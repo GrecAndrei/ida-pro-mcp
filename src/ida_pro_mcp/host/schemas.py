@@ -587,29 +587,37 @@ def build_input_schema_ultra(tool_name: str) -> dict:
     return {"type": "object", "properties": props, "required": required}
 
 def build_tool_description_ultra(tool_name: str) -> str:
-    """Return a tiny wiki-first routing hint for ultra tools/list mode."""
-    if tool_name == "wiki":
-        return "Wiki index + docs. Start with wiki(action='index')."
-    if tool_name == "session":
-        return "Session hub. IDB is optional after create/switch."
-    if tool_name == "batch":
-        return "Batch hub. Use calls as 'tool:action' or {name,action,...}."
-    if tool_name == "llm_helpers":
-        return "LLM orientation helpers. Start with bootstrap or cheatsheet."
-    return f"Use wiki(topic='tools/{tool_name}') for usage."
+    """One-line description + compact action list for ultra (token-minimal) mode."""
+    full = str(TOOL_DESCRIPTIONS.get(tool_name, "") or "").strip()
+    if not full:
+        return f"Use wiki(topic='tools/{tool_name}') for usage."
+    # First sentence only, then append a compact action list if present.
+    first = full.split(". ")[0].strip(" .")
+    if "Actions:" in full:
+        actions_raw = full.split("Actions:", 1)[1].strip()
+        # Keep only the comma-separated action names, drop trailing prose/NOTEs.
+        actions_part = actions_raw.split(".")[0].strip()
+        if len(actions_part) > 120:
+            actions_part = actions_part[:117] + "..."
+        return f"{first}. Actions: {actions_part}."
+    if len(first) > 160:
+        first = first[:157] + "..."
+    return first + "."
 
 def build_tool_description_lean(tool_name: str) -> str:
-    """Return a short description without embedded action lists."""
+    """Short description + full action list, no trailing prose/NOTEs."""
     full = str(TOOL_DESCRIPTIONS.get(tool_name, "") or "").strip()
     if not full:
         return ""
-    if "Actions:" in full:
-        full = full.split("Actions:", 1)[0].strip()
+    # Strip NOTE/footnote prose that appears after the action list.
+    for marker in (" NOTE:", " (read ", " Prefer ", " Use wiki"):
+        if marker in full:
+            full = full.split(marker, 1)[0].strip()
     full = re.sub(r"\s+", " ", full).strip(" .")
     if not full:
         return ""
-    if len(full) > 140:
-        full = full[:137].rstrip() + "..."
+    if len(full) > 300:
+        full = full[:297].rstrip() + "..."
     return full + "."
 
 _TOOL_CATEGORY_CORE = {"session", "truncation", "bookmarks", "batch", "wiki"}
