@@ -29,6 +29,36 @@ from .server_runtime_leases import ServerRuntimeLeasesMixin
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Processors that imply a raw-binary/firmware load (no native container format).
+# Mirrored in _build_ida_command (-Tbin) and the post-load fix_segments step.
+FIRMWARE_RAW_PROCS = (
+    "arm", "mips", "mipsl", "mipsb", "ppc", "ppcl", "tricore",
+    "rx", "v850", "rl78", "stm8",
+)
+
+# IDA loader names that produce correctly-typed segments natively; for these the
+# post-load segment repair must NOT run (it would force data segments to
+# SEG_CODE+EXEC and, for 64-bit PEs, downgrade .text to 32-bit -> MERR_ONLY64).
+NATIVE_LOADERS = (
+    "pe", "pe64", "elf", "elf64", "macho", "macho64",
+    "coff", "ar", "omf", "dos", "dos/exe",
+)
+
+
+def _is_raw_bin_load(opts: dict) -> bool:
+    """True when IDA loads the binary as a raw blob (-Tbin), so segments need
+    post-load repair. For native PE/ELF/Mach-O, IDA's loader already sets the
+    correct class/type/perm/bitness and repair is destructive."""
+    proc = str(opts.get("processor") or "").lower()
+    loader = str(opts.get("loader") or "").lower()
+    if loader in NATIVE_LOADERS:
+        return False
+    if loader == "bin":
+        return True
+    # No explicit loader: raw-bin only for firmware archs. metapc with no
+    # loader is left to IDA auto-detection (PE/ELF native, or raw x86 blob).
+    return proc in FIRMWARE_RAW_PROCS
+
 
 def _resolve_max_rpc_bytes() -> int:
     try:
@@ -1229,7 +1259,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     # segments with wrong bitness, blocking code analysis entirely.
                     # Firmware archs (arm/mips/ppc/tricore/etc.) always get -Tbin.
                     proc = str(opts.get("processor") or "").lower()
-                    if proc in ("arm", "mips", "mipsl", "mipsb", "ppc", "ppcl", "tricore", "rx", "v850", "rl78", "stm8"):
+                    if proc in FIRMWARE_RAW_PROCS:
                         cmd.append("-Tbin")
                     elif str(opts.get("loader") or "") == "bin":
                         cmd.append("-Tbin")
@@ -2015,12 +2045,22 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 _record(action_args.get("action", "apply_options"), res)
 
             # After setting architecture, synchronously fix segment state for
-            # firmware binaries BEFORE reanalyze or bootstrap run. IDA's raw
-            # binary loader creates BSS/DATA segments that block create_insn()
-            # and add_func(). This fix sets class→CODE, type=SEG_CODE,
-            # perm|=SEGPERM_EXEC, bitness→32, and T=1 for ARM Thumb.
-            if any(k in opts for k in ("processor", "bitness")):
+            # raw-binary/firmware loads BEFORE reanalyze or bootstrap run. IDA's
+            # raw binary loader creates BSS/DATA segments that block
+            # create_insn() and add_func(). This fix sets class→CODE,
+            # type=SEG_CODE, perm|=SEGPERM_EXEC, bitness from opts, and T=1
+            # for ARM Thumb. It MUST NOT run for native PE/ELF/Mach-O: IDA's
+            # loader already types those segments correctly, and forcing
+            # SEG_CODE+EXEC on data segments (or bitness=32 on a 64-bit .text)
+            # breaks analysis — the latter makes Hex-Rays return MERR_ONLY64
+            # (-25) for every function.
+            if _is_raw_bin_load(opts):
                 _progress("fix_segments", "start")
+                # Map requested bitness to IDA's seg.bitness (0=16,1=32,2=64);
+                # default to 32-bit for raw firmware blobs.
+                _target_bitness = {16: 0, 32: 1, 64: 2}.get(
+                    int(opts.get("bitness") or 32), 1
+                )
                 try:
                     self._send_rpc_raw({
                         "tool": "misc",
@@ -2041,10 +2081,10 @@ for seg_ea in idautils.Segments():
     if not (seg.perm & idaapi.SEGPERM_EXEC):
         seg.perm |= idaapi.SEGPERM_EXEC
         ida_segment.update_segm(seg)
-    if hasattr(seg, 'bitness') and seg.bitness != 1:
-        seg.bitness = 1
+    if hasattr(seg, 'bitness') and seg.bitness != __TARGET_BITNESS__:
+        seg.bitness = __TARGET_BITNESS__
         ida_segment.update_segm(seg)
-"""
+""".replace("__TARGET_BITNESS__", str(_target_bitness))
                         }
                     }, port, timeout=5)
                 except Exception as e:
