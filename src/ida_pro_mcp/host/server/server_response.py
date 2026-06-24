@@ -839,19 +839,28 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                 pass
 
             # ---- Structural similarity: enrich with agent.cfg_similar ----
-            try:
-                if isinstance(compacted, dict) and addr:
-                    similar = self._exec("agent", action="cfg_similar", addr=addr, top_k=5)
-                    if isinstance(similar, dict) and similar.get("ok"):
-                        compacted.setdefault("similar_functions", similar.get("results") or [])
-            except Exception:
-                pass
+            # Gated by enable_response_enrichment (default off) — this fires an
+            # in-IDA agent.cfg_similar sub-call per response with an `addr`, which
+            # is a hidden round-trip AND bloats every addr response. Opt in via
+            # IDA_MCP_RESPONSE_ENRICH=1.
+            if self.enable_response_enrichment:
+                try:
+                    if isinstance(compacted, dict) and addr:
+                        similar = self._exec("agent", action="cfg_similar", addr=addr, top_k=5)
+                        if isinstance(similar, dict) and similar.get("ok"):
+                            compacted.setdefault("similar_functions", similar.get("results") or [])
+                except Exception:
+                    pass
 
             # ---- Address Calculation Enrichment ----
-            try:
-                if isinstance(compacted, dict):
-                    session_id = getattr(self.current_session, "session_id", None) if self.current_session else None
-                    self._add_address_calculations(compacted, session_id)
-            except Exception:
-                pass
+            # Gated by enable_response_enrichment (default off) — injects a
+            # per-address llm_address_calculation blob (with cfg_structural_analogies)
+            # into every response. Opt in via IDA_MCP_RESPONSE_ENRICH=1.
+            if self.enable_response_enrichment:
+                try:
+                    if isinstance(compacted, dict):
+                        session_id = getattr(self.current_session, "session_id", None) if self.current_session else None
+                        self._add_address_calculations(compacted, session_id)
+                except Exception:
+                    pass
         return compacted
