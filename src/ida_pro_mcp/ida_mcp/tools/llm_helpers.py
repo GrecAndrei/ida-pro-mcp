@@ -1601,8 +1601,10 @@ def llm_helpers(
             # Returns a unified ranked list of addresses with evidence from multiple sources.
             if not query:
                 return make_error(MCPError.INVALID_ARGS, "query required")
-            from .search import search as _search
-            from .blackboard import BlackboardStore
+            try: from .search import search as _search
+            except ImportError: from ida_mcp.tools.search import search as _search
+            try: from .blackboard import BlackboardStore
+            except ImportError: from blackboard import BlackboardStore  # type: ignore[import-not-found]
             results = {}
 
             def _add(ea_str, source, score, text):

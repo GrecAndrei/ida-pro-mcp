@@ -14,7 +14,10 @@ MAX_HEXDUMP_SIZE = 4096
 # MEMORY - Read/Write/Search/Analyze operations
 # ============================================================================
 
-from .string_ops import shannon_entropy as _shannon_entropy
+try:
+    from .string_ops import shannon_entropy as _shannon_entropy
+except ImportError:
+    from string_ops import shannon_entropy as _shannon_entropy  # type: ignore[import-not-found]
 
 
 def _extract_strings(data, min_len=4):

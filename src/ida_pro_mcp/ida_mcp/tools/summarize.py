@@ -911,7 +911,8 @@ def summarize(
                 pass
             try:
                 # Live taint scan — finds source→sink paths not yet in blackboard
-                from .taint import taint as _taint
+                try: from .taint import taint as _taint
+                except ImportError: from taint import taint as _taint  # type: ignore[import-not-found]
                 taint_result = _taint(action="report", max_depth=4, max_paths=30)
                 if taint_result.get("ok") and taint_result.get("total", 0) > 0:
                     sections["taint_findings"] = {

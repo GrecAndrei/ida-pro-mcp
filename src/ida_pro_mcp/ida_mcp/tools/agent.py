@@ -232,7 +232,8 @@ def agent(
             ea, err = validate_addr(addr)
             if err: return err
             
-            from .search import search as search_tool
+            try: from .search import search as search_tool
+            except ImportError: from ida_mcp.tools.search import search as search_tool
             code_refs = search_tool(action="code_ref", pattern=addr, limit=200)
             data_refs = search_tool(action="data_ref", pattern=addr, limit=200)
             code_text = code_refs.get("matches", "")
@@ -276,8 +277,10 @@ def agent(
         
         elif action == "search_all":
             if not query: return make_error(MCPError.INVALID_ARGS, "query required")
-            from .data import data as data_tool
-            from .search import search as search_tool
+            try: from .data import data as data_tool
+            except ImportError: from data import data as data_tool
+            try: from .search import search as search_tool
+            except ImportError: from ida_mcp.tools.search import search as search_tool
             funcs = data_tool(action="functions", query=query, count=25)
             strings = data_tool(action="strings", query=query, count=25)
             names = data_tool(action="globals", query=query, count=25)
@@ -544,7 +547,8 @@ def agent(
         
         elif action == "rename_suggestions":
             # Shared rename suggestion engine (deduped with funcs.suggest_names).
-            from .funcs import _embedding_rename_suggestions
+            try: from .funcs import _embedding_rename_suggestions
+            except ImportError: from funcs import _embedding_rename_suggestions  # type: ignore[import-not-found]
 
             top_k = max(1, int(kwargs.get("top_k", max_items)))
             include_evidence = bool(kwargs.get("include_evidence", True))
@@ -837,7 +841,8 @@ def agent(
                 bridge_name = idc.get_func_name(bridge_ea) or hex(bridge_ea)
             else:
                 # Try to extract a likely bridge from the query via semantic search
-                from .search import search as search_tool
+                try: from .search import search as search_tool
+                except ImportError: from ida_mcp.tools.search import search as search_tool
                 find_res = search_tool(action="find", pattern=query, limit=5)
                 names = find_res.get("names", "")
                 for line in names.splitlines()[:3]:
@@ -880,7 +885,8 @@ def agent(
             
             # Search for functions referencing bridge strings
             for s in bridge_strings[:5]:
-                from .search import search as search_tool
+                try: from .search import search as search_tool
+                except ImportError: from ida_mcp.tools.search import search as search_tool
                 res = search_tool(action="string", pattern=s, limit=10)
                 for line in res.get("matches", "").splitlines():
                     parts = line.split()
@@ -897,7 +903,8 @@ def agent(
             
             # Search for callers of bridge APIs
             for api in bridge_apis[:5]:
-                from .search import search as search_tool
+                try: from .search import search as search_tool
+                except ImportError: from ida_mcp.tools.search import search as search_tool
                 res = search_tool(action="api", pattern=api, limit=10)
                 for line in res.get("matches", "").splitlines():
                     parts = line.split()

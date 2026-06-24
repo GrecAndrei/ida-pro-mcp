@@ -88,12 +88,14 @@ def query(
         args = merged_args
         
         if action == "data":
-            from .data import data as data_tool
+            try: from .data import data as data_tool
+            except ImportError: from data import data as data_tool
             sub = subaction or "functions"
             return data_tool(action=sub, **args)
-            
+
         elif action == "search":
-            from .search import search as search_tool
+            try: from .search import search as search_tool
+            except ImportError: from ida_mcp.tools.search import search as search_tool
             sub = subaction or "find"
             q_text = str(args.get("query") or args.get("q") or args.get("pattern") or "").strip()
             # If caller gives a natural-language search intent, route to embedding-backed search.
@@ -101,34 +103,40 @@ def query(
                 sub = "nl"
                 args.setdefault("query", q_text)
             return search_tool(action=sub, **args)
-            
+
         elif action == "idb":
-            from .idb import idb as idb_tool
+            try: from .idb import idb as idb_tool
+            except ImportError: from idb import idb as idb_tool
             sub = subaction or "summary"
             return idb_tool(action=sub, **args)
-            
+
         elif action == "code":
-            from .code import code as code_tool
+            try: from .code import code as code_tool
+            except ImportError: from code import code as code_tool
             sub = subaction or "disasm"
             return code_tool(action=sub, **args)
-            
+
         elif action == "types":
-            from .types import types as types_tool
+            try: from .types import types as types_tool
+            except ImportError: from types import types as types_tool
             sub = subaction or "list"
             return types_tool(action=sub, **args)
 
         elif action == "imports_deep":
-            from .imports_deep import imports_deep as imports_deep_tool
+            try: from .imports_deep import imports_deep as imports_deep_tool
+            except ImportError: from imports_deep import imports_deep as imports_deep_tool
             sub = subaction or "thunks"
             return imports_deep_tool(action=sub, **args)
 
         elif action == "symbols":
-            from .symbols import symbols as symbols_tool
+            try: from .symbols import symbols as symbols_tool
+            except ImportError: from symbols import symbols as symbols_tool
             sub = subaction or "status"
             return symbols_tool(action=sub, **args)
 
         elif action == "patterns":
-            from .patterns import patterns as patterns_tool
+            try: from .patterns import patterns as patterns_tool
+            except ImportError: from patterns import patterns as patterns_tool
             sub = subaction or "list_sigs"
             return patterns_tool(action=sub, **args)
 
