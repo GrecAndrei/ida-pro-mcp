@@ -406,7 +406,8 @@ def export(
             _ensure_parent_dir(path)
             findings = []
             try:
-                from .blackboard import BlackboardStore  # type: ignore
+                try: from .blackboard import BlackboardStore  # type: ignore
+                except ImportError: from blackboard import BlackboardStore  # type: ignore[import-not-found]
                 bb = BlackboardStore()
                 findings = bb.list(category="vuln", include_resolved=False, limit=2000)
             except Exception:

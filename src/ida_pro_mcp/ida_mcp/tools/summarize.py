@@ -923,7 +923,8 @@ def summarize(
             except Exception:
                 pass
             try:
-                from .blackboard import BlackboardStore
+                try: from .blackboard import BlackboardStore
+                except ImportError: from blackboard import BlackboardStore  # type: ignore[import-not-found]
                 store = BlackboardStore()
                 findings = {}
                 for cat in ("vuln", "hypothesis", "cluster", "obfuscation", "protocol", "rename_suggestion", "pointer_chain"):

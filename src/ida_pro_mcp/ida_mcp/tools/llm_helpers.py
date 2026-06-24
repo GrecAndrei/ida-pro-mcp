@@ -1350,7 +1350,8 @@ def llm_helpers(
                 return make_error(MCPError.INVALID_ARGS, "addr required (source function or address)")
             source = query or "recv"
             try:
-                from .taint import taint as _taint
+                try: from .taint import taint as _taint
+                except ImportError: from taint import taint as _taint  # type: ignore[import-not-found]
                 result = _taint(action="paths", source=source, max_depth=5, max_paths=15)
                 paths = result.get("paths", [])
                 return {

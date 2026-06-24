@@ -1100,7 +1100,8 @@ def agent(
 
             # Auto-write cluster summary to blackboard
             try:
-                from .blackboard import BlackboardStore
+                try: from .blackboard import BlackboardStore
+                except ImportError: from blackboard import BlackboardStore  # type: ignore[import-not-found]
                 store = BlackboardStore()
                 for c in result_clusters:
                     store.write(

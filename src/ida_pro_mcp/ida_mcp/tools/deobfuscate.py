@@ -79,7 +79,8 @@ def _classify_function(func_ea, clf):
 def _write_to_blackboard(addr_str, tags, findings_text):
     """Auto-write high-confidence findings to blackboard."""
     try:
-        from .blackboard import BlackboardStore
+        try: from .blackboard import BlackboardStore
+        except ImportError: from blackboard import BlackboardStore  # type: ignore[import-not-found]
         store = BlackboardStore()
         store.write(
             title=f"Obfuscation detected at {addr_str}",

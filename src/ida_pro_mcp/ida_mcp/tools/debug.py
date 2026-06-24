@@ -186,7 +186,8 @@ def _get_ptr_size():
 def _inject_blackboard_context(result, pc_str):
     """Inject blackboard entries for a given PC address into result dict."""
     try:
-        from .blackboard import BlackboardStore
+        try: from .blackboard import BlackboardStore
+        except ImportError: from blackboard import BlackboardStore  # type: ignore[import-not-found]
         store = BlackboardStore()
         entries = store.list(addr=pc_str, limit=3)
         if entries:
@@ -816,7 +817,8 @@ def debug(
                 return make_error(MCPError.INVALID_ARGS, "No active debugger or PC unavailable")
             pc_hex = hex(pc)
             try:
-                from .blackboard import BlackboardStore
+                try: from .blackboard import BlackboardStore
+                except ImportError: from blackboard import BlackboardStore  # type: ignore[import-not-found]
                 store = BlackboardStore()
                 addr_entries = store.list(addr=pc_hex, limit=10)
                 func = idaapi.get_func(pc)

@@ -271,7 +271,8 @@ def _read_section_bytes(seg_name_pattern: str, max_bytes: int = 0x10000) -> byte
 def _section_entropy_quick() -> dict:
     """Return per-segment entropy via the existing binary_info tool."""
     try:
-        from .binary_info import binary_info
+        try: from .binary_info import binary_info
+        except ImportError: from binary_info import binary_info  # type: ignore[import-not-found]
         result = binary_info(action="sections", limit=32)
         sections = result.get("sections") if isinstance(result, dict) else None
         if not sections:
@@ -769,7 +770,8 @@ def packer(
         section_entropy = _section_entropy_quick()
         if action == "profile":
             try:
-                from .entropy import entropy
+                try: from .entropy import entropy
+                except ImportError: from entropy import entropy  # type: ignore[import-not-found]
                 ent_result = entropy(action="packed_detect", limit=20)
             except Exception:
                 ent_result = {}
