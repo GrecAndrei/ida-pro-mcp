@@ -602,6 +602,15 @@ TOOL_ARG_SCHEMAS = {
         "arg": {"type": "integer", "description": "Plugin argument for plugin_run"},
         "timeout": {"type": "number"},
         "max_wait": {"type": "number"},
+        # Blocking / observe knobs for run+wait. Previously NOT admitted by the
+        # schema, so the dispatch arg-filter silently stripped them: callers
+        # passing blocking=true/pump=true got silent non-blocking behavior with
+        # no error. The in-IDA handler bounds the bare-call default to 10s
+        # (under IDA_MCP_RPC_TIMEOUT) so these are safe to expose.
+        "blocking": {"type": "boolean"},
+        "wait": {"type": "boolean"},
+        "pump": {"type": "boolean"},
+        "poll_timeout": {"type": "number"},
     },
     "data": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["data"]},

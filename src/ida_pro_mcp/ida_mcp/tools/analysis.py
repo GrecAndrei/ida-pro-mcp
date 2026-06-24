@@ -479,7 +479,15 @@ def analysis(
             blocking = kwargs.get("blocking") or kwargs.get("wait") or False
             waited = 0.0
             if blocking:
-                poll_timeout = float(kwargs.get("poll_timeout", 60.0) or 60.0)
+                # Default to a bounded 10s observe window when the caller does
+                # not specify one, safely under the host RPC recv deadline
+                # (IDA_MCP_RPC_TIMEOUT, default 30s). A bare blocking call with
+                # the old 60s default raced the 30s deadline and the host
+                # reported a false crash (process still alive, just polling).
+                if "poll_timeout" in kwargs and kwargs["poll_timeout"] is not None:
+                    poll_timeout = float(kwargs["poll_timeout"] or 0.0)
+                else:
+                    poll_timeout = 10.0
                 start_time = time.time()
                 while time.time() - start_time < poll_timeout:
                     analysis_ok = bool(idaapi.auto_is_ok()) if hasattr(idaapi, "auto_is_ok") else True
