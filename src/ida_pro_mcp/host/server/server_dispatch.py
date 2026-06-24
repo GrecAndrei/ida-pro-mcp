@@ -456,6 +456,12 @@ class ServerDispatchMixin:
                 )
             runtime = self.session_runtimes.get(session.session_id)
             if not self._runtime_alive(runtime):
+                log_rpc(f"analysis/wait: runtime not alive for {session.session_id}, launching IDA first")
+                start_res = self._start_server(session)
+                if "error" in start_res:
+                    return start_res
+                runtime = self.session_runtimes.get(session.session_id)
+            if not isinstance(runtime, dict):
                 return make_error(MCPError.IDA_CRASHED, "IDA runtime is not alive.")
             port = runtime.get("port")
 

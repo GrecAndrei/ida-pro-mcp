@@ -297,7 +297,7 @@ def segments(
                     "type": seg_type,
                     "type_int": seg.type,
                     "align": seg.align,
-                    "bitness": seg.bitness * 16 if seg.bitness else 0,
+                    "bitness": {0: 16, 1: 32, 2: 64}.get(seg.bitness, seg.bitness * 16),
                     "comb": seg.comb,
                     "color": hex(seg.color) if seg.color != 0xFFFFFFFF else None,
                     "code_heads": code_count,

@@ -263,7 +263,7 @@ def idb_segments_detailed(include_head_counts=True):
             "class": ida_segment.get_segm_class(seg),
             "type": seg_type,
             "align": seg.align,
-            "bitness": seg.bitness * 16 if seg.bitness else 0,
+            "bitness": {0: 16, 1: 32, 2: 64}.get(seg.bitness, seg.bitness * 16),
             "code_heads": code_count,
             "data_heads": data_count,
         })

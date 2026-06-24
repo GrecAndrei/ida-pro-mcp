@@ -24,6 +24,7 @@ class MCPError:
     IO_ERROR = "IO_ERROR"
     DB_ERROR = "DB_ERROR"
     NOT_FOUND = "NOT_FOUND"
+    IDA_ERROR = "IDA_ERROR"
 
 
 _HOST_ERROR_HINTS = {

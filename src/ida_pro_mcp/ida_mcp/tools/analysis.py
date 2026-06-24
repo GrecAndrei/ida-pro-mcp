@@ -515,42 +515,65 @@ def analysis(
             return result
 
         if action == "wait":
-            # Report current analysis state and optionally wait for completion.
+            # Report current analysis state without blocking IDA's main thread.
             #
-            # Bounded poll only: passively watch auto_is_ok() for up to poll_timeout
-            # seconds (default 5s — safely under host RPC recv deadline).
-            # timeout=0 means "report current state immediately, don't block."
-            # For longer waits, use the host-side polling loop (analysis/wait
-            # is intercepted by the host and never reaches here with large timeouts).
-            poll_max_wait = float(kwargs.get("max_wait", 30.0) or 30.0)
+            # auto_is_ok() and idautils.Functions() can acquire internal IDA
+            # locks while the analysis worker threads hold them, deadlocking the
+            # RPC server.  We call them in a daemon thread with a hard 2s timeout
+            # so the main thread (= our socket server) is never stuck.
+            # timeout=0 means "report current state immediately" — used by the
+            # host-side polling loop.
+            import threading as _threading
+
+            def _safe_auto_is_ok(out, timeout_sec=2.0):
+                result = [None]
+                def _run():
+                    try:
+                        result[0] = bool(idaapi.auto_is_ok()) if hasattr(idaapi, "auto_is_ok") else True
+                    except Exception:
+                        result[0] = False
+                t = _threading.Thread(target=_run, daemon=True)
+                t.start()
+                t.join(timeout=timeout_sec)
+                out[0] = result[0]  # None = timed out (still running)
+
+            def _safe_func_count(timeout_sec=2.0):
+                result = [-1]
+                def _run():
+                    try:
+                        result[0] = sum(1 for _ in idautils.Functions())
+                    except Exception:
+                        result[0] = -1
+                t = _threading.Thread(target=_run, daemon=True)
+                t.start()
+                t.join(timeout=timeout_sec)
+                return result[0]
+
+            start_time = time.time()
             if "timeout" in kwargs and kwargs["timeout"] is not None:
                 poll_timeout = min(float(kwargs["timeout"] or 0.0), 8.0)
             else:
                 poll_timeout = 5.0
-            start_time = time.time()
-            waited = 0.0
-            if True:
-                while True:
-                    analysis_ok = bool(idaapi.auto_is_ok()) if hasattr(idaapi, "auto_is_ok") else True
-                    if analysis_ok:
-                        break
-                    if poll_timeout <= 0:
-                        break
-                    remaining = min(poll_timeout, poll_max_wait) - waited
-                    if remaining <= 0:
-                        break
-                    sleep_sec = min(0.1, remaining)
-                    time.sleep(sleep_sec)
-                    waited += sleep_sec
-                    # NOTE: deliberately not pretending to pump IDA's event loop
-                    # here. The analyzer advances on its own thread; this loop
-                    # only observes. Use pump=true to actively drive analysis.
+
+            analysis_ok = None
+            while True:
+                out = [None]
+                _safe_auto_is_ok(out, timeout_sec=2.0)
+                analysis_ok = out[0]
+                if analysis_ok:
+                    break
+                if poll_timeout <= 0:
+                    break
+                elapsed = time.time() - start_time
+                if elapsed >= poll_timeout:
+                    break
+                time.sleep(min(0.5, poll_timeout - elapsed))
+
+            if analysis_ok is None:
+                analysis_ok = False  # timed out probing = still running
+
             waited = time.time() - start_time
-            analysis_ok = bool(idaapi.auto_is_ok()) if hasattr(idaapi, "auto_is_ok") else True
-            try:
-                func_count = sum(1 for _ in idautils.Functions())
-            except Exception:
-                func_count = -1
+            func_count = _safe_func_count(timeout_sec=2.0)
             try:
                 string_count = idaapi.get_strlist_qty() if hasattr(idaapi, "get_strlist_qty") else -1
             except Exception:
