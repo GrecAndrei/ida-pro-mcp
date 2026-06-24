@@ -8,7 +8,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from ..analysis.arch_profile import infer_binary_arch_profile, normalize_arch_options
+from ..analysis.arch_profile import normalize_arch_options
 from ..stores.chip_db import find_chip_profile
 from ..config import (
     MAX_BATCH_CALLS,
@@ -530,79 +530,8 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                         "hint": "Provide an absolute path to an existing binary file.",
                     },
                 )
-            # Raw-binary profile inference to avoid metapc/default dead-ends.
-            if analysis_options.get("processor") is None:
-                inferred = infer_binary_arch_profile(binary_path)
-                arch_meta = dict(arch_meta or {})
-                arch_meta["inferred_profile"] = inferred
-                # Packed IDA database (.i64) - don't override arch, let IDA load the DB
-                is_packed_idb = inferred.get("file_kind") == "packed_idb"
-                if is_packed_idb:
-                    arch_meta["inference_applied"] = False
-                    arch_meta["inference_apply_reason"] = "packed_idb_preserve_existing_analysis"
-                else:
-                    if inferred.get("memory_map"):
-                        arch_meta["memory_map"] = inferred.get("memory_map")
-                    if inferred.get("peripheral_addresses"):
-                        arch_meta["peripheral_addresses"] = inferred.get("peripheral_addresses")
-                    if inferred.get("processor"):
-                        # Deterministic inference from explicit profile (e.g. known headers/vector table).
-                        arch_meta["inference_applied"] = True
-                        analysis_options["processor"] = inferred.get("processor")
-                        if inferred.get("bitness") is not None:
-                            analysis_options.setdefault("bitness", inferred.get("bitness"))
-                        if inferred.get("endian"):
-                            analysis_options.setdefault("endian", inferred.get("endian"))
-                        if inferred.get("loader"):
-                            analysis_options.setdefault("loader", inferred.get("loader"))
-                        # Apply load base for chip-specific formats (e.g. AIC WFFW at 0x120000).
-                        if inferred.get("load_base") is not None:
-                            analysis_options.setdefault("baseaddr", inferred["load_base"])
-                            arch_meta["load_base_applied"] = True
-                            arch_meta["load_base"] = hex(inferred["load_base"])
-                        if inferred.get("chip_family"):
-                            arch_meta["chip_family"] = inferred["chip_family"]
-                            analysis_options.setdefault("chip_family", inferred.get("chip_family"))
-                            if inferred.get("memory_map"):
-                                analysis_options.setdefault("memory_map", inferred.get("memory_map"))
-                            if inferred.get("peripheral_addresses"):
-                                analysis_options.setdefault("peripheral_addresses", inferred.get("peripheral_addresses"))
-                            prof = find_chip_profile(str(inferred.get("chip_family") or "")) or {}
-                            if prof.get("post_load_actions"):
-                                analysis_options.setdefault("post_load_actions", prof.get("post_load_actions"))
-                    else:
-                        # For raw blobs with no deterministic header/vector-table, apply the
-                        # top-ranked candidate. Any heuristic recommendation beats IDA's
-                        # metapc/64 default on a raw binary. Gate only on the candidate
-                        # having valid processor/bitness/endian fields.
-                        candidates = inferred.get("candidates") if isinstance(inferred.get("candidates"), list) else []
-                        top = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
-                        nxt = candidates[1] if len(candidates) > 1 and isinstance(candidates[1], dict) else {}
-                        try:
-                            top_conf = float(top.get("confidence", 0.0) or 0.0)
-                        except Exception:
-                            top_conf = 0.0
-                        try:
-                            next_conf = float(nxt.get("confidence", 0.0) or 0.0)
-                        except Exception:
-                            next_conf = 0.0
-                        margin = max(0.0, top_conf - next_conf)
-                        can_apply = bool(
-                            top.get("processor")
-                            and top.get("bitness") in {16, 32, 64}
-                            and str(top.get("endian") or "").lower() in {"little", "big"}
-                            and inferred.get("file_kind") == "raw"
-                        )
-                        if can_apply:
-                            analysis_options["processor"] = top.get("processor")
-                            analysis_options.setdefault("bitness", top.get("bitness"))
-                            analysis_options.setdefault("endian", top.get("endian"))
-                            arch_meta["inference_applied"] = True
-                            arch_meta["inference_apply_reason"] = "raw_binary_top_candidate"
-                            arch_meta["inference_apply_confidence"] = round(top_conf, 3)
-                            arch_meta["inference_apply_margin"] = round(margin, 3)
-                        else:
-                            arch_meta["inference_applied"] = False
+            arch_meta = dict(arch_meta or {})
+            arch_meta["inference_applied"] = False
 
         if not binary_path:
             return make_error(
