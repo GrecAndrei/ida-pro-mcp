@@ -246,28 +246,14 @@ def llm_helpers(
         info = idaapi.get_inf_structure() if hasattr(idaapi, "get_inf_structure") else None
 
         if action == "bootstrap":
-            calls = [
-                "ida://state",
-                "llm_helpers(action='cheatsheet')",
-                "blackboard(action='coverage')",
-                "blackboard(action='frontier', limit=10)",
-                "workflow(action='recon_sweep')",
-                "predictor(action='recommend_bundle')",
-                "search(action='smart_bundle', query='auth check input parse decrypt')",
-            ]
-            rules = [
-                "Do not start with raw decompile spam across random addresses.",
-                "Read state/frontier first, then follow ranked targets.",
-                "Persist findings using blackboard(action='write', ...).",
-                "If stuck for two turns, call predictor(action='recommend_bundle').",
-            ]
             return {
                 "ok": True,
                 "action": "bootstrap",
-                "goal": "Fast orientation for LLMs unfamiliar with project-specific tool names.",
-                "first_calls": calls,
-                "operating_rules": rules,
-                "note": "Use the first 4 calls before deep analysis. This reduces random-walk decompilation and improves coverage.",
+                "first_calls": [
+                    "session(action='info')",
+                    "blackboard(action='frontier', limit=10)",
+                    "predictor(action='recommend_bundle')",
+                ],
             }
 
         elif action == "context_window":
@@ -756,52 +742,30 @@ def llm_helpers(
             is_pe = file_type in (getattr(idaapi, 'f_PE', -1), getattr(idaapi, 'f_COFF', -1))
             is_elf = file_type == getattr(idaapi, 'f_ELF', -1)
 
-            steps = [
-                "1. Get binary overview: binary_info(action='headers')",
-                "2. Check sections: binary_info(action='sections')",
-                "3. Get binary digest: llm_helpers(action='binary_digest')",
-            ]
-
-            if is_pe:
-                steps.extend([
-                    "4. Check imports: imports_deep(action='summary')",
-                    "5. Find suspicious strings: string_ops(action='suspicious')",
-                    "6. Check for C2 indicators: string_ops(action='indicators')",
-                    "7. Detect crypto: crypto_id(action='scan')",
-                    "8. Analyze entry point: llm_helpers(action='function_digest', addr='entry')",
-                    "9. Check for obfuscation: cfg_analysis(action='flatten_detect', addr='main')",
-                    "10. Focus on interesting areas: llm_helpers(action='focus_area')",
-                ])
-            elif is_elf:
-                steps.extend([
-                    "4. Check imports: imports_deep(action='summary')",
-                    "5. Find URLs/IPs: string_ops(action='find_urls')",
-                    "6. Find commands: string_ops(action='find_commands')",
-                    "7. Analyze main: llm_helpers(action='function_digest', addr='main')",
-                    "8. Check complexity: cfg_analysis(action='complexity', addr='main')",
-                    "9. Focus on interesting areas: llm_helpers(action='focus_area')",
-                ])
+            if is_firmware := not (is_pe or is_elf):
+                steps = [
+                    "firmware_view(action='triage_snapshot')",
+                    "firmware_view(action='detect_load_address')",
+                    "firmware_view(action='detect_vector_table')",
+                    "firmware_view(action='detect_mmio')",
+                    "firmware_view(action='campaign')",
+                    "taint(action='report')",
+                ]
+            elif is_pe:
+                steps = [
+                    "imports_deep(action='summary')",
+                    "crypto_id(action='scan')",
+                    "llm_helpers(action='function_digest', addr='entry')",
+                    "llm_helpers(action='focus_area')",
+                ]
             else:
-                steps.extend([
-                    "4. One-shot orientation: firmware_view(action='triage_snapshot')",
-                    "5. Solve load address: firmware_view(action='detect_load_address')",
-                    "6. Find entry points: firmware_view(action='detect_vector_table')",
-                    "7. Find MMIO peripherals: firmware_view(action='detect_mmio')",
-                    "8. Profile all regions: firmware_view(action='scan_region')",
-                    "9. Check entropy distribution: firmware_view(action='region_profile')",
-                    "10. Find pointer tables: firmware_view(action='pointer_sweep')",
-                    "11. Find dispatch/jump tables: firmware_view(action='table_candidates', limit=50)",
-                    "12. Get retyping plan: firmware_view(action='carve_plan')",
-                    "13. Dry-run retyping: firmware_view(action='smart_carve', apply=false, limit=80)",
-                    "14. Apply retyping: firmware_view(action='smart_carve', apply=true)",
-                    "15. Check expected subsystems: ida://knowledge/gaps",
-                    "16. Find interrupt handlers: search(action='func_by_sig', pattern='no_callers')",
-                    "17. Find crypto: search(action='behavior', pattern='crypto_symmetric')",
-                    "18. Taint MMIO/UART inputs: taint(action='report')",
-                    "19. Run full campaign: firmware_view(action='campaign')",
-                ])
+                steps = [
+                    "imports_deep(action='summary')",
+                    "llm_helpers(action='function_digest', addr='main')",
+                    "llm_helpers(action='focus_area')",
+                ]
 
-            return {"ok": True, "guided_steps": "\n".join(steps)}
+            return {"ok": True, "guided_steps": steps}
 
         elif action == "compact":
             if not query:
@@ -925,6 +889,12 @@ def llm_helpers(
             file_type = _inf_filetype_id() if info else 0
             is_pe = file_type in (getattr(idaapi, 'f_PE', -1), getattr(idaapi, 'f_COFF', -1))
             is_elf = file_type == getattr(idaapi, 'f_ELF', -1)
+            fmt = "PE" if is_pe else "ELF" if is_elf else "firmware/raw"
+            return {
+                "ok": True,
+                "format": fmt,
+                "hint": "Invoke /ida-start skill for orientation, /ida-analysis for tool reference.",
+            }
 
             cheat = ["=== Quick Reference for This Binary ==="]
             cheat.append(f"Arch: {_inf_procname() if info else ''} | {_inf_bitness()}-bit")

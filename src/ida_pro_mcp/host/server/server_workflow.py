@@ -751,7 +751,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 "search.structured": "Uses schema-guided retrieval to find semantically constrained candidates.",
                 "summarize.security_posture": "Produces consolidated risk and mitigation posture snapshot.",
                 "firmware_view.triage_snapshot": "Aggregates load/vector/MMIO hints for firmware-first orientation.",
-                "llm_helpers.guided_analysis": "Provides stepwise guidance for deeper targeted follow-up.",
+                "llm_helpers.focus_area": "Identifies the most interesting area to analyze next.",
                 "code.disasm": "Gets opcode-level view at target address for patch semantics.",
                 "code.xrefs_to": "Shows inbound dependency impact into the patch location.",
                 "code.xrefs_from": "Shows outbound behavior impact from patched block.",
@@ -901,7 +901,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
             ]
             if firmware_detected or raw_binary_mode:
                 step_plan.insert(2, {"name": "firmware_view", "arguments": {"action": "triage_snapshot"}})
-                step_plan.append({"name": "llm_helpers", "arguments": {"action": "guided_analysis"}})
+                step_plan.append({"name": "llm_helpers", "arguments": {"action": "focus_area"}})
             workflow_meta["firmware_mode"] = "enabled" if (firmware_detected or raw_binary_mode) else "disabled"
             workflow_meta["firmware_detected"] = firmware_detected
             workflow_meta["raw_binary_mode"] = raw_binary_mode
@@ -953,7 +953,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
             ]
             if firmware_detected or raw_binary_mode:
                 step_plan.insert(2, {"name": "firmware_view", "arguments": {"action": "triage_snapshot"}})
-                step_plan.append({"name": "llm_helpers", "arguments": {"action": "guided_analysis"}})
+                step_plan.append({"name": "llm_helpers", "arguments": {"action": "focus_area"}})
             workflow_meta["firmware_mode"] = "enabled" if (firmware_detected or raw_binary_mode) else "disabled"
             workflow_meta["firmware_detected"] = firmware_detected
             workflow_meta["raw_binary_mode"] = raw_binary_mode

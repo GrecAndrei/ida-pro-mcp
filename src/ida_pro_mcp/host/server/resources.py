@@ -316,15 +316,7 @@ class ResourceResolver:
                 "is_firmware": is_firmware,
             }
             if is_firmware:
-                state["binary"]["firmware_note"] = (
-                    "Raw firmware detected. Start with a one-shot orientation pass: "
-                    "1) CALL firmware_view(action='triage_snapshot') — aggregate load base, vectors, and MMIO hints. "
-                    "Then solve the three hard problems directly when needed: "
-                    "2) CALL firmware_view(action='detect_load_address') — is the binary rebased correctly? "
-                    "3) CALL firmware_view(action='detect_vector_table') — find all entry points (IVT). "
-                    "4) CALL firmware_view(action='detect_mmio') — identify MMIO peripheral registers. "
-                    "Then: CALL llm_helpers(action='guided_analysis') for the full step-by-step workflow."
-                )
+                state["binary"]["firmware"] = True
         except Exception:
             state["binary"] = {}
             is_firmware = False
@@ -474,43 +466,33 @@ class ResourceResolver:
         binary = state.get("binary", {})
 
         if binary.get("is_firmware"):
-            actions.append("CALL firmware_view(action='triage_snapshot') — one-shot load/vector/MMIO orientation")
-            actions.append("CALL llm_helpers(action='guided_analysis') — full firmware workflow")
+            actions.append("firmware_view(action='triage_snapshot')")
 
         if eng.get("pending_proposals", 0) > 0:
-            actions.append(f"READ ida://proposals — {eng['pending_proposals']} engine proposal(s) waiting")
+            actions.append(f"blackboard(action='list', category='proposal') — {eng['pending_proposals']} pending")
 
         next_targets = bb_state.get("next_targets", [])
         if next_targets:
             top = next_targets[0]
             top_addr = top.get("addr", "")
             top_title = top.get("title", top_addr)[:50]
-            actions.append(f"CALL code(action='smart_decompile', addrs='{top_addr}') — top target: {top_title}")
+            actions.append(f"code(action='smart_decompile', addrs='{top_addr}') — {top_title}")
 
         vulns = bb_state.get("vulns", [])
         if vulns:
-            v = vulns[0]
-            v_addr = v.get("addr", "")
-            actions.append(f"CALL llm_helpers(action='dangerous_pattern_explainer', addr='{v_addr}'")
+            v_addr = vulns[0].get("addr", "")
+            actions.append(f"llm_helpers(action='dangerous_pattern_explainer', addr='{v_addr}')")
 
         pct = cov.get("pct_named", 100)
         total = cov.get("total_functions", 0)
         if total > 20 and pct < 40:
-            actions.append(f"READ ida://blackboard/frontier — {pct}% named, {total} functions — get ranked targets")
+            actions.append(f"blackboard(action='frontier', limit=10) — {pct}% named, {total} functions")
 
         if not actions:
-            actions.append("CALL idb(action='summary') then data(action='imports') to orient")
-            actions.append("CALL llm_helpers(action='cheatsheet') for full tool reference")
+            actions.append("idb(action='summary')")
+            actions.append("data(action='imports')")
 
         state["_next_actions"] = actions
-        state["_note"] = (
-            "Read ida://proposals for pending engine actions. "
-            "Read ida://blackboard/frontier for ranked unvisited functions. "
-            "Read ida://blackboard/coverage for analysis progress. "
-            "Read ida://taint for vulnerability paths. "
-            "For raw firmware sessions, call firmware_view(action='triage_snapshot') first. "
-            "This resource is pushed via notifications/resources/updated when anything changes."
-        )
 
         return _make_json_content(state)
 

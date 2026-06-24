@@ -69,8 +69,12 @@ _START_SKILL_BODY = """\
 ## First turn
 ```
 session(action='create', binary_path='path/to/binary')
-llm_helpers(action='bootstrap')
+session(action='state')           # full analysis snapshot — call this every turn
+blackboard(action='frontier', limit=10)
 ```
+
+> Note: MCP resources (ida://state etc.) are NOT auto-injected — always use
+> `session(action='state')` instead.
 
 ## Key shortcuts mapped to tools
 | IDA key | Tool + action |

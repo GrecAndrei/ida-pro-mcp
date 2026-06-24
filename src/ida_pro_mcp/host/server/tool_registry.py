@@ -181,6 +181,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "advance_phase", "link_session", "cross_reference_sessions",
         "list_snapshots", "macro_set", "macro_get", "macro_list",
         "macro_delete", "macro_run", "recent_workset", "kill",
+        "state",
     ],
     "stack_analysis": ["frame", "buffers", "canary", "alignment", "spills", "usage", "variables", "arrays", "uninitialized", "summary"],
     "string_ops": ["score_c2", "indicators", "ioc_extract", "persistence", "evasion", "find_urls", "find_ips", "find_paths", "find_registry", "find_emails", "find_commands", "find_c2", "find_configs", "find_api_keys", "find_databases", "find_crypto_addrs", "find_stack_strings", "find_base64", "entropy_rank", "suspicious", "encoding_stats", "multilingual", "decode_all"],

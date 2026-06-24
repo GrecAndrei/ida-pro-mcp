@@ -329,6 +329,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         "macro_run": "_session_action_macro_run",
         "recent_workset": "_session_action_recent_workset",
         "kill": "_session_action_kill",
+        "state": "_session_action_state",
     }
 
     def _handle_session(self, args: dict) -> dict:
@@ -903,6 +904,33 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         if closed:
             self._session_capsules.pop(str(sid).upper(), None)
         return {"ok": closed, "session_id": sid, "capsule": capsule_info}
+
+    def _session_action_state(self, args: dict) -> dict:
+        """Return the analysis state — same data as the ida://state resource."""
+        try:
+            from .resources import ResourceResolver
+            import json as _json
+            resolver = ResourceResolver(
+                lambda name, kwargs: self._execute_tool(name, kwargs),
+                session_mgr=getattr(self, "session_mgr", None),
+                engine=getattr(self, "_analysis_engines", {}).get(
+                    getattr(self.current_session, "session_id", "") or ""
+                ),
+                bb_path=self._session_blackboard_path(session_obj=self.current_session)
+                    if hasattr(self, "_session_blackboard_path") else None,
+            )
+            resource = resolver.read("ida://state")
+            if resource is None:
+                return make_error(MCPError.IDA_ERROR, "state resource unavailable")
+            content = resource.get("text") or resource.get("blob") or ""
+            if isinstance(content, str):
+                try:
+                    return _json.loads(content)
+                except Exception:
+                    return {"ok": True, "state": content}
+            return {"ok": True, "state": content}
+        except Exception as e:
+            return make_error(MCPError.IDA_ERROR, f"state failed: {e}")
 
     def _session_action_status(self, args: dict) -> dict:
         if self.current_session:
