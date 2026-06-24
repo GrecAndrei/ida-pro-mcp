@@ -1677,6 +1677,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                                 "idb_path": session.idb_path,
                                 "stdout_log": stdout_log,
                                 "stderr_log": stderr_log,
+                                "ida_log": log_file,
                                 "auth_token": session_token,
                                 "log_handles": [stdout_fh, stderr_fh],
                             }
@@ -1831,6 +1832,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                                 "idb_path": session.idb_path,
                                 "stdout_log": stdout_log,
                                 "stderr_log": stderr_log,
+                                "ida_log": log_file,
                                 "auth_token": session_token,
                                 "log_handles": [stdout_fh, stderr_fh],
                             }

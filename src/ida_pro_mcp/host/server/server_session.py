@@ -863,7 +863,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             return make_error(MCPError.IDA_ERROR, f"state failed: {e}")
 
     def _session_action_logs(self, args: dict) -> dict:
-        """Return recent IDA stdout/stderr log lines — reads files directly, no IDA RPC."""
+        """Return recent IDA log lines — reads the -L log file directly, no IDA RPC."""
         session = self.current_session
         if not session:
             return make_error(MCPError.SESSION_REQUIRED, "No active session.")
@@ -871,16 +871,20 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         if not isinstance(runtime, dict):
             return make_error(MCPError.IDA_ERROR, "No runtime record for current session.")
         try:
-            lines = int(args.get("lines") or args.get("tail") or 60)
+            lines = int(args.get("lines") or args.get("tail") or 80)
         except Exception:
-            lines = 60
+            lines = 80
         lines = max(1, min(lines, 500))
+        # ida_log = IDA's -L log file (actual IDA output, including analysis progress)
+        # stdout_log/stderr_log = IDA process stdout/stderr (empty in headless mode)
+        ida_log = runtime.get("ida_log")
         stdout_log = runtime.get("stdout_log")
         stderr_log = runtime.get("stderr_log")
         if not stderr_log and stdout_log:
             err_guess = stdout_log.replace("ida_stdout_", "ida_stderr_")
             if err_guess != stdout_log:
                 stderr_log = err_guess
+        ida_text = self._tail_text_file(ida_log, tail_lines=lines) if ida_log else ""
         out_text = self._tail_text_file(stdout_log, tail_lines=lines) if stdout_log else ""
         err_text = self._tail_text_file(stderr_log, tail_lines=lines) if stderr_log else ""
         alive = False
@@ -893,6 +897,8 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             "ok": True,
             "session_id": session.session_id,
             "ida_alive": alive,
+            "ida_log": ida_log,
+            "ida_log_tail": ida_text or "(empty)",
             "stdout_log": stdout_log,
             "stderr_log": stderr_log,
             "stdout_tail": out_text or "(empty)",
