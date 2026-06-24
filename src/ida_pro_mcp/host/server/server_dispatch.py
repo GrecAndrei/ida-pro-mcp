@@ -111,7 +111,25 @@ class ServerDispatchMixin:
                     import logging
                     logging.getLogger(__name__).debug("arg schema filter failed: %s", _e)
                 _t0 = time.time()
-                res = self._send_rpc_raw({"tool": tool_name, "args": rpc_args}, port)
+                # Long-running actions (analysis/wait, background/wait, etc.) pass a
+                # timeout arg to IDA.  The socket recv timeout must be at least that
+                # long or the host kills the connection before IDA finishes.
+                _LONG_RUNNING_ACTIONS = {
+                    ("analysis", "wait"), ("analysis", "analyze"), ("analysis", "reanalyze"),
+                    ("background", "wait"), ("agent", "analyze_function"),
+                }
+                _rpc_sock_timeout = None  # None → _send_rpc_raw uses IDA_MCP_RPC_TIMEOUT default
+                _action_key = (tool_name, str(rpc_args.get("action") or ""))
+                if _action_key in _LONG_RUNNING_ACTIONS:
+                    _requested = rpc_args.get("timeout") or rpc_args.get("max_wait") or rpc_args.get("poll_timeout")
+                    try:
+                        _rpc_sock_timeout = max(120, int(_requested) + 30) if _requested is not None else 120
+                    except Exception:
+                        _rpc_sock_timeout = 120
+                res = self._send_rpc_raw(
+                    {"tool": tool_name, "args": rpc_args}, port,
+                    recv_timeout=_rpc_sock_timeout,
+                )
                 _elapsed = time.time() - _t0
                 if isinstance(res, dict) and "error" not in res and "ok" not in res:
                     res = {"ok": True, **res}

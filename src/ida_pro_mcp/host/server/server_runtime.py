@@ -389,7 +389,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
 
         return snapshot
 
-    def _send_rpc_raw(self, request, port, timeout=5, auth_token: Optional[str] = None):
+    def _send_rpc_raw(self, request, port, timeout=5, auth_token: Optional[str] = None, recv_timeout: Optional[int] = None):
             import socket
 
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -412,12 +412,15 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         f"RPC request exceeds {MAX_RPC_REQUEST_SIZE} byte cap"
                     )
                 s.sendall(len(data).to_bytes(4, "big") + data)
-                # 30s default (was hardcoded 60s) — env: IDA_MCP_RPC_TIMEOUT
+                # Recv timeout: caller-supplied > env default (IDA_MCP_RPC_TIMEOUT, default 30s).
+                # Long-running actions (analysis/wait etc.) pass recv_timeout= to stay alive.
                 try:
-                    recv_timeout = int(os.environ.get("IDA_MCP_RPC_TIMEOUT", "30"))
+                    _env_recv = int(os.environ.get("IDA_MCP_RPC_TIMEOUT", "30"))
                 except Exception:
-                    recv_timeout = 30
-                recv_timeout = max(1, min(recv_timeout, 600))
+                    _env_recv = 30
+                if recv_timeout is None:
+                    recv_timeout = _env_recv
+                recv_timeout = max(1, recv_timeout)
                 s.settimeout(recv_timeout)
                 lb = b""
                 while len(lb) < 4:
