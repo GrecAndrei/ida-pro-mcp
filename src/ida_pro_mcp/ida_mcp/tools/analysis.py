@@ -440,25 +440,6 @@ def analysis(
                 s_ea = idaapi.inf_get_min_ea()
                 e_ea = idaapi.inf_get_max_ea()
 
-            # Fix ALL segments to CODE type/class/perm for raw binaries.
-            # set_segm_class only changes the class string; seg.type and seg.perm
-            # are what create_insn()/add_func() actually check.
-            for seg_ea in idautils.Segments():
-                try:
-                    seg = idaapi.getseg(seg_ea)
-                    if not seg:
-                        continue
-                    cur_class = ida_segment.get_segm_class(seg)
-                    if cur_class != "CODE":
-                        ida_segment.set_segm_class(seg, "CODE")
-                    if seg.type != idaapi.SEG_CODE:
-                        seg.type = idaapi.SEG_CODE
-                        ida_segment.update_segm(seg)
-                    if not (seg.perm & idaapi.SEGPERM_EXEC):
-                        seg.perm |= idaapi.SEGPERM_EXEC
-                        ida_segment.update_segm(seg)
-                except Exception:
-                    pass
 
             # Schedule analysis (non-blocking by default). Use plan_range or
             # auto_mark_range (fire-and-forget) so IDA's idle loop picks up the
@@ -501,14 +482,17 @@ def analysis(
                             pass  # pump the event loop
                     except Exception:
                         pass
-            # Raw-binary bootstrap: seed entry points synchronously so models
-            # can call code/funcs tools immediately after this returns.
             try:
                 func_count = sum(1 for _ in idautils.Functions())
             except Exception:
                 func_count = 0
             boot = {"seeded_entries": 0}
-            if func_count == 0:
+            # Only seed entry points for raw blobs (no known file format).
+            # ELF/PE/Mach-O loaders handle this themselves.
+            _is_raw = idaapi.get_inf_structure().filetype in (
+                getattr(idaapi, "f_BIN", 0), getattr(idaapi, "f_BINARY", 0)
+            ) if hasattr(idaapi, "get_inf_structure") else False
+            if func_count == 0 and _is_raw:
                 boot = _bootstrap_raw_entry_points(s_ea, e_ea)
             analysis_ok = bool(idaapi.auto_is_ok()) if hasattr(idaapi, "auto_is_ok") else False
             try:
@@ -627,21 +611,6 @@ def _bootstrap_raw_entry_points(start_ea: int, end_ea: int) -> dict:
     data = ida_bytes.get_bytes(start_ea, scan_size) or b""
     if len(data) < 8:
         return {"seeded_entries": 0}
-    # Set Thumb mode for ARM targets before attempting instruction creation
-    try:
-        proc = (_inf_procname() or "").lower()
-    except Exception:
-        proc = ""
-    if "arm" in proc:
-        try:
-            sr_auto = getattr(idc, "SR_auto", 2)
-            idc.split_sreg_range(start_ea, "T", 1, sr_auto)
-        except Exception:
-            try:
-                import ida_segregs
-                ida_segregs.split_sreg_range(start_ea, "T", 1, 2)
-            except Exception:
-                pass
     import struct
     candidates = []
     for i in range(4, len(data) - 3, 4):
