@@ -559,13 +559,18 @@ def _apply_pre_analysis_options():
         except Exception as e:
             warnings_list.append(f"loader_options: {e}")
 
-    # Raw binary / firmware fix: set ALL segments to CODE and fix bitness.
-    # IDA's raw binary loader creates BSS/DATA segments by default which
-    # block instruction creation. Ensure every segment is CODE and 32-bit
-    # when an ARM or firmware processor is loaded.
     proc_lower = str(processor or "").lower()
-    is_firmware_arch = proc_lower in ("arm", "mips", "mipsl", "mipsb", "ppc", "ppcl", "tricore", "rx", "v850", "rl78", "stm8")
-    if is_firmware_arch:
+    # Segment and Thumb fixes only apply to raw blobs (loader=bin / filetype f_BIN).
+    # ELF/PE/Mach-O loaders already set segment types correctly; forcing SEG_CODE
+    # on data segments breaks analysis. T=1 only applies to 32-bit ARM (Thumb mode
+    # doesn't exist on AArch64).
+    try:
+        _filetype = idaapi.get_inf_structure().filetype if hasattr(idaapi, "get_inf_structure") else -1
+        _f_bin = getattr(idaapi, "f_BIN", 0)
+        _is_raw_load = (_filetype == _f_bin) or (str(loader or "").lower() == "bin")
+    except Exception:
+        _is_raw_load = False
+    if _is_raw_load and proc_lower:
         try:
             for seg_ea in idautils.Segments():
                 seg = idaapi.getseg(seg_ea)
@@ -604,8 +609,8 @@ def _apply_pre_analysis_options():
                             changed.append("segment_addressing=32bit")
                         except Exception as _e2:
                             log_ev(f"segment bitness set failed for {hex(seg.start_ea)}: {_e} / {_e2}")
-            # ARM Cortex-M Thumb: set T=1 globally on all segments
-            if "arm" in proc_lower:
+            # Thumb T=1: only for 32-bit ARM raw blobs (AArch64 has no Thumb mode)
+            if "arm" in proc_lower and bitness != 64:
                 for seg_ea in idautils.Segments():
                     seg = idaapi.getseg(seg_ea)
                     if seg:

@@ -167,7 +167,8 @@ def data_ops(
                 proc = (_inf_procname() or "").lower()
             except Exception:
                 proc = ""
-            if "arm" in proc:
+            # T=1 only for 32-bit ARM (Thumb); AArch64 has no Thumb mode
+            if "arm" in proc and (idaapi.get_inf_structure().is_32bit() if hasattr(idaapi, "get_inf_structure") else True):
                 try:
                     sr_auto = getattr(idc, "SR_auto", 2)
                     idc.split_sreg_range(ea, "T", 1, sr_auto)

@@ -347,7 +347,9 @@ def _fwb_run_vector_bootstrap() -> Dict[str, Any]:
         except Exception as _e:
             import logging
             logging.getLogger(__name__).debug("_inf_procname failed: %s", _e)
-        if "arm" in proc:
+        # T=1 (Thumb) only applies to 32-bit ARM; AArch64 has no Thumb mode
+        _is_arm32 = "arm" in proc and idaapi.get_inf_structure().is_32bit() if hasattr(idaapi, "get_inf_structure") else "arm" in proc
+        if _is_arm32:
             try:
                 sr_auto = getattr(idc, "SR_auto", 2)
                 idc.split_sreg_range(mn, "T", 1, sr_auto)
@@ -359,7 +361,7 @@ def _fwb_run_vector_bootstrap() -> Dict[str, Any]:
                     import logging
                     logging.getLogger(__name__).debug("T=1 split_sreg_range failed for mn %s: %s / %s", hex(mn), _e, _e2)
         for h, _ in handler_addrs:
-            if "arm" in proc:
+            if _is_arm32:
                 try:
                     sr_auto = getattr(idc, "SR_auto", 2)
                     idc.split_sreg_range(h, "T", 1, sr_auto)
@@ -753,12 +755,13 @@ def firmware_view(
                         if prev_kind == "data" and not force:
                             _record_contradiction(state, pea, prev_kind, "code", "data_to_code_guard", confidence=0.74)
                             continue
-                        # Set Thumb mode for ARM before creating instruction
+                        # Set Thumb mode for 32-bit ARM before creating instruction
                         try:
                             _proc = (_inf_procname() or "").lower()
                         except Exception:
                             _proc = ""
-                        if "arm" in _proc:
+                        _arm32 = "arm" in _proc and (idaapi.get_inf_structure().is_32bit() if hasattr(idaapi, "get_inf_structure") else True)
+                        if _arm32:
                             try:
                                 idc.split_sreg_range(pea, "T", 1, getattr(idc, "SR_auto", 2))
                             except Exception:
@@ -1279,7 +1282,8 @@ def firmware_view(
                         _proc = (_inf_procname() or "").lower()
                     except Exception:
                         _proc = ""
-                    if "arm" in _proc:
+                    _arm32 = "arm" in _proc and (idaapi.get_inf_structure().is_32bit() if hasattr(idaapi, "get_inf_structure") else True)
+                    if _arm32:
                         try:
                             idc.split_sreg_range(ea_i, "T", 1, getattr(idc, "SR_auto", 2))
                         except Exception:

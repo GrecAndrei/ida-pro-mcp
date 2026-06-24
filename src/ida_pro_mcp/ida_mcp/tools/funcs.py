@@ -356,7 +356,7 @@ def _funcs_impl(
                     proc = (_inf_procname() or "").lower()
                 except Exception:
                     proc = ""
-                is_arm = "arm" in proc
+                is_arm = "arm" in proc and (idaapi.get_inf_structure().is_32bit() if hasattr(idaapi, "get_inf_structure") else True)
                 if is_arm:
                     # Set T=1 segment register for Thumb mode (all Cortex-M is Thumb-2)
                     try:

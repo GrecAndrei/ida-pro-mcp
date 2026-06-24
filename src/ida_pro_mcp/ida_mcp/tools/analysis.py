@@ -517,41 +517,19 @@ def analysis(
         if action == "wait":
             # Report current analysis state and optionally wait for completion.
             #
-            # Two modes:
-            #   - Bounded poll (default): passively watch auto_is_ok() until it
-            #     flips True or the timeout elapses. This does NOT drive the
-            #     analyzer — in headless idat, auto-analysis advances on IDA's
-            #     own thread; sleeping in this RPC handler only observes.
-            #   - Pump (pump=true): call ida_auto.auto_wait(), which actively
-            #     processes the auto-analysis queue to completion. This DOES
-            #     drive analysis, but blocks until the queue is empty (no cap),
-            #     so a genuinely stuck analysis will hang the call. Use this
-            #     when a caller wants to force completion rather than observe.
-            pump = bool(kwargs.get("pump") or kwargs.get("blocking") or False)
+            # Bounded poll only: passively watch auto_is_ok() for up to poll_timeout
+            # seconds (default 5s — safely under host RPC recv deadline).
+            # timeout=0 means "report current state immediately, don't block."
+            # For longer waits, use the host-side polling loop (analysis/wait
+            # is intercepted by the host and never reaches here with large timeouts).
             poll_max_wait = float(kwargs.get("max_wait", 30.0) or 30.0)
-            # Default to a bounded 10s observe window so a bare analysis.wait
-            # actually polls for completion (was 0s) but stays safely under the
-            # host RPC recv deadline (IDA_MCP_RPC_TIMEOUT, default 30s). A poll
-            # that exceeds that deadline gets killed and is falsely reported as
-            # IDA_CRASHED. 10s is enough to distinguish "done" from "needs pump";
-            # an explicit timeout=0 means "report current state, don't block."
-            # For longer waits, raise timeout/max_wait AND IDA_MCP_RPC_TIMEOUT.
             if "timeout" in kwargs and kwargs["timeout"] is not None:
-                poll_timeout = float(kwargs["timeout"] or 0.0)
+                poll_timeout = min(float(kwargs["timeout"] or 0.0), 8.0)
             else:
-                poll_timeout = 10.0
+                poll_timeout = 5.0
             start_time = time.time()
             waited = 0.0
-            pumped = False
-            if pump:
-                try:
-                    import ida_auto as _ida_auto
-                    if hasattr(_ida_auto, "auto_wait"):
-                        _ida_auto.auto_wait()
-                        pumped = True
-                except Exception:
-                    pass
-            if not pumped:
+            if True:
                 while True:
                     analysis_ok = bool(idaapi.auto_is_ok()) if hasattr(idaapi, "auto_is_ok") else True
                     if analysis_ok:
@@ -580,7 +558,6 @@ def analysis(
             return {
                 "ok": True,
                 "analysis_complete": analysis_ok,
-                "pumped": pumped,
                 "functions": func_count,
                 "strings": string_count,
                 "seconds_waited": round(waited, 2),
@@ -588,7 +565,7 @@ def analysis(
                     "Analysis complete. Safe to call code/data/funcs tools."
                     if analysis_ok else
                     f"Analysis still in progress after {round(waited, 1)}s. "
-                    "Use pump=true to actively drive it, or poll session(action='status')."
+                    "Call analysis(action='wait') again to keep polling."
                 ),
             }
 
