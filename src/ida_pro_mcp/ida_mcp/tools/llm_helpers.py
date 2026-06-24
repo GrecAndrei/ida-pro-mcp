@@ -950,6 +950,7 @@ def llm_helpers(
             cheat.append("llm_helpers(action='path_constrained_search', addr='0xADDR', query='crypto')   # Reachable crypto funcs")
             cheat.append("")
             cheat.append("== STRINGS ==")
+            cheat.append("string_ops(action='indicators')            # C2 / malware behavior patterns")
             cheat.append("string_ops(action='ioc_extract')               # C2 URLs, IPs, registry keys")
             cheat.append("string_ops(action='score_c2')                  # Malware family guess + risk score")
             cheat.append("string_ops(action='find_urls')                 # URLs")

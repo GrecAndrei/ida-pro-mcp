@@ -96,8 +96,13 @@ def _load_packer_module():
 
     class _MCPError(Exception):
         INVALID_ARGS = "INVALID_ARGS"
+        IDA_ERROR = "IDA_ERROR"
     fake_common.MCPError = _MCPError
-    fake_common.make_error = lambda *a, **kw: {"ok": False, "error": True}
+    fake_common.make_error = lambda *a, **kw: {
+        "ok": False,
+        "error": a[1] if len(a) > 1 else "error",
+        "code": a[0] if a else None,
+    }
     fake_common.handle_error = lambda e, *a, **kw: {"ok": False, "error": str(e)}
 
     for n in ("idaapi", "idautils", "idc", "ida_bytes", "ida_nalt",
