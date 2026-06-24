@@ -536,8 +536,14 @@ def analysis(
             #     so a genuinely stuck analysis will hang the call. Use this
             #     when a caller wants to force completion rather than observe.
             pump = bool(kwargs.get("pump") or kwargs.get("blocking") or False)
-            poll_timeout = float(kwargs.get("timeout", 0.0) or 0.0)
             poll_max_wait = float(kwargs.get("max_wait", 30.0) or 30.0)
+            # Default to max_wait so a bare analysis.wait actually polls for
+            # completion instead of returning instantly with seconds_waited=0.
+            # An explicit timeout=0 means "report current state, don't block."
+            if "timeout" in kwargs and kwargs["timeout"] is not None:
+                poll_timeout = float(kwargs["timeout"] or 0.0)
+            else:
+                poll_timeout = poll_max_wait
             start_time = time.time()
             waited = 0.0
             pumped = False
