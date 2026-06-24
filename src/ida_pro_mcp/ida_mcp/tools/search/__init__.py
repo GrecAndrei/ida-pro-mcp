@@ -151,7 +151,7 @@ def search(
     semantic_min_score: Annotated[float, "Minimum semantic score"] = 0.0,
     include_semantic_alternatives: Annotated[bool, "Include alternatives"] = False,
     constraints: Annotated[Optional[dict], "Schema constraints for structured search"] = None,
-    timeout_ms: Annotated[int, "Timeout in milliseconds for long searches (0 = no timeout)"] = 0,
+    timeout_ms: Annotated[int, "Timeout in milliseconds for long searches (0 = 10s default)"] = 0,
     **kwargs
 ) -> dict:
     """
@@ -266,6 +266,9 @@ def search(
             offset = max(0, int(offset))
         except Exception:
             offset = 0
+
+        if not timeout_ms or timeout_ms <= 0:
+            timeout_ms = 10000
 
         # L1 Insight Index pre-filtering
         l1_pre_filtered_addrs = None
