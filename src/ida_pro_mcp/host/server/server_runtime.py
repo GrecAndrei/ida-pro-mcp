@@ -1257,14 +1257,29 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 if loader and "-T" not in ida_prefixes:
                     cmd.append(f"-T{loader}")
                 elif not loader and "-T" not in ida_prefixes:
-                    # Default to raw binary loader for any non-PE/ELF/Mach-O binary.
-                    # Without explicit loader, IDA picks OBJ which creates BSS/DATA
-                    # segments with wrong bitness, blocking code analysis entirely.
-                    # Firmware archs (arm/mips/ppc/tricore/etc.) always get -Tbin.
+                    # Only force -Tbin for firmware processors when the file is
+                    # actually a raw blob. ELF/PE/Mach-O files have their own loaders
+                    # that set segments correctly — forcing -Tbin on them breaks
+                    # analysis completely (no sections, wrong bitness, stalled).
                     proc = str(opts.get("processor") or "").lower()
-                    if proc in FIRMWARE_RAW_PROCS:
-                        cmd.append("-Tbin")
-                    elif str(opts.get("loader") or "") == "bin":
+                    _bin_path = session.binary_path or ""
+                    _force_raw = False
+                    if proc in FIRMWARE_RAW_PROCS or str(opts.get("loader") or "") == "bin":
+                        # Check magic bytes — if file is ELF/PE/Mach-O, let IDA auto-detect
+                        _is_native = False
+                        try:
+                            with open(_bin_path, "rb") as _fh:
+                                _magic = _fh.read(4)
+                            if (_magic[:4] == b"\x7fELF"           # ELF
+                                    or _magic[:2] in (b"MZ", b"ZM")  # PE/DOS
+                                    or _magic[:4] in (b"\xca\xfe\xba\xbe", b"\xcf\xfa\xed\xfe",
+                                                      b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf",
+                                                      b"\xfe\xed\xfa\xce")):  # Mach-O
+                                _is_native = True
+                        except Exception:
+                            pass
+                        _force_raw = not _is_native
+                    if _force_raw:
                         cmd.append("-Tbin")
                     # For unknown processors with no explicit loader, let IDA's
                     # auto-detection handle it — but the pre-analysis hook will
