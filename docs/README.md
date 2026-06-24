@@ -4,23 +4,26 @@ This folder is the canonical documentation source for `ida-pro-mcp`.
 
 ## Active documentation
 
-- `../README.md`: project overview, install, architecture, runtime behavior.
-- `TOOLS_REFERENCE.md`: full generated tool/action/argument reference from live schemas.
-- `TECHNICAL_REFERENCE.md`: implementation-level architecture and runtime details.
-- `design/SEMANTIC_MEMORY.md`: local-first semantic memory architecture and capsule workflow.
-- `CARTOGRAPHER_MU.md`: Cartographer-mu semantic engine design.
-- `OPENCODE_SETUP.md`: OpenCode-specific integration/configuration notes.
-- `reference/`: external reference material (IDA headless scripting).
-- `wiki/`: in-tool documentation consumed by the `wiki` MCP tool.
-  - `wiki/tools/*.md`: per-tool manuals generated from live tool metadata.
-  - `wiki/QuickStart.md`: concise operational quickstart.
-  - `wiki/INDEX.md`: generated index of available wiki topics.
-  - `wiki/skills/*`, `wiki/workflows/*`, `wiki/core/*`: analyst workflows and reference content.
+- `../README.md` — project overview, install, architecture, tool surface, runtime behavior
+- `OPENCODE_SETUP.md` — OpenCode-specific configuration and skills
+- `POLICY.md` — governance policy reference
+- `TECHNICAL_REFERENCE.md` — implementation-level architecture and runtime details
+- `TOOLS_REFERENCE.md` — generated tool/action/argument reference from live schemas
+- `design/CAPSULES.md` — experimental Sideband capsule architecture
+- `wiki/` — in-tool documentation consumed by the `wiki` MCP tool
+  - `wiki/QuickStart.md` — concise operational quickstart
+  - `wiki/INDEX.md` — generated index of available wiki topics
+  - `wiki/tools/*.md` — per-tool manuals
 
-## Regeneration model
+## Regeneration
 
-- Tool reference and wiki tool manuals are generated from `ida_mcp_stdio.py` metadata and schema builders.
-- If tool actions/args change, regenerate docs before publishing changes.
+Tool reference and wiki tool manuals are generated from schema metadata in `src/ida_pro_mcp/host/schemas_data.py`. Skills are generated from the same source.
+
+After tool actions or descriptions change:
+```bash
+python scripts/check_schema_integrity.py
+ida-pro-mcp-install --only skills
+```
 
 ## Recommended reading order
 

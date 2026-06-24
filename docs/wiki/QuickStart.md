@@ -5,69 +5,62 @@
 {"name":"session","arguments":{"action":"create","binary_path":"/path/to/binary"}}
 ```
 
-## 2. Orient yourself
+## 2. Get the analysis state
 ```json
-{"name":"llm_helpers","arguments":{"action":"bootstrap"}}
-{"name":"llm_helpers","arguments":{"action":"cheatsheet"}}
+{"name":"session","arguments":{"action":"state"}}
+```
+Returns: binary metadata, coverage, blackboard summary, engine status, and suggested next actions.
+
+> `ida://state` and other `ida://` resources exist in the MCP protocol but are **not** auto-injected — the LLM cannot read them autonomously. Use `session(action='state')` instead.
+
+`tools/list` defaults to `ultra` mode — short routing hints plus action enums, ~9.5k tokens. Use `mode="lean"` or `mode="full"` only when you need exact argument shapes.
+
+## 3. Get ranked next targets
+```json
 {"name":"blackboard","arguments":{"action":"frontier","limit":10}}
-{"name":"idb","arguments":{"action":"meta"}}
-{"name":"data","arguments":{"action":"imports"}}
-{"name":"data","arguments":{"action":"strings","count":50}}
 ```
 
-`tools/list` defaults to `ultra` mode so agents do not burn context on the full schema catalog. Ask for `mode="lean"` or `mode="full"` only when generating or validating exact argument shapes.
-
-## 3. Understand the binary at a glance
+## 4. Decompile a function
 ```json
-{"name":"agent","arguments":{"action":"cluster","max_items":8,"func_limit":200}}
+{"name":"code","arguments":{"action":"smart_decompile","addrs":"0x401000"}}
 ```
-Returns behavioral clusters (crypto, network, injection, etc.) across all functions using bge-code-v1 embeddings.
+`smart_decompile` returns decompiled code + behavior tags + call graph in one call.
 
-## 4. Decompile and classify a function
+## 5. Classify behavior
 ```json
-{"name":"code","arguments":{"action":"decompile","addrs":"0x401000"}}
 {"name":"classify","arguments":{"action":"function","addr":"0x401000"}}
 ```
-`classify` uses BehaviorClassifier (zero-shot embedding similarity) — not keyword matching.
+Uses BehaviorClassifier (zero-shot embedding similarity), not keyword matching.
 
-## 5. Find similar functions
+## 6. Find similar functions
 ```json
 {"name":"agent","arguments":{"action":"similar","addr":"0x401000"}}
 ```
-Uses FunctionEmbeddingIndex (cosine similarity over 1536-dim bge-code-v1 vectors).
 
-## 6. Natural language search
+## 7. Natural language search
 ```json
-{"name":"query","arguments":{"action":"nl","q":"find functions that decrypt strings"}}
+{"name":"search","arguments":{"action":"nl","query":"function that decrypts strings"}}
 ```
 
-## 7. Get rename suggestions for unnamed functions
+## 8. Persist findings
 ```json
-{"name":"funcs","arguments":{"action":"suggest_names","limit":20}}
+{"name":"blackboard","arguments":{"action":"write","addr":"0x401000","category":"vuln","title":"heap overflow in recv handler","confidence":0.85}}
 ```
 
-## 8. Use the blackboard for persistent context
+## 9. Batch multiple calls
 ```json
-{"name":"blackboard","arguments":{"action":"search","query":"crypto key schedule AES"}}
-{"name":"blackboard","arguments":{"action":"list","category":"hypothesis"}}
+{"name":"batch","arguments":{"calls":["idb:meta","data:imports",{"name":"data","action":"strings","count":50}]}}
 ```
-The blackboard auto-captures findings from `memory`, `calc`, `deobfuscate`, `classify`, and `gadgets` — you don't need to write entries manually for those.
 
-## 9. Generate a full report
+## 10. Full report
 ```json
 {"name":"summarize","arguments":{"action":"report"}}
 ```
 
-## 10. Use deterministic workflow planning/execution
-```json
-{"name":"workflow","arguments":{"action":"plan","workflow_action":"triage_fast"}}
-{"name":"workflow","arguments":{"action":"audit_plan","workflow_action":"triage_fast"}}
-{"name":"workflow","arguments":{"action":"execute_plan","workflow_action":"triage_fast","continue_on_error":true}}
-```
-
 ## Key rules
-- `session(action="create")` does not accept `idb_path` or `use_existing`.
-- `idb` is optional once a session is active.
-- Every response includes `context_pack` with relevant prior findings from the blackboard.
-- Use `calc` and `memory` for address arithmetic — never compute addresses mentally.
-- `batch` reduces round-trips for deterministic multi-step flows.
+
+- Write ops (`modify`, `funcs`, `data_ops`, etc.) require `_risk_ack=true`
+- `idb` is optional once a session is active — the active session is used automatically
+- `batch` reduces round-trips for deterministic multi-step flows
+- Use `calc` for address arithmetic
+- Blackboard auto-captures findings from `classify`, `gadgets`, `deobfuscate`, `memory`, `calc` — no manual write needed for those

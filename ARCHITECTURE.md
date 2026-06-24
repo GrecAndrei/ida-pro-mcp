@@ -1,101 +1,112 @@
 ## Architecture Overview
 
-This project has two primary runtime layers:
+Two primary runtime layers:
 
-1. **Host MCP server** (`src/ida_pro_mcp/host/`) — manages sessions, schemas, blackboard, intelligence, and the JSON-RPC bridge to IDA.
-2. **IDA-side tool runtime** (`src/ida_pro_mcp/ida_mcp/` and `src/ida_pro_mcp/server_script.py`) — deterministic IDA SDK tool implementations.
+1. **Host MCP server** (`src/ida_pro_mcp/host/`) — manages sessions, schemas, blackboard, intelligence layer, and the JSON-RPC bridge to IDA.
+2. **IDA-side tool runtime** (`src/ida_pro_mcp/ida_mcp/` + `src/ida_pro_mcp/server_script.py`) — deterministic IDA SDK tool implementations, runs inside `idat`.
 
-`ida_mcp_stdio.py` is the stdio entrypoint used by MCP clients.
+Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-RPC).
 
 ## High-Level Data Flow
 
-1. MCP client calls tool over stdio JSON-RPC.
-2. Host server resolves session/runtime and validates args/schemas.
-3. Host forwards tool call to IDA runtime over local TCP bridge.
-4. IDA tool executes deterministic SDK logic and returns structured output.
-5. Host post-processes response (compact/truncation/enrichment) and replies.
+1. MCP client sends tool call over stdio JSON-RPC
+2. Host server resolves session/runtime, validates args/schemas
+3. Host forwards call to IDA runtime over local TCP bridge
+4. IDA tool executes deterministic SDK logic, returns structured output
+5. Host post-processes response (compact/truncation/blackboard/intelligence) and replies
 
 ## Module Boundaries
 
-- `src/ida_pro_mcp/services.py`
-  - **Single import contract** for all subsystems.
-  - Tools and test files import from here, not from `host/*` directly.
-  - Internal `host/` structure can change freely — only this file needs updating.
-
 - `src/ida_pro_mcp/host/server/`
-  - Core host server object (`server.py`) and behavior mixins:
-    - `server_runtime.py` — runtime lifecycle and process management
-    - `server_runtime_leases.py` — runtime lease file tracking
-    - `server_session.py` — session CRUD and lifecycle
-    - `server_session_bootstrap.py` — bootstrap evidence control loop
-    - `server_dispatch.py` — tool dispatch and routing
-    - `server_response.py` / `server_response_compact.py` — response processing
-    - `server_batch.py` — batch macro execution
-    - `server_blackboard.py` — blackboard integration
-    - `server_semantic.py` — semantic search integration
-    - `server_threat_hunt.py` — threat hunt integration
-    - `server_workflow.py` / `server_workflow_batch.py` — workflow orchestration
-    - `server_predictor.py` — predictive prefetching
-    - `server_wiki.py` — wiki tool integration
+  - `server.py` — core server object, MCP protocol handling, `tools/list` and `tools/call`
+  - `server_dispatch.py` — tool dispatch, routing, phase-gate preflight, policy audit
+  - `server_session.py` — session CRUD and lifecycle (including `session(action='state')`)
+  - `server_session_bootstrap.py` — bootstrap evidence control loop (calibration, tournament, drift)
+  - `server_runtime.py` — runtime (idat process) lifecycle and process management
+  - `server_runtime_leases.py` — runtime lease file tracking
+  - `server_response.py` / `server_response_compact.py` — response processing, compaction
+  - `server_batch.py` — batch macro execution
+  - `server_blackboard.py` — blackboard tool integration
+  - `server_semantic.py` — semantic search integration
+  - `server_threat_hunt.py` — threat hunt integration
+  - `server_workflow.py` / `server_workflow_batch.py` — workflow orchestration
+  - `server_predictor.py` — predictive strategy suggestion
+  - `server_wiki.py` — wiki tool integration
+  - `resources.py` — `ida://` MCP resource definitions and `ResourceResolver`
+  - `tool_registry.py` — canonical action lists and argument schemas
+  - `session_skills.py` / `session_skills_bootstrap.py` — session-level skills and bootstrap mixin
 
 - `src/ida_pro_mcp/host/analysis/`
   - `analysis_engine.py` — AnalysisEngine lifecycle and stage logic
-  - `analysis_engine_kg.py` — Knowledge Graph mixin for AnalysisEngine
-  - `analysis_proposal_store.py` — ProposalStore CRUD
   - `frontier.py` — FrontierEngine (embedding-driven analysis guidance)
-  - `gap_engine.py` — GapEngine for coverage gap detection
-  - `narrative_engine.py` — NarrativeEngine for blackboard narrative
   - `context_density.py` — ContextDensityOptimizer
   - `patterns.py` — pattern matching helpers
 
 - `src/ida_pro_mcp/host/stores/`
   - `blackboard_store.py` — BlackboardStore SQLite-backed durable store
-  - `knowledge_graph.py` — KnowledgeGraph for relationship tracking
-  - `chip_db.py` — Chip DB for architecture profiles
-  - `symbol_db.py` — SymbolDB for symbol management
+  - `knowledge_graph.py` — KnowledgeGraph relationship tracking
   - `insight_index.py` — insight indexing
 
 - `src/ida_pro_mcp/host/schemas*.py`
-  - Tool registry metadata (names, actions, argument schemas, aliases).
-  - Source-of-truth for exposed tool contracts.
+  - Tool registry metadata: names, descriptions, actions, argument schemas, aliases
+  - Source-of-truth for all exposed tool contracts
 
 - `src/ida_pro_mcp/host/intelligence/`
-  - ML components: BehaviorClassifier, BgeCodeEmbedder, ContextAssembler,
-    FrontierEngine, UsageIntelligence, etc.
+  - BehaviorClassifier, BgeCodeEmbedder, ContextAssembler, UsageIntelligence
 
 - `src/ida_pro_mcp/ida_mcp/tools/*.py`
-  - IDA-side tool implementations.
-  - Keep tool output deterministic, structured, and stable.
+  - IDA-side tool implementations
+  - Keep tool output deterministic, structured, and stable
 
-- `src/ida_pro_mcp/ida_mcp/tools/_common.py`
-  - Shared imports/helpers for tool modules.
+- `src/ida_pro_mcp/installer/`
+  - `main.py` — installer entry point (`ida-pro-mcp-install` / `python install.py`)
+  - `skills/__init__.py` — auto-generates Claude Code / OpenCode skills from TOOL_DESCRIPTIONS
+
+## MCP Resources
+
+`ida://` resources are defined in `resources.py` and served via `resources/read`. They are **application-driven** — the LLM cannot read them autonomously; the client UI must explicitly attach them.
+
+The most important resource (`ida://state`) is also accessible as `session(action='state')` — a real tool call the LLM can use directly.
+
+## Tool Call Dispatch Pipeline
+
+1. Canonicalize tool name (alias resolution)
+2. Strip and validate response options (`_response_mode`, `_qol_mode`, etc.)
+3. Policy audit log
+4. Phase-gate preflight — skipped when `_risk_ack=true`
+5. Route to host-side handler (session/blackboard/workflow/etc.) or forward to IDA via TCP RPC
+6. IDA tool execution (deterministic SDK logic)
+7. Host: compact/truncate response
+8. Host: auto-blackboard extraction from response payload
+9. Host: intelligence context injection (top-3 blackboard recall hints in compact mode)
+10. Return MCP content
 
 ## Complexity Hotspots
 
-The largest orchestration surfaces are currently:
-
-- `src/ida_pro_mcp/ida_mcp/tools/firmware_view.py`
-- `src/ida_pro_mcp/ida_mcp/tools/llm_helpers.py`
-- `src/ida_pro_mcp/host/server/workflow.py`
-- `src/ida_pro_mcp/ida_mcp/tools/code.py`
+- `src/ida_pro_mcp/ida_mcp/tools/firmware_view.py` — largest tool, full firmware analysis campaign
+- `src/ida_pro_mcp/ida_mcp/tools/llm_helpers.py` — analysis helpers
+- `src/ida_pro_mcp/host/server/server_workflow.py` — workflow orchestration
+- `src/ida_pro_mcp/ida_mcp/tools/code.py` — decompile, smart_decompile, ctree integration
 
 ## Design Rules
 
-- **Deterministic first**: tool outputs should not depend on hidden mutable state.
-- **Stable schemas**: prefer additive changes over breaking shape changes.
-- **Backward compatibility**: preserve existing aliases and action compatibility where possible.
-- **Defensive errors**: return structured errors with actionable hints.
+- **Deterministic first**: tool outputs must not depend on hidden mutable state
+- **Stable schemas**: prefer additive changes over breaking shape changes
+- **Backward compatibility**: preserve existing aliases and action compatibility
+- **Defensive errors**: return structured errors (`{"error": true, "code": "...", "message": "..."}`) with actionable hints
+- **No LLM runtime**: tool execution is pure IDA SDK + local ML; no server-side LLM calls
 
 ## Safe Areas For New Contributors
 
-- New isolated tool actions with tests.
-- Documentation and wiki improvements.
-- Error-message quality improvements.
-- Response compaction/truncation tests.
+- New isolated tool actions with tests
+- Documentation and wiki improvements
+- Error-message quality improvements
+- Response compaction/truncation tests
 
 ## Risky Areas (Review Carefully)
 
-- Session/runtime lifecycle and process management.
-- Tool/action schema contract changes.
-- Bridge protocol behavior between host and IDA runtime.
-- Large workflow/planner behavior that alters action execution ordering.
+- Session/runtime lifecycle and process management
+- Tool/action schema contract changes (regenerate skills and tool docs after)
+- Bridge protocol between host and IDA runtime
+- Workflow/planner behavior that alters action execution ordering
+- Blackboard auto-extraction pipeline (affects every tool response)
