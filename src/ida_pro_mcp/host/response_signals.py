@@ -163,9 +163,10 @@ def _update_kg_from_hypothesis(db_path: str, addr: str,
         return
     try:
         import importlib.util
+        # response_signals.py is in host/; knowledge_graph.py is in host/stores/.
         _kg_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
-            "knowledge_graph.py",
+            "stores", "knowledge_graph.py",
         )
         if not os.path.exists(_kg_path):
             return

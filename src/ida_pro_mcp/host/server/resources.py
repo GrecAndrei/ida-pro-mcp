@@ -414,8 +414,9 @@ class ResourceResolver:
         # 6. KnowledgeGraph summary + narrative
         try:
             import importlib.util as _ilu, os as _os
+            # resources.py is in host/server/; knowledge_graph.py is in host/stores/.
             _kg_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
-                                     "knowledge_graph.py")
+                                     "..", "stores", "knowledge_graph.py")
             _spec = _ilu.spec_from_file_location("_state_kg", _kg_path)
             _kgmod = _ilu.module_from_spec(_spec)
             _spec.loader.exec_module(_kgmod)
@@ -598,8 +599,9 @@ class ResourceResolver:
             return _make_json_content({"error": "No blackboard path available"})
         try:
             import importlib.util as _ilu, os as _os
+            # resources.py is in host/server/; knowledge_graph.py is in host/stores/.
             _kg_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
-                                     "knowledge_graph.py")
+                                     "..", "stores", "knowledge_graph.py")
             _spec = _ilu.spec_from_file_location("_res_kg", _kg_path)
             _kgmod = _ilu.module_from_spec(_spec)
             _spec.loader.exec_module(_kgmod)

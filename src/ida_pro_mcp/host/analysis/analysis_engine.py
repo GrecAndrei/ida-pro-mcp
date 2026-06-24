@@ -727,9 +727,11 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
         """
         try:
             import importlib.util, os as _os
+            # analysis_engine.py is in host/analysis/; blackboard.py is at the
+            # package root (ida_pro_mcp/ida_mcp/tools/) — two levels up.
             path = _os.path.join(
                 _os.path.dirname(_os.path.abspath(__file__)),
-                "..", "ida_mcp", "tools", "blackboard.py"
+                "..", "..", "ida_mcp", "tools", "blackboard.py"
             )
             spec = importlib.util.spec_from_file_location("_engine_bb_cf", _os.path.abspath(path))
             mod = importlib.util.module_from_spec(spec)
@@ -1055,9 +1057,11 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
     def _bb_store(self):
         try:
             import importlib.util
+            # analysis_engine.py is in host/analysis/; blackboard.py is at the
+            # package root (ida_pro_mcp/ida_mcp/tools/) — two levels up.
             path = os.path.join(
                 os.path.dirname(os.path.abspath(__file__)),
-                "..", "ida_mcp", "tools", "blackboard.py"
+                "..", "..", "ida_mcp", "tools", "blackboard.py"
             )
             spec = importlib.util.spec_from_file_location("_engine_bb", path)
             mod = importlib.util.module_from_spec(spec)
