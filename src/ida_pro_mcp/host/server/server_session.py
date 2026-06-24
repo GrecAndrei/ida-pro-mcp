@@ -330,6 +330,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         "recent_workset": "_session_action_recent_workset",
         "kill": "_session_action_kill",
         "state": "_session_action_state",
+        "logs": "_session_action_logs",
     }
 
     def _handle_session(self, args: dict) -> dict:
@@ -931,6 +932,44 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             return {"ok": True, "state": content}
         except Exception as e:
             return make_error(MCPError.IDA_ERROR, f"state failed: {e}")
+
+    def _session_action_logs(self, args: dict) -> dict:
+        """Return recent IDA stdout/stderr log lines — reads files directly, no IDA RPC."""
+        session = self.current_session
+        if not session:
+            return make_error(MCPError.SESSION_REQUIRED, "No active session.")
+        runtime = self.session_runtimes.get(session.session_id) if hasattr(self, "session_runtimes") else None
+        if not isinstance(runtime, dict):
+            return make_error(MCPError.IDA_ERROR, "No runtime record for current session.")
+        try:
+            lines = int(args.get("lines") or args.get("tail") or 60)
+        except Exception:
+            lines = 60
+        lines = max(1, min(lines, 500))
+        stdout_log = runtime.get("stdout_log")
+        stderr_log = runtime.get("stderr_log")
+        if not stderr_log and stdout_log:
+            err_guess = stdout_log.replace("ida_stdout_", "ida_stderr_")
+            if err_guess != stdout_log:
+                stderr_log = err_guess
+        out_text = self._tail_text_file(stdout_log, tail_lines=lines) if stdout_log else ""
+        err_text = self._tail_text_file(stderr_log, tail_lines=lines) if stderr_log else ""
+        alive = False
+        if runtime.get("process"):
+            try:
+                alive = runtime["process"].poll() is None
+            except Exception:
+                pass
+        return {
+            "ok": True,
+            "session_id": session.session_id,
+            "ida_alive": alive,
+            "stdout_log": stdout_log,
+            "stderr_log": stderr_log,
+            "stdout_tail": out_text or "(empty)",
+            "stderr_tail": err_text or "(empty)",
+            "lines_requested": lines,
+        }
 
     def _session_action_status(self, args: dict) -> dict:
         if self.current_session:
