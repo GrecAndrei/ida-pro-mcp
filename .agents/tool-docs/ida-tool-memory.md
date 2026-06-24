@@ -39,10 +39,17 @@ Read, write, and inspect raw memory/bytes in the binary or debuggee, plus host f
 ## Parameters
 - `action`: `string` - allowed_count: `13`
 - `addr`: `string`
+- `addr1`: `string`
+- `addr2`: `string`
 - `content`: `string` - Content to write for write_file
 - `data`: `string`
+- `depth`: `integer`
 - `encoding`: `string` - File encoding (default: utf-8). Use 'binary' for hex-encoded binary data.
+- `end_addr`: `string`
+- `int_width`: `integer`
 - `path`: `string` - File path for read_file/write_file
+- `pattern`: `string`
+- `regex`: `boolean`
 - `size`: `integer`
 - `type`: `string` - allowed_count: `13`
 - `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).

@@ -37,6 +37,7 @@ Controls IDA analysis engine settings and triggers reanalysis, and runs IDA plug
 - `action`: `string` - allowed: `plugin_run, get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze, run, analyze, wait`
 - `arg`: `integer` - Plugin argument for plugin_run
 - `bitness`: `integer`
+- `blocking`: `boolean`
 - `end`: `string`
 - `endian`: `string`
 - `flags`: `integer`
@@ -44,10 +45,13 @@ Controls IDA analysis engine settings and triggers reanalysis, and runs IDA plug
 - `max_wait`: `number`
 - `name`: `string` - Plugin name for plugin_run
 - `options`: `object`
+- `poll_timeout`: `number`
 - `processor`: `string`
+- `pump`: `boolean`
 - `start`: `string`
 - `timeout`: `number`
 - `value`: `string|object`
+- `wait`: `boolean`
 - `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 
 ## Minimal Call Shapes

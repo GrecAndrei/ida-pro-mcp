@@ -43,6 +43,7 @@ Intelligence subsystem: embedding-based function classification, indexing, simil
 - `constraints`: `object` - Structured query constraints
 - `deep_hash`: `boolean`
 - `include_apis`: `boolean` - Include API list in results
+- `include_resolved`: `boolean`
 - `include_strings`: `boolean` - Include string refs in results
 - `limit`: `integer`
 - `max_items`: `integer`
@@ -50,6 +51,7 @@ Intelligence subsystem: embedding-based function classification, indexing, simil
 - `order_by`: `string` - Column to order by (e.g., 'entropy DESC')
 - `probe`: `boolean`
 - `query`: `string`
+- `similar_top_k`: `integer`
 - `threshold`: `number`
 - `top_k`: `integer`
 - `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).

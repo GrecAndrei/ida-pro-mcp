@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Change data representation at addresses: define types, arrays, strings, pointers. Actions: make_data, make_array, make_string, undefine, make_code, cycle_data, set_repr (hex/dec/bin/char/offset via repr param), make_ptr.
+Change data representation at addresses (≈ IDA Edit menu / D/A/O/U keys). cycle_data: step byte→word→dword→qword at addr (≡ pressing D in IDA). make_data: force a specific size. make_array: define an array. make_string: define a string literal (≡ A in IDA). undefine: undefine bytes (≡ U in IDA). make_code: convert to code (≡ C in IDA). set_repr: change display radix (hex/dec/bin/char/offset). make_ptr: mark as pointer. Actions: make_data, make_array, make_string, undefine, make_code, cycle_data, set_repr, make_ptr.
 
 ## Actions
 - `make_data` (tool-specific)

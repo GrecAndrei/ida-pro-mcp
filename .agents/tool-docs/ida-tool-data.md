@@ -41,6 +41,7 @@ Retrieve core IDB data. functions: list all functions — always includes xref c
 - `min_size`: `integer`
 - `named_only`: `boolean`
 - `offset`: `integer`
+- `queries`: `array`
 - `query`: `string`
 - `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 

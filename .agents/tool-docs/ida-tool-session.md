@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Full session lifecycle with runtime tracking, analysis notebook, hypothesis tracking. Actions: create/switch/close/list/status, snapshot/restore, rate_skill/suggest_strategy/suggest_triage/suggest_analogy/apply_analogy, notebook_append/read, track_hypothesis/confirm/refute, get_phase/advance_phase, recent_workset, macro_set/run, dashboard, health. cleanup_stale: remove sessions older than max_age_days (default 30) — run this when sessions accumulate. health: server, runtime, IDA, session, wiki, and tool-surface diagnostics (verbose=true for per-runtime breakdown).
+Full session lifecycle with runtime tracking, analysis notebook, hypothesis tracking. state: full analysis state snapshot (binary, coverage, blackboard summary, engine status, next actions) — call this at the start of every turn instead of reading the ida://state resource. Actions: create/switch/close/list/status/state, snapshot/restore, rate_skill/suggest_strategy/suggest_triage/suggest_analogy/apply_analogy, notebook_append/read, track_hypothesis/confirm/refute, get_phase/advance_phase, recent_workset, macro_set/run, dashboard, health. cleanup_stale: remove sessions older than max_age_days (default 30). health: server, runtime, IDA, session, wiki diagnostics.
 
 ## Actions
 - `health` (tool-specific)
@@ -69,6 +69,7 @@ Full session lifecycle with runtime tracking, analysis notebook, hypothesis trac
 - `macro_run` (tool-specific)
 - `recent_workset` (tool-specific)
 - `kill` (tool-specific)
+- `state` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
@@ -84,7 +85,7 @@ Full session lifecycle with runtime tracking, analysis notebook, hypothesis trac
 - Keep calls narrow: include only the minimum fields needed for one action.
 
 ## Parameters
-- `action`: `string` - allowed_count: `60`
+- `action`: `string` - allowed_count: `61`
 - `aggressive_cleanup`: `boolean`
 - `analysis_actions`: `array`
 - `analysis_options`: `object` - Advanced analysis payload. Preferred for architecture/loader config at session creation.

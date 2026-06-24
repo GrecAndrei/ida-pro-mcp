@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Firmware RE knowledge base: findings, hypotheses, IOCs, vulns, regions, and knowledge graph. write/read/list/search/update/delete/clear/prune/stats/merge: CRUD. semantic_index/semantic_rebuild: persistent semantic vector lifecycle for entries. related_by_behavior: behavior-centric semantic retrieval over stored notes. frontier: ranked unvisited functions by embedding proximity + xref + entropy (read when choosing what to analyze next). coverage: analyzed vs unvisited per embedding cluster (read to understand progress). propagate_labels: spread LLM labels to embedding-similar neighbors via FrontierEngine. next_target: priority queue (confidence × time_decay × xref_boost). contradict/resolve/add_evidence/calibrate: evidence lifecycle. campaign_summary/auto_tag_propagate: batch operations. start_crawler/stop_crawler/crawler_status/accept/reject: background xref crawler. KG actions: kg_add_system/kg_add_struct/kg_add_gap/kg_add_state_machine/kg_add_attack_surface/kg_add_peripheral + read variants.
+Persistent RE knowledge base: findings, hypotheses, IOCs, decisions, and knowledge graph. write/read/list/search/update/delete: CRUD for findings. frontier: ranked unvisited functions — read this when choosing what to analyze next. next_target: priority queue by confidence×recency×xrefs. decision_card: record a verified claim with evidence citations (required before write-surface tools in prove phase). contradict/resolve/add_evidence/calibrate: evidence lifecycle. Actions: write, read, list, search, update, delete, clear, stats, frontier, next_target, decision_card, working_set, state_health, contradict, resolve, add_evidence, calibrate, campaign_summary, propagate_labels, start_crawler, stop_crawler, phase_set, phase_status, policy_set, policy_check.
 
 ## Actions
 - `policy_set` (tool-specific)
@@ -96,18 +96,35 @@ Firmware RE knowledge base: findings, hypotheses, IOCs, vulns, regions, and know
 ## Parameters
 - `action`: `string` - allowed_count: `70`
 - `addr`: `string` - Associated address
+- `binary_type`: `string`
+- `call_stack`: `array`
 - `category`: `string` - Category (default: general)
 - `confidence`: `number` - Confidence score 0-1
 - `content`: `string` - Content/body text
 - `db_path`: `string` - Override path to blackboard SQLite DB
+- `drivers`: `array`
 - `entry_id`: `string` - Entry ID for read/update/delete
+- `entry_points`: `array`
+- `exit_points`: `array`
+- `filled_by`: `string`
 - `force`: `boolean` - Force semantic_rebuild to re-embed all matching entries
+- `gap_id`: `string`
+- `gap_type`: `string`
+- `hints`: `array`
 - `include_contradicted`: `boolean` - Include contradicted entries in semantic retrieval
 - `include_resolved`: `boolean` - Include resolved entries in semantic retrieval
+- `input_type`: `string`
 - `limit`: `integer` - Max entries to return
+- `members`: `array`
 - `min_confidence`: `number` - Minimum confidence filter
 - `offset`: `integer` - Pagination offset
+- `periph_type`: `string`
 - `query`: `string` - Semantic/behavior query for search and related_by_behavior
+- `reachable_from`: `array`
+- `resolved`: `boolean`
+- `size_bytes`: `integer`
+- `state_var`: `string`
+- `states`: `array`
 - `tag`: `string` - Filter by single tag
 - `tags`: `array` - Tags for categorization
 - `threshold`: `number` - Similarity threshold for semantic retrieval

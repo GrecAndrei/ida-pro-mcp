@@ -43,10 +43,20 @@ High-level AI-assisted analysis combining search, context packing, multi-hop dis
 ## Parameters
 - `action`: `string` - allowed_count: `17`
 - `addr`: `string`
+- `db_path`: `string`
 - `depth`: `integer`
+- `func_limit`: `integer`
+- `include_evidence`: `boolean`
 - `include_pseudocode`: `boolean`
+- `items`: `array`
+- `k`: `integer`
+- `limit`: `integer`
 - `max_items`: `integer`
+- `persist_blackboard`: `boolean`
+- `persist_capsule`: `boolean`
 - `query`: `string`
+- `threshold`: `number`
+- `top_k`: `integer`
 - `use_cache`: `boolean`
 - `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 

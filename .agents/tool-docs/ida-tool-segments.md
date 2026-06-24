@@ -37,12 +37,23 @@ List, create, modify, and analyze binary segments and their permissions/attribut
 
 ## Parameters
 - `action`: `string` - allowed: `list, add, delete, set_attr, set_perms, move, info, analyze, find_code, find_data, compare, merge`
+- `addr`: `string`
+- `addr2`: `string`
+- `address`: `string`
+- `address2`: `string`
 - `attr`: `string`
 - `count`: `integer`
+- `ea`: `string`
+- `ea2`: `string`
 - `end`: `string`
 - `name`: `string`
+- `name2`: `string`
 - `offset`: `integer`
 - `sclass`: `string`
+- `segment`: `string`
+- `segment2`: `string`
+- `segment_name`: `string`
+- `segment_name2`: `string`
 - `start`: `string`
 - `value`: `string|integer`
 - `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).

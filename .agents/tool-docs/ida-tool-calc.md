@@ -37,6 +37,8 @@ Safe address arithmetic and pointer resolution—use instead of mental math. Inc
 - `bit_op`: `string`
 - `expr`: `string`
 - `offsets`: `array|string`
+- `op`: `string`
+- `query`: `string`
 - `size`: `integer`
 - `target`: `string`
 - `type`: `string`

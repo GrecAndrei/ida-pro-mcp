@@ -33,6 +33,7 @@ Query top-level IDB metadata: binary info, segments, entrypoints, bookmarks, and
 
 ## Parameters
 - `action`: `string` - allowed: `meta, summary, segments, entrypoints, bookmarks, overview, architecture_profile, state`
+- `audit_tail`: `integer`
 - `count`: `integer`
 - `offset`: `integer`
 - `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).

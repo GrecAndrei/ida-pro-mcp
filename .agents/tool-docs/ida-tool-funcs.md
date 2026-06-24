@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Function boundary management with regex/glob/substring filtering. Actions: create, delete, set_flags, info, metrics, find_similar, suggest_names. (Renames/comments/listings live on modify and data.)
+Function boundary management (≈ IDA P/Delete keys). create: define a function at addr (≡ pressing P in IDA). delete: remove function definition. info: full function metadata — pass include_xrefs/include_prototype/include_stack for richer output. metrics: size/complexity/call counts. find_similar: structural similarity search. suggest_names: name candidates from heuristics. Note: renames and comments live on modify; listings on code. Actions: create, delete, set_flags, info, metrics, find_similar, suggest_names.
 
 ## Actions
 - `create` (write/mutate)
@@ -35,18 +35,28 @@ Function boundary management with regex/glob/substring filtering. Actions: creat
 - `addr`: `string`
 - `comment`: `string`
 - `count`: `integer`
+- `ea`: `string`
 - `end`: `string`
+- `end_ea`: `string`
 - `flags`: `integer`
 - `force`: `boolean`
+- `function`: `string`
 - `include_items`: `boolean`
 - `include_prototype`: `boolean`
 - `include_stack`: `boolean`
 - `include_xrefs`: `boolean`
+- `limit`: `integer`
+- `min_score`: `number`
 - `name`: `string`
 - `named_only`: `boolean`
 - `offset`: `integer`
 - `query`: `string`
 - `repeatable`: `boolean`
+- `start`: `string`
+- `stop`: `string`
+- `target`: `string`
+- `threshold`: `number`
+- `top_k`: `integer`
 - `action` wrappers accepted by host: `grep, head, tail, pick, next, stats` (in addition to tool-specific enum values above).
 
 ## Minimal Call Shapes
