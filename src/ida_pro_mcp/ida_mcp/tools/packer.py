@@ -21,6 +21,8 @@ existing tools already do it.
 """
 from __future__ import annotations
 
+import time
+
 try:
     from ._common import *
 except ImportError:

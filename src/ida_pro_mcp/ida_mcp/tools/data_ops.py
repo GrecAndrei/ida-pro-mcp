@@ -130,11 +130,27 @@ def data_ops(
         elif action == "make_string":
             str_types = {0: idc.STRTYPE_C, 1: idc.STRTYPE_PASCAL, 2: idc.STRTYPE_C_16}
             stype = str_types.get(str_type, idc.STRTYPE_C)
-            length = size or idaapi.BADADDR
+            # IDA 9.3: idc.create_strlit(ea, endea) takes exactly 2 positional args
+            # (strtype is NOT positional). A finite size must be turned into an end
+            # address (ea + size); passing a bare small int as endea (< ea) raises
+            # OverflowError from SWIG, which the old `except TypeError` did not catch,
+            # turning a recoverable failure into an UNKNOWN_ERROR crash. None size
+            # means auto-detect to the item end (BADADDR).
+            if size and int(size) > 0:
+                end_ea = ea + int(size)
+            else:
+                end_ea = idc.BADADDR
             try:
-                created = idc.create_strlit(ea, length if length != idaapi.BADADDR else idc.BADADDR, stype)
-            except TypeError:
-                created = idc.create_strlit(ea, length if length != idaapi.BADADDR else idc.BADADDR)
+                created = idc.create_strlit(ea, end_ea)
+            except (TypeError, OverflowError):
+                created = False
+            # idc.create_strlit always creates a C string; honor a non-default
+            # strtype best-effort via ida_bytes when available.
+            if created and stype != idc.STRTYPE_C:
+                try:
+                    ida_bytes.set_str_type(ea, stype)  # type: ignore[attr-defined]
+                except Exception:
+                    pass
             if created:
                 return _attach_ml_context({"ok": True, "addr": addr, "type": str_type, "action": action}, action, f"str_type={str_type}")
             return make_error(MCPError.IDA_ERROR, "Failed to create string")

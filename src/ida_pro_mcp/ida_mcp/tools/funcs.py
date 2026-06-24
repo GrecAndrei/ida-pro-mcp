@@ -537,6 +537,11 @@ def _funcs_impl(
             callees = _collect_callees(fn.start_ea)
             info["caller_count"] = len(callers)
             info["callee_count"] = len(callees)
+            # These optional flags are part of the tool schema but the function
+            # signature uses **kwargs, so they must be extracted explicitly.
+            include_xrefs = bool(kwargs.get("include_xrefs", False))
+            include_prototype = bool(kwargs.get("include_prototype", False))
+            include_stack = bool(kwargs.get("include_stack", False))
             if include_xrefs:
                 info["callers_sample"] = [hex_ea(x) for x in callers[:16]]
                 info["callees_sample"] = [hex_ea(x) for x in callees[:16]]
