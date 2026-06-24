@@ -16,6 +16,7 @@ class InstallerOptions:
     rollback_on_fail: bool = False
     runtime_source: str = "auto"
     skills_mode: str = "router"
+    install_claude_skills: bool = True  # install skills for Claude Code / OpenCode
     interactive: bool | None = None
     embed_auto: bool = True
     embed_model_path: str = ""

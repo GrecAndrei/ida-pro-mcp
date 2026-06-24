@@ -337,6 +337,11 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
         opts.skills_mode,
     )
 
+    opts.install_claude_skills = _prompt_yes_no(
+        "Install auto-generated skills for Claude Code / OpenCode (~/.claude/skills, ~/.config/opencode/skills)?",
+        default=opts.install_claude_skills,
+    )
+
     auto_embed_model = find_embed_model(opts.install_root or get_install_root())
     auto_embed_server = find_llama_server_bin(opts.install_root or get_install_root())
     if auto_embed_model:
@@ -429,6 +434,30 @@ def _replace_with_symlink_or_copy(src: Path, dst: Path) -> str:
         return "copied"
 
 
+def _install_claude_opencode_skills(report: InstallReport, dry_run: bool, ui: "UI") -> None:
+    """Auto-generate and install skills for Claude Code and OpenCode."""
+    try:
+        from .skills import install_skills, default_skill_dirs
+    except ImportError as exc:
+        report.add_warning(f"claude-skills: import error — {exc}")
+        return
+    try:
+        target_dirs = default_skill_dirs()
+        written = install_skills(target_dirs, dry_run=dry_run)
+        count = sum(len(paths) for paths in written.values())
+        for skill_name, paths in written.items():
+            for p in paths:
+                report.add_modified(p)
+        action = "would install" if dry_run else "installed"
+        report.add_step(
+            "claude-skills", "ok" if not dry_run else "dry-run",
+            f"{action} {len(written)} skills ({count} files) to {len(target_dirs)} dirs",
+        )
+        ui.ok(f"Claude/OpenCode skills: {action} {len(written)} skills")
+    except Exception as exc:
+        report.add_warning(f"claude-skills install failed: {exc}")
+
+
 def install_codex_skills(source_root: Path, mode: str, report: InstallReport, dry_run: bool) -> None:
     if mode == "none":
         report.add_step("skills", "skipped", "skills mode set to none")
@@ -479,6 +508,8 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
     )
     parser.add_argument("--no-embed-auto", action="store_true", help="disable automatic embedder/server discovery")
     parser.add_argument("--skills-mode", choices=["router", "full", "none"], default="router", help="Codex skill installation mode")
+    parser.add_argument("--install-skills", action="store_true", default=True, help="install auto-generated skills for Claude Code / OpenCode (default: on)")
+    parser.add_argument("--no-install-skills", action="store_true", help="skip Claude Code / OpenCode skill installation")
     parser.add_argument("--capsule", default="", help="optional path to write installer metadata capsule (.sideband)")
     parser.add_argument("--only", action="append", choices=["runtime", "clients", "skills", "shell"], default=[], help="run only selected install phases")
     parser.add_argument("--install-root", default="", help="override install root directory")
@@ -506,6 +537,7 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         rollback_on_fail=args.rollback_on_fail,
         runtime_source=args.runtime_source,
         skills_mode=args.skills_mode,
+        install_claude_skills=not args.no_install_skills,
         interactive=True if args.interactive else (False if args.no_interactive else None),
         embed_auto=not args.no_embed_auto,
         embed_model_path=args.embed_model,
@@ -673,6 +705,12 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
             ui.info("Installing Codex skills")
             install_codex_skills(source_root, opts.skills_mode, report, opts.dry_run)
             ui.ok("Codex skills processed")
+
+            if opts.install_claude_skills:
+                ui.info("Installing Claude Code / OpenCode skills")
+                _install_claude_opencode_skills(report, opts.dry_run, ui)
+            else:
+                report.add_step("claude-skills", "skipped", "disabled by user")
         else:
             report.add_step("skills", "skipped", "filtered by --only")
 
