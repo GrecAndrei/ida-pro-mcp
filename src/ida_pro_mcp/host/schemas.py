@@ -573,6 +573,17 @@ def build_input_schema_ultra(tool_name: str) -> dict:
             "required": ["action"],
         }
 
+    if tool_name == "session":
+        return {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": _action_enum_with_grep("session", compact_surface=True)},
+                "binary_path": {"type": "string", "description": "Absolute path to target binary (required for action='create')."},
+                "idb": {"type": "string", "description": "Optional. session_id, SID_* id, or IDB path."},
+            },
+            "required": ["action"],
+        }
+
     props: Dict[str, Any] = {}
     required: List[str] = []
     action_enum = TOOL_ACTIONS.get(tool_name)
