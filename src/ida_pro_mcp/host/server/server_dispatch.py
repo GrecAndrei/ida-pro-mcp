@@ -1026,9 +1026,15 @@ class ServerDispatchMixin:
                 logging.getLogger(__name__).debug("governance check failed: %s", _e)
 
             # ---- Phase-state preflight (adaptive choreography) ----
+            # Skipped when _risk_ack=true: the caller already acknowledged the
+            # risk explicitly, so demanding a blackboard evidence chain on top
+            # is redundant friction.
             try:
-                if tool_name != "blackboard" and hasattr(self, "_phase_preflight_for_tool"):
-                    phase_block = self._phase_preflight_for_tool(tool_name, args if isinstance(args, dict) else {})
+                _args_for_phase = args if isinstance(args, dict) else {}
+                if (tool_name != "blackboard"
+                        and not bool(_args_for_phase.get("_risk_ack", False))
+                        and hasattr(self, "_phase_preflight_for_tool")):
+                    phase_block = self._phase_preflight_for_tool(tool_name, _args_for_phase)
                     if isinstance(phase_block, dict) and phase_block.get("error"):
                         return phase_block
             except Exception as _e:
