@@ -631,9 +631,9 @@ def _apply_pre_analysis_options():
 
 if __name__ == "__main__":
     _apply_pre_analysis_options()
-    # Start server immediately — do NOT block on auto-analysis.
-    # IDA continues analyzing in background; the server answers queries
-    # as they come. Complex tools (decompile) may internally wait.
-    log_ev("Starting server immediately (auto-analysis runs in background)...")
+    log_ev("Waiting for auto-analysis to complete...")
+    idc.auto_wait()
+    log_ev("Auto-analysis finished.")
     load_tools()
+    log_ev("Starting server (analysis complete)...")
     run_server()

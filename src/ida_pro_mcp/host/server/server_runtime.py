@@ -2207,34 +2207,14 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             self._session_last_activity[session_id] = time.time()
             self._update_session_indexing_metadata(
                 session_id,
-                indexing_mode="hotset_idle",
-                indexing_state="scheduled",
+                indexing_mode="none",
+                indexing_state="disabled",
                 hot_indexed_count=0,
-                indexing_complete=False,
+                indexing_complete=True,
             )
-            try:
-                from ..analysis.analysis_engine import AnalysisEngine
-
-                bb_path = self._session_blackboard_path(session_obj=session, sid=session_id)
-                proposals_path = os.path.join(self.cache_dir, f"{session_id}.proposals.db")
-                engine = AnalysisEngine(
-                    session_id=session_id,
-                    rpc_fn=lambda tool, args: self._send_rpc_raw(
-                        {"tool": tool, "args": args}, server_port, timeout=30.0
-                    ),
-                    notify_fn=self._send_notification,
-                    bb_path=bb_path,
-                    proposals_path=proposals_path,
-                    embeddings_dir=self.cache_dir,
-                )
-                engine.start()
-                self._analysis_engines[session_id] = engine
-                log_rpc(f"[idle-index] Analysis engine started for {session_id}")
-            except Exception as e:
-                log_rpc(f"[idle-index] Analysis engine failed to start (non-fatal): {e}")
-            self._start_idle_index_worker(session_id, server_port)
             # Watchdog gives the host an honest picture of IDA's analysis
-            # progress (and stalls) while the background analysis runs.
+            # progress (and stalls).  It makes ONE lightweight idb(action='state')
+            # call every 5 s — cheap enough not to starve auto-analysis.
             self._start_analysis_watchdog(session_id, server_port)
 
     def _stop_analysis_engine(self, sid: str, join_timeout: float = 2.0) -> None:

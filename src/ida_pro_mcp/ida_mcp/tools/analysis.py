@@ -515,65 +515,16 @@ def analysis(
             return result
 
         if action == "wait":
-            # Report current analysis state without blocking IDA's main thread.
-            #
-            # auto_is_ok() and idautils.Functions() can acquire internal IDA
-            # locks while the analysis worker threads hold them, deadlocking the
-            # RPC server.  We call them in a daemon thread with a hard 2s timeout
-            # so the main thread (= our socket server) is never stuck.
-            # timeout=0 means "report current state immediately" — used by the
-            # host-side polling loop.
-            import threading as _threading
-
-            def _safe_auto_is_ok(out, timeout_sec=2.0):
-                result = [None]
-                def _run():
-                    try:
-                        result[0] = bool(idaapi.auto_is_ok()) if hasattr(idaapi, "auto_is_ok") else True
-                    except Exception:
-                        result[0] = False
-                t = _threading.Thread(target=_run, daemon=True)
-                t.start()
-                t.join(timeout=timeout_sec)
-                out[0] = result[0]  # None = timed out (still running)
-
-            def _safe_func_count(timeout_sec=2.0):
-                result = [-1]
-                def _run():
-                    try:
-                        result[0] = sum(1 for _ in idautils.Functions())
-                    except Exception:
-                        result[0] = -1
-                t = _threading.Thread(target=_run, daemon=True)
-                t.start()
-                t.join(timeout=timeout_sec)
-                return result[0]
-
-            start_time = time.time()
-            if "timeout" in kwargs and kwargs["timeout"] is not None:
-                poll_timeout = min(float(kwargs["timeout"] or 0.0), 8.0)
-            else:
-                poll_timeout = 5.0
-
-            analysis_ok = None
-            while True:
-                out = [None]
-                _safe_auto_is_ok(out, timeout_sec=2.0)
-                analysis_ok = out[0]
-                if analysis_ok:
-                    break
-                if poll_timeout <= 0:
-                    break
-                elapsed = time.time() - start_time
-                if elapsed >= poll_timeout:
-                    break
-                time.sleep(min(0.5, poll_timeout - elapsed))
-
-            if analysis_ok is None:
-                analysis_ok = False  # timed out probing = still running
-
-            waited = time.time() - start_time
-            func_count = _safe_func_count(timeout_sec=2.0)
+            # Since idc.auto_wait() runs before the server starts, analysis is
+            # always complete by the time we get here. Just report the state.
+            try:
+                analysis_ok = bool(idaapi.auto_is_ok()) if hasattr(idaapi, "auto_is_ok") else True
+            except Exception:
+                analysis_ok = True
+            try:
+                func_count = idaapi.get_func_qty() if hasattr(idaapi, "get_func_qty") else -1
+            except Exception:
+                func_count = -1
             try:
                 string_count = idaapi.get_strlist_qty() if hasattr(idaapi, "get_strlist_qty") else -1
             except Exception:
@@ -583,12 +534,11 @@ def analysis(
                 "analysis_complete": analysis_ok,
                 "functions": func_count,
                 "strings": string_count,
-                "seconds_waited": round(waited, 2),
+                "seconds_waited": 0.0,
                 "note": (
                     "Analysis complete. Safe to call code/data/funcs tools."
                     if analysis_ok else
-                    f"Analysis still in progress after {round(waited, 1)}s. "
-                    "Call analysis(action='wait') again to keep polling."
+                    "Analysis may still be running. Try again shortly."
                 ),
             }
 
