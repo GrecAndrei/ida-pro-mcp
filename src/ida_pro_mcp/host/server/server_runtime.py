@@ -1548,6 +1548,24 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     log_rpc(f"Failed to check IDB size: {e}")
 
     def _start_server(self, session):
+            # Per-session mutex: prevent two concurrent callers from both
+            # seeing runtime-dead and launching duplicate IDA processes.
+            sid = session.session_id
+            with self._runtime_lock:
+                if not hasattr(self, "_session_startup_locks"):
+                    self._session_startup_locks = {}
+                if sid not in self._session_startup_locks:
+                    import threading as _threading
+                    self._session_startup_locks[sid] = _threading.Lock()
+            startup_lock = self._session_startup_locks[sid]
+            with startup_lock:
+                # Re-check after acquiring — a concurrent caller may have
+                # already started the runtime while we were waiting.
+                if self._runtime_alive(self.session_runtimes.get(sid)):
+                    return {"ok": True, "idb_path": session.idb_path, "_already_running": True}
+                return self._start_server_inner(session)
+
+    def _start_server_inner(self, session):
             opts = session.analysis_options or {}
             preload_keys = {"processor", "bitness", "endian", "loader", "value", "loader_options", "flags"}
             has_preload_request = any(k in opts and opts.get(k) is not None for k in preload_keys)
@@ -2239,6 +2257,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             self._session_inflight_calls.pop(sid, None)
             with self._runtime_lock:
                 runtime = self.session_runtimes.pop(sid, None)
+                self._session_startup_locks.pop(sid, None)
             self._remove_runtime_lease(sid)
             if not runtime:
                 return
