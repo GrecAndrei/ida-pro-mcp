@@ -631,9 +631,18 @@ def _apply_pre_analysis_options():
 
 if __name__ == "__main__":
     _apply_pre_analysis_options()
-    log_ev("Waiting for auto-analysis to complete...")
-    idc.auto_wait()
-    log_ev("Auto-analysis finished.")
     load_tools()
-    log_ev("Starting server (analysis complete)...")
+    # Run auto_wait() in a background thread so the RPC server starts
+    # immediately and the host's startup ping succeeds.  For large binaries
+    # (10 MB+) auto-analysis can take many minutes; blocking here causes the
+    # host to time out and report "IDA failed to initialize" even though IDA
+    # is healthy.  Tools that require analysis-complete check idc.auto_wait()
+    # themselves or rely on the host-side analysis watchdog.
+    import threading
+    def _run_auto_wait():
+        log_ev("Waiting for auto-analysis to complete...")
+        idc.auto_wait()
+        log_ev("Auto-analysis finished.")
+    threading.Thread(target=_run_auto_wait, daemon=True, name="auto-wait").start()
+    log_ev("Starting server...")
     run_server()
