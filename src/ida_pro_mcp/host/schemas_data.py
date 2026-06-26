@@ -260,7 +260,7 @@ _EXTRA_TOOL_ALIASES = {
     "comments_ai": "annotation",
     "annotations_ai": "annotation",
     "strings_xref": "graph",
-    "emulate": "trace_analysis",
+    # "emulate" alias removed — now a real tool in TOOLS
     "searches": "search",
     "segment": "segments",
     "session_tool": "session",

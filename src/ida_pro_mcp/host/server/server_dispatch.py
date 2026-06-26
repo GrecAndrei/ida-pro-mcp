@@ -1333,6 +1333,10 @@ class ServerDispatchMixin:
             if tool_name == "truncation":
                 return self._handle_truncation(args)
 
+            if tool_name == "multi_session":
+                action = str(args.get("action") or "").strip()
+                return self._handle_multi_session(action, args)
+
             ip = args.pop(
                 "idb", self.current_session.idb_path if self.current_session else None
             )

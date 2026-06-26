@@ -56,6 +56,7 @@ from .server_blackboard import ServerBlackboardMixin
 from .server_predictor import ServerPredictorMixin
 from .server_batch import BackgroundMixin
 from .server_workflow import ServerWorkflowMixin
+from .server_multi_session import ServerMultiSessionMixin
 
 # Compatibility anchor for source-based regression tests.
 # if addr and tool_name in ("code", "data", "search"):
@@ -68,7 +69,7 @@ from ..stores.truncation import truncate_response, continue_truncated  # noqa: F
 # =============================================================================
 
 
-class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, ServerWikiMixin, ServerThreatHuntMixin, ServerBlackboardMixin, ServerPredictorMixin, ServerWorkflowMixin, ServerRuntimeMixin, ServerSessionMixin, ServerDispatchMixin, BackgroundMixin):
+class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, ServerWikiMixin, ServerThreatHuntMixin, ServerBlackboardMixin, ServerPredictorMixin, ServerWorkflowMixin, ServerMultiSessionMixin, ServerRuntimeMixin, ServerSessionMixin, ServerDispatchMixin, BackgroundMixin):
     """
     JSON-RPC stdio server for the IDA Pro MCP.
     """

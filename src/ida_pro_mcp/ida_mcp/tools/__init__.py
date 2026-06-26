@@ -67,6 +67,9 @@ __all__ = [
     "governance",
     "knowledge",
     "packer",
+    "struct_recover",
+    "emulate",
+    "bindiff",
 ]
 
 # Mapping from tool name to module name (when they differ)

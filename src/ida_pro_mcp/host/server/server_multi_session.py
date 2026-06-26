@@ -85,7 +85,7 @@ class ServerMultiSessionMixin:
     # Public action handler
     # ------------------------------------------------------------------
 
-    async def _handle_multi_session(self, action: str, args: dict) -> dict:
+    def _handle_multi_session(self, action: str, args: dict) -> dict:
         """Dispatch multi-session actions."""
         self._init_multi_session()
 
@@ -107,13 +107,13 @@ class ServerMultiSessionMixin:
                 f"Unknown multi_session action: '{action}'",
                 hint=f"Valid actions: {', '.join(sorted(handlers.keys()))}",
             )
-        return await handler(args)
+        return handler(args)
 
     # ------------------------------------------------------------------
     # Action implementations
     # ------------------------------------------------------------------
 
-    async def _ms_group_create(self, args: dict) -> dict:
+    def _ms_group_create(self, args: dict) -> dict:
         """Create a new session group from given session_ids."""
         session_ids = args.get("session_ids") or []
         if not isinstance(session_ids, list):
@@ -155,12 +155,12 @@ class ServerMultiSessionMixin:
         self._session_groups[group_id] = group
         return {"ok": True, "group": group.to_dict()}
 
-    async def _ms_group_list(self, args: dict) -> dict:
+    def _ms_group_list(self, args: dict) -> dict:
         """List all session groups."""
         groups = [g.to_dict() for g in self._session_groups.values()]
         return {"ok": True, "groups": groups, "count": len(groups)}
 
-    async def _ms_group_link(self, args: dict) -> dict:
+    def _ms_group_link(self, args: dict) -> dict:
         """Auto-match imports <-> exports across sessions in a group.
 
         Calls into each session to retrieve its exports and imports, then
@@ -235,7 +235,7 @@ class ServerMultiSessionMixin:
             "import_errors": import_errors if import_errors else None,
         }
 
-    async def _ms_group_remove(self, args: dict) -> dict:
+    def _ms_group_remove(self, args: dict) -> dict:
         """Remove a session group (does not close sessions)."""
         group_id = str(args.get("group_id") or "").strip()
         if not group_id:
@@ -245,7 +245,7 @@ class ServerMultiSessionMixin:
             return make_error(MCPError.NOT_FOUND, f"Group '{group_id}' not found")
         return {"ok": True, "removed": removed.to_dict()}
 
-    async def _ms_cross_resolve(self, args: dict) -> dict:
+    def _ms_cross_resolve(self, args: dict) -> dict:
         """Resolve an import name to the session + EA that provides it."""
         group, err = self._require_group(args)
         if err:
@@ -278,7 +278,7 @@ class ServerMultiSessionMixin:
             "group_id": group.group_id,
         }
 
-    async def _ms_cross_decompile(self, args: dict) -> dict:
+    def _ms_cross_decompile(self, args: dict) -> dict:
         """Decompile a function from a linked session.
 
         Accepts either:
@@ -344,7 +344,7 @@ class ServerMultiSessionMixin:
             }
         return result
 
-    async def _ms_cross_xrefs(self, args: dict) -> dict:
+    def _ms_cross_xrefs(self, args: dict) -> dict:
         """Find all cross-references to a symbol across the group.
 
         Searches both the link table (which sessions import this symbol) and
@@ -403,7 +403,7 @@ class ServerMultiSessionMixin:
             "group_id": group.group_id,
         }
 
-    async def _ms_status(self, args: dict) -> dict:
+    def _ms_status(self, args: dict) -> dict:
         """Return group status with link statistics."""
         group_id = str(args.get("group_id") or "").strip()
 
