@@ -88,8 +88,8 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
         tools_list_mode = (
             str(os.environ.get("IDA_MCP_TOOLS_LIST_MODE", "ultra")).strip().lower()
         )
-        if tools_list_mode not in {"ultra", "lean", "full"}:
-            tools_list_mode = "full"
+        if tools_list_mode not in {"ultra", "lean"}:
+            tools_list_mode = "ultra"
         detail_level = (
             str(os.environ.get("IDA_MCP_ERROR_DETAIL_LEVEL", "basic")).strip().lower()
         )
@@ -246,12 +246,6 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
         self._pointer_note_last_shown_at = 0.0
         self._pointer_note_pending_signal = 0.0
         self._guardrail_strict_writes = _env_bool("IDA_MCP_GUARDRAIL_STRICT_WRITES", False)
-        # Controls whether tools/list returns the full monolithic description/schema payload.
-        # Default OFF for context efficiency in LLM clients.
-        self.monolithic_tool_descriptions = _env_bool(
-            "IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS",
-            False,
-        )
         # Translation layer for Google Vertex AI / Gemini API schema compatibility
         self.vertex_compat = _env_bool(
             "IDA_MCP_VERTEX_COMPAT",
@@ -430,10 +424,8 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
             requested_mode = str(
                 p.get("mode") or p.get("schema_mode") or p.get("tools_list_mode") or ""
             ).strip().lower()
-            if requested_mode in {"ultra", "lean", "full"}:
+            if requested_mode in {"ultra", "lean"}:
                 mode = requested_mode
-            if self.monolithic_tool_descriptions:
-                mode = "full"
             tool_name_prefix = str(p.get("prefix", "") or "").strip().lower()
             tool_name_contains = str(p.get("contains", "") or "").strip().lower()
             tool_category = str(p.get("category", "") or "").strip().lower()

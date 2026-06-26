@@ -16,7 +16,6 @@ from ..schemas import (
     TOOL_ACTIONS,
     TOOL_DESCRIPTIONS,
     TOOLS,
-    build_input_schema,
     build_input_schema_lean,
     build_input_schema_ultra,
     build_tool_description_lean,
@@ -1092,30 +1091,20 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
             return cached[1]
 
         def _tool_description(tool_name: str, tool_mode: str) -> str:
-            if tool_mode == "full":
-                desc = TOOL_DESCRIPTIONS.get(tool_name, "")
-            elif tool_mode == "lean":
+            if tool_mode == "lean":
                 desc = build_tool_description_lean(tool_name)
             else:
                 desc = build_tool_description_ultra(tool_name)
             desc_text = str(desc or "").strip()
             if desc_text:
                 return desc_text
-            fallback = (
-                desc if tool_mode == "full" else TOOL_DESCRIPTIONS.get(tool_name, "")
-            )
-            fallback_text = str(fallback or "").strip()
-            if fallback_text:
-                return fallback_text
             return f"Use wiki(topic='tools/{tool_name}') for usage."
 
         catalog: list[dict] = []
         for t in TOOLS:
             if t in HIDDEN_TOOLS_IN_LIST:
                 continue
-            if mode == "full":
-                schema = build_input_schema(t)
-            elif mode == "lean":
+            if mode == "lean":
                 schema = build_input_schema_lean(t)
             else:
                 schema = build_input_schema_ultra(t)

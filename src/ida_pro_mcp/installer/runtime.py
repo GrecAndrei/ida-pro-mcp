@@ -736,10 +736,9 @@ def build_stdio_config(
             idadir = str(detected)
 
     env: dict[str, str] = {
-        "IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS": "1",
         "IDA_MCP_RESPONSE_MODE": "compact",
         "IDA_MCP_QOL_MODE": "balanced",
-        "IDA_MCP_TOOLS_LIST_MODE": "full",
+        "IDA_MCP_TOOLS_LIST_MODE": "ultra",
         "IDA_MCP_BATCH_COMPACT": "1",
         "IDA_MCP_COMPACT_MAX_ITEMS": "48",
         "IDA_MCP_COMPACT_MAX_STRING": "1400",

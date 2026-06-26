@@ -49,9 +49,8 @@ The installer creates a config like this:
 
 | Variable | Value | Why |
 |----------|-------|-----|
-| `IDA_MCP_TOOLS_LIST_MODE` | `ultra` | ~9.5k tokens per `tools/list` call. Do not set to `full` (~58k tokens). |
+| `IDA_MCP_TOOLS_LIST_MODE` | `ultra` | ~9.5k tokens per `tools/list` call. `lean` is also available (~18k tokens). |
 | `IDA_MCP_RESPONSE_MODE` | `compact` | Compact responses by default. Use `_response_mode='full'` per-call when needed. |
-| `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS` | _(unset or `0`)_ | Setting this to `1` overrides `TOOLS_LIST_MODE` to `full` unconditionally — do not set it. |
 
 ### MCP resources
 
@@ -88,6 +87,6 @@ ida-pro-mcp-install --only skills
 
 **Server not loading**: Verify the `command` path points to the venv python and `IDADIR` is correct.
 
-**Large context usage**: Check that `IDA_MCP_TOOLS_LIST_MODE=ultra` and `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS` is unset.
+**Large context usage**: Check that `IDA_MCP_TOOLS_LIST_MODE=ultra` (the default).
 
 **Changes not taking effect after reinstall**: Kill the running MCP server process so OpenCode relaunches it with the updated package.

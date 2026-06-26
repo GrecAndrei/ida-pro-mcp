@@ -407,8 +407,7 @@ Three QoL profiles control the trade-off between context efficiency and detail:
 - Hardcoded MCP client config paths extracted into `client_configs.json`
 - Dynamically loads and resolves paths from JSON data
 - Writes MCP env defaults:
-  - `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS=1`
-  - `IDA_MCP_TOOLS_LIST_MODE=full`
+  - `IDA_MCP_TOOLS_LIST_MODE=ultra`
   - `IDA_MCP_RESPONSE_MODE=compact`
   - `IDA_MCP_QOL_MODE=balanced`
   - Additional compact/truncation budgets
@@ -430,7 +429,7 @@ Three QoL profiles control the trade-off between context efficiency and detail:
 | `IDADIR` / `IDA_DIR` | auto-detect | IDA installation directory |
 | `IDA_MCP_RESPONSE_MODE` | `compact` | Default response shaping |
 | `IDA_MCP_QOL_MODE` | `balanced` | QoL profile |
-| `IDA_MCP_TOOLS_LIST_MODE` | `full` | Schema verbosity |
+| `IDA_MCP_TOOLS_LIST_MODE` | `ultra` | Schema verbosity (ultra or lean) |
 | `IDA_MCP_CARTOGRAPHER_DIM` | `128` | S4R state dimension |
 | `IDA_MCP_CARTOGRAPHER_TOPK` | `3` | Top-k context entries |
 | `IDA_MCP_RATE_LIMIT_PER_TOOL` | `10` | Per-tool rate limit |
