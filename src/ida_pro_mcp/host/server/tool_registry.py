@@ -153,7 +153,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "packer": ["detect", "profile", "guide", "status", "script"],
     "predictor": ["suggest_next_tool", "detect_stuck", "suggest_focus", "suggest_next_address", "risk_of_stall", "recommend_bundle"],
     "project": ["save", "close", "open", "load_binary", "list_recent", "get_cwd", "set_cwd", "list_dir", "exists", "evidence_graph", "knowledge_merge", "confidence_model", "replay_pipeline", "hypothesis_tracker", "temporal_reasoning", "semantic_artifact_diff", "ai_governance", "knowledge_debt", "casefile_export"],
-    "protocol": ["detect", "parsers", "serializers", "handlers", "endpoints", "tls_config", "socket_flow", "packet_struct", "magic_numbers", "state_machine"],
+    "protocol": ["detect", "parsers", "serializers", "handlers", "endpoints", "tls_config", "socket_flow", "packet_struct", "magic_numbers", "state_machine", "reconstruct", "trace_handler", "export_spec"],
     "query": ["data", "search", "idb", "code", "types", "imports_deep", "symbols", "patterns", "nl", "nl_batch"],
     "search": [
         "nl", "behavior", "find", "semantic", "smart_bundle", "api",
@@ -188,6 +188,10 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "summarize": ["binary", "function", "segment", "imports_by_category", "strings_by_category", "complexity", "call_hierarchy", "data_flow", "security_posture", "statistics", "report"],
     "symbols": ["load_pdb", "load_dwarf", "status", "apply", "export"],
     "taint": ["sources", "sinks", "trace", "paths", "report"],
+    "struct_recover": ["recover", "recover_all", "propagate", "preview", "apply"],
+    "emulate": ["run", "slice", "call", "decrypt", "trace"],
+    "bindiff": ["snapshot", "diff", "patch_analysis", "function_match", "summary"],
+    "multi_session": ["group_create", "group_list", "group_link", "group_remove", "cross_resolve", "cross_decompile", "cross_xrefs", "status"],
     "threat_hunt": ["run", "malware", "vuln", "tracing", "findings", "quick", "deep", "legacy"],
     "trace_analysis": [
         "import_trace", "analyze_coverage", "find_loops",

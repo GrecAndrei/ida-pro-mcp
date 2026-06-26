@@ -235,12 +235,421 @@ def _match_query(text, matcher):
     return bool(matcher("" if text is None else str(text)))
 
 
+# ============================================================================
+# Protocol reconstruction helpers
+# ============================================================================
+
+def _get_switch_targets(func_ea):
+    """Get switch/case targets from a dispatch function.
+
+    Returns list of (case_value, target_ea) tuples.
+    """
+    fn = ida_funcs.get_func(func_ea)
+    if not fn:
+        return []
+    targets = []
+    for head in idautils.Heads(fn.start_ea, fn.end_ea):
+        si = idaapi.get_switch_info(head)
+        if si:
+            results = idaapi.calc_switch_cases(head, si)
+            if results:
+                for case_idx in range(len(results)):
+                    case_values = results[case_idx]
+                    # Each case may have multiple values; get the target
+                    target = si.jumps + case_idx * si.get_jtable_element_size()
+                    target_ea = ida_bytes.get_dword(target) if si.get_jtable_element_size() == 4 else ida_bytes.get_qword(target)
+                    # Try reading target from jump table
+                    jt_ea = si.jumps + case_idx * si.get_jtable_element_size()
+                    if si.get_jtable_element_size() == 4:
+                        tgt = ida_bytes.get_dword(jt_ea)
+                        if si.get_shift() > 0:
+                            tgt = (tgt << si.get_shift()) + si.elbase
+                        elif si.flags & idaapi.SWI_ELBASE:
+                            tgt += si.elbase
+                    else:
+                        tgt = ida_bytes.get_qword(jt_ea)
+                    for cv in case_values:
+                        targets.append((int(cv), tgt))
+    return targets
+
+
+def _trace_buffer_accesses(func_ea):
+    """Trace sequential buffer reads in a handler function.
+
+    Decompiles the function and looks for patterns like:
+    - buf[offset] or *(type*)(buf + offset)
+    - ntohs(*(uint16_t*)(buf + 4))
+    - memcpy(dst, buf + 8, len)
+
+    Returns list of field dicts: {offset, size, type_hint, validation, line}.
+    """
+    fields = []
+    try:
+        cfunc = ida_hexrays.decompile(func_ea)
+        if not cfunc:
+            return fields
+    except Exception:
+        return fields
+
+    sv = cfunc.get_pseudocode()
+    lines = []
+    for i in range(sv.size()):
+        lines.append(ida_lines.tag_remove(sv[i].line).strip())
+
+    # Patterns for buffer access with offset arithmetic
+    # Match: *(type*)(buf + offset), buf[offset], BYTE1(x), etc.
+    ptr_arith_re = re.compile(
+        r'\*\s*\(\s*(?:_?)?(u?int(?:8|16|32|64)_t|char|BYTE|WORD|DWORD|QWORD|short|int|long)\s*\*\s*\)'
+        r'\s*\(\s*\w+\s*\+\s*(\d+)\s*\)'
+    )
+    array_access_re = re.compile(r'(\w+)\[(\d+)\]')
+    ntohs_re = re.compile(r'(ntohs|ntohl|htons|htonl|__builtin_bswap(?:16|32|64))\s*\(')
+    memcpy_re = re.compile(r'memcpy\s*\(\s*\w+\s*,\s*\w+\s*\+\s*(\d+)\s*,\s*(\d+)\s*\)')
+    comparison_re = re.compile(r'(?:if|while|for)\s*\(.*?(\w+)\s*([<>=!]+)\s*(\d+)')
+
+    # Size mapping for type names
+    type_sizes = {
+        "uint8_t": 1, "int8_t": 1, "char": 1, "BYTE": 1, "byte": 1,
+        "uint16_t": 2, "int16_t": 2, "short": 2, "WORD": 2,
+        "uint32_t": 4, "int32_t": 4, "int": 4, "DWORD": 4,
+        "uint64_t": 8, "int64_t": 8, "long": 8, "QWORD": 8,
+    }
+
+    seen_offsets = set()
+    for line in lines:
+        # Pointer arithmetic access: *(uint16_t*)(buf + 4)
+        for m in ptr_arith_re.finditer(line):
+            type_name = m.group(1)
+            offset = int(m.group(2))
+            size = type_sizes.get(type_name, 4)
+            is_unsigned = type_name.startswith("u") or type_name in ("BYTE", "WORD", "DWORD", "QWORD")
+            has_byteswap = bool(ntohs_re.search(line))
+            if offset not in seen_offsets:
+                seen_offsets.add(offset)
+                fields.append({
+                    "offset": offset,
+                    "size": size,
+                    "type_hint": type_name,
+                    "signed": not is_unsigned,
+                    "network_order": has_byteswap,
+                    "line": line[:120],
+                })
+
+        # memcpy with offset: memcpy(dst, buf + 8, 32)
+        for m in memcpy_re.finditer(line):
+            offset = int(m.group(1))
+            size = int(m.group(2))
+            if offset not in seen_offsets:
+                seen_offsets.add(offset)
+                fields.append({
+                    "offset": offset,
+                    "size": size,
+                    "type_hint": f"blob[{size}]",
+                    "signed": False,
+                    "network_order": False,
+                    "line": line[:120],
+                })
+
+    # Sort by offset
+    fields.sort(key=lambda f: f["offset"])
+
+    # Now scan for validation checks on the same lines
+    validations = []
+    for line in lines:
+        m = comparison_re.search(line)
+        if m:
+            var_name = m.group(1)
+            op = m.group(2)
+            value = int(m.group(3))
+            validations.append({"variable": var_name, "operator": op, "value": value, "line": line[:120]})
+
+    # Attach validations to fields heuristically (if validation value matches a field offset or size)
+    for field in fields:
+        for v in validations:
+            if v["value"] == field["size"] or v["value"] == field["offset"]:
+                field.setdefault("validation", []).append(
+                    f"{v['variable']} {v['operator']} {v['value']}"
+                )
+
+    return fields
+
+
+def _analyze_handler_fields(func_ea):
+    """Analyze a handler for field access patterns including TLV and length-prefixed fields.
+
+    Returns dict with fields, relationships, and patterns detected.
+    """
+    result = {
+        "fields": [],
+        "relationships": [],
+        "patterns": [],
+        "decompiled_lines": [],
+    }
+
+    try:
+        cfunc = ida_hexrays.decompile(func_ea)
+        if not cfunc:
+            return result
+    except Exception:
+        return result
+
+    sv = cfunc.get_pseudocode()
+    lines = []
+    for i in range(sv.size()):
+        lines.append(ida_lines.tag_remove(sv[i].line).strip())
+    result["decompiled_lines"] = lines[:80]
+
+    # Detect field accesses
+    fields = _trace_buffer_accesses(func_ea)
+    result["fields"] = fields
+
+    # Detect TLV patterns: type-length-value with sequential small reads followed by variable read
+    if len(fields) >= 2:
+        for i in range(len(fields) - 1):
+            f1 = fields[i]
+            f2 = fields[i + 1]
+            # TLV: small type field followed by small length field at adjacent offset
+            if f1["size"] <= 2 and f2["size"] <= 2 and f2["offset"] == f1["offset"] + f1["size"]:
+                result["patterns"].append({
+                    "type": "possible_tlv",
+                    "type_field_offset": f1["offset"],
+                    "length_field_offset": f2["offset"],
+                    "value_offset": f2["offset"] + f2["size"],
+                    "confidence": "medium",
+                })
+
+    # Detect length-prefixed patterns: field A used as length for memcpy/read
+    length_prefix_re = re.compile(
+        r'(?:memcpy|memmove|read|recv)\s*\(\s*\w+\s*,\s*\w+(?:\s*\+\s*\d+)?\s*,\s*(\w+)\s*\)'
+    )
+    size_var_re = re.compile(
+        r'(\w+)\s*=\s*\*\s*\(\s*(?:_?)?(?:u?int(?:16|32)_t|WORD|DWORD|unsigned\s+(?:short|int))\s*\*\s*\)'
+        r'\s*\(\s*\w+\s*\+\s*(\d+)\s*\)'
+    )
+
+    # Find variables assigned from buffer reads
+    size_vars = {}
+    for line in lines:
+        m = size_var_re.search(line)
+        if m:
+            var_name = m.group(1)
+            offset = int(m.group(2))
+            size_vars[var_name] = offset
+
+    # Find those variables used as lengths
+    for line in lines:
+        m = length_prefix_re.search(line)
+        if m:
+            len_var = m.group(1)
+            if len_var in size_vars:
+                result["relationships"].append({
+                    "type": "length_of",
+                    "length_field_offset": size_vars[len_var],
+                    "length_variable": len_var,
+                    "usage": line[:120],
+                })
+                result["patterns"].append({
+                    "type": "length_prefixed",
+                    "length_field_offset": size_vars[len_var],
+                    "confidence": "high",
+                })
+
+    # Detect nested sub-message patterns: a function call with buf+offset as argument
+    nested_call_re = re.compile(r'(\w+)\s*\(\s*(?:\w+\s*\+\s*(\d+)|&\w+\[(\d+)\])')
+    for line in lines:
+        m = nested_call_re.search(line)
+        if m:
+            callee_name = m.group(1)
+            offset = m.group(2) or m.group(3)
+            # Filter out common non-parse functions
+            if callee_name not in ("memcpy", "memmove", "memset", "memcmp", "printf",
+                                   "sprintf", "snprintf", "strlen", "strcpy"):
+                if offset:
+                    result["patterns"].append({
+                        "type": "nested_submessage",
+                        "callee": callee_name,
+                        "buffer_offset": int(offset),
+                        "line": line[:120],
+                        "confidence": "low",
+                    })
+
+    # Detect loop-based repeated field parsing (while loops with incrementing offset)
+    loop_offset_re = re.compile(r'(?:while|for)\s*\(.*?(\w+)\s*<\s*(\w+).*?\)')
+    for line in lines:
+        m = loop_offset_re.search(line)
+        if m:
+            result["patterns"].append({
+                "type": "repeated_field",
+                "iterator": m.group(1),
+                "bound": m.group(2),
+                "line": line[:120],
+                "confidence": "medium",
+            })
+
+    return result
+
+
+def _export_ksy(protocol_data):
+    """Export protocol data as Kaitai Struct .ksy format (YAML).
+
+    Args:
+        protocol_data: dict with 'name', 'message_types' list
+
+    Returns:
+        String containing Kaitai .ksy YAML content.
+    """
+    name = protocol_data.get("name", "unknown_protocol")
+    message_types = protocol_data.get("message_types", [])
+
+    lines = [
+        "meta:",
+        f"  id: {name}",
+        "  endian: be",
+        "  file-extension: bin",
+        "",
+        "seq:",
+    ]
+
+    # If there's a dispatch field, add it as the first sequence element
+    if message_types:
+        lines.append("  - id: message_type")
+        lines.append("    type: u1")
+        lines.append("")
+        lines.append("types:")
+
+        for msg in message_types:
+            msg_name = msg.get("name", f"msg_{msg.get('case_value', 0)}")
+            msg_name = re.sub(r'[^a-zA-Z0-9_]', '_', msg_name).lower()
+            fields = msg.get("fields", [])
+
+            lines.append(f"  {msg_name}:")
+            lines.append("    seq:")
+
+            if not fields:
+                lines.append(f"      - id: data")
+                lines.append(f"        size-eos: true")
+            else:
+                for idx, field in enumerate(fields):
+                    field_id = field.get("name", f"field_{idx}")
+                    field_id = re.sub(r'[^a-zA-Z0-9_]', '_', field_id).lower()
+                    size = field.get("size", 4)
+                    type_hint = field.get("type_hint", "")
+
+                    # Map to Kaitai types
+                    unsigned = not field.get("signed", False)
+                    prefix = "u" if unsigned else "s"
+                    if size == 1:
+                        ksy_type = f"{prefix}1"
+                    elif size == 2:
+                        ksy_type = f"{prefix}2"
+                    elif size == 4:
+                        ksy_type = f"{prefix}4"
+                    elif size == 8:
+                        ksy_type = f"{prefix}8"
+                    else:
+                        # Blob/variable-length
+                        ksy_type = None
+
+                    lines.append(f"      - id: {field_id}")
+                    if ksy_type:
+                        lines.append(f"        type: {ksy_type}")
+                    else:
+                        lines.append(f"        size: {size}")
+
+                    if field.get("network_order"):
+                        lines.append("        # network byte order (big-endian)")
+
+                    if field.get("validation"):
+                        for v in field["validation"]:
+                            lines.append(f"        # validation: {v}")
+            lines.append("")
+
+    return "\n".join(lines)
+
+
+def _export_json_schema(protocol_data):
+    """Export protocol data as JSON schema.
+
+    Args:
+        protocol_data: dict with 'name', 'message_types' list
+
+    Returns:
+        Dict containing JSON schema representation.
+    """
+    import json
+
+    name = protocol_data.get("name", "unknown_protocol")
+    message_types = protocol_data.get("message_types", [])
+
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": name,
+        "description": f"Reconstructed protocol schema for {name}",
+        "type": "object",
+        "properties": {
+            "message_type": {
+                "type": "integer",
+                "description": "Protocol message type identifier",
+            }
+        },
+        "oneOf": [],
+    }
+
+    for msg in message_types:
+        case_value = msg.get("case_value", 0)
+        msg_name = msg.get("name", f"message_type_{case_value}")
+        fields = msg.get("fields", [])
+
+        msg_schema = {
+            "title": msg_name,
+            "type": "object",
+            "properties": {
+                "message_type": {"const": case_value},
+            },
+            "required": ["message_type"],
+        }
+
+        for idx, field in enumerate(fields):
+            field_name = field.get("name", f"field_{idx}")
+            size = field.get("size", 4)
+            signed = field.get("signed", False)
+
+            field_schema = {"type": "integer"}
+            if not signed:
+                field_schema["minimum"] = 0
+            if size == 1:
+                field_schema["maximum"] = 255 if not signed else 127
+            elif size == 2:
+                field_schema["maximum"] = 65535 if not signed else 32767
+            elif size == 4:
+                field_schema["maximum"] = 4294967295 if not signed else 2147483647
+
+            # For blobs, use string with content encoding
+            if size > 8:
+                field_schema = {
+                    "type": "string",
+                    "contentEncoding": "base64",
+                    "description": f"Binary blob of {size} bytes",
+                }
+
+            if field.get("validation"):
+                field_schema["description"] = f"Validated: {'; '.join(field['validation'])}"
+
+            msg_schema["properties"][field_name] = field_schema
+            msg_schema["required"].append(field_name)
+
+        schema["oneOf"].append(msg_schema)
+
+    return schema
+
+
 @tool
 @idaread
 def protocol(
     action: Annotated[Literal["detect", "parsers", "serializers", "handlers",
                                "endpoints", "tls_config", "socket_flow",
-                               "packet_struct", "magic_numbers", "state_machine"],
+                               "packet_struct", "magic_numbers", "state_machine",
+                               "reconstruct", "trace_handler", "export_spec"],
                       "Protocol analysis action"],
     addr: Annotated[Optional[str], "Address or function to analyze"] = None,
     limit: Annotated[int, "Max results"] = 50,
@@ -261,6 +670,14 @@ def protocol(
     packet_struct - Infer packet/message structure from parsing code.
     magic_numbers - Find protocol magic numbers and version identifiers.
     state_machine - Detect protocol state machine patterns.
+    reconstruct - Full protocol reconstruction from a dispatch function (requires addr).
+                  Traces each case/handler to map message types and field layouts.
+    trace_handler - Deep trace of a single message handler (requires addr).
+                    Analyzes buffer access, TLV patterns, length-prefixed fields,
+                    nested sub-messages, and field relationships.
+    export_spec - Export reconstructed protocol as Kaitai .ksy or JSON schema.
+                  Pass query='ksy' or query='json' to select format.
+                  Pass addr of the dispatch function to reconstruct and export.
     """
     try:
         query_matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
@@ -728,6 +1145,258 @@ def protocol(
                                                "network_related": True, "strings": fn_strs[:10]})
 
             return {"ok": True, "state_machines": state_machines[:limit], "count": len(state_machines)}
+
+        elif action == "reconstruct":
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required for 'reconstruct' action")
+            ea, err = validate_addr(addr, require_func=True)
+            if err:
+                return err
+            fname = idc.get_func_name(ea)
+            fn = ida_funcs.get_func(ea)
+            if not fn:
+                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
+
+            # Step 1: Find switch/dispatch targets in the function
+            switch_targets = _get_switch_targets(ea)
+
+            # If no switch found, try to identify dispatch via call targets (indirect dispatch)
+            if not switch_targets:
+                # Fallback: look for comparison chains in decompiled output
+                try:
+                    cfunc = ida_hexrays.decompile(ea)
+                    if cfunc:
+                        sv = cfunc.get_pseudocode()
+                        case_re = re.compile(r'(?:==|case)\s*(\d+)')
+                        call_re = re.compile(r'(\w+)\s*\(')
+                        for i in range(sv.size()):
+                            line = ida_lines.tag_remove(sv[i].line).strip()
+                            cm = case_re.search(line)
+                            if cm:
+                                case_val = int(cm.group(1))
+                                # Find the handler call on this or next line
+                                handler_match = call_re.search(line)
+                                if handler_match:
+                                    handler_name = handler_match.group(1)
+                                    handler_ea = ida_name.get_name_ea(idaapi.BADADDR, handler_name)
+                                    if handler_ea != idaapi.BADADDR:
+                                        switch_targets.append((case_val, handler_ea))
+                except Exception:
+                    pass
+
+            # Step 2: For each case target, trace buffer accesses
+            message_types = []
+            for case_value, target_ea in switch_targets[:limit]:
+                # Determine handler function
+                handler_fn = ida_funcs.get_func(target_ea)
+                if not handler_fn:
+                    continue
+                handler_name = idc.get_func_name(handler_fn.start_ea) or f"sub_{handler_fn.start_ea:X}"
+
+                # Trace buffer accesses in the handler
+                fields = _trace_buffer_accesses(handler_fn.start_ea)
+
+                # Name fields sequentially
+                for idx, field in enumerate(fields):
+                    field["name"] = f"field_{idx}"
+
+                msg_type = {
+                    "case_value": case_value,
+                    "handler_address": hex(handler_fn.start_ea),
+                    "name": handler_name,
+                    "fields": fields,
+                    "field_count": len(fields),
+                }
+
+                # Add callees for context
+                callees = _get_func_callees(handler_fn.start_ea, max_refs=20)
+                msg_type["callees"] = [c[1] for c in callees[:10]]
+
+                message_types.append(msg_type)
+
+            # Calculate total protocol size estimate
+            total_fields = sum(mt["field_count"] for mt in message_types)
+
+            protocol_data = {
+                "name": fname,
+                "dispatch_address": hex(ea),
+                "message_types": message_types,
+            }
+
+            # Auto-write to blackboard
+            _bb_write(
+                title=f"protocol:reconstruct {fname} ({len(message_types)} msg types)",
+                content=str({
+                    "dispatch": hex(ea),
+                    "message_count": len(message_types),
+                    "total_fields": total_fields,
+                }),
+                addr=hex(ea),
+                tags=["protocol", "reconstruct", fname],
+            )
+
+            return {
+                "ok": True,
+                "dispatch_function": fname,
+                "dispatch_address": hex(ea),
+                "message_type_count": len(message_types),
+                "total_fields": total_fields,
+                "message_types": message_types,
+                "protocol_data": protocol_data,
+            }
+
+        elif action == "trace_handler":
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required for 'trace_handler' action")
+            ea, err = validate_addr(addr, require_func=True)
+            if err:
+                return err
+            fname = idc.get_func_name(ea)
+            fn = ida_funcs.get_func(ea)
+            if not fn:
+                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
+
+            # Deep analysis of the handler
+            analysis = _analyze_handler_fields(ea)
+
+            # Enrich with callee context
+            callees = _get_func_callees(ea, max_refs=50)
+            callee_names = [c[1] for c in callees]
+
+            # Check for byte-order conversions (indicates network protocol)
+            byte_order_apis = {"ntohs", "ntohl", "htons", "htonl",
+                               "__builtin_bswap16", "__builtin_bswap32", "__builtin_bswap64"}
+            has_byteswap = bool(set(c.lower() for c in callee_names) & {a.lower() for a in byte_order_apis})
+
+            # Compute total message size from fields
+            total_size = 0
+            if analysis["fields"]:
+                last_field = analysis["fields"][-1]
+                total_size = last_field["offset"] + last_field["size"]
+
+            # Name fields based on patterns
+            for idx, field in enumerate(analysis["fields"]):
+                field["name"] = f"field_{idx}"
+                # Heuristic naming
+                if field["offset"] == 0 and field["size"] <= 2:
+                    field["name"] = "msg_type"
+                elif field["offset"] <= 2 and field["size"] == 2:
+                    field["name"] = "msg_length"
+                elif field["size"] > 16:
+                    field["name"] = f"payload_{idx}"
+
+            # Auto-write to blackboard
+            _bb_write(
+                title=f"protocol:trace_handler {fname} ({len(analysis['fields'])} fields)",
+                content=str({
+                    "handler": hex(ea),
+                    "fields": len(analysis["fields"]),
+                    "patterns": [p["type"] for p in analysis["patterns"]],
+                    "relationships": len(analysis["relationships"]),
+                }),
+                addr=hex(ea),
+                tags=["protocol", "trace_handler", fname],
+            )
+
+            return {
+                "ok": True,
+                "handler_address": hex(ea),
+                "handler_name": fname,
+                "fields": analysis["fields"],
+                "field_count": len(analysis["fields"]),
+                "estimated_message_size": total_size,
+                "relationships": analysis["relationships"],
+                "patterns": analysis["patterns"],
+                "has_network_byte_order": has_byteswap,
+                "callees": callee_names[:20],
+                "decompiled_excerpt": analysis["decompiled_lines"][:40],
+            }
+
+        elif action == "export_spec":
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required for 'export_spec' action (dispatch function address)")
+
+            # Determine output format from query param
+            fmt = "ksy"
+            if query and query.strip().lower() in ("json", "json_schema", "jsonschema"):
+                fmt = "json"
+            elif query and query.strip().lower() in ("ksy", "kaitai"):
+                fmt = "ksy"
+
+            # First reconstruct the protocol from the dispatch function
+            ea, err = validate_addr(addr, require_func=True)
+            if err:
+                return err
+            fname = idc.get_func_name(ea)
+            fn = ida_funcs.get_func(ea)
+            if not fn:
+                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
+
+            # Reconstruct (reuse logic from 'reconstruct' action)
+            switch_targets = _get_switch_targets(ea)
+            if not switch_targets:
+                try:
+                    cfunc = ida_hexrays.decompile(ea)
+                    if cfunc:
+                        sv = cfunc.get_pseudocode()
+                        case_re = re.compile(r'(?:==|case)\s*(\d+)')
+                        call_re = re.compile(r'(\w+)\s*\(')
+                        for i in range(sv.size()):
+                            line = ida_lines.tag_remove(sv[i].line).strip()
+                            cm = case_re.search(line)
+                            if cm:
+                                case_val = int(cm.group(1))
+                                handler_match = call_re.search(line)
+                                if handler_match:
+                                    handler_name = handler_match.group(1)
+                                    handler_ea = ida_name.get_name_ea(idaapi.BADADDR, handler_name)
+                                    if handler_ea != idaapi.BADADDR:
+                                        switch_targets.append((case_val, handler_ea))
+                except Exception:
+                    pass
+
+            message_types = []
+            for case_value, target_ea in switch_targets[:limit]:
+                handler_fn = ida_funcs.get_func(target_ea)
+                if not handler_fn:
+                    continue
+                handler_name = idc.get_func_name(handler_fn.start_ea) or f"sub_{handler_fn.start_ea:X}"
+                fields = _trace_buffer_accesses(handler_fn.start_ea)
+                for idx, field in enumerate(fields):
+                    field["name"] = f"field_{idx}"
+                message_types.append({
+                    "case_value": case_value,
+                    "name": handler_name,
+                    "fields": fields,
+                })
+
+            protocol_data = {
+                "name": fname,
+                "dispatch_address": hex(ea),
+                "message_types": message_types,
+            }
+
+            # Export in requested format
+            if fmt == "ksy":
+                spec_output = _export_ksy(protocol_data)
+                return {
+                    "ok": True,
+                    "format": "ksy",
+                    "dispatch_function": fname,
+                    "dispatch_address": hex(ea),
+                    "message_type_count": len(message_types),
+                    "spec": spec_output,
+                }
+            else:
+                spec_output = _export_json_schema(protocol_data)
+                return {
+                    "ok": True,
+                    "format": "json_schema",
+                    "dispatch_function": fname,
+                    "dispatch_address": hex(ea),
+                    "message_type_count": len(message_types),
+                    "spec": spec_output,
+                }
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
