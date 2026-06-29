@@ -1252,26 +1252,6 @@ class ContextAssembler:
         results.sort(key=lambda x: x["interest_score"], reverse=True)
         return results[:limit]
 
-
-    def bulk_index(self, functions: list[dict[str, Any]], idb_path: str) -> int:
-        """
-        Index a batch of functions (e.g. after schemaboot ingest).
-        Each dict: {ea, name, pseudocode}.
-        Returns count indexed.
-        """
-        if not idb_path or not functions:
-            return 0
-        idx = self._get_index(idb_path)
-        count = 0
-        for f in functions:
-            pseudo = f.get("pseudocode") or f.get("code") or ""
-            ea = str(f.get("ea") or f.get("addr") or "")
-            name = str(f.get("name") or ea)
-            if pseudo and ea:
-                idx.index(ea, name, pseudo)
-                count += 1
-        return count
-
     def stop(self) -> None:
         """Shut down the llama-server subprocess cleanly."""
         self._embedder.stop()

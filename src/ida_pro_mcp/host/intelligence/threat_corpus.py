@@ -640,21 +640,6 @@ class ThreatCorpus:
             return None
         return self._malware_index.get(name_or_id.strip().lower())
 
-    def find_intrusion_set(self, name_or_id: str) -> dict[str, Any] | None:
-        if not name_or_id:
-            return None
-        return self._intrusion_index.get(name_or_id.strip().lower())
-
-    def find_tool(self, name_or_id: str) -> dict[str, Any] | None:
-        if not name_or_id:
-            return None
-        return self._tool_index.get(name_or_id.strip().lower())
-
-    def find_yara(self, name: str) -> dict[str, Any] | None:
-        if not name:
-            return None
-        return self._yara_index.get(name.strip())
-
     def search_yara_strings(self, needle: str, limit: int = 25) -> list[dict[str, Any]]:
         if not needle:
             return []

@@ -5,7 +5,7 @@ import difflib
 import math
 import struct
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from typing import Any
 
 
@@ -223,86 +223,3 @@ def prune_policy_store(data: dict[str, Any], max_sessions: int = 24) -> dict[str
         "sessions": dict(ordered),
     }
 
-
-def derive_focus_candidates(
-    *,
-    pack: dict[str, Any],
-    addr: str,
-    policy: dict[str, dict[str, Any]],
-    stats: dict[str, Any],
-    bias_fn: Callable[[str, str], float],
-) -> list[dict[str, Any]]:
-    """Return ranked focus candidates (best first)."""
-    if not addr:
-        return []
-    structural = pack.get("structural") or {}
-    related = pack.get("related_findings") or []
-    apis = pack.get("api_calls") or []
-    candidates: list[dict[str, Any]] = []
-
-    sem_weight = float((policy.get("semantic_linked") or {}).get("weight", 0.9))
-    rel_weight = float((policy.get("relation_linked") or {}).get("weight", 1.2))
-    api_weight = float((policy.get("api_linked") or {}).get("weight", 1.0))
-    sem_hit = float((stats.get("semantic_linked") or {}).get("hit_rate", 0.0))
-    rel_hit = float((stats.get("relation_linked") or {}).get("hit_rate", 0.0))
-    api_hit = float((stats.get("api_linked") or {}).get("hit_rate", 0.0))
-    wvals = [sem_weight, rel_weight, api_weight]
-    hvals = [sem_hit, rel_hit, api_hit]
-    wq50 = _q(wvals, 0.50, default=1.0)
-    wq75 = _q(wvals, 0.75, default=1.1)
-    hq50 = _q(hvals, 0.50, default=0.3)
-    hq75 = _q(hvals, 0.75, default=0.4)
-    weight_gate = wq50 + max(0.0, wq75 - wq50)
-    hit_gate = hq50 + max(0.0, hq75 - hq50)
-
-    if related and rel_weight >= weight_gate and rel_hit >= hit_gate:
-        bias = bias_fn("code", "callers")
-        candidates.append({
-            "tool": "code", "action": "callers", "addr": addr,
-            "reason": "High-yield relation-linked findings; expand call-chain context",
-            "score": round((rel_weight + rel_hit) * bias, 3), "bias": bias,
-        })
-
-    entropy = float(structural.get("entropy") or 0.0)
-    xor_count = int(structural.get("xor_count") or 0)
-    cyclo = int(structural.get("cyclomatic_complexity") or 0)
-    struct_sig = (
-        min(1.0, entropy / 8.0)
-        + min(1.0, xor_count / max(1.0, xor_count + 4.0))
-        + min(1.0, cyclo / max(1.0, cyclo + 12.0))
-    ) / 3.0
-    if struct_sig >= 0.4:
-        bias = bias_fn("code", "blocks")
-        candidates.append({
-            "tool": "code", "action": "blocks", "addr": addr,
-            "reason": "Structural complexity/obfuscation indicators are elevated",
-            "score": round((1.0 + struct_sig) * bias, 3),
-            "bias": bias,
-        })
-
-    if apis and api_weight >= wq50 and api_hit >= hq50:
-        bias = bias_fn("search", "api")
-        candidates.append({
-            "tool": "search", "action": "api", "pattern": apis[0],
-            "reason": "API-linked retrieval is productive; pivot on top API behavior",
-            "score": round((api_weight + api_hit) * bias, 3), "bias": bias,
-        })
-
-    sem_ready = sem_weight >= wq50 or sem_hit >= hq50
-    # Prefer structural/code pivots when no relational/API evidence exists.
-    if sem_ready and (related or apis):
-        bias = bias_fn("search", "semantic")
-        candidates.append({
-            "tool": "search", "action": "semantic", "addr": addr,
-            "reason": "Semantic retrieval quality is acceptable; broaden semantic neighborhood",
-            "score": round((sem_weight + sem_hit) * bias, 3), "bias": bias,
-        })
-
-    bias = bias_fn("code", "callees")
-    candidates.append({
-        "tool": "code", "action": "callees", "addr": addr,
-        "reason": "Default structural pivot to progress analysis graph",
-        "score": round(0.5 * bias, 3), "bias": bias,
-    })
-    candidates.sort(key=lambda x: float(x.get("score") or 0.0), reverse=True)
-    return candidates[:4]

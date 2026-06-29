@@ -72,19 +72,6 @@ def _resolve_schemaboot_db_path(candidate: str | None = None) -> str:
     return base
 
 
-def _build_where_clause(constraints: dict) -> tuple[str, list[object]]:
-    """Build SQL WHERE clause for seed selection from a SchemaBoot constraint dict.
-
-    Delegates to HybridQueryBuilder.build_legacy (the single canonical
-    implementation) so we don't drift from schemaboot's query dialect.
-    """
-    try:
-        from .hybrid_search import HybridQueryBuilder
-    except Exception:
-        from support.hybrid_search import HybridQueryBuilder  # type: ignore[import-not-found]
-    return HybridQueryBuilder.build_legacy(constraints or {})
-
-
 # ---------------------------------------------------------------------------
 # Multi-hop bridge-conditioned retrieval
 # ---------------------------------------------------------------------------
@@ -456,98 +443,7 @@ class MultiHopBridgeIndex:
         candidates.sort(key=lambda x: x["fused_score"], reverse=True)
         return candidates[:top_k]
 
-    # ------------------------------------------------------------------
-    # Full pipeline: query -> bridges -> candidates
-    # ------------------------------------------------------------------
-
-    def multi_hop_search(
-        self,
-        query_constraints: dict,
-        bridge_types: tuple[str, ...] = ("apis", "strings"),
-        top_k: int = 20,
-        hops: int = 2,
-    ) -> dict:
-        """Full multi-hop pipeline.
-
-        1. Query SchemaBoot for seed functions matching *query_constraints*.
-        2. Extract bridge entities from the top seed.
-        3. Retrieve candidates that share those bridges.
-        4. (Optional) For hops > 2, extract bridges from top candidates and repeat.
-        """
-        # Step 1: Find seed functions
-        where, params = _build_where_clause(query_constraints or {})
-        sql = (
-            "SELECT ea, name, segment, size, entropy, bb_count, call_count, "
-            "cyclomatic_complexity, api_count, string_count, (incoming_xrefs + outgoing_xrefs) AS xref_count, "
-            "has_loops, is_thunk, is_library FROM function_attrs "
-            f"{where} LIMIT 5"
-        )
-        seeds = []
-        with self._conn() as conn:
-            cur = conn.cursor()
-            cur.execute(sql, params)
-            for row in cur.fetchall():
-                seeds.append(
-                    {
-                        "ea": row[0],
-                        "name": row[1],
-                        "segment": row[2],
-                        "size": row[3],
-                        "entropy": row[4],
-                        "bb_count": row[5],
-                        "call_count": row[6],
-                        "cyclomatic_complexity": row[7],
-                        "api_count": row[8],
-                        "string_count": row[9],
-                        "xref_count": row[10],
-                        "has_loops": bool(row[11]),
-                        "is_thunk": bool(row[12]),
-                        "is_library": bool(row[13]),
-                    }
-                )
-
-        if not seeds:
-            return {"ok": True, "seeds": [], "bridges": {}, "candidates": [], "total_candidates": 0}
-
-        # Step 2: Extract bridges from top seed
-        top_seed = seeds[0]
-        bridges = self.extract_bridges(
-            func_ea=top_seed["ea"],
-            bridge_types=bridge_types,
-            max_bridges=15,
-        )
-
-        # Step 3: Retrieve candidates with tripartite judging
-        candidates = self.search_via_bridges(bridges, top_k=top_k, exclude_ea=top_seed["ea"], seed_ea=top_seed["ea"])
-
-        # Step 4: Additional hops (simplified: extract bridges from top candidate and expand)
-        if hops > 2 and candidates:
-            top_candidate_ea = int(candidates[0]["ea"], 16)
-            extra_bridges = self.extract_bridges(
-                func_ea=top_candidate_ea,
-                bridge_types=bridge_types,
-                max_bridges=10,
-            )
-            # Merge bridges
-            for k, v in extra_bridges.items():
-                existing = set(bridges.get(k, []))
-                for item in v:
-                    if item not in existing:
-                        bridges[k].append(item)
-                        existing.add(item)
-            candidates = self.search_via_bridges(bridges, top_k=top_k, exclude_ea=top_seed["ea"])
-
-        return {
-            "ok": True,
-            "seeds": [{k: (hex(v) if k == "ea" else v) for k, v in s.items()} for s in seeds],
-            "bridges": bridges,
-            "candidates": candidates,
-            "total_candidates": len(candidates),
-        }
-
-
 __all__ = [
     "MultiHopBridgeIndex",
     "_resolve_schemaboot_db_path",
-    "_build_where_clause",
 ]
