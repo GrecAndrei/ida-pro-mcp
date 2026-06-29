@@ -753,6 +753,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
 
     def _session_action_switch(self, args: dict) -> dict:
         old_idb = getattr(self.current_session, "idb_path", None) if self.current_session else None
+        reopen = bool(args.get("reopen") or args.get("restart"))
         sid = args.get("session_id")
         if not sid:
             # Try to find by binary_path
@@ -765,7 +766,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             return make_error(
                 MCPError.INVALID_ARGS,
                 "session_id or binary_path required",
-                hint="Provide session_id or binary_path. Use session(action='list') to see sessions.",
+                hint="Provide session_id or binary_path. Use session(action='list') to see available sessions.",
             )
         normalized_sid = _normalize_session_id(sid)
         if normalized_sid:
@@ -779,34 +780,58 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                     MCPError.INVALID_ARGS, "Invalid session_id format"
                 )
         session = self.session_mgr.get_session(sid)
-        if session:
-            self.current_session = session
-            new_idb = getattr(session, "idb_path", None)
-            if old_idb and new_idb and old_idb != new_idb:
-                self._trigger_session_diff(old_idb, new_idb)
-            runtime = self.session_runtimes.get(sid) if hasattr(self, "session_runtimes") else None
-            runtime_attached = bool(runtime) and bool(self._runtime_alive(runtime))
-            response = {
-                "ok": True,
-                "session": self.current_session.to_dict(),
-                "runtime_attached": runtime_attached,
-                "capsule": self._sync_session_to_capsule(
-                    self.current_session,
-                    event_type="session_switch",
-                    event={"from_idb": old_idb or "", "to_idb": new_idb or ""},
-                ),
-            }
-            idb_path = getattr(session, "idb_path", None)
-            if idb_path and not os.path.isfile(idb_path):
-                response["idb_exists"] = False
-                response["hint"] = (
-                    "IDB file not on disk at the recorded path. Run "
-                    "session(action='create', reopen=true) or project(action='open') to attach a runtime."
-                )
-            return response
-        return make_error(
-            MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
-        )
+        if not session:
+            return make_error(
+                MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
+            )
+
+        self.current_session = session
+        new_idb = getattr(session, "idb_path", None)
+        if old_idb and new_idb and old_idb != new_idb:
+            self._trigger_session_diff(old_idb, new_idb)
+
+        # Decide if we need to spawn/replace the IDA runtime for this session.
+        runtime = self.session_runtimes.get(sid) if hasattr(self, "session_runtimes") else None
+        runtime_alive = bool(runtime) and bool(self._runtime_alive(runtime))
+        should_spawn = (
+            reopen or not runtime_alive
+        ) and os.path.isfile(getattr(session, "binary_path", "") or "")
+        if should_spawn and hasattr(self, "_start_server"):
+            try:
+                start_res = self._start_server(session)
+                if isinstance(start_res, dict) and "error" not in start_res:
+                    runtime = self.session_runtimes.get(sid)
+                    runtime_alive = bool(runtime) and bool(self._runtime_alive(runtime))
+                else:
+                    # Surface the failure but keep the switch logically valid.
+                    self._last_spawn_error = start_res
+            except Exception as exc:  # pragma: no cover - exercised only at runtime
+                self._last_spawn_error = {"error": True, "message": str(exc)}
+
+        runtime_attached = runtime_alive
+        response = {
+            "ok": True,
+            "session": self.current_session.to_dict(),
+            "runtime_attached": runtime_attached,
+            "capsule": self._sync_session_to_capsule(
+                self.current_session,
+                event_type="session_switch",
+                event={"from_idb": old_idb or "", "to_idb": new_idb or ""},
+            ),
+        }
+        idb_path = getattr(session, "idb_path", None)
+        if idb_path and not os.path.isfile(idb_path) and not runtime_attached:
+            response["idb_exists"] = False
+            response["hint"] = (
+                "IDB file not on disk at the recorded path. Try "
+                "session(action='switch', session_id='...', reopen=true) "
+                "to spawn a new IDA runtime."
+            )
+        spawn_error = getattr(self, "_last_spawn_error", None)
+        if isinstance(spawn_error, dict):
+            response["spawn_error"] = spawn_error
+            self._last_spawn_error = None
+        return response
 
     def _session_action_close(self, args: dict) -> dict:
         sid, sid_err = self._resolve_session_id(args)

@@ -22,6 +22,7 @@ def data(
     min_size: Annotated[Optional[int], "Minimum function size filter"] = None,
     named_only: Annotated[bool, "Only return named (non-sub_) items"] = False,
     min_len: Annotated[int, "Minimum string length for strings action"] = 6,
+    structured: Annotated[bool, "When true, also return an 'items' list of structured records alongside the compact text"] = False,
     **kwargs
 ) -> dict:
     """
@@ -70,6 +71,7 @@ def data(
     try:
         if action == "functions":
             func_lines = []
+            func_items: list[dict] = []
 
             total = 0
             _matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
@@ -106,8 +108,23 @@ def data(
                             parts.append(f"xrefs_from={xrefs_from}")
 
                         func_lines.append("  ".join(parts))
+                        if structured:
+                            item: dict = {"addr": hex_ea(ea), "name": name, "size": func_size, "xrefs_to": xrefs_to}
+                            if include_prototype:
+                                item["prototype"] = get_prototype(fn)
+                            if include_xrefs:
+                                item["xrefs_from"] = xrefs_from
+                            func_items.append(item)
 
-            result = {"ok": True, "functions": "\n".join(func_lines), "total": total, "offset": offset, "count": len(func_lines)}
+            result: dict = {
+                "ok": True,
+                "functions": "\n".join(func_lines),
+                "total": total,
+                "offset": offset,
+                "count": len(func_lines),
+            }
+            if structured:
+                result["items"] = func_items
             if total == 0:
                 result["warning"] = "No functions found matching query."
             return result
