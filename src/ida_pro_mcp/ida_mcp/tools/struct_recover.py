@@ -556,7 +556,12 @@ def struct_recover(
             name = "".join(c if c.isalnum() or c == "_" else "_" for c in name)
             ok, err_msg = _apply_struct_to_til(name, best_fields)
             if not ok:
-                return make_error(MCPError.INTERNAL, f"Failed to apply struct: {err_msg}")
+                return make_error(
+                    MCPError.IDA_ERROR,
+                    f"Failed to apply struct: {err_msg}",
+                    hint="Check IDB write permissions and the target function range; "
+                    "struct_recover applies in-place and mutates the IDB.",
+                )
             total_size = max(f["offset"] + f["size"] for f in best_fields)
             return {
                 "ok": True,

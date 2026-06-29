@@ -80,18 +80,30 @@ def test_emulate_uses_valid_mcp_error_codes():
                     if isinstance(t, ast.Name) and t.id.isupper():
                         mcp_error_attrs.add(t.id)
 
-    # Scan emulate.py for `MCPError.<NAME>` and ensure NAME is known.
-    for node in ast.walk(_module("src/ida_pro_mcp/ida_mcp/tools/emulate.py")):
-        if (
-            isinstance(node, ast.Attribute)
-            and isinstance(node.value, ast.Name)
-            and node.value.id == "MCPError"
-            and isinstance(node.attr, str)
-        ):
-            assert node.attr in mcp_error_attrs, (
-                f"emulate.py references MCPError.{node.attr} which is not "
-                f"defined on the IDA-side MCPError catalog. Use a known code."
-            )
+    # Scan the full IDA-side tools package for any `MCPError.<NAME>` and
+    # require each NAME to be defined on the catalog. This pins emulate
+    # *and* any new tool that tries the same anti-pattern.
+    bad: list[tuple[str, int, str]] = []
+    tools_dir = REPO / "src" / "ida_pro_mcp" / "ida_mcp" / "tools"
+    for tool_path in tools_dir.rglob("*.py"):
+        try:
+            tool_tree = ast.parse(tool_path.read_text())
+        except SyntaxError:
+            continue
+        for node in ast.walk(tool_tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "MCPError"
+                and isinstance(node.attr, str)
+            ):
+                if node.attr not in mcp_error_attrs:
+                    line_no = getattr(node, "lineno", -1)
+                    bad.append((str(tool_path), line_no, node.attr))
+    assert not bad, (
+        "These tools reference MCPError codes not defined on the IDA-side "
+        f"catalog (will raise AttributeError at runtime): {bad}"
+    )
 
 
 def test_search_structured_imports_tag_categories_from_support_module():
