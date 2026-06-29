@@ -63,9 +63,7 @@ class ServerPredictorMixin:
             tool, action = cand.split(".", 1) if "." in cand else (cand, "")
             exploration_bonus = 0.15 if tool and tool not in seen_tools else 0.0
             phase_bonus = 0.0
-            if phase == "triage" and tool in {"firmware_view", "workflow"}:
-                phase_bonus = 0.10
-            elif phase == "deep_analysis" and tool in {"code", "types", "taint"}:
+            if phase == "triage" and tool in {"firmware_view", "workflow"} or phase == "deep_analysis" and tool in {"code", "types", "taint"}:
                 phase_bonus = 0.10
             score = base_score + exploration_bonus + phase_bonus
             scored.append(

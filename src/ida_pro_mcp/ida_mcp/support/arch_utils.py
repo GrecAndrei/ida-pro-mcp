@@ -65,30 +65,16 @@ def get_arch():
 
     # x86 family
     if (
-        proc.startswith("metapc")
-        or "x86" in proc
-        or "amd64" in proc
-        or "x64" in proc
-        or "x86_64" in proc
-        or "ia32" in proc
-        or "80386" in proc
-        or "80486" in proc
-        or proc.startswith("i386")
-        or proc.startswith("i486")
-        or proc.startswith("i586")
-        or proc.startswith("i686")
+        proc.startswith(("metapc", "i386", "i486", "i586", "i686")) or "x86" in proc or "amd64" in proc or "x64" in proc or "x86_64" in proc or "ia32" in proc or "80386" in proc or "80486" in proc
     ):
         return "x64" if is_64 else "x86"
     # ARM family
     if (
-        proc.startswith("arm")
-        or proc.startswith("aarch")
-        or normalized_proc.startswith("thumb")
-        or normalized_proc.startswith("armv")
+        proc.startswith(("arm", "aarch")) or normalized_proc.startswith(("thumb", "armv"))
     ):
         return "arm64" if is_64 else "arm"
     # RISC-V
-    if "riscv" in proc or normalized_proc.startswith("riscv") or normalized_proc.startswith("rv"):
+    if "riscv" in proc or normalized_proc.startswith(("riscv", "rv")):
         return "riscv64" if is_64 else "riscv"
     # MIPS
     if proc.startswith("mips") or "mips" in proc:
@@ -148,7 +134,7 @@ def get_arch():
     if normalized_proc.startswith("z80"):
         return "z80"
     # Microchip PIC families frequently found in embedded firmware
-    if normalized_proc.startswith("pic24") or normalized_proc.startswith("dspic"):
+    if normalized_proc.startswith(("pic24", "dspic")):
         return "pic24"
     if normalized_proc.startswith("pic18"):
         return "pic18"
@@ -433,8 +419,6 @@ INTERESTING_INSTRUCTIONS = {
     "bkpt":     "breakpoint",
     "brk":      "breakpoint",
     "mrs":      "system_register_read",
-    # MIPS
-    "syscall":  "system_call",
     "break":    "breakpoint",
     # PowerPC
     "sc":       "system_call",
@@ -594,14 +578,10 @@ def is_return_mnemonic(mnem_lower, disasm_lower="", arch=None):
             return True
         if mnem_lower.startswith("ldm") and "pc" in disasm_lower:
             return True
-        if mnem_lower == "ldr" and "pc" in disasm_lower:
-            return True
-        return False
+        return bool(mnem_lower == "ldr" and "pc" in disasm_lower)
 
     if is_mips_family(arch):
-        if mnem_lower == "jr" and ("ra" in disasm_lower or "$31" in disasm_lower):
-            return True
-        return False
+        return bool(mnem_lower == "jr" and ("ra" in disasm_lower or "$31" in disasm_lower))
 
     if is_ppc_family(arch):
         return mnem_lower == "blr"
@@ -609,9 +589,7 @@ def is_return_mnemonic(mnem_lower, disasm_lower="", arch=None):
     if is_riscv_family(arch):
         if mnem_lower == "ret":
             return True
-        if mnem_lower == "jalr" and "ra" in disasm_lower:
-            return True
-        return False
+        return bool(mnem_lower == "jalr" and "ra" in disasm_lower)
 
     if is_sparc_family(arch):
         return mnem_lower in ("ret", "retl")

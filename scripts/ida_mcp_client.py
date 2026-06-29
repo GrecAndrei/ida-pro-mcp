@@ -3,13 +3,14 @@
 Interactive IDA MCP Client
 Connect to the MCP server and interact with a binary through IDA Pro.
 """
-import sys
-import os
 import json
+import os
+import queue
 import subprocess
+import sys
 import threading
 import time
-import queue
+
 
 class IDAMCPClient:
     def __init__(self):
@@ -17,7 +18,7 @@ class IDAMCPClient:
         self.stdout_queue = queue.Queue()
         self.request_id = 0
         self.session = None
-        
+
     def start(self):
         print("[*] Starting MCP server...")
         self.proc = subprocess.Popen(
@@ -28,22 +29,22 @@ class IDAMCPClient:
             cwd=os.path.dirname(__file__) or ".",
             bufsize=0
         )
-        
+
         # Readers
         def read_stderr():
             for line in self.proc.stderr:
                 decoded = line.decode('utf-8', errors='replace').strip()
                 if decoded:
                     print(f"[IDA] {decoded}", file=sys.stderr)
-        
+
         def read_stdout():
             for line in self.proc.stdout:
                 self.stdout_queue.put(line)
-        
+
         threading.Thread(target=read_stderr, daemon=True).start()
         threading.Thread(target=read_stdout, daemon=True).start()
         time.sleep(0.3)
-        
+
         # Initialize
         resp = self._call("initialize", {
             "protocolVersion": "2024-11-05",
@@ -55,13 +56,13 @@ class IDAMCPClient:
             return False
         print("[+] MCP server initialized")
         return True
-        
+
     def _call(self, method, params, timeout=120):
         self.request_id += 1
         req = {"jsonrpc": "2.0", "id": self.request_id, "method": method, "params": params}
         self.proc.stdin.write((json.dumps(req) + "\n").encode('utf-8'))
         self.proc.stdin.flush()
-        
+
         start = time.time()
         while time.time() - start < timeout:
             try:
@@ -75,19 +76,19 @@ class IDAMCPClient:
             except json.JSONDecodeError:
                 continue
         return {"error": "Timeout"}
-    
+
     def call_tool(self, tool_name, **args):
         """Call an IDA MCP tool and return the parsed result"""
         resp = self._call("tools/call", {"name": tool_name, "arguments": args})
         if "result" not in resp:
             return resp
-        
+
         content = resp["result"].get("content", [{}])[0].get("text", "{}")
         try:
             return json.loads(content)
         except:
             return {"raw": content}
-    
+
     def open_binary(self, binary_path):
         """Open a binary in IDA and create a session"""
         print(f"[*] Opening {binary_path}...")
@@ -99,7 +100,7 @@ class IDAMCPClient:
         else:
             print(f"[!] Failed: {result}")
             return False
-    
+
     def stop(self):
         if self.proc and self.proc.poll() is None:
             self.proc.terminate()
@@ -125,26 +126,26 @@ def interactive_session(client):
     print("  help              - Show tool list")
     print("  exit              - Quit")
     print("="*60)
-    
+
     while True:
         try:
             cmd = input("\nida> ").strip()
             if not cmd:
                 continue
-            
+
             parts = cmd.split(maxsplit=1)
             action = parts[0].lower()
             arg = parts[1] if len(parts) > 1 else ""
-            
+
             if action in ("exit", "quit", "q"):
                 break
-            
-            elif action == "open":
+
+            if action == "open":
                 if not arg:
                     print("Usage: open <binary_path>")
                     continue
                 client.open_binary(arg)
-            
+
             elif action == "call":
                 # call <tool> {"arg": "value"}
                 tool_parts = arg.split(maxsplit=1)
@@ -159,7 +160,7 @@ def interactive_session(client):
                     continue
                 result = client.call_tool(tool_name, **tool_args)
                 print(json.dumps(result, indent=2))
-            
+
             elif action == "funcs":
                 result = client.call_tool("data", action="functions")
                 if "functions" in result:
@@ -169,7 +170,7 @@ def interactive_session(client):
                         print(f"  ... and {len(result['functions']) - 30} more")
                 else:
                     print(json.dumps(result, indent=2))
-            
+
             elif action == "strings":
                 result = client.call_tool("data", action="strings")
                 if "strings" in result:
@@ -181,7 +182,7 @@ def interactive_session(client):
                         print(f"  ... and {len(result['strings']) - 30} more")
                 else:
                     print(json.dumps(result, indent=2))
-            
+
             elif action in ("decomp", "decompile"):
                 if not arg:
                     print("Usage: decomp <address>")
@@ -191,7 +192,7 @@ def interactive_session(client):
                     print(result["pseudocode"])
                 else:
                     print(json.dumps(result, indent=2))
-            
+
             elif action == "disasm":
                 if not arg:
                     print("Usage: disasm <address>")
@@ -202,18 +203,18 @@ def interactive_session(client):
                         print(f"  {line.get('address', ''):16} {line.get('text', '')}")
                 else:
                     print(json.dumps(result, indent=2))
-            
+
             elif action == "xrefs":
                 if not arg:
                     print("Usage: xrefs <address>")
                     continue
                 result = client.call_tool("code", action="xrefs_to", address=arg)
                 print(json.dumps(result, indent=2))
-            
+
             elif action == "meta":
                 result = client.call_tool("idb", action="meta")
                 print(json.dumps(result, indent=2))
-            
+
             elif action == "help":
                 result = client._call("tools/list", {})
                 if "result" in result:
@@ -223,12 +224,12 @@ def interactive_session(client):
                         print(f"  {t['name']:15} - {t.get('description', '')[:55]}...")
                 else:
                     print(f"Error: {result}")
-            
+
             else:
                 # Try as a direct tool call
                 result = client.call_tool(action, action=arg or "meta")
                 print(json.dumps(result, indent=2))
-                
+
         except KeyboardInterrupt:
             print("\nUse 'exit' to quit")
         except EOFError:
@@ -242,16 +243,15 @@ def main():
     parser.add_argument("binary", nargs="?", help="Binary to open")
     parser.add_argument("--cmd", "-c", help="Execute a single command and exit")
     args = parser.parse_args()
-    
+
     client = IDAMCPClient()
     if not client.start():
         sys.exit(1)
-    
+
     try:
-        if args.binary:
-            if not client.open_binary(args.binary):
-                sys.exit(1)
-        
+        if args.binary and not client.open_binary(args.binary):
+            sys.exit(1)
+
         if args.cmd:
             # Single command mode
             parts = args.cmd.split(maxsplit=1)

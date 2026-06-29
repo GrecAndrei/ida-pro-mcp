@@ -25,22 +25,30 @@ try:
 except ImportError:
     from support.semantic_matching import normalize_action  # type: ignore[import-not-found]
 
-from .core import (
-    SEARCH_ACTIONS, SEARCH_ALIASES, SEARCH_INTENT_PATTERNS,
-    MAX_LIMIT, SCORE_SUBSTRING,
-)
-
-from .basic import search_bytes, search_string, search_immediate, search_name
-from .code import search_insns, search_mnemonic, search_instruction, search_text, search_operand, search_comment
-from .refs import search_data_ref, search_code_ref, search_regex, search_func_by_sig
-from .unified import search_find, search_semantic, search_callers, search_callees, search_api
-from .advanced import search_vulnerable, search_constants, search_decompiled, search_structured
-from .meta import search_type, search_export, search_summary
-from .combinators import (
-    search_bool, search_hunt, search_neighborhood, search_outlier,
-    search_fingerprint, search_path, search_reach, search_noreach,
-)
 from ...support.query_lang import run_query_lang
+from .advanced import search_constants, search_decompiled, search_structured, search_vulnerable
+from .basic import search_bytes, search_immediate, search_name, search_string
+from .code import search_comment, search_insns, search_instruction, search_mnemonic, search_operand, search_text
+from .combinators import (
+    search_bool,
+    search_fingerprint,
+    search_hunt,
+    search_neighborhood,
+    search_noreach,
+    search_outlier,
+    search_path,
+    search_reach,
+)
+from .core import (
+    MAX_LIMIT,
+    SCORE_SUBSTRING,
+    SEARCH_ACTIONS,
+    SEARCH_ALIASES,
+    SEARCH_INTENT_PATTERNS,
+)
+from .meta import search_export, search_summary, search_type
+from .refs import search_code_ref, search_data_ref, search_func_by_sig, search_regex
+from .unified import search_api, search_callees, search_callers, search_find, search_semantic
 
 # ============================================================================
 # L1 Insight Index Pre-filtering
@@ -71,7 +79,7 @@ def _load_insight_index(path: str = "") -> dict:
     if not os.path.exists(target):
         return {}
     try:
-        with open(target, "r", encoding="utf-8") as f:
+        with open(target, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return {}
@@ -157,7 +165,7 @@ def search(
     """
     Search for patterns, bytes, references, and semantic targets in the binary.
     All results use compact text format (one match per line) to minimize LLM context.
-    
+
     QUICK ACTIONS:
     - find: Smart unified search (auto-detects names, strings, imports, instructions, xrefs)
     - semantic: Natural-language semantic ranking across symbols/imports/strings/disasm
@@ -170,13 +178,13 @@ def search(
     - decompiled: Search pseudocode across all functions (with caching)
     - structured: Schema-based pre-filtered semantic retrieval
     - summary: Quick count overview across categories (fast planning aid)
-    
+
     DETAILED ACTIONS:
     - bytes, string, immediate, name, insns, mnemonic, instruction, text, operand, comment
     - data_ref, code_ref, regex, func_by_sig
     - type: Search type library names and type usages
     - export: Search exported symbols
-    
+
     COMPOSITION ACTIONS (combinators):
     - bool: Composite boolean query language across name/api/string/mnem/caller/callee
             Example: "(api:Crypt* AND name:key) OR (string:password AND NOT obf:true)"
@@ -511,7 +519,7 @@ def search(
                         if checked >= 200 or len(rows) >= limit:
                             break
                         fname = idc.get_func_name(func_ea) or ""
-                        if not (fname.startswith("sub_") or fname.startswith("j_")):
+                        if not (fname.startswith(("sub_", "j_"))):
                             continue  # skip already-named functions
                         try:
                             cfunc = ida_hexrays.decompile(func_ea)

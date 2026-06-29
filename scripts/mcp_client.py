@@ -5,14 +5,14 @@ Spawns the MCP server and provides an interactive Python API.
 Handles non-blocking I/O, stderr logging, and timeouts properly.
 """
 
-import subprocess
-import json
-import sys
-import os
-import time
-import select
 import fcntl
+import json
+import os
+import select
+import subprocess
+import sys
 import threading
+import time
 
 
 def _default_state_dir() -> str:
@@ -57,39 +57,36 @@ class MCPClient:
             script_dir = os.path.dirname(os.path.abspath(__file__))
             server_script = os.path.join(script_dir, "ida_mcp_stdio.py")
             venv_python = _discover_venv_python()
-            if venv_python:
-                server_cmd = [venv_python, server_script]
-            else:
-                server_cmd = [sys.executable, server_script]
-        
+            server_cmd = [venv_python, server_script] if venv_python else [sys.executable, server_script]
+
         # Environment setup
         run_env = os.environ.copy()
         if env:
             run_env.update(env)
-        
+
         # Auto-detect IDA if not set
         if "IDADIR" not in run_env:
             for ida_dir in ["/opt/ida-pro", "/usr/local/ida-pro"]:
                 if os.path.isdir(ida_dir):
                     run_env["IDADIR"] = ida_dir
                     break
-        
+
         if "IDA_MCP_IDAT" not in run_env and "IDADIR" in run_env:
             idat = os.path.join(run_env["IDADIR"], "idat")
             if os.path.isfile(idat):
                 run_env["IDA_MCP_IDAT"] = idat
-        
+
         if cache_dir:
             run_env["IDA_MCP_CACHE_DIR"] = cache_dir
-        
+
         # Use unique cache dir to avoid conflicts with other servers
         if "IDA_MCP_CACHE_DIR" not in run_env:
             run_env["IDA_MCP_CACHE_DIR"] = os.path.join(
                 _default_state_dir(), f"test-{os.getpid()}"
             )
-        
+
         self._stderr_lines = []
-        
+
         self.proc = subprocess.Popen(
             server_cmd,
             stdin=subprocess.PIPE,
@@ -99,19 +96,19 @@ class MCPClient:
             bufsize=0,
             env=run_env,
         )
-        
+
         # Make stdout non-blocking
         fd = self.proc.stdout.fileno()
         fl = fcntl.fcntl(fd, fcntl.F_GETFL)
         fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
-        
+
         # Start stderr reader thread
         self._stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
         self._stderr_thread.start()
-        
+
         self._req_id = 0
         self._initialize()
-    
+
     def _read_stderr(self):
         """Read stderr in background for debugging."""
         while True:
@@ -122,11 +119,11 @@ class MCPClient:
                 self._stderr_lines.append(line.decode("utf-8", errors="replace").strip())
             except Exception:
                 break
-    
+
     def get_stderr(self, last_n=20):
         """Get recent stderr output for debugging."""
         return "\n".join(self._stderr_lines[-last_n:])
-    
+
     def _initialize(self):
         """Send initialize request and verify server is alive."""
         resp = self._send_recv({
@@ -141,21 +138,21 @@ class MCPClient:
         else:
             print(f"WARNING: Unexpected initialize response: {resp}")
             print(f"Stderr: {self.get_stderr(5)}")
-    
+
     def _next_id(self):
         self._req_id += 1
         return self._req_id
-    
+
     def _send_recv(self, req, timeout=60):
         """Send a JSON-RPC request and wait for response with proper timeout handling."""
         line = json.dumps(req, separators=(",", ":")).encode("utf-8") + b"\n"
         self.proc.stdin.write(line)
         self.proc.stdin.flush()
-        
+
         start = time.time()
         buf = b""
         fd = self.proc.stdout.fileno()
-        
+
         while time.time() - start < timeout:
             # Use select to check if data is available
             ready, _, _ = select.select([fd], [], [], 0.1)
@@ -174,19 +171,19 @@ class MCPClient:
                                 except json.JSONDecodeError:
                                     print(f"Bad JSON: {line[:200]}")
                                     continue
-                except (OSError, IOError):
+                except OSError:
                     pass
-            
+
             # Check if process died
             if self.proc.poll() is not None:
                 print(f"Server exited with code {self.proc.returncode}")
                 print(f"Stderr: {self.get_stderr(10)}")
                 return None
-        
+
         print(f"TIMEOUT waiting for response to {req.get('method')} after {timeout}s")
         print(f"Stderr: {self.get_stderr(10)}")
         return None
-    
+
     def call(self, tool_name, args=None, timeout=60):
         """Call a tool by name."""
         if args is None:
@@ -200,13 +197,13 @@ class MCPClient:
                 "arguments": args
             }
         }, timeout=timeout)
-        
+
         if not resp:
             return {"error": "timeout", "message": f"No response for {tool_name}"}
-        
+
         if "error" in resp:
             return resp["error"]
-        
+
         result = resp.get("result", {})
         content = result.get("content", [])
         if content and isinstance(content, list):
@@ -216,7 +213,7 @@ class MCPClient:
             except json.JSONDecodeError:
                 return {"text": text}
         return result
-    
+
     def list_tools(self):
         """List all available tools."""
         resp = self._send_recv({
@@ -228,11 +225,11 @@ class MCPClient:
         if resp and "result" in resp:
             return resp["result"]
         return resp
-    
+
     def status(self):
         """Get session status."""
         return self.call("session", {"action": "status"})
-    
+
     def close(self):
         """Shut down the server."""
         try:
@@ -240,10 +237,10 @@ class MCPClient:
             self.proc.wait(timeout=5)
         except Exception:
             self.proc.kill()
-    
+
     def __enter__(self):
         return self
-    
+
     def __exit__(self, *args):
         self.close()
 
@@ -253,16 +250,16 @@ def test_basic():
     print("=" * 60)
     print("IDA Pro MCP Test Client - Basic Test")
     print("=" * 60)
-    
+
     with MCPClient() as c:
         print("\n1. Listing tools...")
         tools = c.list_tools()
         print(f"   Total: {tools.get('total', 0)} tools")
-        
+
         print("\n2. Checking session status...")
         status = c.status()
         print(f"   Sessions: {status.get('total_sessions', 0)}")
-        
+
         print("\n3. All basic tests passed!")
         return True
 
@@ -272,10 +269,10 @@ def test_session(binary_path, timeout=30):
     print(f"\n{'=' * 60}")
     print(f"Testing with binary: {binary_path}")
     print(f"{'=' * 60}")
-    
+
     with MCPClient() as c:
         # Create session
-        print(f"\n1. Creating session...")
+        print("\n1. Creating session...")
         start = time.time()
         resp = c.call("session", {
             "action": "create",
@@ -283,11 +280,11 @@ def test_session(binary_path, timeout=30):
         }, timeout=timeout)
         elapsed = time.time() - start
         print(f"   Created in {elapsed:.1f}s")
-        
+
         if resp and "error" in resp:
             print(f"   ERROR: {resp}")
             return False
-        
+
         sid = None
         if resp and "session" in resp:
             sid = resp["session"].get("session_id")
@@ -295,29 +292,29 @@ def test_session(binary_path, timeout=30):
         elif resp and "session_id" in resp:
             sid = resp["session_id"]
             print(f"   Session ID: {sid}")
-        
+
         # Quick status check
-        print(f"\n2. Checking status...")
+        print("\n2. Checking status...")
         status = c.status()
         print(f"   Running: {status.get('session', {}).get('is_running', False)}")
-        
-        print(f"\n3. Session test complete!")
+
+        print("\n3. Session test complete!")
         return True
 
 
 if __name__ == "__main__":
     import argparse
-    
+
     default_binary = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "tests", "data", "test_binary.exe"
     )
-    
+
     parser = argparse.ArgumentParser(description="IDA Pro MCP Test Client")
     parser.add_argument("--test", choices=["basic", "session", "all"], default="basic")
     parser.add_argument("--binary", default=default_binary)
     args = parser.parse_args()
-    
+
     if args.test == "basic":
         test_basic()
     elif args.test == "session":

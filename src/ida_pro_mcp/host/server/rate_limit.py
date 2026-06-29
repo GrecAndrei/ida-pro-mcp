@@ -8,8 +8,8 @@ Two scopes:
 """
 from __future__ import annotations
 
-import time
 import threading
+import time
 from typing import Dict, Optional, Tuple
 
 

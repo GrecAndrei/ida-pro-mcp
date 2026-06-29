@@ -165,7 +165,7 @@ def process_file(file: str, items: list[tuple[int, str, str]]) -> bool:
             # After dropping, collapse blank lines within the paren block,
             # and if the whole block has no symbols left, drop the `from` line too.
             block_lines = lines[stmt_start:end + 1]
-            nonblank = [ln for ln in block_lines if ln.strip() and ln.strip() not in "()"]
+            [ln for ln in block_lines if ln.strip() and ln.strip() not in "()"]
             # If only the `from X import (` and `)` lines remain, drop the whole statement.
             has_content = any(re.search(r"\w", ln) and "import" not in ln for ln in block_lines[1:-1])
             if not has_content:

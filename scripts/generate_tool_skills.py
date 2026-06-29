@@ -12,11 +12,11 @@ Output:
 from __future__ import annotations
 
 import ast
+import contextlib
 import json
 import re
 from pathlib import Path
 from typing import Any
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_FILE = REPO_ROOT / "src" / "ida_pro_mcp" / "host" / "schemas_data.py"
@@ -66,9 +66,8 @@ def _extract_literal_assignment(module: ast.Module, name: str) -> Any:
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id == name:
                     value_node = node.value
-        elif isinstance(node, ast.AnnAssign):
-            if isinstance(node.target, ast.Name) and node.target.id == name:
-                value_node = node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == name:
+            value_node = node.value
     if value_node is None:
         raise RuntimeError(f"Could not find assignment for {name} in {SOURCE_FILE}")
     return ast.literal_eval(value_node)
@@ -82,7 +81,7 @@ def _eval_node(node: ast.AST, env: dict[str, Any]) -> Any:
     if isinstance(node, ast.Tuple):
         return tuple(_eval_node(x, env) for x in node.elts)
     if isinstance(node, ast.Dict):
-        return {_eval_node(k, env): _eval_node(v, env) for k, v in zip(node.keys, node.values)}
+        return {_eval_node(k, env): _eval_node(v, env) for k, v in zip(node.keys, node.values, strict=False)}
     if isinstance(node, ast.Name):
         if node.id in env:
             return env[node.id]
@@ -103,9 +102,8 @@ def _extract_assignment_eval(module: ast.Module, name: str, env: dict[str, Any])
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id == name:
                     value_node = node.value
-        elif isinstance(node, ast.AnnAssign):
-            if isinstance(node.target, ast.Name) and node.target.id == name:
-                value_node = node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == name:
+            value_node = node.value
     if value_node is None:
         raise RuntimeError(f"Could not find assignment for {name} in {SOURCE_FILE}")
     return _eval_node(value_node, env)
@@ -270,14 +268,10 @@ def _cleanup_old_generated(root: Path) -> None:
                         if p.is_file():
                             p.unlink()
                         elif p.is_dir():
-                            try:
+                            with contextlib.suppress(OSError):
                                 p.rmdir()
-                            except OSError:
-                                pass
-                    try:
+                    with contextlib.suppress(OSError):
                         child.rmdir()
-                    except OSError:
-                        pass
 
 
 def _cleanup_old_generated_docs(root: Path) -> None:
@@ -289,10 +283,8 @@ def _cleanup_old_generated_docs(root: Path) -> None:
         except Exception:
             continue
         if GEN_MARKER in text:
-            try:
+            with contextlib.suppress(OSError):
                 doc.unlink()
-            except OSError:
-                pass
 
 
 def main() -> None:

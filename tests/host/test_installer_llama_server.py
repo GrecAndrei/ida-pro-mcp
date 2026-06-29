@@ -3,10 +3,10 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from ida_pro_mcp.installer.common import InstallerOptions
-from ida_pro_mcp.installer.main import parse_args, run_install, UI
-from ida_pro_mcp.installer import runtime as runtime_mod
 import ida_pro_mcp.installer.main as main_mod
+from ida_pro_mcp.installer import runtime as runtime_mod
+from ida_pro_mcp.installer.common import InstallerOptions
+from ida_pro_mcp.installer.main import UI, parse_args, run_install
 
 
 def test_parse_args_install_llama_server_flag():

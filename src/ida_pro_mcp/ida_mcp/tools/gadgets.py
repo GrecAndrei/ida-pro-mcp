@@ -189,9 +189,8 @@ def _find_jop_gadgets(addr, limit, max_insns, query):
                     disasm = _disasm_at(ea).lower()
                     if "ra" not in disasm:
                         is_jop = True
-            elif is_ppc_family(arch):
-                if ml in ("bctr",):
-                    is_jop = True
+            elif is_ppc_family(arch) and ml in ("bctr",):
+                is_jop = True
 
             if is_jop:
                 insns = _decode_backward(ea, max_insns)
@@ -247,9 +246,8 @@ def _find_cop_gadgets(addr, limit, max_insns, query):
                     disasm = _disasm_at(ea).lower()
                     if "ra" not in disasm:
                         is_cop = True
-            elif is_ppc_family(arch):
-                if ml == "bctrl":
-                    is_cop = True
+            elif is_ppc_family(arch) and ml == "bctrl":
+                is_cop = True
 
             if is_cop:
                 insns = _decode_backward(ea, max_insns)
@@ -307,9 +305,8 @@ def _find_syscall_gadgets(addr, limit, max_insns, query):
             elif is_riscv_family(arch):
                 if ml == "ecall":
                     is_syscall = True
-            elif is_sparc_family(arch):
-                if ml == "ta":
-                    is_syscall = True
+            elif is_sparc_family(arch) and ml == "ta":
+                is_syscall = True
 
             if is_syscall:
                 insns = _decode_backward(ea, max_insns)
@@ -364,9 +361,8 @@ def _find_write_what_where(addr, limit, max_insns, query):
             elif is_ppc_family(arch):
                 if ml in ("stw", "sth", "stb", "std", "stwx", "stdx"):
                     is_www = True
-            elif is_riscv_family(arch):
-                if ml in ("sw", "sh", "sb", "sd"):
-                    is_www = True
+            elif is_riscv_family(arch) and ml in ("sw", "sh", "sb", "sd"):
+                is_www = True
 
             if is_www:
                 # Look for a ret following this to make it a usable gadget
@@ -676,7 +672,7 @@ def _find_seh_handlers(addr, limit, _max_insns, _query):
                         pm = (idc.print_insn_mnem(prev) or "").lower()
                         if pm == "push":
                             handler_ea = idc.get_operand_value(prev, 0)
-                            if handler_ea != idaapi.BADADDR and handler_ea != 0:
+                            if handler_ea not in (idaapi.BADADDR, 0):
                                 func = idaapi.get_func(handler_ea)
                                 fname = ida_funcs.get_func_name(func.start_ea) \
                                     if func else idc.get_name(handler_ea) or ""
@@ -945,7 +941,7 @@ def _score_gadgets_behavior(gadgets: list, action: str) -> Optional[dict]:
         from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
     except ImportError:
         try:
-            from host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier# type: ignore
+            from host.intelligence.core import BehaviorClassifier, BgeCodeEmbedder  # type: ignore
         except ImportError:
             return None
     try:
@@ -1009,7 +1005,7 @@ def _classify_gadget_chain(addr, limit, max_insns, query) -> dict:
         from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
     except ImportError:
         try:
-            from host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier# type: ignore
+            from host.intelligence.core import BehaviorClassifier, BgeCodeEmbedder  # type: ignore
         except ImportError:
             return make_error(MCPError.IDA_ERROR, "intelligence.py not available")
 
@@ -1060,7 +1056,7 @@ def _classify_gadget_chain(addr, limit, max_insns, query) -> dict:
         classifier.clear_cache()
 
     # Assess exploitability
-    primitives_present = list(all_gadgets.keys())
+    list(all_gadgets.keys())
     has_pivot = bool(all_gadgets.get("stack_pivot"))
     has_www = bool(all_gadgets.get("write_what_where"))
     has_rop = bool(all_gadgets.get("rop"))

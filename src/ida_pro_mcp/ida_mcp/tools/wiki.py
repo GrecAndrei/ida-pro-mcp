@@ -1,6 +1,5 @@
-import re
 import difflib
-import time
+import re
 from collections import OrderedDict
 
 try:
@@ -38,7 +37,7 @@ def _read_wiki_file(path):
     if real_path in _WIKI_CACHE:
         _WIKI_CACHE.move_to_end(real_path)
         return _WIKI_CACHE[real_path]
-    with open(path, 'r', encoding='utf-8') as f:
+    with open(path, encoding='utf-8') as f:
         content = f.read()
     _WIKI_CACHE[real_path] = content
     if len(_WIKI_CACHE) > _MAX_WIKI_CACHE:
@@ -106,7 +105,7 @@ def wiki(
     _repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_script_dir))))
     wiki_root = os.path.join(_repo_root, "docs", "wiki")
     wiki_root_real = os.path.realpath(wiki_root)
-    
+
     try:
         def collect_topics():
             topics = {}
@@ -183,19 +182,19 @@ def wiki(
                     err["suggestion"] = suggestion
                     err["fuzzy_score"] = round(score, 3)
                 return err
-            
+
             lines = _read_wiki_file(path).splitlines(True)
-            
+
             content_lines = lines
             target_section = None
-            
+
             # Extract section if requested
             if section:
                 section_lines = []
                 found = False
                 header_level = 0
                 s_lower = section.lower().strip()
-                
+
                 for line in lines:
                     strip_line = line.strip()
                     if strip_line.startswith("#"):
@@ -207,16 +206,16 @@ def wiki(
                             header_level = strip_line.count("#")
                             section_lines.append(line)
                             continue
-                        
+
                         if found:
                             # If we hit another header of same or higher level, we are done
                             new_level = strip_line.count("#")
                             if new_level <= header_level:
                                 break
-                    
+
                     if found:
                         section_lines.append(line)
-                
+
                 if found:
                     content_lines = section_lines
                     target_section = section
@@ -232,9 +231,9 @@ def wiki(
             end = total_lines
             if limit > 0:
                 end = min(total_lines, start + limit)
-            
+
             paginated_lines = content_lines[start:end]
-            
+
             # Determine breadcrumbs for the current chunk
             # We look back from the 'start' line in the original file to find active headers
             original_start_index = 0
@@ -245,10 +244,10 @@ def wiki(
                     if line.strip().startswith("#") and sec_text in line.lower():
                         original_start_index = i
                         break
-            
+
             current_line_in_file = original_start_index + start
             breadcrumbs = []
-            
+
             # Scan backwards from current line to find the header hierarchy
             for i in range(current_line_in_file, -1, -1):
                 line = lines[i].strip()
@@ -268,17 +267,17 @@ def wiki(
                 "breadcrumbs": [b["text"] for b in breadcrumbs],
                 "headers": toc[:50],
             }
-            
+
             if target_section:
                 result["section_filter"] = target_section
-            
+
             result["content"] = "".join(paginated_lines)
-            
+
             if limit > 0 and end < total_lines:
                 result["_truncated"] = True
                 result["next_offset"] = end
                 result["lines_remaining"] = total_lines - end
-            
+
             return result
 
         elif action in ("search", "semantic_search"):
@@ -371,6 +370,6 @@ def wiki(
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
-            
+
     except Exception as e:
         return handle_error(e)

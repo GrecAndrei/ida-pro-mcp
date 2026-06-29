@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Blackboard store and host-side orchestration helpers."""
 
+import contextlib
 import hashlib
 import json
 import os
@@ -11,10 +12,8 @@ from typing import Any, Dict, List, Optional
 
 from ..config import _bounded_int
 from ..errors import MCPError, is_error_result, make_error
-from ..stores.symbol_db import SymbolDB
 from ..intelligence.helpers import parse_str_list
-
-
+from ..stores.symbol_db import SymbolDB
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _LANE_CATEGORY = {
@@ -209,7 +208,7 @@ class ServerBlackboardMixin:
                 "seen_addrs": [],
                 "last_transition_reason": "init",
             }
-            setattr(self, "_blackboard_phase_state", state)
+            self._blackboard_phase_state = state
         return state
 
     def _phase_snapshot(self, state: Dict[str, Any], store) -> Dict[str, Any]:
@@ -778,7 +777,7 @@ class ServerBlackboardMixin:
                 "last_write_call": -1,
                 "last_decision_call": -1,
             }
-            setattr(self, "_blackboard_policy_state", state)
+            self._blackboard_policy_state = state
         return state
 
     def _bb_policy_bump(self) -> Dict[str, Any]:
@@ -1017,7 +1016,7 @@ class ServerBlackboardMixin:
         category = _LANE_CATEGORY.get(lane, "hypothesis")
         imported = 0
         trace_tasks = []
-        with open(notes_path, "r", encoding="utf-8") as fh:
+        with open(notes_path, encoding="utf-8") as fh:
             for raw in fh:
                 line = raw.strip()
                 if not line.startswith("- "):
@@ -1187,7 +1186,7 @@ class ServerBlackboardMixin:
                     try:
                         probe = self._execute_tool("code", {"action": "disasm", "addr": addr, "limit": 8})
                         text = json.dumps(probe, ensure_ascii=True).lower()
-                        asm_tok = asm.split()[0].lower() if asm else ""
+                        asm_tok = asm.split(maxsplit=1)[0].lower() if asm else ""
                         ok = addr.lower() in text and (asm_tok in text if asm_tok else True)
                         detail = "code_disasm_addr+asm"
                     except Exception as exc:
@@ -1224,7 +1223,7 @@ class ServerBlackboardMixin:
         }
 
     def _extract_trace_entities(self, text: str) -> Dict[str, Any]:
-        addrs = sorted(set(m.group(0) for m in _ADDR_RE.finditer(text or "")))
+        addrs = sorted({m.group(0) for m in _ADDR_RE.finditer(text or "")})
         symbols = []
         for m in _SYMBOL_RE.finditer(text or ""):
             s = m.group(0)
@@ -1656,10 +1655,8 @@ class ServerBlackboardMixin:
             schema_str = str(args.get("schema") or "")
             schema = {}
             if schema_str:
-                try:
+                with contextlib.suppress(Exception):
                     schema = json.loads(schema_str)
-                except Exception:
-                    pass
             vector = args.get("vector")
             quantized = args.get("quantized")
             q_signs = args.get("q_signs")
@@ -1984,10 +1981,7 @@ class ServerBlackboardMixin:
                     "items": [_entry_brief(e) for e in lane_entries[:limit]],
                 }
             self._bb_policy_mark(policy_state, "working_set")
-            if self._phase_find_loop(phase_state):
-                escape = store.next_target(limit=3)
-            else:
-                escape = []
+            escape = store.next_target(limit=3) if self._phase_find_loop(phase_state) else []
             return {
                 "ok": True,
                 "lanes": lanes,

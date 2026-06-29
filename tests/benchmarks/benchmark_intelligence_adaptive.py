@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Microbenchmarks for adaptive intelligence enrichment paths."""
 
-import time
 import statistics
+import time
 
 from tests._isolated_repo_loader import load_host_module
 

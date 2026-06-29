@@ -1,6 +1,6 @@
+import json
 import os
 import sys
-import json
 
 from tests._isolated_repo_loader import load_package_module
 

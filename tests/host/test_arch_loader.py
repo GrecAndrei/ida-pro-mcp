@@ -1,11 +1,11 @@
 import argparse
 import json
 import os
+import queue
 import subprocess
 import sys
 import threading
 import time
-import queue
 
 
 class MCPClient:

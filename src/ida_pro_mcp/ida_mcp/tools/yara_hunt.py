@@ -8,7 +8,6 @@ import hashlib
 import re
 from collections import OrderedDict
 
-
 # ============================================================================
 # YARA_HUNT - Surgical Pattern Matching with Context & Attribution
 # ============================================================================
@@ -32,7 +31,7 @@ def _load_rule_text(spec: str) -> tuple[Optional[str], Optional[dict]]:
         return None, path_err
     if not os.path.exists(rule_path):
         return None, make_error(MCPError.FILE_NOT_FOUND, f"Rule file not found: {rule_path}")
-    with open(rule_path, "r", encoding="utf-8", errors="replace") as f:
+    with open(rule_path, encoding="utf-8", errors="replace") as f:
         return f.read(), None
 
 
@@ -217,7 +216,7 @@ def yara_hunt(
         if action == "list_rules":
             if not os.path.exists(rules_dir):
                 os.makedirs(rules_dir, exist_ok=True)
-            files = [f for f in os.listdir(rules_dir) if f.endswith(".yar") or f.endswith(".yara")]
+            files = [f for f in os.listdir(rules_dir) if f.endswith((".yar", ".yara"))]
             return {"ok": True, "rules": files, "dir": rules_dir}
 
         yara = None
@@ -270,7 +269,7 @@ def yara_hunt(
                         rule_path, err = validate_path_safe(rules)
                         if err:
                             return err
-                        with open(rule_path, "r", encoding="utf-8", errors="replace") as f:
+                        with open(rule_path, encoding="utf-8", errors="replace") as f:
                             file_text = f.read()
                         compiled = _compile_rule_cached(file_text, yara)
                 except Exception as e:

@@ -17,20 +17,24 @@ Usage (from server.py):
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import threading
 import time
 import uuid
-import importlib.util
-from contextlib import closing
+from collections.abc import Callable
+from contextlib import closing, suppress
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from ..intelligence.helpers import (
     cosine_similarity as _cosine,
-    pack_floats as _pack,
-    unpack_floats as _unpack,
+)
+from ..intelligence.helpers import (
     quantile as _q,
+)
+from ..intelligence.helpers import (
+    unpack_floats as _unpack,
 )
 
 try:
@@ -304,10 +308,8 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
                 continue
             addrs = []
             for it in items:
-                try:
+                with suppress(Exception):
                     addrs.append(int(it["addr"], 16))
-                except Exception:
-                    pass
             if not addrs:
                 continue
             lo, hi = min(addrs), max(addrs)
@@ -726,7 +728,8 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
         for the LLM to review.
         """
         try:
-            import importlib.util, os as _os
+            import importlib.util
+            import os as _os
             # analysis_engine.py is in host/analysis/; blackboard.py is at the
             # package root (ida_pro_mcp/ida_mcp/tools/) — two levels up.
             path = _os.path.join(

@@ -3,13 +3,13 @@
 Smart pattern matching: regex auto-detection, glob, semantic/fuzzy search.
 No IDA dependencies — safe to import from both host and runtime.
 """
+import contextlib
+import fnmatch
 import os
 import re
 import time
-import fnmatch
 from functools import lru_cache
 from typing import Any, Optional
-
 
 _SEMANTIC_CANONICALS = {
     "find": "search",
@@ -98,10 +98,7 @@ def _normalize_semantic_token(token: str) -> str:
         return tok
     for suffix in ("ing", "ers", "ies", "ied", "er", "ed", "es", "s"):
         if len(tok) > 4 and tok.endswith(suffix):
-            if suffix in ("ies", "ied"):
-                tok = tok[:-3] + "y"
-            else:
-                tok = tok[: -len(suffix)]
+            tok = tok[:-3] + "y" if suffix in ("ies", "ied") else tok[:-len(suffix)]
             break
     return _SEMANTIC_CANONICALS.get(tok, tok)
 
@@ -133,10 +130,7 @@ def _compile_semantic_matcher(pattern: str, *, fuzzy_cutoff: float = _SEMANTIC_F
 
     query_set = set(query_tokens)
     pathlike_query = len(query_set) == 2 and bool(re.search(r"[./\\:_-]", pattern))
-    if pathlike_query:
-        overlap_needed = 2
-    else:
-        overlap_needed = max(1, (len(query_set) + 1) // 2)
+    overlap_needed = 2 if pathlike_query else max(1, (len(query_set) + 1) // 2)
     fuzzy_tokens = [
         tok for tok in query_set if len(tok) >= _SEMANTIC_SINGLE_TOKEN_MIN_LEN
     ]
@@ -174,9 +168,7 @@ def _is_regex(pattern):
         return True
     if set("^$+{}()|").intersection(pattern):
         return True
-    if re.search(r"\[.+\]", pattern):
-        return True
-    return False
+    return bool(re.search(r"\[.+\]", pattern))
 
 
 @lru_cache(maxsize=1024)
@@ -212,17 +204,13 @@ def _compile_smart_pattern_uncached(
                 flags |= re.MULTILINE
             elif c == "s":
                 flags |= re.DOTALL
-        try:
+        with contextlib.suppress(re.error):
             regex = re.compile(
                 body, flags or (0 if case_sensitive else re.IGNORECASE)
             )
-        except re.error:
-            pass
     elif _is_regex(pattern):
-        try:
+        with contextlib.suppress(re.error):
             regex = re.compile(pattern, 0 if case_sensitive else re.IGNORECASE)
-        except re.error:
-            pass
     if regex is not None:
         return lambda _t, _r=regex: bool(_r.search(_t))
     if "*" in pattern or "?" in pattern:
@@ -270,10 +258,10 @@ def smart_match(pattern, text, case_sensitive=False):
 # L2 — Global Facts Database (SQLite-backed domain knowledge)
 # ============================================================================
 
+import hashlib  # noqa: E402
 import sqlite3  # noqa: E402
 import threading  # noqa: E402
-import hashlib  # noqa: E402
-from typing import Any, Dict, List, Optional  # noqa: E402
+from typing import Dict, List  # noqa: E402
 
 
 class GlobalFactsDatabase:

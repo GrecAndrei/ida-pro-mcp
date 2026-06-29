@@ -4,7 +4,6 @@ from pathlib import Path
 
 from ida_pro_mcp.host.intelligence.core import BehaviorClassifier, _extract_signature
 
-
 FIX_DIR = Path(__file__).resolve().parents[3] / "fixtures" / "semantic"
 
 

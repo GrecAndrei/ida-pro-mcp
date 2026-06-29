@@ -27,9 +27,10 @@ Examples:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 try:
     from ._common import *
@@ -40,9 +41,11 @@ except ImportError:
         pass
 
 if "tool" not in globals():
-    tool = lambda f: f  # type: ignore
+    def tool(f):
+        return f  # type: ignore
 if "idaread" not in globals():
-    idaread = lambda f: f  # type: ignore
+    def idaread(f):
+        return f  # type: ignore
 if "IDAError" not in globals():
     IDAError = Exception  # type: ignore
 
@@ -176,14 +179,12 @@ def _apply_filter(data: Any, query: str) -> Any:
             if desc:
                 key = key[1:]
             if isinstance(current, list):
-                try:
+                with contextlib.suppress(Exception):
                     current = sorted(
                         current,
                         key=lambda x: (_get_path(x, key) or 0),
                         reverse=desc,
                     )
-                except Exception:
-                    pass
         elif op == "unique":
             if isinstance(current, list):
                 seen = []

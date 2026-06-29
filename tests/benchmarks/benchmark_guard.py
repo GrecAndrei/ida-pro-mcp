@@ -13,7 +13,6 @@ import subprocess
 import sys
 from typing import Dict, Tuple
 
-
 LINE_RE = re.compile(r"^(?P<name>[^=]+?)\s+mean=\s*(?P<mean>[0-9.]+)\s*ms", re.MULTILINE)
 
 
@@ -28,8 +27,7 @@ def parse_means(output: str) -> Dict[str, float]:
 def run_benchmark(script: str) -> Tuple[int, str, str]:
     proc = subprocess.run(
         [sys.executable, script],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )

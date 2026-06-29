@@ -18,8 +18,7 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
-from typing import Optional, List, Dict, Set, Tuple, Any
-
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 # ── Known taint sources (user-controlled input) ───────────────────────────────
 
@@ -95,10 +94,7 @@ DANGEROUS_SINKS = {
 def _is_sanitizer_name(name: str) -> bool:
     n = str(name or "").lower()
     return (
-        n.startswith("validate_")
-        or n.startswith("check_")
-        or n.startswith("sanitize_")
-        or n in ("strlen", "strnlen")
+        n.startswith(("validate_", "check_", "sanitize_")) or n in ("strlen", "strnlen")
     )
 
 

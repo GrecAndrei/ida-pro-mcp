@@ -10,9 +10,11 @@ except ImportError:
 # ============================================================================
 
 try:
-    from ..support._api_categories import API_CATEGORIES as _CATEGORY_APIS, API_TO_CATEGORY as _API_TO_CATEGORY
+    from ..support._api_categories import API_CATEGORIES as _CATEGORY_APIS
+    from ..support._api_categories import API_TO_CATEGORY as _API_TO_CATEGORY
 except ImportError:
-    from support._api_categories import API_CATEGORIES as _CATEGORY_APIS, API_TO_CATEGORY as _API_TO_CATEGORY  # type: ignore[import-not-found]
+    from support._api_categories import API_CATEGORIES as _CATEGORY_APIS  # type: ignore[import-not-found]
+    from support._api_categories import API_TO_CATEGORY as _API_TO_CATEGORY
 
 
 def _get_func_callees(func_ea, max_items=200):
@@ -101,7 +103,7 @@ def _collect_schema_hints(fn, fname: str, callees: list[str], insn_count: int, x
         compiler_hints.update({"library_or_thunk", "compiler_generated"})
         structural_features.add("thunk")
 
-    if fn_name.startswith(("j_", "nullsub_")) or fn_name.startswith("__"):
+    if fn_name.startswith(("j_", "nullsub_", "__")):
         compiler_hints.add("compiler_generated")
         structural_features.add("compiler_stub")
 
@@ -152,7 +154,7 @@ def _collect_schema_hints(fn, fname: str, callees: list[str], insn_count: int, x
 
 def _induce_function_schema(func_ea: int) -> dict:
     """Induce a structured attribute-value schema for a single function.
-    
+
     Returns dict with behavior_tags, dangerous_apis, string_refs, vuln_class,
     compiler_hints, and structural_features.
     """
@@ -164,13 +166,13 @@ def _induce_function_schema(func_ea: int) -> dict:
         "compiler_hints": set(),
         "structural_features": set(),
     }
-    
+
     fn = ida_funcs.get_func(func_ea)
     if not fn:
         return schema
-    
+
     callees = _get_func_callees(func_ea)
-    
+
     # Category-based behavior tags
     category_hits = {}
     matched_apis = {}
@@ -193,7 +195,7 @@ def _induce_function_schema(func_ea: int) -> dict:
                     break
     except Exception:
         pass
-    
+
     # Dangerous API detection
     for callee in callees:
         if callee in DANGEROUS_APIS:
@@ -203,7 +205,7 @@ def _induce_function_schema(func_ea: int) -> dict:
         if base in DANGEROUS_APIS:
             schema["dangerous_apis"].add(callee)
             schema["vuln_class"].add("dangerous_api")
-    
+
     # String references
     for head in idautils.Heads(fn.start_ea, fn.end_ea):
         for dref in idautils.DataRefsFrom(head):
@@ -242,7 +244,7 @@ def _induce_function_schema(func_ea: int) -> dict:
         schema["structural_features"].add("very_small")
     elif insn_count > 500:
         schema["structural_features"].add("very_large")
-    
+
     # Loop detection
     try:
         fc = idaapi.FlowChart(fn)
@@ -255,7 +257,7 @@ def _induce_function_schema(func_ea: int) -> dict:
                 break
     except Exception:
         pass
-    
+
     # Convert sets to sorted lists for JSON serialization
     return {k: sorted(v) for k, v in schema.items()}
 
@@ -375,7 +377,7 @@ def classify(
                     try:
                         from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
                     except ImportError:
-                        from host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier# type: ignore
+                        from host.intelligence.core import BehaviorClassifier, BgeCodeEmbedder  # type: ignore
                     embedder = BgeCodeEmbedder()
                     classifier = BehaviorClassifier.instance(embedder)
                     behavior_tags = classifier.classify(pseudo, threshold=0.0, top_k=6)
@@ -413,7 +415,6 @@ def classify(
         elif action == "binary":
             category_counts = {}
             total_funcs = 0
-            import_names = []
             for ea in idautils.Functions():
                 total_funcs += 1
                 cat, _, _ = _classify_func(ea)
@@ -440,9 +441,7 @@ def classify(
                 binary_type = "crypto_tool"
             elif c.get("math", 0) > 5:
                 binary_type = "scientific_or_game"
-            elif c.get("registry", 0) > 5:
-                binary_type = "system_tool"
-            elif c.get("process", 0) > 5:
+            elif c.get("registry", 0) > 5 or c.get("process", 0) > 5:
                 binary_type = "system_tool"
             elif total_funcs > 0 and c.get("unknown", 0) == total_funcs:
                 binary_type = "library_or_driver"
@@ -478,7 +477,7 @@ def classify(
                 cat, matched, _ = _classify_func(ea)
                 fname = idc.get_func_name(ea)
                 # For unnamed functions, try BehaviorClassifier (more accurate than heuristic)
-                if _classifier and (fname.startswith("sub_") or fname.startswith("nullsub_")):
+                if _classifier and (fname.startswith(("sub_", "nullsub_"))):
                     try:
                         cfunc = ida_hexrays.decompile(ea)
                         if cfunc:
@@ -520,8 +519,7 @@ def classify(
                 is_lib = bool(flags & ida_funcs.FUNC_LIB)
                 is_thunk = bool(flags & ida_funcs.FUNC_THUNK)
                 # Also check name patterns for compiler-generated code
-                is_compiler = fname.startswith("__") or \
-                              fname.startswith("j_") or fname.startswith("nullsub_")
+                is_compiler = fname.startswith(("__", "j_", "nullsub_"))
                 if is_lib or is_thunk or is_compiler:
                     if len(library_funcs) < limit:
                         tag = "lib" if is_lib else ("thunk" if is_thunk else "compiler")
@@ -535,9 +533,7 @@ def classify(
                 if not fn:
                     continue
                 fname_chk = idc.get_func_name(ea)
-                if (fn.flags & (ida_funcs.FUNC_LIB | ida_funcs.FUNC_THUNK)) or \
-                   fname_chk.startswith("__") or fname_chk.startswith("j_") or \
-                   fname_chk.startswith("nullsub_"):
+                if fn.flags & (ida_funcs.FUNC_LIB | ida_funcs.FUNC_THUNK) or fname_chk.startswith(("__", "j_", "nullsub_")):
                     lib_count += 1
             total = sum(1 for _ in idautils.Functions())
             return {
@@ -726,7 +722,7 @@ def classify(
             try:
                 from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
             except ImportError:
-                from host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier# type: ignore
+                from host.intelligence.core import BehaviorClassifier, BgeCodeEmbedder  # type: ignore
             bc = BehaviorClassifier.instance(BgeCodeEmbedder())
             max_funcs = max(1, int(limit))
             rep = bc.anchor_coverage_report(min_similarity=0.4, max_funcs=max_funcs)

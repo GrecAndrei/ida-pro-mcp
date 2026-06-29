@@ -118,7 +118,7 @@ def test_intelligence_tool_module_imports_safely():
 def test_schemas_py_knows_about_intelligence_tool():
     """schemas.py exports `intelligence` in TOOLS, ADVERTISED, and
     TOOL_ACTIONS via _TOOL_ACTIONS_DATA."""
-    from ida_pro_mcp.services import TOOLS, TOOL_ACTIONS, HIDDEN_TOOLS_IN_LIST, ADVERTISED_TOOLS
+    from ida_pro_mcp.services import ADVERTISED_TOOLS, HIDDEN_TOOLS_IN_LIST, TOOL_ACTIONS, TOOLS
     assert "intelligence" in TOOLS
     assert "intelligence" in TOOL_ACTIONS
     assert "intelligence" in ADVERTISED_TOOLS

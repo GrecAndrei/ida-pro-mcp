@@ -1,44 +1,42 @@
 from __future__ import annotations
 
-import os
+import contextlib
 import json
+import os
 import sqlite3
 from typing import Any, Dict, List, Optional
 
-from .structural_index import get_db_path
-from .bridge_retrieval import MultiHopBridgeIndex
 from ..stores.symbol_db import SymbolDB
+from .bridge_retrieval import MultiHopBridgeIndex
+from .structural_index import get_db_path
+
 
 class PPAAEngine:
     """Predictive Pointer & Address Anticipator (PPAA) Engine.
-    
-    Queries local SchemaBoot indexes, Multi-Hop Bridge indexes, and SymbolDB 
-    to retrieve pre-computed function details, string references, constants, 
+
+    Queries local SchemaBoot indexes, Multi-Hop Bridge indexes, and SymbolDB
+    to retrieve pre-computed function details, string references, constants,
     and related nodes without querying the live IDA process.
     """
-    
+
     def __init__(self, idb_path: Optional[str] = None):
         self.idb_path = idb_path
         self.db_path = get_db_path(idb_path) if idb_path else None
-        
+
         # Initialize bridge search index
         self.bridge_index = None
         if self.db_path and os.path.exists(self.db_path):
-            try:
+            with contextlib.suppress(Exception):
                 self.bridge_index = MultiHopBridgeIndex(self.db_path)
-            except Exception:
-                pass
-                
+
         # Lazy symbol DB
         self._symbol_db = None
 
     @property
     def symbol_db(self) -> Optional[SymbolDB]:
         if self._symbol_db is None:
-            try:
+            with contextlib.suppress(Exception):
                 self._symbol_db = SymbolDB()
-            except Exception:
-                pass
         return self._symbol_db
 
     def _conn(self) -> Optional[sqlite3.Connection]:
@@ -71,7 +69,7 @@ class PPAAEngine:
             if not row:
                 conn.close()
                 return None
-            
+
             meta = {
                 "name": row[0],
                 "size": row[1],
@@ -90,7 +88,7 @@ class PPAAEngine:
 
             # 2. Fetch referenced APIs
             cur.execute("SELECT api_name FROM function_apis WHERE func_ea = ?", (ea,))
-            meta["referenced_apis"] = sorted(list(set(r[0] for r in cur.fetchall())))
+            meta["referenced_apis"] = sorted({r[0] for r in cur.fetchall()})
 
             # 3. Fetch referenced strings
             cur.execute("SELECT string_text, string_ea FROM function_strings WHERE func_ea = ?", (ea,))
@@ -107,10 +105,8 @@ class PPAAEngine:
             conn.close()
             return meta
         except Exception:
-            try:
+            with contextlib.suppress(Exception):
                 conn.close()
-            except Exception:
-                pass
             return None
 
     def query_symbol_analogy(self, name: str) -> Optional[Dict[str, Any]]:
@@ -175,10 +171,8 @@ class PPAAEngine:
                 })
             return results
         except Exception:
-            try:
+            with contextlib.suppress(Exception):
                 conn.close()
-            except Exception:
-                pass
         return []
 
     def query_related_bridges(self, ea: int, top_k: int = 3) -> List[Dict[str, Any]]:
@@ -229,10 +223,8 @@ class PPAAEngine:
                     "referencing_function_ea": hex(row[2]) if row[2] else None,
                 }
         except Exception:
-            try:
+            with contextlib.suppress(Exception):
                 conn.close()
-            except Exception:
-                pass
         return None
 
     def query_constant_usage(self, val: int) -> List[Dict[str, Any]]:
@@ -262,8 +254,6 @@ class PPAAEngine:
                 })
             return results
         except Exception:
-            try:
+            with contextlib.suppress(Exception):
                 conn.close()
-            except Exception:
-                pass
         return []

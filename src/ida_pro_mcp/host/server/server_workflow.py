@@ -10,11 +10,9 @@ from ..config import (
     _parse_str_list,
 )
 from ..errors import MCPError, is_error_result, make_error
-from .server_workflow_batch import ServerWorkflowBatchMixin
 from ..schemas import (
     HIDDEN_TOOLS_IN_LIST,
     TOOL_ACTIONS,
-    TOOL_DESCRIPTIONS,
     TOOLS,
     build_input_schema_lean,
     build_input_schema_ultra,
@@ -23,6 +21,7 @@ from ..schemas import (
     classify_tool_category,
     sanitize_schema_for_vertex,
 )
+from .server_workflow_batch import ServerWorkflowBatchMixin
 
 
 class ServerWorkflowMixin(ServerWorkflowBatchMixin):
@@ -1104,10 +1103,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
         for t in TOOLS:
             if t in HIDDEN_TOOLS_IN_LIST:
                 continue
-            if mode == "lean":
-                schema = build_input_schema_lean(t)
-            else:
-                schema = build_input_schema_ultra(t)
+            schema = build_input_schema_lean(t) if mode == "lean" else build_input_schema_ultra(t)
             schema = dict(schema) if isinstance(schema, dict) else {}
 
             if getattr(self, "vertex_compat", False):

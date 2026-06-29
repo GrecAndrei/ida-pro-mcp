@@ -49,6 +49,7 @@ Examples:
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import re
 from typing import Any, Dict, List, Optional
@@ -62,9 +63,11 @@ except ImportError:
         pass
 
 if "tool" not in globals():
-    tool = lambda f: f  # type: ignore
+    def tool(f):
+        return f  # type: ignore
 if "idaread" not in globals():
-    idaread = lambda f: f  # type: ignore
+    def idaread(f):
+        return f  # type: ignore
 if "IDAError" not in globals():
     IDAError = Exception  # type: ignore
 if "make_error" not in globals():
@@ -176,10 +179,8 @@ class QueryParser:
             try:
                 val = int(val)
             except ValueError:
-                try:
+                with contextlib.suppress(ValueError):
                     val = float(val)
-                except ValueError:
-                    pass
             return {"key": key, "op": op, "value": val}
         return None
 
@@ -223,10 +224,7 @@ class QueryExecutor:
                 except (ValueError, TypeError):
                     return False
             elif op == "contains":
-                if isinstance(actual, list):
-                    if expected not in actual:
-                        return False
-                elif isinstance(actual, str):
+                if isinstance(actual, list) or isinstance(actual, str):
                     if expected not in actual:
                         return False
                 else:
@@ -246,14 +244,12 @@ class QueryExecutor:
         group_key = plan.get("group_key")
 
         if sort_key:
-            try:
+            with contextlib.suppress(Exception):
                 results = sorted(
                     results,
                     key=lambda x: (x.get(sort_key) is None, x.get(sort_key) or 0),
                     reverse=(sort_order == "DESC"),
                 )
-            except Exception:
-                pass
 
         total = len(results)
         results = results[:limit]

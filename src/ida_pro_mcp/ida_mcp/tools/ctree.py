@@ -1,36 +1,41 @@
 
-from typing import Annotated, Optional, Literal, Union, Any
-import io
-import sys
+import contextlib
 import os
-import idaapi
-import idautils
-import idc
-import ida_name
-import ida_bytes
+import sys
+from typing import Annotated, Literal, Optional
+
 import ida_hexrays
-import ida_typeinf
-import ida_nalt
-import ida_segment
-import ida_funcs
-import ida_kernwin
-import ida_frame
 import ida_lines
+import idaapi
+import idc
 
 # Infrastructure discovery
 try:
     # Package mode
-    from ..rpc import tool, unsafe
-    from ..sync import idaread, idawrite, IDAError
-    from ..utils import (
-        parse_address, normalize_list_input, normalize_dict_list,
-        get_function, get_prototype, get_image_size, looks_like_address,
-        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size,
-        compile_smart_pattern,
-    )
     from ..error_handling import (
-        MCPError, make_error, handle_error,
-        validate_addr, validate_range, check_debugger, validate_path_safe
+        MCPError,
+        check_debugger,
+        handle_error,
+        make_error,
+        validate_addr,
+        validate_path_safe,
+        validate_range,
+    )
+    from ..rpc import tool, unsafe
+    from ..sync import IDAError, idaread, idawrite
+    from ..utils import (
+        compile_smart_pattern,
+        get_function,
+        get_image_size,
+        get_prototype,
+        get_stack_frame_variables_internal,
+        get_type_by_name,
+        hex_ea,
+        hex_size,
+        looks_like_address,
+        normalize_dict_list,
+        normalize_list_input,
+        parse_address,
     )
 except (ImportError, ValueError):
     # Standalone IDA mode
@@ -38,18 +43,17 @@ except (ImportError, ValueError):
     _mcp_root = os.path.dirname(_this_dir)
     if _mcp_root not in sys.path:
         sys.path.insert(0, _mcp_root)
-        
-    from rpc import tool, unsafe
-    from sync import idaread, idawrite, IDAError
-    from utils import (
-        parse_address, normalize_list_input, normalize_dict_list,
-        get_function, get_prototype, get_image_size, looks_like_address,
-        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size,
-        compile_smart_pattern,
-    )
+
     from error_handling import (
-        MCPError, make_error, handle_error,
-        validate_addr, validate_range, check_debugger, validate_path_safe
+        MCPError,
+        handle_error,
+        make_error,
+        validate_addr,
+    )
+    from rpc import tool
+    from sync import idaread
+    from utils import (
+        compile_smart_pattern,
     )
 
 
@@ -332,10 +336,8 @@ def _ctree_build_logic_graph(cfunc, max_nodes=1200):
             if e.op == ida_hexrays.cot_call:
                 depth = int(getattr(self, "level", 0))
                 txt = "call"
-                try:
+                with contextlib.suppress(Exception):
                     txt = ida_lines.tag_remove(e.print1(None))
-                except Exception:
-                    pass
                 nid = _add_node(getattr(e, "ea", idaapi.BADADDR), "call", txt, depth)
                 _add_edge(self._control_parent(), nid, "contains_call")
                 self.count += 1
@@ -396,7 +398,7 @@ def ctree(
         def match_filter(text):
             if not filter_matcher:
                 return True
-            return filter_matcher((text or ""))
+            return filter_matcher(text or "")
 
         if action == "get_logic_flow":
             graph = _ctree_build_logic_graph(cfunc, max_nodes=max(200, min(5000, int(depth) * 180)))
@@ -454,10 +456,8 @@ def ctree(
                 def visit_expr(self, e):
                     if e.op == ida_hexrays.cot_call:
                         callee = ""
-                        try:
+                        with contextlib.suppress(Exception):
                             callee = ida_lines.tag_remove(e.x.print1(None))
-                        except Exception:
-                            pass
                         args = []
                         try:
                             for a in getattr(e, "a", []):
@@ -525,10 +525,8 @@ def ctree(
                 def visit_expr(self, e):
                     if e.op == ida_hexrays.cot_str:
                         text = ""
-                        try:
+                        with contextlib.suppress(Exception):
                             text = ida_lines.tag_remove(e.print1(None))
-                        except Exception:
-                            pass
                         if match_filter(text):
                             str_lines.append(f"{hex(e.ea)}  {text}")
                     elif e.op == ida_hexrays.cot_obj:
@@ -564,10 +562,8 @@ def ctree(
                     if self.depth > self.max_depth:
                         return 1  # prune: stop descending
                     text = ""
-                    try:
+                    with contextlib.suppress(Exception):
                         text = ida_lines.tag_remove(e.print1(None))
-                    except Exception:
-                        pass
                     self._emit(e, text)
                     self.depth += 1
                     return 0
@@ -579,10 +575,8 @@ def ctree(
                     if self.depth > self.max_depth:
                         return 1
                     text = ""
-                    try:
+                    with contextlib.suppress(Exception):
                         text = ida_lines.tag_remove(i.print1(None))
-                    except Exception:
-                        pass
                     self._emit(i, text)
                     self.depth += 1
                     return 0

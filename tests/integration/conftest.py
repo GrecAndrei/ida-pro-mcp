@@ -13,13 +13,15 @@ Environment:
     SKIP_IDA_TESTS   - Set to "1" to skip all IDA integration tests
 """
 
-import os
-import sys
+import contextlib
 import json
-import time
-import tempfile
-import subprocess
+import os
 import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
 import pytest
 
 IDA_DIR = os.environ.get("IDA_DIR") or os.environ.get("IDADIR") or ""
@@ -65,7 +67,7 @@ with open("{result_file}", "w") as f:
     json.dump({{"ok": True}}, f)
 idc.qexit(0)
 ''')
-        proc = subprocess.run(
+        subprocess.run(
             [IDAT, "-A", "-c", f"-S{script}", TEST_BINARY],
             capture_output=True,
             text=True,
@@ -75,17 +77,13 @@ idc.qexit(0)
         available = os.path.exists(result_file)
         # Cleanup
         for f in (script, result_file):
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(f)
-            except OSError:
-                pass
         for ext in (".idb", ".i64", ".til", ".nam"):
             junk = os.path.splitext(TEST_BINARY)[0] + ext
             if os.path.exists(junk):
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(junk)
-                except OSError:
-                    pass
         return available
     except Exception:
         return False
@@ -163,7 +161,7 @@ idc.qexit(0)
                 f"IDA did not write result file (exit={proc.returncode}). stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
             )
 
-        with open(result_file, "r") as f:
+        with open(result_file) as f:
             result = json.load(f)
 
         result["_ida_elapsed"] = round(elapsed, 2)
@@ -171,18 +169,14 @@ idc.qexit(0)
 
         # Cleanup
         for f in (result_file, script_file):
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(f)
-            except OSError:
-                pass
         # Cleanup database files created by IDA
         for ext in (".idb", ".i64", ".til", ".nam", ".id0", ".id1", ".id2"):
             junk = os.path.splitext(self.binary)[0] + ext
             if os.path.exists(junk):
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(junk)
-                except OSError:
-                    pass
 
         return result
 

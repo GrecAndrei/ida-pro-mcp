@@ -20,31 +20,31 @@ def query(
 ) -> dict:
     """
     Unified query hub - single entry point for all read operations.
-    
+
     This tool routes queries to the appropriate underlying tool, reducing
     the number of tools an LLM needs to remember.
-    
+
     ACTIONS:
-    
+
     data - Query binary data (functions, strings, imports, exports)
         subaction: functions|strings|imports|exports|globals|lookup
         args: {count, offset, query, addr, ...}
         Example: query(action="data", subaction="functions", args={"count": 10})
-        
+
     search - Search the binary
         subaction: find|callers|callees|api|name|bytes|string
         args: {pattern, limit, ...}
         Example: query(action="search", subaction="find", args={"pattern": "malloc"})
-        
+
     idb - Query database metadata
         subaction: meta|summary|segments|entrypoints
         Example: query(action="idb", subaction="summary")
-        
+
     code - Query code at address
         subaction: decompile|disasm|xrefs_to|xrefs_from|callers|callees
         args: {addr, count, ...}
         Example: query(action="code", subaction="decompile", args={"addr": "0x401000"})
-        
+
     types - Query type information
         subaction: list|get|search_structs
         args: {query, name, ...}
@@ -86,7 +86,7 @@ def query(
             if k not in ("action", "subaction", "args") and k not in merged_args:
                 merged_args[k] = v
         args = merged_args
-        
+
         if action == "data":
             try: from .data import data as data_tool
             except ImportError: from data import data as data_tool
@@ -223,7 +223,7 @@ def query(
                 from ida_pro_mcp.services import BehaviorClassifier
             except ImportError:
                 try:
-                    from host.intelligence.core import BehaviorClassifier# type: ignore
+                    from host.intelligence.core import BehaviorClassifier  # type: ignore
                 except ImportError:
                     BehaviorClassifier = None  # type: ignore
             if "BehaviorClassifier" in locals() and BehaviorClassifier is not None:
@@ -287,6 +287,6 @@ def query(
         else:
             return make_error(MCPError.ACTION_NOT_FOUND, f"Unknown query action: {action}",
                             hint="Valid actions: data, search, idb, code, types, imports_deep, symbols, patterns, nl, nl_batch")
-            
+
     except Exception as e:
         return handle_error(e)

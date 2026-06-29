@@ -7,12 +7,12 @@ Pure-python helpers (no IDA imports) so host + server_script can share logic.
 
 from __future__ import annotations
 
+import math
+import struct
 from dataclasses import dataclass, field
 from typing import Any, Dict, Tuple
-import struct
-import math
-from ..stores.chip_db import identify_chip_from_bytes, find_chip_profile
 
+from ..stores.chip_db import find_chip_profile, identify_chip_from_bytes
 
 _PROC_ALIASES = {
     "aarch64": ("arm", 64),

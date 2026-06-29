@@ -20,6 +20,7 @@ Design references:
   - flexvec: SQL pre-filtering before vector search
 """
 
+import contextlib
 import re
 import sqlite3
 import time
@@ -110,11 +111,11 @@ def _normalize_value(key: str, val: Any) -> Any:
 
 def _parse_constraints(constraints: Dict[str, Any]) -> List[Tuple[str, str, Any]]:
     """Parse mixed-format constraints into normalized (field, operator, value) triples.
-    
+
     Supports two formats:
       1. Legacy: {"min_size": 100, "has_loops": True, "apis": "VirtualAlloc"}
       2. Operator: {"size": (">=", 100), "name": ("~", "crypt.*")}
-    
+
     Returns:
         List of (field, operator, value) tuples.
         field can be a column name or a junction table key (apis, strings_like, etc.)
@@ -209,13 +210,13 @@ _REGEX_CACHE: Dict[str, re.Pattern] = {}
 
 class HybridQueryBuilder:
     """Builds SQL WHERE clauses from structured constraints.
-    
+
     Supports:
     - Column filtering (=, !=, <, >, <=, >=, LIKE, regex via application filter)
     - Junction table EXISTS subqueries (apis, strings_like)
     - Boolean normalization (has_loops=True → has_loops=1)
     - Mixed legacy and operator constraint formats
-    
+
     Does NOT support OR at the SQL level — OR groups are returned separately
     so callers can UNION results.
     """
@@ -226,11 +227,11 @@ class HybridQueryBuilder:
         table_alias: str = "fa",
     ) -> Tuple[str, List[Any], List[str]]:
         """Build SQL WHERE clause, params, and junction table requirements.
-        
+
         Args:
             constraints: Constraint dict (legacy or operator format)
             table_alias: SQL table alias for function_attrs
-        
+
         Returns:
             (where_clause, params, junction_keys)
             where_clause is empty string if no constraints
@@ -261,7 +262,7 @@ class HybridQueryBuilder:
         constraints: Dict[str, Any],
     ) -> Tuple[str, List[Any]]:
         """Legacy-only build for backward compatibility.
-        
+
         Returns (where_clause, params) without table alias.
         Maintains exact compatibility with schemaboot.py's _build_where_clause.
         """
@@ -275,14 +276,14 @@ def _build_condition(
     alias: str,
 ) -> Tuple[Optional[str], List[Any]]:
     """Build a single SQL condition.
-    
+
     Returns (sql_fragment, params) or (None, []) if unsupported.
     """
     # --- Junction table conditions (EXISTS subquery) ---
     if field in JUNCTION_TABLES:
         jt, jc = JUNCTION_TABLES[field]
         if operator == "==":
-            if field == "strings_like" or field == "string_contains":
+            if field in {"strings_like", "string_contains"}:
                 sql = (
                     f"EXISTS (SELECT 1 FROM {jt} WHERE "
                     f"{jt}.func_ea = {alias}.ea AND {jt}.{jc} LIKE ?)"
@@ -369,14 +370,14 @@ DEFAULT_SELECT_COLS = [
 
 class HybridSearchEngine:
     """Hybrid search engine: SQL pre-filter → optional vector scoring.
-    
+
     Typical flow:
         1. Build SQL WHERE clause from constraints
         2. Query SQLite for candidate function addresses
         3. Apply application-level filters (regex, OR groups)
         4. Optionally score candidates by vector similarity
         5. Return ranked results
-    
+
     This provides exact-match guarantees that pure vector search cannot:
     - All functions matching SQL constraints WILL be returned (no ANN misses)
     - Precision is 100% for structured attributes
@@ -407,12 +408,12 @@ class HybridSearchEngine:
         extra_params: Optional[List[Any]] = None,
     ) -> Tuple[Optional[List[int]], float, Dict[str, Any]]:
         """Phase 1: SQL pre-filter to get candidate function addresses.
-        
+
         Args:
             constraints: Structured constraints dict
             extra_where: Additional WHERE clause fragment (AND-ed)
             extra_params: Parameters for extra_where
-        
+
         Returns:
             (candidate_eas, elapsed_ms, metadata)
             candidate_eas is None if DB unavailable
@@ -427,7 +428,7 @@ class HybridSearchEngine:
 
             # Build SQL WHERE from constraints
             where_clause, params, junction_keys = HybridQueryBuilder.build(constraints)
-            
+
             # Merge extra WHERE
             if extra_where:
                 if where_clause:
@@ -478,14 +479,14 @@ class HybridSearchEngine:
         select_cols: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Full hybrid search: SQL pre-filter + optional result metadata.
-        
+
         Args:
             constraints: Structured constraints
             top_k: Max results
             offset: Result offset
             order_by: Optional ORDER BY clause (sanitized)
             select_cols: Columns to select (default: basic info)
-        
+
         Returns:
             Result dict with candidates, timing, and metadata
         """
@@ -552,7 +553,7 @@ class HybridSearchEngine:
             # Build results
             candidates = []
             for row in rows:
-                d = dict(zip(col_names, row))
+                d = dict(zip(col_names, row, strict=False))
                 # Convert EAs to hex
                 if "ea" in d:
                     d["ea"] = hex(d["ea"])
@@ -735,10 +736,8 @@ class HybridSearchEngine:
         # Build EA list for Phase 2
         eas = []
         for c in candidates:
-            try:
+            with contextlib.suppress(KeyError, ValueError):
                 eas.append(int(c["ea"], 16))
-            except (KeyError, ValueError):
-                pass
 
         bm25_scores = self.phase2_bm25(eas, query_apis=query_apis, query_strings=query_strings)
 
@@ -780,12 +779,12 @@ def apply_pattern_filter(
     case_sensitive: bool = False,
 ) -> List[Dict[str, Any]]:
     """Apply a pattern filter to candidates (name or address matching).
-    
+
     Args:
         candidates: List of candidate dicts (must have "name" and/or "ea")
         pattern: Pattern to match (regex, glob, or substring)
         case_sensitive: Whether matching is case-sensitive
-    
+
     Returns:
         Filtered candidate list
     """
@@ -826,7 +825,7 @@ def apply_regex_constraints(
     constraints: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
     """Apply regex (~) constraints at the application level.
-    
+
     SQL cannot efficiently handle regex, so regex constraints on
     string columns are applied here after the SQL pre-filter.
     """
@@ -871,7 +870,7 @@ def apply_regex_constraints(
 
 class HybridBenchmark:
     """Benchmark comparing pure SQL vs hybrid search approaches.
-    
+
     Measures:
     - SQL pre-filter latency (Phase 1)
     - Total end-to-end query time

@@ -1,4 +1,5 @@
 import os
+
 import pytest
 
 AIC_FW = os.environ.get(
@@ -149,7 +150,7 @@ with open(RESULT_PATH, 'w') as f:
 
     func_count = result.get("function_count", 0)
     funcs_created = result.get("functions_created", 0)
-    reset_found = result.get("reset_found", False)
+    result.get("reset_found", False)
 
     if func_count == 0 and funcs_created == 0:
         debug = result.get("debug", {})

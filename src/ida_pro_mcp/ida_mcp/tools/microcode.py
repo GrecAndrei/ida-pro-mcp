@@ -84,7 +84,7 @@ def microcode(
 ) -> dict:
     """
     Access Hex-Rays Microcode (IR) for low-level decompiler analysis.
-    
+
     Actions:
     - get: Get high-level microcode summary for function.
     - blocks: List all micro-blocks (mblock_t) in the function.
@@ -94,34 +94,34 @@ def microcode(
     try:
         ea, err = validate_addr(addr, require_func=True)
         if err: return err
-        
+
         # Microcode requires Hex-Rays
         if not ida_hexrays.init_hexrays_plugin():
             return make_error(MCPError.IDA_ERROR, "Hex-Rays decompiler not available")
-            
+
         func = ida_funcs.get_func(ea)
         if not func: return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
-        
+
         # IDA 9.2 requires mba_ranges_t
         mbr = ida_hexrays.mba_ranges_t(func)
         hf = ida_hexrays.hexrays_failure_t()
         # gen_microcode(mbr, hf, retlist, decomp_flags, reqmat)
         mba = ida_hexrays.gen_microcode(mbr, hf, None, 0, maturity)
-        
+
         if not mba: return make_error(MCPError.IDA_ERROR, f"Failed to generate microcode: {hf.str}")
-        
+
         func_name = idc.get_func_name(ea)
-        
+
         if action == "get":
             return {"ok": True, "function": func_name, "blocks_count": mba.qty, "maturity": maturity}
-            
+
         elif action == "blocks":
             block_lines = []
             for i in range(mba.qty):
                 block = mba.get_mblock(i)
                 block_lines.append(f"{i}  {hex(block.start)}-{hex(block.end)}  type={block.type}")
             return {"ok": True, "function": func_name, "blocks": "\n".join(block_lines), "count": len(block_lines)}
-            
+
         elif action == "instructions":
             instr_lines = []
             # Iterate through blocks and instructions
@@ -150,7 +150,7 @@ def microcode(
                 "edges": "\n".join(edge_lines),
                 "count": graph.get("edge_count", 0),
             }
-            
+
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:

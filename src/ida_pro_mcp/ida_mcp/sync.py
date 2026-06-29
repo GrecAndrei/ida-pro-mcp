@@ -1,12 +1,14 @@
+import functools
 import logging
 import os
 import queue
-import functools
 import threading
 from contextlib import contextmanager
 from enum import IntEnum
-import idaapi
+
 import ida_kernwin
+import idaapi
+
 try:
     from ida_pro_mcp.ida_mcp.rpc import McpToolError
 except ImportError:
@@ -122,10 +124,10 @@ def _sync_wrapper(ff, safety_mode: IDASafety):
     def runned():
         if not call_stack.empty():
             last_func_name = call_stack.get()
-            error_str = f"Call stack is not empty while calling the function {ff.__name__} from {last_func_name}"   
+            error_str = f"Call stack is not empty while calling the function {ff.__name__} from {last_func_name}"
             raise IDASyncError(error_str)
 
-        call_stack.put((ff.__name__))
+        call_stack.put(ff.__name__)
         try:
             res_container.put(ff())
         except Exception as x:

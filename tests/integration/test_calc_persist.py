@@ -89,10 +89,10 @@ def _load_persist_fn():
             i += 1
             while i < len(src_lines):
                 nxt = src_lines[i].strip()
-                if nxt.startswith("except") or nxt.startswith("try:"):
+                if nxt.startswith(("except", "try:")):
                     i += 1
                     continue
-                if nxt.startswith("from blackboard") or nxt.startswith("return"):
+                if nxt.startswith(("from blackboard", "return")):
                     i += 1
                     continue
                 break

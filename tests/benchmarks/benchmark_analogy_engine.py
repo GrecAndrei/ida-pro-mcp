@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import os
-import time
 import statistics
+import time
 
 from tests._isolated_repo_loader import load_host_module
 

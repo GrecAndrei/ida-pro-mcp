@@ -253,12 +253,7 @@ def stack_analysis(
             for i, member, name, offset, size, type_str in _iter_frame_members(frame):
                 is_buffer = False
                 # Arrays are buffers
-                if "[" in type_str:
-                    is_buffer = True
-                # Large variables (>= 8 bytes without pointer type) likely buffers
-                elif size >= 8 and "char" in type_str.lower():
-                    is_buffer = True
-                elif size >= 16 and "*" not in type_str:
+                if "[" in type_str or size >= 8 and "char" in type_str.lower() or size >= 16 and "*" not in type_str:
                     is_buffer = True
                 if is_buffer:
                     buffers.append({
@@ -371,12 +366,7 @@ def stack_analysis(
                 is_spill = False
                 n = name.lower()
                 # Saved register detection (common IDA naming patterns)
-                if n.startswith(" s") or n.startswith("__saved"):
-                    is_spill = True
-                elif n in ("r", "s"):
-                    is_spill = True
-                # Architecture-aware: check against callee-saved register set
-                elif n in callee_saved:
+                if n.startswith((" s", "__saved")) or n in ("r", "s") or n in callee_saved:
                     is_spill = True
                 if is_spill:
                     spills.append({
@@ -457,9 +447,9 @@ def stack_analysis(
                 # Classify the variable
                 n = name.lower()
                 kind = "local"
-                if n.startswith("arg_") or n.startswith("param_"):
+                if n.startswith(("arg_", "param_")):
                     kind = "argument"
-                elif n.startswith(" s") or n.startswith("__saved"):
+                elif n.startswith((" s", "__saved")):
                     kind = "saved_reg"
                 elif n.startswith(" r") or n == "r":
                     kind = "return_addr"
@@ -564,9 +554,7 @@ def stack_analysis(
             for i, member, name, offset, size, type_str in _iter_frame_members(frame):
                 n = name.lower()
                 # Skip saved regs, return addr, and arguments
-                if (n.startswith(" s") or n.startswith("__saved") or
-                        n.startswith(" r") or n == "r" or
-                        n.startswith("arg_") or n.startswith("param_")):
+                if (n.startswith((" s", "__saved", " r", "arg_", "param_")) or n == "r"):
                     continue
                 local_vars.append({
                     "name": name,
@@ -581,7 +569,7 @@ def stack_analysis(
             while ea < func.end_ea and ea != idaapi.BADADDR:
                 mnem = idc.print_insn_mnem(ea)
                 if mnem:
-                    ml = mnem.lower()
+                    mnem.lower()
                     # x86/x64: mov/lea to [rbp-X] or [rsp+X]
                     # ARM: str to [fp, #-X] or [sp, #X]
                     op0_type = idc.get_operand_type(ea, 0)
@@ -629,9 +617,9 @@ def stack_analysis(
             if frame:
                 for i, member, name, offset, size, type_str in _iter_frame_members(frame):
                     n = name.lower()
-                    if n.startswith("arg_") or n.startswith("param_"):
+                    if n.startswith(("arg_", "param_")):
                         arg_count += 1
-                    elif n.startswith(" s") or n.startswith("__saved"):
+                    elif n.startswith((" s", "__saved")):
                         saved_count += 1
                     elif n.startswith(" r") or n == "r":
                         pass  # return addr

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -8,7 +9,6 @@ from datetime import datetime
 from pathlib import Path
 
 from .common import InstallReport
-
 
 # Canonical legacy server identifiers that should be migrated/replaced with
 # the current canonical MCP server name.
@@ -37,10 +37,8 @@ def _atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> Non
         os.replace(tmp, path)
     except BaseException:
         # Best-effort cleanup of stragglers; never mask the original error.
-        try:
+        with contextlib.suppress(OSError):
             tmp.unlink()
-        except OSError:
-            pass
         raise
 
 
@@ -55,10 +53,8 @@ def _atomic_write_bytes(path: Path, content: bytes) -> None:
             os.fsync(f.fileno())
         os.replace(tmp, path)
     except BaseException:
-        try:
+        with contextlib.suppress(OSError):
             tmp.unlink()
-        except OSError:
-            pass
         raise
 
 

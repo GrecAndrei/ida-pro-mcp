@@ -1,5 +1,6 @@
 """Test analysis:wait polling on a raw binary after segment/Thumb fixes."""
 import os
+
 import pytest
 
 AIC_FW = os.environ.get(

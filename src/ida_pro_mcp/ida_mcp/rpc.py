@@ -1,5 +1,6 @@
-from typing import Callable
-from zeromcp import McpRpcRegistry, McpServer, McpToolError, McpHttpRequestHandler
+from collections.abc import Callable
+
+from zeromcp import McpHttpRequestHandler, McpRpcRegistry, McpServer, McpToolError
 
 MCP_SERVER = McpServer("ida-pro-mcp")
 MCP_UNSAFE: set[str] = set()

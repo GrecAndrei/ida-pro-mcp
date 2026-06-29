@@ -80,10 +80,7 @@ def find_reexported_names() -> set[tuple[str, str]]:
                 # Resolve relative module
                 if level > 0:
                     base = importer_parts[: len(importer_parts) - level]
-                    if module:
-                        resolved = ".".join(base + [module])
-                    else:
-                        resolved = ".".join(base)
+                    resolved = ".".join(base + [module]) if module else ".".join(base)
                 else:
                     resolved = module
                 # If this is a star import, all defined names in `resolved` are
@@ -109,6 +106,7 @@ res = subprocess.run(
     capture_output=True, text=True
 )
 import json
+
 data = json.loads(res.stdout)
 
 # Group by file

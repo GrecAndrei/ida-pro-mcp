@@ -3,14 +3,15 @@
 
 from __future__ import annotations
 
+import contextlib
 import glob
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import signal
-import secrets
 import subprocess
 import sys
 import threading
@@ -101,18 +102,14 @@ def _kill_process_tree(proc: subprocess.Popen, grace_seconds: float = 2.0) -> No
     if pid is None:
         return
     if sys.platform == "win32":
-        try:
+        with contextlib.suppress(Exception):
             subprocess.run(
                 ["taskkill", "/T", "/F", "/PID", str(pid)],
                 capture_output=True,
                 timeout=grace_seconds + 3,
             )
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception):
             proc.wait(timeout=grace_seconds)
-        except Exception:
-            pass
         return
     # POSIX: child must be in its own process group (set via
     # _popen_new_session_kwargs in the matching Popen call). If the group
@@ -272,7 +269,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             if not os.path.exists(path):
                 return ""
             try:
-                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                with open(path, encoding="utf-8", errors="ignore") as f:
                     lines = f.readlines()
                 return "".join(lines[-max(1, int(tail_lines)) :]).strip()
             except Exception:
@@ -630,7 +627,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
     def _load_session_macros(self):
             self._session_macros = {}
             try:
-                with open(self._macro_path, "r", encoding="utf-8") as f:
+                with open(self._macro_path, encoding="utf-8") as f:
                     raw = json.load(f)
             except FileNotFoundError:
                 return
@@ -769,7 +766,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
 
             # Also persist into session skill/activity store so dashboard counters,
             # phase progression, and dead-end detection reflect real tool usage.
-            try:
+            with contextlib.suppress(Exception):
                 self.session_mgr.log_activity(
                     sid,
                     tool=tool_name,
@@ -783,8 +780,6 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         ensure_ascii=False,
                     )[:400],
                 )
-            except Exception:
-                pass
 
     def _build_recent_workset(
             self,
@@ -1053,10 +1048,8 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             if stop_event is not None:
                 stop_event.set()
             if thread and thread.is_alive() and thread is not threading.current_thread():
-                try:
+                with contextlib.suppress(Exception):
                     thread.join(timeout=max(0.0, float(join_timeout or 0.0)))
-                except Exception:
-                    pass
 
     # ------------------------------------------------------------------
     # Analysis-state observability
@@ -1112,7 +1105,6 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             def _worker() -> None:
                 last_funcs: Optional[int] = None
                 stall_since: Optional[float] = None  # ts when progress last stalled
-                last_is_ok: Optional[bool] = None
                 self._update_session_indexing_metadata(
                     session_id,
                     analysis_state="starting",
@@ -1174,7 +1166,6 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                                 )
 
                     last_funcs = funcs_i
-                    last_is_ok = is_ok
                     stall_sec_report = (
                         round(time.time() - stall_since, 1) if stall_since else 0
                     )
@@ -1204,10 +1195,8 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             if stop_event is not None:
                 stop_event.set()
             if thread and thread.is_alive() and thread is not threading.current_thread():
-                try:
+                with contextlib.suppress(Exception):
                     thread.join(timeout=max(0.0, float(join_timeout or 0.0)))
-                except Exception:
-                    pass
 
     def _json_safe_value(self, value: Any) -> Any:
             """Recursively convert non-JSON-safe values to safe representations."""
@@ -1471,7 +1460,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     name = (proc.info.get("name") or "").lower()
                 except Exception:
                     name = ""
-                if not (("ida" in name) and (name.endswith("t") or name.endswith(".exe") or name == "ida" or name == "ida.exe")):
+                if not (("ida" in name) and (name.endswith(("t", ".exe")) or name in {"ida", "ida.exe"})):
                     if "idat" not in name and "ida" not in name:
                         continue
                 try:
@@ -1762,10 +1751,8 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 # not leak file descriptors across repeated failed starts.
                 if not _handles_transferred:
                     for fh in (stdout_fh, stderr_fh):
-                        try:
+                        with contextlib.suppress(Exception):
                             fh.close()
-                        except Exception:
-                            pass
 
     def _launch_and_wait(self, session, server_port, sanitize_env: bool = False):
             # SCRIPT_DIR is host/server/; server_script.py is at the package root.
@@ -1882,10 +1869,8 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             finally:
                 if not _handles_transferred:
                     for fh in (stdout_fh, stderr_fh):
-                        try:
+                        with contextlib.suppress(Exception):
                             fh.close()
-                        except Exception:
-                            pass
 
     def _attempt_session_recovery(self, session, diag, server_port):
             opts = session.analysis_options or {}
@@ -2008,7 +1993,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             apply_steps: List[Dict[str, Any]] = []
 
             def _progress(step: str, status: str = "start", detail: Any = None) -> None:
-                try:
+                with contextlib.suppress(Exception):
                     self._update_session_indexing_metadata(
                         session.session_id,
                         apply_progress={
@@ -2017,8 +2002,6 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                             "ts": time.time(),
                         },
                     )
-                except Exception:
-                    pass
                 try:
                     params: Dict[str, Any] = {
                         "progressToken": f"apply:{session.session_id}",
@@ -2151,12 +2134,10 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             self.session_mgr._save_metadata(session)
             _progress("verify_architecture", "start")
             current_options = {}
-            try:
+            with contextlib.suppress(Exception):
                 current_options = self._send_rpc_raw(
                     {"tool": "analysis", "args": {"action": "get_options"}}, port
                 )
-            except Exception:
-                pass
 
             # Strict verification for architecture-sensitive loads.
             try:
@@ -2200,15 +2181,13 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             _record("verify_architecture", {"ok": True})
             # Persist the apply transcript so session(status) can show what the
             # (black-box) startup actually did, and clear the live marker.
-            try:
+            with contextlib.suppress(Exception):
                 self._update_session_indexing_metadata(
                     session.session_id,
                     apply_progress=None,
                     last_apply_steps=apply_steps,
                     last_apply_at=time.time(),
                 )
-            except Exception:
-                pass
             return {
                 "ok": True,
                 "current_options": current_options if not is_error_result(current_options) else None,
@@ -2242,10 +2221,8 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             try:
                 engine.stop(join_timeout=join_timeout)
             except TypeError:
-                try:
+                with contextlib.suppress(Exception):
                     engine.stop()
-                except Exception:
-                    pass
             except Exception:
                 pass
 
@@ -2264,19 +2241,15 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             proc = runtime.get("process")
             port = runtime.get("port")
             if proc:
-                try:
+                with contextlib.suppress(Exception):
                     self._send_rpc_raw({"type": "shutdown"}, port, timeout=1)
-                except Exception:
-                    pass
                 # Use _kill_process_tree so the full idat.exe -> ida.exe
                 # tree is terminated; otherwise ida.exe can be left
                 # orphaned holding the unpacked .id0/.id1 files.
                 _kill_process_tree(proc)
             for fh in runtime.get("log_handles", []):
-                try:
+                with contextlib.suppress(Exception):
                     fh.close()
-                except Exception:
-                    pass
 
     def _cleanup_all_runtimes(self):
             with self._runtime_lock:
@@ -2287,7 +2260,6 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
 
     def _resolve_session_from_idb_ref(self, idb_ref: Any) -> Optional[Session]:
             """Resolve idb references from session id, SID_* idb id/name, path, or basename."""
-            from .session import Session  # lazy: break circular import
             if not isinstance(idb_ref, str):
                 return None
             raw = idb_ref.strip()

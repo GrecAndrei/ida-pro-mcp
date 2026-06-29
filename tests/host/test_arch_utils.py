@@ -41,7 +41,9 @@ def _setup_arch(procname, is_64=False):
 
 # Force-reload arch_utils each time to pick up the mock
 import importlib
+
 import arch_utils
+
 importlib.reload(arch_utils)
 
 

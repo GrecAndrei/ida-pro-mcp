@@ -119,10 +119,7 @@ def abi(
             tif = ida_typeinf.tinfo_t()
             if ida_nalt.get_tinfo(tif, fn.start_ea):
                 fdet = ida_typeinf.func_type_data_t()
-                if tif.get_func_details(fdet):
-                    cc_raw = _cc_raw_from_tif(tif, fdet)
-                else:
-                    cc_raw = _cc_raw_from_tif(tif, None)
+                cc_raw = _cc_raw_from_tif(tif, fdet) if tif.get_func_details(fdet) else _cc_raw_from_tif(tif, None)
             cc_name = CC_MAP.get(cc_raw, f"unknown(0x{cc_raw:02x})")
             fname = ida_funcs.get_func_name(fn.start_ea)
             proto = get_prototype(fn)
@@ -194,7 +191,7 @@ def abi(
                         arg = fdet[i]
                         argloc = arg.argloc
                         if argloc.is_reg1():
-                            reg_info = ida_typeinf.reg_info_t()
+                            ida_typeinf.reg_info_t()
                             reg_name = ""
                             reg_no = argloc.reg1()
                             if hasattr(idaapi, "get_reg_name"):

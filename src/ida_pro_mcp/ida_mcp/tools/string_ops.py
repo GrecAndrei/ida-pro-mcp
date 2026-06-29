@@ -4,11 +4,10 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
-import re
-import math
 import base64
+import math
+import re
 from collections import Counter
-
 
 # ============================================================================
 # STRING_OPS - Deep String Analysis for LLMs
@@ -267,19 +266,19 @@ def _find_stack_strings(limit):
             continue
         candidates = []
         for item in idautils.FuncItems(func_ea):
-            insn = idaapi.get_dword(item) if idc.get_item_size(item) >= 4 else 0
+            idaapi.get_dword(item) if idc.get_item_size(item) >= 4 else 0
             # Simple heuristic: look for mov with immediate value that looks like ASCII
             mnem = idc.print_insn_mnem(item)
             if not mnem or mnem.lower() not in ("mov", "movsx", "movzx", "movs", "movd"):
                 continue
             # Check if destination is stack-relative
-            op0_type = idc.get_operand_type(item, 0)
+            idc.get_operand_type(item, 0)
             op1_type = idc.get_operand_type(item, 1)
             if op1_type not in (idc.o_imm, idc.o_mem):
                 continue
             # Get immediate value
             val = idc.get_operand_value(item, 1)
-            if val == 0 or val == idaapi.BADADDR:
+            if val in (0, idaapi.BADADDR):
                 continue
             # Check if value contains printable ASCII bytes
             try:
@@ -309,7 +308,7 @@ def _find_stack_strings(limit):
 def _find_base64_strings(strings, limit, decode=False):
     results = []
     for s_ea, raw, st in strings:
-        text = _text_or_repr(raw)
+        _text_or_repr(raw)
         for m in _BASE64_PATTERN.finditer(raw if isinstance(raw, bytes) else raw.encode("utf-8", errors="replace")):
             b64_str = m.group(0).decode("ascii", errors="replace")
             # Quick validation: length divisible by 4 and has reasonable char distribution
@@ -346,7 +345,7 @@ def _find_api_keys(strings, limit):
         ("JWT", _JWT_PATTERN),
     ]
     for s_ea, raw, st in strings:
-        text = _text_or_repr(raw)
+        _text_or_repr(raw)
         for label, pat in patterns:
             for m in pat.finditer(raw if isinstance(raw, bytes) else raw.encode("utf-8", errors="replace")):
                 match_str = m.group(0).decode("utf-8", errors="replace")
@@ -396,7 +395,7 @@ def _find_c2(strings, limit):
     results = []
     seen = set()
     for s_ea, raw, st in strings:
-        text = _text_or_repr(raw)
+        _text_or_repr(raw)
         # URLs
         for m in _URL_PATTERN.finditer(raw):
             url = m.group(0).decode("utf-8", errors="replace")
@@ -507,7 +506,7 @@ def _entropy_rank(strings, limit, min_entropy=4.0):
 def _find_databases(strings, limit):
     results = []
     for s_ea, raw, st in strings:
-        text = _text_or_repr(raw)
+        _text_or_repr(raw)
         for m in _MONGO_URI_PATTERN.finditer(raw if isinstance(raw, bytes) else raw.encode("utf-8", errors="replace")):
             uri = m.group(0).decode("utf-8", errors="replace")
             results.append(f"{hex(s_ea)}  [MONGO]  {uri}")
@@ -535,7 +534,7 @@ def _find_databases(strings, limit):
 def _find_crypto_addrs(strings, limit):
     results = []
     for s_ea, raw, st in strings:
-        text = _text_or_repr(raw)
+        _text_or_repr(raw)
         for m in _BTC_PATTERN.finditer(raw if isinstance(raw, bytes) else raw.encode("utf-8", errors="replace")):
             addr = m.group(0).decode("utf-8", errors="replace")
             results.append(f"{hex(s_ea)}  [BTC]  {addr}")
@@ -625,10 +624,9 @@ def _collect_all_imports():
             module = ida_nalt.get_import_module_name(mod_idx)
             if not module:
                 continue
-            mod_ea = ida_nalt.get_import_module_name(mod_idx)
+            ida_nalt.get_import_module_name(mod_idx)
             # Enumerate entries in this module
             def _enum_imports(module_name):
-                import enum
                 try:
                     return idaapi.enum_import_names(mod_idx, None)
                 except Exception:
@@ -714,10 +712,9 @@ def _score_strings_c2(all_strings):
         # Regex patterns (fast, high-precision for known formats)
         for category, patterns in _SUSPICIOUS_STRING_KEYWORDS.items():
             for pat, weight, label in patterns:
-                if pat.search(raw_bytes):
-                    if weight > best_score:
-                        best_score = weight
-                        best_cat = label
+                if pat.search(raw_bytes) and weight > best_score:
+                    best_score = weight
+                    best_cat = label
 
         # BehaviorClassifier on string text (catches novel/obfuscated patterns)
         if classifier and len(text) >= 8:

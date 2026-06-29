@@ -9,12 +9,13 @@ final allow/block/ack decisions should remain deterministic.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Dict, Iterable, Optional, Tuple
+from enum import StrEnum
+from typing import Any, Dict, Optional, Tuple
 
 
-class PolicyMode(str, Enum):
+class PolicyMode(StrEnum):
     """Policy strictness for host-side tool execution."""
 
     PERMISSIVE = "permissive"
@@ -22,7 +23,7 @@ class PolicyMode(str, Enum):
     ENFORCE = "enforce"
 
 
-class RiskTier(str, Enum):
+class RiskTier(StrEnum):
     """Capability risk tiers used for deterministic gating."""
 
     READ = "read"
@@ -36,7 +37,7 @@ class RiskTier(str, Enum):
     UNKNOWN = "unknown"
 
 
-class PolicyDecision(str, Enum):
+class PolicyDecision(StrEnum):
     ALLOW = "allow"
     WARN = "warn"
     REQUIRE_ACK = "require_ack"
@@ -358,10 +359,7 @@ def evaluate_policy(
 
     if requires_ack and not acknowledged:
         reasons.append(f"Action risk tier '{risk.value}' requires explicit acknowledgement.")
-        if policy_mode == PolicyMode.PERMISSIVE:
-            decision = PolicyDecision.WARN
-        else:
-            decision = PolicyDecision.REQUIRE_ACK
+        decision = PolicyDecision.WARN if policy_mode == PolicyMode.PERMISSIVE else PolicyDecision.REQUIRE_ACK
     elif "unknown_purpose" in flags:
         reasons.append(f"Purpose '{normalized_purpose}' is not recognized; proceed only if authorized.")
         decision = PolicyDecision.WARN if policy_mode != PolicyMode.ENFORCE else PolicyDecision.REQUIRE_ACK

@@ -27,8 +27,8 @@ from __future__ import annotations
 import collections
 import threading
 import time
-from typing import Callable, Dict, List, Optional, Tuple
-
+from collections.abc import Callable
+from typing import Dict, List, Optional, Tuple
 
 # ── Drift Detector ─────────────────────────────────────────────────────────────
 

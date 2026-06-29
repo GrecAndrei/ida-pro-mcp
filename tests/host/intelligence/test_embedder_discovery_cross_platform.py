@@ -24,14 +24,13 @@ from ida_pro_mcp.host.intelligence.core import (
     EMBEDDER_STATE_FILE,
     _find_llama_server,
     _find_model,
+    _install_root,
     _is_executable,
     _llama_server_binary_names,
     _read_embedder_state,
     _select_state_path,
-    _install_root,
     write_embedder_state,
 )
-
 
 IS_WINDOWS = sys.platform == "win32"
 EXE_SUFFIX = ".exe" if IS_WINDOWS else ""
@@ -91,10 +90,7 @@ def test_is_executable_rejects_text_file(tmp_path: Path):
 
 
 def test_is_executable_accepts_platform_binary(tmp_path: Path):
-    if IS_WINDOWS:
-        bin_path = tmp_path / "llama-server.exe"
-    else:
-        bin_path = tmp_path / "llama-server"
+    bin_path = tmp_path / "llama-server.exe" if IS_WINDOWS else tmp_path / "llama-server"
     bin_path.write_bytes(b"MZ" if IS_WINDOWS else b"\x7fELF")
     bin_path.chmod(0o755)
     assert _is_executable(str(bin_path)) is True
@@ -414,7 +410,7 @@ def test_posix_search_usr_local_bin(clean_state, tmp_path: Path, monkeypatch):
     _real_isdir = os.path.isdir
     monkeypatch.setattr(
         "ida_pro_mcp.host.intelligence.core.os.path.isdir",
-        lambda p: (p == "/usr/local/bin" or p == "/usr/bin" or p == str(local)) or _real_isdir(p),
+        lambda p: (p in {"/usr/local/bin", "/usr/bin"} or p == str(local)) or _real_isdir(p),
     )
     monkeypatch.setattr(
         "ida_pro_mcp.host.intelligence.core._is_executable",

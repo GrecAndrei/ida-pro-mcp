@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .clients import configure_clients, rollback_from_backups
-from .common import InstallReport, InstallerOptions
+from .common import InstallerOptions, InstallReport
 from .discovery import (
     IdaInstall,
     detect_ida_installs,
@@ -21,12 +21,12 @@ from .discovery import (
 )
 from .runtime import (
     build_stdio_config,
+    choose_runtime_source,
     download_and_install_llama_server,
     find_embed_model,
     find_llama_server_bin,
     get_install_root,
     kill_ida_processes,
-    choose_runtime_source,
     setup_runtime_environment,
 )
 
@@ -236,7 +236,7 @@ def _prompt_ida_install(installs: list[IdaInstall], default_index: int = 0) -> I
                 return installs[n - 1]
         # Allow selecting by version string
         for i, inst in enumerate(installs):
-            if ans == inst.version_str or ans == inst.full_version_str:
+            if ans in (inst.version_str, inst.full_version_str):
                 return inst
         print("Invalid choice. Enter a number or version string (e.g. '9.3').")
 
@@ -395,7 +395,7 @@ def install_bashrc_cli(install_root: Path, dry_run: bool, report: InstallReport)
             block_start,
             f'export IDA_PRO_MCP_HOME="{install_root}"',
             'case ":$PATH:" in',
-            f'  *":$IDA_PRO_MCP_HOME/.venv/bin:"*) ;;',
+            '  *":$IDA_PRO_MCP_HOME/.venv/bin:"*) ;;',
             '  *) export PATH="$IDA_PRO_MCP_HOME/.venv/bin:$PATH" ;;',
             'esac',
             f'export IDA_PRO_MCP_CLI="{venv_bin / "ida-pro-mcp-cli"}"',
@@ -434,10 +434,10 @@ def _replace_with_symlink_or_copy(src: Path, dst: Path) -> str:
         return "copied"
 
 
-def _install_claude_opencode_skills(report: InstallReport, dry_run: bool, ui: "UI") -> None:
+def _install_claude_opencode_skills(report: InstallReport, dry_run: bool, ui: UI) -> None:
     """Auto-generate and install skills for Claude Code and OpenCode."""
     try:
-        from .skills import install_skills, default_skill_dirs
+        from .skills import default_skill_dirs, install_skills
     except ImportError as exc:
         report.add_warning(f"claude-skills: import error — {exc}")
         return

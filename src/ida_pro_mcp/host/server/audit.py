@@ -7,11 +7,12 @@ Each line is a deterministic, tamper-evident log record.
 """
 from __future__ import annotations
 
-import os
-import json
-import time
+import contextlib
 import hashlib
+import json
+import os
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -39,10 +40,8 @@ class AuditLogger:
         if self._current_path == path and self._file is not None:
             return self._file
         if self._file is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._file.close()
-            except Exception:
-                pass
         self._file = open(path, "a", encoding="utf-8")
         self._current_path = path
         return self._file
@@ -121,9 +120,7 @@ class AuditLogger:
     def close(self) -> None:
         with self._lock:
             if self._file is not None:
-                try:
+                with contextlib.suppress(Exception):
                     self._file.close()
-                except Exception:
-                    pass
                 self._file = None
                 self._current_path = None

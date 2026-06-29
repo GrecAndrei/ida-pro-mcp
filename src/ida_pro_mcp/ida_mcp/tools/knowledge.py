@@ -9,9 +9,7 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 try:
-    from ida_pro_mcp.services import infer_binary_arch_profile
-    from ida_pro_mcp.services import get_chip_family_catalog
-    from ida_pro_mcp.services import SymbolDB
+    from ida_pro_mcp.services import SymbolDB, get_chip_family_catalog, infer_binary_arch_profile
 except ImportError:
     from host.arch_profile import infer_binary_arch_profile  # type: ignore[import-not-found]
     from host.chip_db import get_chip_family_catalog  # type: ignore[import-not-found]

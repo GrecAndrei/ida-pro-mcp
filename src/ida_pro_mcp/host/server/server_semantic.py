@@ -16,14 +16,14 @@ import time
 from typing import Any, List, Optional
 
 from ..config import (
-    _bounded_int,
-    _coerce_bool,
     EMBEDDING_FIRST_MODE,
     SEMANTIC_GADGET_SOURCE_ACTIONS,
     SEMANTIC_INDEX_DB_NAME,
     SEMANTIC_INDEX_SOURCE_LIMIT,
     SEMANTIC_INDEX_VERSION,
     SEMANTIC_INDEX_WAIT_SECONDS,
+    _bounded_int,
+    _coerce_bool,
     _parse_str_list,
 )
 from ..errors import MCPError, is_error_result, make_error

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from ida_pro_mcp.services import MCPError, make_error, TOOL_ACTIONS
+from ida_pro_mcp.services import TOOL_ACTIONS, MCPError, make_error
 
 
 class TestMCPErrorCodes:

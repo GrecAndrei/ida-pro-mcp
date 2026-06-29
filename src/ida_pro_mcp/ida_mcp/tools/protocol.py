@@ -14,7 +14,7 @@ try:
     from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
 except ImportError:
     try:
-        from host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier# type: ignore
+        from host.intelligence.core import BehaviorClassifier, BgeCodeEmbedder  # type: ignore
     except ImportError:
         BgeCodeEmbedder = None  # type: ignore
         BehaviorClassifier = None  # type: ignore
@@ -257,7 +257,7 @@ def _get_switch_targets(func_ea):
                     case_values = results[case_idx]
                     # Each case may have multiple values; get the target
                     target = si.jumps + case_idx * si.get_jtable_element_size()
-                    target_ea = ida_bytes.get_dword(target) if si.get_jtable_element_size() == 4 else ida_bytes.get_qword(target)
+                    ida_bytes.get_dword(target) if si.get_jtable_element_size() == 4 else ida_bytes.get_qword(target)
                     # Try reading target from jump table
                     jt_ea = si.jumps + case_idx * si.get_jtable_element_size()
                     if si.get_jtable_element_size() == 4:
@@ -302,7 +302,7 @@ def _trace_buffer_accesses(func_ea):
         r'\*\s*\(\s*(?:_?)?(u?int(?:8|16|32|64)_t|char|BYTE|WORD|DWORD|QWORD|short|int|long)\s*\*\s*\)'
         r'\s*\(\s*\w+\s*\+\s*(\d+)\s*\)'
     )
-    array_access_re = re.compile(r'(\w+)\[(\d+)\]')
+    re.compile(r'(\w+)\[(\d+)\]')
     ntohs_re = re.compile(r'(ntohs|ntohl|htons|htonl|__builtin_bswap(?:16|32|64))\s*\(')
     memcpy_re = re.compile(r'memcpy\s*\(\s*\w+\s*,\s*\w+\s*\+\s*(\d+)\s*,\s*(\d+)\s*\)')
     comparison_re = re.compile(r'(?:if|while|for)\s*\(.*?(\w+)\s*([<>=!]+)\s*(\d+)')
@@ -463,15 +463,14 @@ def _analyze_handler_fields(func_ea):
             offset = m.group(2) or m.group(3)
             # Filter out common non-parse functions
             if callee_name not in ("memcpy", "memmove", "memset", "memcmp", "printf",
-                                   "sprintf", "snprintf", "strlen", "strcpy"):
-                if offset:
-                    result["patterns"].append({
-                        "type": "nested_submessage",
-                        "callee": callee_name,
-                        "buffer_offset": int(offset),
-                        "line": line[:120],
-                        "confidence": "low",
-                    })
+                                   "sprintf", "snprintf", "strlen", "strcpy") and offset:
+                result["patterns"].append({
+                    "type": "nested_submessage",
+                    "callee": callee_name,
+                    "buffer_offset": int(offset),
+                    "line": line[:120],
+                    "confidence": "low",
+                })
 
     # Detect loop-based repeated field parsing (while loops with incrementing offset)
     loop_offset_re = re.compile(r'(?:while|for)\s*\(.*?(\w+)\s*<\s*(\w+).*?\)')
@@ -526,14 +525,14 @@ def _export_ksy(protocol_data):
             lines.append("    seq:")
 
             if not fields:
-                lines.append(f"      - id: data")
-                lines.append(f"        size-eos: true")
+                lines.append("      - id: data")
+                lines.append("        size-eos: true")
             else:
                 for idx, field in enumerate(fields):
                     field_id = field.get("name", f"field_{idx}")
                     field_id = re.sub(r'[^a-zA-Z0-9_]', '_', field_id).lower()
                     size = field.get("size", 4)
-                    type_hint = field.get("type_hint", "")
+                    field.get("type_hint", "")
 
                     # Map to Kaitai types
                     unsigned = not field.get("signed", False)
@@ -576,7 +575,6 @@ def _export_json_schema(protocol_data):
     Returns:
         Dict containing JSON schema representation.
     """
-    import json
 
     name = protocol_data.get("name", "unknown_protocol")
     message_types = protocol_data.get("message_types", [])
@@ -1266,7 +1264,7 @@ def protocol(
             # Check for byte-order conversions (indicates network protocol)
             byte_order_apis = {"ntohs", "ntohl", "htons", "htonl",
                                "__builtin_bswap16", "__builtin_bswap32", "__builtin_bswap64"}
-            has_byteswap = bool(set(c.lower() for c in callee_names) & {a.lower() for a in byte_order_apis})
+            has_byteswap = bool({c.lower() for c in callee_names} & {a.lower() for a in byte_order_apis})
 
             # Compute total message size from fields
             total_size = 0

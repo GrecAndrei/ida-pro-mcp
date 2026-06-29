@@ -5,7 +5,6 @@ except ImportError:
 
 from collections import defaultdict, deque
 
-
 _MAX_LIMIT = 500
 _MAX_DEPTH = 64
 _MAX_ITER = 100000  # Guard for unbounded internal iterations

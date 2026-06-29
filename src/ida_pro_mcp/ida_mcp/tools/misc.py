@@ -22,7 +22,7 @@ def read_file_impl(path: str, encoding: Optional[str] = None) -> dict:
             with open(resolved, "rb") as f:
                 data = f.read()
             return {"ok": True, "path": resolved, "size": len(data), "content": data.hex(), "encoding": "binary"}
-        with open(resolved, "r", encoding=enc, errors="replace") as f:
+        with open(resolved, encoding=enc, errors="replace") as f:
             text = f.read()
         return {"ok": True, "path": resolved, "size": len(text), "content": text, "encoding": enc}
     except Exception:
@@ -138,8 +138,9 @@ def misc(
         return write_file_impl(path, content, encoding=encoding)
     if action == "plugin_list":
         try:
-            import ida_loader
             import pathlib
+
+            import ida_loader
             plugin_dirs = []
             try:
                 idadir = os.environ.get("IDADIR")
@@ -221,10 +222,10 @@ def execute_python(script: str):
     old_stderr = sys.stderr
     sys.stdout = output
     sys.stderr = output
-    
+
     # Use a copy of module globals to prevent pollution of live namespace
     _safe_globals = globals().copy()
-    
+
     try:
         # Multi-line or compound statements should go straight to exec.
         if "\n" in script or ";" in script:

@@ -3,7 +3,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional, Tuple
+from collections.abc import Callable
+from typing import Any, Dict, Optional, Tuple
 
 from ..config import _bounded_int, _coerce_bool
 from ..errors import MCPError, make_error

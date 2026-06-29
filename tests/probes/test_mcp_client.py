@@ -1,11 +1,13 @@
-import sys
-import os
+import argparse
+import contextlib
 import json
+import os
+import queue
 import subprocess
+import sys
 import threading
 import time
-import queue
-import argparse
+
 
 class MCPClient:
     def __init__(self, command, args):
@@ -18,7 +20,7 @@ class MCPClient:
         )
         self.response_queue = queue.Queue()
         self.request_id = 1
-        
+
         self.reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
         self.reader_thread.start()
 
@@ -34,24 +36,24 @@ class MCPClient:
                 else:
                     # Notification or other
                     print(f"\n[Server Log] {resp}")
-            except Exception as e:
+            except Exception:
                 # Might be raw text if server is messy
                 pass
 
     def call(self, method, params, timeout=60):
         req_id = self.request_id
         self.request_id += 1
-        
+
         request = {
             "jsonrpc": "2.0",
             "id": req_id,
             "method": method,
             "params": params
         }
-        
-        self.process.stdin.write((json.dumps(request) + "\n").encode('utf-binary' if sys.platform == 'win32' and False else 'utf-8'))
+
+        self.process.stdin.write((json.dumps(request) + "\n").encode('utf-binary' if False else 'utf-8'))
         self.process.stdin.flush()
-        
+
         start_time = time.time()
         while time.time() - start_time < timeout:
             try:
@@ -89,7 +91,7 @@ def main():
         print(f"Error: {target_binary} not found.")
         return
 
-    print(f"[*] Starting MCP server via ida_mcp_stdio.py...")
+    print("[*] Starting MCP server via ida_mcp_stdio.py...")
     client = MCPClient(sys.executable, ["-u", "ida_mcp_stdio.py"])
 
     print("[*] Initializing...")
@@ -98,7 +100,7 @@ def main():
         "capabilities": {},
         "clientInfo": {"name": "test-client", "version": "1.0.0"}
     })
-    
+
     if "error" in init_res:
         print(f"Initialization failed: {init_res}")
         client.stop()
@@ -112,7 +114,7 @@ def main():
             "binary_path": target_binary
         }
     })
-    
+
     if "error" in session_res or (isinstance(session_res.get("result"), dict) and session_res["result"].get("isError")):
         print(f"Session creation failed: {session_res}")
         client.stop()
@@ -128,19 +130,18 @@ def main():
                 elif v.lower() == "false": v = False
                 elif v.isdigit(): v = int(v)
                 elif v.startswith("[") and v.endswith("]"): # Simple list support
-                    try: v = json.loads(v.replace("'", "\""))
-                    except: pass
+                    with contextlib.suppress(BaseException): v = json.loads(v.replace("'", "\""))
                 tool_args[k] = v
-        
+
         if not tool_args and args_cmd.tool == "idb":
             tool_args = {"action": "meta"}
-            
+
         print(f"[*] Calling {args_cmd.tool} with {tool_args}...")
         res = client.call("tools/call", {
             "name": args_cmd.tool,
             "arguments": tool_args
         }, timeout=120)
-        
+
         if "result" in res and "content" in res["result"]:
             for content in res["result"]["content"]:
                 if content["type"] == "text":
@@ -165,7 +166,7 @@ def main():
                     break
                 if not tool_name:
                     continue
-                
+
                 args_str = input("Args (JSON, default {\"action\": \"meta\"}) > ").strip()
                 if not args_str:
                     tool_args = {"action": "meta"} if tool_name == "idb" else {}
@@ -175,13 +176,13 @@ def main():
                     except Exception as e:
                         print(f"Invalid JSON: {e}")
                         continue
-                
+
                 print(f"[*] Calling {tool_name} with {tool_args}...")
                 res = client.call("tools/call", {
                     "name": tool_name,
                     "arguments": tool_args
                 }, timeout=120)
-                
+
                 if "result" in res and "content" in res["result"]:
                     for content in res["result"]["content"]:
                         if content["type"] == "text":
@@ -192,7 +193,7 @@ def main():
                                 print(content["text"])
                 else:
                     print(json.dumps(res, indent=2))
-                    
+
             except KeyboardInterrupt:
                 break
             except EOFError:

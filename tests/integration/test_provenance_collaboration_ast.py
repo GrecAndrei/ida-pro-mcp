@@ -7,7 +7,6 @@ import ast
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 PROJECT_PATH = ROOT / "src" / "ida_pro_mcp" / "ida_mcp" / "tools" / "project.py"
 HOST_PATH = ROOT / "src" / "ida_pro_mcp" / "host" / "schemas.py"

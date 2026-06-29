@@ -56,7 +56,7 @@ class ServerDispatchMixin:
         try:
             config_path = os.path.expanduser("~/.config/ida-pro-mcp/policy.json")
             if os.path.exists(config_path):
-                with open(config_path, "r", encoding="utf-8") as f:
+                with open(config_path, encoding="utf-8") as f:
                     data = json.load(f)
                 if isinstance(data, dict):
                     mode = data.get("mode")
@@ -359,7 +359,7 @@ class ServerDispatchMixin:
                             "content": data.hex(),
                             "encoding": "binary",
                         }
-                    with open(canonical, "r", encoding=enc, errors="replace") as f:
+                    with open(canonical, encoding=enc, errors="replace") as f:
                         text = f.read()
                     return {
                         "ok": True,
@@ -1036,7 +1036,7 @@ class ServerDispatchMixin:
             sid = getattr(self.current_session, "session_id", None) if self.current_session else None
 
             # ---- Deterministic policy preflight ----
-            if tool_name != "blackboard" and tool_name != "background":
+            if tool_name not in {"blackboard", "background"}:
                 try:
                     policy_result = evaluate_policy(
                         tool_name,
@@ -1160,7 +1160,7 @@ class ServerDispatchMixin:
                     try:
                         from .auto_nudge import record_tool_call as nudge_record
                         idb_key = (self.current_session.idb_path if self.current_session else "")
-                        nudge_record(idb_key, "_reroute", f"{tool_name}.{action}", 
+                        nudge_record(idb_key, "_reroute", f"{tool_name}.{action}",
                                     addr=args.get("addr"), query=args.get("query"))
                     except Exception as _e:
                         import logging
@@ -1368,9 +1368,13 @@ class ServerDispatchMixin:
             )
 
         from ..intelligence.structural_index import (
-            get_db_path, ensure_tables, upsert_functions_batch,
-            execute_host_query, write_insight_index, add_global_facts,
-            _detect_global_facts
+            _detect_global_facts,
+            add_global_facts,
+            ensure_tables,
+            execute_host_query,
+            get_db_path,
+            upsert_functions_batch,
+            write_insight_index,
         )
 
         db_path = get_db_path(ip)
@@ -1436,7 +1440,7 @@ class ServerDispatchMixin:
                     conn.close()
                     return make_error(MCPError.NOT_FOUND, f"Function {addr} not in index")
                 cols = [d[0] for d in cursor.description]
-                result = dict(zip(cols, row))
+                result = dict(zip(cols, row, strict=False))
                 if include_apis:
                     cursor.execute("SELECT api_name FROM function_apis WHERE func_ea=?", (ea,))
                     result["apis"] = [r[0] for r in cursor.fetchall()]

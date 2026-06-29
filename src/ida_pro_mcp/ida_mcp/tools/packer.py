@@ -705,7 +705,7 @@ def _build_script_namespace(extra: dict | None = None) -> dict:
 
 @tool
 def packer(
-    action: Annotated[Literal["detect", "profile", "guide", "status", "script"],
+    action: Annotated[Literal[detect, profile, guide, status, script],
                       "Action: detect|profile|guide|status|script"] = "detect",
     include_anti_debug: Annotated[bool, "Include anti-debug/anti-VM detection"] = True,
     include_drm: Annotated[bool, "Include game anti-cheat detection"] = True,

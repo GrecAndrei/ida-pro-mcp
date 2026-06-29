@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 _MAX_TASK_HISTORY = 1000
 _DEFAULT_MAX_WORKERS = int(os.environ.get("IDA_MCP_BATCH_MAX_WORKERS", "4"))
@@ -90,10 +92,7 @@ class BatchManager:
                 task.state = "cancelled"
                 task.finished_at = time.time()
                 return
-            if run_fn is not None:
-                result = run_fn(task)
-            else:
-                result = {"status": "completed", "action": task.action}
+            result = run_fn(task) if run_fn is not None else {"status": "completed", "action": task.action}
             if task._cancel_event.is_set():
                 task.state = "cancelled"
                 task.finished_at = time.time()
@@ -120,10 +119,8 @@ class BatchManager:
         if task is None:
             return {"error": f"task {task_id} not found"}
         if task._future:
-            try:
+            with contextlib.suppress(Exception):
                 task._future.result(timeout=0)
-            except Exception:
-                pass
         return task.to_dict()
 
     def cancel(self, task_id: str) -> Dict[str, Any]:
@@ -148,10 +145,8 @@ class BatchManager:
             return {"error": f"task {task_id} not found"}
         if task._future is None:
             return task.to_dict()
-        try:
+        with contextlib.suppress(Exception):
             task._future.result(timeout=timeout)
-        except Exception:
-            pass
         return task.to_dict()
 
     def list_tasks(self, state: Optional[str] = None) -> List[Dict[str, Any]]:

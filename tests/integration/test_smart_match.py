@@ -5,14 +5,14 @@ Also tests regex-aware SessionManager and BookmarkManager filtering.
 
 These tests run standalone without IDA Pro.
 """
-import os
-import sys
-import json
-import re
-import fnmatch
 import difflib
-import tempfile
+import fnmatch
+import json
+import os
+import re
 import shutil
+import sys
+import tempfile
 import unittest
 
 # ---- Inline the functions under test (they are pure-Python, no IDA deps) ----
@@ -36,9 +36,7 @@ def _is_regex(pattern: str) -> bool:
         return True
     if re.search(r"\[.+\]", pattern):
         return True
-    if re.search(r".\{[0-9]", pattern):
-        return True
-    return False
+    return bool(re.search(r".\{[0-9]", pattern))
 
 
 _SEMANTIC_CANONICALS = {
@@ -89,10 +87,7 @@ def _normalize_semantic_token(token: str) -> str:
         return tok
     for suffix in ("ing", "ers", "ies", "ied", "er", "ed", "es", "s"):
         if len(tok) > 4 and tok.endswith(suffix):
-            if suffix in ("ies", "ied"):
-                tok = tok[:-3] + "y"
-            else:
-                tok = tok[: -len(suffix)]
+            tok = tok[:-3] + "y" if suffix in ("ies", "ied") else tok[:-len(suffix)]
             break
     return _SEMANTIC_CANONICALS.get(tok, tok)
 
@@ -126,10 +121,7 @@ def _compile_semantic_matcher(pattern: str):
     # For path/file-like queries with a delimiter and exactly two tokens
     # (e.g. "test.exe"), require both tokens to reduce broad matches.
     pathlike_query = len(query_set) == 2 and bool(re.search(r"[./\\:_-]", pattern))
-    if pathlike_query:
-        overlap_needed = 2
-    else:
-        overlap_needed = max(1, (len(query_set) + 1) // 2)
+    overlap_needed = 2 if pathlike_query else max(1, (len(query_set) + 1) // 2)
     fuzzy_tokens = [tok for tok in query_set if len(tok) >= _SEMANTIC_SINGLE_TOKEN_MIN_LEN]
 
     def _semantic_matches(text: str) -> bool:
@@ -208,7 +200,7 @@ def pattern_filter(data, pattern, key):
 
 # ---- Import session/bookmark managers (no IDA deps) ----
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from ida_mcp_stdio import SessionManager, BookmarkManager
+from ida_mcp_stdio import BookmarkManager, SessionManager
 
 
 class TestIsRegex(unittest.TestCase):

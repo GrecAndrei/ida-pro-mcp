@@ -9,10 +9,9 @@ import hashlib
 import json
 import shutil
 import subprocess
-import tempfile
 import time
-from ida_pro_mcp.services import parse_str_list
 
+from ida_pro_mcp.services import parse_str_list
 
 try:
     from ...host.casefile_helpers import build_chain_of_custody, build_risk_summary, to_markdown_casefile
@@ -32,7 +31,7 @@ except Exception:
 def project(
     action: Annotated[Literal[
         "save", "close", "open", "load_binary",
-        "list_recent", "get_cwd", "set_cwd", 
+        "list_recent", "get_cwd", "set_cwd",
         "list_dir", "exists",
         "evidence_graph", "knowledge_merge", "confidence_model", "replay_pipeline",
         "hypothesis_tracker", "temporal_reasoning", "semantic_artifact_diff",
@@ -45,9 +44,9 @@ def project(
 ) -> dict:
     """
     File/DB operations with provenance and collaboration intelligence workflows.
-    
+
     ACTIONS:
-    
+
     open - Open file in new IDA instance (multi-session support!)
         Params: path (REQUIRED), content (optional: "load"|"overwrite"|"-c -B"...)
         Returns: {ok, path, mode, pid, cmd, existing_db, session_file}
@@ -57,7 +56,7 @@ def project(
           - Default ("load"): Opens existing .i64/.idb if found, else creates new
           - "overwrite": Forces new database creation (deletes existing)
           - Custom flags: Pass IDA CLI flags like "-c -B -A"
-        
+
     evidence_graph - Build/store evidence-linked findings graph
     knowledge_merge - Merge two session metadata records with conflict analysis
     confidence_model - Score rename/type findings by provenance signal quality
@@ -104,7 +103,7 @@ def project(
             pattern = os.path.join(sdir, "SID_*_metadata.json")
             for meta_path in sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)[:limit]:
                 try:
-                    with open(meta_path, "r", encoding="utf-8", errors="replace") as fh:
+                    with open(meta_path, encoding="utf-8", errors="replace") as fh:
                         data = json.load(fh)
                 except Exception:
                     data = {}
@@ -171,7 +170,7 @@ def project(
             if not os.path.exists(path_):
                 return default
             try:
-                with open(path_, "r", encoding="utf-8", errors="replace") as fh:
+                with open(path_, encoding="utf-8", errors="replace") as fh:
                     return json.load(fh)
             except Exception:
                 return default
@@ -194,13 +193,13 @@ def project(
                 if str(item.get("session_id", "")).upper() == sid_u:
                     return item
             return None
-        
+
         if action == "save":
             import ida_loader
             if ida_loader.save_database(path or "", 0):
                 return {"ok": True, "path": path or idc.get_idb_path()}
             return make_error(MCPError.IDA_ERROR, "Failed to save database")
-        
+
         elif action == "close":
             # HEADLESS ONLY: Close current database
             try:
@@ -230,15 +229,15 @@ def project(
                 "mode": "fallback",
                 "note": "Could not close only the database in this runtime; use host session.close for full runtime teardown.",
             }
-        
+
         elif action == "open":
             if not path: return make_error(MCPError.INVALID_ARGS, "path required")
             path, err = validate_path_safe(path)
             if err: return err
-            
+
             if not os.path.exists(path):
                 return make_error(MCPError.FILE_NOT_FOUND, f"File not found: {path}")
-            
+
             # HEADLESS: Use internal API
             try:
                 import idapro
@@ -299,7 +298,7 @@ def project(
                 }
             except Exception as e:
                 return make_error(MCPError.IDA_ERROR, f"Failed to spawn IDA: {e}", details={"cmd": cmd})
-        
+
         elif action == "load_binary":
             if not path: return make_error(MCPError.INVALID_ARGS, "path required")
             path, err = validate_path_safe(path)
@@ -309,12 +308,12 @@ def project(
             if base_addr:
                 ba, err = validate_addr(base_addr)
                 if err: return err
-            
+
             import ida_loader
             if ida_loader.load_binary_file(path, None, 0, 0, ba, 0):
                 return {"ok": True, "path": path, "base_addr": hex(ba)}
             return make_error(MCPError.IDA_ERROR, "Failed to load binary file")
-        
+
         elif action == "list_recent":
             import ida_diskio
             recent = []
@@ -323,17 +322,17 @@ def project(
                     f = ida_diskio.get_ida_recent_file(i)
                     if f: recent.append(f)
             return {"ok": True, "recent": recent}
-        
+
         elif action == "get_cwd":
             return {"ok": True, "cwd": os.getcwd()}
-        
+
         elif action == "set_cwd":
             if not path: return make_error(MCPError.INVALID_ARGS, "path required")
             path, err = validate_path_safe(path)
             if err: return err
             os.chdir(path)
             return {"ok": True, "cwd": path}
-        
+
         elif action == "list_dir":
             target = path or os.getcwd()
             target, err = validate_path_safe(target)
@@ -348,13 +347,13 @@ def project(
                     "size": os.path.getsize(full) if os.path.isfile(full) else 0
                 })
             return {"ok": True, "path": target, "entries": entries}
-        
+
         elif action == "exists":
             if not path: return make_error(MCPError.INVALID_ARGS, "path required")
             path, err = validate_path_safe(path)
             if err: return err
             return {"ok": True, "path": path, "exists": os.path.exists(path), "is_file": os.path.isfile(path), "is_dir": os.path.isdir(path)}
-        
+
         elif action == "evidence_graph":
             pdir = _provenance_dir()
             findings_path = os.path.join(pdir, "findings.json")
@@ -718,7 +717,7 @@ def project(
                 "chain_events": len(chain),
                 "risk_level": risk_summary.get("risk_level") if isinstance(risk_summary, dict) else None,
             }}
-        
+
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:

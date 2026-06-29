@@ -7,12 +7,11 @@ Run from the project root:
     python scripts/sync_schemas.py [--dry-run]
 """
 from __future__ import annotations
+
+import argparse
 import ast
-import os
 import re
 import sys
-import textwrap
-import argparse
 from pathlib import Path
 from typing import Optional
 
@@ -203,7 +202,7 @@ def run(dry_run: bool = False):
     # Start with everything that has a tool function, minus always-hidden,
     # plus host-side tools that live in server.py not in tools/
     should_advertise = sorted(
-        set(name for name in all_tool_info if name not in ALWAYS_HIDDEN)
+        {name for name in all_tool_info if name not in ALWAYS_HIDDEN}
         | HOST_SIDE_TOOLS
     )
     print(f"Should advertise: {len(should_advertise)} tools")
@@ -219,7 +218,7 @@ def run(dry_run: bool = False):
     added = sorted(new_advertised_set - old_advertised_set)
     removed = sorted(old_advertised_set - new_advertised_set)
 
-    print(f"\nADVERTISED_TOOLS changes:")
+    print("\nADVERTISED_TOOLS changes:")
     print(f"  Adding {len(added)}: {added}")
     print(f"  Removing {len(removed)}: {removed}")
 
@@ -303,7 +302,7 @@ def run(dry_run: bool = False):
                 new_src = new_src[:m.start()] + f'"{tool_name}": "{new_desc_text}"' + new_src[m.end():]
                 desc_updated.append(f"{tool_name} (+{sorted(missing)} -{sorted(extra)})")
 
-    print(f"\nTOOL_DESCRIPTIONS changes:")
+    print("\nTOOL_DESCRIPTIONS changes:")
     print(f"  Added {len(desc_added)}: {desc_added}")
     print(f"  Updated actions {len(desc_updated)}: {desc_updated}")
 

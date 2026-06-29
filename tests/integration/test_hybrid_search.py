@@ -5,9 +5,10 @@ These tests exercise the standalone modules (hybrid_search.py) that have
 NO IDA Pro dependencies. They use only sqlite3 and the standard library.
 """
 
+import contextlib
 import os
-import sys
 import sqlite3
+import sys
 import time
 import unittest
 from typing import Any, Dict, List
@@ -59,8 +60,8 @@ class TestHybridQueryBuilder(unittest.TestCase):
         self.assertIn("fa.has_loops = ?", where)
         self.assertIn("fa.is_thunk = ?", where)
         # Check booleans normalized to 1/0
-        idx_loops = where.find("fa.has_loops = ?")
-        idx_thunk = where.find("fa.is_thunk = ?")
+        where.find("fa.has_loops = ?")
+        where.find("fa.is_thunk = ?")
         # params order matches condition order
         self.assertIn(1, params)  # has_loops=True → 1
         self.assertIn(0, params)  # is_thunk=False → 0
@@ -568,10 +569,8 @@ class TestOperatorFormat(unittest.TestCase):
 
     def tearDown(self):
         for p in getattr(self, '_tmp_dbs', []):
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(p)
-            except OSError:
-                pass
 
     def test_eq_operator(self):
         Engine = self._import_engine()
@@ -673,10 +672,8 @@ class TestHybridBenchmark(unittest.TestCase):
 
     def tearDown(self):
         if hasattr(self, '_tmp_db_path'):
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(self._tmp_db_path)
-            except OSError:
-                pass
 
     def test_benchmark_query(self):
         BM = self._import()

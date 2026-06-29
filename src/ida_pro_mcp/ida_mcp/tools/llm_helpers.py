@@ -4,6 +4,7 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+import contextlib
 import json
 import re
 
@@ -104,7 +105,7 @@ _RE_COMPACTION_RULES = [
 
 def _clean_re_content(raw_message: str, max_lines: int = 30, max_line_len: int = 200) -> str:
     """Aggressively prune RE-specific verbose content to maximize context density.
-    
+
     Implements Contextual Information Density Maximization principles:
     - Strip IDA markup tags
     - Compress hex dumps to previews
@@ -114,18 +115,18 @@ def _clean_re_content(raw_message: str, max_lines: int = 30, max_line_len: int =
     if not raw_message:
         return ""
     cleaned = raw_message
-    
+
     # Apply regex-based compaction rules
     for pattern, replacement in _RE_COMPACTION_RULES:
         cleaned = pattern.sub(replacement, cleaned)
-    
+
     # Line-level compaction
     lines = cleaned.splitlines()
     if len(lines) > max_lines:
         # Keep first N/2 and last N/2 lines, indicate truncation
         half = max_lines // 2
         lines = lines[:half] + [f"... ({len(lines) - max_lines} lines truncated) ..."] + lines[-half:]
-    
+
     # Truncate individual long lines
     result_lines = []
     for line in lines:
@@ -133,13 +134,13 @@ def _clean_re_content(raw_message: str, max_lines: int = 30, max_line_len: int =
         if len(line) > max_line_len:
             line = line[:max_line_len - 3] + "..."
         result_lines.append(line)
-    
+
     cleaned = "\n".join(result_lines)
-    
+
     # Collapse redundant whitespace
     cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
     cleaned = re.sub(r'[ \t]+', ' ', cleaned)
-    
+
     return cleaned.strip()
 
 
@@ -521,10 +522,8 @@ def llm_helpers(
                 for h in history.split(","):
                     h = h.strip()
                     if h:
-                        try:
+                        with contextlib.suppress(Exception):
                             analyzed.add(parse_address(h))
-                        except Exception:
-                            pass
 
             suggestions = []
 
@@ -590,10 +589,8 @@ def llm_helpers(
                 for h in history.split(","):
                     h = h.strip()
                     if h:
-                        try:
+                        with contextlib.suppress(Exception):
                             analyzed.add(parse_address(h))
-                        except Exception:
-                            pass
 
             total = _count_functions()
             analyzed_count = len(analyzed)
@@ -1372,7 +1369,7 @@ def llm_helpers(
                 if pseudo_a and pseudo_b:
                     vec_a = embedder.embed(pseudo_a)
                     vec_b = embedder.embed(pseudo_b)
-                    dot = sum(x * y for x, y in zip(vec_a, vec_b))
+                    dot = sum(x * y for x, y in zip(vec_a, vec_b, strict=False))
                     import math
                     na = math.sqrt(sum(x*x for x in vec_a))
                     nb = math.sqrt(sum(x*x for x in vec_b))
@@ -1464,10 +1461,8 @@ def llm_helpers(
             if not query:
                 return make_error(MCPError.INVALID_ARGS, "query required: semantic description of argument role")
             arg_idx = 0
-            try:
+            with contextlib.suppress(Exception):
                 arg_idx = int(addr) if addr else 0
-            except Exception:
-                pass
             matches = []
             try:
                 from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder

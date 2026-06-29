@@ -35,30 +35,22 @@ ADDITIONAL TOOLS (separate files):
 """
 
 # Import infrastructure modules
-from . import rpc
-from . import sync
-from . import utils
-
 # ============================================================================
 # MODULAR API - 39 tools
 # ============================================================================
-from . import tools
-
 # Prompts (LLM workflow guides)
-from . import prompts
+from . import prompts, rpc, sync, tools, utils
+from .mcp_http import IdaMcpHttpRequestHandler
+from .rpc import MCP_SERVER, MCP_UNSAFE, prompt, resource, tool, unsafe
 
 # Additional consolidated tools (separate files for organization)
 # from . import api_enums      # enum tool (list, info, create, delete, add/del_member, apply, search)
 # from . import api_bookmarks  # bookmark tool (list, set, delete, jump)
 # from . import api_signatures # signatures tool (FLIRT, TIL, Lumina)
-
 # Resources (read-only browsable state)
 # from . import api_resources
-
 # Re-export key components for external use
-from .sync import idaread, idawrite, IDAError, IDASyncError
-from .rpc import MCP_SERVER, MCP_UNSAFE, tool, unsafe, resource, prompt
-from .mcp_http import IdaMcpHttpRequestHandler
+from .sync import IDAError, IDASyncError, idaread, idawrite
 
 __all__ = [
     # Infrastructure modules

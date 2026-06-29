@@ -5,6 +5,7 @@ It loads the actual implementation from the ida_mcp package.
 """
 
 import sys
+
 import idaapi
 
 
@@ -39,7 +40,7 @@ class MCP(idaapi.plugin_t):
         print(
             f"[MCP] Plugin loaded, use Edit -> Plugins -> MCP ({hotkey}) to start the server"
         )
-        self.mcp: "ida_mcp.rpc.McpServer | None" = None
+        self.mcp: ida_mcp.rpc.McpServer | None = None
         return idaapi.PLUGIN_KEEP
 
     def run(self, arg):

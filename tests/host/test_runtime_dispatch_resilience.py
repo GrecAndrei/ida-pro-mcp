@@ -7,8 +7,10 @@ SRC = os.path.join(ROOT, "src")
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
-from ida_pro_mcp.services import MCPError  # noqa: E402
-from ida_pro_mcp.services import Session  # noqa: E402
+from ida_pro_mcp.services import (
+    MCPError,  # noqa: E402
+    Session,  # noqa: E402
+)
 
 
 def _make_session() -> Session:

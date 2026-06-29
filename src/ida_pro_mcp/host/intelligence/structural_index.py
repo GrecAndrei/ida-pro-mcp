@@ -6,11 +6,12 @@ Offloads execution from IDA's thread and executes queries on the host.
 
 from __future__ import annotations
 
-import os
-import time
-import sqlite3
+import contextlib
 import hashlib
 import json
+import os
+import sqlite3
+import time
 from typing import Any, Optional
 
 # Re-use safety paths and validation from config/policy
@@ -108,7 +109,7 @@ def get_db_path(idb_path: str) -> str:
         idb_path = "unknown"
     base = os.path.splitext(idb_path)[0]
     primary_path = f"{base}.schemaboot.db"
-    
+
     # Check if primary path directory is writable
     db_dir = os.path.dirname(os.path.abspath(primary_path))
     if os.path.isdir(db_dir) and os.access(db_dir, os.W_OK):
@@ -119,7 +120,7 @@ def get_db_path(idb_path: str) -> str:
             return primary_path
         except (OSError, PermissionError):
             pass
-            
+
     # Fallback path inside CACHE_DIR
     h = hashlib.sha256(os.path.abspath(primary_path).encode("utf-8")).hexdigest()[:16]
     fallback_dir = os.path.join(CACHE_DIR, "fallback_indexes")
@@ -256,10 +257,8 @@ def write_insight_index(func_attrs_list: list[dict[str, Any]]) -> None:
             json.dump(payload, f, indent=2)
         os.replace(tmp, path)
     except Exception:
-        try:
+        with contextlib.suppress(OSError):
             os.remove(tmp)
-        except OSError:
-            pass
 
 
 def add_global_facts(facts: list[tuple[str, str, str, float]]) -> None:
@@ -310,10 +309,8 @@ def upsert_functions_batch(conn: sqlite3.Connection, attrs_list: list[dict[str, 
         for attrs in attrs_list:
             structs_json = None
             if "reconstructed_structs" in attrs:
-                try:
+                with contextlib.suppress(Exception):
                     structs_json = json.dumps(attrs["reconstructed_structs"])
-                except Exception:
-                    pass
             cursor.execute(
                 """
                 INSERT INTO function_attrs
@@ -429,10 +426,8 @@ def execute_host_query(db_path: str, constraints: dict, limit: int = 50, offset:
     # Extract exact address mapping
     addr = normalized.pop("addr", None)
     if addr is not None:
-        try:
+        with contextlib.suppress(ValueError):
             normalized["ea"] = int(addr, 0) if isinstance(addr, str) else addr
-        except ValueError:
-            pass
 
     where_clause, params = HybridQueryBuilder.build_legacy(normalized)
 

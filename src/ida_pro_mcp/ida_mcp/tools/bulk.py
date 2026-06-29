@@ -22,33 +22,33 @@ def bulk(
 ) -> dict:
     """
     Bulk operations for efficient multi-target modifications.
-    
+
     ACTIONS:
-    
+
     rename - Bulk rename items
         Params: items (list of {addr, value/name})
         Returns: {success, failed, errors}
         Example: [{"addr": "0x401000", "value": "main"}, {"addr": "0x401100", "name": "init_crypto"}]
-        
+
     comment - Bulk add comments
         Params: items (list of {addr, value/text, type?})
         Returns: {success, failed}
         Example: [{"addr": "0x401000", "text": "Entry point", "type": "repeatable"}]
-        
+
     apply_type - Bulk apply type declarations
         Params: items (list of {addr, value/type})
         Returns: {success, failed, errors}
         Example: [{"addr": "0x401000", "type": "int __cdecl(int, char **)"}]
-        
+
     rename_stack - Bulk rename stack variables
         Params: items (list of {addr, old, new})
         Returns: {success, failed}
         Example: [{"addr": "0x401000", "old": "var_8", "new": "buffer"}]
-        
+
     import_annotations - Load names/comments from JSON
         Params: path
         Returns: {names, comments}
-        
+
     export_annotations - Save annotations to JSON
         Params: path (optional - returns data if not provided)
         Returns: {path?, counts} or {annotations}
@@ -60,7 +60,7 @@ def bulk(
             for item in items:
                 try:
                     ea, err = validate_addr(item.get("addr"))
-                    if err: 
+                    if err:
                         failed.append({"addr": item.get("addr"), "error": "Invalid address"})
                         if not continue_on_error:
                             break
@@ -72,25 +72,25 @@ def bulk(
                         if not continue_on_error:
                             break
                         continue
-                    if idc.set_name(ea, new_name, ida_name.SN_FORCE | ida_name.SN_NOWARN): 
+                    if idc.set_name(ea, new_name, ida_name.SN_FORCE | ida_name.SN_NOWARN):
                         success += 1
-                    else: 
+                    else:
                         failed.append({"addr": hex(ea), "name": new_name, "error": "set_name failed"})
                         if not continue_on_error:
                             break
-                except Exception as e: 
+                except Exception as e:
                     failed.append({"addr": item.get("addr"), "error": str(e)})
                     if not continue_on_error:
                         break
             return {"ok": True, "success": success, "failed": len(failed), "errors": failed[:20]}
-        
+
         elif action == "comment":
             if not items: return make_error(MCPError.INVALID_ARGS, "items required")
             success, failed = 0, []
             for item in items:
                 try:
                     ea, err = validate_addr(item.get("addr"))
-                    if err: 
+                    if err:
                         failed.append({"addr": item.get("addr"), "error": "Invalid address"})
                         if not continue_on_error:
                             break
@@ -117,7 +117,7 @@ def bulk(
                     if not continue_on_error:
                         break
             return {"ok": True, "success": success, "failed": len(failed), "errors": failed[:20] if failed else None}
-        
+
         elif action == "apply_type":
             if not items: return make_error(MCPError.INVALID_ARGS, "items required")
             success, failed = 0, []
@@ -136,14 +136,14 @@ def bulk(
                         if not continue_on_error:
                             break
                         continue
-                    
+
                     tif = ida_typeinf.tinfo_t()
                     if not ida_typeinf.parse_decl(tif, None, type_str, ida_typeinf.PT_SIL):
                         failed.append({"addr": hex(ea), "type": type_str, "error": "Failed to parse type"})
                         if not continue_on_error:
                             break
                         continue
-                    
+
                     if ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.TINFO_DEFINITE):
                         success += 1
                     else:
@@ -155,14 +155,14 @@ def bulk(
                     if not continue_on_error:
                         break
             return {"ok": True, "success": success, "failed": len(failed), "errors": failed[:20] if failed else None}
-        
+
         elif action == "rename_stack":
             if not items: return make_error(MCPError.INVALID_ARGS, "items required")
             success, failed = 0, []
             for item in items:
                 try:
                     ea, err = validate_addr(item.get("addr"), require_func=True)
-                    if err: 
+                    if err:
                         failed.append({"addr": item.get("addr"), "error": "Invalid address or not in function"})
                         if not continue_on_error:
                             break
@@ -174,7 +174,7 @@ def bulk(
                         if not continue_on_error:
                             break
                         continue
-                    
+
                     # Get function and frame
                     func = ida_funcs.get_func(ea)
                     if not func:
@@ -182,14 +182,14 @@ def bulk(
                         if not continue_on_error:
                             break
                         continue
-                    
+
                     frame = ida_frame.get_frame(func)
                     if not frame:
                         failed.append({"addr": hex(ea), "error": "No frame for function"})
                         if not continue_on_error:
                             break
                         continue
-                    
+
                     # Iterate frame members by index using get_member_by_id
                     renamed = False
                     for idx in range(frame.memqty):
@@ -205,12 +205,12 @@ def bulk(
                                 break
                         except Exception:
                             break
-                    
+
                     if not renamed:
                         failed.append({"addr": hex(ea), "var": old_name, "error": "Variable not found or rename failed"})
                         if not continue_on_error:
                             break
-                except Exception as e: 
+                except Exception as e:
                     failed.append({"addr": item.get("addr"), "error": str(e)})
                     if not continue_on_error:
                         break
@@ -221,7 +221,7 @@ def bulk(
             MAX_NAMES = 5000
             MAX_HEADS = 20000
             MAX_FUNCS = 5000
-            
+
             # Export names (excluding auto-generated)
             for ea, name in idautils.Names():
                 if len(annotations["names"]) >= MAX_NAMES:
@@ -233,7 +233,7 @@ def bulk(
                     if ida_nalt.get_tinfo(tif, ea):
                         entry["type"] = str(tif)
                     annotations["names"].append(entry)
-            
+
             # Export comments
             for seg_ea in idautils.Segments():
                 seg = idaapi.getseg(seg_ea)
@@ -249,7 +249,7 @@ def bulk(
                         annotations["comments"].append({"addr": hex(head), "comment": cmt, "type": "regular"})
                     if cmt_rep:
                         annotations["comments"].append({"addr": hex(head), "comment": cmt_rep, "type": "repeatable"})
-            
+
             # Export function comments
             funcs_seen = 0
             for func_ea in idautils.Functions():
@@ -262,7 +262,7 @@ def bulk(
                     annotations["comments"].append({"addr": hex(func_ea), "comment": func_cmt, "type": "func"})
                 if func_cmt_rep:
                     annotations["comments"].append({"addr": hex(func_ea), "comment": func_cmt_rep, "type": "func_repeatable"})
-            
+
             if path:
                 path, err = validate_path_safe(path)
                 if err: return err
@@ -271,26 +271,26 @@ def bulk(
                     json.dump(annotations, f, indent=2)
                 return {"ok": True, "path": path, "counts": {k: len(v) for k, v in annotations.items()}}
             return {"ok": True, "annotations": annotations, "counts": {k: len(v) for k, v in annotations.items()}}
-        
+
         elif action == "import_annotations":
             if not path: return make_error(MCPError.INVALID_ARGS, "path required")
             path, err = validate_path_safe(path)
             if err: return err
             if not os.path.exists(path): return make_error(MCPError.FILE_NOT_FOUND, path)
             import json
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, encoding='utf-8') as f:
                 data = json.load(f)
-            
+
             n_applied, c_applied, t_applied = 0, 0, 0
             errors = []
-            
+
             MAX_IMPORT_ITEMS = 5000
-            
+
             # Import names
             for item in data.get("names", [])[:MAX_IMPORT_ITEMS]:
                 try:
                     ea = parse_address(item["addr"])
-                    if idc.set_name(ea, item["name"], ida_name.SN_FORCE | ida_name.SN_NOWARN): 
+                    if idc.set_name(ea, item["name"], ida_name.SN_FORCE | ida_name.SN_NOWARN):
                         n_applied += 1
                     # Also apply type if present
                     if "type" in item:
@@ -300,14 +300,14 @@ def bulk(
                                 t_applied += 1
                 except Exception as e:
                     errors.append({"addr": item.get("addr"), "error": str(e)})
-            
+
             # Import comments
             for item in data.get("comments", [])[:MAX_IMPORT_ITEMS]:
                 try:
                     ea = parse_address(item["addr"])
                     cmt_type = item.get("type", "regular")
                     cmt_text = item["comment"]
-                    
+
                     if cmt_type == "func":
                         idc.set_func_cmt(ea, cmt_text, 0)
                     elif cmt_type == "func_repeatable":
@@ -319,10 +319,10 @@ def bulk(
                     c_applied += 1
                 except Exception as e:
                     errors.append({"addr": item.get("addr"), "error": str(e)})
-            
-            return {"ok": True, "names": n_applied, "comments": c_applied, "types": t_applied, 
+
+            return {"ok": True, "names": n_applied, "comments": c_applied, "types": t_applied,
                     "errors": len(errors), "error_samples": errors[:10] if errors else None}
-        
+
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:

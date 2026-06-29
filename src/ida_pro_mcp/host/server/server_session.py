@@ -3,32 +3,32 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 from datetime import datetime
 from typing import Any, Dict, Optional
 
 from ..analysis.arch_profile import normalize_arch_options
-from ..stores.chip_db import find_chip_profile
 from ..config import (
     MAX_BATCH_CALLS,
     MAX_LIST_LIMIT,
     MAX_LIST_OFFSET,
     MAX_NAME_LEN,
     MAX_NOTE_LEN,
-    MAX_TAGS_PER_SESSION,
     MAX_TAG_LEN,
+    MAX_TAGS_PER_SESSION,
     _bounded_int,
     _coerce_bool,
     _normalize_session_id,
 )
 from ..errors import MCPError, is_error_result, make_error
-from ..schemas import TOOL_ACTIONS
-from .tool_registry import register_tool_actions
-from .server_session_bootstrap import ServerSessionBootstrapMixin
-from ..stores.symbol_db import SymbolDB
 from ..intelligence.helpers import parse_str_list
-
+from ..schemas import TOOL_ACTIONS
+from ..stores.chip_db import find_chip_profile
+from ..stores.symbol_db import SymbolDB
+from .server_session_bootstrap import ServerSessionBootstrapMixin
+from .tool_registry import register_tool_actions
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -166,26 +166,20 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         if self.current_session and (_normalize_session_id(self.current_session.session_id) == sid_norm):
             session = self.current_session
         else:
-            try:
+            with contextlib.suppress(Exception):
                 session = self.session_mgr.get_session(sid_norm)
-            except Exception:
-                pass
 
         idb_path = ""
         if session:
             idb_path = getattr(session, "idb_path", "")
             if not idb_path and hasattr(session, "to_dict"):
-                try:
+                with contextlib.suppress(Exception):
                     idb_path = session.to_dict().get("idb_path", "")
-                except Exception:
-                    pass
             if not idb_path:
                 binary_path = getattr(session, "binary_path", "")
                 if not binary_path and hasattr(session, "to_dict"):
-                    try:
+                    with contextlib.suppress(Exception):
                         binary_path = session.to_dict().get("binary_path", "")
-                    except Exception:
-                        pass
                 if binary_path:
                     idb_path = binary_path
 
@@ -838,8 +832,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
     def _session_action_state(self, args: dict) -> dict:
         """Return the analysis state — same data as the ida://state resource."""
         try:
-            from .resources import ResourceResolver
             import json as _json
+
+            from .resources import ResourceResolver
             resolver = ResourceResolver(
                 lambda name, kwargs: self._execute_tool(name, kwargs),
                 session_mgr=getattr(self, "session_mgr", None),
@@ -889,10 +884,8 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         err_text = self._tail_text_file(stderr_log, tail_lines=lines) if stderr_log else ""
         alive = False
         if runtime.get("process"):
-            try:
+            with contextlib.suppress(Exception):
                 alive = runtime["process"].poll() is None
-            except Exception:
-                pass
         return {
             "ok": True,
             "session_id": session.session_id,
@@ -1047,13 +1040,11 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             include_process_stats=False,
         )
         result["post_kill_state"] = snapshot
-        try:
+        with contextlib.suppress(Exception):
             log_rpc(
                 f"session.kill sid={sid} signaled={result.get('signaled')} "
                 f"terminated={result.get('terminated')} exit={result.get('exit_code')}"
             )
-        except Exception:
-            pass
         return {"ok": True, **result}
 
     def _session_action_rebuild(self, args: dict) -> dict:
@@ -1153,7 +1144,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 result,
                 requested_capsule=args.get("capsule"),
                 event_type="session_update",
-                event={"updated_fields": sorted([k for k in update_kwargs.keys()])},
+                event={"updated_fields": sorted(update_kwargs.keys())},
             ),
         }
 

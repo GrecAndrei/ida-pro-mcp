@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Benchmarks for Evidence Physics bootstrap calibration pipeline."""
 import os
-import time
-import tempfile
 import shutil
 import statistics
+import tempfile
+import time
 
 from tests._isolated_repo_loader import load_package_module, load_repo_module
 

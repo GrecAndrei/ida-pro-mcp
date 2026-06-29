@@ -7,7 +7,6 @@ import ast
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 TRACE_ANALYSIS_PATH = ROOT / "src" / "ida_pro_mcp" / "ida_mcp" / "tools" / "trace_analysis.py"
 HOST_PATH = ROOT / "src" / "ida_pro_mcp" / "host" / "schemas.py"

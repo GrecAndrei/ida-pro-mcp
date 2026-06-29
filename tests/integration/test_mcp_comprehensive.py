@@ -4,13 +4,13 @@ from __future__ import annotations
 import pytest
 
 from ida_pro_mcp.services import (
+    ADVERTISED_TOOLS,
+    HIDDEN_TOOLS_IN_LIST,
+    TOOL_ACTIONS,
+    TOOLS,
     IDAMCPServer,
     Session,
     SessionManager,
-    TOOLS,
-    TOOL_ACTIONS,
-    ADVERTISED_TOOLS,
-    HIDDEN_TOOLS_IN_LIST,
 )
 
 

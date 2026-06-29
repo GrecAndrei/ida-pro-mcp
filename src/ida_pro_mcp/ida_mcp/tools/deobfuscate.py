@@ -7,7 +7,7 @@ try:
     from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
 except ImportError:
     try:
-        from host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier
+        from host.intelligence.core import BehaviorClassifier, BgeCodeEmbedder
     except ImportError:
         BehaviorClassifier = None
 
@@ -242,9 +242,8 @@ def _find_dead_code(func_ea, limit):
             prev = idc.prev_head(ea)
             if prev != idaapi.BADADDR and prev >= func.start_ea:
                 prev_mnem = idc.print_insn_mnem(prev)
-                if prev_mnem:
-                    if prev_mnem.lower() not in _TERMINATORS:
-                        reachable.add(ea)
+                if prev_mnem and prev_mnem.lower() not in _TERMINATORS:
+                    reachable.add(ea)
 
     prev_was_terminator = False
     for ea in idautils.FuncItems(func_ea):
@@ -280,10 +279,7 @@ def _find_dead_code(func_ea, limit):
                 if len(findings) >= limit:
                     return findings
 
-        if mnem:
-            prev_was_terminator = mnem.lower() in _TERMINATORS
-        else:
-            prev_was_terminator = False
+        prev_was_terminator = mnem.lower() in _TERMINATORS if mnem else False
 
     return findings
 

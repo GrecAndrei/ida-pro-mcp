@@ -6,9 +6,9 @@ import os
 import sqlite3
 from typing import Any, Dict, List, Tuple
 
-from .structural_index import get_db_path
-from .embeddings import FunctionEmbeddingIndex
 from .core import BgeCodeEmbedder
+from .embeddings import FunctionEmbeddingIndex
+from .structural_index import get_db_path
 
 
 class CrossBinaryAnalogyEngine:
@@ -150,9 +150,7 @@ class CrossBinaryAnalogyEngine:
                 cur_name = cur_func["name"]
                 # Only suggest if name is generic
                 is_generic = (
-                    cur_name.startswith("sub_")
-                    or cur_name.startswith("0x")
-                    or cur_name.startswith("nullsub_")
+                    cur_name.startswith(("sub_", "0x", "nullsub_"))
                 )
 
                 # Fetch active embedding
@@ -169,9 +167,7 @@ class CrossBinaryAnalogyEngine:
 
                     # Do not suggest generic names from library
                     if (
-                        lib_name.startswith("sub_")
-                        or lib_name.startswith("0x")
-                        or lib_name.startswith("nullsub_")
+                        lib_name.startswith(("sub_", "0x", "nullsub_"))
                     ):
                         continue
 

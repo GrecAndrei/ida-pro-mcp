@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import os
-import tempfile
 import shutil
+import tempfile
 import unittest
 
 from tests._isolated_repo_loader import load_package_module, load_repo_module

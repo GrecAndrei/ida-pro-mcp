@@ -405,7 +405,8 @@ class ResourceResolver:
 
         # 6. KnowledgeGraph summary + narrative
         try:
-            import importlib.util as _ilu, os as _os
+            import importlib.util as _ilu
+            import os as _os
             # resources.py is in host/server/; knowledge_graph.py is in host/stores/.
             _kg_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
                                      "..", "stores", "knowledge_graph.py")
@@ -499,7 +500,10 @@ class ResourceResolver:
     def _bb_store(self):
         """Load BlackboardStore without IDA deps."""
         try:
-            import importlib.util, os as _os, sys as _sys, types as _types
+            import importlib.util
+            import os as _os
+            import sys as _sys
+            import types as _types
             path = _os.path.join(
                 _os.path.dirname(_os.path.abspath(__file__)),
                 "..", "..", "ida_mcp", "tools", "blackboard.py"
@@ -580,7 +584,8 @@ class ResourceResolver:
         if not self.bb_path:
             return _make_json_content({"error": "No blackboard path available"})
         try:
-            import importlib.util as _ilu, os as _os
+            import importlib.util as _ilu
+            import os as _os
             # resources.py is in host/server/; knowledge_graph.py is in host/stores/.
             _kg_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
                                      "..", "stores", "knowledge_graph.py")
@@ -866,7 +871,8 @@ class ResourceResolver:
         ida://blackboard/{category}      — entries by category
         """
         try:
-            import importlib.util, os as _os
+            import importlib.util
+            import os as _os
             bb_path = _os.path.join(
                 _os.path.dirname(_os.path.abspath(__file__)),
                 "..", "..", "ida_mcp", "tools", "blackboard.py"

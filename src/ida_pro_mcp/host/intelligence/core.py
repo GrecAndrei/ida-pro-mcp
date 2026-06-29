@@ -36,8 +36,9 @@ Discovery:
 
 from __future__ import annotations
 
-import hashlib
+import contextlib
 import glob
+import hashlib
 import json
 import math
 import os
@@ -53,7 +54,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .embeddings import FunctionEmbeddingIndex, NOISE_WORDS  # noqa: F401
+from .embeddings import NOISE_WORDS, FunctionEmbeddingIndex  # noqa: F401
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -164,9 +165,7 @@ def _is_executable(path: str) -> bool:
         return False
     if sys.platform == "win32":
         low = path.lower()
-        if not (low.endswith(".exe") or low.endswith(".bat") or low.endswith(".cmd")):
-            return False
-        return True
+        return low.endswith((".exe", ".bat", ".cmd"))
     return os.access(path, os.X_OK)
 
 
@@ -184,14 +183,10 @@ def _read_embedder_state() -> dict:
          - POSIX:   $XDG_CONFIG_HOME/ida-pro-mcp  or  ~/.config/ida-pro-mcp
     """
     candidates: list[str] = []
-    try:
+    with contextlib.suppress(Exception):
         candidates.append(os.path.join(_install_root(), EMBEDDER_STATE_FILE))
-    except Exception:
-        pass
-    try:
+    with contextlib.suppress(Exception):
         candidates.append(os.path.join(CACHE_DIR, EMBEDDER_STATE_FILE))
-    except Exception:
-        pass
     try:
         if sys.platform == "win32":
             appdata = os.environ.get("APPDATA") or os.path.join(
@@ -209,7 +204,7 @@ def _read_embedder_state() -> dict:
         if not p or not os.path.isfile(p):
             continue
         try:
-            with open(p, "r", encoding="utf-8") as f:
+            with open(p, encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError):
             continue
@@ -622,10 +617,10 @@ class BgeCodeEmbedder:
     Falls back to TF-IDF if binary or model not found.
     """
 
-    _instance: Optional["BgeCodeEmbedder"] = None
+    _instance: Optional[BgeCodeEmbedder] = None
     _lock = threading.Lock()
 
-    def __new__(cls) -> "BgeCodeEmbedder":
+    def __new__(cls) -> BgeCodeEmbedder:
         with cls._lock:
             if cls._instance is None:
                 obj = super().__new__(cls)
@@ -669,7 +664,7 @@ class BgeCodeEmbedder:
             else:
                 try:
                     if os.path.isfile(_EMBED_LEASE_FILE):
-                        with open(_EMBED_LEASE_FILE, "r", encoding="utf-8") as f:
+                        with open(_EMBED_LEASE_FILE, encoding="utf-8") as f:
                             lease = json.load(f)
                         lease_port = int(lease.get("port") or 0)
                         if lease_port > 0:
@@ -725,7 +720,7 @@ class BgeCodeEmbedder:
             # Reuse existing shared embed server when available.
             try:
                 if os.path.isfile(_EMBED_LEASE_FILE):
-                    with open(_EMBED_LEASE_FILE, "r", encoding="utf-8") as f:
+                    with open(_EMBED_LEASE_FILE, encoding="utf-8") as f:
                         lease = json.load(f)
                     port = int(lease.get("port") or 0)
                     if port > 0:
@@ -994,11 +989,11 @@ class BehaviorClassifier:
     }
 
     # Module-level singleton so anchors are loaded exactly once per process.
-    _shared: Optional["BehaviorClassifier"] = None
+    _shared: Optional[BehaviorClassifier] = None
     _shared_lock = threading.Lock()
 
     @classmethod
-    def instance(cls, embedder: "BgeCodeEmbedder") -> "BehaviorClassifier":
+    def instance(cls, embedder: BgeCodeEmbedder) -> BehaviorClassifier:
         with cls._shared_lock:
             if cls._shared is None:
                 cls._shared = cls(embedder)

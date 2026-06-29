@@ -71,7 +71,7 @@ def run_probe(binary_path: str) -> int:
             client.stop()
 
     mismatches = 0
-    for (t_a, a_a, r_a), (t_b, a_b, r_b) in zip(results_run_a, results_run_b):
+    for (t_a, a_a, r_a), (t_b, a_b, r_b) in zip(results_run_a, results_run_b, strict=False):
         stable_a = _stable_subset(r_a)
         stable_b = _stable_subset(r_b)
         h_a = _hashify(stable_a)

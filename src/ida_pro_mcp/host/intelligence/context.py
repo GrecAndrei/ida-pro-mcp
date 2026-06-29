@@ -8,6 +8,7 @@ backends can live in a smaller dedicated module.
 from __future__ import annotations
 
 import atexit
+import contextlib
 import hashlib
 import json
 import os
@@ -17,14 +18,6 @@ import time
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
-from .core import (
-    BgeCodeEmbedder,
-    BehaviorClassifier,
-    EMBED_DIM,
-    FunctionEmbeddingIndex,
-    _extract_signature,
-)
-from .structural_index import get_db_path
 from . import helpers as _helpers
 from .api_patterns import (
     ALL_INTERESTING_APIS,
@@ -34,6 +27,14 @@ from .api_patterns import (
     extract_api_calls,
     extract_string_refs,
 )
+from .core import (
+    EMBED_DIM,
+    BehaviorClassifier,
+    BgeCodeEmbedder,
+    FunctionEmbeddingIndex,
+    _extract_signature,
+)
+from .structural_index import get_db_path
 
 
 def _intel_profile_enabled() -> bool:
@@ -655,10 +656,8 @@ class ContextAssembler:
 
         if pseudocode and len(pseudocode.strip()) > 80:
             t_dec = self._perf_start()
-            try:
+            with contextlib.suppress(Exception):
                 self._enrich_decompile(pack, payload, pseudocode, addr, idb_path, bb_store, session_id, mode=mode)
-            except Exception:
-                pass
             self._perf_end(session_id, "decompile_enrich", t_dec)
 
         # ── 2b. Search/xref result enrichment ─────────────────────────────
@@ -883,7 +882,7 @@ class ContextAssembler:
             except Exception:
                 pass
             # Always suggest callers if we haven't already
-            if f"code:callers" not in seen_act and addr:
+            if "code:callers" not in seen_act and addr:
                 actions.append({
                     "tool": "code", "action": "callers", "addr": addr,
                     "reason": "See what calls this function",
@@ -1059,10 +1058,8 @@ class ContextAssembler:
         try:
             eas: List[int] = []
             for a in addresses[:limit]:
-                try:
+                with contextlib.suppress(ValueError, TypeError):
                     eas.append(_helpers.coerce_int(a))
-                except (ValueError, TypeError):
-                    pass
             if not eas:
                 return []
             with sqlite3.connect(db) as conn:
@@ -1224,7 +1221,7 @@ class ContextAssembler:
                 ea_rows.append(ea_int)
             if text_rows:
                 vecs = self._embedder.embed_batch(text_rows)
-                for ea_int, v in zip(ea_rows, vecs):
+                for ea_int, v in zip(ea_rows, vecs, strict=False):
                     row_scores[ea_int] = float(BgeCodeEmbedder.cosine(qv, v))
         except Exception:
             row_scores = {}

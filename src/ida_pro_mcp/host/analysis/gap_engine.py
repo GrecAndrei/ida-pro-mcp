@@ -19,7 +19,6 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional
 
-
 # ── Gap specs per binary type ─────────────────────────────────────────────────
 
 WIFI_GAPS = [

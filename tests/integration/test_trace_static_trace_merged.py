@@ -10,7 +10,7 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 
 
 def _read(rel: str) -> str:
-    with open(os.path.join(ROOT, rel), "r", encoding="utf-8") as f:
+    with open(os.path.join(ROOT, rel), encoding="utf-8") as f:
         return f.read()
 
 

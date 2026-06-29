@@ -25,7 +25,7 @@ def entropy(
 ) -> dict:
     """
     Entropy and heuristic analysis for detecting packed or encrypted code.
-    
+
     Actions:
     - section: Calculate entropy for each segment in the database with window stats.
     - region: Calculate entropy for a specific memory range with histogram.
@@ -38,7 +38,7 @@ def entropy(
     try:
         import math
         from collections import Counter
-        
+
         def calc_entropy(start_ea, length):
             data = ida_bytes.get_bytes(start_ea, length)
             if not data: return 0.0
@@ -207,7 +207,7 @@ def entropy(
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
-            
+
     except Exception as e:
         return handle_error(e)
 

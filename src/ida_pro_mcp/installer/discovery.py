@@ -8,16 +8,16 @@ install to wire into the launch config.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable
-
 
 VERSION_TUPLE = tuple[int, int, int]
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
@@ -52,10 +52,8 @@ def _safe_roots() -> list[Path]:
     wire it as IDADIR.  Audit §6.5.
     """
     roots: list[Path] = []
-    try:
+    with contextlib.suppress(OSError):
         roots.append(Path.home().resolve())
-    except OSError:
-        pass
     if sys.platform == "darwin":
         roots.append(Path("/Applications"))
     elif sys.platform.startswith("linux"):
@@ -150,7 +148,7 @@ class IdaInstall:
         return d
 
     @classmethod
-    def from_dict(cls, d: dict) -> "IdaInstall":
+    def from_dict(cls, d: dict) -> IdaInstall:
         return cls(
             path=Path(d["path"]),
             version=tuple(d["version"]),

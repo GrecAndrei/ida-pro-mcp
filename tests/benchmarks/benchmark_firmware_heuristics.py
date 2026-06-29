@@ -31,7 +31,7 @@ def _summ(name, samples):
 
 
 def bench_entropy(rounds=1000):
-    data = bytes((i % 251 for i in range(1 << 16)))
+    data = bytes(i % 251 for i in range(1 << 16))
     hist = [0] * 256
     for b in data:
         hist[b] += 1

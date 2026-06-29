@@ -27,13 +27,13 @@ def test_shim_module_cannot_be_imported():
 
 
 def test_canonical_modules_are_importable():
-    import ida_pro_mcp.host.intelligence.core
     import ida_pro_mcp.host.intelligence.context
+    import ida_pro_mcp.host.intelligence.core
     from ida_pro_mcp.host.intelligence.core import (
-        BgeCodeEmbedder,
-        BehaviorClassifier,
-        FunctionEmbeddingIndex,
         INTEL_PROFILE,
+        BehaviorClassifier,
+        BgeCodeEmbedder,
+        FunctionEmbeddingIndex,
         _extract_signature,
     )
     from ida_pro_mcp.services import ContextAssembler, get_assembler

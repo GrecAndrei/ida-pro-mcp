@@ -13,12 +13,24 @@ except ImportError:
     from support.semantic_matching import semantic_score, semantic_tokens  # type: ignore[import-not-found]
 
 from .core import (
-    clip_text, paginate_records, iter_segments, iter_code, build_response,
-    MNEMONIC_BASE_SCORE, MNEMONIC_GROUP_SCORE, MNEMONIC_TOKEN_WEIGHT,
-    MNEMONIC_CAP, INSTRUCTION_CAP, INSTRUCTION_TOKEN_WEIGHT,
-    INSTRUCTION_BASE_SCORE, _FIND_INSTRUCTION_CAP,
+    _FIND_INSTRUCTION_CAP,
     _FIND_INSTRUCTION_LIMIT_MULTIPLIER,
-    SCORE_SUBSTRING, MNEMONIC_GROUPS, SearchTimeout, safe_generate_disasm_line,
+    INSTRUCTION_BASE_SCORE,
+    INSTRUCTION_CAP,
+    INSTRUCTION_TOKEN_WEIGHT,
+    MNEMONIC_BASE_SCORE,
+    MNEMONIC_CAP,
+    MNEMONIC_GROUP_SCORE,
+    MNEMONIC_GROUPS,
+    MNEMONIC_TOKEN_WEIGHT,
+    SCORE_SUBSTRING,
+    SearchTimeout,
+    build_response,
+    clip_text,
+    iter_code,
+    iter_segments,
+    paginate_records,
+    safe_generate_disasm_line,
 )
 
 
@@ -52,7 +64,7 @@ def search_insns(pattern, range_start, range_end, include_context, offset, limit
                 for mnem in mnemonics:
                     raw_mnem = idc.print_insn_mnem(check_ea)
                     curr_mnem = raw_mnem.lower() if raw_mnem else ""
-                    if mnem != "*" and curr_mnem != mnem:
+                    if mnem not in ("*", curr_mnem):
                         match = False
                         break
                     sequence.append(curr_mnem)

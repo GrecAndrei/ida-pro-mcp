@@ -15,13 +15,13 @@ def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(repo_root / "src"))
 
+    from ida_pro_mcp.host import schemas
     from ida_pro_mcp.host.schemas_data import (  # pylint: disable=import-error
         TOOL_ACTIONS,
-        TOOL_DESCRIPTIONS,
         TOOL_ARG_SCHEMAS,
+        TOOL_DESCRIPTIONS,
         TOOLS,
     )
-    from ida_pro_mcp.host import schemas
     from ida_pro_mcp.host.server.tool_registry import advertised_tools, tool_actions
 
     errors: list[str] = []

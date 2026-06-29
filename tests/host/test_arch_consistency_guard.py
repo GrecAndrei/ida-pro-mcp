@@ -1,7 +1,6 @@
 import pathlib
 import re
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 TOOLS_DIR = ROOT / "src" / "ida_pro_mcp" / "ida_mcp" / "tools"
 

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import os
-import sys
-import sqlite3
-import pytest
 import contextlib
+import os
+import sqlite3
+import sys
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from tests._isolated_repo_loader import load_host_module, load_tool_module
 
@@ -101,14 +102,14 @@ def test_tiny_emulator_parsing():
     with mock_ida_context():
         trace_mod = load_tool_module("trace_analysis")
         TinyEmulator = trace_mod.TinyEmulator
-        
+
         # Mock get_func to return None inside mock context
         sys.modules["ida_funcs"].get_func.return_value = None
-        
+
         emu = TinyEmulator(0x140001000)
         emu.regs["rsi"] = 0x1000
         emu.regs["rax"] = 2
-        
+
         # Check parse_address_expr
         assert emu.parse_address_expr("[rsi+10h]") == 0x1010
         assert emu.parse_address_expr("[rsi+rax*4-0x8]") == 0x1000 + 8 - 8
@@ -118,26 +119,26 @@ def test_tiny_emulator_advanced():
     with mock_ida_context():
         trace_mod = load_tool_module("trace_analysis")
         TinyEmulator = trace_mod.TinyEmulator
-        
+
         sys.modules["ida_funcs"].get_func.return_value = None
-        
+
         emu = TinyEmulator(0x140001000)
-        
+
         # Test taint propagation
         emu.set_reg_taint("rax", True)
         assert emu.is_reg_tainted("rax")
         assert emu.is_reg_tainted("eax")  # normalizes sub-registers
-        
+
         emu.set_reg_taint("rax", False)
         assert not emu.is_reg_tainted("rax")
-        
+
         # Test stack writes and stack strings
         emu.write_mem(0x7ffffff0, ord('T'), 1)
         emu.write_mem(0x7ffffff1, ord('E'), 1)
         emu.write_mem(0x7ffffff2, ord('S'), 1)
         emu.write_mem(0x7ffffff3, ord('T'), 1)
         emu.write_mem(0x7ffffff4, 0, 1)  # Null terminator
-        
+
         stack_strs = emu.get_stack_strings()
         assert "TEST" in stack_strs
 
@@ -158,23 +159,24 @@ def test_tiny_emulator_advanced():
 def test_prefetch_context():
     with mock_ida_context():
         import sys
-        import idautils
+
         import ida_funcs
-        
+        import idautils
+
         # Configure the active mock inside sys.modules
         sys.modules["ida_funcs"].get_func.return_value.start_ea = 0x1000
         sys.modules["ida_funcs"].get_func.return_value.end_ea = 0x1020
-        
+
         f1 = ida_funcs.get_func(0x1000)
         print("DEBUG_F1_START:", f1.start_ea)
         print("DEBUG_F1_END:", f1.end_ea)
-        
+
         idautils.XrefsTo.return_value = []
         idautils.XrefsFrom.return_value = []
         sys.modules["idc"].next_head.return_value = 0xffffffff
-        
+
         sys.modules["ida_ua"].decode_insn.return_value = 0
-        
+
         trace_mod = load_tool_module("trace_analysis")
         _prefetch_function_context = trace_mod._prefetch_function_context
         res = _prefetch_function_context(0x1000)
@@ -191,7 +193,7 @@ def test_tiny_emulator_new_instructions():
         from unittest.mock import MagicMock
         trace_mod = load_tool_module("trace_analysis")
         TinyEmulator = trace_mod.TinyEmulator
-        
+
         # Configure mocked ida modules and constants
         import ida_ua
         ida_ua.o_reg = 1
@@ -200,16 +202,16 @@ def test_tiny_emulator_new_instructions():
         ida_ua.o_displ = 4
         ida_ua.o_imm = 5
         ida_ua.o_near = 7
-        
+
         # Set up a dictionary to hold our mocked instruction sequence
         mock_instructions = {}
-        
+
         def mock_decode_insn(insn, ip):
             if ip in mock_instructions:
                 inst_info = mock_instructions[ip]
                 insn.size = inst_info.get("size", 4)
                 insn.ea = ip
-                
+
                 # Setup operands
                 ops = []
                 for op_data in inst_info.get("ops", []):
@@ -219,36 +221,36 @@ def test_tiny_emulator_new_instructions():
                     op.value = op_data.get("value", 0)
                     op.addr = op_data.get("addr", 0)
                     ops.append(op)
-                
+
                 while len(ops) < 6:
                     ops.append(MagicMock(type=0, dtype=0, value=0, addr=0))
                 insn.ops = ops
                 return 1
             return 0
-            
+
         sys.modules["ida_ua"].decode_insn.side_effect = mock_decode_insn
-        
+
         def mock_print_insn_mnem(ip):
             if ip in mock_instructions:
                 return mock_instructions[ip]["mnem"]
             return ""
-            
+
         sys.modules["idc"].print_insn_mnem.side_effect = mock_print_insn_mnem
-        
+
         def mock_print_operand(ip, op_idx):
             if ip in mock_instructions:
                 op_strs = mock_instructions[ip].get("op_strs", [])
                 if op_idx < len(op_strs):
                     return op_strs[op_idx]
             return ""
-            
+
         sys.modules["idc"].print_operand.side_effect = mock_print_operand
-        
+
         # Mock get_func
         sys.modules["ida_funcs"].get_func.return_value = None
-        
+
         emu = TinyEmulator(0x1000)
-        
+
         # Helper to run emulator on registered instructions
         def run_emu_at(ip, mnem, op_strs, ops_data):
             mock_instructions[ip] = {
@@ -270,7 +272,7 @@ def test_tiny_emulator_new_instructions():
         ])
         assert emu.get_reg("rax") == 0x20
         assert not emu.is_reg_tainted("rax")
-        
+
         # 64-bit ROL immediate taint
         emu.set_reg("rax", 1)
         emu.set_reg_taint("rax", True)
@@ -280,7 +282,7 @@ def test_tiny_emulator_new_instructions():
         ])
         assert emu.get_reg("rax") == 0x20
         assert emu.is_reg_tainted("rax")
-        
+
         # 64-bit ROR immediate
         emu.set_reg("rax", 0x20)
         emu.set_reg_taint("rax", False)
@@ -289,7 +291,7 @@ def test_tiny_emulator_new_instructions():
             {"type": 5, "value": 5}
         ])
         assert emu.get_reg("rax") == 1
-        
+
         # 64-bit ROL register-based count
         emu.set_reg("rbx", 0x8000000000000000)
         emu.set_reg("rcx", 1)
@@ -301,7 +303,7 @@ def test_tiny_emulator_new_instructions():
         ])
         assert emu.get_reg("rbx") == 1
         assert not emu.is_reg_tainted("rbx")
-        
+
         # 64-bit ROL register count taint
         emu.set_reg("rbx", 0x8000000000000000)
         emu.set_reg("rcx", 1)
@@ -312,7 +314,7 @@ def test_tiny_emulator_new_instructions():
         ])
         assert emu.get_reg("rbx") == 1
         assert emu.is_reg_tainted("rbx")
-        
+
         # 32-bit ROL immediate
         emu.set_reg("rax", 0xf0000000)
         emu.set_reg_taint("rax", False)
@@ -321,7 +323,7 @@ def test_tiny_emulator_new_instructions():
             {"type": 5, "value": 4}
         ])
         assert emu.get_reg("rax") == 0xf
-        
+
         # 32-bit ROR immediate
         emu.set_reg("rax", 0xf)
         run_emu_at(0x1018, "ror", ["eax", "4"], [
@@ -342,7 +344,7 @@ def test_tiny_emulator_new_instructions():
         assert emu.get_reg("rax") == 0xffffffffffffffff
         assert emu.regs["zf"] == 0
         assert emu.regs["sf"] == 0
-        
+
         # NOT 32-bit with taint
         emu.set_reg("rax", 0)
         emu.set_reg_taint("rax", True)
@@ -351,7 +353,7 @@ def test_tiny_emulator_new_instructions():
         ])
         assert emu.get_reg("rax") == 0xffffffff
         assert emu.is_reg_tainted("rax")
-        
+
         # NEG 64-bit
         emu.set_reg("rax", 1)
         emu.set_reg_taint("rax", False)
@@ -362,7 +364,7 @@ def test_tiny_emulator_new_instructions():
         assert emu.regs["zf"] == 0
         assert emu.regs["sf"] == 1
         assert not emu.is_reg_tainted("rax")
-        
+
         # NEG 32-bit zero with taint
         emu.set_reg("rax", 0)
         emu.set_reg_taint("rax", True)
@@ -387,7 +389,7 @@ def test_tiny_emulator_new_instructions():
         ])
         assert emu.get_reg("rax") == 0x2222
         assert emu.is_reg_tainted("rax")
-        
+
         # CMOVZ condition NOT met (ZF = 0)
         emu.set_reg("rax", 0x1111)
         emu.set_reg("rbx", 0x2222)
@@ -400,7 +402,7 @@ def test_tiny_emulator_new_instructions():
         ])
         assert emu.get_reg("rax") == 0x1111
         assert not emu.is_reg_tainted("rax")
-        
+
         # CMOVNZ condition met (ZF = 0)
         emu.set_reg("rax", 0x1111)
         emu.set_reg("rbx", 0x2222)
@@ -437,7 +439,7 @@ def test_tiny_emulator_new_instructions():
         ])
         assert emu.get_reg("al") == 1
         assert not emu.is_reg_tainted("al")
-        
+
         # SETZ on register, ZF = 0, tainted flags
         emu.set_reg("rax", 0xff)
         emu.regs["zf"] = 0
@@ -447,7 +449,7 @@ def test_tiny_emulator_new_instructions():
         ])
         assert emu.get_reg("al") == 0
         assert emu.is_reg_tainted("al")
-        
+
         # SETNZ on memory address, ZF = 0, untainted flags
         emu.set_reg("rsi", 0x1000)
         emu.regs["zf"] = 0
@@ -457,7 +459,7 @@ def test_tiny_emulator_new_instructions():
         ])
         assert emu.read_mem(0x1000, 1) == 1
         assert not emu.is_mem_tainted(0x1000, 1)
-        
+
         # SETNZ on memory address, ZF = 1, tainted flags
         emu.set_reg("rsi", 0x1000)
         emu.regs["zf"] = 1
@@ -474,21 +476,21 @@ def test_symbolic_expression_solving_and_formatting():
     format_sym_expr = trace_mod.format_sym_expr
     format_constraint = trace_mod.format_constraint
     solve_constraints = trace_mod.solve_constraints
-    
+
     # Test expression formatting
     expr1 = ("add", ("reg", "rdi"), ("val", 0x10))
     assert format_sym_expr(expr1) == "(rdi + 0x10)"
-    
+
     expr2 = ("mem", ("sub", ("reg", "rbp"), ("val", 8)), 8)
     assert format_sym_expr(expr2) == "[(rbp - 8)]"
-    
+
     # Test constraint formatting
     const1 = ("eq", expr1, ("val", 0x1337))
     assert format_constraint(const1) == "(rdi + 0x10) == 0x1337"
-    
+
     const2 = ("zero", ("xor", ("reg", "rax"), ("val", 0xff)))
     assert format_constraint(const2) == "(rax ^ 0xff) == 0"
-    
+
     # Test solving constraints
     solutions = solve_constraints([const1, const2])
     assert solutions["rdi"] == 0x1337 - 0x10
@@ -500,7 +502,6 @@ def test_tiny_emulator_symbolic_execution_branch_split(mock_ida):
     # fixture (`mock_ida`) that uses `monkeypatch.setitem` for sys.modules
     # mocking. Pytest handles teardown via monkeypatch.undo() automatically.
     trace_mod = load_tool_module("trace_analysis")
-    TinyEmulator = trace_mod.TinyEmulator
     _trace_analysis_merged_dispatch = trace_mod._trace_analysis_merged_dispatch
 
     import ida_ua

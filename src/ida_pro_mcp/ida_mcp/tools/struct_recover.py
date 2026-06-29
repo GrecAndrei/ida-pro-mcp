@@ -249,7 +249,7 @@ def _apply_struct_to_til(struct_name, fields):
             type_str = field.get("type", "")
             if "[" in type_str:
                 # Array type
-                base_type = type_str.split("[")[0]
+                type_str.split("[")[0]
                 arr_part = type_str.split("[")[1].rstrip("]")
                 arr_count = int(arr_part) if arr_part.isdigit() else size
                 elem_tif = ida_typeinf.tinfo_t()
@@ -269,10 +269,10 @@ def _apply_struct_to_til(struct_name, fields):
 
         # Register in local type library
         rc = struct_tif.set_named_type(til, struct_name, ida_typeinf.NTF_REPLACE)
-        if rc != 0 and rc != ida_typeinf.TERR_OK:
+        if rc not in (0, ida_typeinf.TERR_OK):
             # Try without NTF_REPLACE (new type)
             rc = struct_tif.set_named_type(til, struct_name, 0)
-            if rc != 0 and rc != ida_typeinf.TERR_OK:
+            if rc not in (0, ida_typeinf.TERR_OK):
                 return False, f"set_named_type failed with code {rc}"
 
         return True, None
@@ -368,7 +368,7 @@ def struct_recover(
                         "candidates": [], "note": "No struct-like field accesses found"}
             clusters = _cluster_by_register(accesses)
             # Filter: skip stack pointer registers (they are frame accesses, not structs)
-            sp_names = set(n.lower() for n in get_stack_pointer_names())
+            sp_names = {n.lower() for n in get_stack_pointer_names()}
             candidates = []
             for reg, cluster in sorted(clusters.items(), key=lambda x: -len(x[1])):
                 if reg in sp_names:
@@ -403,7 +403,7 @@ def struct_recover(
         # ACTION: recover_all
         # ----------------------------------------------------------------
         elif action == "recover_all":
-            sp_names = set(n.lower() for n in get_stack_pointer_names())
+            sp_names = {n.lower() for n in get_stack_pointer_names()}
             candidates = []
             func_count = 0
             for ea in idautils.Functions():
@@ -458,7 +458,7 @@ def struct_recover(
                         "propagated_to": [],
                         "note": "No struct accesses found to propagate"}
             clusters = _cluster_by_register(accesses)
-            sp_names = set(n.lower() for n in get_stack_pointer_names())
+            sp_names = {n.lower() for n in get_stack_pointer_names()}
             # Pick the best candidate (most fields, non-stack)
             best_fields = []
             for reg, cluster in sorted(clusters.items(), key=lambda x: -len(x[1])):
@@ -494,7 +494,7 @@ def struct_recover(
                 return {"ok": True, "function": func_name, "addr": hex_ea(func_ea),
                         "c_definition": "", "note": "No struct accesses found"}
             clusters = _cluster_by_register(accesses)
-            sp_names = set(n.lower() for n in get_stack_pointer_names())
+            sp_names = {n.lower() for n in get_stack_pointer_names()}
             # Pick best candidate
             best_fields = []
             best_reg = None
@@ -539,7 +539,7 @@ def struct_recover(
                 return make_error(MCPError.INVALID_ARGS,
                                   f"No struct-like field accesses found in {func_name}")
             clusters = _cluster_by_register(accesses)
-            sp_names = set(n.lower() for n in get_stack_pointer_names())
+            sp_names = {n.lower() for n in get_stack_pointer_names()}
             best_fields = []
             best_reg = None
             for reg, cluster in sorted(clusters.items(), key=lambda x: -len(x[1])):

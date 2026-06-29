@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import hashlib
-import math
 import logging
+import math
 import os
 import re
 import sqlite3
 import threading
 import time
 from collections import Counter
-from contextlib import closing
+from contextlib import closing, suppress
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -311,7 +311,7 @@ class FunctionEmbeddingIndex:
         src = self._source_idb_path()
         if src and os.path.isfile(src):
             st = os.stat(src)
-            return hashlib.sha256(f"{src}:{st.st_size}:{st.st_mtime_ns}".encode("utf-8")).hexdigest()
+            return hashlib.sha256(f"{src}:{st.st_size}:{st.st_mtime_ns}".encode()).hexdigest()
         return hashlib.sha256(src.encode("utf-8")).hexdigest() if src else ""
 
     def _embedder_meta_snapshot(self) -> Dict[str, str]:
@@ -378,10 +378,8 @@ class FunctionEmbeddingIndex:
         out: Dict[str, Any] = {str(k): str(v) for k, v in rows}
         for key in ("index_schema_version", "embedding_dim", "model_size", "server_size"):
             if key in out:
-                try:
+                with suppress(Exception):
                     out[key] = int(out[key])
-                except Exception:
-                    pass
         return out
 
     def recent_functions(self, limit: int = 64) -> List[Dict[str, Any]]:
@@ -553,7 +551,7 @@ class FunctionEmbeddingIndex:
         blob = self._pack(vec)
         with self._cache_lock:
             self._cache[func_ea] = vec
-        src_hash = hashlib.sha256(f"{func_ea}:{ph}".encode("utf-8")).hexdigest()[:24]
+        src_hash = hashlib.sha256(f"{func_ea}:{ph}".encode()).hexdigest()[:24]
         try:
             with self._conn() as conn:
                 conn.execute(

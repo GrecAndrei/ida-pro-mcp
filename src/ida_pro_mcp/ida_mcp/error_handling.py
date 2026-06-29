@@ -411,9 +411,9 @@ def validate_addr(addr: Union[str, int], require_code: bool = False, require_fun
         return None, error
 
     try:
-        import idaapi
         import ida_bytes
         import ida_funcs
+        import idaapi
 
         # Check if address is valid in IDB
         if not idaapi.is_mapped(ea):

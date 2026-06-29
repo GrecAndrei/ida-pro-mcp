@@ -7,13 +7,15 @@ Tests for new smart features:
 - rename propagation blackboard writes
 - query_lang AND-splitting fix
 """
-import os
-import sys
 import json
-import struct
-import tempfile
 import math
+import os
+import struct
+import sys
+import tempfile
+
 import pytest
+
 from tests._isolated_repo_loader import ROOT, load_support_module, load_tool_module
 
 _bb_mod = load_tool_module("blackboard")
@@ -205,7 +207,8 @@ def _load_agent_kmeans():
     pytest.importorskip("numpy")
     # We only need _kmeans_numpy which has no IDA dependencies.
     # Extract it by compiling just the function definition.
-    import ast, types as _types
+    import ast
+    import types as _types
 
     path = os.path.join(os.path.dirname(__file__), "..", "..", "src",
                         "ida_pro_mcp", "ida_mcp", "tools", "agent.py")
@@ -343,7 +346,8 @@ def test_full_query_parse():
 
 def _load_gadgets():
     """Extract _score_gadgets_behavior from gadgets.py without executing IDA imports."""
-    import ast, types as _types
+    import ast
+    import types as _types
 
     path = os.path.join(os.path.dirname(__file__), "..", "..", "src",
                         "ida_pro_mcp", "ida_mcp", "tools", "gadgets.py")
@@ -366,7 +370,7 @@ def _load_gadgets():
     class _MCPError:
         IDA_ERROR = "IDA_ERROR"
     mod.__dict__["MCPError"] = _MCPError
-    from typing import Optional, Dict, List, Any
+    from typing import Any, Dict, List, Optional
     mod.__dict__["Optional"] = Optional
     mod.__dict__["Dict"] = Dict
     mod.__dict__["List"] = List
@@ -396,7 +400,8 @@ def test_score_gadgets_behavior_no_embedder():
 
 def test_score_gadgets_behavior_with_fake_embedder():
     """With a fake embedder, _score_gadgets_behavior returns a dict."""
-    import types, unittest.mock as mock
+    import types
+    import unittest.mock as mock
 
     class _FakeEmb:
         backend = "test"
@@ -404,7 +409,7 @@ def test_score_gadgets_behavior_with_fake_embedder():
             return [1.0, 0.0]
         @staticmethod
         def cosine(a, b):
-            return sum(x*y for x,y in zip(a,b))
+            return sum(x*y for x,y in zip(a,b, strict=False))
 
     class _FakeClassifier:
         ANCHORS = {"rop_chain": "pop rdi ret gadget"}
@@ -433,12 +438,11 @@ def test_score_gadgets_behavior_with_fake_embedder():
 def test_build_decompiler_dataflow_assignment_with_comparison():
     import importlib.util
     import types
-    import sys
     import typing
-    
+
     # Save original modules to restore later
     old_modules = dict(sys.modules)
-    
+
     # Create mock _common module
     mock_common = types.ModuleType("_common")
     mock_common.hex_ea = lambda ea: hex(ea)
@@ -459,7 +463,7 @@ def test_build_decompiler_dataflow_assignment_with_comparison():
     mock_common.Literal = typing.Literal
     mock_common.Union = typing.Union
     mock_common.Any = typing.Any
-    
+
     # Inject stubs
     sys.modules["_common"] = mock_common
     for m in ["idaapi", "idc", "idautils", "ida_funcs", "ida_bytes",
@@ -468,24 +472,24 @@ def test_build_decompiler_dataflow_assignment_with_comparison():
         mod_mock = sys.modules.setdefault(m, types.ModuleType(m))
         setattr(mock_common, m, mod_mock)
     sys.modules["idaapi"].BADADDR = 0xFFFFFFFFFFFFFFFF
-    
+
     try:
         # Load code.py
         path = ROOT / "src" / "ida_pro_mcp" / "ida_mcp" / "tools" / "code.py"
         spec = importlib.util.spec_from_file_location("_code_test", path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        
+
         # Mock cfunc
         class MockVar:
             def __init__(self, name, is_arg=False):
                 self.name = name
                 self.is_arg_var = is_arg
-                
+
         class MockCFunc:
             def __init__(self, vars_list):
                 self.lvars = vars_list
-                
+
         cfunc = MockCFunc([
             MockVar("v5"),
             MockVar("v2"),
@@ -493,13 +497,13 @@ def test_build_decompiler_dataflow_assignment_with_comparison():
             MockVar("s1"),
             MockVar("s2")
         ])
-        
+
         # Mock expression rows
         mock_rows = [
             (0x401000, "v5 = v2 == 3"),
             (0x401010, "v4 = strcmp(s1, s2) == 0")
         ]
-        
+
         # Patch _collect_expr_rows_from_cfunc
         orig_collect = mod._collect_expr_rows_from_cfunc
         mod._collect_expr_rows_from_cfunc = lambda *a, **kw: mock_rows
@@ -507,7 +511,7 @@ def test_build_decompiler_dataflow_assignment_with_comparison():
             flow = mod._build_decompiler_dataflow(cfunc)
         finally:
             mod._collect_expr_rows_from_cfunc = orig_collect
-            
+
         edges = flow["edges"]
         assign_edges = [e for e in edges if e["kind"] == "assign"]
         assert len(assign_edges) == 3

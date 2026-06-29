@@ -23,12 +23,12 @@ def graph(
 ) -> dict:
     """
     Export graphs for visualization and analysis.
-    
+
     Actions:
     - callgraph: Generate function call graph starting from addr
     - cfg: Generate control flow graph for function at addr
     - xref_graph: Generate cross-reference graph
-    
+
     Output formats:
     - json: Structured JSON with nodes and edges
     - dot: Graphviz DOT format for visualization
@@ -49,7 +49,7 @@ def graph(
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = validate_addr(addr, require_func=True)
             if err: return err
-            
+
             depth = max(0, int(depth))
             max_items = min(max(1, int(max_items)), 500)
             nodes, edges, visited = {}, [], set()
@@ -59,7 +59,7 @@ def graph(
             def add_node(f_ea):
                 if f_ea not in nodes:
                     nodes[f_ea] = idc.get_func_name(f_ea) or f"sub_{f_ea:x}"
-            
+
             def traverse(f_ea, d, stack):
                 nonlocal item_count
                 if d > depth or f_ea in visited: return
@@ -84,16 +84,16 @@ def graph(
                             else:
                                 traverse(target.start_ea, d + 1, stack)
                 stack.discard(f_ea)
-            
+
             traverse(ea, 0, set())
-            
+
             return _format_graph(nodes, edges, format, cycle_nodes=cycle_nodes)
-        
+
         elif action == "cfg":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = validate_addr(addr, require_func=True)
             if err: return err
-            
+
             import ida_gdl
             func = ida_funcs.get_func(ea)
             if not func:

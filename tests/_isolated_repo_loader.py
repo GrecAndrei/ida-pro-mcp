@@ -7,7 +7,6 @@ import types
 import typing
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = ROOT / "src"
 TESTS_ROOT = ROOT / "tests"
@@ -157,10 +156,7 @@ def load_tool_submodule(module_relpath: str, *, common_overrides: dict | None = 
     _ensure_nested_namespace("ida_pro_mcp.ida_mcp.tools", TOOLS_ROOT, module_relpath)
     rel = module_relpath.replace(".", "/")
     path = TOOLS_ROOT / rel
-    if path.is_dir():
-        path = path / "__init__.py"
-    else:
-        path = path.with_suffix(".py")
+    path = path / "__init__.py" if path.is_dir() else path.with_suffix(".py")
     fullname = f"ida_pro_mcp.ida_mcp.tools.{module_relpath}"
     return _load_module(fullname, path)
 
@@ -170,10 +166,7 @@ def load_package_module(module_relpath: str):
     _ensure_nested_namespace("ida_pro_mcp", PACKAGE_ROOT, module_relpath)
     rel = module_relpath.replace(".", "/")
     path = PACKAGE_ROOT / rel
-    if path.is_dir():
-        path = path / "__init__.py"
-    else:
-        path = path.with_suffix(".py")
+    path = path / "__init__.py" if path.is_dir() else path.with_suffix(".py")
     fullname = f"ida_pro_mcp.{module_relpath}"
     return _load_module(fullname, path)
 

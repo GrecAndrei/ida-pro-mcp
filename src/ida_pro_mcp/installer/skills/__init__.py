@@ -119,8 +119,8 @@ def generate_skills(
     """
     # Import here so this module is importable without the full host stack
     try:
-        from ida_pro_mcp.host.schemas_data import TOOL_DESCRIPTIONS
         from ida_pro_mcp.host.schemas import classify_tool_category
+        from ida_pro_mcp.host.schemas_data import TOOL_DESCRIPTIONS
     except ImportError:
         # Fall back to minimal stubs when running outside the package
         TOOL_DESCRIPTIONS = {}  # type: ignore[assignment]

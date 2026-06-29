@@ -1,13 +1,15 @@
-import unittest
-from unittest import mock
-import urllib.error
 import os
 import sys
+import unittest
+import urllib.error
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 SRC = os.path.join(ROOT, "src")
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
+
+import contextlib
 
 from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder
 
@@ -20,10 +22,8 @@ class TestBgeCodeEmbedderFailOpen(unittest.TestCase):
     def tearDown(self):
         inst = BgeCodeEmbedder._instance
         if inst is not None:
-            try:
+            with contextlib.suppress(Exception):
                 inst.stop()
-            except Exception:
-                pass
         BgeCodeEmbedder._instance = self._old_instance
 
     def test_embed_disables_llama_after_repeated_rpc_failures(self):

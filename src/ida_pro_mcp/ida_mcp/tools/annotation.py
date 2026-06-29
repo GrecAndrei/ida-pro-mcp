@@ -16,18 +16,27 @@ except ImportError:
 
 try:
     from ..support._api_categories import (
-        DANGEROUS_APIS as _DANGEROUS_APIS,
-        MAGIC_CONSTANTS as _MAGIC_CONSTANTS,
-        TAG_CATEGORIES as _TAG_CATEGORIES,
         API_TO_TAG as _API_TO_TAG,
+    )
+    from ..support._api_categories import (
+        DANGEROUS_APIS as _DANGEROUS_APIS,
+    )
+    from ..support._api_categories import (
+        MAGIC_CONSTANTS as _MAGIC_CONSTANTS,
+    )
+    from ..support._api_categories import (
+        TAG_CATEGORIES as _TAG_CATEGORIES,
     )
 except ImportError:
     from support._api_categories import (
-        DANGEROUS_APIS as _DANGEROUS_APIS,
-        MAGIC_CONSTANTS as _MAGIC_CONSTANTS,
-        TAG_CATEGORIES as _TAG_CATEGORIES,
         API_TO_TAG as _API_TO_TAG,
+    )
+    from support._api_categories import (
+        DANGEROUS_APIS as _DANGEROUS_APIS,
     )  # type: ignore[import-not-found]
+    from support._api_categories import (
+        MAGIC_CONSTANTS as _MAGIC_CONSTANTS,
+    )
 
 
 def _get_func_callees_with_addr(func_ea):
@@ -883,7 +892,7 @@ def annotation(
             proposed = kwargs.get("value", "")
             if not proposed:
                 return make_error(MCPError.INVALID_ARGS, "value (proposed comment) required for validate")
-            
+
             result = _governance_check_proposed_comment(ea, proposed, "comment")
             response = {
                 "ok": True,
@@ -928,7 +937,6 @@ def _annotation_comment_mgr_action(action, addr, text, items, path, fmt):
     """
     import json as json_module
     import os
-    import re
 
     # `fmt` is an alias for the old `format` parameter (Python's
     # `format` is a builtin; we accept either via `fmt`).
@@ -1109,7 +1117,7 @@ def _annotation_comment_mgr_action(action, addr, text, items, path, fmt):
         if not os.path.exists(path):
             return make_error(MCPError.FILE_NOT_FOUND, path)
 
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             content = f.read()
         imported = 0
         errors = []

@@ -114,7 +114,7 @@ def test_bool_tokenizer_handles_simple_primitive():
 def test_bool_parser_precedence():
     """AND binds tighter than OR; NOT applies to the next atom."""
     # Stub the handlers so we can test parser precedence without IDA.
-    s_name, s_api = {1, 2}, {2, 3}
+    _s_name, _s_api = {1, 2}, {2, 3}
     cb._BOOL_PRIMITIVES["name"] = lambda pat, **kw: {int(p) for p in pat.split(",") if p}
     cb._BOOL_PRIMITIVES["api"] = lambda pat: {int(p) for p in pat.split(",") if p}
     cb._prim_funcs_by_name = lambda pat, **kw: {int(p) for p in pat.split(",") if p}

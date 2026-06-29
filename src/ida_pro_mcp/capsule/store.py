@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
-import math
 import sqlite3
-import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,23 +52,21 @@ class CapsuleStore:
         self.conn.row_factory = sqlite3.Row
 
     @classmethod
-    def open(cls, path: Path | str) -> "CapsuleStore":
+    def open(cls, path: Path | str) -> CapsuleStore:
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(p))
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=5000")
-        try:
+        with contextlib.suppress(sqlite3.DatabaseError):
             conn.execute("PRAGMA journal_mode=WAL")
-        except sqlite3.DatabaseError:
-            pass
         initialize_schema(conn)
         return cls(p, conn)
 
     def close(self) -> None:
         self.conn.close()
 
-    def __enter__(self) -> "CapsuleStore":
+    def __enter__(self) -> CapsuleStore:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -458,7 +455,8 @@ class CapsuleStore:
 
     def semantic_summary(self) -> dict:
         self._assert_initialized()
-        get_count = lambda table: int(self.conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"])
+        def get_count(table):
+            return int(self.conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"])
         return {
             "semantic_indexes": get_count("semantic_indexes"),
             "semantic_items": get_count("semantic_items"),
@@ -970,13 +968,14 @@ class CapsuleStore:
     def inspect_summary(self) -> dict:
         self._assert_initialized()
         manifest = self.get_manifest()
-        get_count = lambda table: int(self.conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"])
+        def get_count(table):
+            return int(self.conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"])
         return {
             "path": str(self.path),
             "format": f"{self._get_meta('format_name')}/v{self._get_meta('format_version')}",
             "schema_version": int(self._get_meta("schema_version") or 0),
             "project_name": self._get_meta("project_name") or "",
-            "backends": sorted(list((manifest.get("backends") or {}).keys())),
+            "backends": sorted((manifest.get("backends") or {}).keys()),
             "trust_state": (manifest.get("trust") or {}).get("state", "unknown"),
             "contains_executable_payloads": bool(
                 (manifest.get("trust") or {}).get("contains_executable_payloads", False)

@@ -20,11 +20,12 @@ import sqlite3
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..intelligence.helpers import cosine_similarity as _cosine, unpack_floats as _unpack
+from ..intelligence.helpers import cosine_similarity as _cosine
+from ..intelligence.helpers import unpack_floats as _unpack
 
 
 def _vec_add(a: List[float], b: List[float]) -> List[float]:
-    return [x + y for x, y in zip(a, b)]
+    return [x + y for x, y in zip(a, b, strict=False)]
 
 
 def _vec_scale(a: List[float], s: float) -> List[float]:
@@ -332,7 +333,7 @@ class FrontierEngine:
         classifier = None
         query_vec = None
         try:
-            from ..intelligence.core import BgeCodeEmbedder, BehaviorClassifier
+            from ..intelligence.core import BehaviorClassifier, BgeCodeEmbedder
             embedder = BgeCodeEmbedder()
             classifier = BehaviorClassifier.instance(embedder)
             if query and query.strip():

@@ -7,28 +7,29 @@ class while keeping the same response behavior.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 from typing import Any, Optional
 
 from ..config import (
-    _coerce_bool,
-    CONTEXT_DENSITY_DEFAULT_BUDGET,
-    CONTEXT_DENSITY_COMPACT_THRESHOLD,
+    _COMPACT_DROP,
     _POINTER_NOTE_HEX_RE,
     _POINTER_NOTE_MATH_RE,
+    _POINTER_NOTE_MAX_SIGNAL_MULTIPLIER,
     _POINTER_NOTE_SIGNAL_KEYWORDS,
     _POINTER_NOTE_SIGNAL_MAX_DEPTH,
     _POINTER_NOTE_SIGNAL_MAX_DICT_ITEMS,
     _POINTER_NOTE_SIGNAL_MAX_LIST_ITEMS,
     _POINTER_NOTE_SIGNAL_TOOLS_HINT,
     _POINTER_NOTE_SIGNAL_TOOLS_STRONG,
-    _POINTER_NOTE_MAX_SIGNAL_MULTIPLIER,
-    _COMPACT_DROP,
+    CONTEXT_DENSITY_COMPACT_THRESHOLD,
+    CONTEXT_DENSITY_DEFAULT_BUDGET,
+    _coerce_bool,
 )
-from .server_response_compact import ServerResponseCompactMixin
-from ..stores.truncation import truncate_response
 from ..errors import is_error_result
+from ..stores.truncation import truncate_response
+from .server_response_compact import ServerResponseCompactMixin
 
 
 class ServerResponseMixin(ServerResponseCompactMixin):
@@ -383,24 +384,18 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         if isinstance(payload, list):
             skip = opts.get("output_skip")
             if skip is not None:
-                try:
+                with contextlib.suppress(Exception):
                     payload = payload[int(skip):]
-                except Exception:
-                    pass
 
             head = opts.get("output_head")
             if head is not None:
-                try:
+                with contextlib.suppress(Exception):
                     payload = payload[:int(head)]
-                except Exception:
-                    pass
 
             tail = opts.get("output_tail")
             if tail is not None:
-                try:
+                with contextlib.suppress(Exception):
                     payload = payload[-int(tail):]
-                except Exception:
-                    pass
 
             grep = opts.get("output_grep")
             if grep:
@@ -465,7 +460,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
     def _get_session_imagebase(self, session_id: Optional[str]) -> int:
         if not session_id:
             return 0x140000000
-        
+
         # 1. Check runtime cache
         if hasattr(self, "session_runtimes") and isinstance(self.session_runtimes, dict):
             runtime = self.session_runtimes.get(session_id)
@@ -535,7 +530,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                 self._ppaa_cache_idb = idb_path
             ppaa = self._ppaa_cache
 
-        hex_addrs = sorted(list(set(matches)))
+        hex_addrs = sorted(set(matches))
         valid_addrs = []
         for ha in hex_addrs:
             try:
@@ -545,9 +540,9 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                 elif ppaa:
                     rebased_val = imagebase + val
                     # Smarter threshold: accept values < 0x1000 if they actually exist in metadata indexes
-                    if (ppaa.query_function_metadata(val) or 
-                        ppaa.query_function_metadata(rebased_val) or 
-                        ppaa.query_string_metadata(val) or 
+                    if (ppaa.query_function_metadata(val) or
+                        ppaa.query_function_metadata(rebased_val) or
+                        ppaa.query_string_metadata(val) or
                         ppaa.query_string_metadata(rebased_val)):
                         valid_addrs.append((ha, val))
             except ValueError:
@@ -572,7 +567,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             offset = target_val - imagebase
             sign = "+" if offset >= 0 else "-"
             abs_offset = abs(offset)
-            
+
             addr_info = {
                 "decimal": target_val,
                 "relative_to_imagebase": f"imagebase {sign} 0x{abs_offset:x}",

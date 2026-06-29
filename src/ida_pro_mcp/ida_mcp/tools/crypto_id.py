@@ -6,7 +6,6 @@ except ImportError:
 
 import struct
 
-
 # ============================================================================
 # CRYPTO_ID - Cryptographic Algorithm Identification for LLMs
 # ============================================================================
@@ -284,7 +283,7 @@ def crypto_id(
                             try:
                                 from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
                             except ImportError:
-                                from host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier# type: ignore
+                                from host.intelligence.core import BehaviorClassifier, BgeCodeEmbedder  # type: ignore
                             embedder = BgeCodeEmbedder()
                             classifier = BehaviorClassifier.instance(embedder)
                             behavior_tags = classifier.classify(pseudo, threshold=0.0, top_k=6)

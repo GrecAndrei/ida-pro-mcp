@@ -31,8 +31,7 @@ Example:
 import re
 import time
 from enum import Enum, auto
-from typing import Dict, List, Optional, Set, Tuple, Any
-
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 # ============================================================================
 # SECTION 1: Core Types and Enums
@@ -440,7 +439,7 @@ class NoUnknownCodeExecutionRule(RERule):
                 "rule_id": self.rule_id,
                 "rule": self.name,
                 "severity": sev.name,
-                "description": f"Attempted execution of code from unknown origin" +
+                "description": "Attempted execution of code from unknown origin" +
                               (f" with suspicious behaviors: {detected}." if detected else "."),
                 "resolution": self.resolution,
             })
@@ -718,9 +717,7 @@ class GovernanceEngine:
             verdict = Verdict.REDACTED
         elif has_high:
             verdict = Verdict.BLOCKED
-        elif ontology_verdict == Verdict.WARNED:
-            verdict = Verdict.WARNED
-        elif has_medium:
+        elif ontology_verdict == Verdict.WARNED or has_medium:
             verdict = Verdict.WARNED
         else:
             verdict = Verdict.APPROVED
@@ -831,14 +828,16 @@ def redact_pii(text: str) -> str:
 # ============================================================================
 
 try:
-    from ._common import tool, idaread, make_error, MCPError
+    from ._common import MCPError, idaread, make_error, tool
 except ImportError:
     try:
-        from _common import tool, idaread, make_error, MCPError  # type: ignore[import-not-found]
+        from _common import MCPError, idaread, make_error, tool  # type: ignore[import-not-found]
     except ImportError:
         # Standalone / test mode — tool decorator not available
-        tool = lambda f: f  # type: ignore
-        idaread = lambda f: f  # type: ignore
+        def tool(f):
+            return f  # type: ignore
+        def idaread(f):
+            return f  # type: ignore
         def make_error(*args, **kwargs):  # type: ignore
             # Match the standard in-IDA envelope: {"error": True, "code", "message"}.
             code = args[0] if len(args) > 0 else kwargs.get("code", "UNKNOWN_ERROR")

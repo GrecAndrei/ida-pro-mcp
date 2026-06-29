@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from ida_pro_mcp.host.intelligence.core import BehaviorClassifier
 from ida_pro_mcp.host.intelligence.context import ContextAssembler
+from ida_pro_mcp.host.intelligence.core import BehaviorClassifier
 
 
 class TestBehaviorClassifier:

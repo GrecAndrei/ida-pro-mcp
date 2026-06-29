@@ -5,12 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from ..config import (
-    _bounded_int,
-    _coerce_bool,
-    _parse_str_list,
     _COMPACT_DETAIL_LIST_KEYS,
     _COMPACT_DROP,
     _COMPACT_META_KEYS,
+    _bounded_int,
+    _coerce_bool,
+    _parse_str_list,
 )
 from ..errors import is_error_result
 

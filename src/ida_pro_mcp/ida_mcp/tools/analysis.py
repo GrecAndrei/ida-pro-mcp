@@ -3,16 +3,18 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
-import ida_loader
-import ida_ida
+import contextlib
 import hashlib
 import json
 import os
 import tempfile
 import time
 
+import ida_ida
+import ida_loader
+
 try:
-    from ida_pro_mcp.services import infer_binary_arch_profile
+    pass
 except Exception:
     _infer_arch = None  # type: ignore
 
@@ -169,10 +171,7 @@ def analysis(
                 if key not in mapping or mapping[key] is None:
                     continue
                 try:
-                    if isinstance(val, str):
-                        cast_val = int(val, 0)
-                    else:
-                        cast_val = int(val)
+                    cast_val = int(val, 0) if isinstance(val, str) else int(val)
                 except (TypeError, ValueError):
                     return make_error(
                         MCPError.INVALID_ARGS,
@@ -252,10 +251,8 @@ def analysis(
             except Exception:
                 inf = None
             prev = ""
-            try:
+            with contextlib.suppress(Exception):
                 prev = getattr(inf, "procname", "") if inf else ""
-            except Exception:
-                pass
             if prev == processor:
                 return {
                     "ok": True,
@@ -342,10 +339,8 @@ def analysis(
             applied = {}
             warnings_list = []
             prev = ""
-            try:
+            with contextlib.suppress(Exception):
                 prev = getattr(inf, "procname", "") if inf else ""
-            except Exception:
-                pass
             if processor:
                 proc_flags = flags if flags is not None else getattr(
                     idaapi, "SETPROC_LOADER_NON_FATAL", idaapi.SETPROC_LOADER
@@ -408,10 +403,8 @@ def analysis(
                     if not (be or le):
                         return make_error(MCPError.INVALID_ARGS, "endian must be le|be|little|big")
                     current_be = None
-                    try:
+                    with contextlib.suppress(Exception):
                         current_be = ida_ida.inf_is_be() if hasattr(ida_ida, "inf_is_be") else None
-                    except Exception:
-                        pass
                     if current_be is not None and current_be == be:
                         applied["endian"] = {"value": "be" if be else "le", "note": "already set"}
                     else:
@@ -554,7 +547,6 @@ def _bootstrap_raw_entry_points(start_ea: int, end_ea: int) -> dict:
     Sets Thumb mode and uses ida_ua.create_insn for IDA 9.x compatibility.
     """
     seeded = 0
-    ptr_size = 4
     scan_size = min(max(0, end_ea - start_ea), 0x800)
     if scan_size < 8:
         return {"seeded_entries": 0}
@@ -595,9 +587,7 @@ def _bootstrap_raw_entry_points(start_ea: int, end_ea: int) -> dict:
                 created = idc.create_insn(ea)
             if created == 0:
                 continue
-            if ida_funcs.add_func(ea):
-                seeded += 1
-            elif ida_funcs.add_func(ea, min(ea + 256, end_ea)):
+            if ida_funcs.add_func(ea) or ida_funcs.add_func(ea, min(ea + 256, end_ea)):
                 seeded += 1
         except Exception:
             continue

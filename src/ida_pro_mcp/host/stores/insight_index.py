@@ -16,11 +16,12 @@ under the context budget.
 No LLM dependencies. Standard library only.
 """
 
+import contextlib
 import json
 import os
-import time
 import threading
-from collections import defaultdict, OrderedDict
+import time
+from collections import OrderedDict, defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
 # Canonical behavior tags for reverse engineering functions
@@ -268,7 +269,7 @@ class InsightIndex:
         with self._lock:
             payload = {
                 "func_map": self._func_map,
-                "tag_map": {k: v for k, v in self._tag_map.items()},
+                "tag_map": dict(self._tag_map.items()),
                 "saved_at": time.time(),
             }
         tmp = target + ".tmp"
@@ -277,10 +278,8 @@ class InsightIndex:
                 json.dump(payload, f, indent=2)
             os.replace(tmp, target)
         except Exception:
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(tmp)
-            except OSError:
-                pass
 
     def _load(self) -> None:
         """Deserialize index from JSON."""
@@ -288,7 +287,7 @@ class InsightIndex:
         if not path or not os.path.exists(path):
             return
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 payload = json.load(f)
             func_map = payload.get("func_map", {})
             tag_map = payload.get("tag_map", {})

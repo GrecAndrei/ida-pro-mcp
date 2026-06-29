@@ -13,11 +13,21 @@ except ImportError:
     from support.semantic_matching import semantic_score  # type: ignore[import-not-found]
 
 from .core import (
-    clip_text, paginate_records, build_response, resolve_target,
-    iter_segments, iter_code, xref_count_limited,
-    _FIND_INSTRUCTION_CAP, _FIND_INSTRUCTION_LIMIT_MULTIPLIER,
-    SCORE_SUBSTRING, get_cached_imports, get_cached_strings, SearchTimeout,
-    CALL_XREF_TYPES, safe_generate_disasm_line,
+    _FIND_INSTRUCTION_CAP,
+    _FIND_INSTRUCTION_LIMIT_MULTIPLIER,
+    CALL_XREF_TYPES,
+    SCORE_SUBSTRING,
+    SearchTimeout,
+    build_response,
+    clip_text,
+    get_cached_imports,
+    get_cached_strings,
+    iter_code,
+    iter_segments,
+    paginate_records,
+    resolve_target,
+    safe_generate_disasm_line,
+    xref_count_limited,
 )
 
 

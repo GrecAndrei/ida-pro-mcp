@@ -11,14 +11,25 @@ except ImportError:
 # typing.re (Python 3.12+) which is a deprecated proxy that lacks
 # re.compile().
 import re as _stdlib_re
+
 re = _stdlib_re
 
 from .core import (
-    clip_text, paginate_records, build_response, iter_segments, _cache_get, _cache_set, _cache_key, _SEARCH_CACHE,
-    get_cached_constant_db, get_cached_imports, get_cached_strings,
-    _get_db_fingerprint, SearchTimeout, safe_generate_disasm_line,
+    _SEARCH_CACHE,
+    SearchTimeout,
+    _cache_get,
+    _cache_key,
+    _cache_set,
+    _get_db_fingerprint,
+    build_response,
+    clip_text,
+    get_cached_constant_db,
+    get_cached_imports,
+    get_cached_strings,
+    iter_segments,
+    paginate_records,
+    safe_generate_disasm_line,
 )
-
 
 _DECOMPILED_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
 _DECOMPILED_STOPWORDS = frozenset({
@@ -626,7 +637,7 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
 
 def _sql_filterable_keys() -> set:
     """Return set of constraint keys that can be filtered at the SQL level."""
-    from ...support.hybrid_search import SQL_FILTERABLE_COLUMNS, JUNCTION_TABLES, LEGACY_RANGE_PREFIXES
+    from ...support.hybrid_search import JUNCTION_TABLES, LEGACY_RANGE_PREFIXES, SQL_FILTERABLE_COLUMNS
     keys = set(SQL_FILTERABLE_COLUMNS.keys())
     keys.update(JUNCTION_TABLES.keys())
     keys.update(LEGACY_RANGE_PREFIXES.keys())
@@ -636,7 +647,7 @@ def _sql_filterable_keys() -> set:
 
 def _split_constraints(constraints: dict) -> tuple[dict, dict]:
     """Split constraints into SQL-filterable and schema-only portions.
-    
+
     SQL-filterable constraints go to the schemaboot DB pre-filter.
     Schema-only constraints (behavior_tags, dangerous_apis, etc.)
     require per-function schema induction.
@@ -664,14 +675,14 @@ def _schemaboot_db_path() -> str | None:
             primary = idc.get_idb_path() + ".schemaboot.db"
         except Exception:
             pass
-            
+
     if not primary:
         return None
-        
+
     import os
     if os.path.exists(primary):
         return primary
-        
+
     import hashlib
     try:
         from ida_pro_mcp.services import CACHE_DIR
@@ -693,7 +704,7 @@ def _schemaboot_db_path() -> str | None:
     fallback = os.path.join(CACHE_DIR, "fallback_indexes", f"{h}.schemaboot.db")
     if os.path.exists(fallback):
         return fallback
-        
+
     return primary
 
 
@@ -701,7 +712,7 @@ def _sql_pre_filter_functions(
     sql_constraints: dict,
 ) -> tuple[list[int] | None, dict]:
     """Use HybridSearch to pre-filter function candidates via SQL.
-    
+
     Returns:
         (candidate_eas, info_dict)
         candidate_eas is None if DB unavailable or no filterable constraints
@@ -738,23 +749,21 @@ def _verify_sql_coverage(
     sql_info: dict,
 ) -> bool:
     """Check if SQL candidates cover all constraints.
-    
+
     If SQL returned None (DB not available), we return False so caller
     falls through to full iteration.
     If SQL returned empty list, we return True (no results to process).
     """
-    if sql_candidates is None:
-        return False
-    return True
+    return sql_candidates is not None
 
 
 def search_structured(constraints, pattern, range_start, range_end, include_context, offset, limit, include_items, timeout_ms=0):
     """Schema-based structured semantic retrieval with SQL pre-filtering.
-    
+
     Two-phase hybrid approach:
       Phase 0: SQL pre-filter via schemaboot DB (if filterable constraints exist)
       Phase 1: Schema induction + behavior matching on the reduced candidate pool
-    
+
     Falls back to full iteration if schemaboot DB is unavailable.
     Supports both legacy constraints (min_size, apis, has_loops) and
     operator format ({"size": (">=", 100), "name": ("~", "pattern")}).
@@ -945,10 +954,7 @@ def search_structured(constraints, pattern, range_start, range_end, include_cont
             pre_filter_note = "SQL pre-filter: no candidates matched"
 
     # Build function iterator: SQL candidates or full scan
-    if sql_used and sql_candidates is not None:
-        func_iter = sql_candidates
-    else:
-        func_iter = idautils.Functions()
+    func_iter = sql_candidates if sql_used and sql_candidates is not None else idautils.Functions()
 
     # ---- Phase 1: Schema induction + matching on candidate pool ----
     for func_ea in func_iter:

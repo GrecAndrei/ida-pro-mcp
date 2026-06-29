@@ -345,7 +345,7 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
                         dp[j] = min(dp[j] + 1, dp[j - 1] + 1, prev + cost)
                         prev = cur
                 edit_distance = dp[-1]
-            similarity = round(100.0 * (1.0 - (edit_distance / max(1, max(len(raw_a), len(raw_b))))), 2)
+            similarity = round(100.0 * (1.0 - (edit_distance / max(1, len(raw_a), len(raw_b)))), 2)
             return {"ok": True, "addr1": hex(ea1), "addr2": hex(ea2), "size": cmp_size, "diff_count": len(diffs), "diffs": diffs[:256], "edit_distance": int(edit_distance), "similarity_pct": similarity, "size_capped": cmp_size == max_cmp}
 
         elif action in ("pointers", "find_pointers"):

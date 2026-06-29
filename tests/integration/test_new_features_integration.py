@@ -16,6 +16,7 @@ Requires: licensed IDA Pro configured via IDA_DIR or IDADIR
 """
 
 import pytest
+
 from tests._isolated_repo_loader import load_test_module
 
 _integration_conftest = load_test_module(

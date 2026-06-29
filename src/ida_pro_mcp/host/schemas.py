@@ -7,17 +7,19 @@ import re
 from typing import Any, Dict, List
 
 from .schemas_data import (
-    ADVERTISED_TOOLS,
-    BASE_TOOL_ALIASES,
-    TOOLS,
-    TOOL_ACTIONS as _TOOL_ACTIONS_DATA,
-    TOOL_ARG_SCHEMAS,
-    TOOL_DESCRIPTIONS,
     _ACTION_ALIAS_HINTS,
     _COMMON_ARG_ALIAS_HINTS,
     _EXTRA_TOOL_ALIASES,
     _TOOL_ACTION_EXTRA_ALIASES,
     _TOOL_SPECIFIC_ARG_ALIASES,
+    ADVERTISED_TOOLS,
+    BASE_TOOL_ALIASES,
+    TOOL_ARG_SCHEMAS,
+    TOOL_DESCRIPTIONS,
+    TOOLS,
+)
+from .schemas_data import (
+    TOOL_ACTIONS as _TOOL_ACTIONS_DATA,
 )
 
 TOOL_ACTIONS = _TOOL_ACTIONS_DATA
@@ -720,9 +722,7 @@ def sanitize_schema_for_vertex(schema: Any) -> Any:
                     preferred = t
                     break
             out[k] = preferred or "string"
-        elif k == "required" and isinstance(v, list) and len(v) == 0:
-            continue
-        elif k == "properties" and isinstance(v, dict) and len(v) == 0:
+        elif k == "required" and isinstance(v, list) and len(v) == 0 or k == "properties" and isinstance(v, dict) and len(v) == 0:
             continue
         elif isinstance(v, dict):
             out[k] = sanitize_schema_for_vertex(v)

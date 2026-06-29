@@ -11,7 +11,6 @@ except ImportError:
 
 import hashlib
 
-
 # ============================================================================
 # 7. MODIFY - Rename, comments, set type
 # ============================================================================
@@ -269,7 +268,6 @@ def modify(
         elif action == "patch_asm":
             # Assemble and patch - supports multiple instructions separated by semicolons
             import ida_idp
-            import ida_ua
 
             # Split multiple instructions by semicolons
             instructions = [inst.strip() for inst in value.split(";") if inst.strip()]
@@ -287,7 +285,7 @@ def modify(
                     success, code = res
                 else:
                     # Fallback for older IDA versions
-                    success = res is not None and res != b'' and res != 0
+                    success = res is not None and res not in {b'', 0}
                     code = res
 
                 if not success or not code:
@@ -341,15 +339,18 @@ def _trigger_rename_propagation(func_ea: int, new_name: str) -> None:
             from ida_pro_mcp.services import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature
         except ImportError:
             try:
-                from host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature# type: ignore
+                from host.intelligence.core import (  # type: ignore
+                    BgeCodeEmbedder,
+                    FunctionEmbeddingIndex,
+                    _extract_signature,
+                )
             except ImportError:
                 return
         try:
-            import idc as _idc
-            import idautils as _idautils
-            import idaapi as _idaapi
-            import ida_hexrays as _ida_hexrays
             import ida_funcs as _ida_funcs
+            import ida_hexrays as _ida_hexrays
+            import idautils as _idautils
+            import idc as _idc
 
             idb_path = _idc.get_idb_path() or ""
             if not idb_path:

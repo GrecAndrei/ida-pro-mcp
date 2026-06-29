@@ -28,34 +28,34 @@ def data(
     Query, filter, and list data items: functions, globals, strings, imports.
     Pattern filters use shared auto-detect matching (regex/glob/substring/semantic).
     All list actions return compact text (one item per line) to minimize LLM context usage.
-    
+
     ACTIONS:
-    
+
     functions - List all defined functions with optional filtering
-        Params: query (name filter), offset, count, include_prototype, include_xrefs, 
+        Params: query (name filter), offset, count, include_prototype, include_xrefs,
                 min_size, named_only
         Returns: {functions: "addr  size  name [prototype] [xrefs]\\n...", total, offset, count}
-        
+
     globals - List global names/variables (non-functions)
         Params: query (name filter), offset, count, include_xrefs
         Returns: {globals: "addr  name  size=N [type] [xrefs=N]\\n...", total, offset, count}
-        
+
     strings - List string literals with filtering
         Params: query (content filter), offset, count, include_xrefs
         Returns: {strings: "addr  [xrefs=N]  string_value\\n...", total, offset, count}
-        
+
     imports - List imported modules and functions
         Params: query (filter by module or function name), offset, count
         Returns: {imports: "addr  module  name\\n...", total, offset, count}
-        
+
     exports - List exported entry points
         Params: offset, count
         Returns: {exports: "addr  name  size\\n...", total, offset, count}
-        
+
         lookup - Resolve a name to address or address to name (exact first, then pattern fallback)
         Params: query (name or address)
         Returns: {addr, name, type, size} or {matches, count} when no exact symbol is found
-        
+
     bulk_query - Execute multiple queries in one call
         Params: items (list of {kind, query, offset, count, include_prototype, include_xrefs, min_size, named_only})
         Returns: {results: [{index, kind, result}]}
@@ -70,48 +70,48 @@ def data(
     try:
         if action == "functions":
             func_lines = []
-            
+
             total = 0
             _matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
             for ea in idautils.Functions():
                 name = ida_funcs.get_func_name(ea)
-                
+
                 # Filter by named_only
                 if named_only and name.startswith("sub_"):
                     continue
-                    
+
                 fn = idaapi.get_func(ea)
                 if not fn:
                     continue
-                    
+
                 # Filter by min_size
                 func_size = fn.end_ea - fn.start_ea
                 if min_size and func_size < min_size:
                     continue
-                    
+
                 if not _matcher or _matcher(name):
                     total += 1
-                    
+
                     # Collect paginated results
                     if total > offset and (count == 0 or len(func_lines) < count):
                         # Always include capped xref count (hot functions can have thousands)
-                        xrefs_to = sum(1 for _ in zip(idautils.XrefsTo(ea), range(999)))
+                        xrefs_to = sum(1 for _ in zip(idautils.XrefsTo(ea), range(999), strict=False))
                         parts = [hex_ea(ea), hex_size(func_size), f"xrefs={xrefs_to}", name]
-                        
+
                         if include_prototype:
                             parts.append(get_prototype(fn))
-                            
+
                         if include_xrefs:
-                            xrefs_from = sum(1 for _ in zip(idautils.XrefsFrom(ea), range(999)))
+                            xrefs_from = sum(1 for _ in zip(idautils.XrefsFrom(ea), range(999), strict=False))
                             parts.append(f"xrefs_from={xrefs_from}")
-                            
+
                         func_lines.append("  ".join(parts))
-            
+
             result = {"ok": True, "functions": "\n".join(func_lines), "total": total, "offset": offset, "count": len(func_lines)}
             if total == 0:
                 result["warning"] = "No functions found matching query."
             return result
-        
+
         elif action == "globals":
             glob_lines = []
             total = 0
@@ -121,21 +121,18 @@ def data(
                     continue
                 if idaapi.get_func(ea):
                     continue
-                if named_only and (name.startswith("unk_") or name.startswith("off_") or 
-                                   name.startswith("loc_") or name.startswith("byte_") or
-                                   name.startswith("word_") or name.startswith("dword_") or
-                                   name.startswith("qword_")):
+                if named_only and (name.startswith(("unk_", "off_", "loc_", "byte_", "word_", "dword_", "qword_"))):
                     continue
-                    
+
                 if not _matcher or _matcher(name):
                     total += 1
                     if total > offset and (count == 0 or len(glob_lines) < count):
                         parts = [hex_ea(ea), name]
-                        
+
                         # Get size
                         size = idc.get_item_size(ea)
                         parts.append(f"size={size}")
-                        
+
                         # Try to get type
                         tif = ida_typeinf.tinfo_t()
                         try:
@@ -143,14 +140,14 @@ def data(
                                 parts.append(str(tif))
                         except (TypeError, AttributeError, RuntimeError):
                             pass
-                            
+
                         if include_xrefs:
                             parts.append(f"xrefs={len(list(idautils.XrefsTo(ea)))}")
-                            
+
                         glob_lines.append("  ".join(parts))
-            
+
             return {"ok": True, "globals": "\n".join(glob_lines), "total": total, "offset": offset, "count": len(glob_lines)}
-        
+
         elif action == "strings":
             str_lines = []
             total = 0
@@ -219,7 +216,7 @@ def data(
                         if not _matcher or _matcher(content):
                             total += 1
                             if total > offset and (count == 0 or len(str_lines) < count):
-                                xref_count = sum(1 for _ in zip(idautils.XrefsTo(s.ea), range(999)))
+                                xref_count = sum(1 for _ in zip(idautils.XrefsTo(s.ea), range(999), strict=False))
                                 parts = [hex_ea(s.ea), f"xrefs={xref_count}", content[:500]]
                                 str_lines.append("  ".join(parts))
                     except Exception:
@@ -239,10 +236,7 @@ def data(
                                     content = idc.get_strlit_contents(sc.ea)
                                 if not content:
                                     continue
-                                if isinstance(content, bytes):
-                                    s = content.decode("utf-8", errors="replace")
-                                else:
-                                    s = content
+                                s = content.decode("utf-8", errors="replace") if isinstance(content, bytes) else content
                                 if len(s) < min_len:
                                     continue
 
@@ -260,27 +254,27 @@ def data(
                                 if not _matcher or _matcher(s):
                                     total += 1
                                     if total > offset and (count == 0 or len(str_lines) < count):
-                                        xref_count = sum(1 for _ in zip(idautils.XrefsTo(sc.ea), range(999)))
+                                        xref_count = sum(1 for _ in zip(idautils.XrefsTo(sc.ea), range(999), strict=False))
                                         parts = [hex_ea(sc.ea), f"xrefs={xref_count}", s[:500]]
                                         str_lines.append("  ".join(parts))
                             except Exception:
                                 continue
-            
+
             return {"ok": True, "strings": "\n".join(str_lines), "total": total, "offset": offset, "count": len(str_lines)}
-        
+
         elif action == "imports":
             import_lines = []
             total = 0
             _matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
-            
+
             for i in range(ida_nalt.get_import_module_qty()):
                 module = ida_nalt.get_import_module_name(i) or f"module_{i}"
-                
+
                 # Check module filter
                 if _matcher and not _matcher(module):
                     # Still check individual function names
                     pass
-                
+
                 # Collect imports
                 mod_imports = []
                 def cb(ea, name, ordinal):
@@ -289,25 +283,25 @@ def data(
                         mod_imports.append((ea, imp_name, module, ordinal))
                     return True
                 ida_nalt.enum_import_names(i, cb)
-                
+
                 for ea, imp_name, mod, ordinal in mod_imports:
                     total += 1
                     if total > offset and (count == 0 or len(import_lines) < count):
                         import_lines.append(f"{hex_ea(ea)}  {mod}  {imp_name}")
-                        
+
             return {"ok": True, "imports": "\n".join(import_lines), "total": total, "offset": offset, "count": len(import_lines)}
-        
+
         elif action == "exports":
             export_lines = []
             total = 0
             _matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
-            
+
             # Resolve API
             _qty = getattr(idaapi, "get_entry_qty", None)
             _ordinal = getattr(idaapi, "get_entry_ordinal", None)
             _entry = getattr(idaapi, "get_entry", None)
             _name = getattr(idaapi, "get_entry_name", None)
-            
+
             if not _qty:
                 try:
                     import ida_entry
@@ -331,18 +325,18 @@ def data(
                 ordinal = _ordinal(i)
                 ea = _entry(ordinal)
                 name = _name(ordinal)
-                
-                if query and not _matcher((name or "")):
+
+                if query and not _matcher(name or ""):
                     continue
-                    
+
                 total += 1
                 if total > offset and (count == 0 or len(export_lines) < count):
                     func = idaapi.get_func(ea)
                     size_str = hex_size(func.end_ea - func.start_ea) if func else ""
                     export_lines.append(f"{hex_ea(ea)}  {name}  {size_str}")
-                    
+
             return {"ok": True, "exports": "\n".join(export_lines), "total": total, "offset": offset, "count": len(export_lines)}
-        
+
         elif action == "lookup":
             if not query:
                 return make_error(MCPError.INVALID_ARGS, "query required for lookup")
@@ -431,7 +425,7 @@ def data(
             # Build capability matrix from imports and function API usage
             matrix = {cat: 0 for cat in API_CATEGORIES}
             risk_indicators = []
-            
+
             # Analyze imports
             imports = {}
             def imp_cb(ea, name, ordinal):
@@ -441,7 +435,7 @@ def data(
             nimps = ida_nalt.get_import_module_qty()
             for i in range(nimps):
                 ida_nalt.enum_import_names(i, imp_cb)
-            
+
             for name in imports:
                 low = name.lower()
                 for cat, apis in API_CATEGORIES.items():
@@ -452,7 +446,7 @@ def data(
                 # Risk indicators
                 if low in DANGEROUS_APIS or any(low.endswith(s) for s in ("A", "W", "@plt", "@PLT") if low[:-len(s)] in DANGEROUS_APIS):
                     risk_indicators.append(name)
-            
+
             # Analyze functions for API calls (sample first 200)
             func_count = 0
             for func_ea in idautils.Functions():
@@ -474,11 +468,11 @@ def data(
                                         break
                             if low in DANGEROUS_APIS:
                                 risk_indicators.append(callee)
-            
+
             # Sort categories by count
             sorted_cats = sorted(matrix.items(), key=lambda x: -x[1])
             top_categories = [f"{cat}:{count}" for cat, count in sorted_cats if count > 0][:10]
-            
+
             # Determine binary type from adaptive category prominence.
             binary_type = "unknown"
             vals = sorted(float(v or 0) for v in matrix.values())
@@ -506,7 +500,7 @@ def data(
                 binary_type = "crypto_tool"
             elif process >= gate:
                 binary_type = "system_tool"
-            
+
             return {
                 "ok": True,
                 "matrix": {k: v for k, v in sorted_cats if v > 0},
@@ -621,7 +615,7 @@ def data(
                 "total_strings_scanned": total_scanned,
                 "count": len(top_entries),
             }
-        
+
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:

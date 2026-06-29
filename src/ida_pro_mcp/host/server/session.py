@@ -13,29 +13,29 @@ Creative features integrated directly into existing session tool:
   - Metrics Dashboard (progress tracking for LLM)
   - Auto-predictive tool suggestions (inline context injection)
 """
-import os
-import json
-import threading
-import shutil
-import re
-import glob
-import uuid
 import copy
+import glob
+import json
+import os
+import re
+import shutil
+import threading
+import uuid
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+from ..analysis.patterns import compile_smart_pattern
 from ..config import (
-    log_rpc,
-    _normalize_session_id,
-    _parse_iso_datetime,
+    MAX_NAME_LEN,
+    MAX_NOTE_LEN,
     MAX_SESSION_ID_RETRIES,
     MAX_SNAPSHOTS_PER_SESSION,
     MAX_TAG_LEN,
     MAX_TAGS_PER_SESSION,
-    MAX_NOTE_LEN,
-    MAX_NAME_LEN,
+    _normalize_session_id,
+    _parse_iso_datetime,
+    log_rpc,
 )
-from ..analysis.patterns import compile_smart_pattern
 from ..errors import MCPError, is_error_result, make_error
 
 # ============================================================================
@@ -187,9 +187,10 @@ class Session:
 # ============================================================================
 
 
-from .session_skills import SessionSkillsMixin
-from ..intelligence.helpers import parse_str_list
+import contextlib
 
+from ..intelligence.helpers import parse_str_list
+from .session_skills import SessionSkillsMixin
 
 
 class SessionManager(SessionSkillsMixin):
@@ -281,7 +282,7 @@ class SessionManager(SessionSkillsMixin):
             conn = sqlite3.connect(self._global_skills_db)
             cur = conn.cursor()
             cur.execute("""
-                UPDATE global_skills 
+                UPDATE global_skills
                 SET usage_count_total = usage_count_total + 1, last_used = ?
                 WHERE skill_id = ?
             """, (datetime.now().isoformat(), skill_id))
@@ -353,16 +354,14 @@ class SessionManager(SessionSkillsMixin):
             os.replace(tmp, path)
         except Exception as e:
             log_rpc(f"Failed to save session metadata: {e}")
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(tmp)
-            except OSError:
-                pass
 
     def _load_sessions(self):
         pattern = os.path.join(self.session_dir, "SID_*_metadata.json")
         for meta_path in glob.glob(pattern):
             try:
-                with open(meta_path, "r", encoding="utf-8") as f:
+                with open(meta_path, encoding="utf-8") as f:
                     data = json.load(f)
                     session = Session.from_dict(data)
                     if not _normalize_session_id(session.session_id):
@@ -604,10 +603,7 @@ class SessionManager(SessionSkillsMixin):
                 sessions = [s for s in sessions if matcher(f"{s.session_id} {s.binary_path} {s.idb_path}")]
             sessions.sort(key=lambda s: s.last_accessed, reverse=True)
             total = len(sessions)
-            if limit > 0:
-                sessions = sessions[offset:offset + limit]
-            else:
-                sessions = sessions[offset:]
+            sessions = sessions[offset:offset + limit] if limit > 0 else sessions[offset:]
             return {"sessions": [s.to_dict() for s in sessions], "total": total, "count": len(sessions), "offset": offset, "limit": limit}
 
     def cleanup_stale(self, max_age_days: int = 30) -> List[str]:
@@ -855,10 +851,8 @@ class SessionManager(SessionSkillsMixin):
                     if key not in ("session_id", "_snapshot_id", "_snapshot_time", "_message"):
                         if hasattr(session, key):
                             if key in ("created_at", "last_accessed") and isinstance(val, str):
-                                try:
+                                with contextlib.suppress(Exception):
                                     val = datetime.fromisoformat(val)
-                                except Exception:
-                                    pass
                             setattr(session, key, val)
                 self._save_metadata(session)
             # Restore skills
@@ -874,7 +868,7 @@ class SessionManager(SessionSkillsMixin):
     def list_snapshots(self, sid: str) -> dict:
         with self._lock:
             return {"ok": True, "snapshots": [
-                {k: v for k, v in s.items() if k != "skills" and k != "notebook"}
+                {k: v for k, v in s.items() if k not in {"skills", "notebook"}}
                 for s in self._load_snapshots(sid)
             ]}
 
@@ -885,7 +879,7 @@ class SessionManager(SessionSkillsMixin):
         path = self._get_snapshots_path(sid)
         if os.path.exists(path):
             try:
-                with open(path, "r", encoding="utf-8") as f:
+                with open(path, encoding="utf-8") as f:
                     return json.load(f)
             except Exception:
                 pass
@@ -914,7 +908,7 @@ class SessionManager(SessionSkillsMixin):
         path = self._get_notebook_path(sid)
         if os.path.exists(path):
             try:
-                with open(path, "r", encoding="utf-8") as f:
+                with open(path, encoding="utf-8") as f:
                     return f.read()
             except Exception:
                 pass
@@ -1061,7 +1055,7 @@ class BookmarkManager:
         path = self._get_path(sid)
         if os.path.exists(path):
             try:
-                with open(path, "r", encoding="utf-8") as f:
+                with open(path, encoding="utf-8") as f:
                     return json.load(f)
             except Exception as e:
                 log_rpc(f"Failed to load bookmarks for {sid}: {e}")
@@ -1123,10 +1117,8 @@ class BookmarkManager:
                 tag_matcher = compile_smart_pattern(f_tag, case_sensitive=False)
                 filtered = [b for b in filtered if any(tag_matcher(t) for t in b.get("tags", []))]
             if f_pri:
-                try:
+                with contextlib.suppress(ValueError, TypeError):
                     filtered = [b for b in filtered if b.get("priority", 0) >= int(f_pri)]
-                except (ValueError, TypeError):
-                    pass
             if f_query:
                 q_matcher = compile_smart_pattern(f_query, case_sensitive=False)
                 filtered = [b for b in filtered if q_matcher(b.get("name", "")) or q_matcher(b.get("notes", "")) or q_matcher(b.get("addr", ""))]
@@ -1171,7 +1163,7 @@ class BookmarkManager:
                                 val = parse_str_list(val)
                             bookmarks[i][key] = val
                     res = self.save(sid, bookmarks)
-                    return res if is_error_result(res) else {"ok": True, "bookmark": bookmarks[i]}
+                    return res if is_error_result(res) else {"ok": True, "bookmark": bm}
             return make_error(MCPError.BOOKMARK_NOT_FOUND, "Bookmark not found")
 
     def clear(self, sid: str) -> dict:

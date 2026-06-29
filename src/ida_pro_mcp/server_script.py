@@ -3,12 +3,20 @@ IDA RPC Server
 Designed for stability in IDA 9.2 headless mode.
 Uses non-blocking sockets for connection handling, but tool execution remains synchronous.
 """
-import sys, os, json, socket, time, select, re, hmac
+import hmac
 import inspect
-from typing import get_args, get_origin, Literal, Annotated
+import json
+import os
+import re
+import select
+import socket
+import sys
 
 # HEARTBEAT
 import tempfile
+import time
+from typing import Annotated, Literal, get_args, get_origin
+
 ALIVE_FILE = os.path.join(os.environ.get("TEMP", tempfile.gettempdir()), "ida_mcp_heartbeat.txt")
 with open(ALIVE_FILE, "w") as f: f.write(str(time.time()))
 
@@ -17,7 +25,9 @@ def log_ev(msg):
     print(msg)
 
 try:
-    import idc, idautils, ida_segment
+    import ida_segment
+    import idautils
+    import idc
     log_ev("IDA modules imported")
 except Exception as e:
     log_ev(f"CRITICAL: {e}")
@@ -233,7 +243,7 @@ def _build_error(tool_name, message, code="INVALID_ARGS", details=None, hint=Non
 def process_single(r):
     if not isinstance(r, dict):
         return _build_error("bridge", "Invalid request format", code="INVALID_REQUEST")
-        
+
     if _SESSION_TOKEN:
         provided = str(r.get("session_token") or "")
         if not provided or not hmac.compare_digest(provided, _SESSION_TOKEN):
@@ -243,12 +253,12 @@ def process_single(r):
                 code="UNAUTHORIZED",
                 hint="Use the host-managed authenticated session runtime.",
             )
-            
+
     if r.get("type") == "ping":
         # Report the actual bound port so the host can self-heal if we had
         # to fall back to an ephemeral port (the pre-allocated one was taken).
         return {"pong": True, "port": _BOUND_PORT}
-        
+
     tool_name = r.get("tool")
     args = r.get("args", {})
     log_ev(f"Calling tool: {tool_name}")
@@ -382,15 +392,15 @@ def run_server():
             if not readable:
                 time.sleep(0.01)
                 continue
-                
+
             conn, _ = server_sock.accept()
             conn.settimeout(5.0) # 5s timeout for the actual request data
             log_ev("Connection accepted")
-            
+
             raw_len = conn.recv(4)
             if not raw_len:
                 continue
-                
+
             length = int.from_bytes(raw_len, 'big')
             if length <= 0 or length > _MAX_RPC_REQUEST_BYTES:
                 res = _build_error(
@@ -419,17 +429,14 @@ def run_server():
                 resp_json = json.dumps(res, separators=(",", ":")).encode("utf-8")
                 conn.sendall((len(resp_json)).to_bytes(4, 'big') + resp_json)
                 continue
-                
+
             req = json.loads(data.decode('utf-8'))
-            
-            if isinstance(req, list):
-                res = [process_single(r) for r in req]
-            else:
-                res = process_single(req)
-                
+
+            res = [process_single(r) for r in req] if isinstance(req, list) else process_single(req)
+
             resp_json = json.dumps(res, separators=(",", ":")).encode('utf-8')
             conn.sendall((len(resp_json)).to_bytes(4, 'big') + resp_json)
-            
+
             log_ev("Request finished")
         except socket.timeout: log_ev("Socket timeout")
         except KeyboardInterrupt: break
@@ -456,9 +463,9 @@ def _apply_pre_analysis_options():
     if os.environ.get("IDA_MCP_USE_EXISTING_IDB") == "1" and os.environ.get("IDA_MCP_FORCE_PRE_ANALYSIS_OPTS") != "1":
         return
 
-    import idaapi
     import ida_ida
     import ida_loader
+    import idaapi
 
     processor = opts.get("processor")
     bitness = opts.get("bitness")

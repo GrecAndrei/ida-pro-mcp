@@ -1,7 +1,9 @@
 import os
 import sys
 import types
+
 import pytest
+
 from tests._isolated_repo_loader import load_tool_submodule
 
 ROOT = os.path.dirname(os.path.dirname(__file__))

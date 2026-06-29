@@ -1,5 +1,6 @@
 """Test funcs:create on raw ARM binaries with proper Thumb/segment/bitness setup."""
 import os
+
 import pytest
 
 AIC_FW = os.environ.get(

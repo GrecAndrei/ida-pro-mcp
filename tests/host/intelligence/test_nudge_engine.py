@@ -8,11 +8,11 @@ from unittest.mock import MagicMock, patch
 
 from ida_pro_mcp.host.intelligence.entropy import FunctionEntropyCalculator
 from ida_pro_mcp.services import (
+    SessionManager,
     ensure_tables,
     get_db_path,
     upsert_functions_batch,
 )
-from ida_pro_mcp.services import SessionManager
 
 
 class TestNudgeEngine(unittest.TestCase):
@@ -81,7 +81,7 @@ class TestNudgeEngine(unittest.TestCase):
         mock_embedder.embed.return_value = dummy_vec
         mock_embedder_class.return_value = mock_embedder
         mock_embedder_class.cosine.side_effect = lambda a, b: sum(
-            x * y for x, y in zip(a, b)
+            x * y for x, y in zip(a, b, strict=False)
         )
 
         # Insert some mock functions to structural database
@@ -177,7 +177,7 @@ class TestNudgeEngine(unittest.TestCase):
         mock_embedder.embed.return_value = dummy_vec
         mock_embedder_class.return_value = mock_embedder
         mock_embedder_class.cosine.side_effect = lambda a, b: sum(
-            x * y for x, y in zip(a, b)
+            x * y for x, y in zip(a, b, strict=False)
         )
 
         # Insert structural features to DB

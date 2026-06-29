@@ -33,6 +33,7 @@ except ImportError:
     except ImportError:
         from ida_pro_mcp.ida_mcp.tools.string_ops import shannon_entropy as _shannon_entropy
 
+import contextlib
 import re
 from collections import Counter
 from typing import Any
@@ -57,11 +58,11 @@ def _parse_register_offset(op_str: str) -> Optional[tuple[str, int]]:
     base_reg = None
     offset = 0
     current_sign = 1
-    
+
     valid_regs = {'rax', 'rcx', 'rdx', 'rbx', 'rsp', 'rbp', 'rsi', 'rdi',
                   'r8', 'r9', 'r10', 'r11', 'r12', 'r13', 'r14', 'r15',
                   'eax', 'ecx', 'edx', 'ebx', 'esp', 'ebp', 'esi', 'edi'}
-                  
+
     for tok in tokens:
         tok = tok.strip()
         if not tok:
@@ -69,36 +70,30 @@ def _parse_register_offset(op_str: str) -> Optional[tuple[str, int]]:
         if tok == '+':
             current_sign = 1
             continue
-        elif tok == '-':
+        if tok == '-':
             current_sign = -1
             continue
-            
+
         if tok in valid_regs:
             if base_reg is None:
                 base_reg = tok
         else:
             val = 0
             if tok.endswith('h'):
-                try:
+                with contextlib.suppress(ValueError):
                     val = int(tok[:-1], 16)
-                except ValueError:
-                    pass
             elif tok.startswith('0x'):
-                try:
+                with contextlib.suppress(ValueError):
                     val = int(tok, 16)
-                except ValueError:
-                    pass
             else:
                 try:
                     val = int(tok, 10)
                 except ValueError:
-                    try:
+                    with contextlib.suppress(ValueError):
                         val = int(tok, 16)
-                    except ValueError:
-                        pass
             if val != 0:
                 offset += current_sign * val
-                
+
     if base_reg:
         return base_reg, offset
     return None
@@ -157,7 +152,7 @@ def _extract_function_attributes(func_ea: int) -> dict[str, Any]:
             # API calls via xrefs
             if mnem_l in ("call", "jmp"):
                 for xref in idautils.XrefsFrom(ea, 0):
-                    if xref.type == idaapi.fl_CN or xref.type == idaapi.fl_CF:
+                    if xref.type in (idaapi.fl_CN, idaapi.fl_CF):
                         tgt_name = idc.get_name(xref.to)
                         if tgt_name:
                             apis.add(tgt_name)
@@ -184,7 +179,7 @@ def _extract_function_attributes(func_ea: int) -> dict[str, Any]:
                         val = op.value
                         if val in _CRYPTO_CONSTS and (val, ea) not in crypto_constants:
                             crypto_constants.append((val, ea))
-                
+
                 # Process register offset accesses for struct reconstruction
                 for i in range(idaapi.UA_MAXOP):
                     op_type = idc.get_operand_type(ea, i)
@@ -199,7 +194,7 @@ def _extract_function_attributes(func_ea: int) -> dict[str, Any]:
                                 size = dtype_sizes.get(dtype, 4)
                                 type_guesses = {1: "char", 2: "short", 4: "int", 8: "void*"}
                                 t_guess = type_guesses.get(size, "int")
-                                
+
                                 struct_accesses.setdefault(base_reg, {})
                                 struct_accesses[base_reg].setdefault(offset, []).append(t_guess)
 
@@ -582,8 +577,8 @@ def intelligence(
         except ImportError:
             try:
                 from host.intelligence.core import (  # type: ignore
-                    BgeCodeEmbedder,
                     BehaviorClassifier,
+                    BgeCodeEmbedder,
                     FunctionEmbeddingIndex,
                 )
             except ImportError:
@@ -1014,18 +1009,26 @@ def intelligence(
 
             try:
                 from ida_pro_mcp.services import (
-                    get_db_path, ensure_tables, upsert_functions_batch,
-                    execute_host_query, write_insight_index, add_global_facts,
-                    _detect_global_facts
+                    _detect_global_facts,
+                    add_global_facts,
+                    ensure_tables,
+                    execute_host_query,
+                    get_db_path,
+                    upsert_functions_batch,
+                    write_insight_index,
                 )
             except ImportError:
                 _src_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
                 if _src_dir not in sys.path:
                     sys.path.insert(0, _src_dir)
                 from ida_pro_mcp.services import (
-                    get_db_path, ensure_tables, upsert_functions_batch,
-                    execute_host_query, write_insight_index, add_global_facts,
-                    _detect_global_facts
+                    _detect_global_facts,
+                    add_global_facts,
+                    ensure_tables,
+                    execute_host_query,
+                    get_db_path,
+                    upsert_functions_batch,
+                    write_insight_index,
                 )
 
             db_path = get_db_path(idb_path)
@@ -1155,7 +1158,7 @@ def intelligence(
                         conn.close()
                         return {"error": True, "message": f"Function {addr} not in index"}
                     cols = [d[0] for d in cursor.description]
-                    result = dict(zip(cols, row))
+                    result = dict(zip(cols, row, strict=False))
                     include_apis = bool(kwargs.get("include_apis", False))
                     include_strings = bool(kwargs.get("include_strings", False))
                     if include_apis:

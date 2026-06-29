@@ -23,7 +23,6 @@ import os
 import threading
 from typing import Dict, Optional, Tuple
 
-
 # Silent action rewrites for tools LLMs commonly get wrong. These are
 # deterministic and well-tested; the rule-based ones below are gated by
 # the IDA_MCP_ENABLE_REROUTE_RULES env var (default on) so the static map

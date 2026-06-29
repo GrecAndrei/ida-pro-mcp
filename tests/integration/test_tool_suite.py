@@ -8,7 +8,6 @@ import time
 from typing import Any, Optional
 
 import pytest
-
 from conftest import ida_is_available
 
 AIC_FW = os.environ.get(
@@ -317,7 +316,7 @@ def test_response_routing(mcp_client):
     ]
     responses = [mcp_client.call_tool(tool, **kwargs) for tool, kwargs in calls]
 
-    for (tool, kwargs), response in zip(calls, responses):
+    for (tool, kwargs), response in zip(calls, responses, strict=False):
         parsed = _check_invariants(response, f"routing:{tool}:{kwargs.get('action','')}")
         payload = json.dumps(parsed)
         action = kwargs.get("action", "")
@@ -392,9 +391,9 @@ def test_firmware_suite(mcp_client):
     if function_count_after == 0:
         import warnings
         warnings.warn(
-            f"firmware bootstrap returned function_count_after=0 — likely caused by "
-            f"idaapi.auto_wait() crashing IDA in socket server context. "
-            f"Fix: replace auto_wait calls in firmware_view._fwb_run_vector_bootstrap with non-blocking checks."
+            "firmware bootstrap returned function_count_after=0 — likely caused by "
+            "idaapi.auto_wait() crashing IDA in socket server context. "
+            "Fix: replace auto_wait calls in firmware_view._fwb_run_vector_bootstrap with non-blocking checks."
         )
 
     mcp_client.call_tool("session", action="create", binary_path=TEST_BINARY)

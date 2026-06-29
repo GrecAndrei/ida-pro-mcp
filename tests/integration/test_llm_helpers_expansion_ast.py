@@ -8,7 +8,6 @@ import ast
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 LLM_HELPERS_PATH = ROOT / "src" / "ida_pro_mcp" / "ida_mcp" / "tools" / "llm_helpers.py"
 HOST_PATH = ROOT / "src" / "ida_pro_mcp" / "host" / "schemas.py"

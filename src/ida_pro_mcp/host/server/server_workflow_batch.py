@@ -121,7 +121,7 @@ class ServerWorkflowBatchMixin:
                 if is_error_result(res) and not continue_on_error:
                     break
                 continue
-            elif not name:
+            if not name:
                 res = make_error(
                     MCPError.INVALID_ARGS,
                     f"Call at index {idx} missing name field",

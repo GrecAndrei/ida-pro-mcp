@@ -19,7 +19,6 @@ from ..config import (
 from ..errors import MCPError, make_error
 from ..schemas import TOOL_ACTIONS, TOOL_ARG_SCHEMAS, TOOL_DESCRIPTIONS, TOOLS
 
-
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -194,7 +193,7 @@ class ServerWikiMixin:
                     full_path = os.path.join(root, filename)
                     try:
                         with open(
-                            full_path, "r", encoding="utf-8", errors="ignore"
+                            full_path, encoding="utf-8", errors="ignore"
                         ) as f:
                             text = f.read()
                     except OSError:
@@ -647,7 +646,7 @@ class ServerWikiMixin:
         )
         fuzzy = bool(args.get("fuzzy", True))
         strict_topic = bool(args.get("strict_topic", False))
-        include_related = bool(args.get("include_related", True if verbose else False))
+        include_related = bool(args.get("include_related", bool(verbose)))
 
         if action == "list_topics":
             if topics:

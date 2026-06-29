@@ -10,40 +10,60 @@ This eliminates ~30 lines of boilerplate per tool file.
 """
 
 import io
-import sys
 import os
-from typing import Annotated, Optional, Literal, Union, Any
+import sys
+from typing import Annotated, Any, Literal, Optional, Union
+
+import ida_bytes
+import ida_frame
+import ida_funcs
+import ida_hexrays
+import ida_kernwin
+import ida_lines
+import ida_nalt
+import ida_name
+import ida_segment
+import ida_typeinf
 
 # IDA SDK imports
 import idaapi
 import idautils
 import idc
-import ida_name
-import ida_bytes
-import ida_hexrays
-import ida_typeinf
-import ida_nalt
-import ida_segment
-import ida_funcs
-import ida_kernwin
-import ida_frame
-import ida_lines
 
 # Infrastructure discovery - supports both package and standalone modes
 try:
     # Package mode
-    from ida_mcp.rpc import tool, unsafe
-    from ida_mcp.sync import idaread, idawrite, IDAError
-    from ida_mcp.utils import (
-        parse_address, normalize_list_input, normalize_dict_list,
-        get_function, get_prototype, get_image_size, looks_like_address,
-        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size,
-        smart_match, compile_smart_pattern, resolve_symbol,
-    )
     from ida_mcp.error_handling import (
-        MCPError, make_error, handle_error, ERROR_HINTS,
-        validate_addr, validate_range, check_debugger, validate_path_safe,
-        require_arg, require_one_of, validate_action, validate_count
+        ERROR_HINTS,
+        MCPError,
+        check_debugger,
+        handle_error,
+        make_error,
+        require_arg,
+        require_one_of,
+        validate_action,
+        validate_addr,
+        validate_count,
+        validate_path_safe,
+        validate_range,
+    )
+    from ida_mcp.rpc import tool, unsafe
+    from ida_mcp.sync import IDAError, idaread, idawrite
+    from ida_mcp.utils import (
+        compile_smart_pattern,
+        get_function,
+        get_image_size,
+        get_prototype,
+        get_stack_frame_variables_internal,
+        get_type_by_name,
+        hex_ea,
+        hex_size,
+        looks_like_address,
+        normalize_dict_list,
+        normalize_list_input,
+        parse_address,
+        resolve_symbol,
+        smart_match,
     )
 except (ImportError, ValueError):
     # Standalone IDA mode
@@ -52,56 +72,119 @@ except (ImportError, ValueError):
     if _mcp_root not in sys.path:
         sys.path.insert(0, _mcp_root)
 
-    from rpc import tool, unsafe  # type: ignore[import-not-found]
-    from sync import idaread, idawrite, IDAError  # type: ignore[import-not-found]
-    from utils import (  # type: ignore[import-not-found]
-        parse_address, normalize_list_input, normalize_dict_list,
-        get_function, get_prototype, get_image_size, looks_like_address,
-        get_stack_frame_variables_internal, get_type_by_name, hex_ea, hex_size,
-        smart_match, compile_smart_pattern, resolve_symbol,
-    )
     from error_handling import (  # type: ignore[import-not-found]
-        MCPError, make_error, handle_error, ERROR_HINTS,
-        validate_addr, validate_range, check_debugger, validate_path_safe,
-        require_arg, require_one_of, validate_action, validate_count
+        ERROR_HINTS,
+        MCPError,
+        check_debugger,
+        handle_error,
+        make_error,
+        require_arg,
+        require_one_of,
+        validate_action,
+        validate_addr,
+        validate_count,
+        validate_path_safe,
+        validate_range,
+    )
+    from rpc import tool, unsafe  # type: ignore[import-not-found]
+    from sync import IDAError, idaread, idawrite  # type: ignore[import-not-found]
+    from utils import (  # type: ignore[import-not-found]
+        compile_smart_pattern,
+        get_function,
+        get_image_size,
+        get_prototype,
+        get_stack_frame_variables_internal,
+        get_type_by_name,
+        hex_ea,
+        hex_size,
+        looks_like_address,
+        normalize_dict_list,
+        normalize_list_input,
+        parse_address,
+        resolve_symbol,
+        smart_match,
     )
 
 # Centralized API categories (deduplication)
 try:
     from ..support._api_categories import (
-        API_CATEGORIES, API_TO_CATEGORY, DANGEROUS_APIS,
-        TAG_CATEGORIES, API_TO_TAG, MAGIC_CONSTANTS,
+        API_CATEGORIES,
+        API_TO_CATEGORY,
+        API_TO_TAG,
+        DANGEROUS_APIS,
+        MAGIC_CONSTANTS,
+        TAG_CATEGORIES,
     )
 except ImportError:
     from support._api_categories import (  # type: ignore[import-not-found]
-        API_CATEGORIES, API_TO_CATEGORY, DANGEROUS_APIS,
-        TAG_CATEGORIES, API_TO_TAG, MAGIC_CONSTANTS,
+        API_CATEGORIES,
+        API_TO_CATEGORY,
+        API_TO_TAG,
+        DANGEROUS_APIS,
+        MAGIC_CONSTANTS,
+        TAG_CATEGORIES,
     )
 
 # Multi-architecture helpers
 try:
     from ..support.arch_utils import (  # type: ignore[import-not-found]
-        get_arch, is_x86_family, is_arm_family, is_mips_family,
-        is_ppc_family, is_riscv_family, is_sparc_family,
-        is_return_mnemonic, is_call_mnemonic, is_syscall_mnemonic,
-        get_return_register, get_stack_pointer_names, get_callee_saved_registers,
-        get_prologue_pattern, get_epilogue_pattern, get_tail_call_mnemonics,
-        RETURN_MNEMONICS, UNCONDITIONAL_JUMP_MNEMONICS, CALL_MNEMONICS,
-        CONDITIONAL_BRANCH_MNEMONICS, TERMINATOR_MNEMONICS, SYSCALL_MNEMONICS,
-        MOV_MNEMONICS, COMPARISON_MNEMONICS, XOR_MNEMONICS,
-        ARITHMETIC_MNEMONICS, INTERESTING_INSTRUCTIONS,
+        ARITHMETIC_MNEMONICS,
+        CALL_MNEMONICS,
+        COMPARISON_MNEMONICS,
+        CONDITIONAL_BRANCH_MNEMONICS,
+        INTERESTING_INSTRUCTIONS,
+        MOV_MNEMONICS,
+        RETURN_MNEMONICS,
+        SYSCALL_MNEMONICS,
+        TERMINATOR_MNEMONICS,
+        UNCONDITIONAL_JUMP_MNEMONICS,
+        XOR_MNEMONICS,
+        get_arch,
+        get_callee_saved_registers,
+        get_epilogue_pattern,
+        get_prologue_pattern,
+        get_return_register,
+        get_stack_pointer_names,
+        get_tail_call_mnemonics,
+        is_arm_family,
+        is_call_mnemonic,
+        is_mips_family,
+        is_ppc_family,
+        is_return_mnemonic,
+        is_riscv_family,
+        is_sparc_family,
+        is_syscall_mnemonic,
+        is_x86_family,
     )
 except ImportError:
     from support.arch_utils import (  # type: ignore[import-not-found]
-        get_arch, is_x86_family, is_arm_family, is_mips_family,
-        is_ppc_family, is_riscv_family, is_sparc_family,
-        is_return_mnemonic, is_call_mnemonic, is_syscall_mnemonic,
-        get_return_register, get_stack_pointer_names, get_callee_saved_registers,
-        get_prologue_pattern, get_epilogue_pattern, get_tail_call_mnemonics,
-        RETURN_MNEMONICS, UNCONDITIONAL_JUMP_MNEMONICS, CALL_MNEMONICS,
-        CONDITIONAL_BRANCH_MNEMONICS, TERMINATOR_MNEMONICS, SYSCALL_MNEMONICS,
-        MOV_MNEMONICS, COMPARISON_MNEMONICS, XOR_MNEMONICS,
-        ARITHMETIC_MNEMONICS, INTERESTING_INSTRUCTIONS,
+        ARITHMETIC_MNEMONICS,
+        CALL_MNEMONICS,
+        COMPARISON_MNEMONICS,
+        CONDITIONAL_BRANCH_MNEMONICS,
+        INTERESTING_INSTRUCTIONS,
+        MOV_MNEMONICS,
+        RETURN_MNEMONICS,
+        SYSCALL_MNEMONICS,
+        TERMINATOR_MNEMONICS,
+        UNCONDITIONAL_JUMP_MNEMONICS,
+        XOR_MNEMONICS,
+        get_arch,
+        get_callee_saved_registers,
+        get_epilogue_pattern,
+        get_prologue_pattern,
+        get_return_register,
+        get_stack_pointer_names,
+        get_tail_call_mnemonics,
+        is_arm_family,
+        is_call_mnemonic,
+        is_mips_family,
+        is_ppc_family,
+        is_return_mnemonic,
+        is_riscv_family,
+        is_sparc_family,
+        is_syscall_mnemonic,
+        is_x86_family,
     )
 
 

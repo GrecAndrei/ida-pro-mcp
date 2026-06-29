@@ -12,12 +12,11 @@ Usage:
     python scripts/generate_schemas.py --apply         # patch schemas.py
     python scripts/generate_schemas.py --apply --desc descriptions.json
 """
-import ast
+import argparse
 import json
 import os
 import re
 import sys
-import argparse
 from typing import Dict, List
 
 TOOLS_DIR = os.path.join(os.path.dirname(__file__), "..", "src",

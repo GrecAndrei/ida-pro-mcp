@@ -12,6 +12,7 @@ import time
 import urllib.request
 import zipfile
 from pathlib import Path
+
 from .common import InstallReport
 
 _log = logging.getLogger(__name__)
@@ -346,9 +347,7 @@ def find_llama_server_bin(install_root: Path) -> str:
             return False
         if sys.platform == "win32":
             low = str(p).lower()
-            if not (low.endswith(".exe") or low.endswith(".bat") or low.endswith(".cmd")):
-                return False
-            return True
+            return low.endswith((".exe", ".bat", ".cmd"))
         return os.access(str(p), os.X_OK)
 
     binary_names = ("llama-server.exe", "llama-server") if sys.platform == "win32" else (
@@ -423,7 +422,7 @@ def _score_release_asset(name: str, os_hints: list[str], arch_hints: list[str]) 
     score = 0
     if "llama" in low and "bin" in low:
         score += 3
-    if low.endswith(".zip") or low.endswith(".tar.gz") or low.endswith(".tgz"):
+    if low.endswith((".zip", ".tar.gz", ".tgz")):
         score += 2
     if any(h in low for h in os_hints):
         score += 4
@@ -695,10 +694,7 @@ def setup_runtime_environment(
     run_checked([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
 
     resolved_source = choose_runtime_source(runtime_source, source_root)
-    if resolved_source == "local":
-        package_spec = str(source_root)
-    else:
-        package_spec = "ida-pro-mcp"
+    package_spec = str(source_root) if resolved_source == "local" else "ida-pro-mcp"
     run_checked([str(python_exe), "-m", "pip", "install", package_spec])
     run_checked(
         [

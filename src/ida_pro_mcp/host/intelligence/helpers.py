@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import difflib
 import math
 import struct
 import time
-from typing import Any, Callable, Dict, List, Sequence
+from collections.abc import Callable, Sequence
+from typing import Any, Dict, List
+
 
 def _q(vals: List[float], q: float, default: float = 0.0) -> float:
     if not vals:
@@ -30,7 +33,7 @@ def dot_product(a: Sequence[float], b: Sequence[float]) -> float:
         import numpy as np
         return float(np.dot(a, b))
     except ImportError:
-        return sum(x * y for x, y in zip(a, b))
+        return sum(x * y for x, y in zip(a, b, strict=False))
 
 
 def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
@@ -155,19 +158,15 @@ def compact_policy_blob(sess_blob: Dict[str, Any]) -> Dict[str, Any]:
         for key in ("total", "accepted", "kept"):
             k = f"{src}.{key}"
             if k in rm:
-                try:
+                with contextlib.suppress(Exception):
                     keep_rm[k] = int(rm[k])
-                except Exception:
-                    pass
     out["retrieval_metrics"] = keep_rm
 
     keep_ff: Dict[str, int] = {}
     for k in ("suggested", "followed", "successful", "failed"):
         if k in ff:
-            try:
+            with contextlib.suppress(Exception):
                 keep_ff[k] = int(ff[k])
-            except Exception:
-                pass
     action_totals: Dict[str, int] = {}
     for k, v in ff.items():
         if not str(k).startswith("action."):
@@ -176,10 +175,8 @@ def compact_policy_blob(sess_blob: Dict[str, Any]) -> Dict[str, Any]:
         if len(parts) != 3:
             continue
         ta = parts[1]
-        try:
+        with contextlib.suppress(Exception):
             action_totals[ta] = action_totals.get(ta, 0) + int(v)
-        except Exception:
-            pass
     top_actions = sorted(action_totals.items(), key=lambda kv: kv[1], reverse=True)[:24]
     top_set = {ta for ta, _ in top_actions}
     for k, v in ff.items():
@@ -190,10 +187,8 @@ def compact_policy_blob(sess_blob: Dict[str, Any]) -> Dict[str, Any]:
             continue
         ta = parts[1]
         if ta in top_set:
-            try:
+            with contextlib.suppress(Exception):
                 keep_ff[k] = int(v)
-            except Exception:
-                pass
     out["focus_feedback"] = keep_ff
 
     try:
@@ -225,7 +220,7 @@ def prune_policy_store(data: Dict[str, Any], max_sessions: int = 24) -> Dict[str
     return {
         "schema_version": 2,
         "updated_at": time.time(),
-        "sessions": {sid: blob for sid, blob in ordered},
+        "sessions": dict(ordered),
     }
 
 

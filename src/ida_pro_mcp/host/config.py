@@ -2,14 +2,15 @@
 """
 Host configuration: runtime directories, environment parsing, logging.
 """
+import contextlib
 import os
+import re
+import shutil
 import sys
 import tempfile
-import shutil
 import uuid
-import re
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 from typing import Any, List, Optional
 
 
@@ -138,13 +139,11 @@ def _rotate_bridge_log_if_needed() -> None:
                 tail = b""
         with open(BRIDGE_LOG, "wb") as f:
             f.write(tail)
-        try:
+        with contextlib.suppress(Exception):
             print(
                 f"[config] bridge.log rotated: {size} -> {len(tail)} bytes",
                 file=sys.stderr,
             )
-        except Exception:
-            pass
     except Exception:
         pass
 

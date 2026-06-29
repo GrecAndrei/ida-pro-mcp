@@ -4,11 +4,11 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
-import time
-from collections import OrderedDict
+import contextlib
 import json
 import os
-
+import time
+from collections import OrderedDict
 
 # ============================================================================
 # DEBUG - Debugger operations
@@ -471,10 +471,8 @@ def debug(
             if ida_dbg.del_bpt(ea):
                 _BP_CONDITIONS.pop(int(ea), None)
                 if not _BP_CONDITIONS and _BP_HOOK is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         _BP_HOOK.unhook()
-                    except Exception:
-                        pass
                     _BP_HOOK = None
                 return {"ok": True, "addr": hex(ea)}
             return make_error(MCPError.IDA_ERROR, "Failed to delete breakpoint")
@@ -669,7 +667,7 @@ def debug(
                 visited_fp.add(cur_fp)
                 next_fp = _read_dbg_ptr(cur_fp, ptr_size)
                 ret_ea = _read_dbg_ptr(cur_fp + ptr_size, ptr_size)
-                if not isinstance(ret_ea, int) or ret_ea == 0 or ret_ea == idaapi.BADADDR:
+                if not isinstance(ret_ea, int) or ret_ea in (0, idaapi.BADADDR):
                     break
                 stack.append(
                     {
@@ -872,10 +870,8 @@ def debug(
 
         elif action == "trace_stop":
             if _TRACE_HOOK is not None:
-                try:
+                with contextlib.suppress(Exception):
                     _TRACE_HOOK.unhook()
-                except Exception:
-                    pass
                 _TRACE_HOOK = None
             fh = _TRACE_STATE.get("file")
             path = ""
@@ -900,7 +896,7 @@ def debug(
                 return make_error(MCPError.INVALID_ARGS, "limit must be > 0")
             lim = min(lim, 5000)
             try:
-                with open(output_file, "r", encoding="utf-8") as f:
+                with open(output_file, encoding="utf-8") as f:
                     lines = f.readlines()
                 rows = []
                 for ln in lines[-max(1, lim):]:

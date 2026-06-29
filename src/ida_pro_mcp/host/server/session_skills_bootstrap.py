@@ -48,7 +48,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
                 return {
                     "ok": True,
                     "initialized": False,
-                    "policies": len((b.get("policies") or {})),
+                    "policies": len(b.get("policies") or {}),
                     "message": "Bootstrap lab already exists. Use overwrite=true to reset.",
                 }
             policies = {}
@@ -80,7 +80,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
 
     def _policy_predict(self, policy: dict, features: List[float], rng: random.Random) -> float:
         weights = policy.get("weights") or [0.25, 0.25, 0.25, 0.25]
-        score = sum(w * x for w, x in zip(weights, features))
+        score = sum(w * x for w, x in zip(weights, features, strict=False))
         score += float(policy.get("bias", 0.0))
         noise = float(policy.get("noise", 0.0))
         if noise > 0.0:
@@ -438,7 +438,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
             if not session:
                 return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
             data = self._load_skills(sid)
-            rows = list((((data.get("bootstrap") or {}).get("mitigation_history") or [])))
+            rows = list((data.get("bootstrap") or {}).get("mitigation_history") or [])
             total = len(rows)
             offset = max(0, int(offset))
             limit = max(1, min(int(limit), 5000))
@@ -459,7 +459,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
             if not session:
                 return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
             data = self._load_skills(sid)
-            rows = list((((data.get("bootstrap") or {}).get("mitigation_history") or [])))
+            rows = list((data.get("bootstrap") or {}).get("mitigation_history") or [])
             if not rows:
                 return {
                     "ok": True,
@@ -578,10 +578,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
                     bounded.append(max(0.01, old[i] + delta))
 
                 s = sum(bounded)
-                if s <= 0:
-                    new_w = [0.25, 0.25, 0.25, 0.25]
-                else:
-                    new_w = [x / s for x in bounded]
+                new_w = [0.25, 0.25, 0.25, 0.25] if s <= 0 else [x / s for x in bounded]
 
                 updates.append(
                     {
@@ -717,7 +714,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
             if not session:
                 return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
             data = self._load_skills(sid)
-            rows = list((((data.get("bootstrap") or {}).get("policy_reweight_history") or [])))
+            rows = list((data.get("bootstrap") or {}).get("policy_reweight_history") or [])
             total = len(rows)
             offset = max(0, int(offset))
             limit = max(1, min(int(limit), 5000))
@@ -969,9 +966,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
                     return False
                 if t_since and t < t_since:
                     return False
-                if t_until and t > t_until:
-                    return False
-                return True
+                return not (t_until and t > t_until)
 
             snapshot_series = [
                 {
@@ -1237,7 +1232,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
             if not session:
                 return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
             data = self._load_skills(sid)
-            disputes = list(((data.get("bootstrap") or {}).get("disputes") or []))
+            disputes = list((data.get("bootstrap") or {}).get("disputes") or [])
             if status:
                 status = str(status).strip().lower()
                 disputes = [d for d in disputes if str(d.get("status", "")).lower() == status]

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import atexit
+import contextlib
 import json
 import os
 import signal
@@ -13,10 +14,10 @@ import time
 
 from ..config import (
     _RUNTIME_LEASE_RE,
-    _normalize_session_id,
     PROCESS_TERMINATION_TIMEOUT_SECONDS,
     RUNTIME_LEASE_HEARTBEAT_SECONDS,
     RUNTIME_LEASE_TTL,
+    _normalize_session_id,
     log_rpc,
 )
 
@@ -32,10 +33,8 @@ class ServerRuntimeLeasesMixin:
                     json.dump(lease, f, indent=2)
                 os.replace(tmp, path)
             except Exception:
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(tmp)
-                except OSError:
-                    pass
 
     def _write_runtime_lease(self, sid: str, runtime: dict) -> None:
             proc = runtime.get("process")
@@ -52,10 +51,8 @@ class ServerRuntimeLeasesMixin:
             self._write_runtime_lease_record(path, lease)
 
     def _remove_runtime_lease(self, sid: str) -> None:
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(self._runtime_lease_path(sid))
-            except OSError:
-                pass
 
     def _kill_stale_pid(self, pid: int) -> bool:
             """Best-effort terminate a stale PID.
@@ -163,22 +160,18 @@ class ServerRuntimeLeasesMixin:
                     continue
                 path = os.path.join(self._runtime_lease_dir, name)
                 try:
-                    with open(path, "r", encoding="utf-8") as f:
+                    with open(path, encoding="utf-8") as f:
                         lease = json.load(f)
                 except Exception:
-                    try:
+                    with contextlib.suppress(OSError):
                         os.remove(path)
-                    except OSError:
-                        pass
                     continue
                 sid = _normalize_session_id(lease.get("session_id"))
                 sid_from_name = m.group(1)
                 if not sid or sid != sid_from_name:
                     # Malformed/mismatched lease metadata: drop it and do not signal any PID.
-                    try:
+                    with contextlib.suppress(OSError):
                         os.remove(path)
-                    except OSError:
-                        pass
                     continue
                 try:
                     pid = int(lease.get("pid") or 0)
@@ -200,20 +193,16 @@ class ServerRuntimeLeasesMixin:
                 if not expired:
                     continue
                 if pid <= 0:
-                    try:
+                    with contextlib.suppress(OSError):
                         os.remove(path)
-                    except OSError:
-                        pass
                     continue
                 if not self._is_expected_ida_process(pid, lease):
                     skip_count += 1
                     continue
                 killed = self._kill_stale_pid(pid)
                 if killed:
-                    try:
+                    with contextlib.suppress(OSError):
                         os.remove(path)
-                    except OSError:
-                        pass
                     removed_count += 1
                 else:
                     # Keep lease for retry, but back off immediate repeated kill attempts.
@@ -294,17 +283,13 @@ class ServerRuntimeLeasesMixin:
             self._stop_runtime_lease_heartbeat()
             # Stop all analysis engines
             for sid in list(getattr(self, "_analysis_engines", {}).keys()):
-                try:
+                with contextlib.suppress(Exception):
                     self._stop_analysis_engine(sid)
-                except Exception:
-                    pass
             self._cleanup_all_runtimes()
             # Stop usage intelligence
             if getattr(self, "_usage_intel", None):
-                try:
+                with contextlib.suppress(Exception):
                     self._usage_intel.stop()
-                except Exception:
-                    pass
             # Persist memory tiers
             try:
                 if hasattr(self, "_insight_index"):

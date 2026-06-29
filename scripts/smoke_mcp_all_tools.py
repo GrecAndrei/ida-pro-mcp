@@ -24,10 +24,10 @@ Usage:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import select
-import shutil
 import subprocess
 import sys
 import time
@@ -159,22 +159,16 @@ class MCPClient:
 
     def stop(self) -> None:
         if self.proc:
-            try:
+            with contextlib.suppress(Exception):
                 self.proc.stdin.close()
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 self.proc.stdout.close()
-            except Exception:
-                pass
             try:
                 self.proc.terminate()
                 self.proc.wait(timeout=5)
             except Exception:
-                try:
+                with contextlib.suppress(Exception):
                     self.proc.kill()
-                except Exception:
-                    pass
             self.proc = None
 
     def _readline_timeout(self, timeout: float) -> Optional[bytes]:
@@ -400,9 +394,7 @@ def main() -> int:
             "processor": "metapc", "bitness": 64, "endian": "little",
             "_risk_ack": True,
         })
-        if err or not payload or payload.get("ok") is not True:
-            return False
-        return True
+        return not (err or not payload or payload.get("ok") is not True)
 
     try:
         cli.start()
@@ -448,7 +440,7 @@ def main() -> int:
                         addrs.append(a if str(a).startswith("0x") else hex(int(a, 16)) if isinstance(a, str) else hex(a))
         addr = addrs[0] if addrs else "0x140001000"
         addr2 = addrs[1] if len(addrs) > 1 else addr
-        print(f"=== ida-pro-mcp smoke test ===")
+        print("=== ida-pro-mcp smoke test ===")
         print(f"binary : {args_cli.binary}")
         print(f"session: {sid or '(unknown)'}  addr: {addr} / {addr2}  idb: {idb_path or '-'}")
         print()

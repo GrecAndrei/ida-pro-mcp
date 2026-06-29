@@ -5,8 +5,8 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 import os
-import ida_loader
 
+import ida_loader
 
 # ============================================================================
 # 29. HISTORY - Database Version Control and Undo Management
@@ -23,34 +23,34 @@ def history(
 ) -> dict:
     """
     Database version control: undo, redo, snapshots.
-    
+
     ACTIONS:
-    
+
     undo - Undo last operation(s)
         Params: count (number of steps)
         Returns: {undone, count}
-        
+
     redo - Redo undone operation(s)
         Params: count
         Returns: {redone, count}
-        
+
     list - List undo/redo history
         Returns: {undo_available, redo_available, history}
-        
+
     snapshot - Create a named snapshot of current state
         Params: name
         Returns: {created, name, timestamp}
-        
+
     restore - Restore from a snapshot
         Params: name
         Returns: {restored, name}
-        
+
     diff - Show what changed since last save
         Returns: {changes: [{type, addr, before, after}]}
     """
     try:
         import ida_undo
-        
+
         if action == "undo":
             undone = 0
             for _ in range(count):
@@ -60,7 +60,7 @@ def history(
                     break
 
             return {"ok": True, "undone": undone, "requested": count}
-        
+
         elif action == "redo":
             redone = 0
             for _ in range(count):
@@ -70,7 +70,7 @@ def history(
                     break
 
             return {"ok": True, "redone": redone, "requested": count}
-        
+
         elif action == "list":
             result = {
                 "ok": True,
@@ -115,7 +115,7 @@ def history(
             if not undo_stack and not redo_stack:
                 result["note"] = "No undo/redo history available. Make some edits first."
             return result
-        
+
         elif action == "snapshot":
             if not name:
                 import datetime
@@ -176,16 +176,16 @@ def history(
                 "path": snap_path,
                 "note": "To restore, close IDA and replace the current IDB with this snapshot file",
             }
-        
+
         elif action == "diff":
             # Show changes since database was opened
             # This is limited without IDA's internal change tracking
-            
+
             changes = {
                 "note": "Full diff requires IDA's internal change tracking",
                 "modified_functions": []
             }
-            
+
             # We can list functions that appear to have been renamed
             scanned_funcs = 0
             max_scan = 100000
@@ -201,10 +201,10 @@ def history(
                             "addr": hex(func_ea),
                             "name": name
                         })
-            
+
             changes["ok"] = True
             return changes
-        
+
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
 

@@ -29,16 +29,11 @@ Actions:
 
 from __future__ import annotations
 
+import contextlib
 import json
-import hashlib
-import os
-import sqlite3
-import struct
-import tempfile
 import threading
-import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 try:
     from ._common import *
@@ -49,11 +44,14 @@ except ImportError:
         pass
 
 if "tool" not in globals():
-    tool = lambda f: f  # type: ignore
+    def tool(f):
+        return f  # type: ignore
 if "idaread" not in globals():
-    idaread = lambda f: f  # type: ignore
+    def idaread(f):
+        return f  # type: ignore
 if "idawrite" not in globals():
-    idawrite = lambda f: f  # type: ignore
+    def idawrite(f):
+        return f  # type: ignore
 if "IDAError" not in globals():
     IDAError = Exception  # type: ignore
 
@@ -72,7 +70,7 @@ def _get_embedder():
         return BgeCodeEmbedder()
     except ImportError:
         try:
-            from host.intelligence.core import BgeCodeEmbedder# type: ignore
+            from host.intelligence.core import BgeCodeEmbedder  # type: ignore
             return BgeCodeEmbedder()
         except ImportError:
             return None
@@ -100,8 +98,8 @@ class _BackgroundCrawler:
     sees a popup-style prompt.
     """
 
-    _instance: Optional["_BackgroundCrawler"] = None
-    _instances_by_key: Dict[str, "_BackgroundCrawler"] = {}
+    _instance: Optional[_BackgroundCrawler] = None
+    _instances_by_key: Dict[str, _BackgroundCrawler] = {}
     _lock = threading.Lock()
 
     def __init__(self, db_path: Optional[str] = None):
@@ -116,7 +114,7 @@ class _BackgroundCrawler:
         self._notify_fn = None  # injected by server to send MCP notifications
 
     @classmethod
-    def instance(cls, db_path: Optional[str] = None) -> "_BackgroundCrawler":
+    def instance(cls, db_path: Optional[str] = None) -> _BackgroundCrawler:
         with cls._lock:
             key = str(db_path or "").strip().lower()
             if key:
@@ -207,11 +205,8 @@ class _BackgroundCrawler:
             # Bypass the @idaread/@idawrite safety wrapper because the crawler
             # runs on a background thread that cannot use execute_sync. The
             # tools it calls (agent, blackboard) already handle their own locking.
-            with bypass_sync(reason="background crawler"):
-                try:
-                    self._crawl_step()
-                except Exception:
-                    pass
+            with bypass_sync(reason="background crawler"), contextlib.suppress(Exception):
+                self._crawl_step()
 
     def _crawl_step(self) -> None:
         store = BlackboardStore(self._db_path)
@@ -223,7 +218,7 @@ class _BackgroundCrawler:
                 meta = _json.loads(str(st[0].get("content") or "{}"))
                 if isinstance(meta, dict):
                     if not self._visited and isinstance(meta.get("visited"), list):
-                        self._visited = set(str(x) for x in meta.get("visited", []))
+                        self._visited = {str(x) for x in meta.get("visited", [])}
                     if not self._work_queue and isinstance(meta.get("queue"), list):
                         self._work_queue = [str(x) for x in meta.get("queue", []) if str(x)]
                     if not self._parents and isinstance(meta.get("parents"), dict):
@@ -308,7 +303,7 @@ class _BackgroundCrawler:
                 store.write(
                     title="crawler_state",
                     content=_json.dumps({
-                        "visited": sorted(list(self._visited))[:400],
+                        "visited": sorted(self._visited)[:400],
                         "queue": self._work_queue[:50],
                         "parents": self._parents,
                     }),
@@ -350,7 +345,7 @@ class _BackgroundCrawler:
             store.write(
                 title="crawler_state",
                 content=_json.dumps({
-                    "visited": sorted(list(self._visited))[:400],
+                    "visited": sorted(self._visited)[:400],
                     "queue": self._work_queue[:50],
                     "parents": self._parents,
                 }),
@@ -364,7 +359,7 @@ class _BackgroundCrawler:
 
         # Send MCP notification for new proposals
         if self._notify_fn:
-            try:
+            with contextlib.suppress(Exception):
                 self._notify_fn({
                     "jsonrpc": "2.0",
                     "method": "notifications/message",
@@ -378,8 +373,6 @@ class _BackgroundCrawler:
                         },
                     },
                 })
-            except Exception:
-                pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -527,8 +520,9 @@ def blackboard(
         # and confidence is high enough to be worth propagating
         if addr and confidence >= 0.6 and source_type not in ("propagated", "engine_frontier"):
             try:
-                import idc as _idc_check  # noqa: F401 — only start thread if IDA is available
                 import threading as _thr
+
+                import idc as _idc_check  # noqa: F401 — only start thread if IDA is available
                 def _propagate():
                     try:
                         from ida_pro_mcp.services import FrontierEngine
@@ -799,7 +793,8 @@ def blackboard(
                     "kg_summary", "kg_systems", "kg_gaps", "kg_structs",
                     "kg_state_machines", "kg_attack_surface", "kg_peripherals"):
         try:
-            import importlib.util as _ilu, os as _os
+            import importlib.util as _ilu
+            import os as _os
             _kg_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
                                      "..", "..", "host", "knowledge_graph.py")
             _spec = _ilu.spec_from_file_location("_bb_kg", _os.path.abspath(_kg_path))

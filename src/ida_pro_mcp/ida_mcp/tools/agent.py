@@ -1,7 +1,5 @@
-import hashlib
 import json
 import os
-import time
 
 try:
     from ._common import *
@@ -9,6 +7,8 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 # Absolute imports for sub-tools to prevent IDA -S context issues
+import contextlib
+
 from ida_mcp.tools.code import code as code_tool
 from ida_mcp.tools.ctree import ctree as ctree_tool
 from ida_mcp.tools.graph import graph as graph_tool
@@ -35,24 +35,24 @@ def agent(
 ) -> dict:
     """
     High-level agent helpers for efficient binary analysis.
-    
+
     QUICK ACTIONS (fastest, use these first):
-    
+
     quick - One-shot "what is this?" for any address
         Params: addr
         Returns: {type, name, pseudocode_preview?, callers?, string?, bytes?}
         Use when: You need to understand what's at an address quickly
-        
+
     rename_suggestions - Get context to suggest better names
         Params: addr (must be a function)
         Returns: {current_name, strings_used, apis_called, callers, callees, signature}
         Use when: You want to rename a sub_XXXX function
-        
+
     batch_context - Get context for multiple addresses at once
         Params: query (comma-separated addresses like "0x401000,0x401100,0x402000")
         Returns: {items: [{addr, type, name, size?}]}
         Use when: You have a list of addresses to understand
-        
+
     similar - Find functions with similar structure/API usage
         Params: addr, max_items
         Returns: {similar_functions: [{addr, name, score, reasons, shared_apis}]}
@@ -70,30 +70,30 @@ def agent(
         Params: query (task description), items (list of attempted strategies with outcomes)
         Returns: {insights, guardrails, distilled_strategy}
         Use when: You want to learn from successes and failures to build reusable playbooks.
-    
+
     DETAILED ANALYSIS:
-    
+
     context_pack - Full function context (pseudocode, xrefs, callers, callees, strings)
         Params: addr, include_pseudocode=True for full code
         Returns: {prototype, summary, callers, xrefs_to, xrefs_from, pseudocode?}
-        
+
     analyze_function - Deep analysis (code, logic flow, CFG)
         Params: addr
         Returns: {code_analysis, logic_skeleton, control_flow_graph}
         Note: Slower, use context_pack or quick first
-        
+
     explore_address - Basic address exploration
         Params: addr
         Returns: {type, segment, bytes, disasm, xrefs counts}
-        
+
     find_references - Get all code and data refs to address
         Params: addr
         Returns: {code_refs, data_refs}
-        
+
     search_all - Universal search across names, strings, functions
         Params: query
         Returns: {functions, strings, names}
-        
+
     search_structs - Find structs by field or type name
         Params: query
         Returns: matching struct definitions
@@ -186,15 +186,15 @@ def agent(
                 "behavior_tags": behavior_tags,
                 "rename_suggestion": rename_suggestion,
             }
-        
+
         elif action == "explore_address":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = validate_addr(addr)
             if err: return err
-            
+
             func = idaapi.get_func(ea)
             seg = idaapi.getseg(ea)
-            
+
             item_sz = int(idc.get_item_size(ea) or 0)
             flags = ida_bytes.get_flags(ea)
             kind = "unknown"
@@ -226,12 +226,12 @@ def agent(
                 "xrefs_to_count": len(list(idautils.XrefsTo(ea, 0))),
                 "xrefs_from_count": len(list(idautils.XrefsFrom(ea, 0)))
             }
-        
+
         elif action == "find_references":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = validate_addr(addr)
             if err: return err
-            
+
             try: from .search import search as search_tool
             except ImportError: from ida_mcp.tools.search import search as search_tool
             code_refs = search_tool(action="code_ref", pattern=addr, limit=200)
@@ -274,7 +274,7 @@ def agent(
                 "data_refs_text": data_text,
                 "call_chain_depth3": call_chain,
             }
-        
+
         elif action == "search_all":
             if not query: return make_error(MCPError.INVALID_ARGS, "query required")
             try: from .data import data as data_tool
@@ -471,7 +471,7 @@ def agent(
             if include_pseudocode:
                 pack["pseudocode"] = pseudocode
             return pack
-        
+
         elif action == "quick":
             # One-shot "what is this?" query for any address
             if not addr:
@@ -479,22 +479,22 @@ def agent(
             ea, err = validate_addr(addr)
             if err:
                 return err
-            
+
             result = {
                 "ok": True,
                 "addr": hex(ea),
                 "name": idc.get_name(ea) or None,
             }
-            
+
             func = idaapi.get_func(ea)
             seg = idaapi.getseg(ea)
-            
+
             if func:
                 result["type"] = "function"
                 result["func_name"] = ida_funcs.get_func_name(func.start_ea)
                 result["func_start"] = hex(func.start_ea)
                 result["func_size"] = func.end_ea - func.start_ea
-                
+
                 # Quick decompile
                 if ida_hexrays.init_hexrays_plugin():
                     try:
@@ -507,7 +507,7 @@ def agent(
                                 result["pseudocode_preview"] += f"\n... ({len(lines) - 15} more lines)"
                     except Exception:
                         pass
-                
+
                 # Quick xrefs
                 callers = set()
                 _xref_count = 0
@@ -521,30 +521,30 @@ def agent(
                             callers.add(ida_funcs.get_func_name(cf.start_ea))
                 result["callers"] = list(callers)[:10]
                 result["caller_count"] = len(callers)
-                
+
             elif ida_bytes.is_strlit(ida_bytes.get_flags(ea)):
                 result["type"] = "string"
                 content = idc.get_strlit_contents(ea)
                 if content:
                     result["string"] = (content.decode("utf-8", errors="replace") if isinstance(content, bytes) else str(content))[:500]
                 result["xref_count"] = len(list(idautils.XrefsTo(ea)))
-                
+
             elif ida_bytes.is_data(ida_bytes.get_flags(ea)):
                 result["type"] = "data"
                 result["size"] = idc.get_item_size(ea)
                 result["bytes"] = ida_bytes.get_bytes(ea, min(32, idc.get_item_size(ea))).hex() if ida_bytes.get_bytes(ea, 1) else None
                 result["xref_count"] = len(list(idautils.XrefsTo(ea)))
-                
+
             else:
                 result["type"] = "unknown"
                 result["bytes"] = ida_bytes.get_bytes(ea, 16).hex() if ida_bytes.get_bytes(ea, 16) else None
                 result["disasm"] = ida_lines.tag_remove(idc.generate_disasm_line(ea, 0))
-            
+
             if seg:
                 result["segment"] = ida_segment.get_segm_name(seg)
-                
+
             return result
-        
+
         elif action == "rename_suggestions":
             # Shared rename suggestion engine (deduped with funcs.suggest_names).
             try: from .funcs import _embedding_rename_suggestions
@@ -660,21 +660,21 @@ def agent(
                         pass
 
             return context
-        
+
         elif action == "batch_context":
             # Get context for multiple addresses at once
             if not query:
                 return make_error(MCPError.INVALID_ARGS, "query required (comma-separated addresses)")
-            
+
             addresses = [a.strip() for a in query.split(",")]
             results = []
-            
+
             for addr_str in addresses[:20]:  # Limit to 20
                 ea, err = validate_addr(addr_str)
                 if err:
                     results.append({"addr": addr_str, "error": "invalid address"})
                     continue
-                
+
                 func = idaapi.get_func(ea)
                 if func:
                     results.append({
@@ -689,7 +689,7 @@ def agent(
                         "type": "data" if ida_bytes.is_data(ida_bytes.get_flags(ea)) else "code",
                         "name": idc.get_name(ea)
                     })
-            
+
             return {"ok": True, "items": results, "count": len(results)}
 
         elif action == "similar":
@@ -712,7 +712,7 @@ def agent(
                 from ida_pro_mcp.services import BgeCodeEmbedder, FunctionEmbeddingIndex
             except ImportError:
                 try:
-                    from host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex# type: ignore
+                    from host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex  # type: ignore
                 except ImportError:
                     FunctionEmbeddingIndex = None
 
@@ -829,7 +829,7 @@ def agent(
         elif action == "bridge_query":
             if not query:
                 return make_error(MCPError.INVALID_ARGS, "query required for bridge_query")
-            
+
             # Stage 1: Bridge Selection
             bridge_addr = None
             bridge_name = None
@@ -856,10 +856,10 @@ def agent(
                                 break
                         except Exception:
                             continue
-            
+
             if not bridge_addr:
                 return make_error(MCPError.NOT_FOUND, "Could not identify bridge entity for query", "Try providing addr explicitly or use a more specific query.")
-            
+
             # Stage 2: Extract entities from bridge (string refs, callees)
             bridge_strings = []
             bridge_apis = []
@@ -879,10 +879,10 @@ def agent(
                             callee = idc.get_func_name(xref.to)
                             if callee and not callee.startswith("sub_"):
                                 bridge_apis.append(callee)
-            
+
             # Stage 3: Dual-entity expansion
             candidate_pool = {}
-            
+
             # Search for functions referencing bridge strings
             for s in bridge_strings[:5]:
                 try: from .search import search as search_tool
@@ -900,7 +900,7 @@ def agent(
                                 candidate_pool[func.start_ea]["reasons"].add(f"string_ref:{s[:20]}")
                         except Exception:
                             continue
-            
+
             # Search for callers of bridge APIs
             for api in bridge_apis[:5]:
                 try: from .search import search as search_tool
@@ -918,7 +918,7 @@ def agent(
                                 candidate_pool[func.start_ea]["reasons"].add(f"api_call:{api}")
                         except Exception:
                             continue
-            
+
             # Stage 4: Rank candidates
             ranked = []
             for candidate_ea, data in candidate_pool.items():
@@ -940,10 +940,10 @@ def agent(
                     "score": data["score"],
                     "reasons": sorted(data["reasons"]),
                 })
-            
+
             ranked.sort(key=lambda x: -x["score"])
             ranked = ranked[:max_items]
-            
+
             return {
                 "ok": True,
                 "query": query,
@@ -1025,9 +1025,19 @@ def agent(
             # Uses bge-code-v1 embeddings (or TF-IDF fallback) + pure-numpy k-means.
             # Returns labeled clusters with representative functions and behavior tags.
             try:
-                from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature
+                from ida_pro_mcp.services import (
+                    BehaviorClassifier,
+                    BgeCodeEmbedder,
+                    FunctionEmbeddingIndex,
+                    _extract_signature,
+                )
             except ImportError:
-                from host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier, FunctionEmbeddingIndex, _extract_signature# type: ignore
+                from host.intelligence.core import (  # type: ignore
+                    BehaviorClassifier,
+                    BgeCodeEmbedder,
+                    FunctionEmbeddingIndex,
+                    _extract_signature,
+                )
 
             k = int(kwargs.get("k") or max_items or 12)
             func_limit = int(kwargs.get("func_limit") or 2000)
@@ -1128,13 +1138,15 @@ def agent(
             try:
                 from ida_pro_mcp.services import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature
             except ImportError:
-                from host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature# type: ignore
+                from host.intelligence.core import (  # type: ignore
+                    BgeCodeEmbedder,
+                    FunctionEmbeddingIndex,
+                    _extract_signature,
+                )
 
             idb_path = ""
-            try:
+            with contextlib.suppress(Exception):
                 idb_path = idc.get_idb_path() or ""
-            except Exception:
-                pass
             if not idb_path:
                 return make_error(MCPError.INVALID_ARGS, "No IDB path")
 

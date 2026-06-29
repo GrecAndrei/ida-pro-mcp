@@ -6,9 +6,9 @@ import math
 import sqlite3
 from typing import Any, Dict, List, Optional
 
-from .structural_index import get_db_path
-from .embeddings import FunctionEmbeddingIndex
 from .core import BgeCodeEmbedder
+from .embeddings import FunctionEmbeddingIndex
+from .structural_index import get_db_path
 
 
 class FunctionEntropyCalculator:
@@ -162,7 +162,7 @@ class FunctionEntropyCalculator:
                                 )
                         if other_similarities:
                             # Novelty is 1.0 - max similarity to other functions
-                            semantic_novelty = 1.0 - max(0.0, max(other_similarities))
+                            semantic_novelty = 1.0 - max(0.0, *other_similarities)
                         else:
                             semantic_novelty = 1.0
 

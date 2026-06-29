@@ -6,7 +6,6 @@ from ..batch_manager import BatchManager
 from ..errors import MCPError, make_error
 from ..policy import PolicyDecision, evaluate_policy
 
-
 _BACKGROUND_ACTIONS = {
     "submit": "_bg_submit",
     "status": "_bg_status",

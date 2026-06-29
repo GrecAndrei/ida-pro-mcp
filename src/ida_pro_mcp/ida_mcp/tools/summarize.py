@@ -4,8 +4,8 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+import contextlib
 import re
-
 
 # ============================================================================
 # SUMMARIZE - LLM-Friendly Binary/Function Summarization
@@ -228,10 +228,7 @@ def _get_func_strings(func_ea):
             if ida_bytes.is_strlit(flags):
                 contents = idc.get_strlit_contents(xref.to)
                 if contents:
-                    if isinstance(contents, bytes):
-                        s = contents.decode("utf-8", errors="ignore")
-                    else:
-                        s = str(contents)
+                    s = contents.decode("utf-8", errors="ignore") if isinstance(contents, bytes) else str(contents)
                     if s and s not in strings:
                         strings.append(s)
     return strings
@@ -300,11 +297,9 @@ def summarize(
             # Compiler info
             comp_info = None
             if hasattr(ida_typeinf, "get_compiler_name"):
-                try:
+                with contextlib.suppress(Exception):
                     comp_info = ida_typeinf.get_compiler_name(
                         ida_typeinf.default_compiler())
-                except Exception:
-                    pass
 
             # Count functions
             func_count = sum(1 for _ in idautils.Functions())
@@ -392,7 +387,7 @@ def summarize(
                     try:
                         from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
                     except ImportError:
-                        from host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier# type: ignore
+                        from host.intelligence.core import BehaviorClassifier, BgeCodeEmbedder  # type: ignore
                     embedder = BgeCodeEmbedder()
                     classifier = BehaviorClassifier.instance(embedder)
                     behavior_tags = classifier.classify(preview, threshold=0.35, top_k=4)
@@ -460,9 +455,7 @@ def summarize(
             sfl_r = getattr(ida_segment, "SEGPERM_READ", getattr(idaapi, "SEGPERM_READ", 0))
             sfl_w = getattr(ida_segment, "SEGPERM_WRITE", getattr(idaapi, "SEGPERM_WRITE", 0))
             sfl_x = getattr(ida_segment, "SEGPERM_EXEC", getattr(idaapi, "SEGPERM_EXEC", 0))
-            if sfl_r and (seg.perm & sfl_r):
-                perms += "R"
-            elif not sfl_r:
+            if sfl_r and (seg.perm & sfl_r) or not sfl_r:
                 perms += "R"
             if sfl_w and (seg.perm & sfl_w):
                 perms += "W"
@@ -737,7 +730,7 @@ def summarize(
         # ----------------------------------------------------------------
         elif action == "security_posture":
             all_imports = _get_all_imports()
-            import_set = set(i.lower() for i in all_imports)
+            import_set = {i.lower() for i in all_imports}
 
             # Check for dangerous APIs
             dangerous_found = {}
@@ -757,9 +750,7 @@ def summarize(
                 for f in funcs:
                     fl = f.lower()
                     # Check imports and all names
-                    if fl in import_set:
-                        found.append(f)
-                    elif idc.get_name_ea_simple(f) != idaapi.BADADDR:
+                    if fl in import_set or idc.get_name_ea_simple(f) != idaapi.BADADDR:
                         found.append(f)
                 if found:
                     mitigations_found[category] = found
@@ -901,14 +892,10 @@ def summarize(
         # ----------------------------------------------------------------
         elif action == "report":
             sections = {}
-            try:
+            with contextlib.suppress(Exception):
                 sections["binary"] = summarize(action="binary", addr=addr, max_items=max_items)
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 sections["security"] = summarize(action="security_posture", addr=addr, max_items=max_items)
-            except Exception:
-                pass
             try:
                 # Live taint scan — finds source→sink paths not yet in blackboard
                 try: from .taint import taint as _taint
@@ -957,10 +944,8 @@ def summarize(
                 }
             except Exception:
                 pass
-            try:
+            with contextlib.suppress(Exception):
                 sections["statistics"] = summarize(action="statistics", addr=addr, max_items=max_items)
-            except Exception:
-                pass
             return {
                 "ok": True,
                 "report": sections,

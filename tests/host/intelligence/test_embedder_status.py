@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import urllib.error
 from pathlib import Path
 from unittest import mock
@@ -16,10 +17,8 @@ def _reset_singleton():
 def _restore_singleton(old):
     inst = BgeCodeEmbedder._instance
     if inst is not None:
-        try:
+        with contextlib.suppress(Exception):
             inst.stop()
-        except Exception:
-            pass
     BgeCodeEmbedder._instance = old
 
 

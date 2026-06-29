@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import re
-from typing import Mapping, Optional, Sequence
-from collections import Counter
 import math
+import re
+from collections import Counter
+from collections.abc import Mapping, Sequence
+from typing import Optional
 
 try:
     from ida_pro_mcp.services import BgeCodeEmbedder
 except Exception:
     try:
-        from host.intelligence.core import BgeCodeEmbedder# type: ignore
+        from host.intelligence.core import BgeCodeEmbedder  # type: ignore
     except Exception:
         BgeCodeEmbedder = None  # type: ignore
 

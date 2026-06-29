@@ -26,9 +26,9 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 from .core import (
-    resolve_target, CALL_XREF_TYPES,
+    CALL_XREF_TYPES,
+    resolve_target,
 )
-
 
 # ============================================================================
 # Set arithmetic on function addresses (the "address algebra")
@@ -195,16 +195,7 @@ def _prim_size(pattern: str) -> set[int]:
                 continue
             size = func.end_ea - func.start_ea
             for op, val1, val2 in size_rules:
-                if op == ">" and size > val1:
-                    out.add(int(ea))
-                    break
-                elif op == "<" and size < val1:
-                    out.add(int(ea))
-                    break
-                elif val2 is not None and val1 <= size <= val2:
-                    out.add(int(ea))
-                    break
-                elif op in ("", "=") and val2 is None and size == val1:
+                if op == ">" and size > val1 or op == "<" and size < val1 or val2 is not None and val1 <= size <= val2 or op in ("", "=") and val2 is None and size == val1:
                     out.add(int(ea))
                     break
         except Exception:
@@ -215,7 +206,9 @@ def _prim_size(pattern: str) -> set[int]:
 def _prim_args(pattern: str) -> set[int]:
     """Functions with matching argument count constraint (e.g., '3', '3+')."""
     import re as re_mod
-    import ida_typeinf, ida_nalt
+
+    import ida_nalt
+    import ida_typeinf
     m_args = re_mod.search(r"(\d+)\s*(\+)?", pattern)
     if not m_args:
         return set()
@@ -229,9 +222,7 @@ def _prim_args(pattern: str) -> set[int]:
                 func_data = ida_typeinf.func_type_data_t()
                 if tif.get_func_details(func_data):
                     actual_args = func_data.size()
-                    if plus and actual_args >= arg_count:
-                        out.add(int(ea))
-                    elif not plus and actual_args == arg_count:
+                    if plus and actual_args >= arg_count or not plus and actual_args == arg_count:
                         out.add(int(ea))
         except Exception:
             continue
@@ -330,13 +321,12 @@ def _tokenize_bool(expr: str) -> list[str]:
                 tokens.append("LITERAL:" + val)
                 i += m.end()
                 continue
-            else:
-                j = expr.find('"', i + 1)
-                if j == -1:
-                    j = n
-                tokens.append("LITERAL:" + expr[i + 1:j])
-                i = j + 1
-                continue
+            j = expr.find('"', i + 1)
+            if j == -1:
+                j = n
+            tokens.append("LITERAL:" + expr[i + 1:j])
+            i = j + 1
+            continue
         m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\s*:\s*("(?:[^"\\]|\\.)*"|[^\s()]+)', expr[i:])
         if m:
             key = m.group(1).lower()
@@ -919,14 +909,8 @@ def _fingerprint_similarity(fp1, fp2) -> float:
         return 0.0
     imports1, bb1, size1, cats1 = fp1
     imports2, bb2, size2, cats2 = fp2
-    if imports1 and imports2:
-        j = len(imports1 & imports2) / len(imports1 | imports2)
-    else:
-        j = 0.0
-    if cats1 and cats2:
-        c = len(cats1 & cats2) / len(cats1 | cats2)
-    else:
-        c = 0.0
+    j = len(imports1 & imports2) / len(imports1 | imports2) if imports1 and imports2 else 0.0
+    c = len(cats1 & cats2) / len(cats1 | cats2) if cats1 and cats2 else 0.0
     bb_dist = abs(bb1 - bb2) / 3.0
     size_dist = abs(size1 - size2) / 3.0
     bb_sim = max(0.0, 1.0 - bb_dist)

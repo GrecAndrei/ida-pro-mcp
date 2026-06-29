@@ -5,8 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, BehaviorClassifier
-
+from ida_pro_mcp.host.intelligence.core import BehaviorClassifier, BgeCodeEmbedder
 
 FIX_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "semantic"
 

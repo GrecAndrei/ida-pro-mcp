@@ -4,8 +4,6 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
-import ida_ida
-
 
 # ============================================================================
 # 32. IMPORTS_DEEP - Deep Import Analysis
@@ -24,26 +22,26 @@ def imports_deep(
 ) -> dict:
     """
     Deep import analysis with thunk resolution and delay import detection.
-    
+
     ACTIONS:
-    
+
     thunks - Resolve import thunks to actual API addresses
         Params: query (optional string pattern filter for DLL or function name)
         Returns: {thunks: [{thunk_addr, target, name, dll}]}
-        
+
     delay - List delay-loaded imports
         Returns: {delay_imports: [{dll, functions: [...]}]}
-        
+
     forwarded - Detect forwarded exports in imported DLLs
         Returns: {forwarded: [{from_dll, to_dll, name}]}
-        
+
     ordinal - Resolve ordinal imports to named symbols
         Params: query (optional DLL name filter)
         Returns: {ordinal_imports: [{dll, ordinal, resolved_name}]}
-        
+
     api_sets - Resolve Windows API Set redirections (api-ms-*)
         Returns: {api_sets: [{virtual_dll, actual_dll}]}
-        
+
     resolve - Resolve import at specific address or list all imports
         Params: addr (optional - if omitted, lists first 100 imports)
         Returns: {addr, dll, name, type} OR {resolved: [...]}
@@ -52,7 +50,7 @@ def imports_deep(
         query_matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
         if action == "thunks":
             thunk_lines = []
-            
+
             # Find IAT/thunk sections
             for seg_ea in idautils.Segments():
                 seg_name = idc.get_segm_name(seg_ea)
@@ -60,32 +58,32 @@ def imports_deep(
                     seg = ida_segment.getseg(seg_ea)
                     if not seg:
                         continue
-                    
+
                     ea = seg.start_ea
                     while ea < seg.end_ea:
                         is_64 = _inf_bitness() == 64
                         target = idc.get_qword(ea) if is_64 else idc.get_wide_dword(ea)
                         name = idc.get_name(ea)
-                        
+
                         if name and target:
                             if query_matcher and not query_matcher(name):
                                 ea += 8 if is_64 else 4
                                 continue
 
                             thunk_lines.append(f"{hex(ea)}  -> {hex(target)}  {name}")
-                        
+
                         ea += 8 if is_64 else 4
-                        
+
                         if count != 0 and len(thunk_lines) >= offset + count:
                             break
 
             total = len(thunk_lines)
             page = thunk_lines[offset:offset + count] if count != 0 else thunk_lines[offset:]
             return {"ok": True, "thunks": "\n".join(page), "total": total, "offset": offset, "count": len(page)}
-        
+
         elif action == "delay":
             delay_imports = {}
-            
+
             # Look for delay import directory
             for seg_ea in idautils.Segments():
                 seg_name = idc.get_segm_name(seg_ea)
@@ -110,7 +108,7 @@ def imports_deep(
                             ea = idc.next_head(ea, seg.end_ea)
                             if ea == idaapi.BADADDR:
                                 break
-            
+
             result_lines = []
             for dll, funcs in delay_imports.items():
                 result_lines.append(f"[{dll}]")
@@ -118,10 +116,10 @@ def imports_deep(
                     result_lines.append(f"  {f}")
             page = result_lines[offset:offset + count] if count != 0 else result_lines[offset:]
             return {"ok": True, "delay_imports": "\n".join(page), "total": len(result_lines), "offset": offset, "count": len(page)}
-        
+
         elif action == "forwarded":
             fwd_lines = []
-            
+
             _FWD_LIMIT = offset + count if count != 0 else 50000
             def imp_cb(ea, name, ordinal):
                 if len(fwd_lines) >= _FWD_LIMIT:
@@ -131,19 +129,19 @@ def imports_deep(
                     if len(parts) == 2:
                         fwd_lines.append(f"{hex(ea)}  {name}  -> {parts[1]}")
                 return True
-            
+
             nimps = ida_nalt.get_import_module_qty()
             for i in range(nimps):
                 mod_name = ida_nalt.get_import_module_name(i)
                 if mod_name:
                     ida_nalt.enum_import_names(i, imp_cb)
-            
+
             page = fwd_lines[offset:offset + count] if count != 0 else fwd_lines[offset:]
             return {"ok": True, "forwarded": "\n".join(page), "total": len(fwd_lines), "offset": offset, "count": len(page), "note": "Limited detection - full analysis requires DLL parsing"}
-        
+
         elif action == "ordinal":
             ord_lines = []
-            
+
             _ORD_LIMIT = offset + count if count != 0 else 50000
             def imp_cb(ea, name, ordinal):
                 if len(ord_lines) >= _ORD_LIMIT:
@@ -151,20 +149,20 @@ def imports_deep(
                 if ordinal and ordinal > 0:
                     ord_lines.append(f"{hex(ea)}  ord={ordinal}  {name or f'Ordinal_{ordinal}'}")
                 return True
-            
+
             nimps = ida_nalt.get_import_module_qty()
             for i in range(nimps):
                 mod_name = ida_nalt.get_import_module_name(i)
                 if query_matcher and not query_matcher(mod_name or ""):
                     continue
                 ida_nalt.enum_import_names(i, imp_cb)
-            
+
             page = ord_lines[offset:offset + count] if count != 0 else ord_lines[offset:]
             return {"ok": True, "ordinal_imports": "\n".join(page), "total": len(ord_lines), "offset": offset, "count": len(page)}
-        
+
         elif action == "api_sets":
             set_lines = []
-            
+
             nimps = ida_nalt.get_import_module_qty()
             for i in range(nimps):
                 mod_name = ida_nalt.get_import_module_name(i)
@@ -174,12 +172,12 @@ def imports_deep(
                         actual = "kernelbase.dll"
                     elif 'crt' in mod_name.lower():
                         actual = "ucrtbase.dll"
-                    
+
                     set_lines.append(f"{mod_name}  -> {actual}")
-            
+
             page = set_lines[offset:offset + count] if count != 0 else set_lines[offset:]
             return {"ok": True, "api_sets": "\n".join(page), "total": len(set_lines), "offset": offset, "count": len(page)}
-        
+
         elif action == "resolve":
             if not addr:
                 # Perform batch resolution of all imports
@@ -187,7 +185,7 @@ def imports_deep(
                 nimps = ida_nalt.get_import_module_qty()
                 for i in range(nimps):
                     mod_name = ida_nalt.get_import_module_name(i)
-                    
+
                     _RES_LIMIT = offset + count if count != 0 else 10000
                     def collect_cb(ea, name, ordinal):
                         if len(resolve_lines) >= _RES_LIMIT:
@@ -199,7 +197,7 @@ def imports_deep(
                             return True
                         resolve_lines.append(f"{hex(ea)}  {mod_name}  {resolved_name}")
                         return True
-                        
+
                     ida_nalt.enum_import_names(i, collect_cb)
                 page = resolve_lines[offset:offset + count] if count != 0 else resolve_lines[offset:]
                 return {"ok": True, "resolved": "\n".join(page), "total": len(resolve_lines), "offset": offset, "count": len(page)}
@@ -207,25 +205,25 @@ def imports_deep(
             ea, err = validate_addr(addr)
             if err: return err
             name = idc.get_name(ea)
-            
+
             # Check what module this belongs to
             module = None
             nimps = ida_nalt.get_import_module_qty()
             for i in range(nimps):
                 mod_name = ida_nalt.get_import_module_name(i)
                 found = [False]
-                
+
                 def check_cb(imp_ea, imp_name, ordinal):
                     if imp_ea == ea:
                         found[0] = True
                         return False
                     return True
-                
+
                 ida_nalt.enum_import_names(i, check_cb)
                 if found[0]:
                     module = mod_name
                     break
-            
+
             return {
                 "ok": True,
                 "addr": hex(ea),

@@ -311,7 +311,7 @@ def coverage(
             addr_set = set()
             parse_errors = 0
             saw_drcov_magic = False
-            with open(path_value, "r", encoding="utf-8", errors="ignore") as f:
+            with open(path_value, encoding="utf-8", errors="ignore") as f:
                 for idx, line in enumerate(f):
                     t = line.strip()
                     if not t or t.startswith("#"):
@@ -458,7 +458,7 @@ def coverage(
                 return make_error(MCPError.FILE_NOT_FOUND, f"File not found: {path}")
 
             addresses_list = []
-            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            with open(path, encoding="utf-8", errors="ignore") as f:
                 for line in f:
                     t = line.strip()
                     if t and not t.startswith("#"):

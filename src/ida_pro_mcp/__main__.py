@@ -1,4 +1,5 @@
 import sys
+
 from ida_pro_mcp.host.server.server import main
 
 if __name__ == "__main__":

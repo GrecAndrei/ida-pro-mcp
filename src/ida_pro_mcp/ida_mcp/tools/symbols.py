@@ -20,7 +20,7 @@ def symbols(
 ) -> dict:
     """
     Load and manage debug symbols (PDB, DWARF, COFF).
-    
+
     Actions:
     - load_pdb: Load a Windows PDB file (auto-detects if path is None).
     - load_dwarf: Trigger DWARF info parsing for ELF binaries.
@@ -43,13 +43,13 @@ def symbols(
             if ida_loader.load_and_run_plugin("pdb", 0):
                 return {"ok": True, "loaded": True, "path": path or "auto-detected"}
             return make_error(MCPError.IDA_ERROR, "PDB loading failed or no PDB available")
-        
+
         elif action == "load_dwarf":
             import ida_loader
             if ida_loader.load_and_run_plugin("dwarf", 0):
                 return {"ok": True, "loaded": True}
             return {"ok": True, "note": "DWARF processing handled by IDA during analysis"}
-        
+
         elif action == "status":
             named_funcs = 0
             _STATUS_FUNC_LIMIT = 100000
@@ -59,19 +59,19 @@ def symbols(
                     named_funcs += 1
                     if named_funcs >= _STATUS_FUNC_LIMIT:
                         break
-            
+
             til = ida_typeinf.get_idati()
             # Use get_ordinal_qty/get_ordinal_count for efficiency
             qty_func = getattr(ida_typeinf, 'get_ordinal_qty', None) or getattr(ida_typeinf, 'get_ordinal_count', None)
             type_count = qty_func(til) if til and qty_func else 0
-            
+
             return {
                 "ok": True,
                 "has_debug_info": named_funcs > 10,
                 "named_functions": named_funcs,
                 "type_count": type_count
             }
-        
+
         elif action == "apply":
             if not addr:
                 ea = idaapi.get_screen_ea()
@@ -104,12 +104,12 @@ def symbols(
 
             return {"ok": True, "applied": False, "addr": hex(ea),
                     "note": "No type info found; use types(action='set_prototype') to set one"}
-        
+
         elif action == "export":
             if not path: return make_error(MCPError.INVALID_ARGS, "path required")
             path, err = validate_path_safe(path)
             if err: return err
-            
+
             export_data = {"functions": [], "types": []}
             _EXPORT_FUNC_LIMIT = 50000
             for ea in idautils.Functions():
@@ -121,12 +121,12 @@ def symbols(
                     export_data["functions"].append(item)
                     if len(export_data["functions"]) >= _EXPORT_FUNC_LIMIT:
                         break
-            
+
             import json
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(export_data, f, indent=2)
             return {"ok": True, "exported": True, "count": len(export_data["functions"])}
-        
+
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:

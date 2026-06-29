@@ -15,8 +15,8 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from ida_pro_mcp.installer.discovery import (  # noqa: E402
-    IdaInstall,
     STATE_FILE,
+    IdaInstall,
     detect_ida_installs,
     read_install_state,
     select_ida_install,
@@ -55,7 +55,7 @@ def _make_fake_install(tmp: Path, name: str, build: str, *, version: tuple[int, 
     ida_win.write_bytes(payload)
     ida_win.chmod(0o755)
     # Fake pro license
-    (d / f"idapro_99-9999-AAAA-99.hexlic").write_text("FAKE")
+    (d / "idapro_99-9999-AAAA-99.hexlic").write_text("FAKE")
     return d
 
 

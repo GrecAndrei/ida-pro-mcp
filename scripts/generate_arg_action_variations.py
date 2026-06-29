@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import random
 import sys
 from pathlib import Path
@@ -220,7 +219,6 @@ if __name__ == "__main__":
 # Tool sweep test plan generator
 # This script generates a minimal safe call for each tool.
 
-import json
 
 TEST_ARGS = {
     "session": {"action": "status"},
@@ -241,7 +239,6 @@ TEST_ARGS = {
     "history": {"action": "list"},
     "segments": {"action": "list"},
     "funcs": {"action": "create", "addr": "0x140001000"},
-    "data": {"action": "functions", "count": 1},
     "graph": {"action": "callgraph", "addr": "0x140001000", "format": "dot"},
     "ctree": {"action": "get", "addr": "0x140001000", "depth": 1},
     "bookmarks": {"action": "list"},
@@ -277,7 +274,6 @@ TEST_ARGS = {
     "comment_mgr": {"action": "list"},
     "static_trace": {"action": "list"},
     "colorize": {"action": "list"},
-    "debug": {"action": "threads"},
 }
 
 print(json.dumps(TEST_ARGS, indent=2))

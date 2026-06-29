@@ -1,7 +1,7 @@
 """Tool registry consistency — names and descriptions defined."""
 from __future__ import annotations
 
-from ida_pro_mcp.services import ADVERTISED_TOOLS, HIDDEN_TOOLS_IN_LIST, TOOLS, TOOL_DESCRIPTIONS
+from ida_pro_mcp.services import ADVERTISED_TOOLS, HIDDEN_TOOLS_IN_LIST, TOOL_DESCRIPTIONS, TOOLS
 
 
 class TestToolRegistry:

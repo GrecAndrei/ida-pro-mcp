@@ -1,3 +1,4 @@
+import contextlib
 
 try:
     from ._common import *
@@ -161,19 +162,19 @@ def lumina(
             if include_items:
                 result["items"] = page
             return result
-        
+
         elif action == "get_metadata":
             # Try to get Lumina metadata for a function programmatically
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required")
-            
+
             ea, err = validate_addr(addr, require_func=True)
             if err:
                 return err
-            
+
             func = ida_funcs.get_func(ea)
             func_name = idc.get_func_name(ea)
-            
+
             result = {
                 "ok": True,
                 "addr": hex(ea),
@@ -181,15 +182,15 @@ def lumina(
                 "has_lumina_name": False,
                 "lumina_available": False
             }
-            
+
             try:
                 import ida_lumina
                 result["lumina_available"] = True
-                
+
                 # Check if ida_lumina has the APIs we need
                 if hasattr(ida_lumina, 'is_inited') and ida_lumina.is_inited():
                     result["lumina_initialized"] = True
-                    
+
                     # Try to get function info from Lumina
                     # The API varies by IDA version
                     if hasattr(ida_lumina, 'get_func_info'):
@@ -205,24 +206,22 @@ def lumina(
                                     result["lumina_name"] = info.name
                         except Exception as e:
                             result["get_info_error"] = str(e)
-                    
+
                     # Alternative: Check if function was renamed by Lumina
                     # Functions from Lumina often have specific characteristics
                     if hasattr(ida_lumina, 'is_func_from_lumina'):
-                        try:
+                        with contextlib.suppress(Exception):
                             result["is_from_lumina"] = ida_lumina.is_func_from_lumina(ea)
-                        except Exception:
-                            pass
                 else:
                     result["lumina_initialized"] = False
                     result["note"] = "Lumina not initialized - check Tools > Lumina > Options"
-                    
+
             except ImportError:
                 result["lumina_available"] = False
                 result["note"] = "ida_lumina module not available in this IDA version"
             except Exception as e:
                 result["error"] = str(e)
-            
+
             # Provide alternative: check if name looks like it came from Lumina
             # Lumina names often follow certain patterns
             if func_name and not func_name.startswith("sub_"):
@@ -237,7 +236,7 @@ def lumina(
                     result["name_analysis"]["name_source"] = "FLIRT/library"
                 elif result.get("is_from_lumina"):
                     result["name_analysis"]["name_source"] = "Lumina"
-            
+
             return result
 
         else:
@@ -247,6 +246,6 @@ def lumina(
         return handle_error(e)
 
 
-# ============================================================================  
+# ============================================================================
 # 24. SYMBOLS - Debug Symbol Loading (PDB, DWARF, COFF)
 # ============================================================================

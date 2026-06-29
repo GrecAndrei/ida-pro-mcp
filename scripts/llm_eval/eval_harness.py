@@ -22,15 +22,14 @@ import statistics
 import subprocess
 import sys
 import textwrap
-import time
 import threading
+import time
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from openai import OpenAI
-
 
 # ---------------------------------------------------------------------------
 # Config
@@ -395,9 +394,7 @@ def _run_is_valid(r: dict) -> bool:
     # Treat placeholder/empty runs as invalid for aggregate comparisons.
     if int(r.get("tool_calls", 0) or 0) == 0:
         return False
-    if int(r.get("turns", 0) or 0) <= 1 and int(sc.total) == 0 and int(sc.pts) == 0:
-        return False
-    return True
+    return not (int(r.get("turns", 0) or 0) <= 1 and int(sc.total) == 0 and int(sc.pts) == 0)
 
 
 def _safe_div(num: float, den: float) -> float:
@@ -622,13 +619,12 @@ def _score_tool_result(tool: str, args: dict, result_str: str, score: Score) -> 
             score.award("decompiled_function", "decompile returned code")
 
     # Handler lifting via funcs(create)
-    if tool == "funcs" and action == "create":
-        if '"ok": true' in low:
-            addr_m = re.search(r'"addr"\s*:\s*"(0x[0-9a-f]+)"', low)
-            if addr_m:
-                score.created_handlers.add(addr_m.group(1))
-            if len(score.created_handlers) >= 3:
-                score.award("created_handler_functions_3", f"{len(score.created_handlers)} handlers")
+    if tool == "funcs" and action == "create" and '"ok": true' in low:
+        addr_m = re.search(r'"addr"\s*:\s*"(0x[0-9a-f]+)"', low)
+        if addr_m:
+            score.created_handlers.add(addr_m.group(1))
+        if len(score.created_handlers) >= 3:
+            score.award("created_handler_functions_3", f"{len(score.created_handlers)} handlers")
 
     # Traced reset → main
     if tool == "code" and action in ("decompile", "smart_decompile", "disasm"):
@@ -693,9 +689,8 @@ def _score_final_response(text: str, score: Score) -> None:
         score.award("final_report", f"{hits} sections")
 
     # Synthesis checkpoints from final report text
-    if "purpose" in low or "role" in low:
-        if "wifi" in low and ("firmware" in low or "mac" in low):
-            score.award("firmware_purpose_hypothesis", "purpose in final report")
+    if ("purpose" in low or "role" in low) and "wifi" in low and ("firmware" in low or "mac" in low):
+        score.award("firmware_purpose_hypothesis", "purpose in final report")
     if "next step" in low or "recommend" in low or "further analysis" in low:
         score.award("actionable_next_steps", "next steps in final report")
 
@@ -764,10 +759,7 @@ def _load_api_key(source: str = "opencode") -> str:
     provider_name = "azure" if source == "azure" else "opencode-go"
 
     # Check env vars first
-    if source == "azure":
-        key = os.environ.get("AZURE_API_KEY", "")
-    else:
-        key = os.environ.get("OPENCODE_API_KEY", "")
+    key = os.environ.get("AZURE_API_KEY", "") if source == "azure" else os.environ.get("OPENCODE_API_KEY", "")
     if key:
         return key
 
@@ -1137,7 +1129,7 @@ def _print_report(results: list[dict]) -> None:
         print(f"  Score:        {s.total:3d} / {s.max_pts}  (raw {s.pts}, penalties -{s.penalties})")
         print(f"  Bonus pts:    {rs.bonus_pts}  (not in total, {len(rs.progress_reports)} reports filed)")
         print(f"  Tool calls:   {r['tool_calls']}  |  Turns: {r['turns']}  |  Time: {r['elapsed_s']}s")
-        print(f"\n  Token usage:")
+        print("\n  Token usage:")
         print(f"    Input:      {rs.total_input_tokens:,}")
         print(f"    Output:     {rs.total_output_tokens:,}")
         print(f"    Thinking:   {rs.total_thinking_tokens:,}")
@@ -1152,7 +1144,7 @@ def _print_report(results: list[dict]) -> None:
             f"score/tool={_safe_div(s.total, float(r['tool_calls'] or 0.0)):.3f}  "
             f"score/1kTok={_safe_div(s.total * 1000.0, float(total_tokens)):.4f}"
         )
-        print(f"\n  Checkpoints:")
+        print("\n  Checkpoints:")
         for ev in s.events:
             print(f"    {ev}")
 

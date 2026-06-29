@@ -3,10 +3,10 @@ import os
 import struct
 import sys
 import tempfile
+from collections.abc import Callable
 from typing import (
     Annotated,
     Any,
-    Callable,
     Literal,
     Optional,
     TypedDict,
@@ -19,7 +19,7 @@ try:
     from typing import NotRequired
 except ImportError:
     try:
-        from typing_extensions import NotRequired
+        from typing import NotRequired
     except ImportError:
         # Fallback for old Python without typing_extensions
         NotRequired = Optional
@@ -32,8 +32,8 @@ import ida_typeinf
 import idaapi
 import idautils
 import idc
-from ida_pro_mcp.services import parse_str_list
 
+from ida_pro_mcp.services import parse_str_list
 
 # Support both package mode and standalone mode
 try:
@@ -462,26 +462,26 @@ def is_64bit() -> bool:
 def parse_address(addr: str | int) -> int:
     if isinstance(addr, int):
         return addr
-    
+
     # Try direct integer conversion (hex or decimal)
     try:
         return int(addr, 0)
     except ValueError:
         pass
-    
+
     # Try resolving as a symbol/name
     import idc
     ea = idc.get_name_ea_simple(addr)
     if ea != idaapi.BADADDR:
         return ea
-        
+
     # Final attempt: check if it's a hex string without 0x prefix
     try:
         if all(c in "0123456789abcdefABCDEF" for c in addr):
             return int(addr, 16)
     except ValueError:
         pass
-        
+
     raise IDAError(f"Failed to resolve address or symbol: {addr}")
 
 
@@ -574,12 +574,10 @@ def normalize_dict_list(
 
 def looks_like_address(s: str) -> bool:
     """Check if string looks like an address (0x prefix or all hex chars)"""
-    if s.startswith("0x") or s.startswith("0X"):
+    if s.startswith(("0x", "0X")):
         return True
     # All hex chars and at least 4 chars → likely address
-    if len(s) >= 4 and all(c in "0123456789abcdefABCDEF" for c in s):
-        return True
-    return False
+    return bool(len(s) >= 4 and all(c in "0123456789abcdefABCDEF" for c in s))
 
 
 @overload

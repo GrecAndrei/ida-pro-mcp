@@ -8,6 +8,7 @@ IDA integration tests for blackboard v4 features:
 - UsageIntelligence session report
 """
 import pytest
+
 from tests._isolated_repo_loader import load_test_module
 
 _ic = load_test_module("integration/conftest.py", module_name="_ic_v4")

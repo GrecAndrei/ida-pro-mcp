@@ -3,8 +3,8 @@ try:
     from ._common import *
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
+import contextlib
 import hashlib
-
 
 # ============================================================================
 # 10. FUNCS - Function management
@@ -168,14 +168,12 @@ def _embedding_rename_suggestions(
     try:
         from ida_pro_mcp.services import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature
     except ImportError:
-        from host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature# type: ignore
+        from host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature  # type: ignore
 
     embedder = BgeCodeEmbedder()
     idb_path = ""
-    try:
+    with contextlib.suppress(Exception):
         idb_path = idc.get_idb_path() or ""
-    except Exception:
-        pass
     if not idb_path:
         return make_error(MCPError.INVALID_ARGS, "No IDB path available")
 
@@ -189,7 +187,7 @@ def _embedding_rename_suggestions(
     else:
         for func_ea in idautils.Functions():
             fname = idc.get_func_name(func_ea) or ""
-            if fname.startswith("sub_") or fname.startswith("nullsub_"):
+            if fname.startswith(("sub_", "nullsub_")):
                 target_eas.append(func_ea)
             if len(target_eas) >= max(1, int(limit)):
                 break
@@ -257,7 +255,7 @@ def _funcs_impl(
 ) -> dict:
     """
     Create and modify function definitions.
-    
+
     Actions:
     - create: Define a new function at `addr`. Automatically converts bytes to code
       if needed. If address is inside an existing function, offers to split or
@@ -383,10 +381,8 @@ def _funcs_impl(
                     # Raw/firmware regions often need wider undefine + auto-analysis nudges.
                     converted = False
                     for carve_size in (16, 64, 256):
-                        try:
+                        with contextlib.suppress(Exception):
                             ida_bytes.del_items(ea, ida_bytes.DELIT_SIMPLE, carve_size)
-                        except Exception:
-                            pass
                         try:
                             import ida_auto
                             if hasattr(ida_auto, "auto_make_code"):
@@ -446,10 +442,8 @@ def _funcs_impl(
                     result["removed_overlaps"] = removed_overlaps
                 return result
             if end_ea and hasattr(idaapi, "auto_mark_range"):
-                try:
+                with contextlib.suppress(Exception):
                     idaapi.auto_mark_range(ea, end_ea, idaapi.AU_FINAL)
-                except Exception:
-                    pass
                 if ida_funcs.add_func(ea, end_ea):
                     fn = ida_funcs.get_func(ea)
                     if name and not idc.set_name(ea, name, ida_name.SN_FORCE):
@@ -581,7 +575,7 @@ def _funcs_impl(
                             call_count += 1
                         elif mnem in ("ret", "retn", "bx", "jr", "blr"):
                             ret_count += 1
-                        elif mnem.startswith("j") or mnem.startswith("b"):
+                        elif mnem.startswith(("j", "b")):
                             jump_count += 1
                             if mnem in ("jz", "je", "jnz", "jne", "ja", "jb", "jg", "jl", "jbe", "jge", "jle", "jc", "jnc"):
                                 cond_jump_count += 1

@@ -424,7 +424,7 @@ def compare(
                 if p1 and p2:
                     v1 = asm._embedder.embed(p1)
                     v2 = asm._embedder.embed(p2)
-                    sim = sum(float(a) * float(b) for a, b in zip(v1, v2))
+                    sim = sum(float(a) * float(b) for a, b in zip(v1, v2, strict=False))
                     embedding_similarity = round(sim, 4)
                     try:
                         clf = asm._behavior_classifier()

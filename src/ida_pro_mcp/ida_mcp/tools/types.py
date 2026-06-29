@@ -131,20 +131,19 @@ def types(
                 tif = ida_typeinf.tinfo_t()
                 if tif.get_numbered_type(til, ordinal):
                     tname = tif.get_type_name()
-                    if tname:
-                        if matcher is None or matcher(tname):
-                            found += 1
-                            if found > offset and (count == 0 or len(types_list) < count):
-                                types_list.append({
-                                    "ordinal": ordinal,
-                                    "name": tname,
-                                    "type": str(tif),
-                                    "is_struct": tif.is_struct(),
-                                    "is_enum": tif.is_enum(),
-                                    "size": tif.get_size(),
-                                })
-                                if count > 0 and len(types_list) >= count:
-                                    break
+                    if tname and (matcher is None or matcher(tname)):
+                        found += 1
+                        if found > offset and (count == 0 or len(types_list) < count):
+                            types_list.append({
+                                "ordinal": ordinal,
+                                "name": tname,
+                                "type": str(tif),
+                                "is_struct": tif.is_struct(),
+                                "is_enum": tif.is_enum(),
+                                "size": tif.get_size(),
+                            })
+                            if count > 0 and len(types_list) >= count:
+                                break
 
             return {
                 "ok": True,
@@ -325,10 +324,7 @@ def types(
             func = idaapi.get_func(ea)
 
             if not apply_kind:
-                if func and func.start_ea == ea:
-                    apply_kind = "function"
-                else:
-                    apply_kind = "global"
+                apply_kind = "function" if func and func.start_ea == ea else "global"
 
             if apply_kind == "function":
                 if not ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.TINFO_DEFINITE):
@@ -443,7 +439,7 @@ def types(
                 if frame_id != idaapi.BADADDR:
                     locals_found = []
                     off = idc.get_first_member(frame_id)
-                    while off != -1 and off != idaapi.BADADDR:
+                    while off not in (-1, idaapi.BADADDR):
                         nm = idc.get_member_name(frame_id, off) or ""
                         if nm:
                             sz = idc.get_member_size(frame_id, off)
@@ -528,7 +524,7 @@ def types(
                 m = udt[i]
                 field_offset = m.offset // 8
                 mem_addr = ea + field_offset
-                mem_type_str = str(m.type)
+                str(m.type)
                 mem_size = m.type.get_size()
 
                 val_str = "?"
@@ -749,7 +745,7 @@ def types(
                 else:
                     offset_str = f"{field_offset:3d}-{field_end - 1:3d}"
                     bar_marker = "#" if m.is_gap() else " "
-                    bar = "|" + bar_marker * max(field_size, 1)
+                    "|" + bar_marker * max(field_size, 1)
                     lines.append(f"  {offset_str}  [{field_type:<30}]  {field_name:<20}  ({field_size} bytes)")
 
             if not is_union:
@@ -1056,9 +1052,7 @@ def _resolve_type_by_name(type_name: str, tif: ida_typeinf.tinfo_t) -> bool:
     if tif.get_named_type(None, type_name):
         return True
     tid = ida_typeinf.get_named_type_tid(type_name)
-    if tid != idaapi.BADADDR and tif.get_type_by_tid(tid):
-        return True
-    return False
+    return bool(tid != idaapi.BADADDR and tif.get_type_by_tid(tid))
 
 
 def _type_kind(tif: ida_typeinf.tinfo_t) -> str:

@@ -3,24 +3,24 @@
 Tests for the revamped session management, funcs, misc, and modify tools.
 These tests run standalone without IDA Pro.
 """
-import os
-import sys
 import json
-import tempfile
+import os
 import shutil
+import sys
+import tempfile
 import unittest
 
 # Add parent dir to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from ida_mcp_stdio import (
-    SessionManager,
-    Session,
     IDAMCPServer,
-    make_error,
     MCPError,
-    truncate_response,
+    Session,
+    SessionManager,
     continue_truncated,
+    make_error,
+    truncate_response,
 )
 
 
@@ -61,11 +61,11 @@ class TestSessionManagerRevamp(unittest.TestCase):
         self.assertIsNone(found)
 
     def test_discover_sessions_no_filter(self):
-        s1 = self.mgr.create_session(self.test_binary)
+        self.mgr.create_session(self.test_binary)
         other = os.path.join(self.tmpdir, "other.exe")
         with open(other, "wb") as f:
             f.write(b"\x00" * 50)
-        s2 = self.mgr.create_session(other)
+        self.mgr.create_session(other)
         result = self.mgr.discover_sessions()
         self.assertEqual(len(result), 2)
 
@@ -74,7 +74,7 @@ class TestSessionManagerRevamp(unittest.TestCase):
         other = os.path.join(self.tmpdir, "other.exe")
         with open(other, "wb") as f:
             f.write(b"\x00" * 50)
-        s2 = self.mgr.create_session(other)
+        self.mgr.create_session(other)
         result = self.mgr.discover_sessions("test.exe")
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].session_id, s1.session_id)

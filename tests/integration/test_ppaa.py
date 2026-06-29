@@ -1,3 +1,4 @@
+import contextlib
 import os
 import sqlite3
 import unittest
@@ -14,11 +15,11 @@ class TestPPAAEngine(unittest.TestCase):
     def setUp(self):
         self.dummy_idb = "dummy_test.idb"
         self.db_path = get_db_path(self.dummy_idb)
-        
+
         # Ensure we start clean
         if os.path.exists(self.db_path):
             os.remove(self.db_path)
-            
+
         # Create a mock SchemaBoot SQLite database
         self.conn = sqlite3.connect(self.db_path)
         self.conn.execute(
@@ -67,11 +68,11 @@ class TestPPAAEngine(unittest.TestCase):
             )
             """
         )
-        
+
         # Populate test data
         self.conn.execute(
             """
-            INSERT INTO function_attrs VALUES 
+            INSERT INTO function_attrs VALUES
             (0x140001080, 'aes_decrypt_block', 128, '.text', 0, 0, 8, 4, 3, 2, 4.5, 5, 'a1b2c3d4e5f6g7h8', '[{"base_register": "rsi", "fields": [{"offset": 16, "offset_hex": "0x10", "type": "char"}]}]')
             """
         )
@@ -82,10 +83,8 @@ class TestPPAAEngine(unittest.TestCase):
         self.conn.commit()
 
     def tearDown(self):
-        try:
+        with contextlib.suppress(Exception):
             self.conn.close()
-        except Exception:
-            pass
         # Force any cached sqlite3 connections (created by PPAAEngine or
         # downstream helpers via WAL mode) to release the file. On Windows
         # a closed connection can still hold a transient lock; collect gc
@@ -106,10 +105,8 @@ class TestPPAAEngine(unittest.TestCase):
         for side in (self.db_path + "-wal", self.db_path + "-shm",
                      self.db_path + "-journal"):
             if os.path.exists(side):
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(side)
-                except OSError:
-                    pass
 
     def test_ppaa_initialization(self):
         engine = PPAAEngine(self.dummy_idb)

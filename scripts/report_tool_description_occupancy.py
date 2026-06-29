@@ -14,7 +14,6 @@ from pathlib import Path
 
 import tiktoken
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMAS_PATH = ROOT / "src" / "ida_pro_mcp" / "host" / "schemas.py"
 

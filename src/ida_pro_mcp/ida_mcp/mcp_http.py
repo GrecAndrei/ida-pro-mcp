@@ -1,13 +1,13 @@
 import html
 import json
-import ida_netnode
-from urllib.parse import urlparse, parse_qs
-from typing import TypeVar, cast
 from http.server import HTTPServer
+from typing import TypeVar, cast
+from urllib.parse import parse_qs, urlparse
 
+import ida_netnode
+
+from .rpc import MCP_SERVER, MCP_UNSAFE, McpHttpRequestHandler, McpRpcRegistry
 from .sync import idaread, idawrite
-from .rpc import McpRpcRegistry, McpHttpRequestHandler, MCP_SERVER, MCP_UNSAFE
-
 
 T = TypeVar("T")
 

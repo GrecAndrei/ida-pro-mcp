@@ -9,7 +9,7 @@ tool calls (e.g. decompile) to the session that owns a given symbol.
 from __future__ import annotations
 
 import uuid
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..errors import MCPError, make_error
 

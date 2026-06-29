@@ -286,7 +286,7 @@ class TestWorkflowStructure(unittest.TestCase):
             drm={}, binary_path="",
         )
         # No path = no fake command hint
-        ext = wf["workflow"]["external_steps"] if "workflow" in wf else wf["external_steps"]
+        wf["workflow"]["external_steps"] if "workflow" in wf else wf["external_steps"]
         # workflow_for with empty binary returns a workflow with the
         # external step that has NO command_hint.
         self.assertGreater(len(wf["external_steps"]), 0)

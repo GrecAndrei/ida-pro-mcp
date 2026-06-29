@@ -10,6 +10,7 @@ import json
 import os
 import tempfile
 import time
+
 from tests._isolated_repo_loader import load_host_module, load_tool_module
 
 _kg_mod = load_host_module("knowledge_graph")
@@ -169,7 +170,7 @@ def test_kg_add_transition():
 
 def test_kg_add_gap():
     kg = _kg()
-    gid = kg.add_gap("WPA key derivation",
+    kg.add_gap("WPA key derivation",
                      why="All WPA2 firmware must derive PTK/GTK",
                      hints=["Look for HMAC-SHA1 with 4096 iterations"],
                      priority=0.85, gap_type="security")
@@ -207,7 +208,7 @@ def test_kg_add_gap_candidate():
 
 def test_kg_add_attack_surface():
     kg = _kg()
-    aid = kg.add_attack_surface(
+    kg.add_attack_surface(
         "0x401000", name="Management frame handler",
         reachable_from="air_unauthenticated",
         input_type="management_frame",
@@ -233,7 +234,7 @@ def test_kg_update_attack_surface():
 
 def test_kg_add_peripheral():
     kg = _kg()
-    pid = kg.add_peripheral("0xA0010000", name="AES accelerator",
+    kg.add_peripheral("0xA0010000", name="AES accelerator",
                              periph_type="crypto", confidence=0.8)
     periphs = kg.list_peripherals()
     assert len(periphs) == 1
@@ -304,7 +305,7 @@ def test_gap_engine_seed_wifi():
 def test_gap_engine_no_duplicates():
     kg = _kg()
     ge = GapEngine(kg)
-    added1 = ge.seed_gaps("wifi_firmware")
+    ge.seed_gaps("wifi_firmware")
     added2 = ge.seed_gaps("wifi_firmware")
     assert added2 == 0  # no duplicates
 

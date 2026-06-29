@@ -21,24 +21,24 @@ def hooks(
 ) -> dict:
     """
     Generate hook scripts and suggestions for dynamic analysis.
-    
+
     ACTIONS:
-    
+
     suggest - Suggest functions to hook based on category
         Params: category (network|file|crypto|registry|process)
         Returns: {suggestions: [{name, addr, reason}]}
-        
+
     generate_frida - Generate Frida hook script for function
         Params: addr or func_name
         Returns: {script: "JavaScript code"}
-        
+
     generate_detours - Generate Microsoft Detours template
         Params: addr or func_name
         Returns: {code: "C++ template"}
-        
+
     find_targets - Find interesting hook targets in binary
         Returns: {targets: [{addr, name, category, importance}]}
-        
+
     inline_hooks - Suggest inline hook points (for trampolines)
         Params: addr
         Returns: {hook_points: [{addr, bytes_available, safe}]}
@@ -56,17 +56,17 @@ def hooks(
             "process": ["CreateProcess", "VirtualAlloc", "VirtualProtect", "LoadLibrary",
                        "GetProcAddress", "NtAllocate", "mmap", "mprotect", "execve", "fork"]
         }
-        
+
         if action == "suggest":
             cat = (category or "").lower()
             if not cat:
                 return {"ok": True, "categories": list(HOOK_PATTERNS.keys()), "hint": "Provide category for suggestions"}
             if cat not in HOOK_PATTERNS:
                 return make_error(MCPError.INVALID_ARGS, f"Unknown category. Use: {', '.join(HOOK_PATTERNS.keys())}")
-            
+
             patterns = HOOK_PATTERNS[cat]
             suggestions = []
-            
+
             # Search imports
             for seg_ea in idautils.Segments():
                 seg = ida_segment.getseg(seg_ea)
@@ -85,7 +85,7 @@ def hooks(
                                         "type": "import"
                                     })
                                     break
-            
+
             # Search named functions
             for seg_ea in idautils.Segments():
                 for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
@@ -104,36 +104,35 @@ def hooks(
                                 break
                 if len(suggestions) >= 10000:
                     break
-            
+
             return {"ok": True, "category": cat, "suggestions": suggestions[:50]}
-        
+
         elif action == "generate_frida":
             if not addr and not func_name:
                 return make_error(MCPError.INVALID_ARGS, "addr or func_name required")
-            
+
             ea, err = validate_addr(addr or func_name)
             if err: return err
-            
+
             func = ida_funcs.get_func(ea)
             if not func: return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
-            
+
             name = idc.get_func_name(ea)
             tif = ida_typeinf.tinfo_t()
             arg_count = 0
-            if ida_nalt.get_tinfo(tif, ea):
-                if tif.is_func():
-                    arg_count = tif.get_nargs()
-            
+            if ida_nalt.get_tinfo(tif, ea) and tif.is_func():
+                arg_count = tif.get_nargs()
+
             # Fallback to stack frame if no type info
             if arg_count == 0:
                 frame = ida_frame.get_frame(func)
                 if frame: arg_count = min(8, ida_frame.get_frame_size(func) // 8)
-            
+
             # Generate arg loggers
             arg_logs = "\n".join([f'        console.log("    arg{i}:", args[{i}]);' for i in range(min(8, arg_count))])
             module_hint = os.path.basename(idaapi.get_input_file_path() or "").lower()
             offset = hex(ea - idaapi.get_imagebase())
-            
+
             script = f'''// Frida hook for {name} at {hex(ea)}
 const moduleHint = "{module_hint}";
 const targetModule = Process.enumerateModules().find(m => m.name.toLowerCase() === moduleHint) || Process.mainModule;
@@ -153,19 +152,19 @@ Interceptor.attach(funcAddr, {{
 }});
 '''
             return {"ok": True, "function": name, "addr": hex(ea), "script": script}
-        
+
         elif action == "generate_detours":
             if not addr and not func_name:
                 return make_error(MCPError.INVALID_ARGS, "addr or func_name required")
-            
+
             ea, err = validate_addr(addr or func_name)
             if err: return err
-            
+
             name = idc.get_func_name(ea) or f"sub_{ea:x}"
-            
+
             # Get prototype
             proto = get_prototype(ida_funcs.get_func(ea)) or f"void* __stdcall {name}(...)"
-            
+
             code = f'''// Microsoft Detours hook for {name}
 #include <windows.h>
 #include <detours.h>
@@ -189,7 +188,7 @@ void Install{name}Hook() {{
 }}
 '''
             return {"ok": True, "function": name, "addr": hex(ea), "code": code}
-        
+
         elif action == "find_targets":
             targets = []
             importance_keywords = {
@@ -197,7 +196,7 @@ void Install{name}Hook() {{
                 "medium": ["send", "recv", "file", "read", "write", "execute", "load"],
                 "normal": []
             }
-            
+
             for seg_ea in idautils.Segments():
                 for func_ea in idautils.Functions(seg_ea, idc.get_segm_end(seg_ea)):
                     if len(targets) >= 10000:
@@ -205,25 +204,25 @@ void Install{name}Hook() {{
                     name = idc.get_func_name(func_ea)
                     if not name or name.startswith("sub_"):
                         continue
-                    
+
                     name_lower = name.lower()
                     importance = "normal"
                     cat = "other"
-                    
+
                     # Determine category
                     for category, patterns in HOOK_PATTERNS.items():
                         for p in patterns:
                             if p.lower() in name_lower:
                                 cat = category
                                 break
-                    
+
                     # Determine importance
                     for level, keywords in importance_keywords.items():
                         for kw in keywords:
                             if kw in name_lower:
                                 importance = level
                                 break
-                    
+
                     if cat != "other" or importance != "normal":
                         targets.append({
                             "addr": hex(func_ea),
@@ -233,31 +232,31 @@ void Install{name}Hook() {{
                         })
                 if len(targets) >= 10000:
                     break
-            
+
             # Sort by importance
             importance_order = {"high": 0, "medium": 1, "normal": 2}
             targets.sort(key=lambda x: importance_order.get(x["importance"], 2))
-            
+
             return {"ok": True, "targets": targets[:100]}
-        
+
         elif action == "inline_hooks":
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required")
-            
+
             ea, err = validate_addr(addr)
             if err: return err
             func = ida_funcs.get_func(ea)
-            
+
             if not func:
                 return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {addr}")
-            
+
             hook_points = []
             current = func.start_ea
-            
+
             while current < func.end_ea and len(hook_points) < 20:
                 insn = idaapi.insn_t()
                 length = idaapi.decode_insn(insn, current)
-                
+
                 if length >= 5:  # Need at least 5 bytes for JMP
                     # Check if this is a safe hook point (not in middle of instruction)
                     hook_points.append({
@@ -266,9 +265,9 @@ void Install{name}Hook() {{
                         "safe": length >= 5,
                         "disasm": ida_lines.tag_remove(idc.generate_disasm_line(current, 0) or "")
                     })
-                
+
                 current += length if length > 0 else 1
-            
+
             return {"ok": True, "function": idc.get_func_name(ea) or hex(ea), "hook_points": hook_points}
 
         else:

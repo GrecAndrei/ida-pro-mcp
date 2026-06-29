@@ -8,8 +8,13 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 from .core import (
-    build_response, resolve_target, iter_segments, iter_code, SearchTimeout,
-    CALL_XREF_TYPES, safe_generate_disasm_line,
+    CALL_XREF_TYPES,
+    SearchTimeout,
+    build_response,
+    iter_code,
+    iter_segments,
+    resolve_target,
+    safe_generate_disasm_line,
 )
 
 
@@ -92,9 +97,7 @@ def _is_dangerous_regex(pattern: str) -> bool:
     if pattern.count('(') > 20:
         return True
     # Excessive backslash escaping that can blow up
-    if pattern.count('\\') > 50:
-        return True
-    return False
+    return pattern.count('\\') > 50
 
 
 def search_regex(pattern, case_sensitive, range_start, range_end, include_context, offset, limit, timeout_ms=0):
@@ -151,7 +154,7 @@ def search_regex(pattern, case_sensitive, range_start, range_end, include_contex
 
 def search_func_by_sig(pattern, offset, limit, timeout_ms=0):
     """Filter functions by characteristics.
-    
+
     Supports structural filters in pattern:
     - size:>N / size:<N / size:N-M  — function size in bytes
     - calls:NAME  — calls a specific function

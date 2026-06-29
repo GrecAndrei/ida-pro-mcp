@@ -7,7 +7,6 @@ that structured queries return correct deterministic results.
 
 import pytest
 
-
 pytestmark = pytest.mark.skipif(
     not pytest.importorskip("conftest", reason="IDA integration tests disabled"),
     reason="IDA integration tests require licensed IDA Pro",

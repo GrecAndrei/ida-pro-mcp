@@ -1,3 +1,4 @@
+import contextlib
 
 try:
     from ._common import *
@@ -12,10 +13,10 @@ except ImportError:
 _UNICORN_AVAILABLE = False
 try:
     import unicorn
-    import unicorn.x86_const as uc_x86
-    import unicorn.arm_const as uc_arm
     import unicorn.arm64_const as uc_arm64
+    import unicorn.arm_const as uc_arm
     import unicorn.mips_const as uc_mips
+    import unicorn.x86_const as uc_x86
     _UNICORN_AVAILABLE = True
 except ImportError:
     pass
@@ -182,16 +183,12 @@ def _setup_uc(uc_arch, uc_mode, start_ea, end_ea, regs=None):
             continue
         data = ida_bytes.get_bytes(seg_start, seg_size)
         if data:
-            try:
+            with contextlib.suppress(unicorn.UcError):
                 uc.mem_write(seg_start, data)
-            except unicorn.UcError:
-                pass
 
     # Map stack
-    try:
+    with contextlib.suppress(unicorn.UcError):
         uc.mem_map(STACK_ADDR, STACK_SIZE, unicorn.UC_PROT_ALL)
-    except unicorn.UcError:
-        pass
     sp_init = STACK_ADDR + STACK_SIZE - 0x1000
     sp_const = _sp_reg(uc_arch, uc_mode)
     if sp_const is not None:
@@ -200,10 +197,8 @@ def _setup_uc(uc_arch, uc_mode, start_ea, end_ea, regs=None):
     # Write a return-stop address on the stack for x86
     if uc_arch == unicorn.UC_ARCH_X86:
         stop_addr = 0xDEAD0000
-        try:
+        with contextlib.suppress(unicorn.UcError):
             uc.mem_map(stop_addr & ~0xFFF, 0x1000, unicorn.UC_PROT_ALL)
-        except unicorn.UcError:
-            pass
         if uc_mode == unicorn.UC_MODE_64:
             uc.mem_write(sp_init, stop_addr.to_bytes(8, 'little'))
         else:
@@ -226,10 +221,8 @@ def _read_regs(uc, uc_arch, uc_mode):
     gpr = _gpr_map(uc_arch, uc_mode)
     result = {}
     for name, const in gpr.items():
-        try:
+        with contextlib.suppress(unicorn.UcError):
             result[name] = hex(uc.reg_read(const))
-        except unicorn.UcError:
-            pass
     return result
 
 
@@ -444,10 +437,8 @@ def emulate(
                 nul = after.index(0)
                 decoded = after[:nul].decode("utf-8", errors="replace")
             except (ValueError, UnicodeDecodeError):
-                try:
+                with contextlib.suppress(Exception):
                     decoded = after.rstrip(b"\x00").decode("utf-8", errors="replace")
-                except Exception:
-                    pass
 
             ret_const = _ret_reg(uc_arch, uc_mode)
             ret_val = uc.reg_read(ret_const) if ret_const else 0

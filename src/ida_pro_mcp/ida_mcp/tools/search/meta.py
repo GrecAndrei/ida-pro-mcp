@@ -16,7 +16,11 @@ except ImportError:
     from support.semantic_matching import semantic_score  # type: ignore[import-not-found]  # noqa: F401
 
 from .core import (
-    build_response, iter_segments, iter_code, get_cached_imports, get_cached_strings,
+    build_response,
+    get_cached_imports,
+    get_cached_strings,
+    iter_code,
+    iter_segments,
     safe_generate_disasm_line,
 )
 
@@ -112,7 +116,7 @@ def search_export(pattern, case_sensitive, offset, limit, include_items):
 
 def search_summary(pattern, case_sensitive, range_start, range_end):
     """Quick summary of match counts across categories (fast, no full enumeration).
-    
+
     If pattern is None or empty, returns total counts for all categories.
     Useful for LLM planning before running an expensive search.
     """

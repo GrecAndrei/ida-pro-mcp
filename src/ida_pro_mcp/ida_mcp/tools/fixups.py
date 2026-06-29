@@ -24,20 +24,20 @@ def fixups(
 ) -> dict:
     """
     Manage fixups (relocations) in the database.
-    
+
     Actions:
     - list: List fixups in a range (default: all).
     - get: Get fixup details at `addr`.
     - add: Add a fixup at `addr` targeting `target`.
     - delete: Remove a fixup.
-    
+
     Arguments:
     - fixup_type: Integer type (processor specific).
     - target: Target address for the fixup.
     """
     try:
         import ida_fixup
-        
+
         if action == "list":
             import ida_ida
             # Fix min_ea/max_ea access for IDA 9.0+
@@ -52,7 +52,7 @@ def fixups(
                 except AttributeError:
                     min_ea = idc.get_inf_attr(idc.INF_MIN_EA)
                     max_ea = idc.get_inf_attr(idc.INF_MAX_EA)
-                
+
             if start:
                 start_ea, err = validate_addr(start)
                 if err: return err
@@ -80,7 +80,7 @@ def fixups(
                             })
                 ea = ida_fixup.get_next_fixup_ea(ea)
             return {"ok": True, "fixups": fixup_list, "total": total, "offset": offset, "count": len(fixup_list)}
-        
+
         elif action == "get":
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required")
@@ -124,7 +124,7 @@ def fixups(
                 return make_error(MCPError.NOT_FOUND, f"No fixup at address {hex(ea)}")
             ida_fixup.del_fixup(ea)
             return {"ok": True, "addr": hex(ea)}
-        
+
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:

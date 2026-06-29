@@ -23,15 +23,20 @@ _bootstrap_import_path()
 from ida_pro_mcp.installer.clients import (  # noqa: E402
     LEGACY_SERVER_NAMES,
     get_config_paths,
+)
+from ida_pro_mcp.installer.clients import (
     update_json_config as _update_json_config,
+)
+from ida_pro_mcp.installer.clients import (
     update_opencode_config as _update_opencode_config,
+)
+from ida_pro_mcp.installer.clients import (
     update_toml_config as _update_toml_config,
 )
 from ida_pro_mcp.installer.common import InstallReport  # noqa: E402
 from ida_pro_mcp.installer.main import main as installer_main  # noqa: E402
 from ida_pro_mcp.installer.runtime import (  # noqa: E402
     build_stdio_config,
-    detect_ida_install_dir,
     get_install_root,
 )
 

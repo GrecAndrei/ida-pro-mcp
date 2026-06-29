@@ -199,7 +199,7 @@ class SessionBootstrapMonitoringMixin:
             if not session:
                 return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
             data = self._load_skills(sid)
-            snaps = list((((data.get("bootstrap") or {}).get("metric_snapshots") or [])))
+            snaps = list((data.get("bootstrap") or {}).get("metric_snapshots") or [])
             total = len(snaps)
             offset = max(0, int(offset))
             limit = max(1, min(int(limit), 1000))
@@ -220,7 +220,7 @@ class SessionBootstrapMonitoringMixin:
             if not session:
                 return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
             data = self._load_skills(sid)
-            snaps = list((((data.get("bootstrap") or {}).get("metric_snapshots") or [])))
+            snaps = list((data.get("bootstrap") or {}).get("metric_snapshots") or [])
             if len(snaps) < 2:
                 return {
                     "ok": True,
@@ -278,7 +278,7 @@ class SessionBootstrapMonitoringMixin:
                 return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
             data = self._load_skills(sid)
             bootstrap = data.get("bootstrap") or {}
-            snaps = list((bootstrap.get("metric_snapshots") or []))
+            snaps = list(bootstrap.get("metric_snapshots") or [])
             if len(snaps) < 5:
                 return {
                     "ok": True,
@@ -328,7 +328,7 @@ class SessionBootstrapMonitoringMixin:
                 return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
             data = self._load_skills(sid)
             bootstrap = data.get("bootstrap") or {}
-            snaps = list((bootstrap.get("metric_snapshots") or []))
+            snaps = list(bootstrap.get("metric_snapshots") or [])
             baseline = bootstrap.get("baseline") or {}
             if not baseline:
                 baseline_res = self.bootstrap_update_baseline(sid, window=max(30, window))

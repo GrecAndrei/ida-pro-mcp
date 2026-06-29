@@ -1,15 +1,14 @@
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=5000")
-    try:
+    with contextlib.suppress(sqlite3.DatabaseError):
         conn.execute("PRAGMA journal_mode=WAL")
-    except sqlite3.DatabaseError:
-        pass
 
     conn.executescript(
         """

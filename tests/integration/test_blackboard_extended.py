@@ -6,10 +6,10 @@ Tests for extended blackboard features:
 - Background crawler (unit-level, no IDA)
 - New MCP resource URIs
 """
-import os
-import sys
 import json
+import os
 import struct
+import sys
 import tempfile
 
 from tests._isolated_repo_loader import load_tool_module

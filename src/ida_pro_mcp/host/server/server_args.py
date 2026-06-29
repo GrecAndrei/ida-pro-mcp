@@ -6,6 +6,7 @@ Extracted from host/server.py so the main JSON-RPC server file is less monolithi
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import shlex
@@ -137,20 +138,17 @@ class ServerArgsMixin:
                 normalized[key] = cleaned
                 value = cleaned
             # Accept bracketed list-like singletons such as "[0x401000]" as scalar.
-            if key in {"addr", "pattern", "query", "session_id", "binary_path"}:
-                if (
-                    isinstance(value, str)
-                    and value.startswith("[")
-                    and value.endswith("]")
-                ):
-                    inner = value[1:-1].strip()
-                    if inner and "," not in inner:
-                        normalized[key] = _strip_balanced_wrappers(inner)
+            if key in {"addr", "pattern", "query", "session_id", "binary_path"} and (
+                isinstance(value, str)
+                and value.startswith("[")
+                and value.endswith("]")
+            ):
+                inner = value[1:-1].strip()
+                if inner and "," not in inner:
+                    normalized[key] = _strip_balanced_wrappers(inner)
             if key in int_like_fields and isinstance(value, str):
-                try:
+                with contextlib.suppress(Exception):
                     normalized[key] = int(value, 0)
-                except Exception:
-                    pass
         # For array-like address fields, gracefully normalize common malformed scalar wrappers.
         if "addrs" in normalized and isinstance(normalized["addrs"], str):
             text = normalized["addrs"].strip()

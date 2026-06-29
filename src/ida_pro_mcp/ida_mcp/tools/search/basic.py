@@ -6,9 +6,14 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 from .core import (
-    iter_segments, build_response,
-    resolve_target, safe_get_strlist_items, safe_get_strlit_contents,
-    safe_generate_disasm_line, SearchTimeout, xref_count_limited,
+    SearchTimeout,
+    build_response,
+    iter_segments,
+    resolve_target,
+    safe_generate_disasm_line,
+    safe_get_strlist_items,
+    safe_get_strlit_contents,
+    xref_count_limited,
 )
 
 
@@ -88,9 +93,7 @@ def search_bytes(pattern, range_start, range_end, include_context, offset, limit
                         hi, lo = spec
                         if hi is not None and ((byte_val >> 4) & 0xF) != hi:
                             return False
-                        if lo is not None and (byte_val & 0xF) != lo:
-                            return False
-                        return True
+                        return not (lo is not None and byte_val & 15 != lo)
 
                     pat_specs = _parse_tokens(pattern)
                     if not pat_specs:

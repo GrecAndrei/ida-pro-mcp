@@ -96,12 +96,12 @@ def continue_truncated(
 def truncate_response(response: Dict[str, Any], max_tokens: int = 4000) -> Dict[str, Any]:
     """
     Intelligently truncate large MCP responses to fit within LLM context windows.
-    
+
     Args:
         response: The original tool response dictionary.
         max_tokens: Approximate character limit (roughly 1 char = 1 token for simplicity).
             Must be >= 500.
-        
+
     Returns:
         A pruned response with truncation markers. Original dict is never modified.
     """
@@ -115,7 +115,7 @@ def truncate_response(response: Dict[str, Any], max_tokens: int = 4000) -> Dict[
     pruned = copy.deepcopy(response)
     pruned["_truncated"] = True
     truncated_fields: Dict[str, Dict[str, Any]] = {}
-    
+
     # 2. Strip verbose metadata first (low-value fields for LLMs)
     _LOW_VALUE_KEYS = {"traceback", "raw_bytes", "hexdump_full"}
     for key in list(pruned.keys()):
@@ -129,11 +129,11 @@ def truncate_response(response: Dict[str, Any], max_tokens: int = 4000) -> Dict[
         if isinstance(value, list) and len(value) > 10:
             # We found a large list. Prune it.
             original_len = len(value)
-            
+
             # Keep the first N items until we hit the limit
             # We estimate 200 chars per item for safety
             keep_count = max(5, (max_tokens // 200))
-            
+
             if original_len > keep_count:
                 pruned[key] = value[:keep_count]
                 pruned[f"{key}_total_count"] = original_len

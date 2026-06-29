@@ -1,3 +1,4 @@
+import contextlib
 
 try:
     from ._common import *
@@ -479,8 +480,8 @@ def _get_blackboard_context_for_addr(addr_hex: str) -> list:
     Returns compact list of {title, category, confidence}.
     """
     try:
-        import importlib.util, os as _os
-        path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+        import os as _os
+        _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
                              "..", "..", "host", "knowledge_graph.py")
         # Use blackboard directly
         from blackboard import BlackboardStore  # type: ignore
@@ -658,64 +659,64 @@ def code(
 ) -> list[dict] | dict:
     """
     Perform code analysis, decompilation, and graph traversal.
-    
+
     ACTIONS:
-    
+
     decompile - Decompile function to Pseudo-C (requires Hex-Rays)
         Params: addrs (REQUIRED)
         Returns: [{addr, code, prototype}] or {addr, error}
         Example: code(action="decompile", addrs="0x401000")
         Example: code(action="decompile", addrs=["main", "0x402000"])
-        
+
     disasm - Get assembly listing (LLM-compact text, one line per instruction)
         Params: addrs (REQUIRED), optional end, disasm_style (csmini|classic|annotated), include_bytes, limit
         Returns: [{addr, name, disasm: "*addr:instr\\n*addr:instr\\n...", count, style, range}]
         Example: code(action="disasm", addrs="0x401000")
         Example: code(action="disasm", addrs="0x125b0", end="0x12640", limit=160, disasm_style="csmini")
-        
+
     xrefs_to - Get cross-references TO an address (compact text, includes function names)
         Params: addrs (REQUIRED)
         Returns: [{addr, xrefs: "addr  type  func_name\\n...", count}]
         Example: code(action="xrefs_to", addrs="0x401000")
-        
+
     xrefs_from - Get cross-references FROM an address (compact text, includes names)
-        Params: addrs (REQUIRED)  
+        Params: addrs (REQUIRED)
         Returns: [{addr, xrefs: "addr  type  name\\n...", count}]
         Example: code(action="xrefs_from", addrs="0x401000")
-        
+
     callees - List functions called BY this function (compact text)
         Params: addrs (REQUIRED)
         Returns: [{addr, callees: "addr  name\\n...", count}]
         Example: code(action="callees", addrs="main")
-        
+
     callers - List functions that CALL this function (compact text)
         Params: addrs (REQUIRED)
         Returns: [{addr, callers: "addr  name\\n...", count}]
         Example: code(action="callers", addrs="printf")
-        
+
     blocks - Get basic blocks (compact text with successors/predecessors)
         Params: addrs (REQUIRED)
         Returns: [{addr, blocks: "start-end  succs=[...]  preds=[...]\\n...", count}]
         Example: code(action="blocks", addrs="0x401000")
-        
+
     analyze - Comprehensive analysis (decompile + callees + callers + strings)
         Params: addrs (REQUIRED)
         Returns: [{addr, pseudocode, prototype, callees, callers, strings}]
         Example: code(action="analyze", addrs="main")
         Best for: Getting full context about a function in one call
-        
+
     callgraph - Generate call graph from starting function (compact text)
         Params: addrs (REQUIRED), max_depth (default 5)
         Returns: [{addr, nodes: "addr  depth=N  name\\n...", edges: "addr -> addr\\n..."}]
         Example: code(action="callgraph", addrs="main", max_depth=3)
-        
+
     find_paths - Find call-graph paths from one function to another (BFS over call graph)
         Note: this traverses the call graph (function-to-function), not intra-function CFG.
         For intra-function basic block paths, use cfg_analysis(action="paths").
         Params: addrs (REQUIRED - start function), target (REQUIRED - target function)
         Returns: {from, to, paths: [[addr1, addr2, ...], ...]}
         Example: code(action="find_paths", addrs="0x401000", target="0x402000")
-        
+
     strings_in_func - List strings referenced in function (compact text)
         Params: addrs (REQUIRED)
         Returns: [{addr, strings: "addr  string_value\\n...", count}]
@@ -757,13 +758,13 @@ def code(
             max_items = min(max(disasm_max, 1), DISASM_MAX_LINES)
         addrs = normalize_list_input(addrs)
         results = []
-        
+
         for addr in addrs:
             ea, error = validate_addr(addr)
             if error:
                 results.append({"addr": addr, **error})
                 continue
-            
+
             if action == "decompile":
                 func = idaapi.get_func(ea)
                 if not func:
@@ -775,10 +776,10 @@ def code(
                         suggestion = f" Try {hex_ea(prev_func.start_ea)} ({ida_funcs.get_func_name(prev_func.start_ea) or 'unnamed'})"
                     elif next_func:
                         suggestion = f" Try {hex_ea(next_func.start_ea)} ({ida_funcs.get_func_name(next_func.start_ea) or 'unnamed'})"
-                    
+
                     results.append({"addr": addr, "error": f"No function at {hex_ea(ea)}.{suggestion}"})
                     continue
-                
+
                 try:
                     cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
                     if cfunc:
@@ -912,12 +913,12 @@ def code(
                         include_bytes=include_bytes,
                     )
                     results.append({
-                        "addr": addr, 
+                        "addr": addr,
                         "warning": "Address is not within a defined function. Showing raw disassembly.",
                         "disasm": "\n".join(lines),
                         "count": len(lines),
                         "style": disasm_style,
-                        "range": f"{hex_ea(ea)}-{hex_ea((end_ea if end_ea is not None else (ea + 0x1000)))}",
+                        "range": f"{hex_ea(ea)}-{hex_ea(end_ea if end_ea is not None else (ea + 0x1000))}",
                     })
                     continue
                 disasm_start = ea if end_ea is not None else func.start_ea
@@ -939,7 +940,7 @@ def code(
                     "style": disasm_style,
                     "range": f"{hex_ea(disasm_start)}-{hex_ea(disasm_end)}",
                 })
-            
+
             elif action == "xrefs_to":
                 xref_lines = []
                 for x in idautils.XrefsTo(ea, 0):
@@ -950,7 +951,7 @@ def code(
                     fn_name = ida_funcs.get_func_name(fn.start_ea) if fn else ""
                     xref_lines.append(f"{hex_ea(x.frm)}  {kind}  {fn_name}")
                 results.append({"ok": True, "addr": addr, "xrefs": "\n".join(xref_lines), "count": len(xref_lines)})
-            
+
             elif action == "xrefs_from":
                 xref_lines = []
                 for x in idautils.XrefsFrom(ea, 0):
@@ -960,7 +961,7 @@ def code(
                     name = ida_name.get_name(x.to) or ""
                     xref_lines.append(f"{hex_ea(x.to)}  {kind}  {name}")
                 results.append({"ok": True, "addr": addr, "xrefs": "\n".join(xref_lines), "count": len(xref_lines)})
-            
+
             elif action == "callees":
                 func = idaapi.get_func(ea)
                 if not func:
@@ -972,11 +973,11 @@ def code(
                         if xref.iscode:
                             target_func = idaapi.get_func(xref.to)
                             if target_func and target_func.start_ea != func.start_ea:
-                                callees.add((hex_ea(target_func.start_ea), 
+                                callees.add((hex_ea(target_func.start_ea),
                                             ida_funcs.get_func_name(target_func.start_ea)))
                 callee_lines = [f"{a}  {n}" for a, n in sorted(callees)]
                 results.append({"ok": True, "addr": addr, "callees": "\n".join(callee_lines), "count": len(callee_lines)})
-            
+
             elif action == "callers":
                 func = idaapi.get_func(ea)
                 start = func.start_ea if func else ea
@@ -989,7 +990,7 @@ def code(
                                         ida_funcs.get_func_name(caller_func.start_ea)))
                 caller_lines = [f"{a}  {n}" for a, n in sorted(callers)]
                 results.append({"ok": True, "addr": addr, "callers": "\n".join(caller_lines), "count": len(caller_lines)})
-            
+
             elif action == "blocks":
                 func = idaapi.get_func(ea)
                 if not func:
@@ -1013,16 +1014,16 @@ def code(
                 if not func:
                     results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
                     continue
-                
+
                 visited = {func.start_ea: 0}
                 queue = [(func.start_ea, 0)]
                 edge_set = set()
-                
+
                 while queue and len(edge_set) < max_items:
                     curr_ea, dist = queue.pop(0)
                     if dist >= max_depth:
                         continue
-                    
+
                     for item_ea in idautils.FuncItems(curr_ea):
                         for xref in idautils.XrefsFrom(item_ea, 0):
                             if xref.iscode:
@@ -1033,45 +1034,45 @@ def code(
                                     if target_ea not in visited:
                                         visited[target_ea] = dist + 1
                                         queue.append((target_ea, dist + 1))
-                
+
                 # Compact: nodes with depth, then edges
                 node_lines = [f"{hex_ea(k)}  depth={v}  {ida_funcs.get_func_name(k)}" for k, v in sorted(visited.items(), key=lambda x: x[1])]
                 edge_lines = [f"{hex_ea(c)} -> {hex_ea(t)}" for c, t in sorted(edge_set)]
                 results.append({"ok": True, "addr": hex_ea(func.start_ea), "nodes": "\n".join(node_lines), "edges": "\n".join(edge_lines)})
-            
+
             elif action == "export":
                 # Export function info
                 func = idaapi.get_func(ea)
                 if not func:
                     results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
                     continue
-                
+
                 name = ida_funcs.get_func_name(func.start_ea)
                 proto = get_prototype(func)
-                
+
                 if format == "c_header":
                     results.append({"addr": addr, "header": f"{proto};"})
                 elif format == "prototypes":
                     results.append({"addr": addr, "prototype": proto})
                 else:
-                    results.append({"addr": addr, "name": name, "prototype": proto, 
+                    results.append({"addr": addr, "name": name, "prototype": proto,
                                    "start": hex_ea(func.start_ea), "end": hex_ea(func.end_ea)})
-            
+
             elif action == "xrefs_to_field":
                 # Find code that accesses a specific struct field by offset
                 if not field_name:
                     results.append(make_error(MCPError.INVALID_ARGS, "field_name required"))
                     continue
-                
+
                 struct_name = None
                 actual_field = field_name
                 if "." in field_name:
                     struct_name, actual_field = field_name.rsplit(".", 1)
-                
+
                 try:
                     til = ida_typeinf.get_idati()
                     qty_func = getattr(ida_typeinf, 'get_ordinal_qty', None) or getattr(ida_typeinf, 'get_ordinal_count', None)
-                    
+
                     # Step 1: Find the field offset in the struct
                     field_offset = None
                     field_type_str = None
@@ -1105,20 +1106,19 @@ def code(
                                             break
                             if field_offset is not None:
                                 break
-                    
+
                     if field_offset is None:
                         results.append({"addr": addr, "field": field_name, "xrefs": [],
                                         "note": f"Field '{actual_field}' not found in any struct"})
                         continue
-                    
+
                     # Step 2: Find code that accesses this offset
                     # Strategy: scan decompiled functions for offset access patterns
                     # and scan disassembly for load/store at [reg+offset]
-                    import re as _re
                     code_refs = []
                     offset_hex = hex(field_offset)
                     offset_dec = str(field_offset)
-                    
+
                     # Scan all functions for references to this offset
                     for func_ea in idautils.Functions():
                         func = idaapi.get_func(func_ea)
@@ -1145,7 +1145,7 @@ def code(
                                     break
                         if found_in_func and len(code_refs) >= max_items:
                             break
-                    
+
                     results.append({
                         "ok": True,
                         "field": field_name,
@@ -1166,26 +1166,26 @@ def code(
                 if not target:
                     results.append(make_error(MCPError.INVALID_ARGS, "target required"))
                     continue
-                
+
                 target_ea, error = validate_addr(target)
                 if error:
                     results.append({"addr": addr, **error})
                     continue
-                
+
                 # Simple BFS
                 queue = [(ea, [hex(ea)])]
                 visited = {ea}
                 paths = []
-                
+
                 while queue and len(paths) < max_items:
                     curr, path = queue.pop(0)
                     if curr == target_ea:
                         paths.append(path)
                         continue
-                    
+
                     if len(path) >= max_depth:
                         continue
-                        
+
                     # Get succs
                     succs = []
                     func = idaapi.get_func(curr) # if callgraph
@@ -1197,14 +1197,14 @@ def code(
                                     tf = idaapi.get_func(xref.to)
                                     if tf and tf.start_ea != func.start_ea:
                                         succs.append(tf.start_ea)
-                    
+
                     for s in succs:
                         if s not in visited:
                             visited.add(s)
                             queue.append((s, path + [hex(s)]))
-                            
+
                 results.append({"from": addr, "to": target, "paths": paths})
-            
+
             elif action == "strings_in_func":
                 func = idaapi.get_func(ea)
                 if not func:
@@ -1490,7 +1490,7 @@ def code(
                     "mmap","munmap","ioctl","open","read","write","close",
                 ]
                 found_apis = [a for a in _KNOWN_APIS if a in pseudo]
-                pseudo_lower = pseudo.lower()
+                pseudo.lower()
 
                 # Callers/callees count
                 n_callers = sum(1 for x in idautils.XrefsTo(func.start_ea, 0) if x.iscode)
@@ -1506,10 +1506,8 @@ def code(
                     for xr in idautils.XrefsFrom(item, 0):
                         s = idc.get_strlit_contents(xr.to)
                         if s:
-                            try:
+                            with contextlib.suppress(Exception):
                                 str_refs.append(s.decode("utf-8", errors="replace")[:80])
-                            except Exception:
-                                pass
                 str_refs = list(dict.fromkeys(str_refs))[:6]
 
                 # Complexity
@@ -1575,7 +1573,7 @@ def code(
 
             else:
                 return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
-        
+
         return results[0] if len(results) == 1 else results
     except Exception as e:
         return handle_error(e)

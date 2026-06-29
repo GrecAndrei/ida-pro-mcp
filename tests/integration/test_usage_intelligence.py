@@ -7,6 +7,7 @@ detector remains.
 """
 import json
 import tempfile
+
 from tests._isolated_repo_loader import load_host_module
 
 _mod = load_host_module("intelligence.usage")

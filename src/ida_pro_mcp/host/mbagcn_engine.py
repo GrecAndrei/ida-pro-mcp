@@ -48,13 +48,13 @@ class MbaGCNEncoder:
         self.output_dim = output_dim
         self.spectral_k = min(hidden_dim, 32)
 
-    def _normalized_laplacian(self, adj: "np.ndarray") -> "np.ndarray":
+    def _normalized_laplacian(self, adj: np.ndarray) -> np.ndarray:
         degree = np.sum(adj, axis=1)
         degree = np.where(degree == 0, 1.0, degree)
         d_inv_sqrt = np.diag(1.0 / np.sqrt(degree))
         return np.eye(adj.shape[0]) - d_inv_sqrt @ adj @ d_inv_sqrt
 
-    def _spectral_embed(self, adj: "np.ndarray") -> "np.ndarray":
+    def _spectral_embed(self, adj: np.ndarray) -> np.ndarray:
         n = adj.shape[0]
         k = min(self.spectral_k, n)
         if n == 1:
@@ -67,14 +67,14 @@ class MbaGCNEncoder:
             spec = np.concatenate([spec, pad], axis=1)
         return spec.astype(np.float32)
 
-    def _jl_project(self, fused: "np.ndarray") -> "np.ndarray":
+    def _jl_project(self, fused: np.ndarray) -> np.ndarray:
         fused_dim = fused.shape[1]
         rng = np.random.default_rng(42 + fused_dim)
         P = rng.normal(0.0, 1.0 / math.sqrt(fused_dim),
                        size=(fused_dim, self.output_dim)).astype(np.float32)
         return fused @ P
 
-    def encode_cfg(self, node_features: "np.ndarray", adjacency: "np.ndarray") -> "np.ndarray":
+    def encode_cfg(self, node_features: np.ndarray, adjacency: np.ndarray) -> np.ndarray:
         n = node_features.shape[0]
         if node_features.shape[1] != self.input_dim:
             pad = np.zeros((n, self.input_dim - node_features.shape[1]), dtype=np.float32)
@@ -87,7 +87,7 @@ class MbaGCNEncoder:
         norms[norms < 1e-12] = 1.0
         return (embeddings / norms).astype(np.float32)
 
-    def encode_function(self, node_features: "np.ndarray", adjacency: "np.ndarray") -> "np.ndarray":
+    def encode_function(self, node_features: np.ndarray, adjacency: np.ndarray) -> np.ndarray:
         node_embeddings = self.encode_cfg(node_features, adjacency)
         out_degrees = np.sum(adjacency, axis=1).astype(np.float32)
         total = out_degrees.sum()
@@ -111,7 +111,7 @@ class CFGExtractor:
     """Extract CFG structure and per-block features from an IDA function."""
 
     @staticmethod
-    def extract_from_ida(func_ea: int) -> Tuple["np.ndarray", "np.ndarray"]:
+    def extract_from_ida(func_ea: int) -> Tuple[np.ndarray, np.ndarray]:
         try:
             import ida_funcs
             import idaapi
@@ -160,7 +160,7 @@ class CFGExtractor:
         return node_features, adjacency
 
     @staticmethod
-    def _extract_block_features(start_ea: int, end_ea: int) -> "np.ndarray":
+    def _extract_block_features(start_ea: int, end_ea: int) -> np.ndarray:
         try:
             import idautils
             import idc
@@ -235,7 +235,7 @@ class GraphEmbeddingStore:
         conn.commit()
         conn.close()
 
-    def store(self, func_ea: int, func_name: str, embedding: "np.ndarray",
+    def store(self, func_ea: int, func_name: str, embedding: np.ndarray,
               node_count: int, edge_count: int) -> None:
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
@@ -252,7 +252,7 @@ class GraphEmbeddingStore:
         conn.commit()
         conn.close()
 
-    def load(self, func_ea: int) -> Optional["np.ndarray"]:
+    def load(self, func_ea: int) -> Optional[np.ndarray]:
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
         cur.execute("SELECT embedding FROM graph_embeddings WHERE func_ea = ?", (func_ea,))
@@ -262,7 +262,7 @@ class GraphEmbeddingStore:
             return np.frombuffer(row[0], dtype=np.float32)
         return None
 
-    def find_similar(self, query_embedding: "np.ndarray", top_k: int = 10) \
+    def find_similar(self, query_embedding: np.ndarray, top_k: int = 10) \
             -> List[Tuple[int, str, float]]:
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()

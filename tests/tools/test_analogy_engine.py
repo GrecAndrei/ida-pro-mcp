@@ -6,16 +6,16 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-from ida_pro_mcp.services import CrossBinaryAnalogyEngine
 from ida_pro_mcp.services import (
+    CrossBinaryAnalogyEngine,
+    FunctionEmbeddingIndex,
+    MCPError,
+    ServerSessionMixin,
+    SessionManager,
     ensure_tables,
     get_db_path,
     upsert_functions_batch,
 )
-from ida_pro_mcp.services import FunctionEmbeddingIndex
-from ida_pro_mcp.services import SessionManager
-from ida_pro_mcp.services import ServerSessionMixin
-from ida_pro_mcp.services import MCPError
 
 
 def make_func_attrs(ea, name, **kwargs):
@@ -109,7 +109,7 @@ class TestCrossBinaryAnalogyEngine(unittest.TestCase):
         # Deterministic fixed-size vector
         mock_embedder.embed.return_value = [1.0] + [0.0] * 1535
         mock_embedder_class.return_value = mock_embedder
-        mock_embedder_class.cosine.side_effect = lambda a, b: sum(x * y for x, y in zip(a, b))
+        mock_embedder_class.cosine.side_effect = lambda a, b: sum(x * y for x, y in zip(a, b, strict=False))
 
         # 2. Populate active DB with a generic function
         conn_active = sqlite3.connect(get_db_path(self.active_idb))
@@ -165,7 +165,7 @@ class TestCrossBinaryAnalogyEngine(unittest.TestCase):
         mock_embedder.backend = "tfidf-fallback"
         mock_embedder.embed.return_value = [1.0] + [0.0] * 1535
         mock_embedder_class.return_value = mock_embedder
-        mock_embedder_class.cosine.side_effect = lambda a, b: sum(x * y for x, y in zip(a, b))
+        mock_embedder_class.cosine.side_effect = lambda a, b: sum(x * y for x, y in zip(a, b, strict=False))
 
         # Setup structural and embedding DBs
         conn_active = sqlite3.connect(get_db_path(self.active_idb))
@@ -241,7 +241,7 @@ class TestCrossBinaryAnalogyEngine(unittest.TestCase):
         self.assertTrue(res.get("ok"))
         self.assertEqual(res.get("applied"), 1)
         self.assertEqual(srv.call_tool.call_count, 2)
-        
+
         # Check call arguments
         srv.call_tool.assert_any_call("modify", self.active_idb, action="rename", addr="0x401000", value="parse_packet")
         srv.call_tool.assert_any_call("modify", self.active_idb, action="comment", addr="0x401000", value="Decodes network packet", comment_type="repeatable")

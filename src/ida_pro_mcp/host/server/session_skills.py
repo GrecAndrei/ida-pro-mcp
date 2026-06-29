@@ -7,8 +7,8 @@ import os
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from ..errors import MCPError, is_error_result, make_error
 from ..config import log_rpc
+from ..errors import MCPError, is_error_result, make_error
 from .session_skills_bootstrap import SessionBootstrapMixin
 
 # ====================================================================
@@ -64,7 +64,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
         path = self._get_skills_path(sid)
         if os.path.exists(path):
             try:
-                with open(path, "r", encoding="utf-8") as f:
+                with open(path, encoding="utf-8") as f:
                     return json.load(f)
             except (json.JSONDecodeError, OSError):
                 pass
@@ -144,9 +144,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
             # Session manager methods present at runtime.
             for phase_items in matrix.values():
                 for item in phase_items:
-                    if item in ("suggest_strategy_blended", "predictor_suggest_next_tool_blended"):
-                        implemented_actions.add(item)
-                    elif hasattr(self, item):
+                    if item in ("suggest_strategy_blended", "predictor_suggest_next_tool_blended") or hasattr(self, item):
                         implemented_actions.add(item)
 
             phase_rows = []
@@ -290,7 +288,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
             if not session:
                 return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
             data = self._load_skills(sid)
-            rows = list((((data.get("bootstrap") or {}).get("readiness_history") or [])))
+            rows = list((data.get("bootstrap") or {}).get("readiness_history") or [])
             total = len(rows)
             offset = max(0, int(offset))
             limit = max(1, min(int(limit), 10000))
@@ -311,7 +309,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
             if not session:
                 return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
             data = self._load_skills(sid)
-            rows = list((((data.get("bootstrap") or {}).get("readiness_history") or [])))
+            rows = list((data.get("bootstrap") or {}).get("readiness_history") or [])
             if len(rows) < 2:
                 return {
                     "ok": True,
@@ -696,7 +694,6 @@ class SessionSkillsMixin(SessionBootstrapMixin):
                             try:
                                 with open(
                                     os.path.join(self.session_dir, fn),
-                                    "r",
                                     encoding="utf-8",
                                 ) as f:
                                     sdata = json.load(f)
@@ -859,7 +856,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
 
             # Calculate completion indicators
             functions_decompiled = tool_action_counts.get("code.decompile", 0) + tool_action_counts.get("code.semantic_decompile", 0)
-            searches_performed = sum(v for k, v in tool_action_counts.items() if k.startswith("search.") or k.startswith("data."))
+            searches_performed = sum(v for k, v in tool_action_counts.items() if k.startswith(("search.", "data.")))
             xrefs_traced = sum(v for k, v in tool_action_counts.items() if "xref" in k)
 
             return {
@@ -928,7 +925,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
             session = self.sessions.get(sid)
             other = self.sessions.get(other_sid)
             if not session or not other:
-                return make_error(MCPError.SESSION_NOT_FOUND, f"One or both sessions not found")
+                return make_error(MCPError.SESSION_NOT_FOUND, "One or both sessions not found")
             if other_sid not in session.linked_sessions:
                 session.linked_sessions.append(other_sid)
             if sid not in other.linked_sessions:

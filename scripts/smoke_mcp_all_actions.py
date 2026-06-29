@@ -601,8 +601,6 @@ ACTION_ARGS: dict[tuple[str, str], dict] = {
     ("debug", "breakpoints"): {},
     ("debug", "regs"):      {},
     ("debug", "snapshot_regs"): {},
-    # bridge_search covered above
-    ("bridge_search", "bridges"): {"func_name": "main", "bridge_types": ["apis"], "top_k": 3},
 }
 
 # Actions that would corrupt the shared session / IDB state for the rest of
@@ -776,9 +774,7 @@ def main() -> int:
             "action": "create", "binary_path": args_cli.binary,
             "processor": "metapc", "bitness": 64, "endian": "little", "_risk_ack": True,
         })
-        if err or not payload or payload.get("ok") is not True:
-            return False
-        return True
+        return not (err or not payload or payload.get("ok") is not True)
 
     try:
         cli.start()
@@ -818,7 +814,7 @@ def main() -> int:
             print("FATAL: tools/list returned no tools", file=sys.stderr)
             return 5
 
-        print(f"=== ida-pro-mcp ALL-ACTIONS smoke test ===")
+        print("=== ida-pro-mcp ALL-ACTIONS smoke test ===")
         print(f"binary : {args_cli.binary}")
         print(f"addr    : {addr} / {addr2}  idb: {idb_path or '-'}")
         print()
@@ -843,10 +839,9 @@ def main() -> int:
                 if not (status == "CLEAN" and args_cli.skip_clean):
                     print(f"{status:7} {name:18} {action_lbl:22} {note}")
                 sys.stdout.flush()
-                if status in ("TIMEOUT", "CRASH") and err in ("timeout", "eof"):
-                    if not restart():
-                        print("  (host restart failed; aborting)", file=sys.stderr)
-                        break
+                if status in ("TIMEOUT", "CRASH") and err in ("timeout", "eof") and not restart():
+                    print("  (host restart failed; aborting)", file=sys.stderr)
+                    break
                 continue
 
             for action in acts:
@@ -874,10 +869,9 @@ def main() -> int:
                 if not (status == "CLEAN" and args_cli.skip_clean):
                     print(f"{status:7} {name:18} {action:22} {note}")
                 sys.stdout.flush()
-                if status in ("TIMEOUT", "CRASH") and err in ("timeout", "eof"):
-                    if not restart():
-                        print("  (host restart failed; aborting)", file=sys.stderr)
-                        break
+                if status in ("TIMEOUT", "CRASH") and err in ("timeout", "eof") and not restart():
+                    print("  (host restart failed; aborting)", file=sys.stderr)
+                    break
             else:
                 continue
             break  # if inner broke out due to restart failure, stop tools loop

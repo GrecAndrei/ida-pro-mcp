@@ -1,23 +1,25 @@
-import os
-import sys
-import json
 import argparse
 import http.client
-import traceback
+import json
+import os
+import sys
 import tempfile
 import tomllib
-import tomli_w
+import traceback
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
+
+import tomli_w
+
 from ida_pro_mcp.installer.clients import LEGACY_SERVER_NAMES
 
 if TYPE_CHECKING:
     from ida_pro_mcp.ida_mcp.zeromcp import McpServer
-    from ida_pro_mcp.ida_mcp.zeromcp.jsonrpc import JsonRpcResponse, JsonRpcRequest
+    from ida_pro_mcp.ida_mcp.zeromcp.jsonrpc import JsonRpcRequest, JsonRpcResponse
 else:
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "ida_mcp"))
     from zeromcp import McpServer
-    from zeromcp.jsonrpc import JsonRpcResponse, JsonRpcRequest
+    from zeromcp.jsonrpc import JsonRpcRequest, JsonRpcResponse
 
     sys.path.pop(0)  # Clean up
 
@@ -35,9 +37,7 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
     else:
         request_obj: JsonRpcRequest = request  # type: ignore
 
-    if request_obj["method"] == "initialize":
-        return dispatch_original(request)
-    elif request_obj["method"].startswith("notifications/"):
+    if request_obj["method"] == "initialize" or request_obj["method"].startswith("notifications/"):
         return dispatch_original(request)
 
     conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=30)

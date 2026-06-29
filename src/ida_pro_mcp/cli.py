@@ -15,12 +15,12 @@ import socket as _socket_mod
 import subprocess
 import sys
 import tempfile
-import time
-
-from ida_pro_mcp import __version__
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Optional
+
+from ida_pro_mcp import __version__
 
 _DAEMON_SOCKET = os.path.join(tempfile.gettempdir(), "ida-mcp-daemon.sock")
 
@@ -251,18 +251,14 @@ def _handle_background_mode(args):
         elif args.payload is not None:
             payload = _load_json_arg(args.payload, label="payload")
         tool_args: dict = payload if isinstance(payload, dict) else {}
-        if tool_args:
-            tool_args = dict(tool_args)
-        else:
-            tool_args = {}
+        tool_args = dict(tool_args) if tool_args else {}
         tool_args["action"] = action
 
     if args.session_id:
         tool_args["session_id"] = args.session_id
 
-    if action == "submit":
-        if not tool_args.get("script") and not tool_args.get("tool_call"):
-            raise SystemExit("background submit requires --file, or payload with 'script' or 'tool_call'")
+    if action == "submit" and not tool_args.get("script") and not tool_args.get("tool_call"):
+        raise SystemExit("background submit requires --file, or payload with 'script' or 'tool_call'")
 
     if action in ("result", "cancel", "wait"):
         task_id = tool_args.get("task_id")

@@ -11,8 +11,6 @@ except ImportError:
 
 import hashlib
 import json
-import difflib
-
 
 # -- helpers ------------------------------------------------------------------
 
@@ -132,7 +130,7 @@ def _resolve_snapshot(snapshot):
         except (json.JSONDecodeError, ValueError):
             pass
         try:
-            with open(snapshot, "r") as f:
+            with open(snapshot) as f:
                 return json.load(f), None
         except (OSError, json.JSONDecodeError, ValueError):
             pass

@@ -3,12 +3,14 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+import contextlib
+import glob
+import json
+import os
+import time
+
 import ida_entry
 import ida_ida
-import os
-import json
-import time
-import glob
 
 try:
     from ida_pro_mcp.services import infer_binary_arch_profile
@@ -45,30 +47,30 @@ def idb(
 ) -> Any:
     """
     IDA database metadata and structural information.
-    
+
     ACTIONS:
-    
+
     meta - Comprehensive binary metadata
-        Returns: {binary_path, idb_path, processor, bitness, compiler, image_base, 
+        Returns: {binary_path, idb_path, processor, bitness, compiler, image_base,
                   min_ea, max_ea, file_type, md5, sha256, crc32, timestamps}
-    
+
     summary - Quick analysis summary with statistics
         Returns: {functions, named_functions, segments, strings, imports, exports,
                   comments, analysis_ok, coverage_estimate}
-    
+
     overview - One-shot context for LLMs: meta + summary + segments + entrypoints combined
         Returns: {meta, summary, segments, entrypoints} - everything needed to start analysis
 
     architecture_profile - Current IDB architecture profile + raw-binary inference guidance
         Returns: {current, inferred_from_binary, raw_binary_mode, recommendations}
-    
+
     segments - Detailed segment information with permissions and attributes
         Params: offset, count (for pagination)
         Returns: {segments: [{name, start, end, size, perms, class, align, type, flags}]}
-    
+
     entrypoints - All entry points with type classification
         Returns: {entrypoints: [{name, addr, ordinal, type, is_main}]}
-    
+
     bookmarks - IDA native bookmarks
         Returns: {bookmarks: [{index, addr, desc}]}
     """
@@ -132,10 +134,7 @@ def idb(
         if action == "segments":
             segs = idb_segments_detailed()
             total = len(segs)
-            if count == 0:
-                page = segs[offset:]
-            else:
-                page = segs[offset:offset + count]
+            page = segs[offset:] if count == 0 else segs[offset:offset + count]
             return {"ok": True, "segments": page, "total": total, "offset": offset, "count": len(page)}
         if action == "entrypoints":
             return {"ok": True, **idb_entrypoints_detailed()}
@@ -155,21 +154,21 @@ def idb_meta():
     """Rich metadata about the binary and IDB."""
     binary_path = _get_path(ida_nalt, ["get_input_file_path"]) or _get_path(idaapi, ["get_input_file_path"]) or "unknown"
     idb_path = _get_path(idaapi, ["get_idb_path"]) or _get_path(idc, ["get_idb_path"]) or "unknown"
-    
+
     # Get min/max EA
     min_ea = _safe_inf_get("min_ea", 0)
     max_ea = _safe_inf_get("max_ea", 0)
-    
+
     # File hashes if available
     md5 = ida_nalt.retrieve_input_file_md5() if hasattr(ida_nalt, "retrieve_input_file_md5") else None
     sha256 = ida_nalt.retrieve_input_file_sha256() if hasattr(ida_nalt, "retrieve_input_file_sha256") else None
     crc32 = ida_nalt.retrieve_input_file_crc32() if hasattr(ida_nalt, "retrieve_input_file_crc32") else None
-    
+
     # Compiler info
     comp = _safe_inf_get("cc_id", 0)
-    compiler_names = {0: "unknown", 1: "visual_c", 2: "borland", 3: "watcom", 
+    compiler_names = {0: "unknown", 1: "visual_c", 2: "borland", 3: "watcom",
                       6: "gnu", 7: "visual_cxx", 8: "bp", 9: "clang"}
-    
+
     # File type — resolve effective kind (raw vs obj discrepancy).
     file_type_id = _inf_filetype_id()
     ft_loader = _filetype_name(file_type_id)
@@ -221,23 +220,23 @@ def idb_segments_detailed(include_head_counts=True):
         seg = ida_segment.getseg(ea)
         if not seg:
             continue
-            
+
         # Permissions string
         perms = ""
         if seg.perm & idaapi.SEGPERM_READ: perms += "r"
         if seg.perm & idaapi.SEGPERM_WRITE: perms += "w"
         if seg.perm & idaapi.SEGPERM_EXEC: perms += "x"
-        
+
         # Segment type - build dict safely for IDA 9 compatibility
         seg_types = {}
-        for attr_name, type_name in [("SEG_CODE", "code"), ("SEG_DATA", "data"), 
+        for attr_name, type_name in [("SEG_CODE", "code"), ("SEG_DATA", "data"),
                                       ("SEG_BSS", "bss"), ("SEG_STACK", "stack"),
                                       ("SEG_XTRN", "extern"), ("SEG_NULL", "null"),
                                       ("SEG_NORM", "normal"), ("SEG_ABS", "absolute")]:
             if hasattr(ida_segment, attr_name):
                 seg_types[getattr(ida_segment, attr_name)] = type_name
         seg_type = seg_types.get(seg.type, f"type_{seg.type}")
-        
+
         code_count = None
         data_count = None
         if include_head_counts:
@@ -253,7 +252,7 @@ def idb_segments_detailed(include_head_counts=True):
                 head = idc.next_head(head, seg.end_ea)
                 if head == idaapi.BADADDR:
                     break
-        
+
         segments.append({
             "name": ida_segment.get_segm_name(seg),
             "start": hex(seg.start_ea),
@@ -273,14 +272,14 @@ def idb_segments_detailed(include_head_counts=True):
 def idb_entrypoints_detailed():
     """Entry points with classification."""
     entries = []
-    main_names = {"main", "_main", "WinMain", "_WinMain@16", "wmain", "_wmain", 
+    main_names = {"main", "_main", "WinMain", "_WinMain@16", "wmain", "_wmain",
                   "DllMain", "_DllMain@12", "DllEntryPoint", "start", "_start"}
-    
+
     for i in range(ida_entry.get_entry_qty()):
         ord_val = ida_entry.get_entry_ordinal(i)
         ea = ida_entry.get_entry(ord_val)
         name = ida_entry.get_entry_name(ord_val)
-        
+
         # Classify entry type
         entry_type = "export"
         if i == 0:
@@ -289,13 +288,13 @@ def idb_entrypoints_detailed():
             entry_type = "main"
         elif name and name.startswith("Dll"):
             entry_type = "dll_entry"
-            
+
         # Get function info if available
         func = ida_funcs.get_func(ea)
         func_size = None
         if func:
             func_size = hex(func.end_ea - func.start_ea)
-            
+
         entries.append({
             "name": name,
             "addr": hex(ea),
@@ -318,8 +317,8 @@ def idb_bookmarks():
             desc = idc.get_bookmark_desc(i)
             func = ida_funcs.get_func(ea)
             bookmarks.append({
-                "index": i, 
-                "addr": hex(ea), 
+                "index": i,
+                "addr": hex(ea),
                 "desc": desc or "",
                 "func": idc.get_func_name(func.start_ea) if func else None
             })
@@ -333,10 +332,10 @@ def idb_summary(fast=False):
     # Count functions
     all_funcs = list(idautils.Functions())
     named_funcs = sum(1 for ea in all_funcs if not idc.get_func_name(ea).startswith("sub_"))
-    
+
     # Count strings
     string_count = idaapi.get_strlist_qty()
-    
+
     # Count imports/exports
     import_count = 0
     for i in range(ida_nalt.get_import_module_qty()):
@@ -381,7 +380,7 @@ def idb_summary(fast=False):
             if head == idaapi.BADADDR:
                 break
             limit += 1
-    
+
     # Coverage estimate
     total_code_bytes = 0
     defined_code_bytes = 0
@@ -398,9 +397,9 @@ def idb_summary(fast=False):
                 head = idc.next_head(head, seg.end_ea)
                 if head == idaapi.BADADDR:
                     break
-    
+
     coverage = round(defined_code_bytes / total_code_bytes * 100, 1) if total_code_bytes > 0 else 0
-    
+
     return {
         "functions": len(all_funcs),
         "named_functions": named_funcs,
@@ -621,14 +620,10 @@ def idb_state(audit_tail: int = 5) -> dict:
             str_qty = int(idaapi.get_strlist_qty())
     except Exception:
         pass
-    try:
+    with contextlib.suppress(Exception):
         import_qty = int(ida_nalt.get_import_module_qty())
-    except Exception:
-        pass
-    try:
+    with contextlib.suppress(Exception):
         export_qty = int(ida_entry.get_entry_qty())
-    except Exception:
-        pass
 
     # UI cursor
     cursor_ea = ""

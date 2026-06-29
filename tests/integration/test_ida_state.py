@@ -1,9 +1,10 @@
 import json
 import os
+import os as _os
+import sys as _sys
 
 import pytest
 
-import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.dirname(__file__))
 from conftest import IDARunner, ida_is_available
 

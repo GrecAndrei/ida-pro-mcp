@@ -103,10 +103,7 @@ class ServerThreatHuntMixin:
             val = payload.get(key)
             if isinstance(val, list):
                 for entry in val:
-                    if isinstance(entry, dict):
-                        e = dict(entry)
-                    else:
-                        e = {"value": entry}
+                    e = dict(entry) if isinstance(entry, dict) else {"value": entry}
                     e.setdefault("tool", tool)
                     e.setdefault("action", action)
                     out.append(e)

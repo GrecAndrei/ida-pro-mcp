@@ -9,11 +9,11 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+import contextlib
 import importlib
 import json
 import re
 from typing import Any, Dict, List
-
 
 # =============================================================================
 # Macro DSL Interpreter (embedded into batch to avoid standalone duplication)
@@ -263,10 +263,8 @@ class MacroDSLInterpreter:
             k, v = token.split("=", 1)
             k = k.strip()
             v = v.strip()
-            try:
+            with contextlib.suppress(json.JSONDecodeError):
                 v = json.loads(v)
-            except json.JSONDecodeError:
-                pass
             args[k] = v
         return args
 

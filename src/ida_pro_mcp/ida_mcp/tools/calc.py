@@ -6,12 +6,16 @@ except ImportError:
 
 import json
 import re
+
 from ida_pro_mcp.services import parse_str_list
 
 try:
     from ..support.semantic_matching import normalize_action, semantic_score, semantic_tokens
 except ImportError:
-    from support.semantic_matching import normalize_action, semantic_score, semantic_tokens  # type: ignore[import-not-found]
+    from support.semantic_matching import (  # type: ignore[import-not-found]
+        semantic_score,
+        semantic_tokens,
+    )
 
 
 _CALC_ACTIONS = {"eval", "offset", "convert", "resolve", "deref", "chain", "align", "bitops"}
@@ -377,8 +381,8 @@ def calc(
             raise ValueError(f"Unknown type: {val_type}")
 
         def eval_expr(expression):
-            import re
             import ast
+            import re
             # Safety: limit expression length
             if len(expression) > 1024:
                 raise ValueError("Expression too long (max 1024 chars)")
@@ -460,7 +464,7 @@ def calc(
                     return all(vals) if isinstance(node.op, ast.And) else any(vals)
                 if isinstance(node, ast.Compare):
                     lhs = _eval_node(node.left)
-                    for op, comp in zip(node.ops, node.comparators):
+                    for op, comp in zip(node.ops, node.comparators, strict=False):
                         if not isinstance(op, allowed_cmps):
                             raise ValueError("Comparison operator not allowed")
                         rhs = _eval_node(comp)
@@ -521,7 +525,7 @@ def calc(
                 ea2 = resolve_addr(target)
             except ValueError as e:
                 return make_error(MCPError.INVALID_ARGS, str(e))
-            
+
             delta = ea2 - ea1
             return _finalize({
                 "ok": True,
@@ -541,7 +545,7 @@ def calc(
                 v = resolve_int(value)
             except ValueError as e:
                 return make_error(MCPError.INVALID_ARGS, str(e))
-                
+
             # ASCII representation (4/8 bytes)
             import struct
             try:
@@ -553,7 +557,7 @@ def calc(
                         ascii_val += "."
             except Exception:
                 ascii_val = "n/a"
-                
+
             return _finalize({
                 "ok": True,
                 "hex": hex(v),
@@ -622,7 +626,7 @@ def calc(
             file_off = _get_fro(ea)
             seg = idaapi.getseg(ea)
             seg_name = ida_segment.get_segm_name(seg) if seg else "none"
-            
+
             return _finalize({
                 "ok": True,
                 "va": hex(ea),

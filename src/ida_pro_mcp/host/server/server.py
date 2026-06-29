@@ -2,15 +2,15 @@
 """
 MCP Server: IDAMCPServer — the main JSON-RPC stdio server.
 """
-import os
-import sys
-import json
-import time
-import threading
-import tempfile
-import warnings
 import atexit
+import json
+import os
 import socket as _socket_mod
+import sys
+import tempfile
+import threading
+import time
+import warnings
 from typing import Any, Dict, List, Optional
 
 from ida_pro_mcp import __version__
@@ -20,49 +20,50 @@ warnings.filterwarnings("ignore")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-from .resources import list_resources, ResourceResolver
-from .audit import AuditLogger
-from .rate_limit import RateLimiter
+import contextlib
+
+from ..analysis.context_density import ContextDensityOptimizer
+from ..analysis.patterns import GlobalFactsDatabase
 from ..config import (
     CACHE_DIR,
-    log_rpc,
+    CONTEXT_DENSITY_COMPACT_THRESHOLD,
+    CONTEXT_DENSITY_DEFAULT_BUDGET,
+    CONTEXT_DENSITY_MAX_CODE_PREVIEW,
+    CONTEXT_DENSITY_MAX_HEX_PREVIEW,
+    CONTEXT_DENSITY_MAX_XREF_ITEMS,
     _bounded_int,
     _coerce_bool,
     _env_bool,
     _normalize_session_id,
     _select_runtime_dir,
-    CONTEXT_DENSITY_DEFAULT_BUDGET,
-    CONTEXT_DENSITY_COMPACT_THRESHOLD,
-    CONTEXT_DENSITY_MAX_CODE_PREVIEW,
-    CONTEXT_DENSITY_MAX_HEX_PREVIEW,
-    CONTEXT_DENSITY_MAX_XREF_ITEMS,
+    log_rpc,
 )
-from ..analysis.context_density import ContextDensityOptimizer
 from ..errors import MCPError, is_error_result, make_error
-from ..analysis.patterns import GlobalFactsDatabase
-from ..stores.insight_index import InsightIndex
 from ..schemas import (
     _resolve_tool_alias,
 )
-from .server_args import ServerArgsMixin
-from .server_dispatch import ServerDispatchMixin
-from .server_session import ServerSessionMixin
-from .server_runtime import ServerRuntimeMixin
-from .server_response import ServerResponseMixin
-from .server_semantic import ServerSemanticMixin
-from .server_wiki import ServerWikiMixin
-from .server_threat_hunt import ServerThreatHuntMixin
-from .server_blackboard import ServerBlackboardMixin
-from .server_predictor import ServerPredictorMixin
-from .server_batch import BackgroundMixin
-from .server_workflow import ServerWorkflowMixin
-from .server_multi_session import ServerMultiSessionMixin
+from ..stores.insight_index import InsightIndex
 
 # Compatibility anchor for source-based regression tests.
 # if addr and tool_name in ("code", "data", "search"):
-
 # Import truncation middleware
-from ..stores.truncation import truncate_response, continue_truncated  # noqa: F401
+from ..stores.truncation import continue_truncated, truncate_response  # noqa: F401
+from .audit import AuditLogger
+from .rate_limit import RateLimiter
+from .resources import ResourceResolver, list_resources
+from .server_args import ServerArgsMixin
+from .server_batch import BackgroundMixin
+from .server_blackboard import ServerBlackboardMixin
+from .server_dispatch import ServerDispatchMixin
+from .server_multi_session import ServerMultiSessionMixin
+from .server_predictor import ServerPredictorMixin
+from .server_response import ServerResponseMixin
+from .server_runtime import ServerRuntimeMixin
+from .server_semantic import ServerSemanticMixin
+from .server_session import ServerSessionMixin
+from .server_threat_hunt import ServerThreatHuntMixin
+from .server_wiki import ServerWikiMixin
+from .server_workflow import ServerWorkflowMixin
 
 # =============================================================================
 # MCP SERVER
@@ -261,7 +262,7 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
         )
         self.cache_dir = _select_runtime_dir(preferred_cache)
         os.makedirs(self.cache_dir, exist_ok=True)
-        from .session import SessionManager, BookmarkManager  # lazy: break circular import
+        from .session import BookmarkManager, SessionManager  # lazy: break circular import
         self.session_mgr = SessionManager(self.cache_dir)
         # Automatic session housekeeping: if we have accumulated way more
         # sessions than a sensible working set, prune the stale ones
@@ -726,18 +727,14 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
         except Exception:
             pass
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 conn.close()
-            except Exception:
-                pass
 
     @staticmethod
     def _cleanup_daemon() -> None:
         _remove_pidfile()
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(DAEMON_SOCKET)
-        except OSError:
-            pass
 
     def _send_notification(self, notification: dict) -> None:
         """Send an unsolicited MCP notification to the client (no id field = notification)."""
@@ -817,10 +814,8 @@ def _write_pidfile() -> None:
 
 
 def _remove_pidfile() -> None:
-    try:
+    with contextlib.suppress(OSError):
         os.unlink(DAEMON_PIDFILE)
-    except OSError:
-        pass
 
 
 def main():

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """E2E script to run live macro crystallization against a real binary in real IDA."""
 
-import os
-import sys
-import time
 import json
-import subprocess
-import threading
+import os
 import queue
+import subprocess
+import sys
+import threading
+import time
 
 # Setup project paths dynamically
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -148,7 +148,7 @@ def main():
         session_res = client.call_tool("session", action="create", binary_path=TEST_BINARY, force_new=True)
         print("Session creation response:")
         print(json.dumps(session_res, indent=2))
-        
+
         sid = session_res.get("session", {}).get("session_id")
         if not sid:
             print("Failed to get session ID!")
@@ -162,18 +162,18 @@ def main():
         print("\n[2] Executing live tool calls on real IDA database...")
         for iter_num in range(1, 3):
             print(f"\n--- Iteration {iter_num} ---")
-            
-            print(f"  > Calling search(find, query='main')...")
+
+            print("  > Calling search(find, query='main')...")
             search_res = client.call_tool("search", action="find", query="main")
             print(f"    Search response: {json.dumps(search_res)}")
 
-            print(f"  > Calling code(disasm, addr='0x140010108')...")
+            print("  > Calling code(disasm, addr='0x140010108')...")
             code_res = client.call_tool("code", action="disasm", addr="0x140010108")
             print(f"    Code response: {json.dumps(code_res)}")
 
-            print(f"  > Calling blackboard(write)...")
-            bb_res = client.call_tool("blackboard", action="write", 
-                                       title=f"Live Finding {iter_num}", 
+            print("  > Calling blackboard(write)...")
+            bb_res = client.call_tool("blackboard", action="write",
+                                       title=f"Live Finding {iter_num}",
                                        content=f"Observed code flow at 0x140010108 during iteration {iter_num}",
                                        category="triage")
             print(f"    Blackboard response: ok={bb_res.get('ok')}")
@@ -185,9 +185,9 @@ def main():
 
         # 3. Trigger crystallization
         print("\n[3] Triggering crystallization on the real logged sequence...")
-        crystallize_res = client.call_tool("session", 
-                                           action="crystallize_mined_macros", 
-                                           session_id=sid, 
+        crystallize_res = client.call_tool("session",
+                                           action="crystallize_mined_macros",
+                                           session_id=sid,
                                            min_support=2)
         print("\nCrystallization Response:")
         print(json.dumps(crystallize_res, indent=2))

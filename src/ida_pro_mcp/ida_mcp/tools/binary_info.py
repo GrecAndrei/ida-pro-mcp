@@ -35,8 +35,9 @@ def binary_info(
     - overlay: Detect and analyze overlay data (data appended after PE)
     """
     try:
-        import ida_entry
         from collections import Counter
+
+        import ida_entry
         info = idaapi.get_inf_structure() if hasattr(idaapi, 'get_inf_structure') else None
         file_type = _inf_filetype_id()
         proc_name = _inf_procname()

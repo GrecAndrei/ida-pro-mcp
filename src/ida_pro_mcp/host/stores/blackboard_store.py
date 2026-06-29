@@ -8,8 +8,8 @@ background crawler live elsewhere in the host package.
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
 import sqlite3
 import tempfile
@@ -56,7 +56,7 @@ def _get_embedder():
         return BgeCodeEmbedder()
     except ImportError:
         try:
-            from host.intelligence.core import BgeCodeEmbedder# type: ignore
+            from host.intelligence.core import BgeCodeEmbedder  # type: ignore
             return BgeCodeEmbedder()
         except ImportError:
             return None
@@ -793,7 +793,7 @@ class BlackboardStore:
         candidates = []
         for fn in parsed_funcs:
             name = fn.get("name", "")
-            if not (name.startswith("sub_") or name.startswith("j_")):
+            if not (name.startswith(("sub_", "j_"))):
                 continue
             addr = fn.get("start_ea") or fn.get("addr")
             if not addr:

@@ -22,7 +22,7 @@ def colorize(
 ) -> dict:
     """
     Apply visual coloring to the database.
-    
+
     Actions:
     - set_func: Color an entire function.
     - set_range: Color a specific memory range.
@@ -40,7 +40,7 @@ def colorize(
             "orange": 0x0080FF, "white": 0xFFFFFF, "black": 0x000000,
             "default": 0xFFFFFFFF
         }
-        
+
         def parse_color(c_str):
             if not c_str: return COLORS["yellow"]
             c_str = c_str.lower().strip().replace("#", "")
@@ -56,7 +56,7 @@ def colorize(
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = validate_addr(addr, require_func=True)
             if err: return err
-            
+
             bgr = parse_color(color)
             func = ida_funcs.get_func(ea)
             curr = func.start_ea
@@ -76,7 +76,7 @@ def colorize(
             if err: return err
             ee, err = validate_addr(end_addr)
             if err: return err
-            
+
             bgr = parse_color(color)
             curr = ea
             _max_items = 100000
@@ -107,13 +107,13 @@ def colorize(
         elif action == "highlight_pattern":
             if not pattern: return make_error(MCPError.INVALID_ARGS, "pattern required")
             bgr = parse_color(color)
-            
+
             pt = ida_bytes.compiled_binpat_vec_t()
             # parse_binpat_str returns number of patterns parsed (>0 = success) in IDA 9
             n_parsed = ida_bytes.parse_binpat_str(pt, 0, pattern, 16)
             if not n_parsed:
                 return make_error(MCPError.INVALID_ARGS, "Invalid pattern")
-            
+
             matches = []
             for seg_ea in idautils.Segments():
                 seg = idaapi.getseg(seg_ea)
@@ -131,7 +131,7 @@ def colorize(
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = validate_addr(addr)
             if err: return err
-            
+
             # If in function, clear function
             func = ida_funcs.get_func(ea)
             if func:

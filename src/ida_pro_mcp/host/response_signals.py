@@ -34,7 +34,6 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 
-
 # ==========================================================================
 # Session Resume Injection
 # ==========================================================================
@@ -94,7 +93,7 @@ def build_session_resume(
                 decompiled.add(addr)
 
     if decompiled:
-        resume["previously_decompiled"] = sorted(list(decompiled))
+        resume["previously_decompiled"] = sorted(decompiled)
 
     pending = [h for h in hypotheses if h.get("status") == "pending"]
     if pending:

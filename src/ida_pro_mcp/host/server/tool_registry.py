@@ -260,7 +260,7 @@ def has_tool(tool: str) -> bool:
 
 def register_tool_actions(tool: str, actions: list[str]) -> None:
     """Register or override a tool's action list at runtime.
-    
+
     Used by tool modules that define their action lists in the tool file itself
     (e.g., session, intelligence).  Any tool not explicitly registered here
     falls back to the ``_TOOL_ACTIONS`` literal above.

@@ -7,7 +7,7 @@ SRC = os.path.join(ROOT, "src")
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
-from ida_pro_mcp.services import normalize_arch_options, infer_binary_arch_profile
+from ida_pro_mcp.services import infer_binary_arch_profile, normalize_arch_options
 
 
 def test_normalize_arch_options_aliases():

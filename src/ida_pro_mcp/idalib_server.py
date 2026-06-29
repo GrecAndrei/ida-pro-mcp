@@ -1,12 +1,13 @@
-import sys
-import signal
-import logging
 import argparse
+import logging
+import signal
+import sys
 from pathlib import Path
+
+import ida_auto
 
 # idapro must go first to initialize idalib
 import idapro
-import ida_auto
 
 from ida_pro_mcp.ida_mcp import MCP_SERVER
 

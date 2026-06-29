@@ -1,3 +1,4 @@
+import contextlib
 
 try:
     from ._common import *
@@ -109,7 +110,7 @@ def data_ops(
             if ida_bytes.create_data(ea, flags, size, idaapi.BADADDR):
                 return _attach_ml_context({"ok": True, "addr": addr, "size": size, "action": action}, action, f"size={size}")
             return make_error(MCPError.IDA_ERROR, "Failed to create data")
-        
+
         elif action == "make_array":
             if count is None:
                 return make_error(MCPError.INVALID_ARGS, "count required")
@@ -136,10 +137,7 @@ def data_ops(
             # OverflowError from SWIG, which the old `except TypeError` did not catch,
             # turning a recoverable failure into an UNKNOWN_ERROR crash. None size
             # means auto-detect to the item end (BADADDR).
-            if size and int(size) > 0:
-                end_ea = ea + int(size)
-            else:
-                end_ea = idc.BADADDR
+            end_ea = ea + int(size) if size and int(size) > 0 else idc.BADADDR
             try:
                 created = idc.create_strlit(ea, end_ea)
             except (TypeError, OverflowError):
@@ -194,10 +192,8 @@ def data_ops(
         elif action == "make_ptr":
             ptr_size = _inf_ptr_size()
             if ida_bytes.create_data(ea, _flag_for_size(ptr_size), ptr_size, idaapi.BADADDR):
-                try:
+                with contextlib.suppress(Exception):
                     idc.op_offset(ea, 0, idc.REF_OFF64 if ptr_size == 8 else idc.REF_OFF32, 0, 0, 0)
-                except Exception:
-                    pass
                 return _attach_ml_context({"ok": True, "addr": addr, "size": ptr_size, "pointer": True, "action": action}, action, f"ptr_size={ptr_size}")
             return make_error(MCPError.IDA_ERROR, "Failed to create pointer data")
 

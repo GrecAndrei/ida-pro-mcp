@@ -19,7 +19,7 @@ def nav(
 ) -> dict:
     """
     Navigation helpers for triage and analysis context.
-    
+
     Actions:
     - goto: Get detailed analysis context for an address.
     - cursor: Get current pseudo-cursor position (screen ea).
@@ -33,7 +33,7 @@ def nav(
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = validate_addr(addr)
             if err: return err
-            
+
             func = ida_funcs.get_func(ea)
             return {
                 "ok": True,
@@ -74,10 +74,10 @@ def nav(
             query = str(addr).lower().strip()
             semantic_backend = "keywords_only"
             semantic_warning = None
-            
+
             # Score candidates by semantic relevance
             candidates = []
-            
+
             # Check entry points first
             import ida_entry
             for i in range(ida_entry.get_entry_qty()):
@@ -93,7 +93,7 @@ def nav(
                     score += 150
                 if score > 0:
                     candidates.append({"addr": ea, "name": name, "score": score, "matched_by": "entry_point"})
-            
+
             # Check all functions (capped to prevent hangs)
             max_funcs = 50000
             func_count = 0
@@ -103,12 +103,12 @@ def nav(
                 fname = idc.get_func_name(func_ea) or ""
                 score = 0
                 matched_by = []
-                
+
                 # Name matching
                 if query in fname.lower():
                     score += 80
                     matched_by.append("name")
-                
+
                 # Semantic intent matching
                 intent_map = {
                     "main": ["main", "winmain", "dllmain", "entry", "start"],
@@ -125,7 +125,7 @@ def nav(
                     "decode": ["decode", "decrypt", "uncompress", "decompress", "unpack"],
                     "encode": ["encode", "encrypt", "compress", "pack", "serialize"],
                 }
-                
+
                 for intent, keywords in intent_map.items():
                     if intent in query:
                         for kw in keywords:
@@ -133,18 +133,18 @@ def nav(
                                 score += 60
                                 matched_by.append(f"intent:{intent}")
                                 break
-                
+
                 # API category matching
                 try:
                     from .classify import _classify_func
                 except ImportError:
                     from classify import _classify_func  # type: ignore[import-not-found]
-                
+
                 cat, _, _ = _classify_func(func_ea)
                 if cat in query:
                     score += 40
                     matched_by.append(f"category:{cat}")
-                
+
                 if score > 0:
                     candidates.append({"addr": func_ea, "name": fname, "score": score, "matched_by": matched_by})
 
@@ -153,7 +153,7 @@ def nav(
                 from ida_pro_mcp.services import BgeCodeEmbedder, FunctionEmbeddingIndex
             except ImportError:
                 try:
-                    from host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex# type: ignore
+                    from host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex  # type: ignore
                 except ImportError:
                     BgeCodeEmbedder = None  # type: ignore
                     FunctionEmbeddingIndex = None  # type: ignore
@@ -193,14 +193,14 @@ def nav(
                     semantic_warning = "Embedding backend unavailable; used keyword fallback."
             else:
                 semantic_warning = "Embedding backend not installed; used keyword fallback."
-            
+
             if not candidates:
                 return make_error(MCPError.NOT_FOUND, f"No function matches semantic query: '{query}'", "Try a more specific query or use search(action='find', pattern=...)")
-            
+
             # Sort by score descending
             candidates.sort(key=lambda x: -x["score"])
             top = candidates[0]
-            
+
             return {
                 "ok": True,
                 "query": query,

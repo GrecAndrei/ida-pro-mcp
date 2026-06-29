@@ -26,10 +26,8 @@ def _patched_attr(obj, attr, value):
         if had_attr:
             setattr(obj, attr, original)
         else:
-            try:
+            with contextlib.suppress(AttributeError):
                 delattr(obj, attr)
-            except AttributeError:
-                pass
 
 
 @contextlib.contextmanager
@@ -46,8 +44,6 @@ def _patched_attrs(obj, **replacements):
             if had_attr:
                 setattr(obj, attr, original)
             else:
-                try:
+                with contextlib.suppress(AttributeError):
                     delattr(obj, attr)
-                except AttributeError:
-                    pass
 

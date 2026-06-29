@@ -11,37 +11,38 @@ except ImportError:
     except ImportError:
         BlackboardStore = None  # type: ignore
 
+import contextlib
 import json
 import os
 import time
 
 try:
     from ..support.firmware_heuristics import (
+        aggregate_fingerprint_scores,
+        apply_fingerprint_boost,
         ascii_run_stats,
         build_campaign_execution_plan,
         build_carve_plan,
         cluster_pointer_hits,
         dedup_regions_by_fingerprint,
-        aggregate_fingerprint_scores,
-        apply_fingerprint_boost,
         rank_region_plans,
         region_priority_score,
-        summarize_campaign_regions,
         shannon_entropy,
+        summarize_campaign_regions,
     )
 except ImportError:
     from support.firmware_heuristics import (  # type: ignore[import-not-found]
+        aggregate_fingerprint_scores,
+        apply_fingerprint_boost,
         ascii_run_stats,
         build_campaign_execution_plan,
         build_carve_plan,
         cluster_pointer_hits,
         dedup_regions_by_fingerprint,
-        aggregate_fingerprint_scores,
-        apply_fingerprint_boost,
         rank_region_plans,
         region_priority_score,
-        summarize_campaign_regions,
         shannon_entropy,
+        summarize_campaign_regions,
     )
 
 
@@ -64,7 +65,7 @@ def _fw_state_path() -> str:
 def _load_fw_state() -> dict:
     p = _fw_state_path()
     try:
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             data = json.load(f)
             if isinstance(data, dict):
                 data.setdefault("history", [])
@@ -236,7 +237,7 @@ def _profile_range(s_ea: int, e_ea: int, ptr_size: int) -> dict:
 
 
 try:
-    from typing import List, Dict
+    from typing import Dict, List
 except ImportError:  # Python 3.9+
     pass
 
@@ -285,10 +286,8 @@ def _fwb_annotate_mmio(peripherals: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def _fwb_define_ascii_strings(limit: int = 256) -> Dict[str, Any]:
-    try:
+    with contextlib.suppress(Exception):
         idaapi.build_strlist()
-    except Exception:
-        pass
     defined = idaapi.get_strlist_qty() if hasattr(idaapi, "get_strlist_qty") else 0
     return {"strings_defined": min(defined, limit)}
 
@@ -657,7 +656,7 @@ def firmware_view(
                 "next_actions": [
                     f"firmware_view(action='pointer_sweep', start='{hex(s_ea)}', end='{hex(e_ea)}', stride={ptr_size})",
                     f"firmware_view(action='auto_retype', start='{hex(s_ea)}', end='{hex(e_ea)}', apply=false)",
-                    f"search(action='semantic', pattern='init parser dispatch checksum', limit=60)",
+                    "search(action='semantic', pattern='init parser dispatch checksum', limit=60)",
                 ],
             }
             return _log_ml(result, action, f"unknown_ratio={unknown_ratio:.3f}; strategy={strategy}")
@@ -745,10 +744,8 @@ def firmware_view(
                             _record_contradiction(state, pea, prev_kind, "ptr", "code_to_ptr_guard", confidence=0.82)
                             continue
                         if ida_bytes.create_data(pea, ida_bytes.qword_flag() if ptr_size == 8 else ida_bytes.dword_flag(), ptr_size, idaapi.BADADDR):
-                            try:
+                            with contextlib.suppress(Exception):
                                 idc.op_offset(pea, 0, idc.REF_OFF64 if ptr_size == 8 else idc.REF_OFF32, 0, 0, 0)
-                            except Exception:
-                                pass
                             applied += 1
                             state["history"].append({"ts": int(time.time()), "action": "auto_retype", "ea": hex(pea), "new_kind": "ptr", "prev_kind": prev_kind, "size": ptr_size})
                     elif p["kind"] == "code":
@@ -1214,10 +1211,8 @@ def firmware_view(
                     if k == "make_ptr":
                         ok = ida_bytes.create_data(oa, ida_bytes.qword_flag() if ptr_size == 8 else ida_bytes.dword_flag(), ptr_size, idaapi.BADADDR)
                         if ok:
-                            try:
+                            with contextlib.suppress(Exception):
                                 idc.op_offset(oa, 0, idc.REF_OFF64 if ptr_size == 8 else idc.REF_OFF32, 0, 0, 0)
-                            except Exception:
-                                pass
                             applied += 1
                             state["history"].append({"ts": int(time.time()), "action": "smart_carve", "ea": hex(oa), "new_kind": "ptr", "prev_kind": prev_kind, "size": ptr_size})
                     elif k == "make_string":
@@ -1536,13 +1531,7 @@ def firmware_view(
                     # Covers standard Cortex-M SRAM (0x20000000+), vendor SRAM
                     # (e.g. AIC8800D80 at 0x1a0000), and ITCM/CCM ranges.
                     sp_plausible = (
-                        sp_val != 0
-                        and sp_val != 0xFFFFFFFF
-                        and (sp_val & 3) == 0
-                        and (
-                            0x00100000 <= sp_val <= 0x40080000  # standard + vendor SRAM
-                            or 0x60000000 <= sp_val <= 0xA0000000  # external RAM
-                        )
+                        sp_val not in {0, 4294967295} and sp_val & 3 == 0 and (1048576 <= sp_val <= 1074266112 or 1610612736 <= sp_val <= 2684354560)
                     )
                     thumb_like = 0
                     for i in range(1, min(32, len(chunk) // 4)):

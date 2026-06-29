@@ -2,11 +2,13 @@
 """
 Test session persistence - verify sessions survive server restart.
 """
+import contextlib
 import json
 import os
 import subprocess
 import sys
 import time
+
 import pytest
 
 # Check IDA availability without relative imports
@@ -48,10 +50,8 @@ def send_request(proc, method, params):
 
 
 def _stop_server(proc):
-    try:
+    with contextlib.suppress(Exception):
         proc.stdin.close()
-    except Exception:
-        pass
     try:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
