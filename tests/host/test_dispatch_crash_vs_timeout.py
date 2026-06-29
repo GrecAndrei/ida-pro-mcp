@@ -20,8 +20,8 @@ SRC = os.path.join(ROOT, "src")
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
-from ida_pro_mcp.host.server.server_dispatch import ServerDispatchMixin
-from ida_pro_mcp.services import MCPError, Session
+from ida_pro_mcp.host.server.server_dispatch import ServerDispatchMixin  # noqa: E402
+from ida_pro_mcp.services import MCPError, Session  # noqa: E402
 
 
 def _session() -> Session:
@@ -53,10 +53,11 @@ class _Dispatch(ServerDispatchMixin):
     def _resolve_session_from_idb_ref(self, idb_path):
         return _session()
 
-    def _runtime_alive(self, runtime):
+    @staticmethod
+    def _runtime_alive(runtime):
         return runtime is not None
 
-    def _send_rpc_raw(self, payload, port):
+    def _send_rpc_raw(self, payload, port, **kwargs):
         raise self._rpc_exc
 
     def _get_ida_diagnostics(self, *a, **k):
