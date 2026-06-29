@@ -20,6 +20,7 @@ def data(
     include_prototype: Annotated[bool, "Include function prototypes (functions action)"] = False,
     include_xrefs: Annotated[bool, "Include cross-reference counts"] = False,
     min_size: Annotated[Optional[int], "Minimum function size filter"] = None,
+    min_xrefs: Annotated[Optional[int], "For functions action: keep only functions with >= this many xrefs_to. Cheap filter that avoids paying for thousands of stub functions."] = None,
     named_only: Annotated[bool, "Only return named (non-sub_) items"] = False,
     min_len: Annotated[int, "Minimum string length for strings action"] = 6,
     structured: Annotated[bool, "When true, also return an 'items' list of structured records alongside the compact text"] = False,
@@ -34,8 +35,10 @@ def data(
 
     functions - List all defined functions with optional filtering
         Params: query (name filter), offset, count, include_prototype, include_xrefs,
-                min_size, named_only
+                min_size, min_xrefs (>= N xrefs_to), named_only
         Returns: {functions: "addr  size  name [prototype] [xrefs]\\n...", total, offset, count}
+        Tip: setting min_xrefs=3 cuts the long tail of stub functions so callers
+        don't pay to paginate thousands of zero-caller entries.
 
     globals - List global names/variables (non-functions)
         Params: query (name filter), offset, count, include_xrefs
@@ -90,6 +93,18 @@ def data(
                 func_size = fn.end_ea - fn.start_ea
                 if min_size and func_size < min_size:
                     continue
+
+                # Filter by min_xrefs (cheap single pass; collects via XrefsTo).
+                # Without this filter an `idautils.Functions()` walk on a
+                # large binary can return thousands of stub functions with
+                # zero callers. Pre-filtering here means agents don't pay
+                # the cost of paginating junk results.
+                if min_xrefs is not None:
+                    xref_count = sum(
+                        1 for _ in zip(idautils.XrefsTo(ea), range(999), strict=False)
+                    )
+                    if xref_count < min_xrefs:
+                        continue
 
                 if not _matcher or _matcher(name):
                     total += 1

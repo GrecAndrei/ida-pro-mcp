@@ -709,6 +709,7 @@ def funcs(
     offset: Annotated[int, "Pagination offset for list"] = 0,
     count: Annotated[int, "Pagination count for list (0=all)"] = 50,
     min_size: Annotated[int, "Skip functions smaller than this for list"] = 0,
+    min_xrefs: Annotated[Optional[int], "Keep only functions with >= this many xrefs_to (cuts stub-function noise on large binaries)"] = None,
     named_only: Annotated[bool, "Skip sub_* for list"] = False,
     **kwargs
 ) -> dict:
@@ -717,7 +718,8 @@ def funcs(
 
     Actions:
     - list: Read-only function enumeration. Returns {functions, total, count, offset}.
-      Filters: query (substring/regex), min_size, named_only. Paginated with offset/count.
+      Filters: query (substring/regex), min_size, min_xrefs (>= N xrefs_to cuts stub noise),
+      named_only. Paginated with offset/count.
       Alias of data(action='functions', ...) — same payload, no _risk_ack needed.
     - create: Define a new function at `addr`. Automatically converts bytes to code
       if needed. If address is inside an existing function, offers to split or
@@ -745,6 +747,7 @@ def funcs(
             include_prototype=False,
             include_xrefs=True,
             min_size=min_size,
+            min_xrefs=min_xrefs,
             named_only=named_only,
         )
 
