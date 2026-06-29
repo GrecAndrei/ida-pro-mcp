@@ -524,9 +524,8 @@ def classify(
                     if len(library_funcs) < limit:
                         tag = "lib" if is_lib else ("thunk" if is_thunk else "compiler")
                         library_funcs.append(f"{hex(ea)}  {fname}  [{tag}]")
-                else:
-                    if len(user_funcs) < limit:
-                        user_funcs.append(f"{hex(ea)}  {fname}")
+                elif len(user_funcs) < limit:
+                    user_funcs.append(f"{hex(ea)}  {fname}")
             lib_count = 0
             for ea in idautils.Functions():
                 fn = ida_funcs.get_func(ea)

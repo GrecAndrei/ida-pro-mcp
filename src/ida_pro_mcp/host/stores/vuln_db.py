@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
 
 
 @dataclass(frozen=True)
@@ -9,15 +8,15 @@ class VulnPattern:
     id: str
     name: str
     description: str
-    indicator_functions: List[str]
-    indicator_strings: List[str]
-    indicator_patterns: List[str]
+    indicator_functions: list[str]
+    indicator_strings: list[str]
+    indicator_patterns: list[str]
     severity: str
     cwe_id: str
     remediation: str
 
 
-VULN_PATTERNS: List[VulnPattern] = [
+VULN_PATTERNS: list[VulnPattern] = [
     VulnPattern("VP001", "strcpy_without_bounds", "Unbounded string copy into destination buffer.", ["strcpy", "strcat"], ["copy", "buffer"], ["strcpy(", "strcat("], "High", "CWE-120", "Use bounded copy APIs and validate destination capacity."),
     VulnPattern("VP002", "gets_usage", "Unsafe gets() allows unbounded input.", ["gets"], ["input"], ["gets("], "Critical", "CWE-242", "Replace gets() with fgets() and explicit size checks."),
     VulnPattern("VP003", "printf_non_literal", "User data reaches format string sinks.", ["printf", "sprintf", "syslog"], ["%n", "format"], ["printf(", "sprintf("], "High", "CWE-134", "Use constant format strings and sanitize user input."),

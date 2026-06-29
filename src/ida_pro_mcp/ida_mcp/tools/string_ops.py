@@ -201,7 +201,7 @@ def _query_filter(strings, query):
 
 def _match_pattern(strings, pattern, limit, extract_groups=False):
     results = []
-    for s_ea, raw, st in strings:
+    for s_ea, raw, _st in strings:
         m = pattern.search(raw)
         if m:
             text = _text_or_repr(raw)
@@ -235,7 +235,7 @@ def _get_func_name_for_ea(ea):
 def _find_string_xrefs(strings, limit, max_xrefs=5000):
     """Find which functions reference each string."""
     results = []
-    for s_ea, raw, st in strings:
+    for s_ea, raw, _st in strings:
         funcs = set()
         xref_count = 0
         for xref in idautils.XrefsTo(s_ea):
@@ -307,7 +307,7 @@ def _find_stack_strings(limit):
 
 def _find_base64_strings(strings, limit, decode=False):
     results = []
-    for s_ea, raw, st in strings:
+    for s_ea, raw, _st in strings:
         _text_or_repr(raw)
         for m in _BASE64_PATTERN.finditer(raw if isinstance(raw, bytes) else raw.encode("utf-8", errors="replace")):
             b64_str = m.group(0).decode("ascii", errors="replace")
@@ -344,7 +344,7 @@ def _find_api_keys(strings, limit):
         ("Slack Token", _SLACK_TOKEN_PATTERN),
         ("JWT", _JWT_PATTERN),
     ]
-    for s_ea, raw, st in strings:
+    for s_ea, raw, _st in strings:
         _text_or_repr(raw)
         for label, pat in patterns:
             for m in pat.finditer(raw if isinstance(raw, bytes) else raw.encode("utf-8", errors="replace")):
@@ -361,7 +361,7 @@ def _find_api_keys(strings, limit):
 
 def _find_configs(strings, limit):
     results = []
-    for s_ea, raw, st in strings:
+    for s_ea, raw, _st in strings:
         text = _text_or_repr(raw)
         # JSON-like
         for m in _JSON_PATTERN.finditer(raw if isinstance(raw, bytes) else raw.encode("utf-8", errors="replace")):
@@ -394,7 +394,7 @@ def _find_configs(strings, limit):
 def _find_c2(strings, limit):
     results = []
     seen = set()
-    for s_ea, raw, st in strings:
+    for s_ea, raw, _st in strings:
         _text_or_repr(raw)
         # URLs
         for m in _URL_PATTERN.finditer(raw):
@@ -487,7 +487,7 @@ def _entropy_rank(strings, limit, min_entropy=4.0):
     q50 = sorted(ents)[len(ents) // 2] if ents else float(min_entropy)
     q75 = sorted(ents)[min(len(ents) - 1, int(round((len(ents) - 1) * 0.75)))] if ents else float(min_entropy)
     adaptive_gate = max(float(min_entropy), q50 + max(0.0, q75 - q50))
-    for s_ea, raw, st in strings:
+    for s_ea, raw, _st in strings:
         if not raw or len(raw) < 4:
             continue
         ent = _shannon_entropy(raw)
@@ -505,7 +505,7 @@ def _entropy_rank(strings, limit, min_entropy=4.0):
 
 def _find_databases(strings, limit):
     results = []
-    for s_ea, raw, st in strings:
+    for s_ea, raw, _st in strings:
         _text_or_repr(raw)
         for m in _MONGO_URI_PATTERN.finditer(raw if isinstance(raw, bytes) else raw.encode("utf-8", errors="replace")):
             uri = m.group(0).decode("utf-8", errors="replace")
@@ -533,7 +533,7 @@ def _find_databases(strings, limit):
 
 def _find_crypto_addrs(strings, limit):
     results = []
-    for s_ea, raw, st in strings:
+    for s_ea, raw, _st in strings:
         _text_or_repr(raw)
         for m in _BTC_PATTERN.finditer(raw if isinstance(raw, bytes) else raw.encode("utf-8", errors="replace")):
             addr = m.group(0).decode("utf-8", errors="replace")
@@ -626,9 +626,9 @@ def _collect_all_imports():
                 continue
             ida_nalt.get_import_module_name(mod_idx)
             # Enumerate entries in this module
-            def _enum_imports(module_name):
+            def _enum_imports(module_name, _mod_idx=mod_idx):
                 try:
-                    return idaapi.enum_import_names(mod_idx, None)
+                    return idaapi.enum_import_names(_mod_idx, None)
                 except Exception:
                     return []
             entries = _enum_imports(mod_idx) if hasattr(idaapi, 'enum_import_names') else []
@@ -710,7 +710,7 @@ def _score_strings_c2(all_strings):
         best_cat = "general"
 
         # Regex patterns (fast, high-precision for known formats)
-        for category, patterns in _SUSPICIOUS_STRING_KEYWORDS.items():
+        for _category, patterns in _SUSPICIOUS_STRING_KEYWORDS.items():
             for pat, weight, label in patterns:
                 if pat.search(raw_bytes) and weight > best_score:
                     best_score = weight
@@ -930,7 +930,7 @@ def string_ops(
 
         if action == "decode_all":
             results = []
-            for s_ea, raw, st in all_strings:
+            for s_ea, raw, _st in all_strings:
                 has_non_ascii = any(b > 127 for b in raw)
                 if not has_non_ascii:
                     continue
@@ -979,7 +979,7 @@ def string_ops(
 
         elif action == "find_ips":
             results = []
-            for s_ea, raw, st in all_strings:
+            for s_ea, raw, _st in all_strings:
                 m4 = _IPV4_PATTERN.search(raw)
                 m6 = _IPV6_PATTERN.search(raw)
                 if m4 or m6:
@@ -1001,7 +1001,7 @@ def string_ops(
         elif action == "encoding_stats":
             stats = {"ascii": 0, "utf-8": 0, "utf-16": 0, "wide": 0, "unknown": 0}
             total = 0
-            for s_ea, raw, st in all_strings:
+            for _s_ea, raw, st in all_strings:
                 total += 1
                 if st == idc.STRTYPE_C:
                     if all(b < 128 for b in raw):
@@ -1019,7 +1019,7 @@ def string_ops(
 
         elif action == "multilingual":
             results = []
-            for s_ea, raw, st in all_strings:
+            for s_ea, raw, _st in all_strings:
                 has_non_ascii = any(b > 127 for b in raw)
                 if not has_non_ascii:
                     continue

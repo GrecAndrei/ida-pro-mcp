@@ -16,15 +16,15 @@ from typing import Dict, Tuple
 LINE_RE = re.compile(r"^(?P<name>[^=]+?)\s+mean=\s*(?P<mean>[0-9.]+)\s*ms", re.MULTILINE)
 
 
-def parse_means(output: str) -> Dict[str, float]:
-    out: Dict[str, float] = {}
+def parse_means(output: str) -> dict[str, float]:
+    out: dict[str, float] = {}
     for m in LINE_RE.finditer(output):
         name = m.group("name").strip()
         out[name] = float(m.group("mean"))
     return out
 
 
-def run_benchmark(script: str) -> Tuple[int, str, str]:
+def run_benchmark(script: str) -> tuple[int, str, str]:
     proc = subprocess.run(
         [sys.executable, script],
         capture_output=True,

@@ -5,7 +5,7 @@ import hashlib
 import json
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +26,7 @@ from .schema import (
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _normalize_source_ref(ref: Any) -> dict:

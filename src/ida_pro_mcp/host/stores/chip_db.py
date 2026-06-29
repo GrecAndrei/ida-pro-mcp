@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -16,18 +16,18 @@ class MagicSignature:
 @dataclass(frozen=True)
 class ChipProfile:
     chip_family: str
-    signatures: List[MagicSignature]
+    signatures: list[MagicSignature]
     load_base: int
     processor: str
     bitness: int
     endian: str
     header_parser: str
-    memory_map: List[Dict[str, Any]]
-    peripheral_addresses: List[Dict[str, Any]]
-    post_load_actions: List[str]
+    memory_map: list[dict[str, Any]]
+    peripheral_addresses: list[dict[str, Any]]
+    post_load_actions: list[str]
 
 
-def _profile_dict(p: ChipProfile) -> Dict[str, Any]:
+def _profile_dict(p: ChipProfile) -> dict[str, Any]:
     return {
         "chip_family": p.chip_family,
         "signatures": [
@@ -45,7 +45,7 @@ def _profile_dict(p: ChipProfile) -> Dict[str, Any]:
     }
 
 
-CHIP_PROFILES: List[ChipProfile] = [
+CHIP_PROFILES: list[ChipProfile] = [
     ChipProfile(
         chip_family="AIC8800D80",
         signatures=[MagicSignature(offset=0x20, value=b"WFFW", description="AIC firmware header magic")],
@@ -122,7 +122,7 @@ CHIP_PROFILES: List[ChipProfile] = [
 ]
 
 
-def identify_chip_from_bytes(head: bytes) -> Optional[Dict[str, Any]]:
+def identify_chip_from_bytes(head: bytes) -> dict[str, Any] | None:
     for profile in CHIP_PROFILES:
         if not profile.signatures:
             continue
@@ -140,11 +140,11 @@ def identify_chip_from_bytes(head: bytes) -> Optional[Dict[str, Any]]:
     return None
 
 
-def get_chip_family_catalog() -> List[Dict[str, Any]]:
+def get_chip_family_catalog() -> list[dict[str, Any]]:
     return [_profile_dict(p) for p in CHIP_PROFILES]
 
 
-def find_chip_profile(chip_family: str) -> Optional[Dict[str, Any]]:
+def find_chip_profile(chip_family: str) -> dict[str, Any] | None:
     needle = str(chip_family or "").strip().lower()
     for p in CHIP_PROFILES:
         if p.chip_family.lower() == needle:

@@ -12,7 +12,7 @@ import re
 import shlex
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..config import _coerce_bool
 from ..errors import MCPError, is_error_result, make_error
@@ -46,14 +46,14 @@ class ServerArgsMixin:
             self._next_cache.pop(token, None)
 
     def _parse_action_tail_tokens(self, tail: str) -> dict:
-        parsed: Dict[str, Any] = {}
+        parsed: dict[str, Any] = {}
         if not tail:
             return parsed
         try:
             tokens = shlex.split(tail)
         except Exception:
             tokens = tail.split()
-        positional: List[str] = []
+        positional: list[str] = []
         for token in tokens:
             if "=" in token:
                 k, v = token.split("=", 1)
@@ -124,7 +124,7 @@ class ServerArgsMixin:
             "target",
         }
         schema = TOOL_ARG_SCHEMAS.get(tool_name, {})
-        wrapper_fields.update(str(k) for k in schema.keys())
+        wrapper_fields.update(str(k) for k in schema)
         for key, value in list(normalized.items()):
             if key not in wrapper_fields:
                 continue
@@ -286,7 +286,7 @@ class ServerArgsMixin:
 
     def _wrapper_source_action(
         self, tool_name: str, args: dict, wrapper_action: str
-    ) -> tuple[Optional[str], Optional[dict]]:
+    ) -> tuple[str | None, dict | None]:
         native_actions = set(TOOL_ACTIONS.get(tool_name, []) or [])
         source_action = (
             args.get("source_action")
@@ -356,7 +356,7 @@ class ServerArgsMixin:
         return str(item).strip()
 
     def _collect_wrapper_items(
-        self, payload: Any, field: Optional[str] = None
+        self, payload: Any, field: str | None = None
     ) -> tuple[list[Any], str, str]:
         if isinstance(payload, dict):
             if field:

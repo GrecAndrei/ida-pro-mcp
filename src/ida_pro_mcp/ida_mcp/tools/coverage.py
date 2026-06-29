@@ -356,14 +356,8 @@ def coverage(
                 aset = cov.get("addresses", set())
                 span = end - start
                 if span <= 4096:
-                    for ea in range(start, end):
-                        if ea in aset:
-                            return True
-                    return False
-                for ea in idautils.Heads(start, end):
-                    if ea in aset:
-                        return True
-                return False
+                    return any(ea in aset for ea in range(start, end))
+                return any(ea in aset for ea in idautils.Heads(start, end))
 
             ranges = cov.get("ranges", [])
             starts = cov.get("range_starts", [])
@@ -710,8 +704,7 @@ def coverage(
                         # but only if contiguous with previous uncovered blocks
                         gap_start = block.start_ea
                         gap_end = block.end_ea
-                        if prev_end > gap_start:
-                            gap_start = prev_end
+                        gap_start = max(gap_start, prev_end)
                         if gap_end > gap_start:
                             gaps.append({
                                 "start": hex(gap_start),

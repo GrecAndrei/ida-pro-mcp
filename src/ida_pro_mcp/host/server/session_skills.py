@@ -5,7 +5,6 @@ import json
 import math
 import os
 from datetime import datetime
-from typing import Dict, List, Optional
 
 from ..config import log_rpc
 from ..errors import MCPError, is_error_result, make_error
@@ -80,7 +79,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
         except Exception as e:
             log_rpc(f"Failed to save skills for {sid}: {e}")
 
-    def _bootstrap_plan_matrix(self) -> Dict[str, List[str]]:
+    def _bootstrap_plan_matrix(self) -> dict[str, list[str]]:
         return {
             "phase1_bootstrap_core": [
                 "bootstrap_init",
@@ -445,7 +444,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
                 "generated_at": datetime.now().isoformat(),
             }
 
-    def _bootstrap_prior_confidence(self, bootstrap: Optional[dict]) -> float:
+    def _bootstrap_prior_confidence(self, bootstrap: dict | None) -> float:
         """Estimate confidence prior from tournament policy quality (0..1)."""
         if not isinstance(bootstrap, dict):
             return 0.5
@@ -632,7 +631,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
     def suggest_triage(
         self,
         sid: str,
-        context: Optional[str] = None,
+        context: str | None = None,
         limit: int = 5,
     ) -> dict:
         """Rank and suggest target functions for active triage based on entropy and novelty."""
@@ -663,7 +662,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
     def suggest_analogy(
         self,
         sid: str,
-        library_idbs: Optional[List[str]] = None,
+        library_idbs: list[str] | None = None,
         threshold_cosine: float = 0.85,
         threshold_structural: float = 0.70,
         limit: int = 10,
@@ -785,7 +784,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
                 },
             }
 
-    def _detect_dead_end(self, activity_log: List[dict]) -> Optional[dict]:
+    def _detect_dead_end(self, activity_log: list[dict]) -> dict | None:
         """Detect stalled analysis patterns."""
         if len(activity_log) < 10:
             return None
@@ -848,7 +847,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
 
             # Count unique actions
             unique_actions = set()
-            tool_action_counts: Dict[str, int] = {}
+            tool_action_counts: dict[str, int] = {}
             for e in activity_log:
                 key = f"{e.get('tool')}.{e.get('action')}"
                 unique_actions.add(key)
@@ -945,7 +944,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
             if not linked:
                 return {"ok": True, "shared": [], "note": "No linked sessions. Use link_session to share findings."}
             # Collect function names from all linked sessions' skills data
-            shared_funcs: Dict[str, List[str]] = {}
+            shared_funcs: dict[str, list[str]] = {}
             for lsid in [sid] + linked:
                 data = self._load_skills(lsid)
                 for entry in data.get("activity_log", []):

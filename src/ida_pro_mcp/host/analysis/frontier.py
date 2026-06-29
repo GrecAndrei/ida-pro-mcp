@@ -18,21 +18,21 @@ from __future__ import annotations
 import math
 import sqlite3
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from ..intelligence.helpers import cosine_similarity as _cosine
 from ..intelligence.helpers import unpack_floats as _unpack
 
 
-def _vec_add(a: List[float], b: List[float]) -> List[float]:
+def _vec_add(a: list[float], b: list[float]) -> list[float]:
     return [x + y for x, y in zip(a, b, strict=False)]
 
 
-def _vec_scale(a: List[float], s: float) -> List[float]:
+def _vec_scale(a: list[float], s: float) -> list[float]:
     return [x * s for x in a]
 
 
-def _vec_norm(a: List[float]) -> List[float]:
+def _vec_norm(a: list[float]) -> list[float]:
     n = math.sqrt(sum(x * x for x in a))
     if n < 1e-9:
         return a
@@ -42,11 +42,11 @@ def _vec_norm(a: List[float]) -> List[float]:
 # ── k-means (pure python/numpy-free) ─────────────────────────────────────────
 
 def _kmeans(
-    vecs: List[List[float]],
+    vecs: list[list[float]],
     k: int,
     max_iter: int = 30,
     seed: int = 42,
-) -> List[int]:
+) -> list[int]:
     """Assign each vector to one of k clusters. Returns cluster id per vector."""
     if not vecs or k <= 1:
         return [0] * len(vecs)
@@ -121,11 +121,11 @@ class FrontierEngine:
         self._emb_db = embeddings_db
         self._bb_db  = blackboard_db
         # cluster state
-        self._ea_list:    List[str]        = []
-        self._vecs:       List[List[float]] = []
-        self._names:      Dict[str, str]   = {}
-        self._clusters:   List[int]        = []   # cluster id per ea
-        self._centroids:  List[List[float]] = []
+        self._ea_list:    list[str]        = []
+        self._vecs:       list[list[float]] = []
+        self._names:      dict[str, str]   = {}
+        self._clusters:   list[int]        = []   # cluster id per ea
+        self._centroids:  list[list[float]] = []
         self._built_at:   float = 0.0
         self._k:          int   = 0
 
@@ -141,7 +141,7 @@ class FrontierEngine:
         c.execute("PRAGMA journal_mode=WAL")
         return c
 
-    def _load_embeddings(self) -> Tuple[List[str], List[List[float]], Dict[str, str]]:
+    def _load_embeddings(self) -> tuple[list[str], list[list[float]], dict[str, str]]:
         eas, vecs, names = [], [], {}
         try:
             with self._emb_conn() as conn:
@@ -157,9 +157,9 @@ class FrontierEngine:
             pass
         return eas, vecs, names
 
-    def _load_bb_labels(self) -> Dict[str, Dict]:
+    def _load_bb_labels(self) -> dict[str, dict]:
         """Load blackboard entries that have addresses — these are LLM labels."""
-        labels: Dict[str, Dict] = {}
+        labels: dict[str, dict] = {}
         try:
             with self._bb_conn() as conn:
                 for row in conn.execute("""
@@ -183,7 +183,7 @@ class FrontierEngine:
 
     # ── cluster build ─────────────────────────────────────────────────────────
 
-    def refresh(self, k: Optional[int] = None) -> int:
+    def refresh(self, k: int | None = None) -> int:
         """Rebuild cluster model. Returns number of functions indexed."""
         eas, vecs, names = self._load_embeddings()
         if not eas:
@@ -211,12 +211,12 @@ class FrontierEngine:
         self._built_at = time.time()
         return n
 
-    def _ea_to_idx(self) -> Dict[str, int]:
+    def _ea_to_idx(self) -> dict[str, int]:
         return {ea: i for i, ea in enumerate(self._ea_list)}
 
     # ── label propagation ─────────────────────────────────────────────────────
 
-    def propagate_labels(self) -> List[Dict]:
+    def propagate_labels(self) -> list[dict]:
         """
         For every blackboard entry with an address that has an embedding,
         find all cluster neighbors within PROPAGATE_THRESHOLD cosine distance
@@ -312,10 +312,10 @@ class FrontierEngine:
     def frontier(
         self,
         limit: int = 20,
-        xref_counts: Optional[Dict[str, int]] = None,
-        entropy_map: Optional[Dict[str, float]] = None,
-        query: Optional[str] = None,
-    ) -> List[Dict]:
+        xref_counts: dict[str, int] | None = None,
+        entropy_map: dict[str, float] | None = None,
+        query: str | None = None,
+    ) -> list[dict]:
         """
         Return ranked list of unvisited functions most worth analyzing next.
 
@@ -345,7 +345,7 @@ class FrontierEngine:
         labeled_eas = set(labels.keys())
 
         # Which clusters have labeled members?
-        cluster_labeled: Dict[int, List[str]] = {}
+        cluster_labeled: dict[int, list[str]] = {}
         ea_idx = self._ea_to_idx()
         for ea in labeled_eas:
             idx = ea_idx.get(ea)
@@ -437,7 +437,7 @@ class FrontierEngine:
 
     # ── coverage map ──────────────────────────────────────────────────────────
 
-    def coverage(self) -> Dict[str, Any]:
+    def coverage(self) -> dict[str, Any]:
         """
         Return coverage statistics: analyzed/visited/unvisited counts,
         per-cluster breakdown, and overall coverage percentage.
@@ -452,7 +452,7 @@ class FrontierEngine:
         unvisited = total - analyzed
 
         # Per-cluster breakdown
-        cluster_stats: Dict[int, Dict] = {}
+        cluster_stats: dict[int, dict] = {}
         for i, ea in enumerate(self._ea_list):
             c = self._clusters[i]
             if c not in cluster_stats:
@@ -493,7 +493,7 @@ class FrontierEngine:
 
     # ── contradiction detection ───────────────────────────────────────────────
 
-    def detect_contradictions(self) -> List[Dict]:
+    def detect_contradictions(self) -> list[dict]:
         """
         Find pairs of blackboard entries in the same cluster whose labels
         are semantically inconsistent (very different categories/titles).
@@ -507,7 +507,7 @@ class FrontierEngine:
         ea_idx = self._ea_to_idx()
 
         # Group labeled functions by cluster
-        cluster_labels: Dict[int, List[Tuple[str, Dict]]] = {}
+        cluster_labels: dict[int, list[tuple[str, dict]]] = {}
         for ea, lbl in labels.items():
             idx = ea_idx.get(ea)
             if idx is None:

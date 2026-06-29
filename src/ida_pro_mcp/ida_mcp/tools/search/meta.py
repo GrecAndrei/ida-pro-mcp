@@ -140,7 +140,7 @@ def search_summary(pattern, case_sensitive, range_start, range_end):
     }
 
     # Names (full scan — just iteration, no decompilation)
-    for ea, name in idautils.Names():
+    for _ea, name in idautils.Names():
         if matcher(name):
             summary["names"] += 1
 

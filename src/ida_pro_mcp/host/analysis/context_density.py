@@ -12,7 +12,7 @@ import json
 import math
 import re
 from collections import Counter
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 class ContextDensityOptimizer:
@@ -50,7 +50,7 @@ class ContextDensityOptimizer:
             return text
         return re.sub(r'<[^>]+>', '', text)
 
-    def compress_code_blocks(self, text: str, max_lines: Optional[int] = None) -> str:
+    def compress_code_blocks(self, text: str, max_lines: int | None = None) -> str:
         """Collapse fenced code blocks longer than max_lines+1 to a preview."""
         if not isinstance(text, str):
             return text
@@ -73,7 +73,7 @@ class ContextDensityOptimizer:
 
         return pattern.sub(_repl, text)
 
-    def compress_hex_dumps(self, text: str, max_lines: Optional[int] = None) -> str:
+    def compress_hex_dumps(self, text: str, max_lines: int | None = None) -> str:
         """Collapse contiguous hex-dump lines longer than max_lines+1."""
         if not isinstance(text, str):
             return text
@@ -84,7 +84,7 @@ class ContextDensityOptimizer:
         )
 
         lines = text.split('\n')
-        result: List[str] = []
+        result: list[str] = []
         i = 0
         while i < len(lines):
             if hex_line_re.match(lines[i]):
@@ -111,7 +111,7 @@ class ContextDensityOptimizer:
     # Xref compaction
     # ------------------------------------------------------------------
 
-    def compress_xref_lists(self, obj: Any, max_items: Optional[int] = None) -> Any:
+    def compress_xref_lists(self, obj: Any, max_items: int | None = None) -> Any:
         """Truncate long xref lists and add a per-segment histogram."""
         max_items = max_items if max_items is not None else self.max_xref_items
 
@@ -141,8 +141,8 @@ class ContextDensityOptimizer:
 
         return obj
 
-    def _histogram_by_segment(self, addresses: List[str]) -> Dict[str, int]:
-        counts: Dict[str, int] = {}
+    def _histogram_by_segment(self, addresses: list[str]) -> dict[str, int]:
+        counts: dict[str, int] = {}
         for addr in addresses:
             seg = self._addr_to_segment(addr)
             counts[seg] = counts.get(seg, 0) + 1
@@ -196,7 +196,7 @@ class ContextDensityOptimizer:
     # Information density measurement
     # ------------------------------------------------------------------
 
-    def measure_information_density(self, text: str) -> Dict[str, float]:
+    def measure_information_density(self, text: str) -> dict[str, float]:
         """Calculate estimated tokens, lexical diversity, Shannon entropy,
         useful-token ratio, and an overall density score."""
         if not isinstance(text, str) or not text:
@@ -260,7 +260,7 @@ class ContextDensityOptimizer:
     # Recursive response compaction
     # ------------------------------------------------------------------
 
-    def compact_response(self, data: Any, budget_tokens: Optional[int] = None) -> Any:
+    def compact_response(self, data: Any, budget_tokens: int | None = None) -> Any:
         """Main entry point.  Recursively compacts *data* only when the
         serialized size exceeds *compact_threshold* or the estimated token
         count exceeds *budget_tokens*.  Critical metadata (addresses,
@@ -295,7 +295,7 @@ class ContextDensityOptimizer:
             return compacted
 
         if isinstance(data, dict):
-            out: Dict[str, Any] = {}
+            out: dict[str, Any] = {}
             for k, v in data.items():
                 # Never drop critical metadata keys
                 out[k] = self._compact_recursive(v, budget_tokens)
@@ -310,7 +310,7 @@ class ContextDensityOptimizer:
         text = self.compress_xref_lists(text)
 
         lines = text.split('\n')
-        truncated: List[str] = []
+        truncated: list[str] = []
         for line in lines:
             if len(line) > self.max_line_length:
                 line = line[: self.max_line_length - 3] + '...'
@@ -325,7 +325,7 @@ class ContextDensityOptimizer:
     # Legacy compatibility shim (matches reference implementation)
     # ------------------------------------------------------------------
 
-    def optimize(self, raw_message: str, context_label: str = "unknown") -> Dict[str, Any]:
+    def optimize(self, raw_message: str, context_label: str = "unknown") -> dict[str, Any]:
         """Legacy-style optimization returning full metadata."""
         if not raw_message:
             return {
@@ -362,11 +362,11 @@ class ContextDensityOptimizer:
 _default_optimizer = ContextDensityOptimizer()
 
 
-def compact_response(data: Any, budget_tokens: Optional[int] = None) -> Any:
+def compact_response(data: Any, budget_tokens: int | None = None) -> Any:
     """Module-level convenience wrapper."""
     return _default_optimizer.compact_response(data, budget_tokens)
 
 
-def measure_information_density(text: str) -> Dict[str, float]:
+def measure_information_density(text: str) -> dict[str, float]:
     """Module-level convenience wrapper."""
     return _default_optimizer.measure_information_density(text)

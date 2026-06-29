@@ -555,9 +555,12 @@ def compare(
             ea2, err = _resolve_func(addr2, "addr2")
             if err: return err
 
-            a1 = _get_callees(ea1); a2 = _get_callees(ea2)
-            s1 = _get_string_refs(ea1); s2 = _get_string_refs(ea2)
-            f1 = ida_funcs.get_func(ea1); f2 = ida_funcs.get_func(ea2)
+            a1 = _get_callees(ea1)
+            a2 = _get_callees(ea2)
+            s1 = _get_string_refs(ea1)
+            s2 = _get_string_refs(ea2)
+            f1 = ida_funcs.get_func(ea1)
+            f2 = ida_funcs.get_func(ea2)
             size1 = (f1.end_ea - f1.start_ea) if f1 else 0
             size2 = (f2.end_ea - f2.start_ea) if f2 else 0
             bc1, ec1, _ = _flowchart_info(ea1)

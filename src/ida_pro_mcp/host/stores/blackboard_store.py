@@ -8,6 +8,7 @@ background crawler live elsewhere in the host package.
 
 from __future__ import annotations
 
+import builtins
 import hashlib
 import json
 import os
@@ -16,12 +17,12 @@ import tempfile
 import time
 import uuid
 from contextlib import closing
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..intelligence.helpers import quantile as _quantile
 
 
-def _resolve_db_path(db_path: Optional[str] = None) -> str:
+def _resolve_db_path(db_path: str | None = None) -> str:
     if db_path:
         return db_path
     try:
@@ -62,17 +63,17 @@ def _get_embedder():
             return None
 
 
-def _pack_vec(vec: List[float]) -> bytes:
+def _pack_vec(vec: list[float]) -> bytes:
     from .intelligence.helpers import pack_floats
     return pack_floats(vec)
 
 
-def _unpack_vec(blob: bytes) -> List[float]:
+def _unpack_vec(blob: bytes) -> list[float]:
     from .intelligence.helpers import unpack_floats
     return unpack_floats(blob)
 
 
-def _cosine(a: List[float], b: List[float]) -> float:
+def _cosine(a: list[float], b: list[float]) -> float:
     from .intelligence.helpers import dot_product
     return dot_product(a, b)
 
@@ -80,7 +81,7 @@ def _cosine(a: List[float], b: List[float]) -> float:
 class BlackboardStore:
     """SQLite-backed blackboard with extended firmware RE schema."""
 
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: str | None = None):
         primary_path = _resolve_db_path(db_path)
         self.db_path = primary_path
         try:
@@ -187,7 +188,7 @@ class BlackboardStore:
     def _get_embedder(self):
         return _get_embedder()
 
-    def _embed_text(self, text: str) -> Optional[bytes]:
+    def _embed_text(self, text: str) -> bytes | None:
         embedder = self._get_embedder()
         if embedder is None:
             return None
@@ -196,7 +197,7 @@ class BlackboardStore:
         except Exception:
             return None
 
-    def _sync_entry_to_capsule(self, entry: Dict[str, Any], vector_blob: Optional[bytes]) -> None:
+    def _sync_entry_to_capsule(self, entry: dict[str, Any], vector_blob: bytes | None) -> None:
         capsule_path = str(os.environ.get("IDA_MCP_CAPSULE", "") or "").strip()
         if not capsule_path:
             return
@@ -258,7 +259,7 @@ class BlackboardStore:
         category: str = "general",
         addr: str = "",
         addr_end: str = "",
-        tags: Optional[List[str]] = None,
+        tags: builtins.list[str] | None = None,
         confidence: float = 0.5,
         source: str = "manual",
         embed: bool = True,
@@ -268,7 +269,7 @@ class BlackboardStore:
         blocks_addr: str = "",
         register: str = "",
         reg_type: str = "",
-        evidence: Optional[List[Dict]] = None,
+        evidence: builtins.list[dict] | None = None,
         source_type: str = "",
         entropy: float = 0.0,
         xref_count: int = 0,
@@ -313,23 +314,23 @@ class BlackboardStore:
         )
         return entry_id
 
-    def read(self, entry_id: str) -> Optional[Dict]:
+    def read(self, entry_id: str) -> dict | None:
         with closing(self._conn()) as conn:
             row = conn.execute("SELECT * FROM blackboard WHERE id = ?", (entry_id,)).fetchone()
             return self._row_to_dict(row) if row else None
 
     def list(
         self,
-        category: Optional[str] = None,
-        addr: Optional[str] = None,
-        tag: Optional[str] = None,
+        category: str | None = None,
+        addr: str | None = None,
+        tag: str | None = None,
         min_confidence: float = 0.0,
         limit: int = 100,
         offset: int = 0,
         include_resolved: bool = True,
         include_contradicted: bool = False,
-        ioc_type: Optional[str] = None,
-    ) -> List[Dict]:
+        ioc_type: str | None = None,
+    ) -> builtins.list[dict]:
         conditions = ["confidence >= ?"]
         params: list = [min_confidence]
         if category:
@@ -361,10 +362,10 @@ class BlackboardStore:
         query: str,
         top_k: int = 10,
         threshold: float = 0.4,
-        category: Optional[str] = None,
+        category: str | None = None,
         include_resolved: bool = True,
         include_contradicted: bool = False,
-    ) -> List[Dict]:
+    ) -> builtins.list[dict]:
         embedder = self._get_embedder()
         if embedder is None:
             q = query.lower()
@@ -460,7 +461,7 @@ class BlackboardStore:
                         "ts": round(time.time(), 1)})
         return self.update(entry_id, evidence=ev_list)
 
-    def calibrate_confidence(self, entry_id: str) -> Optional[float]:
+    def calibrate_confidence(self, entry_id: str) -> float | None:
         """
         Recalculate confidence from evidence weights.
 
@@ -478,7 +479,7 @@ class BlackboardStore:
         self.update(entry_id, confidence=new_conf, calibrated=1)
         return new_conf
 
-    def campaign_summary(self) -> Dict:
+    def campaign_summary(self) -> dict:
         """
         High-level summary of the RE campaign state.
 
@@ -576,7 +577,7 @@ class BlackboardStore:
             ).fetchall()
 
         # Build addr → tag set map
-        addr_tags: Dict[str, set] = {}
+        addr_tags: dict[str, set] = {}
         for addr, tags_json in rows:
             try:
                 tags = json.loads(tags_json or "[]")
@@ -613,7 +614,7 @@ class BlackboardStore:
             conn.commit()
         return updated
 
-    def next_target(self, limit: int = 5, rpc_fn=None, query: Optional[str] = None) -> List[Dict]:
+    def next_target(self, limit: int = 5, rpc_fn=None, query: str | None = None) -> builtins.list[dict]:
         """
         Return highest-priority unexplored addresses.
 
@@ -759,7 +760,7 @@ class BlackboardStore:
 
         return result
 
-    def _seed_from_xrefs(self, rpc_fn, seen_addrs: set, limit: int) -> List[Dict]:
+    def _seed_from_xrefs(self, rpc_fn, seen_addrs: set, limit: int) -> builtins.list[dict]:
         """Seed next_target with xref-ranked unnamed functions when blackboard is sparse."""
         try:
             funcs_result = rpc_fn("data", {"action": "functions", "count": 200})
@@ -863,7 +864,7 @@ class BlackboardStore:
                 self._sync_entry_to_capsule(entry, vec_blob)
         return ok
 
-    def semantic_index(self, category: Optional[str] = None) -> Dict[str, Any]:
+    def semantic_index(self, category: str | None = None) -> dict[str, Any]:
         conditions = []
         params: list = []
         if category:
@@ -885,7 +886,7 @@ class BlackboardStore:
             "db_path": self.db_path,
         }
 
-    def semantic_rebuild(self, category: Optional[str] = None, force: bool = False, limit: int = 5000) -> Dict[str, Any]:
+    def semantic_rebuild(self, category: str | None = None, force: bool = False, limit: int = 5000) -> dict[str, Any]:
         embedder = self._get_embedder()
         if embedder is None:
             return {"ok": False, "error": "embedder unavailable"}
@@ -925,7 +926,7 @@ class BlackboardStore:
             conn.commit()
             return cur.rowcount > 0
 
-    def clear(self, category: Optional[str] = None) -> int:
+    def clear(self, category: str | None = None) -> int:
         with closing(self._conn()) as conn:
             if category:
                 cur = conn.execute("DELETE FROM blackboard WHERE category = ?", (category,))
@@ -934,7 +935,7 @@ class BlackboardStore:
             conn.commit()
             return cur.rowcount
 
-    def stats(self) -> Dict:
+    def stats(self) -> dict:
         with closing(self._conn()) as conn:
             total, cats, avg_conf = conn.execute(
                 "SELECT COUNT(*), COUNT(DISTINCT category), AVG(confidence) FROM blackboard"
@@ -978,7 +979,7 @@ class BlackboardStore:
             "calibrated_entries": calibrated or 0,
         }
 
-    def prune(self, max_entries: int = 1000, min_q_value: float = 0.0, older_than_days: int = 0) -> Dict:
+    def prune(self, max_entries: int = 1000, min_q_value: float = 0.0, older_than_days: int = 0) -> dict:
         with closing(self._conn()) as conn:
             total = conn.execute("SELECT COUNT(*) FROM blackboard").fetchone()[0]
             conditions = ["1=1"]
@@ -1015,7 +1016,7 @@ class BlackboardStore:
         if not rows:
             return False
         wa = set(title.lower().split())
-        sims: List[float] = []
+        sims: list[float] = []
         for (t,) in rows:
             wb = set(t.lower().split())
             if wa and wb:
@@ -1031,7 +1032,7 @@ class BlackboardStore:
             adaptive_gate = threshold
         return max(sims) >= adaptive_gate
 
-    def auto_merge(self, addr: str = "", category: str = "", similarity_threshold: float = 0.85) -> Dict:
+    def auto_merge(self, addr: str = "", category: str = "", similarity_threshold: float = 0.85) -> dict:
         with closing(self._conn()) as conn:
             conditions = ["1=1"]
             params: list = []
@@ -1052,7 +1053,7 @@ class BlackboardStore:
             wa, wb = set(a.lower().split()), set(b.lower().split())
             return len(wa & wb) / len(wa | wb) if wa and wb else 0.0
 
-        pair_sims: List[float] = []
+        pair_sims: list[float] = []
         for i, e in enumerate(entries):
             for o in entries[i + 1:]:
                 if e.get("addr") == o.get("addr") and e.get("category") == o.get("category"):
@@ -1075,14 +1076,14 @@ class BlackboardStore:
                         deleted.add(o["id"])
         return {"merged": len(deleted), "remaining": len(entries) - len(deleted)}
 
-    def _row_to_dict(self, row) -> Dict:
+    def _row_to_dict(self, row) -> dict:
         if row is None:
             return {}
         if not hasattr(self, "_col_cache"):
             with closing(self._conn()) as conn:
                 # PRAGMA table_info returns (cid, name, type, notnull, dflt, pk)
                 self._col_cache = [d[1] for d in conn.execute("PRAGMA table_info(blackboard)").fetchall()]
-        d: Dict = {}
+        d: dict = {}
         for i, col in enumerate(self._col_cache):
             if i < len(row):
                 d[col] = row[i]

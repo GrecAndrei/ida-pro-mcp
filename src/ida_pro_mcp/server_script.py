@@ -160,7 +160,6 @@ def _try_load_single_tool(name):
 
 
 def load_tools():
-    global TOOLS
     try:
         tools_dir = os.path.join(_mcp_root, "tools")
         # tools_dir is on sys.path directly; use flat importlib to avoid

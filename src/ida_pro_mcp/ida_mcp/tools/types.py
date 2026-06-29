@@ -367,10 +367,9 @@ def types(
                 except Exception as e:
                     return handle_error(e)
 
-            else:  # global/default
-                if not ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.TINFO_DEFINITE):
-                    return make_error(MCPError.IDA_ERROR, f"Failed to apply type at {hex(ea)}. "
-                                      "The address or type may be incompatible.")
+            elif not ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.TINFO_DEFINITE):
+                return make_error(MCPError.IDA_ERROR, f"Failed to apply type at {hex(ea)}. "
+                                  "The address or type may be incompatible.")
 
             return {"ok": True, "addr": hex(ea), "type": str(tif), "kind": apply_kind}
 

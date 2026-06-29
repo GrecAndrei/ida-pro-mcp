@@ -17,7 +17,6 @@ by matching against blackboard entries and classifier outputs.
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional
 
 # ── Gap specs per binary type ─────────────────────────────────────────────────
 
@@ -169,7 +168,7 @@ BLE_GAPS = [
     },
 ]
 
-GAPS_BY_TYPE: Dict[str, List[Dict]] = {
+GAPS_BY_TYPE: dict[str, list[dict]] = {
     "wifi_firmware": WIFI_GAPS,
     "router_firmware": ROUTER_GAPS,
     "ble_firmware": BLE_GAPS,
@@ -271,7 +270,7 @@ class GapEngine:
 
         return filled
 
-    def _find_candidate(self, gap: Dict, entries: List[Dict]) -> Optional[str]:
+    def _find_candidate(self, gap: dict, entries: list[dict]) -> str | None:
         """
         Find a blackboard entry that might fill this gap.
         Uses keyword matching on title/content/tags against gap hints.

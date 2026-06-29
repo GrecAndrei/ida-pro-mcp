@@ -18,7 +18,6 @@ from __future__ import annotations
 import math
 import sqlite3
 import time
-from typing import List, Optional, Tuple
 
 try:
     import numpy as np
@@ -111,7 +110,7 @@ class CFGExtractor:
     """Extract CFG structure and per-block features from an IDA function."""
 
     @staticmethod
-    def extract_from_ida(func_ea: int) -> Tuple[np.ndarray, np.ndarray]:
+    def extract_from_ida(func_ea: int) -> tuple[np.ndarray, np.ndarray]:
         try:
             import ida_funcs
             import idaapi
@@ -252,7 +251,7 @@ class GraphEmbeddingStore:
         conn.commit()
         conn.close()
 
-    def load(self, func_ea: int) -> Optional[np.ndarray]:
+    def load(self, func_ea: int) -> np.ndarray | None:
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
         cur.execute("SELECT embedding FROM graph_embeddings WHERE func_ea = ?", (func_ea,))
@@ -263,7 +262,7 @@ class GraphEmbeddingStore:
         return None
 
     def find_similar(self, query_embedding: np.ndarray, top_k: int = 10) \
-            -> List[Tuple[int, str, float]]:
+            -> list[tuple[int, str, float]]:
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
         cur.execute("SELECT func_ea, func_name, embedding FROM graph_embeddings")

@@ -37,9 +37,9 @@ def main() -> int:
     if missing_descriptions:
         errors.append(f"missing TOOL_DESCRIPTIONS entries: {missing_descriptions}")
 
-    if TOOL_ACTIONS != tool_actions():
+    if tool_actions() != TOOL_ACTIONS:
         errors.append("schemas_data.TOOL_ACTIONS differs from tool_registry.tool_actions()")
-    if schemas.TOOL_ACTIONS != tool_actions():
+    if tool_actions() != schemas.TOOL_ACTIONS:
         errors.append("schemas.TOOL_ACTIONS differs from tool_registry.tool_actions()")
     if list(schemas.ADVERTISED_TOOLS) != advertised_tools():
         errors.append("schemas.ADVERTISED_TOOLS differs from tool_registry.advertised_tools()")

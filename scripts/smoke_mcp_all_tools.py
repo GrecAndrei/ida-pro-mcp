@@ -31,7 +31,7 @@ import select
 import subprocess
 import sys
 import time
-from typing import Any, Optional
+from typing import Any
 
 VENV_PY = "/home/alex/.local/share/ida-pro-mcp/.venv/bin/python"
 HOST_MODULE = "ida_pro_mcp.host.server"
@@ -139,7 +139,7 @@ SKIP_TOOLS: set[str] = set()  # nothing skipped by default
 
 class MCPClient:
     def __init__(self, timeout: float):
-        self.proc: Optional[subprocess.Popen] = None
+        self.proc: subprocess.Popen | None = None
         self._id = 0
         self.timeout = timeout
 
@@ -171,7 +171,7 @@ class MCPClient:
                     self.proc.kill()
             self.proc = None
 
-    def _readline_timeout(self, timeout: float) -> Optional[bytes]:
+    def _readline_timeout(self, timeout: float) -> bytes | None:
         assert self.proc is not None and self.proc.stdout is not None
         fd = self.proc.stdout.fileno()
         deadline = time.time() + timeout
@@ -190,7 +190,7 @@ class MCPClient:
                 return b""  # EOF
             return chunk
 
-    def call(self, method: str, params: Optional[dict] = None) -> Optional[dict]:
+    def call(self, method: str, params: dict | None = None) -> dict | None:
         """Send one JSON-RPC request, return the matching response (id-matched,
         skipping interleaved notifications / late/mismatched lines)."""
         assert self.proc is not None and self.proc.stdin is not None
@@ -233,7 +233,7 @@ class MCPClient:
             return []
         return r["result"].get("tools", []) or []
 
-    def tool_call(self, name: str, args: dict) -> tuple[Optional[dict], str]:
+    def tool_call(self, name: str, args: dict) -> tuple[dict | None, str]:
         r = self.call("tools/call", {"name": name, "arguments": args})
         if not r:
             return None, "no response"
@@ -271,7 +271,7 @@ def first_addr_from_functions(payload: dict, n: int = 2) -> list[str]:
     return addrs
 
 
-def classify(payload: Optional[dict], err: str) -> tuple[str, str]:
+def classify(payload: dict | None, err: str) -> tuple[str, str]:
     if err == "timeout":
         return "TIMEOUT", "(no response in budget)"
     if err == "eof":

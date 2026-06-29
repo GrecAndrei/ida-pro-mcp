@@ -56,7 +56,7 @@ sys.modules["idc"].get_func_name = lambda ea: ""
 sys.modules["idc"].get_name = lambda ea, *a: ""
 sys.modules["idc"].print_insn_mnem = lambda ea: ""
 sys.modules["idc"].next_head = lambda ea, end: ea + 1
-sys.modules["idautils"].Functions = lambda: []
+sys.modules["idautils"].Functions = list
 sys.modules["idautils"].XrefsFrom = lambda ea, *a: []
 sys.modules["idautils"].XrefsTo = lambda ea, *a: []
 

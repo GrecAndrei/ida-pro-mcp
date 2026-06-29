@@ -204,17 +204,16 @@ RETURN_MNEMONICS = {
     # RISC-V
     "jalr",   # jalr x0, ra, 0  is the canonical return
     # SPARC
-    "retl", "ret",
-    # SuperH
+    "retl", # SuperH
     "rts",
     # 68k
-    "rts", "rte", "rtd",
+    "rte", "rtd",
     # Xtensa
-    "ret", "retw", "ret.n", "retw.n",
+    "retw", "ret.n", "retw.n",
     # TriCore
-    "ret", "rfe",
+    "rfe",
     # AVR/MSP430/8051/Z80/PIC
-    "reti", "retn", "return", "retfie",
+    "reti", "return", "retfie",
     # MicroBlaze
     "rtsd",
 }
@@ -226,19 +225,15 @@ UNCONDITIONAL_JUMP_MNEMONICS = {
     # ARM
     "b",
     # AArch64
-    "b", "br",
+    "br",
     # MIPS
-    "j", "b",
-    # PowerPC
-    "b", "ba",
+    "j", # PowerPC
+    "ba",
     # RISC-V
-    "j", "jal",
+    "jal",
     # SPARC
-    "ba", "jmp",
     # SuperH
-    "bra", "jmp",
-    # 68k
-    "jmp", "bra",
+    "bra",
 }
 
 # Call / branch-and-link mnemonics
@@ -248,27 +243,22 @@ CALL_MNEMONICS = {
     # ARM
     "bl", "blx",
     # AArch64
-    "bl", "blr",
+    "blr",
     # MIPS
     "jal", "jalr",
     # PowerPC
-    "bl", "bla",
+    "bla",
     # RISC-V
-    "jal", "jalr",
     # SPARC
-    "call",
     # SuperH
     "bsr", "jsr",
     # 68k
-    "bsr", "jsr",
     # Xtensa
     "call0", "call4", "call8", "call12", "callx0", "callx4", "callx8", "callx12",
     # TriCore
     "calla", "calli",
     # AVR
     "rcall", "icall", "eicall",
-    # MSP430
-    "calla",
 }
 
 # Conditional branch mnemonics (x86 + ARM + MIPS + PPC + RISC-V + SPARC)
@@ -282,16 +272,14 @@ CONDITIONAL_BRANCH_MNEMONICS = {
     "bhi", "bls", "bge", "blt", "bgt", "ble",
     "cbz", "cbnz", "tbz", "tbnz",
     # MIPS
-    "beq", "bne", "bgtz", "blez", "bltz", "bgez",
+    "bgtz", "blez", "bltz", "bgez",
     "beqz", "bnez", "bgezal", "bltzal",
     # PowerPC
-    "beq", "bne", "blt", "bgt", "ble", "bge",
     "bdnz", "bdz", "bc",
     # RISC-V
-    "beq", "bne", "blt", "bge", "bltu", "bgeu",
-    "beqz", "bnez", "blez", "bgez", "bltz", "bgtz",
+    "bltu", "bgeu",
     # SPARC
-    "be", "bne", "bl", "bge", "ble", "bg", "bcs", "bcc",
+    "be", "bl", "bg",
 }
 
 # Terminator mnemonics (instructions that end a basic block with no fall-through)
@@ -307,9 +295,8 @@ SYSCALL_MNEMONICS = {
     # ARM
     "svc", "swi",
     # AArch64
-    "svc", "hvc", "smc",
+    "hvc", "smc",
     # MIPS
-    "syscall",
     # PowerPC
     "sc",
     # RISC-V
@@ -320,12 +307,6 @@ SYSCALL_MNEMONICS = {
     "trapa",
     # 68k
     "trap",
-    # TriCore
-    "syscall",
-    # Xtensa
-    "syscall",
-    # ARC
-    "swi",
 }
 
 # MOV-like data transfer mnemonics (used for stack-string detection)
@@ -333,14 +314,13 @@ MOV_MNEMONICS = {
     # x86
     "mov", "movabs",
     # ARM
-    "mov", "movw", "movt", "strb", "movb",
+    "movw", "movt", "strb", "movb",
     # MIPS
     "li", "lui", "move", "sb",
     # PowerPC
-    "li", "lis", "mr", "stb",
+    "lis", "mr", "stb",
     # RISC-V
-    "li", "lui", "mv", "sb",
-    # Xtensa
+    "mv", # Xtensa
     "movi", "movi.n", "s8i",
     # AVR
     "ldi", "sts", "std",
@@ -351,20 +331,18 @@ COMPARISON_MNEMONICS = {
     # x86
     "test", "cmp",
     # ARM
-    "cmp", "cmn", "tst", "teq",
+    "cmn", "tst", "teq",
     # AArch64
-    "cmp", "cmn", "tst",
     "cbz", "cbnz",
     # MIPS
     "beqz", "bnez", "slti", "sltiu",
     # PowerPC
     "cmpwi", "cmplwi", "cmpdi", "cmpldi",
     # RISC-V
-    "beqz", "bnez",
     # Xtensa
-    "beqz", "bnez", "bgez", "bltz",
+    "bgez", "bltz",
     # AVR
-    "cp", "cpc", "cpi", "tst",
+    "cp", "cpc", "cpi",
 }
 
 # XOR-like mnemonics (used for obfuscation detection)
@@ -374,15 +352,7 @@ XOR_MNEMONICS = {
     # ARM
     "eor",
     # MIPS
-    "xor", "xori",
-    # PowerPC
-    "xor", "xori",
-    # RISC-V
-    "xor", "xori",
-    # Xtensa
-    "xor",
-    # AVR
-    "eor",
+    "xori",
 }
 
 # Arithmetic mnemonics used in integer overflow heuristics
@@ -390,17 +360,16 @@ ARITHMETIC_MNEMONICS = {
     # x86
     "add", "mul", "imul", "shl", "shr",
     # ARM
-    "add", "adds", "mul", "muls", "lsl", "lsr", "madd", "umull", "smull",
+    "adds", "muls", "lsl", "lsr", "madd", "umull", "smull",
     # MIPS
-    "add", "addu", "addi", "addiu", "mul", "mult", "multu", "sll", "srl",
+    "addu", "addi", "addiu", "mult", "multu", "sll", "srl",
     # PowerPC
-    "add", "addi", "mulli", "mullw", "slwi", "srwi",
+    "mulli", "mullw", "slwi", "srwi",
     # RISC-V
-    "add", "addi", "mul", "slli", "srli",
+    "slli", "srli",
     # Xtensa
-    "add", "addi", "slli",
     # AVR
-    "add", "adiw", "mul", "lsl", "lsr",
+    "adiw",
 }
 
 # Interesting instructions for triage (architecture-aware)

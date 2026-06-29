@@ -52,7 +52,7 @@ import urllib.error
 import urllib.request
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from .embeddings import NOISE_WORDS, FunctionEmbeddingIndex  # noqa: F401
 
@@ -494,8 +494,8 @@ _IDENT_RE = re.compile(r'\b[A-Za-z_][A-Za-z0-9_]{2,}\b')
 _CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 
 
-def _identifier_terms(ident: str) -> List[str]:
-    terms: List[str] = []
+def _identifier_terms(ident: str) -> list[str]:
+    terms: list[str] = []
     for chunk in re.split(r"[_\W]+", str(ident or "")):
         if not chunk:
             continue
@@ -549,11 +549,11 @@ class _TFIDFEmbedder:
 
     def __init__(self, dim: int = EMBED_DIM):
         self._dim = dim
-        self._idf: Dict[str, float] = {}
+        self._idf: dict[str, float] = {}
         self._doc_count = 0
 
-    def _tokens(self, text: str) -> List[str]:
-        out: List[str] = []
+    def _tokens(self, text: str) -> list[str]:
+        out: list[str] = []
         for raw in self._TOKENIZE.findall(str(text or "")):
             for term in _identifier_terms(raw):
                 low = term.lower()
@@ -578,7 +578,7 @@ class _TFIDFEmbedder:
             expanded.extend(synonyms.get(tok, ()))
         return expanded
 
-    def fit_many(self, texts: List[str]) -> None:
+    def fit_many(self, texts: list[str]) -> None:
         df: Counter = Counter()
         for t in texts:
             df.update(set(self._tokens(t)))
@@ -587,7 +587,7 @@ class _TFIDFEmbedder:
                      for tok, cnt in df.items()}
         self._doc_count = n
 
-    def embed(self, text: str) -> List[float]:
+    def embed(self, text: str) -> list[float]:
         toks = self._tokens(text)
         if not toks:
             return [0.0] * self._dim
@@ -617,7 +617,7 @@ class BgeCodeEmbedder:
     Falls back to TF-IDF if binary or model not found.
     """
 
-    _instance: Optional[BgeCodeEmbedder] = None
+    _instance: BgeCodeEmbedder | None = None
     _lock = threading.Lock()
 
     def __new__(cls) -> BgeCodeEmbedder:
@@ -631,15 +631,15 @@ class BgeCodeEmbedder:
     def _init(self) -> None:
         self._server_bin   = _find_llama_server()
         self._model_path   = _find_model()
-        self._port: Optional[int] = None
-        self._proc: Optional[subprocess.Popen] = None
+        self._port: int | None = None
+        self._proc: subprocess.Popen | None = None
         self._ready        = False
         self._start_lock   = threading.Lock()
         self._fallback     = _TFIDFEmbedder()
         self._use_llama    = (bool(self._server_bin) and bool(self._model_path)
                               and not EMBED_DISABLED)
         # Cached anchor embeddings for BehaviorClassifier
-        self._anchor_cache: Dict[str, List[float]] = {}
+        self._anchor_cache: dict[str, list[float]] = {}
         self._batch_size = int(os.environ.get("IDA_MCP_EMBED_BATCH", "16"))
         self._batch_size = max(1, min(64, self._batch_size))
         self._batch_lock = threading.Lock()
@@ -800,7 +800,7 @@ class BgeCodeEmbedder:
 
     # ── embedding ──────────────────────────────────────────────────────────
 
-    def _llama_embed(self, text: str) -> Optional[List[float]]:
+    def _llama_embed(self, text: str) -> list[float] | None:
         if not self._ready and not self._start_server():
             return None
         try:
@@ -826,7 +826,7 @@ class BgeCodeEmbedder:
                 self.stop()
             return None
 
-    def _llama_embed_batch(self, texts: List[str]) -> Optional[List[List[float]]]:
+    def _llama_embed_batch(self, texts: list[str]) -> list[list[float]] | None:
         if not texts:
             return []
         if len(texts) == 1:
@@ -847,7 +847,7 @@ class BgeCodeEmbedder:
             rows = data.get("data") or []
             if not isinstance(rows, list) or len(rows) != len(texts):
                 return None
-            out: List[List[float]] = []
+            out: list[list[float]] = []
             for row in rows:
                 vec = row.get("embedding") if isinstance(row, dict) else None
                 if not vec:
@@ -863,7 +863,7 @@ class BgeCodeEmbedder:
                 self.stop()
             return None
 
-    def embed(self, text: str) -> List[float]:
+    def embed(self, text: str) -> list[float]:
         """Return L2-normalized 1536-dim embedding for text."""
         if self._use_llama:
             vec = self._llama_embed(text)
@@ -872,11 +872,11 @@ class BgeCodeEmbedder:
         # Fallback
         return self._fallback.embed(text)
 
-    def embed_batch(self, texts: List[str]) -> List[List[float]]:
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
         if self._use_llama:
-            out: List[List[float]] = []
+            out: list[list[float]] = []
             i = 0
             while i < len(texts):
                 with self._batch_lock:
@@ -909,7 +909,7 @@ class BgeCodeEmbedder:
         return "bge-code-v1" if self._use_llama else "tfidf-fallback"
 
     @staticmethod
-    def cosine(a: List[float], b: List[float]) -> float:
+    def cosine(a: list[float], b: list[float]) -> float:
         from .helpers import cosine_similarity
         return cosine_similarity(a, b)
 
@@ -931,7 +931,7 @@ class BehaviorClassifier:
     # Anchors are written as pseudo-code patterns rather than keyword lists so
     # bge-code-v1 (code-specialized, last-token pooling) embeds them in the
     # same space as actual decompiled pseudocode.
-    ANCHORS: Dict[str, str] = {
+    ANCHORS: dict[str, str] = {
         "crypto_symmetric": "state = load_block(input); round = 0; while (round < nr) { state ^= round_keys[round]; sub_bytes(state, sbox); shift_rows(state); if (round != nr - 1) mix_columns(state, gf_mul); round++; } store_block(out, state ^ round_keys[nr]); key_schedule(key, round_keys);",
         "crypto_hash": "ctx->h0 = 0x67452301; ctx->h1 = 0xefcdab89; while (len >= 64) { compress_block(ctx, block); block += 64; len -= 64; } pad_and_finalize(ctx); digest[0] = bswap32(ctx->h0); digest[1] = bswap32(ctx->h1); if (hmac) inner_outer_hash(ctx, key_block);",
         "network_http": "sock = connect_tcp(host, port); req = format(\"POST %s HTTP/1.1\", path); add_header(req, \"Host\", host); add_header(req, \"User-Agent\", ua); send(sock, req, strlen(req), 0); recv_until_headers(sock, buf); parse_status_line(buf); if (chunked) decode_chunked(sock, body); close_socket(sock);",
@@ -955,7 +955,7 @@ class BehaviorClassifier:
         "integer_overflow": "count = read_u32(pkt + 4); size = count * elem_size; buf = malloc(size); if (size < count) overflow = 1; for (i = 0; i < count; ++i) copy_elem(buf + i * elem_size, src); truncation or wraparound in arithmetic before allocation/copy;",
         "path_traversal": "snprintf(path, sizeof(path), \"%s/%s\", base_dir, user_name); if (strstr(user_name, \"..\")) warn_only(); fopen(path, \"wb\"); extract_archive(entry_name, base_dir); insufficient canonicalization allows writes outside intended root;",
     }
-    ANCHOR_MIN_CONFIDENCE: Dict[str, float] = {
+    ANCHOR_MIN_CONFIDENCE: dict[str, float] = {
         "buffer_overflow": 0.35,
         "use_after_free": 0.35,
         "format_string_vuln": 0.35,
@@ -963,7 +963,7 @@ class BehaviorClassifier:
         "path_traversal": 0.35,
     }
     _ANCHOR_TOKEN_BONUS_WEIGHT = 0.18
-    _ANCHOR_TOKEN_ALIASES: Dict[str, Tuple[str, ...]] = {
+    _ANCHOR_TOKEN_ALIASES: dict[str, tuple[str, ...]] = {
         "crypto_symmetric": ("aes", "cipher", "encrypt", "decrypt", "round", "sbox", "sub_bytes", "mix_columns", "round_key", "key_schedule"),
         "crypto_hash": ("hash", "digest", "sha", "md5", "hmac", "compress", "finalize"),
         "network_http": ("http", "header", "headers", "request", "response", "user_agent", "chunked", "post", "get", "recv", "send"),
@@ -989,7 +989,7 @@ class BehaviorClassifier:
     }
 
     # Module-level singleton so anchors are loaded exactly once per process.
-    _shared: Optional[BehaviorClassifier] = None
+    _shared: BehaviorClassifier | None = None
     _shared_lock = threading.Lock()
 
     @classmethod
@@ -1008,7 +1008,7 @@ class BehaviorClassifier:
 
     def __init__(self, embedder: BgeCodeEmbedder):
         self._embedder = embedder
-        self._anchor_embs: Dict[str, List[float]] = {}
+        self._anchor_embs: dict[str, list[float]] = {}
         self._anchor_lock = threading.Lock()
         self._anchor_generation = 0
 
@@ -1022,7 +1022,7 @@ class BehaviorClassifier:
             self._anchor_generation += 1
             self._anchor_embs.clear()
 
-    def refresh_anchors(self, behaviors: Optional[List[str]] = None) -> None:
+    def refresh_anchors(self, behaviors: list[str] | None = None) -> None:
         """Pre-warm the anchor cache.
 
         If `behaviors` is omitted, all anchors are refreshed. Otherwise only the
@@ -1034,7 +1034,7 @@ class BehaviorClassifier:
         for behavior in targets:
             self._get_anchor(behavior, generation=generation)
 
-    def _get_anchor(self, behavior: str, generation: Optional[int] = None) -> Optional[List[float]]:
+    def _get_anchor(self, behavior: str, generation: int | None = None) -> list[float] | None:
         """
         Return cached anchor embedding or compute it.
         NEVER holds the lock during embed — that was causing full serialization.
@@ -1070,11 +1070,11 @@ class BehaviorClassifier:
 
     def classify_vec(
         self,
-        query_vec: List[float],
+        query_vec: list[float],
         threshold: float = 0.25,
         top_k: int = 4,
         block: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Classify a pre-computed embedding vector against all behavior anchors.
 
@@ -1108,10 +1108,10 @@ class BehaviorClassifier:
         return results[:top_k]
 
     @staticmethod
-    def _anchor_explain(anchor_text: str, query_text: str) -> List[str]:
+    def _anchor_explain(anchor_text: str, query_text: str) -> list[str]:
         phrases = [p.strip() for p in anchor_text.split(";") if p.strip()]
         q_tokens = set(re.findall(r"[A-Za-z0-9_]+", (query_text or "").lower()))
-        scored: List[tuple[int, str]] = []
+        scored: list[tuple[int, str]] = []
         for ph in phrases:
             p_tokens = set(re.findall(r"[A-Za-z0-9_]+", ph.lower()))
             scored.append((len(q_tokens.intersection(p_tokens)), ph))
@@ -1141,7 +1141,7 @@ class BehaviorClassifier:
             out.add(literal.lower())
         return out
 
-    def _token_bonus(self, behavior: str, query_text: str) -> Tuple[float, List[str]]:
+    def _token_bonus(self, behavior: str, query_text: str) -> tuple[float, list[str]]:
         aliases = set(self._ANCHOR_TOKEN_ALIASES.get(behavior, ()))
         if not aliases:
             return 0.0, []
@@ -1161,7 +1161,7 @@ class BehaviorClassifier:
         max_tokens: int = 3000,
         top_k: int = 4,
         block: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Zero-shot behavior classification of decompiled pseudocode.
         Embeds text and delegates to classify_vec.
@@ -1212,7 +1212,7 @@ class BehaviorClassifier:
         rows.sort(key=lambda x: x.get("confidence", 0.0), reverse=True)
         return rows
 
-    def anchor_coverage_report(self, min_similarity: float = 0.4, max_funcs: int = 5000) -> Dict[str, Any]:
+    def anchor_coverage_report(self, min_similarity: float = 0.4, max_funcs: int = 5000) -> dict[str, Any]:
         """Report how many functions match each anchor above min_similarity."""
         rows = []
         try:
@@ -1220,7 +1220,7 @@ class BehaviorClassifier:
             funcs = list(idautils.Functions())[:max(1, int(max_funcs))]
         except Exception:
             funcs = []
-        cache: List[Tuple[int, List[float]]] = []
+        cache: list[tuple[int, list[float]]] = []
         for ea in funcs:
             try:
                 import ida_hexrays

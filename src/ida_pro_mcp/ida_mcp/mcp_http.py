@@ -38,7 +38,7 @@ def handle_enabled_tools(registry: McpRpcRegistry, config_key: str):
     """Changed to registry to enable configured tools, returns original tools."""
     original_tools = registry.methods.copy()
     enabled_tools = config_json_get(
-        config_key, {name: True for name in original_tools.keys()}
+        config_key, dict.fromkeys(original_tools, True)
     )
     new_tools = [name for name in original_tools if name not in enabled_tools]
 
@@ -48,7 +48,7 @@ def handle_enabled_tools(registry: McpRpcRegistry, config_key: str):
             enabled_tools.pop(name)
 
     if new_tools:
-        enabled_tools.update({name: True for name in new_tools})
+        enabled_tools.update(dict.fromkeys(new_tools, True))
         config_json_set(config_key, enabled_tools)
 
     registry.methods = {
@@ -332,7 +332,7 @@ input[type="submit"]:hover {
         self.update_cors_policy()
 
         # Update the server's tools
-        enabled_tools = {name: name in postvars for name in ORIGINAL_TOOLS.keys()}
+        enabled_tools = {name: name in postvars for name in ORIGINAL_TOOLS}
         self.mcp_server.tools.methods = {
             name: func
             for name, func in ORIGINAL_TOOLS.items()

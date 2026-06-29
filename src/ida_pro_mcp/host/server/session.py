@@ -20,9 +20,10 @@ import os
 import re
 import shutil
 import threading
+import contextlib
 import uuid
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..analysis.patterns import compile_smart_pattern
 from ..config import (
@@ -92,16 +93,16 @@ class Session:
         session_id: str,
         idb_path: str,
         binary_path: str,
-        analysis_options: Optional[dict] = None,
+        analysis_options: dict | None = None,
         analysis_applied: bool = False,
-        ida_args: Optional[List[str]] = None,
-        created_at: Optional[datetime] = None,
-        last_accessed: Optional[datetime] = None,
-        tags: Optional[List[str]] = None,
+        ida_args: list[str] | None = None,
+        created_at: datetime | None = None,
+        last_accessed: datetime | None = None,
+        tags: list[str] | None = None,
         notes: str = "",
         auto_name: str = "",
         phase: str = "triage",
-        linked_sessions: Optional[List[str]] = None,
+        linked_sessions: list[str] | None = None,
         packed_idb: bool = False,
     ):
         self.session_id = session_id
@@ -187,16 +188,14 @@ class Session:
 # ============================================================================
 
 
-import contextlib
-
-from ..intelligence.helpers import parse_str_list
-from .session_skills import SessionSkillsMixin
+from ..intelligence.helpers import parse_str_list  # noqa: E402
+from .session_skills import SessionSkillsMixin  # noqa: E402
 
 
 class SessionManager(SessionSkillsMixin):
     def __init__(self, cache_dir: str):
         self._lock = threading.RLock()
-        self.sessions: Dict[str, Session] = {}
+        self.sessions: dict[str, Session] = {}
         self.cache_dir = cache_dir
         self.session_dir = os.path.join(cache_dir, "sessions")
         self._global_skills_db = os.path.join(cache_dir, "global_skills.db")
@@ -234,7 +233,7 @@ class SessionManager(SessionSkillsMixin):
         conn.commit()
         conn.close()
 
-    def _find_global_skills(self, context: str = "", tags: Optional[List[str]] = None, limit: int = 10) -> List[dict]:
+    def _find_global_skills(self, context: str = "", tags: list[str] | None = None, limit: int = 10) -> list[dict]:
         import sqlite3
         skills = []
         tag_set = {str(t).strip().lower() for t in (tags or []) if str(t).strip()}
@@ -242,7 +241,7 @@ class SessionManager(SessionSkillsMixin):
             conn = sqlite3.connect(self._global_skills_db)
             cur = conn.cursor()
             query = "SELECT * FROM global_skills WHERE 1=1"
-            params: List[Any] = []
+            params: list[Any] = []
             # Pull a broader candidate pool first, then rank by context.
             query += " ORDER BY q_value DESC LIMIT ?"
             params.append(max(int(limit) * 4, 40))
@@ -295,10 +294,10 @@ class SessionManager(SessionSkillsMixin):
     # Sanitization
     # ------------------------------------------------------------------
 
-    def _sanitize_tags(self, tags: Optional[List[Any]]) -> List[str]:
+    def _sanitize_tags(self, tags: list[Any] | None) -> list[str]:
         if not tags:
             return []
-        cleaned: List[str] = []
+        cleaned: list[str] = []
         for tag in tags:
             if tag is None:
                 continue
@@ -372,7 +371,7 @@ class SessionManager(SessionSkillsMixin):
                 log_rpc(f"Failed to load session metadata from {meta_path}: {e}")
         self._load_orphaned_idbs()
 
-    def _extract_sid(self, path: str) -> Optional[str]:
+    def _extract_sid(self, path: str) -> str | None:
         base = os.path.basename(path)
         match = re.match(r"SID_([A-Za-z0-9]{8})", base)
         return match.group(1) if match else None
@@ -403,9 +402,9 @@ class SessionManager(SessionSkillsMixin):
     # ------------------------------------------------------------------
 
     def create_session(
-        self, binary_path: str, use_existing: Optional[str] = None,
-        analysis_options: Optional[dict] = None, idb_path: Optional[str] = None,
-        ida_args: Optional[List[str]] = None, tags: Optional[List[str]] = None,
+        self, binary_path: str, use_existing: str | None = None,
+        analysis_options: dict | None = None, idb_path: str | None = None,
+        ida_args: list[str] | None = None, tags: list[str] | None = None,
         notes: str = "", packed_idb: bool = False,
     ) -> Session:
         with self._lock:
@@ -431,7 +430,7 @@ class SessionManager(SessionSkillsMixin):
             self._save_metadata(session)
             return session
 
-    def get_session(self, sid: str) -> Optional[Session]:
+    def get_session(self, sid: str) -> Session | None:
         with self._lock:
             session = self.sessions.get(sid)
             if session:
@@ -439,7 +438,7 @@ class SessionManager(SessionSkillsMixin):
                 return copy.deepcopy(session)
             return None
 
-    def find_session_by_path(self, path: str) -> Optional[Session]:
+    def find_session_by_path(self, path: str) -> Session | None:
         with self._lock:
             norm = os.path.realpath(os.path.abspath(path))
             for s in self.sessions.values():
@@ -449,7 +448,7 @@ class SessionManager(SessionSkillsMixin):
                     return copy.copy(s)
             return None
 
-    def discover_sessions(self, query: str = "") -> List[Session]:
+    def discover_sessions(self, query: str = "") -> list[Session]:
         with self._lock:
             if not query:
                 return [copy.copy(s) for s in self.sessions.values()]
@@ -496,7 +495,7 @@ class SessionManager(SessionSkillsMixin):
         with self._lock:
             return self._delete_session_unlocked(sid)
 
-    def update_session(self, sid: str, **kwargs) -> Optional[Session]:
+    def update_session(self, sid: str, **kwargs) -> Session | None:
         with self._lock:
             session = self.sessions.get(sid)
             if not session:
@@ -514,10 +513,10 @@ class SessionManager(SessionSkillsMixin):
             self._save_metadata(session)
             return copy.copy(session)
 
-    def rename_session(self, sid: str, new_name: str) -> Optional[Session]:
+    def rename_session(self, sid: str, new_name: str) -> Session | None:
         return self.update_session(sid, auto_name=self._sanitize_name(new_name))
 
-    def duplicate_session(self, sid: str) -> Optional[Session]:
+    def duplicate_session(self, sid: str) -> Session | None:
         with self._lock:
             session = self.sessions.get(sid)
             if not session:
@@ -537,7 +536,7 @@ class SessionManager(SessionSkillsMixin):
             self._save_metadata(new_session)
             return copy.copy(new_session)
 
-    def export_session(self, sid: str, include_skills: bool = True) -> Optional[dict]:
+    def export_session(self, sid: str, include_skills: bool = True) -> dict | None:
         with self._lock:
             session = self.sessions.get(sid)
             if not session:
@@ -551,12 +550,12 @@ class SessionManager(SessionSkillsMixin):
                 data["_hypotheses"] = skills_data.get("hypotheses", [])
             return data
 
-    def get_high_confidence_hypotheses(self, sid: str, min_confidence: float = 0.8) -> List[dict]:
+    def get_high_confidence_hypotheses(self, sid: str, min_confidence: float = 0.8) -> list[dict]:
         with self._lock:
             if sid not in self.sessions:
                 return []
             data = self._load_skills(sid)
-            out: List[dict] = []
+            out: list[dict] = []
             for h in data.get("hypotheses", []) or []:
                 try:
                     conf = float(h.get("confidence", 0.0) or 0.0)
@@ -588,10 +587,10 @@ class SessionManager(SessionSkillsMixin):
                 self._save_skills(new_sid, current)
             return copy.copy(session)
 
-    def archive_session(self, sid: str) -> Optional[Session]:
+    def archive_session(self, sid: str) -> Session | None:
         return self.update_session(sid, tags=["archived"])
 
-    def unarchive_session(self, sid: str) -> Optional[Session]:
+    def unarchive_session(self, sid: str) -> Session | None:
         session = self.sessions.get(sid)
         return self.update_session(sid, tags=[t for t in getattr(session, 'tags', []) if t != "archived"])
 
@@ -606,7 +605,7 @@ class SessionManager(SessionSkillsMixin):
             sessions = sessions[offset:offset + limit] if limit > 0 else sessions[offset:]
             return {"sessions": [s.to_dict() for s in sessions], "total": total, "count": len(sessions), "offset": offset, "limit": limit}
 
-    def cleanup_stale(self, max_age_days: int = 30) -> List[str]:
+    def cleanup_stale(self, max_age_days: int = 30) -> list[str]:
         with self._lock:
             cutoff = datetime.now() - timedelta(days=max_age_days)
             stale = [sid for sid, s in self.sessions.items() if s.last_accessed < cutoff]
@@ -652,11 +651,11 @@ class SessionManager(SessionSkillsMixin):
             now = datetime.now()
             ages = [(now - s.created_at).total_seconds() for s in self.sessions.values()]
             avg_age_days = (sum(ages) / len(ages)) / 86400 if ages else 0
-            tag_counts: Dict[str, int] = {}
+            tag_counts: dict[str, int] = {}
             for s in self.sessions.values():
                 for t in s.tags:
                     tag_counts[t] = tag_counts.get(t, 0) + 1
-            phases: Dict[str, int] = {}
+            phases: dict[str, int] = {}
             for s in self.sessions.values():
                 phases[s.phase] = phases.get(s.phase, 0) + 1
             return {
@@ -664,7 +663,7 @@ class SessionManager(SessionSkillsMixin):
                 "avg_age_days": round(avg_age_days, 2), "tags": tag_counts, "phases": phases,
             }
 
-    def tag_session(self, sid: str, tag: str) -> Optional[Session]:
+    def tag_session(self, sid: str, tag: str) -> Session | None:
         session = self.sessions.get(sid)
         if not session:
             return None
@@ -673,17 +672,17 @@ class SessionManager(SessionSkillsMixin):
             tags.append(tag)
         return self.update_session(sid, tags=tags)
 
-    def untag_session(self, sid: str, tag: str) -> Optional[Session]:
+    def untag_session(self, sid: str, tag: str) -> Session | None:
         session = self.sessions.get(sid)
         if not session:
             return None
         return self.update_session(sid, tags=[t for t in getattr(session, 'tags', []) if t != tag])
 
-    def find_by_tag(self, tag: str) -> List[Session]:
+    def find_by_tag(self, tag: str) -> list[Session]:
         with self._lock:
             return [copy.copy(s) for s in self.sessions.values() if tag in s.tags]
 
-    def add_note(self, sid: str, note: str) -> Optional[Session]:
+    def add_note(self, sid: str, note: str) -> Session | None:
         session = self.sessions.get(sid)
         if not session:
             return None
@@ -691,48 +690,48 @@ class SessionManager(SessionSkillsMixin):
         combined = f"{session.notes}\n{note}" if session.notes else note
         return self.update_session(sid, notes=self._sanitize_note(combined))
 
-    def clear_notes(self, sid: str) -> Optional[Session]:
+    def clear_notes(self, sid: str) -> Session | None:
         return self.update_session(sid, notes="")
 
-    def search_notes(self, query: str) -> List[Session]:
+    def search_notes(self, query: str) -> list[Session]:
         with self._lock:
             matcher = compile_smart_pattern(query, case_sensitive=False)
             return [copy.copy(s) for s in self.sessions.values() if s.notes and matcher(s.notes)]
 
-    def get_recent(self, n: int = 5) -> List[Session]:
+    def get_recent(self, n: int = 5) -> list[Session]:
         with self._lock:
             sorted_sessions = sorted(self.sessions.values(), key=lambda s: s.last_accessed, reverse=True)
             return [copy.copy(s) for s in sorted_sessions[:n]]
 
-    def get_oldest(self, n: int = 5) -> List[Session]:
+    def get_oldest(self, n: int = 5) -> list[Session]:
         with self._lock:
             sorted_sessions = sorted(self.sessions.values(), key=lambda s: s.created_at)
             return [copy.copy(s) for s in sorted_sessions[:n]]
 
-    def list_active(self) -> List[Session]:
+    def list_active(self) -> list[Session]:
         with self._lock:
             return [copy.copy(s) for s in self.sessions.values() if "archived" not in s.tags]
 
-    def list_archived(self) -> List[Session]:
+    def list_archived(self) -> list[Session]:
         with self._lock:
             return [copy.copy(s) for s in self.sessions.values() if "archived" in s.tags]
 
-    def get_session_age(self, sid: str) -> Optional[timedelta]:
+    def get_session_age(self, sid: str) -> timedelta | None:
         session = self.sessions.get(sid)
         if not session:
             return None
         return datetime.now() - session.created_at
 
-    def get_session_idle_time(self, sid: str) -> Optional[timedelta]:
+    def get_session_idle_time(self, sid: str) -> timedelta | None:
         session = self.sessions.get(sid)
         if not session:
             return None
         return datetime.now() - session.last_accessed
 
-    def set_binary_path(self, sid: str, path: str) -> Optional[Session]:
+    def set_binary_path(self, sid: str, path: str) -> Session | None:
         return self.update_session(sid, binary_path=path)
 
-    def set_idb_path(self, sid: str, path: str) -> Optional[Session]:
+    def set_idb_path(self, sid: str, path: str) -> Session | None:
         return self.update_session(sid, idb_path=path)
 
     def session_exists(self, sid: str) -> bool:
@@ -743,7 +742,7 @@ class SessionManager(SessionSkillsMixin):
         with self._lock:
             return len(self.sessions)
 
-    def merge_sessions(self, sid1: str, sid2: str) -> Optional[Session]:
+    def merge_sessions(self, sid1: str, sid2: str) -> Session | None:
         with self._lock:
             s1, s2 = self.sessions.get(sid1), self.sessions.get(sid2)
             if not s1 or not s2:
@@ -765,7 +764,7 @@ class SessionManager(SessionSkillsMixin):
             self._save_metadata(s1)
             return copy.copy(s1)
 
-    def validate_session(self, sid: str) -> Optional[dict]:
+    def validate_session(self, sid: str) -> dict | None:
         with self._lock:
             session = self.sessions.get(sid)
             if not session:
@@ -784,15 +783,15 @@ class SessionManager(SessionSkillsMixin):
                 issues.append("created_at is in the future")
             return {"session_id": sid, "valid": len(issues) == 0, "issues": issues}
 
-    def bulk_delete(self, sids: List[str]) -> dict:
+    def bulk_delete(self, sids: list[str]) -> dict:
         with self._lock:
             return {sid: self._delete_session_unlocked(sid) for sid in sids}
 
-    def bulk_tag(self, sids: List[str], tag: str) -> dict:
+    def bulk_tag(self, sids: list[str], tag: str) -> dict:
         with self._lock:
             cleaned = self._sanitize_tags([tag])
             if not cleaned:
-                return {sid: False for sid in sids}
+                return dict.fromkeys(sids, False)
             safe_tag = cleaned[0]
             results = {}
             for sid in sids:
@@ -810,7 +809,7 @@ class SessionManager(SessionSkillsMixin):
     # REAL SNAPSHOTS (persist to disk, survive restarts)
     # ====================================================================
 
-    def snapshot_session(self, sid: str, message: str = "") -> Optional[dict]:
+    def snapshot_session(self, sid: str, message: str = "") -> dict | None:
         """Create a real, persisted snapshot checkpoint."""
         with self._lock:
             session = self.sessions.get(sid)
@@ -832,7 +831,7 @@ class SessionManager(SessionSkillsMixin):
             self._save_snapshots(sid, snapshots)
             return {"ok": True, "snapshot_id": snapshot_id, "message": message}
 
-    def restore_snapshot(self, sid: str, snapshot_id: str) -> Optional[Session]:
+    def restore_snapshot(self, sid: str, snapshot_id: str) -> Session | None:
         """Restore session state from a persisted snapshot. Returns the restored session or None."""
         with self._lock:
             snapshots = self._load_snapshots(sid)
@@ -875,7 +874,7 @@ class SessionManager(SessionSkillsMixin):
     def _get_snapshots_path(self, sid: str) -> str:
         return os.path.join(self.session_dir, f"SID_{sid}_snapshots.json")
 
-    def _load_snapshots(self, sid: str) -> List[dict]:
+    def _load_snapshots(self, sid: str) -> list[dict]:
         path = self._get_snapshots_path(sid)
         if os.path.exists(path):
             try:
@@ -885,7 +884,7 @@ class SessionManager(SessionSkillsMixin):
                 pass
         return []
 
-    def _save_snapshots(self, sid: str, snapshots: List[dict]):
+    def _save_snapshots(self, sid: str, snapshots: list[dict]):
         path = self._get_snapshots_path(sid)
         tmp = path + ".tmp"
         try:
@@ -926,7 +925,7 @@ class SessionManager(SessionSkillsMixin):
         except Exception as e:
             log_rpc(f"Failed to save notebook for {sid}: {e}")
 
-    def notebook_append(self, sid: str, entry: str, section: Optional[str] = None) -> dict:
+    def notebook_append(self, sid: str, entry: str, section: str | None = None) -> dict:
         """Append to the analysis notebook. Auto-links addresses and bookmarks."""
         with self._lock:
             session = self.sessions.get(sid)
@@ -944,7 +943,7 @@ class SessionManager(SessionSkillsMixin):
             self._save_metadata(session)
             return {"ok": True, "notebook_lines": len(lines)}
 
-    def notebook_read(self, sid: str, lines: Optional[str] = None) -> dict:
+    def notebook_read(self, sid: str, lines: str | None = None) -> dict:
         """Read the analysis notebook."""
         with self._lock:
             notebook = self._load_notebook(sid)
@@ -979,8 +978,8 @@ class SessionManager(SessionSkillsMixin):
     # HYPOTHESIS TRACKER
     # ====================================================================
 
-    def track_hypothesis(self, sid: str, statement: str, evidence_for: Optional[List[str]] = None,
-                         evidence_against: Optional[List[str]] = None, confidence: float = 0.5) -> dict:
+    def track_hypothesis(self, sid: str, statement: str, evidence_for: list[str] | None = None,
+                         evidence_against: list[str] | None = None, confidence: float = 0.5) -> dict:
         with self._lock:
             session = self.sessions.get(sid)
             if not session:
@@ -1003,13 +1002,13 @@ class SessionManager(SessionSkillsMixin):
             self._save_skills(sid, data)
             return {"ok": True, "hypothesis_id": hid, "hypothesis": hyp}
 
-    def confirm_hypothesis(self, sid: str, hid: str, evidence: Optional[List[str]] = None) -> dict:
+    def confirm_hypothesis(self, sid: str, hid: str, evidence: list[str] | None = None) -> dict:
         return self._resolve_hypothesis(sid, hid, "confirmed", evidence or [])
 
-    def refute_hypothesis(self, sid: str, hid: str, reason: str, evidence: Optional[List[str]] = None) -> dict:
+    def refute_hypothesis(self, sid: str, hid: str, reason: str, evidence: list[str] | None = None) -> dict:
         return self._resolve_hypothesis(sid, hid, "refuted", evidence or [], reason)
 
-    def _resolve_hypothesis(self, sid: str, hid: str, status: str, evidence: List[str], reason: str = ""):
+    def _resolve_hypothesis(self, sid: str, hid: str, status: str, evidence: list[str], reason: str = ""):
         data = self._load_skills(sid)
         for h in data.get("hypotheses", []):
             if h["id"] == hid:
@@ -1021,7 +1020,7 @@ class SessionManager(SessionSkillsMixin):
                 return {"ok": True, "hypothesis_id": hid, "hypothesis": h}
         return make_error(MCPError.NOT_FOUND, f"Hypothesis {hid} not found")
 
-    def list_hypotheses(self, sid: str, status: Optional[str] = None) -> dict:
+    def list_hypotheses(self, sid: str, status: str | None = None) -> dict:
         data = self._load_skills(sid)
         hyps = data.get("hypotheses", [])
         if status:
@@ -1051,7 +1050,7 @@ class BookmarkManager:
     def _get_path(self, sid: str) -> str:
         return os.path.join(self.session_dir, f"SID_{sid}_bookmarks.json")
 
-    def load(self, sid: str) -> List[dict]:
+    def load(self, sid: str) -> list[dict]:
         path = self._get_path(sid)
         if os.path.exists(path):
             try:
@@ -1062,7 +1061,7 @@ class BookmarkManager:
                 return []
         return []
 
-    def save(self, sid: str, bookmarks: List[dict]) -> dict:
+    def save(self, sid: str, bookmarks: list[dict]) -> dict:
         path = self._get_path(sid)
         tmp = path + ".tmp"
         try:

@@ -28,7 +28,6 @@ import collections
 import threading
 import time
 from collections.abc import Callable
-from typing import Dict, List, Optional, Tuple
 
 # ── Drift Detector ─────────────────────────────────────────────────────────────
 
@@ -51,7 +50,7 @@ class DriftDetector:
     def __init__(self, window: int = 20):
         self._window = window
         self._recent: collections.deque = collections.deque(maxlen=window)
-        self._session_stats: Dict[str, Dict] = collections.defaultdict(lambda: {
+        self._session_stats: dict[str, dict] = collections.defaultdict(lambda: {
             "analysis_calls": 0,
             "record_calls": 0,
             "error_calls": 0,
@@ -64,7 +63,7 @@ class DriftDetector:
     def _analyze_without_record_threshold(self) -> int:
         return max(6, int(round(self._window * 0.5)))
 
-    def _low_record_threshold(self) -> Tuple[int, float]:
+    def _low_record_threshold(self) -> tuple[int, float]:
         return (max(12, int(round(self._window))), 0.1)
 
     def _repeated_addr_threshold(self) -> int:
@@ -80,8 +79,8 @@ class DriftDetector:
         return max(4, int(round(self._window * 0.3)))
 
     def observe(self, tool: str, action: str, session_id: str,
-                latency_ms: float, error: Optional[str],
-                addr: Optional[str] = None):
+                latency_ms: float, error: str | None,
+                addr: str | None = None):
         with self._lock:
             state = (tool, action)
             self._recent.append(state)
@@ -97,7 +96,7 @@ class DriftDetector:
                 s["addrs_seen"][addr] += 1
             s["latencies"].append(latency_ms)
 
-    def check(self, session_id: str) -> List[Dict]:
+    def check(self, session_id: str) -> list[dict]:
         """Return list of drift signals for this session."""
         signals = []
         with self._lock:
@@ -174,7 +173,7 @@ class DriftDetector:
 
         return signals
 
-    def session_report(self, session_id: str) -> Dict:
+    def session_report(self, session_id: str) -> dict:
         with self._lock:
             s = dict(self._session_stats.get(session_id, {}))
         if not s:
@@ -206,7 +205,7 @@ class UsageIntelligence:
     """
 
     def __init__(self, audit_dir: str,
-                 notify_fn: Optional[Callable[[Dict], None]] = None,
+                 notify_fn: Callable[[dict], None] | None = None,
                  drift_check_interval: float = 60.0):
         # audit_dir is retained for API compatibility but unused: drift is a
         # live signal and no longer mined from historical logs.
@@ -217,7 +216,7 @@ class UsageIntelligence:
         self.drift = DriftDetector()
 
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._active_sessions: set = set()
         self._last_drift_check = 0.0
 
@@ -234,22 +233,22 @@ class UsageIntelligence:
         self._stop.set()
 
     def observe(self, tool: str, action: str, session_id: str,
-                latency_ms: float = 0.0, error: Optional[str] = None,
-                addr: Optional[str] = None):
+                latency_ms: float = 0.0, error: str | None = None,
+                addr: str | None = None):
         """Live observation — called on every tool call from server.py."""
         self._active_sessions.add(session_id)
         self.drift.observe(tool, action, session_id, latency_ms, error, addr)
 
-    def predict_next(self, tool: str, action: str, top_k: int = 5) -> List[Dict]:
+    def predict_next(self, tool: str, action: str, top_k: int = 5) -> list[dict]:
         """No next-action prediction (the Markov/effectiveness models were
         removed as unvalidated LLM-steering). Retained as a no-op so callers
         that merge usage-intelligence predictions keep working."""
         return []
 
-    def session_report(self, session_id: str) -> Dict:
+    def session_report(self, session_id: str) -> dict:
         return self.drift.session_report(session_id)
 
-    def global_report(self) -> Dict:
+    def global_report(self) -> dict:
         return {
             "active_sessions": len(self._active_sessions),
         }

@@ -9,7 +9,7 @@ import uuid
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 _MAX_TASK_HISTORY = 1000
 _DEFAULT_MAX_WORKERS = int(os.environ.get("IDA_MCP_BATCH_MAX_WORKERS", "4"))
@@ -24,17 +24,17 @@ _MAX_PERSIST_FIELDS = {"task_id", "session_id", "action", "args", "state", "crea
 @dataclass
 class BatchTask:
     task_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
-    session_id: Optional[str] = None
+    session_id: str | None = None
     action: str = "script"
-    args: Dict[str, Any] = field(default_factory=dict)
+    args: dict[str, Any] = field(default_factory=dict)
     state: str = "pending"
     created_at: float = field(default_factory=time.time)
-    started_at: Optional[float] = None
-    finished_at: Optional[float] = None
+    started_at: float | None = None
+    finished_at: float | None = None
     result: Any = None
-    error: Optional[str] = None
-    progress: Optional[str] = None
-    _future: Optional[Future] = field(default=None, repr=False)
+    error: str | None = None
+    progress: str | None = None
+    _future: Future | None = field(default=None, repr=False)
     _cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
     @property
@@ -44,7 +44,7 @@ class BatchTask:
         end = self.finished_at or time.time()
         return end - self.started_at
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "task_id": self.task_id,
             "session_id": self.session_id,
@@ -63,17 +63,17 @@ class BatchTask:
 class BatchManager:
     def __init__(self, max_workers: int = _DEFAULT_MAX_WORKERS):
         self._lock = threading.Lock()
-        self._tasks: Dict[str, BatchTask] = {}
+        self._tasks: dict[str, BatchTask] = {}
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="batch-")
         self._load_persisted()
 
     def submit(
         self,
         action: str,
-        args: Dict[str, Any],
+        args: dict[str, Any],
         *,
-        session_id: Optional[str] = None,
-        run_fn: Optional[Callable[[BatchTask], Any]] = None,
+        session_id: str | None = None,
+        run_fn: Callable[[BatchTask], Any] | None = None,
     ) -> str:
         task = BatchTask(action=action, args=args, session_id=session_id)
         with self._lock:
@@ -84,7 +84,7 @@ class BatchManager:
         task._future = future
         return task.task_id
 
-    def _run_task(self, task: BatchTask, run_fn: Optional[Callable[[BatchTask], Any]]) -> None:
+    def _run_task(self, task: BatchTask, run_fn: Callable[[BatchTask], Any] | None) -> None:
         try:
             task.started_at = time.time()
             task.state = "running"
@@ -106,14 +106,14 @@ class BatchManager:
             task.finished_at = time.time()
             self._save_persisted()
 
-    def status(self, task_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def status(self, task_id: str | None = None) -> list[dict[str, Any]]:
         with self._lock:
             if task_id:
                 task = self._tasks.get(task_id)
                 return [task.to_dict()] if task else []
             return [t.to_dict() for t in list(self._tasks.values())]
 
-    def result(self, task_id: str) -> Dict[str, Any]:
+    def result(self, task_id: str) -> dict[str, Any]:
         with self._lock:
             task = self._tasks.get(task_id)
         if task is None:
@@ -123,7 +123,7 @@ class BatchManager:
                 task._future.result(timeout=0)
         return task.to_dict()
 
-    def cancel(self, task_id: str) -> Dict[str, Any]:
+    def cancel(self, task_id: str) -> dict[str, Any]:
         with self._lock:
             task = self._tasks.get(task_id)
         if task is None:
@@ -138,7 +138,7 @@ class BatchManager:
         self._save_persisted()
         return task.to_dict()
 
-    def wait(self, task_id: str, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def wait(self, task_id: str, timeout: float | None = None) -> dict[str, Any]:
         with self._lock:
             task = self._tasks.get(task_id)
         if task is None:
@@ -149,7 +149,7 @@ class BatchManager:
             task._future.result(timeout=timeout)
         return task.to_dict()
 
-    def list_tasks(self, state: Optional[str] = None) -> List[Dict[str, Any]]:
+    def list_tasks(self, state: str | None = None) -> list[dict[str, Any]]:
         with self._lock:
             tasks = list(self._tasks.values())
             if state:

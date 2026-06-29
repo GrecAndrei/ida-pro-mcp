@@ -16,7 +16,7 @@ import sqlite3
 import threading
 import time
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from . import helpers as _helpers
 from .api_patterns import (
@@ -63,28 +63,28 @@ class ContextAssembler:
         # Shared singleton classifier — anchors loaded once across all instances
         self._classifier = BehaviorClassifier.instance(self._embedder)
         # Per-binary embedding indexes keyed by idb_path
-        self._indexes: Dict[str, FunctionEmbeddingIndex] = {}
+        self._indexes: dict[str, FunctionEmbeddingIndex] = {}
         self._idx_lock   = threading.Lock()
         # Activity tracking for stuck detection (in-memory, per session)
-        self._activity: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        self._activity: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self._activity_lock = threading.Lock()
-        self._related_addr_graph: Dict[str, Dict[str, set]] = defaultdict(lambda: defaultdict(set))
+        self._related_addr_graph: dict[str, dict[str, set]] = defaultdict(lambda: defaultdict(set))
         self._related_addr_lock = threading.Lock()
-        self._retrieval_metrics: Dict[str, Dict[str, int]] = defaultdict(dict)
+        self._retrieval_metrics: dict[str, dict[str, int]] = defaultdict(dict)
         self._retrieval_metrics_lock = threading.Lock()
-        self._session_semantic_threshold: Dict[str, float] = {}
+        self._session_semantic_threshold: dict[str, float] = {}
         self._semantic_threshold_lock = threading.Lock()
         self._last_housekeeping_ts = 0.0
         self._housekeeping_lock = threading.Lock()
         self._related_graph_max_edges = 1200
-        self._semantic_circuit_breaker_until: Dict[str, int] = {}
+        self._semantic_circuit_breaker_until: dict[str, int] = {}
         self._circuit_breaker_lock = threading.Lock()
-        self._session_stats_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+        self._session_stats_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._stats_cache_lock = threading.Lock()
         self._stats_cache_ttl_sec = 1.5
-        self._perf_buckets: Dict[str, Dict[str, float]] = defaultdict(dict)
+        self._perf_buckets: dict[str, dict[str, float]] = defaultdict(dict)
         self._perf_lock = threading.Lock()
-        self._semantic_budget_cache: Dict[str, Tuple[float, int]] = {}
+        self._semantic_budget_cache: dict[str, tuple[float, int]] = {}
         self._semantic_budget_lock = threading.Lock()
 
     # ── helpers ─────────────────────────────────────────────────────────
@@ -115,7 +115,7 @@ class ContextAssembler:
 
     # ── blackboard retrieval ──────────────────────────────────────────────
 
-    def _get_bb_entries(self, addr: str, bb_store) -> List[Dict[str, Any]]:
+    def _get_bb_entries(self, addr: str, bb_store) -> list[dict[str, Any]]:
         """Fetch blackboard entries relevant to this address."""
         if bb_store is None or not addr:
             return []
@@ -127,8 +127,8 @@ class ContextAssembler:
 
     def _merge_related_findings(
         self,
-        pack: Dict[str, Any],
-        entries: List[Dict[str, Any]],
+        pack: dict[str, Any],
+        entries: list[dict[str, Any]],
         source: str,
         session_id: str = "",
     ) -> None:
@@ -166,7 +166,7 @@ class ContextAssembler:
             "api_linked": 2,
             "semantic_linked": 1,
         }
-        merged: Dict[str, Dict[str, Any]] = {}
+        merged: dict[str, dict[str, Any]] = {}
         for existing in pack.get("related_findings", []):
             e = dict(existing)
             e.setdefault("retrieval_source", "address_linked")
@@ -185,9 +185,8 @@ class ContextAssembler:
             if new_rank > prev_rank:
                 merged[key] = e
                 continue
-            if new_rank == prev_rank:
-                if float(e.get("confidence") or 0.0) > float(prev.get("confidence") or 0.0):
-                    merged[key] = e
+            if new_rank == prev_rank and float(e.get("confidence") or 0.0) > float(prev.get("confidence") or 0.0):
+                merged[key] = e
 
         ranked = sorted(
             merged.values(),
@@ -237,7 +236,7 @@ class ContextAssembler:
             b[f"{bucket}.sum_ms"] = float(b.get(f"{bucket}.sum_ms", 0.0) + dt_ms)
             b[f"{bucket}.max_ms"] = max(float(b.get(f"{bucket}.max_ms", 0.0)), dt_ms)
 
-    def _session_retrieval_stats(self, session_id: str) -> Dict[str, Any]:
+    def _session_retrieval_stats(self, session_id: str) -> dict[str, Any]:
         if not session_id:
             return {}
         try:
@@ -250,7 +249,7 @@ class ContextAssembler:
                 metrics = dict(self._retrieval_metrics.get(session_id, {}))
             if not metrics:
                 return {}
-            out: Dict[str, Any] = {}
+            out: dict[str, Any] = {}
             sources = ["address_linked", "relation_linked", "api_linked", "semantic_linked"]
             for src in sources:
                 total = int(metrics.get(f"{src}.total", 0))
@@ -308,21 +307,21 @@ class ContextAssembler:
             return int(self._semantic_circuit_breaker_until.get(session_id, 0)) > int(time.time())
 
     @staticmethod
-    def _quantile(vals: List[float], q: float, default: float = 0.0) -> float:
+    def _quantile(vals: list[float], q: float, default: float = 0.0) -> float:
         """Deterministic quantile helper with sane fallback."""
         try:
             return _helpers.quantile(vals, q, default)
         except Exception:
             return float(default)
 
-    def _semantic_quality_profile(self, session_id: str) -> Dict[str, float]:
+    def _semantic_quality_profile(self, session_id: str) -> dict[str, float]:
         """
         Build adaptive semantic-quality profile from session telemetry.
         Avoids fixed cutoffs by deriving baselines from observed distributions.
         """
         stats = self._session_retrieval_stats(session_id) if session_id else {}
-        rates: List[float] = []
-        totals: List[int] = []
+        rates: list[float] = []
+        totals: list[int] = []
         for src in ("address_linked", "relation_linked", "api_linked", "semantic_linked"):
             bucket = stats.get(src) if isinstance(stats, dict) else None
             if not isinstance(bucket, dict):
@@ -467,10 +466,10 @@ class ContextAssembler:
     def _get_bb_by_api_signals(
         self,
         bb_store,
-        api_calls: List[str],
+        api_calls: list[str],
         addr: str,
         top_k: int = 4,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Retrieve blackboard findings related to the same behavior signal (APIs/tags),
         not just exact address matches.
@@ -478,7 +477,7 @@ class ContextAssembler:
         if bb_store is None or not api_calls:
             return []
         try:
-            ranked: List[Tuple[int, float, Dict[str, Any]]] = []
+            ranked: list[tuple[int, float, dict[str, Any]]] = []
             seen_ids: set = set()
             # Query per API tag; blackboard tags are stored as JSON arrays and
             # list(tag=...) already supports LIKE matching.
@@ -497,7 +496,7 @@ class ContextAssembler:
         except Exception:
             return []
 
-    def _record_related_addresses(self, session_id: str, anchor_addr: str, related_addrs: List[str]) -> None:
+    def _record_related_addresses(self, session_id: str, anchor_addr: str, related_addrs: list[str]) -> None:
         """Record caller/callee/xref relations observed in tool outputs."""
         if not session_id or not anchor_addr or not related_addrs:
             return
@@ -518,7 +517,7 @@ class ContextAssembler:
         addr: str,
         bb_store,
         top_k: int = 4,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Retrieve blackboard findings from addresses related through recent
         caller/callee/xref exploration in this session.
@@ -530,7 +529,7 @@ class ContextAssembler:
                 neighbors = list(self._related_addr_graph.get(session_id, {}).get(addr, set()))
             if not neighbors:
                 return []
-            out: List[Dict[str, Any]] = []
+            out: list[dict[str, Any]] = []
             seen: set = set()
             for naddr in neighbors[:8]:
                 for entry in bb_store.list(addr=naddr, limit=3):
@@ -561,7 +560,7 @@ class ContextAssembler:
         addr: str,
         tool: str,
         action: str,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         with self._activity_lock:
             log = list(self._activity.get(session_id, []))
         if len(log) < 4:
@@ -614,13 +613,13 @@ class ContextAssembler:
         self,
         tool: str,
         action: str,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
         addr: str,
         session_id: str,
         idb_path: str,
         bb_store=None,
         mode: str = "full",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Build a context_pack for injection into the tool response.
         Non-blocking: slow operations (embedding new function) are async.
@@ -628,7 +627,7 @@ class ContextAssembler:
         """
         _full = mode == "full"
         t_all = self._perf_start()
-        pack: Dict[str, Any] = {}
+        pack: dict[str, Any] = {}
 
         self._run_housekeeping(session_id)
 
@@ -673,7 +672,7 @@ class ContextAssembler:
             t_search = self._perf_start()
             try:
                 # Collect addresses from the result payload
-                hit_addrs: List[str] = []
+                hit_addrs: list[str] = []
                 for key in ("matches", "items", "results", "callers", "callees",
                             "xrefs", "refs", "addresses", "functions"):
                     val = payload.get(key)
@@ -720,7 +719,7 @@ class ContextAssembler:
 
         return pack
 
-    def _query_schemaboot(self, idb_path: str, addr: str) -> Optional[Dict[str, Any]]:
+    def _query_schemaboot(self, idb_path: str, addr: str) -> dict[str, Any] | None:
         """Pull structural attributes from schemaboot for this function address."""
         if not idb_path or not addr:
             return None
@@ -739,7 +738,7 @@ class ContextAssembler:
                 """, (ea,))
                 row = cur.fetchone()
                 # Also fetch API list from junction table
-                apis: List[str] = []
+                apis: list[str] = []
                 if row:
                     cur.execute(
                         "SELECT api_name FROM function_apis WHERE func_ea = ? LIMIT 60",
@@ -769,8 +768,8 @@ class ContextAssembler:
 
     def _enrich_decompile(
         self,
-        pack: Dict[str, Any],
-        payload: Dict[str, Any],
+        pack: dict[str, Any],
+        payload: dict[str, Any],
         pseudocode: str,
         addr: str,
         idb_path: str,
@@ -792,9 +791,9 @@ class ContextAssembler:
         func_name = payload.get("name") or f"sub_{addr}"
 
         # ── Step 1: Deterministic API extraction (no ML, instant) ─────────
-        api_calls: List[str] = []
-        string_refs: List[str] = []
-        crypto_consts: List[str] = []
+        api_calls: list[str] = []
+        string_refs: list[str] = []
+        crypto_consts: list[str] = []
         try:
             api_calls = extract_api_calls(pseudocode)
             string_refs = extract_string_refs(pseudocode)
@@ -803,7 +802,7 @@ class ContextAssembler:
             pass
 
         # ── Step 2: Schemaboot structural attributes (fast SQL) ──────────
-        sb_attrs: Optional[Dict[str, Any]] = None
+        sb_attrs: dict[str, Any] | None = None
         try:
             sb_attrs = self._query_schemaboot(idb_path, addr)
             # Merge API list from schemaboot with what we found in pseudocode
@@ -822,7 +821,7 @@ class ContextAssembler:
             pack["crypto_constants_detected"] = crypto_consts
 
         if sb_attrs:
-            structural: Dict[str, Any] = {}
+            structural: dict[str, Any] = {}
             if sb_attrs.get("incoming_xrefs") is not None:
                 structural["xref_count"] = sb_attrs["incoming_xrefs"]
             if sb_attrs.get("xor_count", 0) > 0:
@@ -843,7 +842,7 @@ class ContextAssembler:
         # response can expose both deterministic and semantic signals.
         # Skip the embedding work in compact mode — the result is only surfaced
         # in full mode, so computing it would be pure waste.
-        behavior_hits: List[Dict[str, Any]] = []
+        behavior_hits: list[dict[str, Any]] = []
         if _full and pseudocode.strip():
             try:
                 behavior_hits = self._behavior_classifier().classify(
@@ -862,7 +861,7 @@ class ContextAssembler:
         # Only surfaced in full mode, so skip the rule evaluation entirely in
         # compact mode.
         if _full:
-            actions: List[Dict[str, Any]] = []
+            actions: list[dict[str, Any]] = []
             seen_act: set = set()
             try:
                 for act in actions_from_apis(api_calls, addr):
@@ -929,7 +928,7 @@ class ContextAssembler:
                 pass
 
         # ── Step 5: Embedding-based function similarity (background-safe) ─
-        query_vec: Optional[List[float]] = None
+        query_vec: list[float] | None = None
         if idb_path:
             try:
                 query_vec = self._embedder.embed(pseudocode[:3000])
@@ -974,7 +973,7 @@ class ContextAssembler:
                         top = [(sim, ea) for sim, ea in scored[:3] if sim >= 0.6]
                         if top:
                             top_eas = [ea for _, ea in top]
-                            names: Dict[str, str] = {}
+                            names: dict[str, str] = {}
                             try:
                                 with idx._conn() as conn:
                                     ph2 = ",".join("?" * len(top_eas))
@@ -1041,10 +1040,10 @@ class ContextAssembler:
 
     def _enrich_address_list(
         self,
-        addresses: List[str],
+        addresses: list[str],
         idb_path: str,
         limit: int = 20,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Enrich a list of addresses with schemaboot structural data.
         Used to annotate search/xref results without extra tool calls.
@@ -1056,7 +1055,7 @@ class ContextAssembler:
         if not os.path.exists(db):
             return []
         try:
-            eas: List[int] = []
+            eas: list[int] = []
             for a in addresses[:limit]:
                 with contextlib.suppress(ValueError, TypeError):
                     eas.append(_helpers.coerce_int(a))
@@ -1076,7 +1075,7 @@ class ContextAssembler:
                     SELECT func_ea, api_name FROM function_apis
                     WHERE func_ea IN ({ph}) LIMIT 200
                 """, eas)
-                apis_by_ea: Dict[int, List[str]] = {}
+                apis_by_ea: dict[int, list[str]] = {}
                 for func_ea, api_name in cur.fetchall():
                     apis_by_ea.setdefault(func_ea, []).append(api_name)
 
@@ -1089,7 +1088,7 @@ class ContextAssembler:
                 row = rows.get(ea_int)
                 if not row:
                     continue
-                entry: Dict[str, Any] = {
+                entry: dict[str, Any] = {
                     "ea":   hex(row[0]),
                     "name": row[1],
                 }
@@ -1119,7 +1118,7 @@ class ContextAssembler:
         self,
         idb_path: str,
         limit: int = 5,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Recommend unanalyzed functions worth examining next, ranked by
         embedding similarity over structural summaries.
@@ -1173,7 +1172,7 @@ class ContextAssembler:
             return []
 
         seen_eas: set = set()
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
 
         def _add(row, reason: str, interest_score: float):
             ea_int = row[0]
@@ -1199,15 +1198,15 @@ class ContextAssembler:
             })
 
         # Embedding-first structural ranking
-        row_scores: Dict[int, float] = {}
+        row_scores: dict[int, float] = {}
         try:
             anchor = (
                 "high value reverse engineering target with suspicious behavior, "
                 "complex control flow, many cross references, and high analysis payoff"
             )
             qv = self._embedder.embed(anchor)
-            text_rows: List[str] = []
-            ea_rows: List[int] = []
+            text_rows: list[str] = []
+            ea_rows: list[int] = []
             for row in rows:
                 ea_int = int(row[0] or 0)
                 if not ea_int:
@@ -1254,7 +1253,7 @@ class ContextAssembler:
         return results[:limit]
 
 
-    def bulk_index(self, functions: List[Dict[str, Any]], idb_path: str) -> int:
+    def bulk_index(self, functions: list[dict[str, Any]], idb_path: str) -> int:
         """
         Index a batch of functions (e.g. after schemaboot ingest).
         Each dict: {ea, name, pseudocode}.
@@ -1278,7 +1277,7 @@ class ContextAssembler:
         self._embedder.stop()
 
     @property
-    def status(self) -> Dict[str, Any]:
+    def status(self) -> dict[str, Any]:
         return {
             "backend": self._embedder.backend,
             "llama_server_bin": self._embedder._server_bin or "not found",
@@ -1296,7 +1295,7 @@ class ContextAssembler:
 # Module-level singleton access
 # ─────────────────────────────────────────────────────────────────────────────
 
-_assembler: Optional[ContextAssembler] = None
+_assembler: ContextAssembler | None = None
 _assembler_lock = threading.Lock()
 
 
@@ -1309,7 +1308,6 @@ def get_assembler() -> ContextAssembler:
 
 
 def _shutdown_intelligence_singleton() -> None:
-    global _assembler
     try:
         if _assembler is not None:
             _assembler.stop()

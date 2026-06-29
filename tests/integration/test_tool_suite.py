@@ -21,7 +21,7 @@ class MCPTestClient:
     """Simple MCP client for testing."""
 
     def __init__(self, timeout: int = 120):
-        self.proc: Optional[subprocess.Popen] = None
+        self.proc: subprocess.Popen | None = None
         self.stdout_queue: queue.Queue = queue.Queue()
         self.request_id = 0
         self.timeout = timeout
@@ -69,7 +69,7 @@ class MCPTestClient:
         )
         return "result" in resp
 
-    def _call(self, method: str, params: dict, timeout: Optional[int] = None) -> dict:
+    def _call(self, method: str, params: dict, timeout: int | None = None) -> dict:
         if timeout is None:
             timeout = self.timeout
 
@@ -357,7 +357,7 @@ def test_firmware_suite(mcp_client):
 
     # detect_vector_table requires IDB bounds to be set — retry if IDB not ready yet
     vt_res = None
-    for attempt in range(3):
+    for _attempt in range(3):
         vt_res = mcp_client.call_tool("firmware_view", action="detect_vector_table")
         if not vt_res.get("error"):
             break
@@ -393,7 +393,7 @@ def test_firmware_suite(mcp_client):
         warnings.warn(
             "firmware bootstrap returned function_count_after=0 — likely caused by "
             "idaapi.auto_wait() crashing IDA in socket server context. "
-            "Fix: replace auto_wait calls in firmware_view._fwb_run_vector_bootstrap with non-blocking checks."
+            "Fix: replace auto_wait calls in firmware_view._fwb_run_vector_bootstrap with non-blocking checks.", stacklevel=2
         )
 
     mcp_client.call_tool("session", action="create", binary_path=TEST_BINARY)

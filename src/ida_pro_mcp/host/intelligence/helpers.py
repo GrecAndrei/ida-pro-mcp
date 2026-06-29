@@ -6,10 +6,10 @@ import math
 import struct
 import time
 from collections.abc import Callable, Sequence
-from typing import Any, Dict, List
+from typing import Any
 
 
-def _q(vals: List[float], q: float, default: float = 0.0) -> float:
+def _q(vals: list[float], q: float, default: float = 0.0) -> float:
     if not vals:
         return float(default)
     s = sorted(float(v) for v in vals)
@@ -51,7 +51,7 @@ def pack_floats(vec: Sequence[float]) -> bytes:
     return struct.pack(f"{len(vec)}f", *vec)
 
 
-def unpack_floats(blob: bytes) -> List[float]:
+def unpack_floats(blob: bytes) -> list[float]:
     """Inverse of :func:`pack_floats`."""
     n = len(blob) // 4
     return list(struct.unpack(f"{n}f", blob))
@@ -76,11 +76,11 @@ def similarity_ratio(a: str, b: str) -> float:
 
 def best_match(
     query: str,
-    choices: List[str],
+    choices: list[str],
     *,
     n: int = 1,
     cutoff: float = 0.6,
-) -> List[str]:
+) -> list[str]:
     """Wrap :func:`difflib.get_close_matches` so callers don't need to
     import difflib directly. Returns at most *n* matches above *cutoff*."""
     return difflib.get_close_matches(query or "", choices, n=n, cutoff=cutoff)
@@ -122,7 +122,7 @@ def coerce_int(value, default: int = 0) -> int:
         return default
 
 
-def parse_str_list(value, sep: str = ",") -> List[str]:
+def parse_str_list(value, sep: str = ",") -> list[str]:
     """Parse a CSV-style string into a list of trimmed non-empty items.
 
     If *value* is already a list/tuple, each element is trimmed and
@@ -147,13 +147,13 @@ def parse_str_list(value, sep: str = ",") -> List[str]:
     return [p.strip() for p in s.split(sep) if p.strip()]
 
 
-def compact_policy_blob(sess_blob: Dict[str, Any]) -> Dict[str, Any]:
+def compact_policy_blob(sess_blob: dict[str, Any]) -> dict[str, Any]:
     """Bound policy size by pruning low-value/high-cardinality history."""
     out = dict(sess_blob or {})
     rm = dict(out.get("retrieval_metrics") or {})
     ff = dict(out.get("focus_feedback") or {})
 
-    keep_rm: Dict[str, int] = {}
+    keep_rm: dict[str, int] = {}
     for src in ("address_linked", "relation_linked", "api_linked", "semantic_linked"):
         for key in ("total", "accepted", "kept"):
             k = f"{src}.{key}"
@@ -162,12 +162,12 @@ def compact_policy_blob(sess_blob: Dict[str, Any]) -> Dict[str, Any]:
                     keep_rm[k] = int(rm[k])
     out["retrieval_metrics"] = keep_rm
 
-    keep_ff: Dict[str, int] = {}
+    keep_ff: dict[str, int] = {}
     for k in ("suggested", "followed", "successful", "failed"):
         if k in ff:
             with contextlib.suppress(Exception):
                 keep_ff[k] = int(ff[k])
-    action_totals: Dict[str, int] = {}
+    action_totals: dict[str, int] = {}
     for k, v in ff.items():
         if not str(k).startswith("action."):
             continue
@@ -200,14 +200,14 @@ def compact_policy_blob(sess_blob: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def prune_policy_store(data: Dict[str, Any], max_sessions: int = 24) -> Dict[str, Any]:
+def prune_policy_store(data: dict[str, Any], max_sessions: int = 24) -> dict[str, Any]:
     """Prune policy store to bounded session count and compact blobs."""
     if not isinstance(data, dict):
         return {"schema_version": 2, "sessions": {}}
     sessions = data.get("sessions")
     if not isinstance(sessions, dict):
         sessions = {}
-    compacted: Dict[str, Dict[str, Any]] = {}
+    compacted: dict[str, dict[str, Any]] = {}
     for sid, blob in sessions.items():
         if not isinstance(blob, dict):
             continue
@@ -226,19 +226,19 @@ def prune_policy_store(data: Dict[str, Any], max_sessions: int = 24) -> Dict[str
 
 def derive_focus_candidates(
     *,
-    pack: Dict[str, Any],
+    pack: dict[str, Any],
     addr: str,
-    policy: Dict[str, Dict[str, Any]],
-    stats: Dict[str, Any],
+    policy: dict[str, dict[str, Any]],
+    stats: dict[str, Any],
     bias_fn: Callable[[str, str], float],
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Return ranked focus candidates (best first)."""
     if not addr:
         return []
     structural = pack.get("structural") or {}
     related = pack.get("related_findings") or []
     apis = pack.get("api_calls") or []
-    candidates: List[Dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
 
     sem_weight = float((policy.get("semantic_linked") or {}).get("weight", 0.9))
     rel_weight = float((policy.get("relation_linked") or {}).get("weight", 1.2))

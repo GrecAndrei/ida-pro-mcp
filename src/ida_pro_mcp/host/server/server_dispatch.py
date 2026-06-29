@@ -7,7 +7,7 @@ import json
 import os
 import re
 import time
-from typing import Any, List, Optional
+from typing import Any
 
 from ida_pro_mcp import __version__
 
@@ -272,7 +272,7 @@ class ServerDispatchMixin:
 
     _MEMORY_MAX_BYTES = 64 * 1024 * 1024
 
-    def _memory_allow_root(self) -> Optional[str]:
+    def _memory_allow_root(self) -> str | None:
             env_root = os.environ.get("IDA_MCP_MEMORY_ROOT")
             if env_root:
                 try:
@@ -624,7 +624,7 @@ class ServerDispatchMixin:
                 return out
             if isinstance(value, dict):
                 out: list[str] = []
-                for k, v in value.items():
+                for _k, v in value.items():
                     if isinstance(v, str):
                         for line in v.splitlines():
                             line = line.strip()
@@ -641,7 +641,7 @@ class ServerDispatchMixin:
             return [s] if s else []
 
     def _grep_collect_lines(
-            self, payload: Any, field: Optional[str] = None
+            self, payload: Any, field: str | None = None
         ) -> tuple[list[str], str]:
             if field and isinstance(payload, dict):
                 return self._grep_value_lines(payload.get(field)), field
@@ -777,7 +777,7 @@ class ServerDispatchMixin:
                 )
 
             selected = {}
-            missing: List[str] = []
+            missing: list[str] = []
             for key in fields:
                 if key in source_payload:
                     selected[key] = source_payload.get(key)
@@ -915,7 +915,7 @@ class ServerDispatchMixin:
             except Exception:
                 serialized = str(source_payload)
             items, used_field, item_kind = self._collect_wrapper_items(source_payload)
-            top_keys: List[str] = []
+            top_keys: list[str] = []
             if isinstance(source_payload, dict):
                 top_keys = list(source_payload.keys())[:64]
             stats = {

@@ -93,7 +93,8 @@ def test_usage_intel_start_stop():
     ui.start()
     assert ui._thread is not None and ui._thread.is_alive()
     ui.stop()
-    import time as _t; _t.sleep(0.1)
+    import time as _t
+    _t.sleep(0.1)
     assert ui._stop.is_set()
 
 
@@ -132,7 +133,7 @@ def test_usage_intel_drift_notification():
     notifications = []
     tmpdir = tempfile.mkdtemp()
     ui = UsageIntelligence(audit_dir=tmpdir,
-                           notify_fn=lambda n: notifications.append(n))
+                           notify_fn=notifications.append)
     # Simulate stuck loop
     for _ in range(15):
         ui.observe("code", "decompile", "sess1", latency_ms=100.0)

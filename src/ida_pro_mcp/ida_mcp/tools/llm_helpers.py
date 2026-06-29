@@ -739,7 +739,7 @@ def llm_helpers(
             is_pe = file_type in (getattr(idaapi, 'f_PE', -1), getattr(idaapi, 'f_COFF', -1))
             is_elf = file_type == getattr(idaapi, 'f_ELF', -1)
 
-            if is_firmware := not (is_pe or is_elf):
+            if not (is_pe or is_elf):
                 steps = [
                     "firmware_view(action='triage_snapshot')",
                     "firmware_view(action='detect_load_address')",

@@ -102,7 +102,7 @@ class TestHybridQueryBuilder(unittest.TestCase):
 
     def test_operator_format_range(self):
         QB = self._import()
-        where, params, _ = QB.build({"size": (">=", 100), "size": ("<=", 500)})
+        where, params, _ = QB.build({"size": (">=", 100), "size": ("<=", 500)})  # noqa: F601
         # The second "size" overwrites the first since dict
         self.assertIn("fa.size <= ?", where)
 

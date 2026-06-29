@@ -1090,10 +1090,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
             return cached[1]
 
         def _tool_description(tool_name: str, tool_mode: str) -> str:
-            if tool_mode == "lean":
-                desc = build_tool_description_lean(tool_name)
-            else:
-                desc = build_tool_description_ultra(tool_name)
+            desc = build_tool_description_lean(tool_name) if tool_mode == "lean" else build_tool_description_ultra(tool_name)
             desc_text = str(desc or "").strip()
             if desc_text:
                 return desc_text

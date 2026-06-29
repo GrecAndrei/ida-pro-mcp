@@ -1,6 +1,7 @@
 """Unit tests for FrontierEngine (host/frontier.py)."""
 from __future__ import annotations
 
+import contextlib
 import os
 import tempfile
 
@@ -45,17 +46,13 @@ class TestFrontierEngine:
 
     def test_propagate_labels_accepts_entries(self, dbs: tuple) -> None:
         eng = dbs[0]
-        try:
+        with contextlib.suppress(Exception):  # May need specific DB setup
             eng.propagate_labels()
-        except Exception:
-            pass  # May need specific DB setup
 
     def test_refresh_runs(self, dbs: tuple) -> None:
         eng = dbs[0]
-        try:
+        with contextlib.suppress(Exception):  # May need specific DB setup
             eng.refresh()
-        except Exception:
-            pass  # May need specific DB setup
 
 
 class TestFrontierAndBlackboardIntegration:

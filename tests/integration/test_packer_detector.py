@@ -264,7 +264,7 @@ class TestWorkflowStructure(unittest.TestCase):
             self.assertIn("tool", step)
             self.assertIn("arguments", step)
             # No <placeholder> in arguments
-            for k, v in step["arguments"].items():
+            for _k, v in step["arguments"].items():
                 self.assertNotIn("<", str(v),
                                  f"placeholder leaked into {step}")
 

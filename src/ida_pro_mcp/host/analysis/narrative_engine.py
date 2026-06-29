@@ -15,8 +15,6 @@ Output is plain text (not JSON) so the LLM can read it naturally.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional
-
 
 class NarrativeEngine:
     """
@@ -32,7 +30,7 @@ class NarrativeEngine:
         self.kg = kg
         self.bb = bb_store
 
-    def generate(self, binary_meta: Optional[Dict] = None) -> str:
+    def generate(self, binary_meta: dict | None = None) -> str:
         """Generate the full narrative. Returns plain text."""
         parts = []
 
@@ -55,7 +53,7 @@ class NarrativeEngine:
 
     # ── sections ──────────────────────────────────────────────────────────────
 
-    def _section_identity(self, meta: Dict) -> str:
+    def _section_identity(self, meta: dict) -> str:
         name = meta.get("filename") or meta.get("input_file") or "unknown binary"
         arch = meta.get("processor") or meta.get("arch") or "unknown arch"
         bits = meta.get("bitness") or meta.get("bits") or 0
@@ -171,7 +169,7 @@ class NarrativeEngine:
 
         if attack_surface:
             # Group by reachable_from
-            by_reach: Dict[str, List] = {}
+            by_reach: dict[str, list] = {}
             for a in attack_surface:
                 r = a.get("reachable_from", "unknown")
                 by_reach.setdefault(r, []).append(a)

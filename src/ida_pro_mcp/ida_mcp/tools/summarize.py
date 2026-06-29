@@ -322,7 +322,7 @@ def summarize(
             # Interesting strings sample
             all_strings = _get_all_strings(max_items)
             interesting = []
-            for s_ea, s_val in all_strings[:max_items]:
+            for _s_ea, s_val in all_strings[:max_items]:
                 if len(s_val) > 5:
                     interesting.append(s_val[:120])
 
@@ -506,7 +506,7 @@ def summarize(
             categorized = {}
             uncategorized = []
 
-            for s_ea, s_val in all_strings:
+            for _s_ea, s_val in all_strings:
                 matched = False
                 for cat, pattern in _STRING_PATTERNS.items():
                     if pattern.search(s_val):

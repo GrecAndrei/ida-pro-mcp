@@ -14,28 +14,14 @@ try:
     # Package mode
     from ..error_handling import (
         MCPError,
-        check_debugger,
         handle_error,
         make_error,
         validate_addr,
-        validate_path_safe,
-        validate_range,
     )
-    from ..rpc import tool, unsafe
-    from ..sync import IDAError, idaread, idawrite
+    from ..rpc import tool
+    from ..sync import idaread
     from ..utils import (
         compile_smart_pattern,
-        get_function,
-        get_image_size,
-        get_prototype,
-        get_stack_frame_variables_internal,
-        get_type_by_name,
-        hex_ea,
-        hex_size,
-        looks_like_address,
-        normalize_dict_list,
-        normalize_list_input,
-        parse_address,
     )
 except (ImportError, ValueError):
     # Standalone IDA mode

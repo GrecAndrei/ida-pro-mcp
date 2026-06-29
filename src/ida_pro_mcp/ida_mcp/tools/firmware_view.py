@@ -1513,7 +1513,7 @@ def firmware_view(
                 return None, None
 
             # Detect raw binary (IDA defaults to metapc/x86 when format unknown)
-            filetype_id = _inf_filetype_id() if hasattr(_inf_filetype_id, '__call__') else 0
+            filetype_id = _inf_filetype_id() if callable(_inf_filetype_id) else 0
             try:
                 filetype_id = _inf_filetype_id()
             except Exception:
@@ -1595,10 +1595,7 @@ def firmware_view(
                 arch_hint = "generic"
                 chunk = ida_bytes.get_bytes(min_ea, min(512, binary_size)) or b""
                 for i in range(0, len(chunk) - ptr_size + 1, ptr_size):
-                    if ptr_size == 4:
-                        v = _struct.unpack_from("<I", chunk, i)[0]
-                    else:
-                        v = _struct.unpack_from("<Q", chunk, i)[0]
+                    v = _struct.unpack_from("<I", chunk, i)[0] if ptr_size == 4 else _struct.unpack_from("<Q", chunk, i)[0]
                     mapped_v, derived_base = _normalize_handler(v)
                     if mapped_v is not None:
                         func = idaapi.get_func(mapped_v)
@@ -1763,7 +1760,7 @@ def firmware_view(
 
             # Convert sets to lists for JSON serialization
             peripherals = []
-            for key, info in sorted(mmio_accesses.items(), key=lambda x: -x[1]["count"]):
+            for _key, info in sorted(mmio_accesses.items(), key=lambda x: -x[1]["count"]):
                 peripherals.append({
                     "base": info["base"],
                     "access_count": info["count"],
@@ -1825,7 +1822,7 @@ def firmware_view(
             # Identify likely RTOS family by symbols/strings and infer task entry loops.
             names = []
             try:
-                for ea, nm in idautils.Names():
+                for _ea, nm in idautils.Names():
                     if nm:
                         names.append(str(nm))
             except Exception:

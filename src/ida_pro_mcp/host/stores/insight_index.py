@@ -22,7 +22,7 @@ import os
 import threading
 import time
 from collections import OrderedDict, defaultdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 # Canonical behavior tags for reverse engineering functions
 CANONICAL_TAGS = frozenset({
@@ -64,10 +64,10 @@ class InsightIndex:
         _lock: threading.RLock for thread-safe operations.
     """
 
-    def __init__(self, persistence_path: Optional[str] = None):
-        self._tag_map: Dict[str, List[str]] = defaultdict(list)
-        self._func_map: Dict[str, Dict[str, Any]] = {}
-        self._access_log: OrderedDict[str, Dict[str, Any]] = OrderedDict()
+    def __init__(self, persistence_path: str | None = None):
+        self._tag_map: dict[str, list[str]] = defaultdict(list)
+        self._func_map: dict[str, dict[str, Any]] = {}
+        self._access_log: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._lock = threading.RLock()
         self._persistence_path = persistence_path
         if persistence_path:
@@ -77,7 +77,7 @@ class InsightIndex:
     # Indexing
     # ------------------------------------------------------------------
 
-    def index_function(self, func_addr: str, attributes: Dict[str, Any]) -> None:
+    def index_function(self, func_addr: str, attributes: dict[str, Any]) -> None:
         """
         Add or update a function in the insight index.
 
@@ -140,7 +140,7 @@ class InsightIndex:
             self._access_log.pop(addr, None)
             return True
 
-    def rebuild(self, functions: List[Tuple[str, Dict[str, Any]]]) -> None:
+    def rebuild(self, functions: list[tuple[str, dict[str, Any]]]) -> None:
         """
         Bulk-rebuild the entire index. Used on binary load.
 
@@ -159,7 +159,7 @@ class InsightIndex:
     # Querying
     # ------------------------------------------------------------------
 
-    def query_by_tag(self, tag: str) -> List[Dict[str, Any]]:
+    def query_by_tag(self, tag: str) -> list[dict[str, Any]]:
         """
         Query functions by a single behavior tag.
 
@@ -177,8 +177,8 @@ class InsightIndex:
             return results
 
     def query_by_tags(
-        self, tags: List[str], mode: str = "and"
-    ) -> List[Dict[str, Any]]:
+        self, tags: list[str], mode: str = "and"
+    ) -> list[dict[str, Any]]:
         """
         Query functions by multiple behavior tags.
 
@@ -199,7 +199,7 @@ class InsightIndex:
         with self._lock:
             if mode == "and":
                 # Start with the shortest candidate list
-                candidates: Optional[set] = None
+                candidates: set | None = None
                 for tag in tags:
                     addrs = set(self._tag_map.get(tag, []))
                     if candidates is None:
@@ -226,18 +226,18 @@ class InsightIndex:
                     results.append(dict(meta))
             return results
 
-    def query_by_name(self, name_pattern: str) -> List[Dict[str, Any]]:
+    def query_by_name(self, name_pattern: str) -> list[dict[str, Any]]:
         """Substring match against function names (case-insensitive)."""
         pattern = name_pattern.lower()
         with self._lock:
             results = []
-            for addr, meta in self._func_map.items():
+            for _addr, meta in self._func_map.items():
                 if pattern in meta.get("name", "").lower():
                     meta["access_count"] = meta.get("access_count", 0) + 1
                     results.append(dict(meta))
             return results
 
-    def get_function(self, func_addr: str) -> Optional[Dict[str, Any]]:
+    def get_function(self, func_addr: str) -> dict[str, Any] | None:
         """Get metadata for a single function by address."""
         addr = str(func_addr).lower()
         with self._lock:
@@ -247,12 +247,12 @@ class InsightIndex:
                 return dict(meta)
             return None
 
-    def get_all_tags(self) -> List[str]:
+    def get_all_tags(self) -> list[str]:
         """Return all known tags sorted alphabetically."""
         with self._lock:
             return sorted(self._tag_map.keys())
 
-    def get_tag_histogram(self) -> Dict[str, int]:
+    def get_tag_histogram(self) -> dict[str, int]:
         """Return {tag: count} for all indexed tags."""
         with self._lock:
             return {tag: len(addrs) for tag, addrs in self._tag_map.items()}
@@ -261,7 +261,7 @@ class InsightIndex:
     # Persistence
     # ------------------------------------------------------------------
 
-    def save(self, path: Optional[str] = None) -> None:
+    def save(self, path: str | None = None) -> None:
         """Serialize index to JSON."""
         target = path or self._persistence_path
         if not target:
@@ -303,7 +303,7 @@ class InsightIndex:
     # Promotion / Demotion helpers
     # ------------------------------------------------------------------
 
-    def get_hot_functions(self, min_accesses: int = 3, limit: int = 50) -> List[Dict[str, Any]]:
+    def get_hot_functions(self, min_accesses: int = 3, limit: int = 50) -> list[dict[str, Any]]:
         """Return functions accessed >= min_accesses (promotion candidates)."""
         with self._lock:
             items = [
@@ -313,7 +313,7 @@ class InsightIndex:
             items.sort(key=lambda x: -x.get("access_count", 0))
             return items[:limit]
 
-    def get_stale_functions(self, max_accesses: int = 1, staleness_days: int = 30) -> List[str]:
+    def get_stale_functions(self, max_accesses: int = 1, staleness_days: int = 30) -> list[str]:
         """Return function addresses with low access and old index time (demotion candidates)."""
         cutoff = time.time() - (staleness_days * 86400)
         with self._lock:
@@ -328,7 +328,7 @@ class InsightIndex:
     # Stats
     # ------------------------------------------------------------------
 
-    def stats(self) -> Dict[str, Any]:
+    def stats(self) -> dict[str, Any]:
         with self._lock:
             total_funcs = len(self._func_map)
             total_tags = len(self._tag_map)

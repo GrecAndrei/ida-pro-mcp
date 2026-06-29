@@ -140,10 +140,7 @@ class ServerRuntimeLeasesMixin:
             first = os.path.basename(parts[0]).lower()
             if first in expected_names:
                 return True
-            for part in parts:
-                if os.path.basename(part).lower() in expected_names:
-                    return True
-            return False
+            return any(os.path.basename(part).lower() in expected_names for part in parts)
 
     def _cleanup_stale_runtime_leases(self) -> None:
             try:

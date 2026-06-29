@@ -369,33 +369,32 @@ def analysis(
                 current_bitness = _get_app_bitness()
                 if current_bitness == int(bitness):
                     applied["bitness"] = {"value": int(bitness), "note": "already set"}
-                else:
-                    if hasattr(ida_ida, "inf_set_app_bitness"):
-                        try:
-                            max_ea = ida_ida.inf_get_max_ea()
-                        except Exception:
-                            max_ea = None
-                        if max_ea is not None:
-                            max_allowed = (1 << int(bitness)) - 1
-                            if max_ea > max_allowed:
-                                warnings_list.append(
-                                    f"bitness {bitness} may truncate addresses (max_ea={hex(max_ea)} > {hex(max_allowed)})"
-                                )
-                        try:
-                            ida_ida.inf_set_app_bitness(int(bitness))
-                        except Exception as e:
-                            return make_error(
-                                MCPError.IDA_ERROR,
-                                str(e),
-                                details={"bitness": int(bitness)},
+                elif hasattr(ida_ida, "inf_set_app_bitness"):
+                    try:
+                        max_ea = ida_ida.inf_get_max_ea()
+                    except Exception:
+                        max_ea = None
+                    if max_ea is not None:
+                        max_allowed = (1 << int(bitness)) - 1
+                        if max_ea > max_allowed:
+                            warnings_list.append(
+                                f"bitness {bitness} may truncate addresses (max_ea={hex(max_ea)} > {hex(max_allowed)})"
                             )
-                        applied["bitness"] = int(bitness)
-                        if warnings_list:
-                            applied["bitness_warnings"] = warnings_list
-                    else:
-                        applied["bitness_requested"] = int(bitness)
-                        applied["bitness_applied"] = False
-                        applied["bitness_note"] = "inf_set_app_bitness unavailable in this IDA build"
+                    try:
+                        ida_ida.inf_set_app_bitness(int(bitness))
+                    except Exception as e:
+                        return make_error(
+                            MCPError.IDA_ERROR,
+                            str(e),
+                            details={"bitness": int(bitness)},
+                        )
+                    applied["bitness"] = int(bitness)
+                    if warnings_list:
+                        applied["bitness_warnings"] = warnings_list
+                else:
+                    applied["bitness_requested"] = int(bitness)
+                    applied["bitness_applied"] = False
+                    applied["bitness_note"] = "inf_set_app_bitness unavailable in this IDA build"
             if endian:
                 if hasattr(ida_ida, "inf_set_be"):
                     be = str(endian).lower() in ("be", "big", "big_endian", "big-endian", "bigendian", "1", "true")

@@ -578,9 +578,8 @@ def _score_tool_result(tool: str, args: dict, result_str: str, score: Score) -> 
             score.award("arch_correct", "ARM/Cortex-M in response")
 
     # Load address — match 0x120000 but NOT 0x1200000
-    if re.search(r'\b0x120000\b(?!0)', result_str, re.IGNORECASE):
-        if tool in ("session", "idb", "firmware_view", "analysis"):
-            score.award("load_address_correct", "0x120000 confirmed")
+    if re.search(r'\b0x120000\b(?!0)', result_str, re.IGNORECASE) and tool in ("session", "idb", "firmware_view", "analysis"):
+        score.award("load_address_correct", "0x120000 confirmed")
 
     # Vector table
     if tool == "firmware_view" and action == "detect_vector_table":

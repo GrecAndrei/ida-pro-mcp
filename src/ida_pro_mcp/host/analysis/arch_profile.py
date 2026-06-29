@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 import struct
 from dataclasses import dataclass, field
-from typing import Any, Dict, Tuple
+from typing import Any
 
 from ..stores.chip_db import find_chip_profile, identify_chip_from_bytes
 
@@ -43,13 +43,13 @@ def _norm_endian(value: Any) -> str | None:
     return None
 
 
-def normalize_arch_options(options: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def normalize_arch_options(options: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     """
     Canonicalize processor aliases and endian synonyms.
     Returns (normalized_options, meta).
     """
     out = dict(options or {})
-    meta: Dict[str, Any] = {"normalizations": []}
+    meta: dict[str, Any] = {"normalizations": []}
 
     # Strip arch keys that are empty/zero/whitespace — an LLM passing processor=""
     # or bitness=0 should be treated the same as not passing it at all, otherwise
@@ -110,14 +110,14 @@ class ArchInference:
     file_kind: str = "unknown"
     confidence: float = 0.0
     reason: str = ""
-    candidates: list[Dict[str, Any]] = field(default_factory=list)
+    candidates: list[dict[str, Any]] = field(default_factory=list)
     load_base: int | None = None         # confirmed load base address (e.g. from WFFW header)
     chip_family: str | None = None       # e.g. "aic8800d80", "stm32", "esp32"
-    memory_map: list[Dict[str, Any]] = field(default_factory=list)
-    peripheral_addresses: list[Dict[str, Any]] = field(default_factory=list)
+    memory_map: list[dict[str, Any]] = field(default_factory=list)
+    peripheral_addresses: list[dict[str, Any]] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
             "processor": self.processor,
             "bitness": self.bitness,
             "endian": self.endian,
@@ -139,11 +139,11 @@ class ArchInference:
         return d
 
 
-def _byte_2gram_embedding(data: bytes) -> Dict[int, float]:
+def _byte_2gram_embedding(data: bytes) -> dict[int, float]:
     """Compact sparse embedding over byte 2-grams."""
     if not data or len(data) < 2:
         return {}
-    v: Dict[int, float] = {}
+    v: dict[int, float] = {}
     total = 0
     for i in range(len(data) - 1):
         key = (data[i] << 8) | data[i + 1]
@@ -157,7 +157,7 @@ def _byte_2gram_embedding(data: bytes) -> Dict[int, float]:
     return v
 
 
-def _sparse_cosine(a: Dict[int, float], b: Dict[int, float]) -> float:
+def _sparse_cosine(a: dict[int, float], b: dict[int, float]) -> float:
     if not a or not b:
         return 0.0
     dot = 0.0
@@ -172,7 +172,7 @@ def _sparse_cosine(a: Dict[int, float], b: Dict[int, float]) -> float:
     return max(0.0, min(1.0, dot / (na * nb)))
 
 
-def _arch_prototype_embeddings() -> Dict[str, Dict[int, float]]:
+def _arch_prototype_embeddings() -> dict[str, dict[int, float]]:
     """
     Lightweight architecture prototype embeddings.
     These are stable tokenized opcode bytes represented as n-gram vectors.
@@ -186,7 +186,7 @@ def _arch_prototype_embeddings() -> Dict[str, Dict[int, float]]:
     return {k: _byte_2gram_embedding(v) for k, v in proto.items()}
 
 
-def _opcode_density_scores(data: bytes) -> Dict[str, float]:
+def _opcode_density_scores(data: bytes) -> dict[str, float]:
     """
     Score likely architectures using opcode-sequence density.
     Counts known prologues/epilogues as weighted hits.
@@ -229,7 +229,7 @@ def _opcode_density_scores(data: bytes) -> Dict[str, float]:
     }
 
 
-def _raw_arch_candidates(data: bytes) -> list[Dict[str, Any]]:
+def _raw_arch_candidates(data: bytes) -> list[dict[str, Any]]:
     """
     Blended architecture candidates for raw blobs.
     Combines opcode-density (primary) with byte-embedding (secondary).
@@ -247,12 +247,12 @@ def _raw_arch_candidates(data: bytes) -> list[Dict[str, Any]]:
     # --- embedding signal ---
     sample_vec = _byte_2gram_embedding(sample)
     proto = _arch_prototype_embeddings() if sample_vec else {}
-    em_raw: Dict[str, float] = {}
+    em_raw: dict[str, float] = {}
     for arch, vec in proto.items():
         em_raw[arch] = _sparse_cosine(sample_vec, vec)
     em_best = max(em_raw.values()) if em_raw else 0.0
 
-    arch_meta: Dict[str, Dict[str, Any]] = {
+    arch_meta: dict[str, dict[str, Any]] = {
         "metapc": {"processor": "metapc", "bitness": 32, "endian": "little"},
         "arm":    {"processor": "arm",    "bitness": 32, "endian": "little"},
         "mipsl":  {"processor": "mipsl",  "bitness": 32, "endian": "little"},
@@ -277,7 +277,7 @@ def _raw_arch_candidates(data: bytes) -> list[Dict[str, Any]]:
     # Pick label: opcode-dominated when od_best > 0, otherwise embedding.
     method = "opcode-density + embedding blend" if od_best > 0 else "byte-embedding similarity"
 
-    out: list[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for blended, arch in rows[:4]:
         meta = arch_meta[arch]
         conf = max(0.01, min(0.95, blended / (top_blended + 1e-9) * top_blended))
@@ -294,7 +294,7 @@ def _raw_arch_candidates(data: bytes) -> list[Dict[str, Any]]:
     return out
 
 
-def infer_binary_arch_profile(binary_path: str) -> Dict[str, Any]:
+def infer_binary_arch_profile(binary_path: str) -> dict[str, Any]:
     """
     Lightweight architecture inference for session bootstrap.
     Uses magic headers and Cortex-M vector-table heuristics for raw blobs.

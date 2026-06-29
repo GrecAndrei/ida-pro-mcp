@@ -260,10 +260,9 @@ def query(
                             row["similarity"] = sim * 0.92
                             row["expansion_query"] = eq
                             by_addr[ea] = row
-                        else:
-                            if sim > float(cur.get("similarity") or 0.0):
-                                cur["similarity"] = sim * 0.96
-                                cur["expansion_query"] = eq
+                        elif sim > float(cur.get("similarity") or 0.0):
+                            cur["similarity"] = sim * 0.96
+                            cur["expansion_query"] = eq
                 results = sorted(by_addr.values(), key=lambda x: float(x.get("similarity") or 0.0), reverse=True)
             sims = [float(r.get("similarity") or 0.0) for r in results]
             if sims:

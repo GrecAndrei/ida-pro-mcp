@@ -96,7 +96,7 @@ def _db_changed() -> bool:
     """Check if the database has changed since our last cache."""
     global _DB_FINGERPRINT
     current = _get_db_fingerprint()
-    if _DB_FINGERPRINT is None or _DB_FINGERPRINT != current:
+    if _DB_FINGERPRINT is None or current != _DB_FINGERPRINT:
         _DB_FINGERPRINT = current
         return True
     return False
@@ -122,10 +122,10 @@ def get_cached_imports() -> list[dict]:
     for mod_idx in range(ida_nalt.get_import_module_qty()):
         mod_name = ida_nalt.get_import_module_name(mod_idx) or f"mod_{mod_idx}"
 
-        def make_cb(mod):
-            def cb(ea, name, ordinal):
+        def make_cb(mod, _imports=imports):
+            def cb(ea, name, ordinal, _imports_inner=_imports):
                 if name:
-                    imports.append({"ea": ea, "name": name, "module": mod, "ordinal": ordinal})
+                    _imports_inner.append({"ea": ea, "name": name, "module": mod, "ordinal": ordinal})
                 return True
             return cb
 

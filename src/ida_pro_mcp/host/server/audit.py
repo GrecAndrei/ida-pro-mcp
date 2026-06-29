@@ -13,8 +13,8 @@ import json
 import os
 import threading
 import time
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 
 class AuditLogger:
@@ -22,15 +22,15 @@ class AuditLogger:
     Per-call audit logger. Writes JSONL, rotates daily, caps total size.
     """
 
-    def __init__(self, base_dir: Optional[str] = None, max_mb: float = 256.0):
+    def __init__(self, base_dir: str | None = None, max_mb: float = 256.0):
         self.base_dir = base_dir or os.path.join(
             os.path.expanduser("~"), ".ida-pro-mcp", "audit"
         )
         os.makedirs(self.base_dir, exist_ok=True)
         self.max_bytes = int(max_mb * 1024 * 1024)
         self._lock = threading.Lock()
-        self._file: Optional[Any] = None
-        self._current_path: Optional[str] = None
+        self._file: Any | None = None
+        self._current_path: str | None = None
         self._total_written = 0
 
     def _open_for_date(self, dt: datetime) -> Any:
@@ -51,7 +51,7 @@ class AuditLogger:
         try:
             total = 0
             month_dirs = []
-            for root, dirs, files in os.walk(self.base_dir):
+            for root, _dirs, files in os.walk(self.base_dir):
                 for f in files:
                     fp = os.path.join(root, f)
                     total += os.path.getsize(fp)
@@ -74,18 +74,18 @@ class AuditLogger:
         self,
         tool: str,
         action: str,
-        args: Dict[str, Any],
+        args: dict[str, Any],
         result: Any,
         latency_ms: float,
-        session_id: Optional[str] = None,
-        guardrail_mode: Optional[str] = None,
+        session_id: str | None = None,
+        guardrail_mode: str | None = None,
         guardrail_blocked: bool = False,
-        error: Optional[str] = None,
+        error: str | None = None,
     ) -> None:
         """Write a single audit record."""
         with self._lock:
-            now = datetime.now(timezone.utc)
-            record: Dict[str, Any] = {
+            now = datetime.now(UTC)
+            record: dict[str, Any] = {
                 "ts": now.isoformat(),
                 "unix_ms": int(time.time() * 1000),
                 "session_id": session_id,

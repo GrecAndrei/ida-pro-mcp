@@ -27,7 +27,7 @@ TAINT_SOURCES = {
     "recv", "recvfrom", "recvmsg", "WSARecv", "WSARecvFrom",
     "read", "fread", "fgets", "gets",
     # File
-    "fread", "fgets", "gets", "scanf", "sscanf", "fscanf",
+    "scanf", "sscanf", "fscanf",
     # Environment
     "getenv", "getenv_s",
     # Windows
@@ -214,7 +214,7 @@ def _collect_mop_mregs(mop, out: Set[int]) -> None:
         return
     try:
         if hasattr(mop, "r"):
-            r = int(getattr(mop, "r"))
+            r = int(mop.r)
             if r >= 0:
                 out.add(r)
     except Exception:
@@ -476,7 +476,7 @@ def taint(
                 if sink_ea in reachable_eas or sink_ea == source_ea:
                     # Find the path to this sink
                     path_to_sink = None
-                    for ea, depth, path in reachable:
+                    for ea, _depth, path in reachable:
                         if ea == sink_ea:
                             path_to_sink = [hex_ea(p) for p in path]
                             break
@@ -493,7 +493,7 @@ def taint(
                                 sanitized_by.append(nm)
                     interproc = []
                     # one-level inter-procedural check
-                    for cea, _, cpath in _callees_of(source_ea, max_depth=1, visited={source_ea}):
+                    for cea, _, _cpath in _callees_of(source_ea, max_depth=1, visited={source_ea}):
                         if cea == source_ea:
                             continue
                         c_reach = _callees_of(cea, max_depth=1, visited={cea})
@@ -607,7 +607,7 @@ def taint(
                 for sink_name, sink_ea in sink_addrs.items():
                     if sink_ea in reachable_eas:
                         path_to_sink = None
-                        for ea, depth, path in reachable:
+                        for ea, _depth, path in reachable:
                             if ea == sink_ea:
                                 path_to_sink = [hex_ea(p) for p in path[:6]]
                                 break

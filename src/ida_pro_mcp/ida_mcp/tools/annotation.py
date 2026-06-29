@@ -24,9 +24,6 @@ try:
     from ..support._api_categories import (
         MAGIC_CONSTANTS as _MAGIC_CONSTANTS,
     )
-    from ..support._api_categories import (
-        TAG_CATEGORIES as _TAG_CATEGORIES,
-    )
 except ImportError:
     from support._api_categories import (
         API_TO_TAG as _API_TO_TAG,
@@ -667,7 +664,7 @@ def annotation(
             # Analyze how arguments are used in the function body
             callees = _get_func_callees_with_addr(ea)
             api_usage = []
-            for call_addr, callee_name in callees:
+            for _call_addr, callee_name in callees:
                 api_usage.append(callee_name)
 
             # Build documentation comment

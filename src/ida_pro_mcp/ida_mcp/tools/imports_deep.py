@@ -187,15 +187,15 @@ def imports_deep(
                     mod_name = ida_nalt.get_import_module_name(i)
 
                     _RES_LIMIT = offset + count if count != 0 else 10000
-                    def collect_cb(ea, name, ordinal):
-                        if len(resolve_lines) >= _RES_LIMIT:
+                    def collect_cb(ea, name, ordinal, _mod_name=mod_name, _limit=_RES_LIMIT):
+                        if len(resolve_lines) >= _limit:
                             return False
                         resolved_name = name or f"ordinal_{ordinal}"
                         if query_matcher and not (
-                            query_matcher(mod_name or "") or query_matcher(resolved_name)
+                            query_matcher(_mod_name or "") or query_matcher(resolved_name)
                         ):
                             return True
-                        resolve_lines.append(f"{hex(ea)}  {mod_name}  {resolved_name}")
+                        resolve_lines.append(f"{hex(ea)}  {_mod_name}  {resolved_name}")
                         return True
 
                     ida_nalt.enum_import_names(i, collect_cb)
@@ -213,9 +213,9 @@ def imports_deep(
                 mod_name = ida_nalt.get_import_module_name(i)
                 found = [False]
 
-                def check_cb(imp_ea, imp_name, ordinal):
+                def check_cb(imp_ea, imp_name, ordinal, _found=found):
                     if imp_ea == ea:
-                        found[0] = True
+                        _found[0] = True
                         return False
                     return True
 

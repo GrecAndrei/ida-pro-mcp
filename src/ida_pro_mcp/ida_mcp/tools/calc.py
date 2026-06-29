@@ -10,7 +10,7 @@ import re
 from ida_pro_mcp.services import parse_str_list
 
 try:
-    from ..support.semantic_matching import normalize_action, semantic_score, semantic_tokens
+    from ..support.semantic_matching import semantic_score, semantic_tokens  # noqa: F401
 except ImportError:
     from support.semantic_matching import (  # type: ignore[import-not-found]
         semantic_score,
@@ -761,10 +761,7 @@ def calc(
                 return make_error(MCPError.INVALID_ARGS, str(e))
             except Exception as e:
                 return make_error(MCPError.INVALID_ARGS, f"Evaluation error: {expr} ({e})")
-            if alignment & (alignment - 1) == 0:
-                aligned_down = align_val & ~(alignment - 1)
-            else:
-                aligned_down = (align_val // alignment) * alignment
+            aligned_down = align_val & ~(alignment - 1) if alignment & alignment - 1 == 0 else align_val // alignment * alignment
             aligned_up = aligned_down if align_val == aligned_down else aligned_down + alignment
             nearest = aligned_down if abs(align_val - aligned_down) <= abs(aligned_up - align_val) else aligned_up
             return _finalize({

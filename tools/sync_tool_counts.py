@@ -21,7 +21,6 @@ import re
 import sys
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Tuple
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
@@ -32,7 +31,7 @@ if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 
-def _live_counts() -> Tuple[int, int, int]:
+def _live_counts() -> tuple[int, int, int]:
     """Return (TOOLS, ADVERTISED, HIDDEN) from the live schema."""
     from ida_pro_mcp.host.schemas import (  # noqa: WPS433 — local import
         ADVERTISED_TOOLS,
@@ -43,7 +42,7 @@ def _live_counts() -> Tuple[int, int, int]:
     return len(TOOLS), len(ADVERTISED_TOOLS), len(HIDDEN_TOOLS_IN_LIST)
 
 
-def _patch(path: Path, patterns: Iterable[Tuple[str, str]]) -> bool:
+def _patch(path: Path, patterns: Iterable[tuple[str, str]]) -> bool:
     """Replace ``(pattern, repl)`` pairs in ``path``. Returns True if changed."""
     text = path.read_text(encoding="utf-8")
     new = text

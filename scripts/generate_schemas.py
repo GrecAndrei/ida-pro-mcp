@@ -17,7 +17,6 @@ import json
 import os
 import re
 import sys
-from typing import Dict, List
 
 TOOLS_DIR = os.path.join(os.path.dirname(__file__), "..", "src",
                          "ida_pro_mcp", "ida_mcp", "tools")
@@ -145,7 +144,7 @@ SKIP_FILES = {
 }
 
 
-def scan_tool_actions(tool_file: str) -> List[str]:
+def scan_tool_actions(tool_file: str) -> list[str]:
     """Extract action names from a tool file."""
     try:
         src = open(tool_file).read()
@@ -178,7 +177,7 @@ def scan_tool_actions(tool_file: str) -> List[str]:
     return actions
 
 
-def discover_all() -> Dict[str, List[str]]:
+def discover_all() -> dict[str, list[str]]:
     """Discover all tool→actions mappings."""
     result = {}
 
@@ -214,8 +213,8 @@ def discover_all() -> Dict[str, List[str]]:
     return result
 
 
-def patch_schemas(actions_map: Dict[str, List[str]],
-                  descriptions: Dict[str, str]) -> None:
+def patch_schemas(actions_map: dict[str, list[str]],
+                  descriptions: dict[str, str]) -> None:
     """Patch TOOL_DESCRIPTIONS and TOOL_ACTIONS in schemas.py."""
     src = open(SCHEMAS_PATH).read()
 

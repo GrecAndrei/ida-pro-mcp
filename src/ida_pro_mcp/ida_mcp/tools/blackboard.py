@@ -282,10 +282,7 @@ class _BackgroundCrawler:
         try:
             for c in (quick.get("callees") or []):
                 c_addr = ""
-                if isinstance(c, dict):
-                    c_addr = str(c.get("addr") or c.get("ea") or "").strip()
-                else:
-                    c_addr = str(c).strip().split()[0]
+                c_addr = str(c.get("addr") or c.get("ea") or "").strip() if isinstance(c, dict) else str(c).strip().split()[0]
                 if not c_addr or c_addr in self._visited or c_addr in self._work_queue:
                     continue
                 self._parents[c_addr] = addr_str

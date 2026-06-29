@@ -272,7 +272,7 @@ def export(
 
             # Export inferred types (function signatures + named item types).
             type_count = 0
-            for ea, nm in idautils.Names():
+            for ea, _nm in idautils.Names():
                 t = idc.get_type(ea)
                 if not t:
                     continue
@@ -338,8 +338,8 @@ def export(
             try:
                 for i in range(idaapi.get_import_module_qty()):
                     mod_name = idaapi.get_import_module_name(i) or f"mod_{i}"
-                    def _cb(ea, name, ord_):
-                        data["imports"].append({"module": mod_name, "addr": hex(ea), "name": name or "", "ordinal": int(ord_ or 0)})
+                    def _cb(ea, name, ord_, _mod_name=mod_name):
+                        data["imports"].append({"module": _mod_name, "addr": hex(ea), "name": name or "", "ordinal": int(ord_ or 0)})
                         return True
                     idaapi.enum_import_names(i, _cb)
             except Exception:

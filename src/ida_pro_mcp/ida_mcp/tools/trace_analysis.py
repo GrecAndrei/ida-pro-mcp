@@ -167,13 +167,11 @@ def trace_analysis(
             return out
 
         def _resolve_run_trace(run_name: Optional[str], fallback: Optional[list[int]] = None) -> list[int]:
-            global _TRACE_RUNS
             if run_name:
                 return list(_TRACE_RUNS.get(str(run_name), []))
             return list(fallback) if fallback else []
 
         def _cache_run_trace(run_name: Optional[str], values: list[int]) -> None:
-            global _TRACE_RUNS
             if not run_name:
                 return
             key = str(run_name)
@@ -185,7 +183,6 @@ def trace_analysis(
                 _TRACE_RUNS.pop(oldest, None)
 
         def _cache_snapshot(snapshot_id: str, payload: dict) -> None:
-            global _TRACE_STATE_SNAPSHOTS
             if snapshot_id in _TRACE_STATE_SNAPSHOTS:
                 _TRACE_STATE_SNAPSHOTS.pop(snapshot_id, None)
             _TRACE_STATE_SNAPSHOTS[snapshot_id] = payload
@@ -219,7 +216,7 @@ def trace_analysis(
 
         def load_trace(run_id: Optional[str] = None, compress: bool = False):
             nonlocal trace_data
-            global _TRACE_CACHE, _TRACE_RUNS
+            global _TRACE_CACHE
             if trace_data and isinstance(trace_data, list):
                 parsed = _parse_addrs(trace_data)
                 if compress:
@@ -689,7 +686,7 @@ def trace_analysis(
                         funcs_b[fn] += 1
                 _diff_xref_limit = int(kwargs.get("diff_xref_limit", 50000))
                 _diff_xref_count = 0
-                for idx, ea in enumerate(trace_a):
+                for _idx, ea in enumerate(trace_a):
                     if _diff_xref_count >= _diff_xref_limit:
                         break
                     for xref in idautils.XrefsFrom(ea):
@@ -700,7 +697,7 @@ def trace_analysis(
                             callee = idc.get_name(xref.to)
                             if callee and not callee.startswith("sub_"):
                                 apis_a.append(callee)
-                for idx, ea in enumerate(trace_b):
+                for _idx, ea in enumerate(trace_b):
                     if _diff_xref_count >= _diff_xref_limit:
                         break
                     for xref in idautils.XrefsFrom(ea):
@@ -2104,10 +2101,7 @@ class TinyEmulator:
             self.sym_regs.pop(norm, None)
 
     def is_mem_tainted(self, addr, size=1):
-        for i in range(size):
-            if (addr + i) in self.tainted_mem:
-                return True
-        return False
+        return any(addr + i in self.tainted_mem for i in range(size))
 
     def set_mem_taint(self, addr, size=1, state=True):
         for i in range(size):
@@ -2773,11 +2767,10 @@ class TinyEmulator:
                 res = (val0 << val1) & op_mask
             elif mnem == "shr":
                 res = (val0 & op_mask) >> val1
+            elif val0 & (1 << (op_width - 1)):
+                res = ((val0 & op_mask) >> val1) | (~((op_mask) >> val1) & op_mask)
             else:
-                if val0 & (1 << (op_width - 1)):
-                    res = ((val0 & op_mask) >> val1) | (~((op_mask) >> val1) & op_mask)
-                else:
-                    res = (val0 & op_mask) >> val1
+                res = (val0 & op_mask) >> val1
             t0 = self.parse_op_taint(insn, 0)
             t1 = self.parse_op_taint(insn, 1)
             t_res = t0 or t1
@@ -2814,11 +2807,10 @@ class TinyEmulator:
             shift = val1 % width
             if shift == 0:
                 res = val0
+            elif mnem == "rol":
+                res = ((val0 << shift) | (val0 >> (width - shift))) & mask
             else:
-                if mnem == "rol":
-                    res = ((val0 << shift) | (val0 >> (width - shift))) & mask
-                else:
-                    res = ((val0 >> shift) | (val0 << (width - shift))) & mask
+                res = ((val0 >> shift) | (val0 << (width - shift))) & mask
 
             t0 = self.parse_op_taint(insn, 0)
             t_res = t0 or t1
@@ -3027,9 +3019,8 @@ class TinyEmulator:
                 if jump:
                     if taken_c:
                         self.path_constraints.append((self.ip, taken_c))
-                else:
-                    if fallthrough_c:
-                        self.path_constraints.append((self.ip, fallthrough_c))
+                elif fallthrough_c:
+                    self.path_constraints.append((self.ip, fallthrough_c))
 
             if jump and self.func_start <= target < self.func_end:
                 next_ip = target
@@ -3190,13 +3181,9 @@ class TinyEmulator:
                         current_emu.ip = target
                     else:
                         current_emu.ip = next_ip
-                elif mnem in ("ret", "retn"):
+                elif mnem in ("ret", "retn") or not current_emu.step():
                     completed_paths.append(current_emu)
                     break
-                else:
-                    if not current_emu.step():
-                        completed_paths.append(current_emu)
-                        break
 
                 step_count += 1
                 if step_count > _STEP_CAP:

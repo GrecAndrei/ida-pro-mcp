@@ -7,7 +7,7 @@ import re
 import shlex
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..config import (
     EMBEDDING_FIRST_MODE,
@@ -25,7 +25,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 class ServerWikiMixin:
     def _resolve_wiki_root(self) -> str:
         env_path = os.environ.get("IDA_MCP_WIKI_DIR")
-        candidates: List[str] = []
+        candidates: list[str] = []
         if env_path:
             candidates.append(os.path.realpath(os.path.expanduser(env_path)))
 
@@ -54,7 +54,7 @@ class ServerWikiMixin:
                 return cand
         return ""
 
-    def _wiki_parse_headers(self, lines: List[str]) -> List[dict]:
+    def _wiki_parse_headers(self, lines: list[str]) -> list[dict]:
         headers = []
         for idx, line in enumerate(lines, 1):
             strip = line.strip()
@@ -64,7 +64,7 @@ class ServerWikiMixin:
                 headers.append({"level": level, "text": text, "line": idx})
         return headers
 
-    def _wiki_tokenize(self, text: str) -> List[str]:
+    def _wiki_tokenize(self, text: str) -> list[str]:
         if not text:
             return []
         return re.findall(r"[a-z0-9_]+", text.lower())
@@ -82,7 +82,7 @@ class ServerWikiMixin:
                 return stem
         return t
 
-    def _wiki_embed_text(self, text: str) -> Optional[List[float]]:
+    def _wiki_embed_text(self, text: str) -> list[float] | None:
         txt = (text or "").strip()
         if not txt:
             return None
@@ -105,7 +105,7 @@ class ServerWikiMixin:
         self._wiki_embed_cache[key] = vec
         return vec
 
-    def _wiki_expand_semantic_terms(self, query_tokens: List[str]) -> set[str]:
+    def _wiki_expand_semantic_terms(self, query_tokens: list[str]) -> set[str]:
         raw = {self._wiki_stem_token(t) for t in query_tokens if t}
         expanded = set(raw)
         for group in WIKI_SEMANTIC_GROUPS:
@@ -116,18 +116,18 @@ class ServerWikiMixin:
 
     def _wiki_semantic_search_pages(
         self,
-        pages: List[dict],
+        pages: list[dict],
         query: str,
         *,
         max_results: int,
         category_filter: Any = None,
         include_snippets: bool = False,
         context_lines: int = 2,
-    ) -> List[dict]:
+    ) -> list[dict]:
         query_lower = query.lower().strip()
         query_tokens = self._wiki_tokenize(query_lower)
         expanded_terms = self._wiki_expand_semantic_terms(query_tokens)
-        scored: List[dict] = []
+        scored: list[dict] = []
         for page in pages:
             if not self._wiki_match_category(page["topic"], category_filter):
                 continue
@@ -181,8 +181,8 @@ class ServerWikiMixin:
         ):
             return cache
 
-        topics: Dict[str, List[str]] = {}
-        pages: List[dict] = []
+        topics: dict[str, list[str]] = {}
+        pages: list[dict] = []
         if wiki_root and os.path.isdir(wiki_root):
             for root, _, files in os.walk(wiki_root):
                 rel_dir = os.path.relpath(root, wiki_root)
@@ -248,7 +248,7 @@ class ServerWikiMixin:
 
     def _wiki_normalize_topic(
         self, topic_name: Any
-    ) -> tuple[Optional[str], Optional[dict]]:
+    ) -> tuple[str | None, dict | None]:
         normalized = str(topic_name or "").strip().replace("\\", "/")
         if not normalized:
             return None, make_error(MCPError.INVALID_ARGS, "topic required")
@@ -300,7 +300,7 @@ class ServerWikiMixin:
         out["action"] = base
         tail = parts[1].strip() if len(parts) > 1 else ""
         if tail:
-            positional: List[str] = []
+            positional: list[str] = []
             for token in shlex.split(tail):
                 if "=" in token:
                     k, v = token.split("=", 1)
@@ -342,7 +342,7 @@ class ServerWikiMixin:
                     out["topic"] = candidate
         return out
 
-    def _wiki_generated_tool_doc(self, tool_name: str) -> Optional[str]:
+    def _wiki_generated_tool_doc(self, tool_name: str) -> str | None:
         if not isinstance(tool_name, str):
             return None
         tool_name = tool_name.strip().lower()
@@ -355,7 +355,7 @@ class ServerWikiMixin:
 
         action_list = TOOL_ACTIONS.get(tool_name, [])
         schema = TOOL_ARG_SCHEMAS.get(tool_name, {})
-        key_params = [p for p in schema.keys() if p not in ("action",)]
+        key_params = [p for p in schema if p not in ("action",)]
         key_params = key_params[:16]
 
         lines = [
@@ -428,12 +428,12 @@ class ServerWikiMixin:
         self,
         text: str,
         query_lower: str,
-        query_tokens: List[str],
+        query_tokens: list[str],
         context_lines: int,
         max_snippets: int = 5,
-    ) -> List[dict]:
+    ) -> list[dict]:
         lines = text.splitlines()
-        snippets: List[dict] = []
+        snippets: list[dict] = []
         if not lines:
             return snippets
         terms = [query_lower] + [t for t in query_tokens if len(t) >= 3]
@@ -455,10 +455,10 @@ class ServerWikiMixin:
         self,
         page: dict,
         query_lower: str,
-        query_tokens: List[str],
+        query_tokens: list[str],
         fuzzy: bool,
-    ) -> tuple[int, List[str]]:
-        reasons: List[str] = []
+    ) -> tuple[int, list[str]]:
+        reasons: list[str] = []
         qvec = self._wiki_embed_text(query_lower) if EMBEDDING_FIRST_MODE else None
         title_text = str(page.get("semantic_title_text") or "").strip()
         body_text = str(page.get("semantic_body_text") or "").strip()
@@ -516,7 +516,7 @@ class ServerWikiMixin:
 
     def _wiki_search_pages(
         self,
-        pages: List[dict],
+        pages: list[dict],
         query: str,
         *,
         max_results: int,
@@ -524,10 +524,10 @@ class ServerWikiMixin:
         include_snippets: bool = False,
         context_lines: int = 2,
         fuzzy: bool = True,
-    ) -> List[dict]:
+    ) -> list[dict]:
         query_lower = query.lower().strip()
         query_tokens = self._wiki_tokenize(query_lower)
-        scored: List[dict] = []
+        scored: list[dict] = []
         for page in pages:
             if not self._wiki_match_category(page["topic"], category_filter):
                 continue
@@ -552,8 +552,8 @@ class ServerWikiMixin:
         return scored[:max_results]
 
     def _wiki_related_topics(
-        self, current_topic: str, pages: List[dict], max_items: int = 6
-    ) -> List[str]:
+        self, current_topic: str, pages: list[dict], max_items: int = 6
+    ) -> list[str]:
         current = current_topic.lower()
         current_page = None
         for page in pages:
@@ -571,8 +571,8 @@ class ServerWikiMixin:
         return related[:max_items]
 
     def _wiki_resolve_topic(
-        self, normalized_topic: str, pages: List[dict], strict: bool = False
-    ) -> Optional[dict]:
+        self, normalized_topic: str, pages: list[dict], strict: bool = False
+    ) -> dict | None:
         if not pages:
             return None
         wanted = normalized_topic.lower()
@@ -619,8 +619,8 @@ class ServerWikiMixin:
 
         wiki_root = self._resolve_wiki_root()
         wiki_index = self._wiki_get_index(wiki_root)
-        topics: Dict[str, List[str]] = wiki_index.get("topics", {})
-        pages: List[dict] = wiki_index.get("pages", [])
+        topics: dict[str, list[str]] = wiki_index.get("topics", {})
+        pages: list[dict] = wiki_index.get("pages", [])
 
         verbose = bool(args.get("verbose", False))
         default_limit = (
@@ -738,7 +738,7 @@ class ServerWikiMixin:
         resolved_page = self._wiki_resolve_topic(
             topic_name or "", pages, strict=strict_topic
         )
-        content: Optional[str] = None
+        content: str | None = None
         source = "generated"
         resolved_topic = topic_name
         title = None
@@ -765,7 +765,7 @@ class ServerWikiMixin:
                 )
                 category = "tools"
             else:
-                suggestions: List[str] = []
+                suggestions: list[str] = []
                 if pages and topic_name:
                     suggestions = [
                         m["topic"]

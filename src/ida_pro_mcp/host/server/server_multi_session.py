@@ -9,7 +9,7 @@ tool calls (e.g. decompile) to the session that owns a given symbol.
 from __future__ import annotations
 
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from ..errors import MCPError, make_error
 
@@ -20,10 +20,10 @@ class SessionGroup:
     def __init__(self, group_id: str, name: str = ""):
         self.group_id = group_id
         self.name = name or group_id
-        self.session_ids: List[str] = []
+        self.session_ids: list[str] = []
         # import_name -> {"provider_sid": str, "export_ea": str, "importer_sids": [str]}
-        self.links: Dict[str, Dict[str, Any]] = {}
-        self.metadata: Dict[str, Any] = {}
+        self.links: dict[str, dict[str, Any]] = {}
+        self.metadata: dict[str, Any] = {}
 
     def to_dict(self) -> dict:
         return {
@@ -42,7 +42,7 @@ class ServerMultiSessionMixin:
     transparent resolution of inter-binary references and cross-session decompilation.
     """
 
-    _session_groups: Dict[str, SessionGroup]
+    _session_groups: dict[str, SessionGroup]
 
     def _init_multi_session(self) -> None:
         """Initialize multi-session state. Call from server __init__."""
@@ -53,12 +53,12 @@ class ServerMultiSessionMixin:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _get_group(self, group_id: str) -> Optional[SessionGroup]:
+    def _get_group(self, group_id: str) -> SessionGroup | None:
         """Look up a group by ID."""
         self._init_multi_session()
         return self._session_groups.get(group_id)
 
-    def _require_group(self, args: dict) -> Tuple[Optional[SessionGroup], Optional[dict]]:
+    def _require_group(self, args: dict) -> tuple[SessionGroup | None, dict | None]:
         """Extract and validate group_id from args. Returns (group, error)."""
         group_id = str(args.get("group_id") or "").strip()
         if not group_id:
@@ -125,7 +125,7 @@ class ServerMultiSessionMixin:
             )
 
         # Validate that all sessions exist
-        valid_sids: List[str] = []
+        valid_sids: list[str] = []
         for raw_sid in session_ids:
             sid = str(raw_sid).strip().upper()
             if not sid:
@@ -172,8 +172,8 @@ class ServerMultiSessionMixin:
 
         # Gather exports from all sessions
         # exports_map: symbol_name -> {sid, ea}
-        exports_map: Dict[str, Dict[str, str]] = {}
-        export_errors: List[Dict[str, str]] = []
+        exports_map: dict[str, dict[str, str]] = {}
+        export_errors: list[dict[str, str]] = []
 
         for sid in group.session_ids:
             result = self._dispatch_to_session(sid, "symbols", {"action": "exports"})
@@ -195,7 +195,7 @@ class ServerMultiSessionMixin:
 
         # Gather imports from all sessions and match against exports
         links_built = 0
-        import_errors: List[Dict[str, str]] = []
+        import_errors: list[dict[str, str]] = []
 
         for sid in group.session_ids:
             result = self._dispatch_to_session(sid, "imports_deep", {"action": "resolve"})
@@ -373,7 +373,7 @@ class ServerMultiSessionMixin:
                 f"Symbol '{symbol}' not linked in group '{group.group_id}'",
             )
 
-        xrefs_result: List[Dict[str, Any]] = []
+        xrefs_result: list[dict[str, Any]] = []
 
         # For each importer session, find xrefs to the import stub
         deep = bool(args.get("deep", False))
@@ -432,8 +432,8 @@ class ServerMultiSessionMixin:
             return err
 
         # Detailed stats for a single group
-        providers: Dict[str, int] = {}
-        importers: Dict[str, int] = {}
+        providers: dict[str, int] = {}
+        importers: dict[str, int] = {}
         for link in group.links.values():
             psid = link.get("provider_sid", "")
             providers[psid] = providers.get(psid, 0) + 1

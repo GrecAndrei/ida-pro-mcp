@@ -11,7 +11,7 @@ import tempfile
 import threading
 import time
 import warnings
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ida_pro_mcp import __version__
 
@@ -20,11 +20,11 @@ warnings.filterwarnings("ignore")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-import contextlib
+import contextlib  # noqa: E402
 
-from ..analysis.context_density import ContextDensityOptimizer
-from ..analysis.patterns import GlobalFactsDatabase
-from ..config import (
+from ..analysis.context_density import ContextDensityOptimizer  # noqa: E402
+from ..analysis.patterns import GlobalFactsDatabase  # noqa: E402
+from ..config import (  # noqa: E402
     CACHE_DIR,
     CONTEXT_DENSITY_COMPACT_THRESHOLD,
     CONTEXT_DENSITY_DEFAULT_BUDGET,
@@ -38,32 +38,32 @@ from ..config import (
     _select_runtime_dir,
     log_rpc,
 )
-from ..errors import MCPError, is_error_result, make_error
-from ..schemas import (
+from ..errors import MCPError, is_error_result, make_error  # noqa: E402
+from ..schemas import (  # noqa: E402
     _resolve_tool_alias,
 )
-from ..stores.insight_index import InsightIndex
+from ..stores.insight_index import InsightIndex  # noqa: E402
 
 # Compatibility anchor for source-based regression tests.
 # if addr and tool_name in ("code", "data", "search"):
 # Import truncation middleware
-from ..stores.truncation import continue_truncated, truncate_response  # noqa: F401
-from .audit import AuditLogger
-from .rate_limit import RateLimiter
-from .resources import ResourceResolver, list_resources
-from .server_args import ServerArgsMixin
-from .server_batch import BackgroundMixin
-from .server_blackboard import ServerBlackboardMixin
-from .server_dispatch import ServerDispatchMixin
-from .server_multi_session import ServerMultiSessionMixin
-from .server_predictor import ServerPredictorMixin
-from .server_response import ServerResponseMixin
-from .server_runtime import ServerRuntimeMixin
-from .server_semantic import ServerSemanticMixin
-from .server_session import ServerSessionMixin
-from .server_threat_hunt import ServerThreatHuntMixin
-from .server_wiki import ServerWikiMixin
-from .server_workflow import ServerWorkflowMixin
+from ..stores.truncation import continue_truncated, truncate_response  # noqa: F401,E402
+from .audit import AuditLogger  # noqa: E402
+from .rate_limit import RateLimiter  # noqa: E402
+from .resources import ResourceResolver, list_resources  # noqa: E402
+from .server_args import ServerArgsMixin  # noqa: E402
+from .server_batch import BackgroundMixin  # noqa: E402
+from .server_blackboard import ServerBlackboardMixin  # noqa: E402
+from .server_dispatch import ServerDispatchMixin  # noqa: E402
+from .server_multi_session import ServerMultiSessionMixin  # noqa: E402
+from .server_predictor import ServerPredictorMixin  # noqa: E402
+from .server_response import ServerResponseMixin  # noqa: E402
+from .server_runtime import ServerRuntimeMixin  # noqa: E402
+from .server_semantic import ServerSemanticMixin  # noqa: E402
+from .server_session import ServerSessionMixin  # noqa: E402
+from .server_threat_hunt import ServerThreatHuntMixin  # noqa: E402
+from .server_wiki import ServerWikiMixin  # noqa: E402
+from .server_workflow import ServerWorkflowMixin  # noqa: E402
 
 # =============================================================================
 # MCP SERVER
@@ -179,15 +179,15 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
                 "error_details": "full",
             },
         }
-        self._next_cache: Dict[str, Dict[str, Any]] = {}
+        self._next_cache: dict[str, dict[str, Any]] = {}
         self._next_cache_ttl_seconds = 1800
-        self._activity_log: List[Dict[str, Any]] = []
+        self._activity_log: list[dict[str, Any]] = []
         self._activity_log_max = 4000
-        self._session_last_activity: Dict[str, float] = {}
-        self._session_inflight_calls: Dict[str, int] = {}
+        self._session_last_activity: dict[str, float] = {}
+        self._session_inflight_calls: dict[str, int] = {}
         self._idle_index_lock = threading.RLock()
-        self._idle_index_threads: Dict[str, threading.Thread] = {}
-        self._idle_index_stop_events: Dict[str, threading.Event] = {}
+        self._idle_index_threads: dict[str, threading.Thread] = {}
+        self._idle_index_stop_events: dict[str, threading.Event] = {}
         self._idle_index_delay_seconds = _bounded_int(
             os.environ.get("IDA_MCP_IDLE_INDEX_DELAY", 20),
             20,
@@ -217,9 +217,9 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
         # as "stalled" when the process is alive but analysis stops advancing.
         # See _start_analysis_watchdog / _stop_analysis_watchdog.
         self._analysis_watchdog_lock = threading.RLock()
-        self._analysis_watchdog_threads: Dict[str, threading.Thread] = {}
-        self._analysis_watchdog_stop_events: Dict[str, threading.Event] = {}
-        self._analysis_watchdog_state: Dict[str, Dict[str, Any]] = {}
+        self._analysis_watchdog_threads: dict[str, threading.Thread] = {}
+        self._analysis_watchdog_stop_events: dict[str, threading.Event] = {}
+        self._analysis_watchdog_state: dict[str, dict[str, Any]] = {}
         self._analysis_watchdog_interval = _bounded_int(
             os.environ.get("IDA_MCP_WATCHDOG_INTERVAL", 5),
             5,
@@ -301,34 +301,34 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
             )
         except Exception:
             self._usage_intel = None
-        self._last_injected_entries: List[Dict[str, Any]] = []
-        self._last_query_bridges: List[str] = []
+        self._last_injected_entries: list[dict[str, Any]] = []
+        self._last_query_bridges: list[str] = []
         self._call_counter = 0
         self._macro_path = os.path.join(self.cache_dir, "session_macros.json")
         self._runtime_lease_dir = os.path.join(self.cache_dir, "runtime_leases")
         os.makedirs(self._runtime_lease_dir, exist_ok=True)
-        self._session_macros: Dict[str, Dict[str, Any]] = {}
+        self._session_macros: dict[str, dict[str, Any]] = {}
         self.current_session = None
         self.session_runtimes = {}
-        self._session_capsules: Dict[str, str] = {}
+        self._session_capsules: dict[str, str] = {}
         self._runtime_lock = threading.RLock()
-        self._session_startup_locks: Dict[str, threading.Lock] = {}
+        self._session_startup_locks: dict[str, threading.Lock] = {}
         self._semantic_index_lock = threading.RLock()
         self._shutdown = False
         self._shutdown_requested = False
         self._lease_thread_stop = threading.Event()
-        self._lease_thread: Optional[threading.Thread] = None
-        self._analysis_engines: Dict[str, Any] = {}  # session_id -> AnalysisEngine
-        self._wiki_cache: Dict[str, Any] = {
+        self._lease_thread: threading.Thread | None = None
+        self._analysis_engines: dict[str, Any] = {}  # session_id -> AnalysisEngine
+        self._wiki_cache: dict[str, Any] = {
             "root": "",
             "expires": 0.0,
             "topics": {},
             "pages": [],
         }
         self._wiki_cache_ttl = 5.0
-        self._wiki_embed_cache: Dict[str, List[float]] = {}
+        self._wiki_embed_cache: dict[str, list[float]] = {}
         self._wiki_embed_cache_max = 512
-        self._tools_list_cache: Dict[str, tuple] = {}
+        self._tools_list_cache: dict[str, tuple] = {}
         self._context_density_optimizer = ContextDensityOptimizer(
             budget_tokens=CONTEXT_DENSITY_DEFAULT_BUDGET,
             compact_threshold=CONTEXT_DENSITY_COMPACT_THRESHOLD,
@@ -568,7 +568,7 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
         if m == "resources/read":
             uri = p.get("uri", "")
             resolver = ResourceResolver(
-                lambda name, kwargs: self._execute_tool(name, kwargs),
+                self._execute_tool,
                 insight_index=self._insight_index,
                 global_facts=self._global_facts,
                 session_mgr=self.session_mgr,
@@ -695,7 +695,7 @@ class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, Se
                     break
                 try:
                     conn, _ = sock.accept()
-                except _socket_mod.timeout:
+                except TimeoutError:
                     continue
                 threading.Thread(target=self._handle_daemon_conn, args=(conn,), daemon=True).start()
         finally:

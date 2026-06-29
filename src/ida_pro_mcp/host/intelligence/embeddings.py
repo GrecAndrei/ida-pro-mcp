@@ -12,8 +12,8 @@ import threading
 import time
 from collections import Counter
 from contextlib import closing, suppress
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import UTC, datetime
+from typing import Any
 
 from .helpers import cosine_similarity as _cosine
 
@@ -41,7 +41,7 @@ NOISE_WORDS = frozenset({
 
 _SEARCH_NOISE_TOKENS = NOISE_WORDS
 
-_TOKEN_SYNONYMS: Dict[str, Tuple[str, ...]] = {
+_TOKEN_SYNONYMS: dict[str, tuple[str, ...]] = {
     "aes": ("crypto", "cipher", "encrypt", "decrypt"),
     "cipher": ("crypto", "encrypt", "decrypt"),
     "encrypt": ("crypto", "cipher"),
@@ -67,7 +67,7 @@ _TOKEN_SYNONYMS: Dict[str, Tuple[str, ...]] = {
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _safe_file_head_sha256(path: str, max_bytes: int = 16 * 1024 * 1024) -> str:
@@ -92,14 +92,14 @@ def _safe_stat(path: str) -> tuple[int, int]:
     return int(st.st_size), int(st.st_mtime_ns)
 
 
-def _split_identifier_token(token: str) -> List[str]:
+def _split_identifier_token(token: str) -> list[str]:
     """Split RE identifiers into searchable semantic pieces."""
     raw = str(token or "").strip()
     if not raw:
         return []
     if raw.lower().startswith("0x") or raw.isdigit():
         return [raw.lower()]
-    parts: List[str] = []
+    parts: list[str] = []
     for chunk in re.split(r"[_\W]+", raw):
         if not chunk:
             continue
@@ -118,7 +118,7 @@ def _expand_query_tokens(tokens: set[str]) -> set[str]:
     return expanded
 
 
-def _idf_scores(docs: List[set[str]]) -> Dict[str, float]:
+def _idf_scores(docs: list[set[str]]) -> dict[str, float]:
     df: Counter[str] = Counter()
     for doc in docs:
         df.update(doc)
@@ -126,7 +126,7 @@ def _idf_scores(docs: List[set[str]]) -> Dict[str, float]:
     return {tok: math.log((total + 1.0) / (cnt + 0.5)) + 1.0 for tok, cnt in df.items()}
 
 
-def _weighted_token_score(query_tokens: set[str], row_tokens: set[str], idf: Dict[str, float]) -> Tuple[float, List[str]]:
+def _weighted_token_score(query_tokens: set[str], row_tokens: set[str], idf: dict[str, float]) -> tuple[float, list[str]]:
     if not query_tokens or not row_tokens:
         return 0.0, []
     expanded = _expand_query_tokens(query_tokens)
@@ -145,9 +145,9 @@ def _normalize_search_text(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "").strip().lower())
 
 
-def _tokenize_search_text(text: str, max_tokens: int = 96) -> List[str]:
+def _tokenize_search_text(text: str, max_tokens: int = 96) -> list[str]:
     seen = set()
-    out: List[str] = []
+    out: list[str] = []
     for raw in _SEARCH_TOKEN_RE.findall(str(text or "").replace("_", " ")):
         for low in _split_identifier_token(raw):
             if low in seen or low in _SEARCH_NOISE_TOKENS:
@@ -197,7 +197,7 @@ class FunctionEmbeddingIndex:
 
     def __init__(self, db_path: str, embedder: Any):
         self._embedder = embedder
-        self._cache: Dict[str, List[float]] = {}  # ea_hex -> embedding
+        self._cache: dict[str, list[float]] = {}  # ea_hex -> embedding
         self._cache_lock = threading.Lock()
 
         try:
@@ -294,7 +294,7 @@ class FunctionEmbeddingIndex:
             (key, value),
         )
 
-    def _meta_get(self, conn: sqlite3.Connection, key: str) -> Optional[str]:
+    def _meta_get(self, conn: sqlite3.Connection, key: str) -> str | None:
         row = conn.execute("SELECT value FROM embedding_meta WHERE key=?", (key,)).fetchone()
         if not row:
             return None
@@ -314,7 +314,7 @@ class FunctionEmbeddingIndex:
             return hashlib.sha256(f"{src}:{st.st_size}:{st.st_mtime_ns}".encode()).hexdigest()
         return hashlib.sha256(src.encode("utf-8")).hexdigest() if src else ""
 
-    def _embedder_meta_snapshot(self) -> Dict[str, str]:
+    def _embedder_meta_snapshot(self) -> dict[str, str]:
         backend = str(getattr(self._embedder, "backend", "unknown"))
         dim = str(getattr(self._embedder, "dim", 0) or 0)
         model_path = ""
@@ -372,19 +372,19 @@ class FunctionEmbeddingIndex:
             self._meta_set(conn, "updated_at", now)
             conn.commit()
 
-    def metadata(self) -> Dict[str, Any]:
+    def metadata(self) -> dict[str, Any]:
         with self._conn() as conn:
             rows = conn.execute("SELECT key, value FROM embedding_meta").fetchall()
-        out: Dict[str, Any] = {str(k): str(v) for k, v in rows}
+        out: dict[str, Any] = {str(k): str(v) for k, v in rows}
         for key in ("index_schema_version", "embedding_dim", "model_size", "server_size"):
             if key in out:
                 with suppress(Exception):
                     out[key] = int(out[key])
         return out
 
-    def recent_functions(self, limit: int = 64) -> List[Dict[str, Any]]:
+    def recent_functions(self, limit: int = 64) -> list[dict[str, Any]]:
         """Return most recently indexed function refs for capsule snapshots."""
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         try:
             with self._conn() as conn:
                 for row in conn.execute(
@@ -411,10 +411,10 @@ class FunctionEmbeddingIndex:
     def capsule_state(
         self,
         *,
-        anchor_metadata: Optional[Dict[str, Any]] = None,
-        thresholds: Optional[Dict[str, Any]] = None,
+        anchor_metadata: dict[str, Any] | None = None,
+        thresholds: dict[str, Any] | None = None,
         recent_limit: int = 64,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Build a capsule-ready embedding state payload."""
         meta = self.metadata()
         model_head = str(meta.get("model_sha256_head") or "")
@@ -442,7 +442,7 @@ class FunctionEmbeddingIndex:
             "updated_at": _now_iso(),
         }
 
-    def verify_metadata(self, current_embedder: Any) -> Dict[str, Any]:
+    def verify_metadata(self, current_embedder: Any) -> dict[str, Any]:
         stored = self.metadata()
         current_backend = str(getattr(current_embedder, "backend", "unknown"))
         current_dim = int(getattr(current_embedder, "dim", 0) or 0)
@@ -450,7 +450,7 @@ class FunctionEmbeddingIndex:
             "embedding_backend": current_backend,
             "embedding_dim": current_dim,
         }
-        mismatches: Dict[str, Dict[str, Any]] = {}
+        mismatches: dict[str, dict[str, Any]] = {}
         if str(stored.get("embedding_backend", "")) != current_backend:
             mismatches["embedding_backend"] = {
                 "stored": stored.get("embedding_backend"),
@@ -490,21 +490,21 @@ class FunctionEmbeddingIndex:
         except Exception:
             pass
 
-    def _pack(self, vec: List[float]) -> bytes:
+    def _pack(self, vec: list[float]) -> bytes:
         from .helpers import pack_floats
         return pack_floats(vec)
 
-    def _unpack(self, blob: bytes) -> List[float]:
+    def _unpack(self, blob: bytes) -> list[float]:
         from .helpers import unpack_floats
         return unpack_floats(blob)
 
     def _phash(self, text: str) -> str:
         return hashlib.md5(text.encode("utf-8", errors="replace")).hexdigest()[:16]
 
-    def _row_meta_for_eas(self, eas: List[str]) -> Dict[str, Dict[str, Any]]:
+    def _row_meta_for_eas(self, eas: list[str]) -> dict[str, dict[str, Any]]:
         if not eas:
             return {}
-        rows: Dict[str, Dict[str, Any]] = {}
+        rows: dict[str, dict[str, Any]] = {}
         try:
             with self._conn() as conn:
                 ph = ",".join("?" * len(eas))
@@ -616,17 +616,17 @@ class FunctionEmbeddingIndex:
 
     def similar_vec(
         self,
-        query_vec: List[float],
+        query_vec: list[float],
         top_k: int = 5,
-        exclude_ea: Optional[str] = None,
+        exclude_ea: str | None = None,
         threshold: float = 0.6,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Return top-k most similar functions given a pre-computed query vector."""
         with self._cache_lock:
             if not self._cache:
                 return []
             snapshot = list(self._cache.items())
-        scored: List[Tuple[float, str]] = []
+        scored: list[tuple[float, str]] = []
         for ea, vec in snapshot:
             if ea == exclude_ea:
                 continue
@@ -652,16 +652,16 @@ class FunctionEmbeddingIndex:
         self,
         pseudocode: str,
         top_k: int = 5,
-        exclude_ea: Optional[str] = None,
+        exclude_ea: str | None = None,
         threshold: float = 0.6,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Return top-k most similar functions by cosine similarity."""
         with self._cache_lock:
             if not self._cache:
                 return []
             cache_items = list(self._cache.items())
         q = self._embedder.embed(pseudocode)
-        scored: List[Tuple[float, str]] = []
+        scored: list[tuple[float, str]] = []
         for ea, vec in cache_items:
             if ea == exclude_ea:
                 continue
@@ -689,15 +689,15 @@ class FunctionEmbeddingIndex:
         query: str,
         top_k: int = 10,
         threshold: float = 0.0,
-        exclude_ea: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        exclude_ea: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Rank indexed functions by lexical overlap over stored signatures and names."""
         q_norm = _normalize_search_text(query)
         q_tokens = set(_tokenize_search_text(query, max_tokens=48))
         if not q_norm and not q_tokens:
             return []
 
-        raw_rows: List[Tuple[str, str, str, Any, set[str], str]] = []
+        raw_rows: list[tuple[str, str, str, Any, set[str], str]] = []
         try:
             with self._conn() as conn:
                 for row in conn.execute(
@@ -716,7 +716,7 @@ class FunctionEmbeddingIndex:
             return []
 
         idf = _idf_scores([r[4] for r in raw_rows])
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         try:
             for ea, name, signature_text, indexed_at, row_tokens, blob in raw_rows:
                 if not row_tokens:
@@ -759,13 +759,13 @@ class FunctionEmbeddingIndex:
         query: str,
         top_k: int = 10,
         threshold: float = 0.0,
-        exclude_ea: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        exclude_ea: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Blend semantic similarity with lexical signature overlap."""
         if not query:
             return []
 
-        semantic_hits: List[Dict[str, Any]] = []
+        semantic_hits: list[dict[str, Any]] = []
         lexical_hits = self.search_text(
             query,
             top_k=max(max(1, int(top_k)) * 6, 48),
@@ -786,7 +786,7 @@ class FunctionEmbeddingIndex:
 
         sem_max = max((float(h.get("similarity") or 0.0) for h in semantic_hits), default=1.0) or 1.0
         lex_max = max((float(h.get("score") or 0.0) for h in lexical_hits), default=1.0) or 1.0
-        merged: Dict[str, Dict[str, Any]] = {}
+        merged: dict[str, dict[str, Any]] = {}
 
         for hit in semantic_hits:
             ea = str(hit.get("ea") or "")
@@ -826,7 +826,7 @@ class FunctionEmbeddingIndex:
                 row["signature"] = hit.get("signature") or ""
 
         q_tokens = set(_tokenize_search_text(query, max_tokens=48))
-        ranked: List[Dict[str, Any]] = []
+        ranked: list[dict[str, Any]] = []
         for row in merged.values():
             sem_norm = float(row.get("similarity") or 0.0) / sem_max if sem_max > 0 else 0.0
             lex_norm = float(row.get("lexical_score") or 0.0) / lex_max if lex_max > 0 else 0.0
@@ -859,8 +859,8 @@ class FunctionEmbeddingIndex:
         query_or_vec: Any,
         top_k: int = 10,
         threshold: float = 0.0,
-        exclude_ea: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        exclude_ea: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Compatibility entrypoint for semantic or hybrid function search."""
         if isinstance(query_or_vec, (list, tuple)):
             try:
@@ -870,11 +870,11 @@ class FunctionEmbeddingIndex:
             return self.similar_vec(vec, top_k=top_k, exclude_ea=exclude_ea, threshold=threshold)
         return self.hybrid_search(str(query_or_vec or ""), top_k=top_k, threshold=threshold, exclude_ea=exclude_ea)
 
-    def cache_store(self, ea: str, vec: List[float]) -> None:
+    def cache_store(self, ea: str, vec: list[float]) -> None:
         with self._cache_lock:
             self._cache[ea] = vec
 
-    def cache_snapshot(self) -> List[Tuple[str, List[float]]]:
+    def cache_snapshot(self) -> list[tuple[str, list[float]]]:
         with self._cache_lock:
             return list(self._cache.items())
 

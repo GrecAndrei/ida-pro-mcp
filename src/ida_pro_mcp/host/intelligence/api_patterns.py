@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
-_INTERESTING_APIS: Dict[str, frozenset] = {
+_INTERESTING_APIS: dict[str, frozenset] = {
     "process_injection": frozenset({
         "VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread",
         "NtCreateThread", "RtlCreateUserThread", "NtWriteVirtualMemory",
@@ -47,7 +47,7 @@ _INTERESTING_APIS: Dict[str, frozenset] = {
 
 ALL_INTERESTING_APIS: frozenset = frozenset().union(*_INTERESTING_APIS.values())
 
-_API_COMBOS: List[Tuple[frozenset, List[Dict[str, Any]]]] = [
+_API_COMBOS: list[tuple[frozenset, list[dict[str, Any]]]] = [
     (frozenset({"VirtualAllocEx", "WriteProcessMemory"}), [
         {"tool": "annotation", "action": "mark_dangerous",
          "reason": "VirtualAllocEx + WriteProcessMemory = classic process injection"},
@@ -96,8 +96,8 @@ _CRYPTO_CONSTS = frozenset({
 })
 
 
-def extract_api_calls(pseudocode: str) -> List[str]:
-    found: List[str] = []
+def extract_api_calls(pseudocode: str) -> list[str]:
+    found: list[str] = []
     seen: set = set()
     for match in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_]{3,})\b", pseudocode):
         name = match.group(1)
@@ -107,7 +107,7 @@ def extract_api_calls(pseudocode: str) -> List[str]:
     return found[:30]
 
 
-def extract_string_refs(pseudocode: str) -> List[str]:
+def extract_string_refs(pseudocode: str) -> list[str]:
     raw = _STRING_LIT_RE.findall(pseudocode)
     interesting = [
         s for s in raw
@@ -120,14 +120,14 @@ def extract_string_refs(pseudocode: str) -> List[str]:
     return (interesting or raw)[:8]
 
 
-def detect_crypto_constants(pseudocode: str) -> List[str]:
+def detect_crypto_constants(pseudocode: str) -> list[str]:
     hits = [h.lower() for h in _HEX_CONST_RE.findall(pseudocode) if h.lower() in _CRYPTO_CONSTS]
     return list(set(hits))[:5]
 
 
-def actions_from_apis(apis: List[str], addr: str) -> List[Dict[str, Any]]:
+def actions_from_apis(apis: list[str], addr: str) -> list[dict[str, Any]]:
     api_set = frozenset(apis)
-    actions: List[Dict[str, Any]] = []
+    actions: list[dict[str, Any]] = []
     seen: set = set()
     for required, combo_actions in _API_COMBOS:
         if required & api_set:
@@ -144,8 +144,8 @@ def actions_from_apis(apis: List[str], addr: str) -> List[Dict[str, Any]]:
     return actions[:6]
 
 
-def actions_from_schemaboot(attrs: Dict[str, Any], addr: str) -> List[Dict[str, Any]]:
-    actions: List[Dict[str, Any]] = []
+def actions_from_schemaboot(attrs: dict[str, Any], addr: str) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
     xor = attrs.get("xor_count", 0)
     entropy = attrs.get("entropy", 0.0)
     cyclomatic = attrs.get("cyclomatic_complexity", 0)

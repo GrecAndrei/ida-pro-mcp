@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import sqlite3
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .core import BgeCodeEmbedder
 from .embeddings import FunctionEmbeddingIndex
@@ -18,7 +18,7 @@ class FunctionEntropyCalculator:
     """
 
     @staticmethod
-    def compute_instruction_entropy(row: Dict[str, Any]) -> float:
+    def compute_instruction_entropy(row: dict[str, Any]) -> float:
         """
         Computes Shannon entropy over instruction counts.
         """
@@ -44,7 +44,7 @@ class FunctionEntropyCalculator:
         return entropy
 
     @classmethod
-    def compute_structural_entropy(cls, row: Dict[str, Any]) -> float:
+    def compute_structural_entropy(cls, row: dict[str, Any]) -> float:
         """
         Computes a normalized structural entropy score in [0.0, 1.0]
         based on byte entropy, instruction counts/ratios, and CFG attributes.
@@ -83,9 +83,9 @@ class FunctionEntropyCalculator:
     def compute_triage_suggestions(
         self,
         idb_path: str,
-        context: Optional[str] = None,
+        context: str | None = None,
         limit: int = 5,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Query functions from the structural index, calculate their structural entropy,
         determine their semantic novelty against the existing index (or custom context),
@@ -119,7 +119,7 @@ class FunctionEntropyCalculator:
         explored_eas = set(emb_index._cache.keys())
 
         # If a context text is provided, embed it
-        ctx_vec: Optional[List[float]] = None
+        ctx_vec: list[float] | None = None
         if context and context.strip():
             try:
                 ctx_vec = embedder.embed(context)

@@ -142,7 +142,7 @@ def _sync_wrapper(ff, safety_mode: IDASafety):
         res = res_container.get(timeout=30)
     except queue.Empty:
         logger.error(f"IDA execute_sync timed out for {ff.__name__}")
-        raise IDASyncError(f"IDA execute_sync timed out for {ff.__name__}")
+        raise IDASyncError(f"IDA execute_sync timed out for {ff.__name__}") from None
 
     if isinstance(res, Exception):
         raise res

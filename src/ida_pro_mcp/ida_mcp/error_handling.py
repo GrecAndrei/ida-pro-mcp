@@ -7,7 +7,7 @@ without burning context tokens on repeated trial-and-error.
 """
 
 import traceback
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple
 
 
 class MCPError:
@@ -339,7 +339,7 @@ def handle_error(e: Exception, context: str = None) -> Dict[str, Any]:
 # Validation Helpers
 # ============================================================================
 
-def parse_address_safe(addr_str: Union[str, int]) -> Tuple[Optional[int], Optional[Dict]]:
+def parse_address_safe(addr_str: str | int) -> Tuple[Optional[int], Optional[Dict]]:
     """
     Safely parse an address string or integer.
     Returns (address, None) on success, or (None, error_dict) on failure.
@@ -401,7 +401,7 @@ def parse_address_safe(addr_str: Union[str, int]) -> Tuple[Optional[int], Option
     except Exception as e:
         return None, make_error(MCPError.ADDRESS_INVALID, f"Failed to parse address: {str(e)}")
 
-def validate_addr(addr: Union[str, int], require_code: bool = False, require_func: bool = False) -> Tuple[Optional[int], Optional[Dict]]:
+def validate_addr(addr: str | int, require_code: bool = False, require_func: bool = False) -> Tuple[Optional[int], Optional[Dict]]:
     """
     Validate an address exists and meets requirements.
     Returns (address, None) on success, or (None, error_dict) on failure.
@@ -451,7 +451,7 @@ def validate_addr(addr: Union[str, int], require_code: bool = False, require_fun
     except Exception as e:
         return None, handle_error(e)
 
-def validate_range(start: Union[str, int], end: Union[str, int]) -> Tuple[Optional[int], Optional[int], Optional[Dict]]:
+def validate_range(start: str | int, end: str | int) -> Tuple[Optional[int], Optional[int], Optional[Dict]]:
     """
     Validate an address range.
     Returns (start, end, None) on success.
@@ -572,10 +572,10 @@ def require_one_of(**kwargs) -> Optional[Dict]:
         err = require_one_of(addr=addr, name=name, expr=expr)
         if err: return err
     """
-    for key, value in kwargs.items():
+    for _key, value in kwargs.items():
         if value is not None and (not isinstance(value, str) or value.strip()):
             return None
-    names = ", ".join(f"'{k}'" for k in kwargs.keys())
+    names = ", ".join(f"'{k}'" for k in kwargs)
     return make_error(
         MCPError.MISSING_REQUIRED_ARG,
         f"At least one of {names} is required",

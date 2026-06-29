@@ -6,14 +6,13 @@ import random
 import time
 import uuid
 from datetime import datetime
-from typing import Dict, List, Optional
 
 from ..errors import MCPError, is_error_result, make_error
 from .session_skills_bootstrap_monitoring import SessionBootstrapMonitoringMixin
 
 
 class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
-    def _default_bootstrap_policies(self) -> List[dict]:
+    def _default_bootstrap_policies(self) -> list[dict]:
         """Synthetic analyst policies used for cold-start tournament calibration."""
         return [
             {"id": "p01_balanced", "name": "Balanced Analyst", "weights": [0.35, 0.30, 0.20, 0.15], "bias": 0.00, "noise": 0.03},
@@ -78,7 +77,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
             self._save_skills(sid, data)
             return {"ok": True, "initialized": True, "policies": len(policies)}
 
-    def _policy_predict(self, policy: dict, features: List[float], rng: random.Random) -> float:
+    def _policy_predict(self, policy: dict, features: list[float], rng: random.Random) -> float:
         weights = policy.get("weights") or [0.25, 0.25, 0.25, 0.25]
         score = sum(w * x for w, x in zip(weights, features, strict=False))
         score += float(policy.get("bias", 0.0))
@@ -108,8 +107,8 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
             if not policies:
                 return make_error(MCPError.INVALID_ARGS, "No bootstrap policies found")
 
-            per_policy_loss: Dict[str, float] = {pid: 0.0 for pid in policies}
-            per_policy_wins: Dict[str, int] = {pid: 0 for pid in policies}
+            per_policy_loss: dict[str, float] = dict.fromkeys(policies, 0.0)
+            per_policy_wins: dict[str, int] = dict.fromkeys(policies, 0)
 
             for _ in range(rounds):
                 # Synthetic evidence cube: [static, dynamic, semantic, novelty]
@@ -957,7 +956,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
                 except Exception:
                     t_until = None
 
-            def _in_window(ts: Optional[str]) -> bool:
+            def _in_window(ts: str | None) -> bool:
                 if not ts:
                     return False
                 try:
@@ -1085,7 +1084,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
         sid: str,
         predicted: float,
         observed: int,
-        skill_id: Optional[str] = None,
+        skill_id: str | None = None,
         delay_seconds: int = 0,
     ) -> dict:
         """Ingest delayed outcome and update both session and bootstrap calibration."""
@@ -1113,7 +1112,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
         data: dict,
         predicted: float,
         observed: int,
-        skill_id: Optional[str] = None,
+        skill_id: str | None = None,
         delay_seconds: int = 0,
     ) -> dict:
         bootstrap = data.get("bootstrap")
@@ -1189,7 +1188,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
         claim_id: str,
         predicted: float,
         reason: str,
-        skill_id: Optional[str] = None,
+        skill_id: str | None = None,
     ) -> dict:
         """Open a dispute for a claim with delayed/contested outcome."""
         with self._lock:
@@ -1226,7 +1225,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
             self._save_skills(sid, data)
             return {"ok": True, "dispute": row}
 
-    def bootstrap_list_disputes(self, sid: str, status: Optional[str] = None) -> dict:
+    def bootstrap_list_disputes(self, sid: str, status: str | None = None) -> dict:
         with self._lock:
             session = self.sessions.get(sid)
             if not session:

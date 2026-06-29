@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from ida_mcp_stdio import IDAMCPServer
+from ida_mcp_stdio import IDAMCPServer  # noqa: E402
 
 
 def measure_payload(server: IDAMCPServer, mode: str) -> dict:

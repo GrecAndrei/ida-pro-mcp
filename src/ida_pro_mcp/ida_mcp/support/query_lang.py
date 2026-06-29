@@ -224,7 +224,7 @@ class QueryExecutor:
                 except (ValueError, TypeError):
                     return False
             elif op == "contains":
-                if isinstance(actual, list) or isinstance(actual, str):
+                if isinstance(actual, (list, str)):
                     if expected not in actual:
                         return False
                 else:

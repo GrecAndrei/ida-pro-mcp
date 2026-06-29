@@ -3,15 +3,15 @@ import copy
 import json
 import uuid
 from collections import deque
-from typing import Any, Dict
+from typing import Any
 
 # Minimum sensible token limit to prevent degenerate truncation
 _MIN_MAX_TOKENS = 500
 _MAX_TRUNCATION_STORE = 20
-_TRUNCATION_STORE: Dict[str, Dict[str, Any]] = {}
+_TRUNCATION_STORE: dict[str, dict[str, Any]] = {}
 _TRUNCATION_ORDER: deque[str] = deque()
 
-def _store_truncation(response: Dict[str, Any], fields: Dict[str, Dict[str, Any]]) -> str:
+def _store_truncation(response: dict[str, Any], fields: dict[str, dict[str, Any]]) -> str:
     token = uuid.uuid4().hex[:8].upper()
     _TRUNCATION_STORE[token] = {"response": response, "fields": fields}
     _TRUNCATION_ORDER.append(token)
@@ -25,7 +25,7 @@ def continue_truncated(
     field: str | None = None,
     offset: int | None = None,
     count: int | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     entry = _TRUNCATION_STORE.get(token)
     if not entry:
         return {"error": True, "message": "Unknown or expired continuation token"}
@@ -93,7 +93,7 @@ def continue_truncated(
 
     return {"error": True, "message": f"Field {field} is not a supported truncated type"}
 
-def truncate_response(response: Dict[str, Any], max_tokens: int = 4000) -> Dict[str, Any]:
+def truncate_response(response: dict[str, Any], max_tokens: int = 4000) -> dict[str, Any]:
     """
     Intelligently truncate large MCP responses to fit within LLM context windows.
 
@@ -114,7 +114,7 @@ def truncate_response(response: Dict[str, Any], max_tokens: int = 4000) -> Dict[
 
     pruned = copy.deepcopy(response)
     pruned["_truncated"] = True
-    truncated_fields: Dict[str, Dict[str, Any]] = {}
+    truncated_fields: dict[str, dict[str, Any]] = {}
 
     # 2. Strip verbose metadata first (low-value fields for LLMs)
     _LOW_VALUE_KEYS = {"traceback", "raw_bytes", "hexdump_full"}

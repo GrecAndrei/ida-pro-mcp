@@ -146,7 +146,7 @@ def test_schemas_drop_mbagcn():
         if attr.startswith("__"):
             continue
         val = getattr(schemas, attr)
-        if isinstance(val, (list, tuple, set)) or isinstance(val, dict):
+        if isinstance(val, (list, tuple, set, dict)):
             assert "mbagcn" not in val, f"schemas.{attr} still has mbagcn"
 
 

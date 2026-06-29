@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 # ==========================================================================
 # Session Resume Injection
@@ -42,8 +42,8 @@ from typing import Any, Dict, List, Optional
 def build_session_resume(
     session_manager,
     sid: str,
-    blackboard_entries: Optional[List[dict]] = None,
-) -> Optional[dict]:
+    blackboard_entries: list[dict] | None = None,
+) -> dict | None:
     """Build a session resume context block for reconnecting LLMs.
 
     Only fires for the first 2 calls of a session. The original
@@ -58,7 +58,7 @@ def build_session_resume(
     if not session:
         return None
 
-    resume: Dict[str, Any] = {}
+    resume: dict[str, Any] = {}
     skills_data = session_manager._load_skills(sid)
     activity_log = skills_data.get("activity_log", [])
     hypotheses = skills_data.get("hypotheses", [])

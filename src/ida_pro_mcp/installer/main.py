@@ -7,7 +7,7 @@ import os
 import shutil
 import sys
 import traceback
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .clients import configure_clients, rollback_from_backups
@@ -235,7 +235,7 @@ def _prompt_ida_install(installs: list[IdaInstall], default_index: int = 0) -> I
             if 1 <= n <= len(installs):
                 return installs[n - 1]
         # Allow selecting by version string
-        for i, inst in enumerate(installs):
+        for _i, inst in enumerate(installs):
             if ans in (inst.version_str, inst.full_version_str):
                 return inst
         print("Invalid choice. Enter a number or version string (e.g. '9.3').")
@@ -445,7 +445,7 @@ def _install_claude_opencode_skills(report: InstallReport, dry_run: bool, ui: UI
         target_dirs = default_skill_dirs()
         written = install_skills(target_dirs, dry_run=dry_run)
         count = sum(len(paths) for paths in written.values())
-        for skill_name, paths in written.items():
+        for _skill_name, paths in written.items():
             for p in paths:
                 report.add_modified(p)
         action = "would install" if dry_run else "installed"
@@ -796,7 +796,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
         log_path = log_root / "install-error.log"
         try:
             log_root.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.now(timezone.utc).isoformat()
+            timestamp = datetime.now(UTC).isoformat()
             with open(log_path, "a", encoding="utf-8") as logf:
                 logf.write(
                     f"\n=== {timestamp} run_install crashed ===\n{tb_text}\n"

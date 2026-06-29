@@ -5,7 +5,7 @@ import math
 from typing import Dict, List
 
 try:
-    from ida_pro_mcp.services import quantile
+    from ida_pro_mcp.services import quantile  # noqa: F401
 except ImportError:
     def _quantile(vals, q, default=0.0):
         if not vals:
@@ -59,13 +59,11 @@ def ascii_run_stats(data: bytes, min_len: int = 6) -> Dict[str, int]:
         else:
             if cur >= min_len:
                 runs += 1
-                if cur > longest:
-                    longest = cur
+                longest = max(longest, cur)
             cur = 0
     if cur >= min_len:
         runs += 1
-        if cur > longest:
-            longest = cur
+        longest = max(longest, cur)
     return {"runs": runs, "longest": longest}
 
 
@@ -208,8 +206,7 @@ def summarize_campaign_regions(regions: List[Dict]) -> Dict:
     for r in regions:
         p = float(r.get("priority_score") or 0.0)
         total_pri += p
-        if p > max_pri:
-            max_pri = p
+        max_pri = max(max_pri, p)
         rk = str((r.get("plan") or {}).get("risk") or "low")
         if rk not in risk_counts:
             rk = "low"
@@ -309,8 +306,7 @@ def aggregate_fingerprint_scores(rows: List[Dict], limit: int = 24) -> List[Dict
         pri = float(r.get("priority_score") or 0.0)
         a["count"] += 1
         a["priority_sum"] += pri
-        if pri > a["max_priority"]:
-            a["max_priority"] = pri
+        a["max_priority"] = max(a["max_priority"], pri)
         if len(a["examples"]) < 3:
             a["examples"].append({
                 "segment": r.get("segment"),

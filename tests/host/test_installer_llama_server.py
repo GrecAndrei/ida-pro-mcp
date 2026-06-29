@@ -37,7 +37,7 @@ def test_find_embed_model_finds_model_in_user_downloads(monkeypatch):
 
         monkeypatch.setattr(Path, "home", lambda: home)
         monkeypatch.delenv("IDA_MCP_EMBED_MODEL", raising=False)
-        monkeypatch.setattr("ida_pro_mcp.host.intelligence.core._read_embedder_state", lambda: {})
+        monkeypatch.setattr("ida_pro_mcp.host.intelligence.core._read_embedder_state", dict)
         result = runtime_mod.find_embed_model(install_root)
         assert result
         assert Path(result).name == "bge-code-v1-q8_0.gguf"
@@ -55,7 +55,7 @@ def test_find_embed_model_finds_model_in_user_models_dir(monkeypatch):
 
         monkeypatch.setattr(Path, "home", lambda: home)
         monkeypatch.delenv("IDA_MCP_EMBED_MODEL", raising=False)
-        monkeypatch.setattr("ida_pro_mcp.host.intelligence.core._read_embedder_state", lambda: {})
+        monkeypatch.setattr("ida_pro_mcp.host.intelligence.core._read_embedder_state", dict)
         result = runtime_mod.find_embed_model(install_root)
         assert result
         assert Path(result).name == "bge-code-v1.gguf"
@@ -71,7 +71,7 @@ def test_find_embed_model_returns_empty_when_nothing_present(monkeypatch):
 
         monkeypatch.setattr(Path, "home", lambda: home)
         monkeypatch.delenv("IDA_MCP_EMBED_MODEL", raising=False)
-        monkeypatch.setattr("ida_pro_mcp.host.intelligence.core._read_embedder_state", lambda: {})
+        monkeypatch.setattr("ida_pro_mcp.host.intelligence.core._read_embedder_state", dict)
         assert runtime_mod.find_embed_model(install_root) == ""
 
 

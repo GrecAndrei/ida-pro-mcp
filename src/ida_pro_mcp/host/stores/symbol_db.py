@@ -6,7 +6,7 @@ import json
 import os
 import sqlite3
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 def _default_db_path() -> str:
@@ -19,7 +19,7 @@ def _default_db_path() -> str:
 class SymbolDB:
     _initialized_paths = set()
 
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: str | None = None):
         self.db_path = db_path or _default_db_path()
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         if (
@@ -81,7 +81,7 @@ class SymbolDB:
         finally:
             conn.close()
 
-    def upsert_symbol(self, row: Dict[str, Any]) -> int:
+    def upsert_symbol(self, row: dict[str, Any]) -> int:
         now = time.time()
         payload = {
             "symbol_name": row.get("symbol_name") or "",
@@ -149,7 +149,7 @@ class SymbolDB:
             conn.commit()
             return int(cur.lastrowid or 0)
 
-    def query_symbols(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
+    def query_symbols(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
         q = f"%{str(query or '').strip()}%"
         with self._conn() as conn:
             rows = conn.execute(
@@ -162,7 +162,7 @@ class SymbolDB:
                 """,
                 (q, q, int(limit)),
             ).fetchall()
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for r in rows:
             out.append(
                 {
@@ -178,7 +178,7 @@ class SymbolDB:
             )
         return out
 
-    def lookup_by_fingerprint(self, fingerprint: str, limit: int = 5) -> List[Dict[str, Any]]:
+    def lookup_by_fingerprint(self, fingerprint: str, limit: int = 5) -> list[dict[str, Any]]:
         with self._conn() as conn:
             rows = conn.execute(
                 """
@@ -190,7 +190,7 @@ class SymbolDB:
                 """,
                 (fingerprint, int(limit)),
             ).fetchall()
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for r in rows:
             out.append(
                 {
@@ -207,7 +207,7 @@ class SymbolDB:
             )
         return out
 
-    def stats_by_chip(self) -> List[Dict[str, Any]]:
+    def stats_by_chip(self) -> list[dict[str, Any]]:
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT chip_family, COUNT(*) FROM symbols GROUP BY chip_family ORDER BY COUNT(*) DESC"
@@ -270,9 +270,9 @@ class SymbolDB:
             conn.commit()
             return int(cur.lastrowid or 0)
 
-    def query_hypotheses(self, *, binary_hash: str = "", chip_family: str = "", limit: int = 200) -> List[Dict[str, Any]]:
+    def query_hypotheses(self, *, binary_hash: str = "", chip_family: str = "", limit: int = 200) -> list[dict[str, Any]]:
         where = []
-        params: List[Any] = []
+        params: list[Any] = []
         if binary_hash:
             where.append("binary_hash=?")
             params.append(str(binary_hash))
@@ -288,7 +288,7 @@ class SymbolDB:
         )
         with self._conn() as conn:
             rows = conn.execute(sql, tuple(params)).fetchall()
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for r in rows:
             out.append(
                 {

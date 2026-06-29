@@ -270,7 +270,7 @@ def test_crawler_notify_fn_called():
     """Crawler calls notify_fn when proposals are generated."""
     notifications = []
     crawler = _BackgroundCrawler(db_path=tempfile.mktemp(suffix=".db"))
-    crawler._notify_fn = lambda n: notifications.append(n)
+    crawler._notify_fn = notifications.append
 
     # Manually trigger notification
     proposals = [{"proposal_id": "p1", "addr": "0x401000",

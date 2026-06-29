@@ -392,9 +392,8 @@ class HybridSearchEngine:
             conn = sqlite3.connect(self.db_path)
             # PRAGMA query_only is not available in all SQLite versions;
             # use a try/except to gracefully degrade
-            try:
+            with contextlib.suppress(sqlite3.Error):
                 conn.execute("PRAGMA query_only = 1")
-            except sqlite3.Error:
                 pass  # Older SQLite versions don't support this pragma
             conn.row_factory = sqlite3.Row
             return conn
@@ -622,11 +621,11 @@ class HybridSearchEngine:
         import math as _math
 
         if not candidate_eas or not (query_apis or query_strings):
-            return {ea: 0.0 for ea in candidate_eas}
+            return dict.fromkeys(candidate_eas, 0.0)
 
         conn = self._connect()
         if conn is None:
-            return {ea: 0.0 for ea in candidate_eas}
+            return dict.fromkeys(candidate_eas, 0.0)
 
         try:
             cur = conn.cursor()
@@ -704,7 +703,7 @@ class HybridSearchEngine:
             return scores
 
         except sqlite3.Error:
-            return {ea: 0.0 for ea in candidate_eas}
+            return dict.fromkeys(candidate_eas, 0.0)
         finally:
             conn.close()
 

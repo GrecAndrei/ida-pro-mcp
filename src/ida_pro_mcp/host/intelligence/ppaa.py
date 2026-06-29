@@ -4,7 +4,7 @@ import contextlib
 import json
 import os
 import sqlite3
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..stores.symbol_db import SymbolDB
 from .bridge_retrieval import MultiHopBridgeIndex
@@ -19,7 +19,7 @@ class PPAAEngine:
     and related nodes without querying the live IDA process.
     """
 
-    def __init__(self, idb_path: Optional[str] = None):
+    def __init__(self, idb_path: str | None = None):
         self.idb_path = idb_path
         self.db_path = get_db_path(idb_path) if idb_path else None
 
@@ -33,13 +33,13 @@ class PPAAEngine:
         self._symbol_db = None
 
     @property
-    def symbol_db(self) -> Optional[SymbolDB]:
+    def symbol_db(self) -> SymbolDB | None:
         if self._symbol_db is None:
             with contextlib.suppress(Exception):
                 self._symbol_db = SymbolDB()
         return self._symbol_db
 
-    def _conn(self) -> Optional[sqlite3.Connection]:
+    def _conn(self) -> sqlite3.Connection | None:
         if not self.db_path or not os.path.exists(self.db_path):
             return None
         try:
@@ -49,7 +49,7 @@ class PPAAEngine:
         except Exception:
             return None
 
-    def query_function_metadata(self, ea: int) -> Optional[Dict[str, Any]]:
+    def query_function_metadata(self, ea: int) -> dict[str, Any] | None:
         """Retrieve attributes, APIs, constants, and strings for a function."""
         conn = self._conn()
         if not conn:
@@ -109,7 +109,7 @@ class PPAAEngine:
                 conn.close()
             return None
 
-    def query_symbol_analogy(self, name: str) -> Optional[Dict[str, Any]]:
+    def query_symbol_analogy(self, name: str) -> dict[str, Any] | None:
         """Lookup renaming and analysis analogies in SymbolDB."""
         if not self.symbol_db or not name:
             return None
@@ -134,7 +134,7 @@ class PPAAEngine:
             pass
         return None
 
-    def query_functions_by_cfg_hash(self, cfg_hash: str, exclude_ea: Optional[int] = None) -> List[Dict[str, Any]]:
+    def query_functions_by_cfg_hash(self, cfg_hash: str, exclude_ea: int | None = None) -> list[dict[str, Any]]:
         """Find functions with the matching cfg_hash."""
         conn = self._conn()
         if not conn or not cfg_hash:
@@ -175,7 +175,7 @@ class PPAAEngine:
                 conn.close()
         return []
 
-    def query_related_bridges(self, ea: int, top_k: int = 3) -> List[Dict[str, Any]]:
+    def query_related_bridges(self, ea: int, top_k: int = 3) -> list[dict[str, Any]]:
         """Run Multi-Hop Bridge retrieval to get structurally similar functions."""
         if not self.bridge_index:
             return []
@@ -198,7 +198,7 @@ class PPAAEngine:
         except Exception:
             return []
 
-    def query_string_metadata(self, ea: int) -> Optional[Dict[str, Any]]:
+    def query_string_metadata(self, ea: int) -> dict[str, Any] | None:
         """Retrieve string literal content and referencing function name if the address is a string."""
         conn = self._conn()
         if not conn:
@@ -227,7 +227,7 @@ class PPAAEngine:
                 conn.close()
         return None
 
-    def query_constant_usage(self, val: int) -> List[Dict[str, Any]]:
+    def query_constant_usage(self, val: int) -> list[dict[str, Any]]:
         """Find functions using this value as a constant."""
         conn = self._conn()
         if not conn:

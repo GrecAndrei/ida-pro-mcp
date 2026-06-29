@@ -158,5 +158,5 @@ with open(RESULT_PATH, 'w') as f:
             import warnings
             warnings.warn(
                 f"create_insn succeeded but add_func failed on handler at {result.get('handler_ea')}. "
-                f"Steps: {result.get('steps')}. This may be a transient IDA issue."
+                f"Steps: {result.get('steps')}. This may be a transient IDA issue.", stacklevel=2
             )

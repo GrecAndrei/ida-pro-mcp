@@ -28,7 +28,7 @@ sys.modules["ida_funcs"].func_t = type("func_t", (), {})
 sys.modules["ida_typeinf"].tinfo_t = type("tinfo_t", (), {})
 sys.modules["ida_hexrays"].user_lvar_modifier_t = type("user_lvar_modifier_t", (), {})
 sys.modules["idc"].batch = lambda x: 0
-sys.modules["idautils"].Functions = lambda: []
+sys.modules["idautils"].Functions = list
 sys.modules["idautils"].XrefsFrom = lambda ea, *a: []
 sys.modules["idautils"].XrefsTo = lambda ea, *a: []
 sys.modules["ida_netnode"].netnode = type("netnode", (), {
@@ -90,7 +90,7 @@ MOCK_XREFS_TO = {
 
 def setup_mocks():
     _refs_mod.idautils.Functions = lambda: MOCK_FUNCTIONS
-    _refs_mod.idaapi.get_func = lambda ea: MOCK_FUNC_MAP.get(ea)
+    _refs_mod.idaapi.get_func = MOCK_FUNC_MAP.get
     _refs_mod.ida_funcs.get_func_name = lambda ea: f"func_{hex(ea)}"
     _refs_mod.idc.get_func_name = lambda ea: f"func_{hex(ea)}"
     _refs_mod.idc.get_name = lambda ea, *a: f"func_{hex(ea)}"

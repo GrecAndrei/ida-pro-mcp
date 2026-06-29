@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +36,7 @@ class InstallerOptions:
 
 @dataclass
 class InstallReport:
-    started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    started_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     finished_at: str | None = None
     status: str = "running"
     steps: list[dict[str, Any]] = field(default_factory=list)
@@ -63,7 +63,7 @@ class InstallReport:
 
     def finalize(self, success: bool) -> None:
         self.status = "ok" if success else "failed"
-        self.finished_at = datetime.now(timezone.utc).isoformat()
+        self.finished_at = datetime.now(UTC).isoformat()
 
     def write(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

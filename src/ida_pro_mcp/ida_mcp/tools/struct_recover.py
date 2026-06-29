@@ -130,7 +130,7 @@ def _build_field_layout(cluster, func_ea):
     # Sort by offset
     sorted_offsets = sorted(offset_map.keys())
     fields = []
-    for idx, offset in enumerate(sorted_offsets):
+    for _idx, offset in enumerate(sorted_offsets):
         size, rw_set = offset_map[offset]
         access = "rw" if len(rw_set) > 1 else list(rw_set)[0]
         type_str = _infer_field_type(size)

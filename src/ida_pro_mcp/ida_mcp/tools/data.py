@@ -276,15 +276,15 @@ def data(
                     pass
 
                 # Collect imports
-                mod_imports = []
-                def cb(ea, name, ordinal):
+                mod_imports: list = []
+                def cb(ea, name, ordinal, _module=module, _mod_imports=mod_imports):
                     imp_name = name or f"ord_{ordinal}"
-                    if not _matcher or _matcher(module) or _matcher(imp_name):
-                        mod_imports.append((ea, imp_name, module, ordinal))
+                    if not _matcher or _matcher(_module) or _matcher(imp_name):
+                        _mod_imports.append((ea, imp_name, _module, ordinal))
                     return True
                 ida_nalt.enum_import_names(i, cb)
 
-                for ea, imp_name, mod, ordinal in mod_imports:
+                for ea, imp_name, mod, _ordinal in mod_imports:
                     total += 1
                     if total > offset and (count == 0 or len(import_lines) < count):
                         import_lines.append(f"{hex_ea(ea)}  {mod}  {imp_name}")
@@ -423,7 +423,7 @@ def data(
 
         elif action == "capability_matrix":
             # Build capability matrix from imports and function API usage
-            matrix = {cat: 0 for cat in API_CATEGORIES}
+            matrix = dict.fromkeys(API_CATEGORIES, 0)
             risk_indicators = []
 
             # Analyze imports

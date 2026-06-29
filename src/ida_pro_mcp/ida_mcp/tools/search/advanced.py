@@ -14,7 +14,7 @@ import re as _stdlib_re
 
 re = _stdlib_re
 
-from .core import (
+from .core import (  # noqa: E402
     _SEARCH_CACHE,
     SearchTimeout,
     _cache_get,

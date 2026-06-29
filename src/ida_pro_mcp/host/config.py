@@ -11,7 +11,7 @@ import tempfile
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any
 
 
 def _default_runtime_dir() -> str:
@@ -52,7 +52,7 @@ def _is_writable_dir(path: str) -> bool:
 
 
 def _select_runtime_dir(preferred: str) -> str:
-    candidates: List[str] = []
+    candidates: list[str] = []
     script_dir = os.path.dirname(os.path.abspath(__file__))
     for candidate in (
         preferred,
@@ -324,12 +324,12 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return _coerce_bool(os.environ.get(name), default)
 
 
-def _parse_str_list(value: Any) -> List[str]:
+def _parse_str_list(value: Any) -> list[str]:
     from .intelligence.helpers import parse_str_list
     return parse_str_list(value)
 
 
-def _parse_line_range(value: Any) -> tuple[Optional[int], Optional[int]]:
+def _parse_line_range(value: Any) -> tuple[int | None, int | None]:
     if value is None:
         return (None, None)
     if isinstance(value, (list, tuple)) and len(value) == 2:
@@ -346,7 +346,7 @@ def _parse_line_range(value: Any) -> tuple[Optional[int], Optional[int]]:
     return (int(s), None)
 
 
-def _normalize_session_id(value: Any) -> Optional[str]:
+def _normalize_session_id(value: Any) -> str | None:
     """Return the canonical 8-char uppercase session id, or None if invalid.
 
     Accepts the canonical form ("A1B2C3D4") and the disk-encoding form
@@ -365,7 +365,7 @@ def _normalize_session_id(value: Any) -> Optional[str]:
     return sid
 
 
-def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+def _parse_iso_datetime(value: Any) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -378,7 +378,7 @@ def _parse_iso_datetime(value: Any) -> Optional[datetime]:
         return None
 
 
-def validate_path(path: str) -> Optional[str]:
+def validate_path(path: str) -> str | None:
     if not path or "\x00" in path:
         return None
     # Reject paths containing '..' components before normalization

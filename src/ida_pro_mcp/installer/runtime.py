@@ -723,7 +723,7 @@ def build_stdio_config(
     """
     idadir = ""
     if ida_install is not None:
-        idadir = str(getattr(ida_install, "path"))
+        idadir = str(ida_install.path)
     if not idadir:
         idadir = os.environ.get("IDADIR") or os.environ.get("IDA_DIR") or ""
     if not idadir:

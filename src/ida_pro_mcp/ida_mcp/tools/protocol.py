@@ -694,7 +694,7 @@ def protocol(
                 all_strings = _get_all_strings(max_strings=5000)
                 corpus = " ".join(s_val for _, s_val, _ in all_strings[:2000])
                 # Also gather API names referenced
-                for api_cat, apis in _NETWORK_APIS.items():
+                for _api_cat, apis in _NETWORK_APIS.items():
                     for api in apis:
                         xrefs = _find_api_xrefs(api)
                         if xrefs:
@@ -727,7 +727,7 @@ def protocol(
             if not classifier_results:
                 all_strings = _get_all_strings()
                 if not api_usage:
-                    for api_cat, apis in _NETWORK_APIS.items():
+                    for _api_cat, apis in _NETWORK_APIS.items():
                         for api in apis:
                             xrefs = _find_api_xrefs(api)
                             if xrefs:
@@ -746,8 +746,8 @@ def protocol(
                             "SMTP/FTP": _PROTOCOL_ANCHORS.get("smtp_ftp", ""),
                         }
                         anchor_vecs = {k: embedder.embed(v) for k, v in anchor_map.items() if v}
-                        proto_scores = {k: 0.0 for k in anchor_vecs.keys()}
-                        proto_hits = {k: [] for k in anchor_vecs.keys()}
+                        proto_scores = dict.fromkeys(anchor_vecs, 0.0)
+                        proto_hits = {k: [] for k in anchor_vecs}
                         string_candidate_sims: List[float] = []
                         string_candidates: List[Tuple[str, float, str, str]] = []
 

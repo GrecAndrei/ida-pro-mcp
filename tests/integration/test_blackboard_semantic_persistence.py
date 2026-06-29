@@ -18,7 +18,7 @@ class _FakeEmbedder:
 
 
 def test_blackboard_capsule_sync_on_write(monkeypatch, tmp_path):
-    monkeypatch.setattr(_bb, "_get_embedder", lambda: _FakeEmbedder())
+    monkeypatch.setattr(_bb, "_get_embedder", _FakeEmbedder)
     cap = tmp_path / "project.sideband"
     monkeypatch.setenv("IDA_MCP_CAPSULE", str(cap))
     db = tempfile.mktemp(suffix=".bb.db")

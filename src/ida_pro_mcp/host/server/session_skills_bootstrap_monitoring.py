@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Optional
 
 from ..errors import MCPError, is_error_result, make_error
 
@@ -233,7 +232,7 @@ class SessionBootstrapMonitoringMixin:
             first = recent[0]
             last = recent[-1]
 
-            def _delta(key: str) -> Optional[float]:
+            def _delta(key: str) -> float | None:
                 a = first.get(key)
                 b = last.get(key)
                 if a is None or b is None:

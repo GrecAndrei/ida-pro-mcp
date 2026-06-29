@@ -132,7 +132,7 @@ def graph(
             for b in blocks:
                 src = id_by_start.get(b.start_ea)
                 succs = list(b.succs())
-                for idx, s in enumerate(succs):
+                for _idx, s in enumerate(succs):
                     dst = id_by_start.get(s.start_ea)
                     if not src or not dst:
                         continue

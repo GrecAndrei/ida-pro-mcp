@@ -8,7 +8,6 @@ import threading
 import time
 import uuid
 from contextlib import closing
-from typing import Dict, List, Optional
 
 
 class ProposalStore:
@@ -53,7 +52,7 @@ class ProposalStore:
             conn.commit()
 
     def add(self, proposal_type: str, title: str, summary: str,
-            items: List[Dict], confidence: float = 0.5,
+            items: list[dict], confidence: float = 0.5,
             session_id: str = "") -> str:
         pid = uuid.uuid4().hex[:12]
         with self._lock, closing(self._conn()) as conn:
@@ -66,7 +65,7 @@ class ProposalStore:
             conn.commit()
         return pid
 
-    def list_pending(self) -> List[Dict]:
+    def list_pending(self) -> list[dict]:
         with self._lock, closing(self._conn()) as conn:
             rows = conn.execute(
                 "SELECT id,proposal_type,title,summary,items,confidence,created_at,session_id "
@@ -80,7 +79,7 @@ class ProposalStore:
         ]
 
     def accept(self, proposal_id: str, scope: str = "all",
-               selected_ids: Optional[List[str]] = None) -> Optional[Dict]:
+               selected_ids: list[str] | None = None) -> dict | None:
         """Accept a proposal. Returns the proposal dict with accepted items."""
         with self._lock, closing(self._conn()) as conn:
             row = conn.execute(
@@ -90,10 +89,7 @@ class ProposalStore:
             if not row:
                 return None
             items = json.loads(row[3] or "[]")
-            if scope == "selected" and selected_ids:
-                accepted = [it for it in items if it.get("id") in selected_ids]
-            else:
-                accepted = items
+            accepted = [it for it in items if it.get("id") in selected_ids] if scope == "selected" and selected_ids else items
             conn.execute(
                 "UPDATE proposals SET status='accepted', accepted_ids=? WHERE id=?",
                 (json.dumps([it.get("id") for it in accepted]), proposal_id)

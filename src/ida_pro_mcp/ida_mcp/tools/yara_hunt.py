@@ -93,7 +93,7 @@ def _find_hex_matches(data: bytes, pattern):
     if plen == 0 or len(data) < plen:
         return []
     hits = []
-    for i in range(0, len(data) - plen + 1):
+    for i in range(len(data) - plen + 1):
         if _match_hex_window(data[i : i + plen], pattern):
             hits.append(i)
     return hits

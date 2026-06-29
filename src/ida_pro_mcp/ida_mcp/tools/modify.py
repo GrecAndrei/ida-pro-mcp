@@ -336,13 +336,12 @@ def _trigger_rename_propagation(func_ea: int, new_name: str) -> None:
 
     def _propagate():
         try:
-            from ida_pro_mcp.services import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature
+            from ida_pro_mcp.services import BgeCodeEmbedder, FunctionEmbeddingIndex  # noqa: F401
         except ImportError:
             try:
                 from host.intelligence.core import (  # type: ignore
                     BgeCodeEmbedder,
                     FunctionEmbeddingIndex,
-                    _extract_signature,
                 )
             except ImportError:
                 return

@@ -18,7 +18,7 @@ from __future__ import annotations
 import math
 import os
 import sqlite3
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 try:
     from .core import BgeCodeEmbedder
@@ -33,7 +33,7 @@ except Exception:  # pragma: no cover - test/import flexibility
 # SchemaBoot DB helpers
 # ---------------------------------------------------------------------------
 
-def _resolve_schemaboot_db_path(candidate: Optional[str] = None) -> str:
+def _resolve_schemaboot_db_path(candidate: str | None = None) -> str:
     """Resolve the SchemaBoot DB path.
 
     Tries the explicit candidate first, then walks a list of common
@@ -72,7 +72,7 @@ def _resolve_schemaboot_db_path(candidate: Optional[str] = None) -> str:
     return base
 
 
-def _build_where_clause(constraints: Dict) -> Tuple[str, List[object]]:
+def _build_where_clause(constraints: dict) -> tuple[str, list[object]]:
     """Build SQL WHERE clause for seed selection from a SchemaBoot constraint dict.
 
     Delegates to HybridQueryBuilder.build_legacy (the single canonical
@@ -102,7 +102,7 @@ class MultiHopBridgeIndex:
     score and a raw bridge-overlap signal.
     """
 
-    def __init__(self, db_path: Optional[str] = None, embedder: Optional[Any] = None):
+    def __init__(self, db_path: str | None = None, embedder: Any | None = None):
         self.db_path = _resolve_schemaboot_db_path(db_path)
         self._embedder = embedder
 
@@ -126,16 +126,16 @@ class MultiHopBridgeIndex:
 
     def extract_bridges(
         self,
-        func_ea: Optional[int] = None,
-        func_name: Optional[str] = None,
-        bridge_types: Tuple[str, ...] = ("apis", "strings"),
+        func_ea: int | None = None,
+        func_name: str | None = None,
+        bridge_types: tuple[str, ...] = ("apis", "strings"),
         max_bridges: int = 10,
-    ) -> Dict[str, List[str]]:
+    ) -> dict[str, list[str]]:
         """Extract bridge entities from a seed function.
 
         Returns ``{"apis": [...], "strings": [...]}`` sorted by frequency.
         """
-        bridges: Dict[str, List[str]] = {}
+        bridges: dict[str, list[str]] = {}
 
         if func_ea is not None:
             where = "fa.func_ea = ?"
@@ -179,8 +179,8 @@ class MultiHopBridgeIndex:
 
         # Deduplicate and limit
         for k in bridges:
-            seen: Set[str] = set()
-            uniq: List[str] = []
+            seen: set[str] = set()
+            uniq: list[str] = []
             for v in bridges[k]:
                 if v not in seen:
                     seen.add(v)
@@ -196,8 +196,8 @@ class MultiHopBridgeIndex:
     # ------------------------------------------------------------------
 
     def _compute_bridge_idf(
-        self, bridge_apis: List[str], bridge_strings: List[str]
-    ) -> Dict[str, float]:
+        self, bridge_apis: list[str], bridge_strings: list[str]
+    ) -> dict[str, float]:
         """IDF weights for bridge entities.
 
         Rare bridges (appearing in few functions) are more discriminative:
@@ -206,7 +206,7 @@ class MultiHopBridgeIndex:
         A bridge that appears in every function tells us nothing; one
         that appears in only 3 functions is highly informative.
         """
-        idf: Dict[str, float] = {}
+        idf: dict[str, float] = {}
         try:
             with self._conn() as conn:
                 cur = conn.cursor()
@@ -239,10 +239,10 @@ class MultiHopBridgeIndex:
 
     def _tripartite_score(
         self,
-        seed_attrs: Dict,
-        bridge_attrs: Dict,
-        candidate_attrs: Dict,
-        idf_weights: Optional[Dict[str, float]] = None,
+        seed_attrs: dict,
+        bridge_attrs: dict,
+        candidate_attrs: dict,
+        idf_weights: dict[str, float] | None = None,
     ) -> float:
         """Tripartite scorer s(q, b, c).
 
@@ -293,15 +293,15 @@ class MultiHopBridgeIndex:
 
     def _pit_fusion(
         self,
-        judge_scores: List[float],
-        bridge_scores: List[float],
+        judge_scores: list[float],
+        bridge_scores: list[float],
         alpha: float = 0.1,
-    ) -> List[float]:
+    ) -> list[float]:
         """Percentile-rank (PIT) fusion of tripartite judge scores and bridge similarity.
 
         F(i) = (1 - alpha) * PIT_judge(i) + alpha * PIT_bridge(i)
         """
-        def _pit(scores: List[float]) -> List[float]:
+        def _pit(scores: list[float]) -> list[float]:
             if not scores:
                 return []
             sorted_idx = sorted(range(len(scores)), key=lambda i: scores[i])
@@ -324,11 +324,11 @@ class MultiHopBridgeIndex:
 
     def search_via_bridges(
         self,
-        bridges: Dict[str, List[str]],
+        bridges: dict[str, list[str]],
         top_k: int = 20,
-        exclude_ea: Optional[int] = None,
-        seed_ea: Optional[int] = None,
-    ) -> List[Dict]:
+        exclude_ea: int | None = None,
+        seed_ea: int | None = None,
+    ) -> list[dict]:
         """Find functions that share bridge entities with the seed.
 
         Uses tripartite judging + PIT fusion for ranking.
@@ -363,8 +363,8 @@ class MultiHopBridgeIndex:
                     }
 
             # Collect all candidate EAs that match any bridge
-            candidate_eas: Set[int] = set()
-            bridge_scores: Dict[int, float] = {}
+            candidate_eas: set[int] = set()
+            bridge_scores: dict[int, float] = {}
 
             api_bridges = bridges.get("apis", [])
             string_bridges = bridges.get("strings", [])
@@ -462,11 +462,11 @@ class MultiHopBridgeIndex:
 
     def multi_hop_search(
         self,
-        query_constraints: Dict,
-        bridge_types: Tuple[str, ...] = ("apis", "strings"),
+        query_constraints: dict,
+        bridge_types: tuple[str, ...] = ("apis", "strings"),
         top_k: int = 20,
         hops: int = 2,
-    ) -> Dict:
+    ) -> dict:
         """Full multi-hop pipeline.
 
         1. Query SchemaBoot for seed functions matching *query_constraints*.

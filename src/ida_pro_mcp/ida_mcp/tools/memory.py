@@ -283,7 +283,7 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
                     return make_error(MCPError.INVALID_ARGS, "invalid regex pattern")
             elif wildcard_mask is not None:
                 plen = len(pattern_bytes)
-                for i in range(0, max(0, len(raw) - plen + 1)):
+                for i in range(max(0, len(raw) - plen + 1)):
                     ok = True
                     for j in range(plen):
                         if wildcard_mask[j] and raw[i + j] != pattern_bytes[j]:
@@ -317,8 +317,7 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
             if cmp_size <= 0:
                 return make_error(MCPError.INVALID_ARGS, "size must be > 0")
             max_cmp = 8192
-            if cmp_size > max_cmp:
-                cmp_size = max_cmp
+            cmp_size = min(cmp_size, max_cmp)
             raw_a = ida_bytes.get_bytes(ea1, cmp_size)
             raw_b = ida_bytes.get_bytes(ea2, cmp_size)
             if not raw_a or not raw_b:

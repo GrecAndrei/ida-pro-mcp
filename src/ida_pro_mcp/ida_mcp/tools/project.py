@@ -10,6 +10,7 @@ import json
 import shutil
 import subprocess
 import time
+from datetime import UTC
 
 from ida_pro_mcp.services import parse_str_list
 
@@ -181,9 +182,9 @@ def project(
 
         def _now_iso() -> str:
             try:
-                from datetime import datetime, timezone
+                from datetime import datetime
 
-                return datetime.now(timezone.utc).isoformat()
+                return datetime.now(UTC).isoformat()
             except Exception:
                 return str(time.time())
 

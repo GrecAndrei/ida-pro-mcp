@@ -8,7 +8,7 @@ import os
 import re
 import time
 from collections import Counter
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..config import _bounded_int
 from ..errors import MCPError, is_error_result, make_error
@@ -32,7 +32,7 @@ def _clip(text: Any, limit: int = 120) -> str:
     return value[: max(0, limit - 1)].rstrip() + "…"
 
 
-def _entry_brief(entry: Dict[str, Any]) -> Dict[str, Any]:
+def _entry_brief(entry: dict[str, Any]) -> dict[str, Any]:
     tags = entry.get("tags") or []
     evidence = entry.get("evidence") or []
     addr = str(entry.get("addr") or "").strip()
@@ -60,7 +60,7 @@ def _entry_brief(entry: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _entry_collection_summary(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _entry_collection_summary(entries: list[dict[str, Any]]) -> dict[str, Any]:
     categories = Counter(str(e.get("category") or "general") for e in entries)
     source_types = Counter(str(e.get("source_type") or "manual") for e in entries)
     briefs = [_entry_brief(e) for e in entries[:10]]
@@ -73,7 +73,7 @@ def _entry_collection_summary(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def _target_collection_summary(targets: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _target_collection_summary(targets: list[dict[str, Any]]) -> dict[str, Any]:
     if not targets:
         return {"count": 0, "briefs": []}
     briefs = []
@@ -106,7 +106,7 @@ def _target_collection_summary(targets: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def _frontier_collection_summary(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _frontier_collection_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
     if not results:
         return {"count": 0, "briefs": []}
     briefs = []
@@ -128,7 +128,7 @@ def _frontier_collection_summary(results: List[Dict[str, Any]]) -> Dict[str, Any
     return {"count": len(results), "briefs": briefs}
 
 
-def _proposal_collection_summary(proposals: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _proposal_collection_summary(proposals: list[dict[str, Any]]) -> dict[str, Any]:
     if not proposals:
         return {"count": 0, "briefs": []}
     briefs = []
@@ -146,7 +146,7 @@ def _proposal_collection_summary(proposals: List[Dict[str, Any]]) -> Dict[str, A
     return {"count": len(proposals), "briefs": briefs}
 
 
-def _coerce_str_list(value: Any) -> List[str]:
+def _coerce_str_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(v).strip() for v in value if str(v).strip()]
     if isinstance(value, str):
@@ -174,7 +174,7 @@ _EVIDENCE_TOOL_HINTS = {
 
 
 class ServerBlackboardMixin:
-    def _session_blackboard_path(self, session_obj=None, sid: Optional[str] = None) -> str:
+    def _session_blackboard_path(self, session_obj=None, sid: str | None = None) -> str:
         session = session_obj
         sid_text = str(sid or "").strip()
         if session is None and sid_text:
@@ -198,7 +198,7 @@ class ServerBlackboardMixin:
             return os.path.join(self.cache_dir, f"{fallback_sid}.blackboard.db")
         return ""
 
-    def _phase_state(self) -> Dict[str, Any]:
+    def _phase_state(self) -> dict[str, Any]:
         state = getattr(self, "_blackboard_phase_state", None)
         if not isinstance(state, dict):
             state = {
@@ -211,7 +211,7 @@ class ServerBlackboardMixin:
             self._blackboard_phase_state = state
         return state
 
-    def _phase_snapshot(self, state: Dict[str, Any], store) -> Dict[str, Any]:
+    def _phase_snapshot(self, state: dict[str, Any], store) -> dict[str, Any]:
         seen = state.get("seen_addrs") or []
         recent = state.get("recent_actions") or []
         contradictions = 0
@@ -229,14 +229,14 @@ class ServerBlackboardMixin:
             "contradicted_entries": contradictions,
         }
 
-    def _phase_transition(self, state: Dict[str, Any], phase: str, reason: str) -> None:
+    def _phase_transition(self, state: dict[str, Any], phase: str, reason: str) -> None:
         phase = str(phase or "").strip().lower()
         if phase not in {"scout", "prove", "commit", "finalize"}:
             return
         state["phase"] = phase
         state["last_transition_reason"] = reason[:160]
 
-    def _phase_log_action(self, state: Dict[str, Any], action: str, addr: str = "") -> None:
+    def _phase_log_action(self, state: dict[str, Any], action: str, addr: str = "") -> None:
         recent = state.get("recent_actions")
         if not isinstance(recent, list):
             recent = []
@@ -252,7 +252,7 @@ class ServerBlackboardMixin:
                 seen.append(addr)
             state["seen_addrs"] = seen[-200:]
 
-    def _phase_find_loop(self, state: Dict[str, Any]) -> bool:
+    def _phase_find_loop(self, state: dict[str, Any]) -> bool:
         recent = state.get("recent_actions") or []
         if len(recent) < 6:
             return False
@@ -260,7 +260,7 @@ class ServerBlackboardMixin:
         uniq = set(tail)
         return len(uniq) <= 2 and tail.count(tail[-1]) >= 3
 
-    def _phase_contracts(self, phase: str) -> Dict[str, Any]:
+    def _phase_contracts(self, phase: str) -> dict[str, Any]:
         phase = str(phase or "scout")
         contracts = {
             "scout": {
@@ -286,7 +286,7 @@ class ServerBlackboardMixin:
         }
         return contracts.get(phase, contracts["scout"])
 
-    def _phase_escape_route(self, store, limit: int = 3) -> List[Dict[str, Any]]:
+    def _phase_escape_route(self, store, limit: int = 3) -> list[dict[str, Any]]:
         targets = store.next_target(limit=limit)
         out = []
         for t in targets[:limit]:
@@ -303,7 +303,7 @@ class ServerBlackboardMixin:
             )
         return out
 
-    def _phase_tick(self, state: Dict[str, Any], store, limit: int = 3) -> Dict[str, Any]:
+    def _phase_tick(self, state: dict[str, Any], store, limit: int = 3) -> dict[str, Any]:
         phase = str(state.get("phase") or "scout")
         loop = self._phase_find_loop(state)
         contracts = self._phase_contracts(phase)
@@ -358,7 +358,7 @@ class ServerBlackboardMixin:
                 return True
         return False
 
-    def _evidence_has_tool_citation(self, evidence_for: List[Any]) -> bool:
+    def _evidence_has_tool_citation(self, evidence_for: list[Any]) -> bool:
         for item in evidence_for or []:
             txt = str(item or "").strip().lower()
             if not txt:
@@ -372,7 +372,7 @@ class ServerBlackboardMixin:
                     return True
         return False
 
-    def _phase_auto_transition(self, state: Dict[str, Any], action: str, args: Dict[str, Any], store) -> None:
+    def _phase_auto_transition(self, state: dict[str, Any], action: str, args: dict[str, Any], store) -> None:
         if not bool(state.get("auto_transition", True)):
             return
         phase = str(state.get("phase") or "scout")
@@ -387,7 +387,7 @@ class ServerBlackboardMixin:
         if action in {"memory_compile", "phase_finalize"}:
             self._phase_transition(state, "finalize", f"auto: {action} requested")
 
-    def _phase_contract_check(self, state: Dict[str, Any], action: str, args: Dict[str, Any], store) -> Optional[Dict[str, Any]]:
+    def _phase_contract_check(self, state: dict[str, Any], action: str, args: dict[str, Any], store) -> dict[str, Any] | None:
         phase = str(state.get("phase") or "scout")
         if phase == "scout":
             return None
@@ -426,7 +426,7 @@ class ServerBlackboardMixin:
             return None
         return None
 
-    def _phase_preflight_for_tool(self, tool_name: str, args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _phase_preflight_for_tool(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any] | None:
         try:
             if str(tool_name or "").strip().lower() == "blackboard":
                 return None
@@ -476,7 +476,7 @@ class ServerBlackboardMixin:
             return None
         return None
 
-    def _phase_followup_for_response(self, tool_name: str) -> Optional[Dict[str, Any]]:
+    def _phase_followup_for_response(self, tool_name: str) -> dict[str, Any] | None:
         try:
             if str(tool_name or "").strip().lower() == "blackboard":
                 return None
@@ -508,7 +508,7 @@ class ServerBlackboardMixin:
             return None
         return None
 
-    def _evidence_gravity(self, store, source_entry_id: str, addr: str, source_text: str = "") -> Dict[str, Any]:
+    def _evidence_gravity(self, store, source_entry_id: str, addr: str, source_text: str = "") -> dict[str, Any]:
         addr = str(addr or "").strip()
         if not addr or not hasattr(self, "_execute_tool"):
             return {"ok": False, "reason": "no_addr_or_runtime"}
@@ -576,7 +576,7 @@ class ServerBlackboardMixin:
         )
         return {"ok": True, "entry_id": gravity_id, "pull_count": len(pulls), "embedding_neighbor_count": len(embedding_neighbors)}
 
-    def _quest_board(self, store, entry_id: str = "", limit: int = 20) -> Dict[str, Any]:
+    def _quest_board(self, store, entry_id: str = "", limit: int = 20) -> dict[str, Any]:
         seeds = []
         if entry_id:
             e = store.read(entry_id)
@@ -601,7 +601,7 @@ class ServerBlackboardMixin:
                 break
         return {"ok": True, "count": len(quests[:limit]), "quests": quests[:limit]}
 
-    def _quest_complete(self, store, quest_id: str, quest_type: str, status: str, result_text: str, evidence: List[str], entry_id: str = "", addr: str = "") -> Dict[str, Any]:
+    def _quest_complete(self, store, quest_id: str, quest_type: str, status: str, result_text: str, evidence: list[str], entry_id: str = "", addr: str = "") -> dict[str, Any]:
         qid = str(quest_id or "").strip() or f"quest-{int(time.time() * 1000)}"
         qtype = str(quest_type or "").strip() or "generic"
         st = str(status or "completed").strip().lower()
@@ -628,7 +628,7 @@ class ServerBlackboardMixin:
         )
         return {"ok": True, "entry_id": eid, "quest": payload}
 
-    def _memory_compile(self, store, limit: int = 30, notes_path: str = "") -> Dict[str, Any]:
+    def _memory_compile(self, store, limit: int = 30, notes_path: str = "") -> dict[str, Any]:
         entries = store.list(include_resolved=True, include_contradicted=True, limit=max(200, limit * 4))
         facts = []
         open_h = []
@@ -763,7 +763,7 @@ class ServerBlackboardMixin:
         )
         return {"ok": True, "entry_id": cid, "notes_path": notes_written or None, **compiled}
 
-    def _bb_policy_state(self) -> Dict[str, Any]:
+    def _bb_policy_state(self) -> dict[str, Any]:
         state = getattr(self, "_blackboard_policy_state", None)
         if not isinstance(state, dict):
             state = {
@@ -780,12 +780,12 @@ class ServerBlackboardMixin:
             self._blackboard_policy_state = state
         return state
 
-    def _bb_policy_bump(self) -> Dict[str, Any]:
+    def _bb_policy_bump(self) -> dict[str, Any]:
         state = self._bb_policy_state()
         state["call_seq"] = int(state.get("call_seq", 0)) + 1
         return state
 
-    def _bb_policy_mark(self, state: Dict[str, Any], marker: str) -> None:
+    def _bb_policy_mark(self, state: dict[str, Any], marker: str) -> None:
         seq = int(state.get("call_seq", 0))
         if marker == "working_set":
             state["last_working_set_call"] = seq
@@ -794,7 +794,7 @@ class ServerBlackboardMixin:
         elif marker == "decision":
             state["last_decision_call"] = seq
 
-    def _bb_policy_snapshot(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    def _bb_policy_snapshot(self, state: dict[str, Any]) -> dict[str, Any]:
         seq = int(state.get("call_seq", 0))
         last_ws = int(state.get("last_working_set_call", -1))
         last_write = int(state.get("last_write_call", -1))
@@ -817,7 +817,7 @@ class ServerBlackboardMixin:
             "staleness": staleness,
         }
 
-    def _bb_policy_enforced_for_phase(self, state: Dict[str, Any], phase: str) -> bool:
+    def _bb_policy_enforced_for_phase(self, state: dict[str, Any], phase: str) -> bool:
         if not bool(state.get("strict_mode", False)):
             return False
         phases = state.get("enforce_phases")
@@ -826,7 +826,7 @@ class ServerBlackboardMixin:
         # Backward-compatible fallback: enforce everywhere if list is absent/empty.
         return True
 
-    def _bb_policy_check(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    def _bb_policy_check(self, state: dict[str, Any]) -> dict[str, Any]:
         snapshot = self._bb_policy_snapshot(state)
         reasons = []
         max_age = int(snapshot["max_staleness_calls"])
@@ -897,7 +897,7 @@ class ServerBlackboardMixin:
             pass
         return out
 
-    def _lane_fetch(self, store, lane: str, limit: int) -> List[Dict[str, Any]]:
+    def _lane_fetch(self, store, lane: str, limit: int) -> list[dict[str, Any]]:
         category = _LANE_CATEGORY.get(lane, "general")
         if lane == "lane_queue":
             targets = store.next_target(limit=limit)
@@ -931,7 +931,7 @@ class ServerBlackboardMixin:
             kwargs["min_confidence"] = 0.0
         return store.list(**kwargs)
 
-    def _state_health(self, store) -> Dict[str, Any]:
+    def _state_health(self, store) -> dict[str, Any]:
         stats = store.stats() or {}
         total = int(stats.get("total_entries") or 0)
         by_cat = stats.get("by_category") or {}
@@ -978,7 +978,7 @@ class ServerBlackboardMixin:
             "recommended_action": fix,
         }
 
-    def _notes_export(self, store, notes_path: str, limit: int = 20) -> Dict[str, Any]:
+    def _notes_export(self, store, notes_path: str, limit: int = 20) -> dict[str, Any]:
         lanes = ["lane_now", "lane_hypotheses", "lane_facts", "lane_queue", "lane_dead_ends"]
         lines = ["# RE Notes", "", "Generated from blackboard working set.", ""]
         for lane in lanes:
@@ -1010,7 +1010,7 @@ class ServerBlackboardMixin:
         auto_trace: bool = False,
         trace_depth: int = 2,
         trace_limit: int = 8,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if not os.path.exists(notes_path):
             return make_error(MCPError.NOT_FOUND, f"Notes file not found: {notes_path}")
         category = _LANE_CATEGORY.get(lane, "hypothesis")
@@ -1057,7 +1057,7 @@ class ServerBlackboardMixin:
             "trace_task_ids": trace_tasks[:20],
         }
 
-    def _validate_rename_spec(self, spec: Dict[str, Any]) -> Optional[str]:
+    def _validate_rename_spec(self, spec: dict[str, Any]) -> str | None:
         if not isinstance(spec, dict):
             return "rename_spec must be an object"
         renames = spec.get("renames")
@@ -1074,7 +1074,7 @@ class ServerBlackboardMixin:
                 return f"rename_spec.renames[{idx}].name required"
         return None
 
-    def _validate_patch_spec(self, spec: Dict[str, Any]) -> Optional[str]:
+    def _validate_patch_spec(self, spec: dict[str, Any]) -> str | None:
         if not isinstance(spec, dict):
             return "patch_spec must be an object"
         patches = spec.get("patches")
@@ -1091,7 +1091,7 @@ class ServerBlackboardMixin:
                 return f"patch_spec.patches[{idx}].asm or .bytes required"
         return None
 
-    def _validate_proposal_spec(self, proposal_type: str, spec: Dict[str, Any]) -> Optional[str]:
+    def _validate_proposal_spec(self, proposal_type: str, spec: dict[str, Any]) -> str | None:
         if proposal_type == "rename":
             return self._validate_rename_spec(spec)
         if proposal_type == "patch":
@@ -1105,7 +1105,7 @@ class ServerBlackboardMixin:
             return None
         return None
 
-    def _proposal_entries(self, store, status: str = "", limit: int = 100) -> List[Dict[str, Any]]:
+    def _proposal_entries(self, store, status: str = "", limit: int = 100) -> list[dict[str, Any]]:
         entries = store.list(category="proposal", include_resolved=True, include_contradicted=True, limit=limit)
         if status:
             status = status.strip().lower()
@@ -1117,12 +1117,12 @@ class ServerBlackboardMixin:
             return filtered
         return entries
 
-    def _proposal_status_replace(self, tags: List[str], new_status: str) -> List[str]:
+    def _proposal_status_replace(self, tags: list[str], new_status: str) -> list[str]:
         clean = [t for t in tags if not str(t).startswith("status:")]
         clean.append(f"status:{new_status}")
         return clean
 
-    def _proposal_execute(self, proposal_type: str, spec: Dict[str, Any]) -> Dict[str, Any]:
+    def _proposal_execute(self, proposal_type: str, spec: dict[str, Any]) -> dict[str, Any]:
         if not hasattr(self, "_execute_tool"):
             return {"ok": True, "applied": 0, "note": "Execution hook unavailable in this runtime."}
         applied = []
@@ -1153,7 +1153,7 @@ class ServerBlackboardMixin:
                     failed.append({"addr": row.get("addr"), "type_str": row.get("type_str"), "error": res})
         return {"ok": not failed, "applied": len(applied), "failed": failed, "applied_items": applied}
 
-    def _proposal_verify(self, proposal_type: str, spec: Dict[str, Any]) -> Dict[str, Any]:
+    def _proposal_verify(self, proposal_type: str, spec: dict[str, Any]) -> dict[str, Any]:
         checks = []
         passed = 0
         total = 0
@@ -1222,7 +1222,7 @@ class ServerBlackboardMixin:
             "failed": total - passed,
         }
 
-    def _extract_trace_entities(self, text: str) -> Dict[str, Any]:
+    def _extract_trace_entities(self, text: str) -> dict[str, Any]:
         addrs = sorted({m.group(0) for m in _ADDR_RE.finditer(text or "")})
         symbols = []
         for m in _SYMBOL_RE.finditer(text or ""):
@@ -1280,7 +1280,7 @@ class ServerBlackboardMixin:
         auto_trace: bool = True,
         depth: int = 2,
         limit: int = 8,
-    ) -> Optional[str]:
+    ) -> str | None:
         if not auto_trace:
             return None
         entities = self._extract_trace_entities(source_text or "")
@@ -1294,7 +1294,7 @@ class ServerBlackboardMixin:
             limit=limit,
         )
 
-    def _set_task_status(self, store, entry: Dict[str, Any], status: str, payload: Dict[str, Any]) -> None:
+    def _set_task_status(self, store, entry: dict[str, Any], status: str, payload: dict[str, Any]) -> None:
         tags = entry.get("tags") or []
         if not isinstance(tags, list):
             tags = []
@@ -1302,7 +1302,7 @@ class ServerBlackboardMixin:
         new_tags.append(f"status:{status}")
         store.update(entry.get("id"), tags=new_tags, content=json.dumps(payload, ensure_ascii=True))
 
-    def _auto_proposals_from_trace(self, store, trace_entry_id: str, pairs: List[Dict[str, str]]) -> int:
+    def _auto_proposals_from_trace(self, store, trace_entry_id: str, pairs: list[dict[str, str]]) -> int:
         created = 0
         for p in pairs:
             spec = {"renames": [{"addr": p.get("addr"), "name": p.get("name")}]}
@@ -1335,7 +1335,7 @@ class ServerBlackboardMixin:
             created += 1
         return created
 
-    def _run_trace_task(self, store, entry: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _run_trace_task(self, store, entry: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         entities = payload.get("entities") or {}
         addrs = entities.get("addrs") or []
         symbols = entities.get("symbols") or []

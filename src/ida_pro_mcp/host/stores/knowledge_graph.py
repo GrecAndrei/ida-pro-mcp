@@ -18,7 +18,7 @@ import os
 import sqlite3
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -164,10 +164,10 @@ class KnowledgeGraph:
 
     # ── systems ───────────────────────────────────────────────────────────────
 
-    def add_system(self, name: str, members: List[str],
-                   description: str = "", entry_points: Optional[List[str]] = None,
-                   exit_points: Optional[List[str]] = None,
-                   tags: Optional[List[str]] = None,
+    def add_system(self, name: str, members: list[str],
+                   description: str = "", entry_points: list[str] | None = None,
+                   exit_points: list[str] | None = None,
+                   tags: list[str] | None = None,
                    confidence: float = 0.5) -> str:
         sid = uuid.uuid4().hex[:10]
         now = _now()
@@ -200,24 +200,24 @@ class KnowledgeGraph:
             c.commit()
         return n > 0
 
-    def get_system(self, sid: str) -> Optional[Dict]:
+    def get_system(self, sid: str) -> dict | None:
         with self._conn() as c:
             row = c.execute("SELECT * FROM kg_systems WHERE id=?", (sid,)).fetchone()
         return self._sys_row(row) if row else None
 
-    def list_systems(self) -> List[Dict]:
+    def list_systems(self) -> list[dict]:
         with self._conn() as c:
             rows = c.execute("SELECT * FROM kg_systems ORDER BY confidence DESC").fetchall()
         return [self._sys_row(r) for r in rows]
 
-    def _sys_row(self, r) -> Dict:
+    def _sys_row(self, r) -> dict:
         d = dict(r)
         for k in ("members", "entry_points", "exit_points", "data_structs",
                   "state_vars", "tags"):
             d[k] = json.loads(d.get(k) or "[]")
         return d
 
-    def find_system_for_addr(self, addr: str) -> Optional[Dict]:
+    def find_system_for_addr(self, addr: str) -> dict | None:
         """Return the system that contains this address as a member."""
         for sys in self.list_systems():
             if addr in sys["members"]:
@@ -237,7 +237,7 @@ class KnowledgeGraph:
     # ── structs ───────────────────────────────────────────────────────────────
 
     def add_struct(self, name: str,
-                   members: Optional[List[Dict]] = None,
+                   members: list[dict] | None = None,
                    size_bytes: int = 0,
                    confidence: float = 0.5) -> str:
         sid = uuid.uuid4().hex[:10]
@@ -266,7 +266,7 @@ class KnowledgeGraph:
             c.commit()
         return True
 
-    def get_struct(self, struct_id: str) -> Optional[Dict]:
+    def get_struct(self, struct_id: str) -> dict | None:
         with self._conn() as c:
             row = c.execute("SELECT * FROM kg_structs WHERE id=?",
                             (struct_id,)).fetchone()
@@ -277,7 +277,7 @@ class KnowledgeGraph:
             d[k] = json.loads(d.get(k) or "[]")
         return d
 
-    def list_structs(self) -> List[Dict]:
+    def list_structs(self) -> list[dict]:
         with self._conn() as c:
             rows = c.execute("SELECT * FROM kg_structs ORDER BY confidence DESC").fetchall()
         result = []
@@ -288,15 +288,15 @@ class KnowledgeGraph:
             result.append(d)
         return result
 
-    def find_struct_by_offset_pattern(self, offsets: List[int],
-                                       threshold: Optional[float] = None) -> Optional[Dict]:
+    def find_struct_by_offset_pattern(self, offsets: list[int],
+                                       threshold: float | None = None) -> dict | None:
         """Find best matching struct by offset overlap using adaptive gating."""
         offsets_set = set(offsets)
         if not offsets_set:
             return None
         best = None
         best_score = 0.0
-        scored: List[Tuple[float, Dict]] = []
+        scored: list[tuple[float, dict]] = []
         for s in self.list_structs():
             known = {m.get("offset") for m in s.get("members", [])}
             if not known:
@@ -332,7 +332,7 @@ class KnowledgeGraph:
     # ── state machines ────────────────────────────────────────────────────────
 
     def add_state_machine(self, name: str, state_var: str,
-                           states: Optional[List[Dict]] = None,
+                           states: list[dict] | None = None,
                            confidence: float = 0.5,
                            system_id: str = "") -> str:
         sid = uuid.uuid4().hex[:10]
@@ -362,7 +362,7 @@ class KnowledgeGraph:
             c.commit()
         return True
 
-    def get_state_machine(self, sm_id: str) -> Optional[Dict]:
+    def get_state_machine(self, sm_id: str) -> dict | None:
         with self._conn() as c:
             row = c.execute("SELECT * FROM kg_state_machines WHERE id=?",
                             (sm_id,)).fetchone()
@@ -374,7 +374,7 @@ class KnowledgeGraph:
         d["handlers"] = json.loads(d.get("handlers") or "{}")
         return d
 
-    def list_state_machines(self) -> List[Dict]:
+    def list_state_machines(self) -> list[dict]:
         with self._conn() as c:
             rows = c.execute("SELECT * FROM kg_state_machines ORDER BY confidence DESC").fetchall()
         result = []
@@ -389,7 +389,7 @@ class KnowledgeGraph:
     # ── gaps ──────────────────────────────────────────────────────────────────
 
     def add_gap(self, expected: str, why: str = "",
-                hints: Optional[List[str]] = None,
+                hints: list[str] | None = None,
                 priority: float = 0.5,
                 gap_type: str = "capability",
                 binary_type: str = "") -> str:
@@ -427,7 +427,7 @@ class KnowledgeGraph:
             c.commit()
         return True
 
-    def list_gaps(self, resolved: bool = False) -> List[Dict]:
+    def list_gaps(self, resolved: bool = False) -> list[dict]:
         with self._conn() as c:
             rows = c.execute(
                 "SELECT * FROM kg_gaps WHERE resolved=? ORDER BY priority DESC",
@@ -446,7 +446,7 @@ class KnowledgeGraph:
     def add_attack_surface(self, entry_point: str, name: str = "",
                             reachable_from: str = "unknown",
                             input_type: str = "unknown",
-                            call_stack: Optional[List[str]] = None,
+                            call_stack: list[str] | None = None,
                             confidence: float = 0.5) -> str:
         aid = uuid.uuid4().hex[:10]
         now = _now()
@@ -460,7 +460,7 @@ class KnowledgeGraph:
             c.commit()
         return aid
 
-    def list_attack_surface(self) -> List[Dict]:
+    def list_attack_surface(self) -> list[dict]:
         with self._conn() as c:
             rows = c.execute(
                 "SELECT * FROM kg_attack_surface ORDER BY fuzz_priority DESC"
@@ -495,7 +495,7 @@ class KnowledgeGraph:
 
     def add_peripheral(self, base_addr: str, name: str = "",
                         periph_type: str = "unknown",
-                        drivers: Optional[List[str]] = None,
+                        drivers: list[str] | None = None,
                         confidence: float = 0.5) -> str:
         pid = uuid.uuid4().hex[:10]
         now = _now()
@@ -545,7 +545,7 @@ class KnowledgeGraph:
             c.commit()
         return pid
 
-    def list_peripherals(self) -> List[Dict]:
+    def list_peripherals(self) -> list[dict]:
         with self._conn() as c:
             rows = c.execute(
                 "SELECT * FROM kg_peripherals ORDER BY confidence DESC"
@@ -561,7 +561,7 @@ class KnowledgeGraph:
 
     # ── summary ───────────────────────────────────────────────────────────────
 
-    def summary(self) -> Dict:
+    def summary(self) -> dict:
         with self._conn() as c:
             n_sys = c.execute("SELECT COUNT(*) FROM kg_systems").fetchone()[0]
             n_struct = c.execute("SELECT COUNT(*) FROM kg_structs").fetchone()[0]

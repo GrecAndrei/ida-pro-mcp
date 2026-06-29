@@ -14,7 +14,7 @@ Original 339-line implementation had:
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Optional
+from typing import Any
 
 # ============================================================================
 # Address Patching
@@ -47,7 +47,7 @@ _MOV_DISP_RE = re.compile(
 )
 
 
-def patch_addresses(text: str, base_registers: Optional[Dict[str, int]] = None) -> str:
+def patch_addresses(text: str, base_registers: dict[str, int] | None = None) -> str:
     """Annotate rip-relative / base+offset expressions in disassembly or pseudocode.
 
     For each match, append a `; -> 0xNNN` comment with the resolved address.
@@ -151,7 +151,7 @@ _STRING_IN_CODE_RE = re.compile(
 
 
 def digest_decompiled(pseudocode: str, func_name: str = "", func_addr: str = "",
-                       schema_attrs: Optional[dict] = None) -> dict:
+                       schema_attrs: dict | None = None) -> dict:
     """Parse decompiled pseudocode and extract a structured summary.
 
     Returns:
@@ -176,7 +176,7 @@ def digest_decompiled(pseudocode: str, func_name: str = "", func_addr: str = "",
 
     schema_attrs = schema_attrs or {}
 
-    digest: Dict[str, Any] = {
+    digest: dict[str, Any] = {
         "api_calls": [],
         "api_categories": set(),
         "patterns": [],

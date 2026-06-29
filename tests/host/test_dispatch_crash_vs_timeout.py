@@ -69,7 +69,7 @@ def _call(rpc_exc, proc_poll):
 
 
 def test_alive_socket_timeout_is_ida_timeout_not_crash():
-    res = _call(socket.timeout("recv timed out"), None)
+    res = _call(TimeoutError("recv timed out"), None)
     assert res["code"] == MCPError.IDA_TIMEOUT
     assert res["recoverable"] is True
     assert res["details"]["port"] == 9999
@@ -90,6 +90,6 @@ def test_alive_other_error_is_rpc_connection_error():
 
 
 def test_dead_process_still_reports_crash():
-    res = _call(socket.timeout("recv timed out"), 1)
+    res = _call(TimeoutError("recv timed out"), 1)
     assert res["code"] == MCPError.IDA_CRASHED
     assert res["recoverable"] is False

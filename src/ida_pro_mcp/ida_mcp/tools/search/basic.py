@@ -110,7 +110,7 @@ def search_bytes(pattern, range_start, range_end, include_context, offset, limit
                         chunk_end = min(curr + chunk_size + plen - 1, seg_end)
                         chunk_bytes = ida_bytes.get_bytes(curr, max(0, chunk_end - curr)) or b""
                         if len(chunk_bytes) >= plen:
-                                for i in range(0, len(chunk_bytes) - plen + 1):
+                                for i in range(len(chunk_bytes) - plen + 1):
                                     ok = all(_match(chunk_bytes[i + j], spec) for j, spec in enumerate(pat_specs))
                                     if ok:
                                         ea = curr + i

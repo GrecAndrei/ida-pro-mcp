@@ -21,13 +21,12 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Dict, Optional, Tuple
 
 # Silent action rewrites for tools LLMs commonly get wrong. These are
 # deterministic and well-tested; the rule-based ones below are gated by
 # the IDA_MCP_ENABLE_REROUTE_RULES env var (default on) so the static map
 # can be disabled independently if it causes false positives.
-_REROUTE_MAP: Dict[Tuple[str, str], Tuple[str, str]] = {
+_REROUTE_MAP: dict[tuple[str, str], tuple[str, str]] = {
     ("search", "bytes"): ("search", "string"),
     ("search", "text"): ("search", "name"),
     ("search", "instruction"): ("search", "insns"),
@@ -45,7 +44,7 @@ def _rule_disasm_reroute(t: str, a: str, args: dict) -> bool:
     return bool(args.get("as_code") or args.get("disasm") or args.get("decode"))
 
 
-def get_reroute(tool: str, action: str, args: dict) -> Optional[Tuple[str, dict]]:
+def get_reroute(tool: str, action: str, args: dict) -> tuple[str, dict] | None:
     """Return (corrected_tool, corrected_args) if the call should be rerouted, else None.
 
     The static _REROUTE_MAP always applies. The _rule_disasm_reroute rule is
@@ -76,13 +75,13 @@ def get_reroute(tool: str, action: str, args: dict) -> Optional[Tuple[str, dict]
 # ----------------------------------------------------------------------------
 
 _recorder_lock = threading.Lock()
-_recent_tools: Dict[str, list] = {}  # sid -> [(tool, action), ...]
+_recent_tools: dict[str, list] = {}  # sid -> [(tool, action), ...]
 _RECENT_TOOLS_LIMIT = 16
 
 
 def record_tool_call(idb: str, tool: str, action: str,
-                     addr: Optional[str] = None,
-                     query: Optional[str] = None) -> None:
+                     addr: str | None = None,
+                     query: str | None = None) -> None:
     """Record a tool call. Currently only used to feed the LOOP detector
     in `check_stuck_blocking`. The Markov-chain side (UsageIntelligence) has
     its own observer; this is a fallback for the auto-blocker.
@@ -96,7 +95,7 @@ def record_tool_call(idb: str, tool: str, action: str,
 
 
 def check_stuck_blocking(idb: str, tool: str, action: str,
-                         args: dict) -> Optional[dict]:
+                         args: dict) -> dict | None:
     """Block the call if the LLM is in a LOOP pattern (>N alternations between
     the same two tools). Other "stuck" signals (slow, repeated, etc.) are
     advisory only and intentionally ignored here.

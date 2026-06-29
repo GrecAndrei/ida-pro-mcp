@@ -12,7 +12,7 @@ import json
 import os
 import sqlite3
 import time
-from typing import Any, Optional
+from typing import Any
 
 # Re-use safety paths and validation from config/policy
 from ..config import CACHE_DIR
@@ -360,7 +360,7 @@ def upsert_functions_batch(conn: sqlite3.Connection, attrs_list: list[dict[str, 
             for txt, ea in attrs.get("strings", []):
                 cursor.execute("INSERT INTO function_strings (func_ea, string_text, string_ea) VALUES (?, ?, ?)", (attrs["ea"], txt, ea))
 
-            for const_val, const_ea in attrs.get("crypto_constants", []):
+            for const_val, _const_ea in attrs.get("crypto_constants", []):
                 cursor.execute(
                     "INSERT INTO function_constants (func_ea, constant_value, constant_name) VALUES (?, ?, ?)",
                     (attrs["ea"], const_val, ""),
@@ -370,7 +370,7 @@ def upsert_functions_batch(conn: sqlite3.Connection, attrs_list: list[dict[str, 
     return count
 
 
-def execute_host_query(db_path: str, constraints: dict, limit: int = 50, offset: int = 0, order_by: Optional[str] = None, include_apis: bool = False, include_strings: bool = False) -> dict:
+def execute_host_query(db_path: str, constraints: dict, limit: int = 50, offset: int = 0, order_by: str | None = None, include_apis: bool = False, include_strings: bool = False) -> dict:
     """Execute SQLite structured query directly on the host, bypassing IDA entirely."""
     if not os.path.exists(db_path):
         return make_error(MCPError.FILE_NOT_FOUND, "No index found. Ingest the session first.")

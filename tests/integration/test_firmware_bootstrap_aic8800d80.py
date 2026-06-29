@@ -161,5 +161,5 @@ with open(RESULT_PATH, 'w') as f:
             f"func_failures={debug.get('func_failures', [])} "
             f"segment_class={seg_class} seg_bitness={result.get('segment_bitness')} "
             f"T={result.get('t_register')} first_handler_ok={result.get('first_handler_ok')} "
-            f"Root cause: create_insn/add_func chain broken despite segment/bitness/Thumb fixes."
+            f"Root cause: create_insn/add_func chain broken despite segment/bitness/Thumb fixes.", stacklevel=2
         )

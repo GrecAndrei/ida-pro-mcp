@@ -224,7 +224,7 @@ def stack_analysis(
                 return err
             frame_size = _frame_size(frame)
             members = []
-            for i, member, name, offset, size, type_str in _iter_frame_members(frame):
+            for _, _member, name, offset, size, type_str in _iter_frame_members(frame):
                 members.append({
                     "index": i,
                     "name": name,
@@ -250,7 +250,7 @@ def stack_analysis(
             if err:
                 return err
             buffers = []
-            for i, member, name, offset, size, type_str in _iter_frame_members(frame):
+            for _, _member, name, offset, size, type_str in _iter_frame_members(frame):
                 is_buffer = False
                 # Arrays are buffers
                 if "[" in type_str or size >= 8 and "char" in type_str.lower() or size >= 16 and "*" not in type_str:
@@ -326,14 +326,13 @@ def stack_analysis(
             # Check member alignments
             max_member_align = 1
             member_details = []
-            for i, member, name, offset, size, type_str in _iter_frame_members(frame):
+            for _, _member, name, offset, size, _type_str in _iter_frame_members(frame):
                 m_align = 1
                 for a in (16, 8, 4, 2):
                     if offset % a == 0 and size >= a:
                         m_align = a
                         break
-                if m_align > max_member_align:
-                    max_member_align = m_align
+                max_member_align = max(max_member_align, m_align)
                 member_details.append({
                     "name": name,
                     "offset": hex(offset),
@@ -362,7 +361,7 @@ def stack_analysis(
             # Build a set of callee-saved registers for the current arch
             _arch_name = get_arch()
             callee_saved = get_callee_saved_registers(_arch_name)
-            for i, member, name, offset, size, type_str in _iter_frame_members(frame):
+            for _, _member, name, offset, size, _type_str in _iter_frame_members(frame):
                 is_spill = False
                 n = name.lower()
                 # Saved register detection (common IDA naming patterns)
@@ -397,10 +396,8 @@ def stack_analysis(
             while ea < func.end_ea and ea != idaapi.BADADDR:
                 spd = ida_frame.get_spd(func, ea)
                 if spd is not None:
-                    if spd > max_spd:
-                        max_spd = spd
-                    if spd < min_spd:
-                        min_spd = spd
+                    max_spd = max(max_spd, spd)
+                    min_spd = min(min_spd, spd)
                 ea = idc.next_head(ea)
                 usage_iter += 1
                 if usage_iter >= 100000:
@@ -443,7 +440,7 @@ def stack_analysis(
                 return err
             frame_size = _frame_size(frame)
             variables = []
-            for i, member, name, offset, size, type_str in _iter_frame_members(frame):
+            for _, _member, name, offset, size, type_str in _iter_frame_members(frame):
                 # Classify the variable
                 n = name.lower()
                 kind = "local"
@@ -495,7 +492,7 @@ def stack_analysis(
             if err:
                 return err
             arrays = []
-            for i, member, name, offset, size, type_str in _iter_frame_members(frame):
+            for _, _member, name, offset, size, type_str in _iter_frame_members(frame):
                 is_array = False
                 element_size = 0
                 element_count = 0
@@ -551,7 +548,7 @@ def stack_analysis(
                 return err
             # Collect all local variable offsets
             local_vars = []
-            for i, member, name, offset, size, type_str in _iter_frame_members(frame):
+            for _, _member, name, offset, size, type_str in _iter_frame_members(frame):
                 n = name.lower()
                 # Skip saved regs, return addr, and arguments
                 if (n.startswith((" s", "__saved", " r", "arg_", "param_")) or n == "r"):
@@ -615,7 +612,7 @@ def stack_analysis(
             buffer_count = 0
             has_canary = False
             if frame:
-                for i, member, name, offset, size, type_str in _iter_frame_members(frame):
+                for _, _member, name, _offset, size, type_str in _iter_frame_members(frame):
                     n = name.lower()
                     if n.startswith(("arg_", "param_")):
                         arg_count += 1

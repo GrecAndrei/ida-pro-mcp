@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Threat-hunt orchestration helpers extracted from the main server."""
 
-from typing import Optional
 
 from ..config import (
     ALLOW_HEURISTIC_FALLBACKS,
@@ -31,7 +30,7 @@ class ServerThreatHuntMixin:
         }
 
     def _threat_hunt_step(
-        self, ip: str, tool: str, action: str, step_args: Optional[dict] = None
+        self, ip: str, tool: str, action: str, step_args: dict | None = None
     ) -> dict:
         payload_args = dict(step_args or {})
         payload_args["action"] = action
@@ -226,10 +225,7 @@ class ServerThreatHuntMixin:
             a_txt = str(f.get("title") or f.get("summary") or f.get("name") or "A")
             for c in callees[:10]:
                 c_addr_txt = ""
-                if isinstance(c, dict):
-                    c_addr_txt = str(c.get("addr") or c.get("ea") or "").strip()
-                else:
-                    c_addr_txt = str(c).split()[0]
+                c_addr_txt = str(c.get("addr") or c.get("ea") or "").strip() if isinstance(c, dict) else str(c).split()[0]
                 if not c_addr_txt:
                     continue
                 try:

@@ -259,14 +259,14 @@ def _detect_flavor(install_dir: Path) -> str:
         ("idaessential_*.hexlic", "essential"),
         ("idafree_*.hexlic", "free"),
     ):
-        for lic in home.glob(name):
+        for _lic in home.glob(name):
             return flavor
     # Bundled license next to install
-    for lic in install_dir.glob("idapro_*.hexlic"):
+    for _lic in install_dir.glob("idapro_*.hexlic"):
         return "pro"
-    for lic in install_dir.glob("idahome_*.hexlic"):
+    for _lic in install_dir.glob("idahome_*.hexlic"):
         return "home"
-    for lic in install_dir.glob("*.hexlic"):
+    for _lic in install_dir.glob("*.hexlic"):
         return "pro"
     return "unknown"
 

@@ -103,10 +103,7 @@ def _matches_query(insns, query):
             _QUERY_MATCHER_CACHE.popitem(last=False)
     else:
         _QUERY_MATCHER_CACHE.move_to_end(query)
-    for _, mnem, disasm in insns:
-        if matcher(mnem) or matcher(disasm):
-            return True
-    return False
+    return any(matcher(mnem) or matcher(disasm) for _, mnem, disasm in insns)
 
 
 # ---- ROP gadgets ----

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Dict, Optional, Tuple
 
 
 class TokenBucket:
@@ -23,7 +22,7 @@ class TokenBucket:
         self.last_update = time.monotonic()
         self._lock = threading.Lock()
 
-    def acquire(self, tokens: float = 1.0) -> Tuple[bool, float]:
+    def acquire(self, tokens: float = 1.0) -> tuple[bool, float]:
         """Try to acquire tokens. Returns (ok, wait_seconds)."""
         with self._lock:
             now = time.monotonic()
@@ -55,9 +54,9 @@ class RateLimiter:
 
     def __init__(
         self,
-        per_tool_rate: Optional[float] = None,
-        global_rate: Optional[float] = None,
-        burst: Optional[int] = None,
+        per_tool_rate: float | None = None,
+        global_rate: float | None = None,
+        burst: int | None = None,
     ):
         import os
         # Allow tests to disable rate limiting
@@ -73,7 +72,7 @@ class RateLimiter:
                 os.environ.get("IDA_MCP_RATE_LIMIT_GLOBAL", "30")
             )
             self.burst = burst or int(os.environ.get("IDA_MCP_RATE_LIMIT_BURST", "20"))
-        self._tool_buckets: Dict[str, TokenBucket] = {}
+        self._tool_buckets: dict[str, TokenBucket] = {}
         self._global_bucket = TokenBucket(self.global_rate, self.burst)
         self._lock = threading.Lock()
 
@@ -83,7 +82,7 @@ class RateLimiter:
                 self._tool_buckets[tool] = TokenBucket(self.per_tool_rate, self.burst)
             return self._tool_buckets[tool]
 
-    def check(self, tool: str) -> Tuple[bool, str]:
+    def check(self, tool: str) -> tuple[bool, str]:
         """
         Check if call is allowed. Returns (allowed, reason).
         If not allowed, reason explains which limit was hit.
@@ -100,7 +99,7 @@ class RateLimiter:
             return False, f"global rate limit ({self.global_rate}/s); wait {wait:.1f}s"
         return True, ""
 
-    def stats(self) -> Dict[str, any]:
+    def stats(self) -> dict[str, any]:
         """Current bucket levels for diagnostics."""
         out = {
             "global": {

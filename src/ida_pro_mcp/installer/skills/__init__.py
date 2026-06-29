@@ -1,15 +1,13 @@
 """Generate and install Claude Code / OpenCode skills from TOOL_DESCRIPTIONS."""
 from __future__ import annotations
 
-import json
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 # ---------------------------------------------------------------------------
 # Category metadata — title, description, IDA analogy shown in the skill
 # ---------------------------------------------------------------------------
-_CATEGORY_META: Dict[str, Tuple[str, str]] = {
+_CATEGORY_META: dict[str, tuple[str, str]] = {
     "core": (
         "ida-core",
         "Core session and navigation tools — start here. Covers session lifecycle, "
@@ -111,8 +109,8 @@ def _make_tool_entry(tool: str, description: str) -> str:
 
 
 def generate_skills(
-    category_filter: List[str] | None = None,
-) -> Dict[str, str]:
+    category_filter: list[str] | None = None,
+) -> dict[str, str]:
     """
     Return {skill_name: skill_content} for all skills.
     category_filter limits to specific categories if given.
@@ -128,12 +126,12 @@ def generate_skills(
             return "other"
 
     # Group tools by category
-    by_cat: Dict[str, List[Tuple[str, str]]] = defaultdict(list)
+    by_cat: dict[str, list[tuple[str, str]]] = defaultdict(list)
     for tool, desc in sorted(TOOL_DESCRIPTIONS.items()):
         cat = classify_tool_category(tool)
         by_cat[cat].append((tool, desc))
 
-    skills: Dict[str, str] = {}
+    skills: dict[str, str] = {}
 
     # One skill per category
     for cat, tools in by_cat.items():
@@ -168,16 +166,16 @@ def generate_skills(
 
 
 def install_skills(
-    target_dirs: List[Path],
+    target_dirs: list[Path],
     dry_run: bool = False,
-    category_filter: List[str] | None = None,
-) -> Dict[str, List[Path]]:
+    category_filter: list[str] | None = None,
+) -> dict[str, list[Path]]:
     """
     Write skills to each target directory.
     Returns {skill_name: [paths_written]}.
     """
     skills = generate_skills(category_filter=category_filter)
-    written: Dict[str, List[Path]] = defaultdict(list)
+    written: dict[str, list[Path]] = defaultdict(list)
 
     for target_dir in target_dirs:
         for skill_name, content in skills.items():
@@ -191,7 +189,7 @@ def install_skills(
     return written
 
 
-def default_skill_dirs() -> List[Path]:
+def default_skill_dirs() -> list[Path]:
     """Standard skill directories for Claude Code and OpenCode."""
     home = Path.home()
     import os

@@ -89,7 +89,7 @@ def abi(
             Some builds expose it via tinfo_t.get_cc(), others via func_type_data_t.cc.
             """
             try:
-                if hasattr(tif, "get_cc") and callable(getattr(tif, "get_cc")):
+                if hasattr(tif, "get_cc") and callable(tif.get_cc):
                     val = tif.get_cc()
                     if isinstance(val, int):
                         return val & 0xF0

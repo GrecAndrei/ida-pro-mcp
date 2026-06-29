@@ -186,13 +186,15 @@ def patterns(
             p_bytes, p_mask = [], []
             for part in pat.split():
                 if "?" in part:
-                    p_bytes.append(0); p_mask.append(False)
+                    p_bytes.append(0)
+                    p_mask.append(False)
                 else:
-                    p_bytes.append(int(part, 16)); p_mask.append(True)
+                    p_bytes.append(int(part, 16))
+                    p_mask.append(True)
             if not in_path or not os.path.exists(in_path):
                 return {"ok": True, "engine": "fallback", "matches": [], "count": 0, "warning": yara_err or "input file unavailable"}
             data = open(in_path, "rb").read()
-            for i in range(0, max(0, len(data) - len(p_bytes) + 1)):
+            for i in range(max(0, len(data) - len(p_bytes) + 1)):
                 if all(data[i + j] == p_bytes[j] for j in range(len(p_bytes)) if p_mask[j]):
                     matches.append({"offset": i, "addr": hex(i)})
                     if len(matches) >= max(1, count):

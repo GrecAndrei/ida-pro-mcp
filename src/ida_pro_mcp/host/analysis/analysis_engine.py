@@ -375,7 +375,7 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
             q50 = sim_vals[len(sim_vals) // 2]
             q75 = sim_vals[min(len(sim_vals) - 1, int(round((len(sim_vals) - 1) * 0.75)))]
             sim_gate = min(0.995, q75 + max(0.0, q75 - q50))
-            for sim, other_id, other_row, other_vec in sorted(sim_candidates, key=lambda x: x[0], reverse=True):
+            for sim, _other_id, other_row, _other_vec in sorted(sim_candidates, key=lambda x: x[0], reverse=True):
                 if sim < sim_gate:
                     continue
                 # High similarity but different category or conflicting title

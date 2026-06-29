@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from ..config import _bounded_int, _coerce_bool
 from ..errors import MCPError, make_error
@@ -14,9 +14,9 @@ class ServerSessionBootstrapMixin:
     def _handle_session_bootstrap(
         self,
         action: str,
-        args: Dict[str, Any],
-        sid_arg: Callable[..., Tuple[Optional[str], Optional[dict]]],
-    ) -> Optional[dict]:
+        args: dict[str, Any],
+        sid_arg: Callable[..., tuple[str | None, dict | None]],
+    ) -> dict | None:
         if action == "bootstrap_init":
             sid, sid_err = sid_arg()
             if sid_err:

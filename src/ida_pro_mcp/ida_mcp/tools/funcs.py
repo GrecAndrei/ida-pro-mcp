@@ -298,9 +298,8 @@ def _funcs_impl(
 
             existing = ida_funcs.get_func(ea)
             if existing and existing.start_ea == ea:
-                if name:
-                    if not idc.set_name(ea, name, ida_name.SN_FORCE):
-                        return make_error(MCPError.IDA_ERROR, f"Function exists at {hex(ea)} but failed to rename to '{name}'")
+                if name and not idc.set_name(ea, name, ida_name.SN_FORCE):
+                    return make_error(MCPError.IDA_ERROR, f"Function exists at {hex(ea)} but failed to rename to '{name}'")
                 return {
                     "ok": True,
                     "addr": hex(ea),
@@ -591,11 +590,10 @@ def _funcs_impl(
                 edges = 0
                 fc = idaapi.FlowChart(fn)
                 for b in fc:
-                    for s in b.succs():
+                    for _s in b.succs():
                         edges += 1
                 cyclomatic = edges - bb_count + 2
-                if cyclomatic < 1:
-                    cyclomatic = 1
+                cyclomatic = max(cyclomatic, 1)
             except Exception:
                 pass
             size = fn.end_ea - fn.start_ea

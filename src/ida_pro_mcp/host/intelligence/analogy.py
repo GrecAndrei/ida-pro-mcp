@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 from .core import BgeCodeEmbedder
 from .embeddings import FunctionEmbeddingIndex
@@ -19,13 +19,13 @@ class CrossBinaryAnalogyEngine:
 
     @staticmethod
     def compute_analogy_score(
-        current_attrs: Dict[str, Any],
-        source_attrs: Dict[str, Any],
-        current_vector: List[float],
-        source_vector: List[float],
+        current_attrs: dict[str, Any],
+        source_attrs: dict[str, Any],
+        current_vector: list[float],
+        source_vector: list[float],
         threshold_cosine: float = 0.85,
         threshold_structural: float = 0.70,
-    ) -> Tuple[float, float, float]:
+    ) -> tuple[float, float, float]:
         """
         Computes cosine similarity and structural ratio similarity.
         Returns (confidence, cosine_sim, structural_sim) if passing thresholds,
@@ -63,9 +63,9 @@ class CrossBinaryAnalogyEngine:
         )
 
     @staticmethod
-    def get_capsule_comments(sideband_path: str) -> Dict[str, str]:
+    def get_capsule_comments(sideband_path: str) -> dict[str, str]:
         """Fetch custom comments/notes associated with functions inside sideband."""
-        comments: Dict[str, str] = {}
+        comments: dict[str, str] = {}
         if not sideband_path or not os.path.exists(sideband_path):
             return comments
         try:
@@ -84,11 +84,11 @@ class CrossBinaryAnalogyEngine:
     def suggest_analogies(
         self,
         current_idb: str,
-        library_idbs: List[str],
+        library_idbs: list[str],
         threshold_cosine: float = 0.85,
         threshold_structural: float = 0.70,
         limit: int = 10,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Rank functions in current session by their similarity to historical library functions.
         Returns a list of suggested analogies.
@@ -116,7 +116,7 @@ class CrossBinaryAnalogyEngine:
             current_idb + ".embeddings.db", embedder
         )
 
-        suggestions: List[Dict[str, Any]] = []
+        suggestions: list[dict[str, Any]] = []
 
         # 2. Iterate over analogy sources (historical library binaries)
         for lib_idb in library_idbs:

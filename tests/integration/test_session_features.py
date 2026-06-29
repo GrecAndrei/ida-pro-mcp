@@ -1187,7 +1187,7 @@ class TestSnapshotIDDuplicate(unittest.TestCase):
 
         # Create multiple snapshots
         snap_ids = []
-        for i in range(5):
+        for _i in range(5):
             snap = self.mgr.snapshot_session(sid)
             self.assertIsNotNone(snap)
             snap_ids.append(snap["snapshot_id"])
@@ -1337,7 +1337,7 @@ class TestSessionCreateEdgeCases(unittest.TestCase):
             f.write(b"\x00" * 50)
 
         sessions = []
-        for i in range(10):
+        for _i in range(10):
             s = self.mgr.create_session(test_bin)
             sessions.append(s.session_id)
 

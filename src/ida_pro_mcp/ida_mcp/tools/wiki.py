@@ -32,7 +32,6 @@ def _get_wiki_root():
 
 def _read_wiki_file(path):
     """Read a wiki file with caching."""
-    global _WIKI_CACHE
     real_path = os.path.realpath(path)
     if real_path in _WIKI_CACHE:
         _WIKI_CACHE.move_to_end(real_path)
@@ -109,7 +108,7 @@ def wiki(
     try:
         def collect_topics():
             topics = {}
-            for root, dirs, files in os.walk(wiki_root):
+            for root, _dirs, files in os.walk(wiki_root):
                 rel_path = os.path.relpath(root, wiki_root)
                 category = "root" if rel_path == "." else rel_path.replace(os.sep, "/")
                 pages = [f.replace(".md", "") for f in files if f.endswith(".md")]

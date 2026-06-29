@@ -9,7 +9,7 @@ import os
 import re
 import time
 from functools import lru_cache
-from typing import Any, Optional
+from typing import Any
 
 _SEMANTIC_CANONICALS = {
     "find": "search",
@@ -240,10 +240,7 @@ def compile_smart_pattern(
     )
     raw_cutoff = _resolve_optional_param(fuzzy_cutoff, defaults["fuzzy_cutoff"])
     # Preserve explicit caller override; otherwise derive adaptive cutoff from pattern.
-    if fuzzy_cutoff is None:
-        use_cutoff = _adaptive_fuzzy_cutoff(str(pattern or ""), float(raw_cutoff))
-    else:
-        use_cutoff = float(raw_cutoff)
+    use_cutoff = _adaptive_fuzzy_cutoff(str(pattern or ""), float(raw_cutoff)) if fuzzy_cutoff is None else float(raw_cutoff)
     use_cutoff = max(0.0, min(1.0, use_cutoff))
     return _compile_smart_pattern_cached(
         pattern, case_sensitive, use_semantic, use_cutoff
@@ -261,7 +258,6 @@ def smart_match(pattern, text, case_sensitive=False):
 import hashlib  # noqa: E402
 import sqlite3  # noqa: E402
 import threading  # noqa: E402
-from typing import Dict, List  # noqa: E402
 
 
 class GlobalFactsDatabase:
@@ -311,13 +307,13 @@ class GlobalFactsDatabase:
         ("obfuscator_signature", "vm_entry", "Virtualization obfuscator entry", 0.65, "builtin"),
     ]
 
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: str | None = None):
         if db_path is None:
             db_path = os.path.join(os.path.expanduser("~"), ".ida-pro-mcp", "global_facts.db")
         self.db_path = db_path
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._lock = threading.RLock()
-        self._conn: Optional[sqlite3.Connection] = None
+        self._conn: sqlite3.Connection | None = None
         self._init_db()
 
     def _init_db(self) -> None:
@@ -381,7 +377,7 @@ class GlobalFactsDatabase:
             self._conn.commit()
         return fact_id
 
-    def get_fact(self, category: str, key: str) -> Optional[Dict[str, Any]]:
+    def get_fact(self, category: str, key: str) -> dict[str, Any] | None:
         """Retrieve a single fact by category and key."""
         with self._lock:
             cursor = self._conn.execute(
@@ -407,7 +403,7 @@ class GlobalFactsDatabase:
                 }
             return None
 
-    def query_facts(self, category: Optional[str] = None, key_pattern: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+    def query_facts(self, category: str | None = None, key_pattern: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
         """
         Query facts by category and/or key pattern (substring match).
 
@@ -421,7 +417,7 @@ class GlobalFactsDatabase:
             Max results.
         """
         conditions = []
-        params: List[Any] = []
+        params: list[Any] = []
         if category:
             conditions.append("category = ?")
             params.append(category)
@@ -457,7 +453,7 @@ class GlobalFactsDatabase:
             self._conn.commit()
             return cursor.rowcount > 0
 
-    def get_stale_facts(self, staleness_days: int = 30, limit: int = 50) -> List[Dict[str, Any]]:
+    def get_stale_facts(self, staleness_days: int = 30, limit: int = 50) -> list[dict[str, Any]]:
         """Return facts not accessed recently with low access count (demotion candidates)."""
         cutoff = time.time() - (staleness_days * 86400)
         with self._lock:
@@ -476,7 +472,7 @@ class GlobalFactsDatabase:
                 for row in cursor.fetchall()
             ]
 
-    def get_popular_facts(self, min_accesses: int = 5, limit: int = 20) -> List[Dict[str, Any]]:
+    def get_popular_facts(self, min_accesses: int = 5, limit: int = 20) -> list[dict[str, Any]]:
         """Return frequently accessed facts (promotion candidates to L1)."""
         with self._lock:
             cursor = self._conn.execute(

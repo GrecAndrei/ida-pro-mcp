@@ -148,7 +148,7 @@ def main():
                     try:
                         inner = json.loads(content["text"])
                         print(json.dumps(inner, indent=2))
-                    except:
+                    except Exception:  # noqa: BLE001
                         print(content["text"])
         else:
             print(json.dumps(res, indent=2))
@@ -189,7 +189,7 @@ def main():
                             try:
                                 inner = json.loads(content["text"])
                                 print(json.dumps(inner, indent=2))
-                            except:
+                            except Exception:  # noqa: BLE001
                                 print(content["text"])
                 else:
                     print(json.dumps(res, indent=2))

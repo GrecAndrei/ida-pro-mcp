@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 
 class PolicyMode(StrEnum):
@@ -209,16 +209,16 @@ class PolicyResult:
     tool: str
     action: str
     mode: PolicyMode
-    purpose: Optional[str] = None
+    purpose: str | None = None
     requires_ack: bool = False
-    reasons: Tuple[str, ...] = field(default_factory=tuple)
-    flags: Tuple[str, ...] = field(default_factory=tuple)
+    reasons: tuple[str, ...] = field(default_factory=tuple)
+    flags: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def allowed(self) -> bool:
         return self.decision in {PolicyDecision.ALLOW, PolicyDecision.WARN}
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "decision": self.decision.value,
             "allowed": self.allowed,
@@ -277,7 +277,7 @@ def classify_tool_action(tool: Any, action: Any) -> RiskTier:
     return RiskTier.UNKNOWN
 
 
-def purpose_flags(purpose: Any) -> Tuple[str, ...]:
+def purpose_flags(purpose: Any) -> tuple[str, ...]:
     normalized = normalize_name(purpose)
     if not normalized:
         return ()
@@ -296,7 +296,7 @@ def evaluate_policy(
     mode: Any = PolicyMode.ASSIST,
     purpose: Any = None,
     ack: Any = False,
-    classifier_flags: Optional[Iterable[str]] = None,
+    classifier_flags: Iterable[str] | None = None,
 ) -> PolicyResult:
     """Evaluate a deterministic policy decision for a tool/action call.
 
@@ -379,7 +379,7 @@ def evaluate_policy(
     )
 
 
-def build_audit_record(result: PolicyResult, *, session_id: Optional[str] = None) -> Dict[str, Any]:
+def build_audit_record(result: PolicyResult, *, session_id: str | None = None) -> dict[str, Any]:
     """Build a compact audit record for policy-relevant calls."""
 
     return {

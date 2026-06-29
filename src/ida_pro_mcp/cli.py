@@ -18,14 +18,14 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from ida_pro_mcp import __version__
 
 _DAEMON_SOCKET = os.path.join(tempfile.gettempdir(), "ida-mcp-daemon.sock")
 
 
-def _load_json_arg(value: Optional[str], *, label: str) -> Any:
+def _load_json_arg(value: str | None, *, label: str) -> Any:
     if value is None:
         return None
     text = value.strip()
@@ -225,7 +225,7 @@ def _daemon_call(tool_name: str, args: dict[str, Any]) -> dict:
             data += chunk
         if not data:
             raise SystemExit("Daemon returned empty response")
-        lines = [l.strip() for l in data.decode("utf-8").split("\n") if l.strip()]
+        lines = [ln.strip() for ln in data.decode("utf-8").split("\n") if ln.strip()]  # noqa: E741
         if not lines:
             raise SystemExit("Daemon returned no valid JSON lines")
         return json.loads(lines[-1])
@@ -242,7 +242,7 @@ def _handle_background_mode(args):
             with open(script_file) as f:
                 script = f.read()
         except Exception as e:
-            raise SystemExit(f"Cannot read file {script_file}: {e}")
+            raise SystemExit(f"Cannot read file {script_file}: {e}") from e
         tool_args = {"action": action, "script": script}
     else:
         payload = None

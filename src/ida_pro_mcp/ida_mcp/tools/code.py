@@ -621,8 +621,7 @@ def _disasm_range(
         next_ea = idc.next_head(curr, hard_end)
         if next_ea == idaapi.BADADDR or next_ea <= curr:
             item_size = int(idc.get_item_size(curr) or 1)
-            if item_size < 1:
-                item_size = 1
+            item_size = max(item_size, 1)
             curr = curr + item_size
         else:
             curr = next_ea

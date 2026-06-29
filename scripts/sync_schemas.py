@@ -13,7 +13,6 @@ import ast
 import re
 import sys
 from pathlib import Path
-from typing import Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TOOLS_DIR = PROJECT_ROOT / "src/ida_pro_mcp/ida_mcp/tools"
@@ -53,7 +52,7 @@ def get_tool_files() -> list[Path]:
     )
 
 
-def extract_tool_info(path: Path) -> Optional[dict]:
+def extract_tool_info(path: Path) -> dict | None:
     """Extract @tool function name, docstring, and action Literals from a tool file."""
     try:
         src = path.read_text(encoding="utf-8", errors="replace")

@@ -150,7 +150,7 @@ def cfg_analysis(
 
         elif action == "branches":
             results = []
-            for bid, (start, end) in blocks.items():
+            for bid, (_start, end) in blocks.items():
                 successors = succs_map.get(bid, [])
                 if len(successors) == 2:
                     # Conditional branch - last instruction of block

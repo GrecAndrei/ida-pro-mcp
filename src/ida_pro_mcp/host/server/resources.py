@@ -48,12 +48,12 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..errors import is_error_result
 
 # TTL cache for ida://state coverage stats (expensive: calls data/functions)
-_STATE_CACHE: Dict[str, Any] = {}
+_STATE_CACHE: dict[str, Any] = {}
 _STATE_CACHE_TTL = 30.0  # seconds
 
 
@@ -123,7 +123,7 @@ RESOURCE_TEMPLATES = [
 ]
 
 
-def list_resources() -> List[Dict]:
+def list_resources() -> list[dict]:
     """Return static resource catalog."""
     return [
         {"uri": "ida://state", "name": "Analysis State — complete picture (read first)", "mimeType": "text/plain"},
@@ -162,11 +162,11 @@ def list_resources() -> List[Dict]:
     ]
 
 
-def _make_text_content(text: str) -> Dict:
+def _make_text_content(text: str) -> dict:
     return {"uri": "", "mimeType": "text/plain", "text": text}
 
 
-def _make_json_content(data: Any) -> Dict:
+def _make_json_content(data: Any) -> dict:
     return {
         "uri": "",
         "mimeType": "application/json",
@@ -188,7 +188,7 @@ class ResourceResolver:
         self.bb_path = bb_path
         self.usage_intel = usage_intel  # UsageIntelligence instance
 
-    def read(self, uri: str) -> Optional[Dict]:
+    def read(self, uri: str) -> dict | None:
         if not uri.startswith("ida://"):
             return None
         rest = uri[6:].strip("/")
@@ -247,14 +247,14 @@ class ResourceResolver:
     # Root / Meta
     # ------------------------------------------------------------------
 
-    def _read_root(self) -> Dict:
+    def _read_root(self) -> dict:
         return _make_json_content({
             "domains": ["meta", "segments", "functions", "strings", "imports", "exports", "structs", "globals", "xrefs", "types", "bookmarks"],
             "templates": RESOURCE_TEMPLATES,
             "note": "Append domain name to ida:// to read resources. Use {addr} for function addresses.",
         })
 
-    def _read_meta(self) -> Dict:
+    def _read_meta(self) -> dict:
         result = self._exec("idb", action="meta")
         return _make_json_content(result)
 
@@ -262,7 +262,7 @@ class ResourceResolver:
     # State — complete analysis picture
     # ------------------------------------------------------------------
 
-    def _read_state(self) -> Dict:
+    def _read_state(self) -> dict:
         """
         ida://state — the LLM's externalized working memory.
 
@@ -271,7 +271,7 @@ class ResourceResolver:
         anything significant changes; the server pushes
         notifications/resources/updated with uri=ida://state.
         """
-        state: Dict[str, Any] = {}
+        state: dict[str, Any] = {}
 
         # 1. Binary identity
         try:
@@ -525,8 +525,10 @@ class ResourceResolver:
                 spec.loader.exec_module(mod)
             finally:
                 for m, orig in _saved.items():
-                    if orig is None: _sys.modules.pop(m, None)
-                    else: _sys.modules[m] = orig
+                    if orig is None:
+                        _sys.modules.pop(m, None)
+                    else:
+                        _sys.modules[m] = orig
             kwargs = {}
             if self.bb_path:
                 kwargs["db_path"] = self.bb_path
@@ -538,7 +540,7 @@ class ResourceResolver:
     # Proposals
     # ------------------------------------------------------------------
 
-    def _read_proposals(self) -> Dict:
+    def _read_proposals(self) -> dict:
         """
         ida://proposals — pending engine proposals.
 
@@ -571,7 +573,7 @@ class ResourceResolver:
         except Exception as e:
             return _make_json_content({"error": str(e), "proposals": []})
 
-    def _read_knowledge(self, parts: List[str]) -> Dict:
+    def _read_knowledge(self, parts: list[str]) -> dict:
         """
         ida://knowledge              — full KG summary
         ida://knowledge/systems      — all systems
@@ -630,7 +632,7 @@ class ResourceResolver:
     # Usage intelligence
     # ------------------------------------------------------------------
 
-    def _read_usage(self, parts: List[str]) -> Dict:
+    def _read_usage(self, parts: list[str]) -> dict:
         """
         ida://usage                    — global report (active sessions, current-session drift)
         ida://usage/session/{sid}      — per-session drift report
@@ -657,7 +659,7 @@ class ResourceResolver:
     # Segments
     # ------------------------------------------------------------------
 
-    def _read_segments_resource(self, parts: List[str]) -> Optional[Dict]:
+    def _read_segments_resource(self, parts: list[str]) -> dict | None:
         if len(parts) == 1:
             return self._read_segments()
         name = parts[1]
@@ -670,11 +672,11 @@ class ResourceResolver:
             return self._read_segment_instructions(name)
         return None
 
-    def _read_segments(self) -> Dict:
+    def _read_segments(self) -> dict:
         result = self._exec("idb", action="segments")
         return _make_json_content(result)
 
-    def _read_segment(self, name: str) -> Optional[Dict]:
+    def _read_segment(self, name: str) -> dict | None:
         result = self._exec("idb", action="segments")
         if isinstance(result, dict) and "segments" in result:
             for seg in result["segments"]:
@@ -682,7 +684,7 @@ class ResourceResolver:
                     return _make_json_content(seg)
         return _make_json_content({"error": f"Segment '{name}' not found"})
 
-    def _read_segment_bytes(self, name: str) -> Dict:
+    def _read_segment_bytes(self, name: str) -> dict:
         result = self._exec("segments", action="list")
         if isinstance(result, dict) and "segments" in result:
             for seg in result["segments"]:
@@ -694,7 +696,7 @@ class ResourceResolver:
                         return _make_json_content({"segment": name, "bytes": mem})
         return _make_json_content({"error": f"Segment '{name}' not found"})
 
-    def _read_segment_instructions(self, name: str) -> Dict:
+    def _read_segment_instructions(self, name: str) -> dict:
         result = self._exec("segments", action="list")
         if isinstance(result, dict) and "segments" in result:
             for seg in result["segments"]:
@@ -709,7 +711,7 @@ class ResourceResolver:
     # Functions
     # ------------------------------------------------------------------
 
-    def _read_functions_resource(self, parts: List[str]) -> Optional[Dict]:
+    def _read_functions_resource(self, parts: list[str]) -> dict | None:
         if len(parts) == 1:
             return self._read_functions()
         addr = parts[1]
@@ -738,55 +740,55 @@ class ResourceResolver:
             return self._read_function_similar(addr)
         return None
 
-    def _read_functions(self) -> Dict:
+    def _read_functions(self) -> dict:
         result = self._exec("data", action="functions", count=100)
         return _make_json_content(result)
 
-    def _read_function(self, addr: str) -> Dict:
+    def _read_function(self, addr: str) -> dict:
         result = self._exec("funcs", action="info", addr=addr, include_prototype=True)
         return _make_json_content(result)
 
-    def _read_function_decompile(self, addr: str) -> Dict:
+    def _read_function_decompile(self, addr: str) -> dict:
         result = self._exec("code", action="decompile", addr=addr)
         if isinstance(result, dict) and "pseudocode" in result:
             return _make_text_content(result["pseudocode"])
         return _make_json_content(result)
 
-    def _read_function_disasm(self, addr: str) -> Dict:
+    def _read_function_disasm(self, addr: str) -> dict:
         result = self._exec("code", action="disasm", addr=addr)
         if isinstance(result, dict) and "disassembly" in result:
             return _make_text_content(result["disassembly"])
         return _make_json_content(result)
 
-    def _read_function_xrefs(self, addr: str) -> Dict:
+    def _read_function_xrefs(self, addr: str) -> dict:
         result = self._exec("code", action="xrefs_to", addr=addr)
         return _make_json_content(result)
 
-    def _read_function_blocks(self, addr: str) -> Dict:
+    def _read_function_blocks(self, addr: str) -> dict:
         result = self._exec("code", action="blocks", addr=addr)
         return _make_json_content(result)
 
-    def _read_function_callers(self, addr: str) -> Dict:
+    def _read_function_callers(self, addr: str) -> dict:
         result = self._exec("code", action="callers", addr=addr)
         return _make_json_content(result)
 
-    def _read_function_callees(self, addr: str) -> Dict:
+    def _read_function_callees(self, addr: str) -> dict:
         result = self._exec("code", action="callees", addr=addr)
         return _make_json_content(result)
 
-    def _read_function_ctree(self, addr: str) -> Dict:
+    def _read_function_ctree(self, addr: str) -> dict:
         result = self._exec("ctree", action="get", addr=addr)
         return _make_json_content(result)
 
-    def _read_function_stack(self, addr: str) -> Dict:
+    def _read_function_stack(self, addr: str) -> dict:
         result = self._exec("stack_analysis", action="analyze_frame", addr=addr)
         return _make_json_content(result)
 
-    def _read_function_embedding(self, addr: str) -> Dict:
+    def _read_function_embedding(self, addr: str) -> dict:
         result = self._exec("agent", action="cfg_encode", addr=addr)
         return _make_json_content(result)
 
-    def _read_function_similar(self, addr: str) -> Dict:
+    def _read_function_similar(self, addr: str) -> dict:
         result = self._exec("agent", action="cfg_similar", addr=addr, top_k=10)
         return _make_json_content(result)
 
@@ -794,34 +796,34 @@ class ResourceResolver:
     # Data
     # ------------------------------------------------------------------
 
-    def _read_strings(self) -> Dict:
+    def _read_strings(self) -> dict:
         result = self._exec("data", action="strings", count=200)
         return _make_json_content(result)
 
-    def _read_imports_resource(self, parts: List[str]) -> Dict:
+    def _read_imports_resource(self, parts: list[str]) -> dict:
         if len(parts) > 1 and parts[1] == "deep":
             result = self._exec("imports_deep", action="thunks")
             return _make_json_content(result)
         result = self._exec("data", action="imports", count=200)
         return _make_json_content(result)
 
-    def _read_exports(self) -> Dict:
+    def _read_exports(self) -> dict:
         result = self._exec("data", action="exports", count=200)
         return _make_json_content(result)
 
-    def _read_structs(self) -> Dict:
+    def _read_structs(self) -> dict:
         result = self._exec("types", action="list")
         return _make_json_content(result)
 
-    def _read_globals(self) -> Dict:
+    def _read_globals(self) -> dict:
         result = self._exec("data", action="globals", count=100)
         return _make_json_content(result)
 
-    def _read_xrefs(self) -> Dict:
+    def _read_xrefs(self) -> dict:
         result = self._exec("data", action="lookup", kind="xref", count=100)
         return _make_json_content(result)
 
-    def _read_types(self) -> Dict:
+    def _read_types(self) -> dict:
         result = self._exec("types", action="list", count=100)
         return _make_json_content(result)
 
@@ -829,11 +831,11 @@ class ResourceResolver:
     # Meta-layers
     # ------------------------------------------------------------------
 
-    def _read_bookmarks(self) -> Dict:
+    def _read_bookmarks(self) -> dict:
         result = self._exec("bookmarks", action="list")
         return _make_json_content(result)
 
-    def _read_skills(self) -> Dict:
+    def _read_skills(self) -> dict:
         if not self.session_mgr:
             return _make_json_content({"error": "Session manager not available"})
         result = self._exec("session", action="list_skills")
@@ -841,7 +843,7 @@ class ResourceResolver:
             return _make_json_content({"skills": [], "note": "No skills available"})
         return _make_json_content(result)
 
-    def _read_facts(self) -> Dict:
+    def _read_facts(self) -> dict:
         if not self.global_facts:
             return _make_json_content({"error": "Global facts database not available"})
         facts = self.global_facts.query_facts(limit=100)
@@ -850,7 +852,7 @@ class ResourceResolver:
             "facts": facts,
         })
 
-    def _read_archive(self) -> Dict:
+    def _read_archive(self) -> dict:
         if not self.session_mgr:
             return _make_json_content({"error": "Session manager not available"})
         result = self._exec("session", action="stats")
@@ -861,7 +863,7 @@ class ResourceResolver:
             "note": "L4 archive includes session stats and activity logs.",
         })
 
-    def _read_blackboard_resource(self, parts: List[str]) -> Dict:
+    def _read_blackboard_resource(self, parts: list[str]) -> dict:
         """
         ida://blackboard                 — all unresolved, non-contradicted entries
         ida://blackboard/next_target     — priority-ranked next analysis targets
@@ -976,7 +978,7 @@ class ResourceResolver:
         entries = store.list(category=sub, limit=100, include_resolved=False)
         return _make_json_content({"category": sub, "entries": entries, "count": len(entries)})
 
-    def _read_taint(self) -> Dict:
+    def _read_taint(self) -> dict:
         """ida://taint — full taint report (source→sink paths). Read after finding network/file input."""
         result = self._exec("taint", action="report", max_depth=4, max_paths=30)
         if isinstance(result, dict):

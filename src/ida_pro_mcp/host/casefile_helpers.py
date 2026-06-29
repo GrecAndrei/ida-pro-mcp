@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 
-def build_risk_summary(findings: List[Dict[str, Any]], hypotheses: List[Dict[str, Any]], ai_records: List[Dict[str, Any]]) -> Dict[str, Any]:
+def build_risk_summary(findings: list[dict[str, Any]], hypotheses: list[dict[str, Any]], ai_records: list[dict[str, Any]]) -> dict[str, Any]:
     high_findings = 0
     low_evidence = 0
     for f in findings:
@@ -31,8 +31,8 @@ def build_risk_summary(findings: List[Dict[str, Any]], hypotheses: List[Dict[str
     }
 
 
-def build_chain_of_custody(sessions: List[Dict[str, Any]], replay_steps: List[Dict[str, Any]], ai_records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    events: List[Dict[str, Any]] = []
+def build_chain_of_custody(sessions: list[dict[str, Any]], replay_steps: list[dict[str, Any]], ai_records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
     for s in sessions:
         events.append(
             {
@@ -64,7 +64,7 @@ def build_chain_of_custody(sessions: List[Dict[str, Any]], replay_steps: List[Di
     return events[-2000:]
 
 
-def to_markdown_casefile(payload: Dict[str, Any]) -> str:
+def to_markdown_casefile(payload: dict[str, Any]) -> str:
     summ = payload.get("summary") or {}
     risk = payload.get("risk_summary") or {}
     lines = [

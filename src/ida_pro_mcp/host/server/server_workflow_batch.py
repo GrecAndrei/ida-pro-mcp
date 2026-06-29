@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from typing import Any
 
 from ..config import MAX_BATCH_CALLS, MAX_BATCH_PAYLOAD_BYTES
 from ..errors import MCPError, is_error_result, make_error
@@ -14,7 +14,7 @@ from ..schemas import TOOLS, _resolve_tool_alias
 class ServerWorkflowBatchMixin:
     def _normalize_batch_call(
         self, call: Any, idx: int
-    ) -> tuple[Optional[str], Any, Optional[dict]]:
+    ) -> tuple[str | None, Any, dict | None]:
         """
         Normalize one batch entry.
         Supported forms:
