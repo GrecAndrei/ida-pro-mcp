@@ -286,6 +286,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         "add_note": ("dict", "add_note", _sess_coerce_note),
         "clear_notes": ("dict", "clear_notes", _sess_coerce_none),
         "cleanup_stale": "_session_action_cleanup_stale",
+        "idle_purge": "_session_action_idle_purge",
         "stats": "_session_action_stats",
         "validate": "_session_action_validate",
         "bulk_delete": "_session_action_bulk_delete",
@@ -1265,6 +1266,139 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             "count": len(deleted),
             "deleted_count": len(deleted),
             "orphan_count": len(also_pruned_orphans),
+        }
+
+    def _session_action_idle_purge(self, args: dict) -> dict:
+        """Close sessions (and their live IDA runtimes) that haven't been
+        touched within ``idle_seconds``. ``idle_seconds`` is required and
+        must be a positive integer; pass 1 to mean "close anything not
+        used in the last second" (effectively close-all-else).
+
+        Sessions tracked here are real entries in session_mgr whose
+        ``last_used`` timestamp is older than ``now - idle_seconds``. We
+        only act on sessions that ALSO have a live runtime attached —
+        pre-existing cleanup_stale handles db-only stale rows.
+
+        Args:
+            idle_seconds: int (required) — age threshold in seconds.
+            prune_orphans: bool (default True) — also drop sessions whose
+                binary + idb paths no longer exist on disk.
+
+        Returns:
+            ok envelope with closed_sids / orphan_sids lists and counts,
+            matching the existing cleanup_stale shape.
+        """
+        raw_age = args.get("idle_seconds")
+        if raw_age is None:
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "idle_seconds is required",
+                details={"hint": "Pass an integer number of seconds, e.g. session(action='idle_purge', idle_seconds=1800)."},
+            )
+        try:
+            idle_seconds = int(raw_age)
+        except (TypeError, ValueError):
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "idle_seconds must be an integer",
+                details={"got": str(raw_age), "type": type(raw_age).__name__},
+            )
+        if idle_seconds <= 0:
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "idle_seconds must be a positive integer",
+                details={"got": idle_seconds},
+            )
+
+        prune_orphans = bool(args.get("prune_orphans", True))
+
+        # ``last_used`` is stored as ISO 8601 in self.sessions[*] via
+        # Session.update_access; parse it to epoch so we don't fight
+        # the timezone layer. Unknown / unparseable timestamps are
+        # treated as "fresh" and skipped.
+        now_epoch = datetime.now().timestamp()
+        cutoff_epoch = now_epoch - idle_seconds
+
+        closed_sids: list[str] = []
+        skipped_sids: list[str] = []
+        # Snapshot first so we don't mutate sessions we are iterating.
+        snapshot = self.session_mgr.list_sessions(offset=0, limit=10_000).get("sessions", [])
+        for raw in snapshot:
+            sid = _normalize_session_id(raw.get("session_id") or "")
+            if not sid:
+                continue
+            last_used = raw.get("last_used")
+            if not last_used:
+                # Unknown liveness — leave it alone so a brand-new session
+                # doesn't get killed before its first touch.
+                skipped_sids.append(sid)
+                continue
+            try:
+                parsed = datetime.fromisoformat(last_used.replace("Z", "+00:00"))
+                last_used_epoch = parsed.timestamp()
+            except Exception:
+                skipped_sids.append(sid)
+                continue
+            if last_used_epoch > cutoff_epoch:
+                continue
+            # Only kill live sessions + their runtimes. Skipping the no-
+            # runtime path here avoids racing with cleanup_stale, which is
+            # the canonical owner of stale-metadata pruning.
+            has_runtime = (
+                hasattr(self, "session_runtimes")
+                and isinstance(self.session_runtimes, dict)
+                and sid in self.session_runtimes
+            )
+            if not has_runtime:
+                skipped_sids.append(sid)
+                continue
+            with contextlib.suppress(Exception):
+                self._export_session_hypotheses_to_symbol_db(sid)
+            try:
+                self._cleanup_runtime(sid)
+            except Exception as e:
+                return make_error(
+                    MCPError.IDA_ERROR,
+                    f"Failed to clean up runtime for session {sid}",
+                    details={"session_id": sid, "exception": type(e).__name__, "message": str(e)},
+                )
+            deleted = self.session_mgr.delete_session(sid)
+            if deleted:
+                if (
+                    self.current_session
+                    and self.current_session.session_id == sid
+                ):
+                    self.current_session = None
+                closed_sids.append(sid)
+
+        orphan_sids: list[str] = []
+        if prune_orphans:
+            snapshot2 = self.session_mgr.list_sessions(offset=0, limit=10_000).get("sessions", [])
+            for raw in snapshot2:
+                sid = _normalize_session_id(raw.get("session_id") or "")
+                if not sid:
+                    continue
+                binary = raw.get("binary_path") or ""
+                idb = raw.get("idb_path") or ""
+                bin_missing = bool(binary) and not os.path.isfile(binary)
+                idb_missing = bool(idb) and not os.path.isfile(idb)
+                if bin_missing and idb_missing:
+                    try:
+                        if self.session_mgr.delete_session(sid):
+                            orphan_sids.append(sid)
+                    except Exception:
+                        continue
+
+        return {
+            "ok": True,
+            "closed_sids": closed_sids,
+            "orphan_sids": orphan_sids,
+            "skipped_sids": skipped_sids,
+            "count": len(closed_sids),
+            "closed_count": len(closed_sids),
+            "orphan_count": len(orphan_sids),
+            "skipped_count": len(skipped_sids),
+            "idle_seconds": idle_seconds,
         }
 
     def _session_action_stats(self, args: dict) -> dict:
