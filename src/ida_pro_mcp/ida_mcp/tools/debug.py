@@ -147,10 +147,16 @@ def _get_reg_dict(tid=None):
     target_tid = tid if tid is not None else ida_dbg.get_current_thread()
     dbg = ida_idd.get_dbg()
     if not dbg:
-        return {"error": True, "message": "No debugger backend attached"}
+        return make_error(
+            MCPError.DEBUGGER_NOT_RUNNING,
+            "No debugger backend attached",
+        )
     regvals = ida_dbg.get_reg_vals(target_tid)
     if not regvals:
-        return {"error": True, "message": "Could not read register values (debugger not running?)"}
+        return make_error(
+            MCPError.DEBUGGER_REGISTER_ERROR,
+            "Could not read register values (debugger not running?)",
+        )
     regs = {}
     for i, rv in enumerate(regvals):
         if i < dbg.nregs:

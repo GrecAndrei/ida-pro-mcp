@@ -1005,7 +1005,11 @@ def intelligence(
 
             idb_path = idc.get_idb_path()
             if not idb_path:
-                return {"error": True, "message": "No active IDB path found"}
+                return make_error(
+                    MCPError.IDB_NOT_FOUND,
+                    "No active IDB path found",
+                    hint="Open an IDB in IDA before running structural intelligence actions.",
+                )
 
             try:
                 from ida_pro_mcp.services import (
@@ -1051,14 +1055,20 @@ def intelligence(
                 return {"ok": True, "functions": results}
 
             def _do_structural_extract_single(_addr):
-                if not _addr:
-                    return {"error": True, "message": "addr required"}
+                err = require_arg(_addr, "addr")
+                if err:
+                    return err
                 ea, err = validate_addr(_addr, require_func=True)
                 if err:
                     return err
                 attrs = _extract_function_attributes(ea)
                 if not attrs:
-                    return {"error": True, "message": "Extraction failed"}
+                    return make_error(
+                        MCPError.ANALYSIS_INCOMPLETE,
+                        "Extraction failed",
+                        details={"ea": hex(ea)},
+                        hint="The function may be partially analyzed. Wait for analysis to complete.",
+                    )
                 return {"ok": True, "function": attrs}
 
             def _do_structural_ingest():
@@ -1074,7 +1084,7 @@ def intelligence(
                     ingested = upsert_functions_batch(conn, funcs_data)
                     conn.close()
                 except Exception as e:
-                    return {"error": True, "message": f"Database error during ingest: {e}"}
+                    return handle_error(e, context="structural_ingest")
 
                 try:
                     write_insight_index(funcs_data)
@@ -1104,12 +1114,22 @@ def intelligence(
                         os.remove(db_path)
                         return {"ok": True, "deleted": db_path}
                     except Exception as e:
-                        return {"error": True, "message": f"Failed to delete database: {e}"}
-                return {"error": True, "message": f"No index found at {db_path}"}
+                        return handle_error(e, context="structural_delete")
+                return make_error(
+                    MCPError.NO_RESULTS,
+                    f"No index found at {db_path}",
+                    details={"db_path": db_path},
+                    hint="Run intelligence(action='structural_ingest') first to build the index.",
+                )
 
             if action == "structural_stats":
                 if not os.path.exists(db_path):
-                    return {"error": True, "message": "No index found. Run structural_ingest first."}
+                    return make_error(
+                        MCPError.NO_RESULTS,
+                        "No index found. Run structural_ingest first.",
+                        details={"db_path": db_path},
+                        hint="Run intelligence(action='structural_ingest') first to build the index.",
+                    )
                 try:
                     conn = sqlite3.connect(db_path)
                     cursor = conn.cursor()
@@ -1137,18 +1157,28 @@ def intelligence(
                         "segments": segments,
                     }
                 except Exception as e:
-                    return {"error": True, "message": f"Failed to retrieve stats: {e}"}
+                    return handle_error(e, context="structural_stats")
 
             if action == "structural_get":
-                if not addr:
-                    return {"error": True, "message": "addr required for structural_get"}
+                err = require_arg(addr, "addr")
+                if err:
+                    return err
                 try:
                     ea = int(addr, 0) if isinstance(addr, str) else addr
                 except ValueError:
-                    return {"error": True, "message": f"Invalid address format: {addr}"}
+                    return make_error(
+                        MCPError.ADDRESS_INVALID,
+                        f"Invalid address format: {addr}",
+                        details={"addr": addr},
+                    )
 
                 if not os.path.exists(db_path):
-                    return {"error": True, "message": "No index found"}
+                    return make_error(
+                        MCPError.NO_RESULTS,
+                        "No index found",
+                        details={"db_path": db_path},
+                        hint="Run intelligence(action='structural_ingest') first to build the index.",
+                    )
                 try:
                     conn = sqlite3.connect(db_path)
                     cursor = conn.cursor()
@@ -1156,7 +1186,11 @@ def intelligence(
                     row = cursor.fetchone()
                     if not row:
                         conn.close()
-                        return {"error": True, "message": f"Function {addr} not in index"}
+                        return make_error(
+                            MCPError.NOT_FOUND,
+                            f"Function {addr} not in index",
+                            details={"addr": addr, "db_path": db_path},
+                        )
                     cols = [d[0] for d in cursor.description]
                     result = dict(zip(cols, row, strict=False))
                     include_apis = bool(kwargs.get("include_apis", False))
@@ -1171,7 +1205,7 @@ def intelligence(
                     result["ea"] = hex(result["ea"])
                     return {"ok": True, "function": result}
                 except Exception as e:
-                    return {"error": True, "message": f"Failed to get function: {e}"}
+                    return handle_error(e, context="structural_get")
 
             if action == "structural_query":
                 constraints = kwargs.get("constraints") or {}
@@ -1195,7 +1229,12 @@ def intelligence(
                         return extract_res
                     func_data = extract_res.get("function")
                     if not func_data:
-                        return {"error": True, "message": f"Failed to extract function at {addr}"}
+                        return make_error(
+                            MCPError.ANALYSIS_INCOMPLETE,
+                            f"Failed to extract function at {addr}",
+                            details={"addr": addr},
+                            hint="Wait for analysis to complete, or check that addr points to a valid function.",
+                        )
 
                     try:
                         conn = sqlite3.connect(db_path)
@@ -1203,7 +1242,7 @@ def intelligence(
                         upsert_functions_batch(conn, [func_data])
                         conn.close()
                     except Exception as e:
-                        return {"error": True, "message": f"Database error during refresh: {e}"}
+                        return handle_error(e, context="structural_refresh")
 
                     try:
                         write_insight_index([func_data])

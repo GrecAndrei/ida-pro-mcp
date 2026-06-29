@@ -20,6 +20,50 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def test_intelligence_no_legacy_error_only_dict():
+    """intelligence.py had ~12 inline `{"error": True, "message": ...}`
+    branches in the structural_* actions. Each must now go through
+    make_error or handle_error.
+    """
+    src = (REPO / "src/ida_pro_mcp/ida_mcp/tools/intelligence.py").read_text()
+    legacy = re.findall(r'\{\s*"error":\s*True,\s*"message":[^}]*\}', src)
+    assert not legacy, (
+        f"intelligence.py still has legacy inline error dicts (no code/hint):\n"
+        + "\n".join(legacy[:10])
+    )
+    assert "MCPError.NO_RESULTS" in src, (
+        "intelligence.py should use MCPError.NO_RESULTS for missing index."
+    )
+    assert "MCPError.IDB_NOT_FOUND" in src
+    assert "MCPError.ANALYSIS_INCOMPLETE" in src
+    assert "MCPError.ADDRESS_INVALID" in src
+
+
+def test_debug_no_legacy_error_only_dict():
+    """debug.py had two legacy `{"error": True, "message": ...}` returns
+    inside the register access path. They must now use make_error with
+    DEBUGGER_NOT_RUNNING / DEBUGGER_REGISTER_ERROR.
+    """
+    src = (REPO / "src/ida_pro_mcp/ida_mcp/tools/debug.py").read_text()
+    legacy = re.findall(r'return\s+\{\s*"error":\s*True,\s*"message":', src)
+    assert not legacy, (
+        f"debug.py still has legacy inline error returns: {legacy}"
+    )
+    assert "MCPError.DEBUGGER_NOT_RUNNING" in src
+    assert "MCPError.DEBUGGER_REGISTER_ERROR" in src
+
+
+def test_hybrid_search_uses_envelope_instead_of_string_codes():
+    """hybrid_search.py used to return `{"error": "db_unavailable"}` or
+    `{"error": "sql_error"}` — bare error strings. They must now look like
+    full envelopes with code and hint.
+    """
+    src = (REPO / "src/ida_pro_mcp/ida_mcp/support/hybrid_search.py").read_text()
+    assert '"error": "db_unavailable"' not in src
+    assert '"error": "sql_error"' not in src
+    assert '"code": "DB_ERROR"' in src or '"code": "DB_UNAVAILABLE"' in src
+
+
 def test_misc_no_inline_error_dumps_with_traceback():
     """misc.py used to swallow every exception into a `traceback.format_exc()`
     string and ship that to the caller. It must now go through

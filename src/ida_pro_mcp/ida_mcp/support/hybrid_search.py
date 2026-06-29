@@ -420,7 +420,16 @@ class HybridSearchEngine:
         t0 = time.time()
         conn = self._connect()
         if conn is None:
-            return None, 0.0, {"error": "db_unavailable"}
+            return (
+                None,
+                0.0,
+                {
+                    "error": True,
+                    "code": "DB_UNAVAILABLE",
+                    "message": "Hybrid search DB unavailable",
+                    "hint": "Re-run intelligence(action='structural_ingest') to rebuild the index.",
+                },
+            )
 
         try:
             cursor = conn.cursor()
@@ -465,7 +474,16 @@ class HybridSearchEngine:
             }
 
         except sqlite3.Error:
-            return None, 0.0, {"error": "sql_error"}
+            return (
+                None,
+                0.0,
+                {
+                    "error": True,
+                    "code": "DB_ERROR",
+                    "message": "Hybrid search SQL failed",
+                    "hint": "Index may be corrupted. Try rebuilding via structural_ingest.",
+                },
+            )
         finally:
             conn.close()
 
