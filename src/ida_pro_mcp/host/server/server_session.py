@@ -376,7 +376,17 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         coerced, cerr = coerce(args)
         if cerr:
             return cerr
-        mgr_call = getattr(self.session_mgr, mgr_method)
+        # Defensive: if the SessionManager doesn't expose the method,
+        # surface a clear NOT_IMPLEMENTED rather than an AttributeError
+        # that callers can't classify.
+        mgr_call = getattr(self.session_mgr, mgr_method, None)
+        if mgr_call is None:
+            return make_error(
+                MCPError.NOT_IMPLEMENTED,
+                f"Session action {mgr_method!r} is not implemented in this build",
+                hint="Check the package version; this action may have been removed or is gated on a feature flag.",
+                details={"method": mgr_method, "kind": kind},
+            )
         if kind == "dict":
             result = mgr_call(sid, **coerced)
             if result is None:
@@ -885,12 +895,15 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             if resource is None:
                 return make_error(MCPError.IDA_ERROR, "state resource unavailable")
             content = resource.get("text") or resource.get("blob") or ""
+            state_value: object = content
             if isinstance(content, str):
                 try:
-                    return _json.loads(content)
+                    state_value = _json.loads(content)
                 except Exception:
-                    return {"ok": True, "state": content}
-            return {"ok": True, "state": content}
+                    state_value = content
+            # Always wrap in a uniform envelope so callers can reliably
+            # check `ok` and find the state under a known key.
+            return {"ok": True, "state": state_value}
         except Exception as e:
             return make_error(MCPError.IDA_ERROR, f"state failed: {e}")
 

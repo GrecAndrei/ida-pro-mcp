@@ -777,10 +777,22 @@ def search_structured(constraints, pattern, range_start, range_end, include_cont
         from ..classify import _classify_func, _induce_function_schema
     except ImportError:
         from classify import _classify_func, _induce_function_schema  # type: ignore[import-not-found]
+    # NOTE: legacy version did
+    # from ..annotation import _DANGEROUS_APIS, _TAG_CATEGORIES which always
+    # ImportErrored — the real constants live in support/_api_categories
+    # under their canonical (non-_) names. Import from the right module
+    # and rebind to the historical underscored names for the rest of the
+    # function body to keep working unchanged.
     try:
-        from ..annotation import _DANGEROUS_APIS, _TAG_CATEGORIES
+        from ..support._api_categories import (
+            DANGEROUS_APIS as _DANGEROUS_APIS,
+            TAG_CATEGORIES as _TAG_CATEGORIES,
+        )
     except ImportError:
-        from annotation import _DANGEROUS_APIS, _TAG_CATEGORIES  # type: ignore[import-not-found]
+        from support._api_categories import (  # type: ignore[import-not-found]
+            DANGEROUS_APIS as _DANGEROUS_APIS,
+            TAG_CATEGORIES as _TAG_CATEGORIES,
+        )
 
     def induce_schema(func_ea):
         db_fp = _get_db_fingerprint()

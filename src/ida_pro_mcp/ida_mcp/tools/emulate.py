@@ -28,8 +28,11 @@ MAX_INSTRUCTIONS = 100000
 
 def _require_unicorn():
     if not _UNICORN_AVAILABLE:
-        return make_error(MCPError.INTERNAL,
-                          "unicorn not installed. Run: pip install unicorn")
+        return make_error(
+            MCPError.NOT_IMPLEMENTED,
+            "Unicorn emulator not available",
+            hint="Install unicorn on the IDA runtime: pip install unicorn",
+        )
     return None
 
 
@@ -301,8 +304,11 @@ def emulate(
 
         uc_arch, uc_mode = _get_uc_arch()
         if uc_arch is None:
-            return make_error(MCPError.INTERNAL,
-                              f"Unsupported architecture: {get_arch()}")
+            return make_error(
+                MCPError.NOT_IMPLEMENTED,
+                f"Unsupported architecture for emulation: {get_arch()}",
+                hint="emulate supports x86/x86_64/ARM/ARM64/MIPS only.",
+            )
 
         if not addr:
             return make_error(MCPError.INVALID_ARGS, "addr required")

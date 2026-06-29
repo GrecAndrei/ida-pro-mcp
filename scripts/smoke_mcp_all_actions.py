@@ -800,7 +800,9 @@ def main() -> int:
         addrs = S.first_addr_from_functions(ap2 or {}, 3) if ap2 else []
         if len(addrs) < 2:
             ep, _ = cli.tool_call("idb", {"action": "entrypoints", "_risk_ack": True})
-            eps = ep.get("entrypoints") if isinstance(ep, dict) else []
+            eps = ep.get("entrypoints") if isinstance(ep, dict) else None
+            if eps is None:
+                eps = []
             for e in eps[:2]:
                 if isinstance(e, dict):
                     a = e.get("ea") or e.get("address")

@@ -13,10 +13,26 @@ import time
 import ida_ida
 import ida_loader
 
-try:
-    pass
-except Exception:
-    _infer_arch = None  # type: ignore
+_infer_arch = None  # type: ignore[misc]
+"""Optional helper for refining filetype. Reserved for future arch
+inference; not currently implemented. See _safe_infer_arch() for the
+defensive call site."""
+
+
+def _safe_infer_arch(binary_path: str) -> dict:
+    """Best-effort call to optional `_infer_arch`; returns {} on absence.
+
+    Earlier revisions of this module referenced ``callable(_infer_arch)``
+    in analysis(action='get_options') which raised NameError when the
+    helper was undefined. Guard the call site so the absence is a no-op.
+    """
+    fn = globals().get("_infer_arch")
+    if not callable(fn):
+        return {}
+    try:
+        return fn(binary_path) or {}
+    except Exception:
+        return {}
 
 
 # ============================================================================
@@ -127,14 +143,11 @@ def analysis(
                     binary_path = idaapi.get_input_file_path()
             except Exception:
                 pass
-            if ft_name == "obj" and binary_path and callable(_infer_arch):
-                try:
-                    inf_result = _infer_arch(binary_path) or {}
-                    if inf_result.get("file_kind") == "raw":
-                        ft_effective = "raw"
-                        ft_note = "IDA loader reports obj for plain binaries; effective kind is raw."
-                except Exception:
-                    pass
+            if ft_name == "obj" and binary_path:
+                inf_result = _safe_infer_arch(binary_path)
+                if inf_result.get("file_kind") == "raw":
+                    ft_effective = "raw"
+                    ft_note = "IDA loader reports obj for plain binaries; effective kind is raw."
 
             return {
                 "ok": True,
