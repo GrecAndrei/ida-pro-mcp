@@ -71,12 +71,8 @@ from ida_pro_mcp.host.mbagcn_engine import (
     GraphEmbeddingStore,
     MbaGCNEncoder,
     default_db_path,
-    is_available,
-)
-from ida_pro_mcp.host.mbagcn_engine import (
     default_db_path as mbagcn_default_db_path,
-)
-from ida_pro_mcp.host.mbagcn_engine import (
+    is_available,
     is_available as mbagcn_is_available,
 )
 from ida_pro_mcp.host.policy import (

@@ -13,6 +13,7 @@ Creative features integrated directly into existing session tool:
   - Metrics Dashboard (progress tracking for LLM)
   - Auto-predictive tool suggestions (inline context injection)
 """
+import contextlib
 import copy
 import glob
 import json
@@ -20,7 +21,6 @@ import os
 import re
 import shutil
 import threading
-import contextlib
 import uuid
 from datetime import datetime, timedelta
 from typing import Any

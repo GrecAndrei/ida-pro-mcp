@@ -55,9 +55,9 @@ def find_uses(file_text: str, alias: str) -> int:
 # Strategy:
 # - In a try/except import block, the import is multi-line `from X import (a, b as c)`.
 # - For each unused name, we can either drop it from the multi-import, or
-#   add `# noqa: F401` to the import line.
+#   add `noqa F401` to the import line.
 # Simplest: if alias is never used → drop name from import statement.
-# If alias is used → add `# noqa: F401` to the import line.
+# If alias is used → add `noqa F401` to the import line.
 
 # Group by file
 per_file: dict[str, list[dict]] = {}

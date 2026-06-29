@@ -70,7 +70,21 @@ from .server_workflow import ServerWorkflowMixin  # noqa: E402
 # =============================================================================
 
 
-class IDAMCPServer(ServerArgsMixin, ServerResponseMixin, ServerSemanticMixin, ServerWikiMixin, ServerThreatHuntMixin, ServerBlackboardMixin, ServerPredictorMixin, ServerWorkflowMixin, ServerMultiSessionMixin, ServerRuntimeMixin, ServerSessionMixin, ServerDispatchMixin, BackgroundMixin):
+class IDAMCPServer(
+    ServerArgsMixin,
+    ServerResponseMixin,
+    ServerSemanticMixin,
+    ServerWikiMixin,
+    ServerThreatHuntMixin,
+    ServerBlackboardMixin,
+    ServerPredictorMixin,
+    ServerWorkflowMixin,
+    ServerMultiSessionMixin,
+    ServerRuntimeMixin,
+    ServerSessionMixin,
+    ServerDispatchMixin,
+    BackgroundMixin,
+):
     """
     JSON-RPC stdio server for the IDA Pro MCP.
     """

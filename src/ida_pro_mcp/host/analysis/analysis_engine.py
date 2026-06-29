@@ -28,11 +28,7 @@ from pathlib import Path
 
 from ..intelligence.helpers import (
     cosine_similarity as _cosine,
-)
-from ..intelligence.helpers import (
     quantile as _q,
-)
-from ..intelligence.helpers import (
     unpack_floats as _unpack,
 )
 

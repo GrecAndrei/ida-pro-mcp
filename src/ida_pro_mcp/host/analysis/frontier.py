@@ -20,8 +20,7 @@ import sqlite3
 import time
 from typing import Any
 
-from ..intelligence.helpers import cosine_similarity as _cosine
-from ..intelligence.helpers import unpack_floats as _unpack
+from ..intelligence.helpers import cosine_similarity as _cosine, unpack_floats as _unpack
 
 
 def _vec_add(a: list[float], b: list[float]) -> list[float]:
