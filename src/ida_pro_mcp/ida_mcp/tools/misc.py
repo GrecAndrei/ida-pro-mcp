@@ -1,5 +1,3 @@
-import traceback
-
 try:
     from ._common import *
 except ImportError:
@@ -14,9 +12,17 @@ def read_file_impl(path: str, encoding: Optional[str] = None) -> dict:
         if path_err:
             return path_err
         if not _os.path.exists(resolved):
-            return {"error": True, "message": f"File not found: {resolved}"}
+            return make_error(
+                MCPError.FILE_NOT_FOUND,
+                f"File not found: {resolved}",
+                details={"path": resolved},
+            )
         if not _os.path.isfile(resolved):
-            return {"error": True, "message": f"Not a file: {resolved}"}
+            return make_error(
+                MCPError.INVALID_FILE_FORMAT,
+                f"Not a file: {resolved}",
+                details={"path": resolved},
+            )
         enc = (encoding or "utf-8").strip().lower()
         if enc == "binary":
             with open(resolved, "rb") as f:
@@ -25,8 +31,14 @@ def read_file_impl(path: str, encoding: Optional[str] = None) -> dict:
         with open(resolved, encoding=enc, errors="replace") as f:
             text = f.read()
         return {"ok": True, "path": resolved, "size": len(text), "content": text, "encoding": enc}
-    except Exception:
-        return {"error": True, "message": traceback.format_exc()}
+    except OSError as e:
+        return make_error(
+            MCPError.FILE_READ_ERROR,
+            f"Read failed: {resolved}",
+            details={"path": resolved, "errno": e.errno, "strerror": e.strerror or str(e)},
+        )
+    except Exception as e:
+        return handle_error(e, context="read_file")
 
 
 def write_file_impl(path: str, content: str, encoding: Optional[str] = None) -> dict:
@@ -49,9 +61,20 @@ def write_file_impl(path: str, content: str, encoding: Optional[str] = None) -> 
             f.write(content)
         return {"ok": True, "path": resolved, "size": len(content), "encoding": enc}
     except ValueError as ve:
-        return {"error": True, "message": f"Invalid hex content for binary mode: {ve}"}
-    except Exception:
-        return {"error": True, "message": traceback.format_exc()}
+        return make_error(
+            MCPError.FILE_ENCODING_ERROR,
+            f"Invalid hex content for binary mode: {ve}",
+            details={"path": path, "encoding": "binary"},
+        )
+    except OSError as e:
+        return make_error(
+            MCPError.FILE_WRITE_ERROR,
+            f"Write failed: {resolved}",
+            details={"path": resolved, "errno": e.errno, "strerror": e.strerror or str(e)},
+        )
+    except Exception as e:
+        return handle_error(e, context="write_file")
+
 
 @tool
 def misc(
@@ -83,9 +106,10 @@ def misc(
     """
     if action == "python":
         # Support both 'expr' and 'code' for backward compatibility
+        err = require_one_of(expr=expr, code=code)
+        if err:
+            return err
         script = expr if expr else code
-        if not script:
-            return {"error": True, "message": "expr or code required"}
         result = execute_python(script)
         if isinstance(result, dict) and result.get("error"):
             return result
@@ -98,24 +122,26 @@ def misc(
             return out
         return {"ok": True, "output": "", "result": None}
     if action == "idc":
+        err = require_one_of(expr=expr, code=code)
+        if err:
+            return err
         script = expr if expr else code
-        if not script:
-            return {"error": True, "message": "expr or code required"}
         try:
             import idc
             res = idc.eval_idc(script)
             return {"ok": True, "result": res}
-        except Exception:
-            return {"error": True, "message": traceback.format_exc()}
+        except Exception as e:
+            return handle_error(e, context="idc")
     if action == "load_sig":
-        if not name:
-            return {"error": True, "message": "name required"}
+        err = require_arg(name, "name")
+        if err:
+            return err
         try:
             import ida_libfuncs
             ida_libfuncs.plan_to_apply_ldes(name)
             return {"ok": True, "name": name, "note": "Signature application planned"}
-        except Exception:
-            return {"error": True, "message": traceback.format_exc()}
+        except Exception as e:
+            return handle_error(e, context="load_sig")
     if action == "cache_stats":
         try:
             from ida_mcp.cache import TOOL_CACHE
@@ -127,14 +153,22 @@ def misc(
             except ImportError:
                 return {"ok": True, "message": "Cache not available"}
     if action == "read_file":
-        if not path:
-            return {"error": True, "message": "path required for read_file"}
+        err = require_arg(path, "path")
+        if err:
+            return err
         return read_file_impl(path, encoding=encoding)
     if action == "write_file":
-        if not path:
-            return {"error": True, "message": "path required for write_file"}
+        err = require_arg(path, "path")
+        if err:
+            return err
+        # content is optional (None means "not provided"). Empty strings are
+        # allowed so callers can create zero-byte files.
         if content is None:
-            return {"error": True, "message": "content required for write_file"}
+            return make_error(
+                MCPError.MISSING_REQUIRED_ARG,
+                "'content' parameter is required for write_file",
+                hint="Provide the 'content' parameter (use '' for empty files).",
+            )
         return write_file_impl(path, content, encoding=encoding)
     if action == "plugin_list":
         try:
@@ -177,21 +211,31 @@ def misc(
                 "count": len(discovered),
                 "note": "Filesystem-based plugin listing (runtime enumeration API not available in this IDA build).",
             }
-        except Exception:
-            return {"error": True, "message": traceback.format_exc()}
+        except Exception as e:
+            return handle_error(e, context="plugin_list")
     if action == "plugin_run":
-        if not name:
-            return {"error": True, "message": "name required"}
+        err = require_arg(name, "name")
+        if err:
+            return err
         try:
             import ida_loader
             plugin = ida_loader.find_plugin(name, True)
             if plugin in (None, -1):
-                return {"error": True, "message": f"Plugin not found: {name}"}
+                return make_error(
+                    MCPError.PLUGIN_NOT_FOUND,
+                    f"Plugin not found: {name}",
+                    details={"name": name},
+                    hint="Use misc(action='plugin_list') to see available plugins.",
+                )
             if ida_loader.run_plugin(plugin, arg or 0):
                 return {"ok": True, "name": name}
-            return {"error": True, "message": f"Failed to run plugin: {name}"}
-        except Exception:
-            return {"error": True, "message": traceback.format_exc()}
+            return make_error(
+                MCPError.PLUGIN_ERROR,
+                f"Failed to run plugin: {name}",
+                details={"name": name, "arg": arg},
+            )
+        except Exception as e:
+            return handle_error(e, context="plugin_run")
     if action == "health":
         try:
             import platform
@@ -205,9 +249,14 @@ def misc(
                 info["ida_path"] = idaapi.get_ida_subdir("") or ""
                 info["cwd"] = os.getcwd()
             return info
-        except Exception:
-            return {"error": True, "message": traceback.format_exc()}
-    return {"error": True, "message": f"Unknown action: {action}"}
+        except Exception as e:
+            return handle_error(e, context="health")
+    return make_error(
+        MCPError.ACTION_NOT_FOUND,
+        f"Unknown action: {action}",
+        details={"provided": action},
+        hint="Valid actions: python, idc, load_sig, cache_stats, read_file, write_file, plugin_list, plugin_run, health",
+    )
 
 _MAX_SCRIPT_LENGTH = 50000
 
@@ -216,7 +265,12 @@ _MAX_SCRIPT_LENGTH = 50000
 def execute_python(script: str):
     """Executes Python code in IDA context and returns stdout/stderr."""
     if len(script) > _MAX_SCRIPT_LENGTH:
-        return {"error": True, "message": f"Script exceeds max length ({len(script)} > {_MAX_SCRIPT_LENGTH})"}
+        return make_error(
+            MCPError.SIZE_LIMIT_EXCEEDED,
+            f"Script exceeds max length ({len(script)} > {_MAX_SCRIPT_LENGTH})",
+            details={"length": len(script), "max": _MAX_SCRIPT_LENGTH},
+            hint="Split the script into smaller chunks or reduce its size before submission.",
+        )
     output = io.StringIO()
     old_stdout = sys.stdout
     old_stderr = sys.stderr
@@ -243,14 +297,14 @@ def execute_python(script: str):
     except SyntaxError as e:
         line = getattr(e, "lineno", None)
         offset = getattr(e, "offset", None)
-        return {
-            "error": True,
-            "message": f"SyntaxError: {e.msg}",
-            "details": {"line": line, "offset": offset, "text": e.text},
-            "hint": "Use action=python with 'code' for multi-line scripts.",
-        }
-    except Exception:
-        return {"error": True, "message": traceback.format_exc()}
+        return make_error(
+            MCPError.SCRIPT_ERROR,
+            f"SyntaxError: {e.msg}",
+            details={"line": line, "offset": offset, "text": e.text, "kind": "SyntaxError"},
+            hint="Use action=python with 'code' for multi-line scripts.",
+        )
+    except Exception as e:
+        return handle_error(e, context="execute_python")
     finally:
         sys.stdout = old_stdout
         sys.stderr = old_stderr
