@@ -1571,7 +1571,14 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     )
 
                 return make_error(
-                    MCPError.IDA_TIMEOUT, f"IDA failed to initialize within {startup_timeout}s."
+                    MCPError.IDA_TIMEOUT,
+                    f"IDA failed to initialize within {startup_timeout}s",
+                    hint=(
+                        "Increase IDA_MCP_STARTUP_TIMEOUT (current "
+                        f"{startup_timeout}s) if the binary is large or your "
+                        "machine is slow. Check the IDA log in stderr_log for "
+                        "the exact startup phase that hangs."
+                    ),
                 )
             finally:
                 # On any non-success return, the log handles were never
