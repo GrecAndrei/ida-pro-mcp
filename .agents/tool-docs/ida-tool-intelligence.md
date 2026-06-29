@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Intelligence subsystem: embedding-based function classification, indexing, similarity search, and evidence-card production. Actions: intelligence_status, embedder_status, anchor_status, refresh_anchors, classify_text, classify_function, index_function, index_batch, similar_functions, semantic_search, blackboard_search, export_index_summary, evidence_card. NOTE: similar_functions is the canonical embedding-driven nearest-neighbor search; agent.similar overlaps functionally but is the older 'context pack' workflow. Prefer intelligence.similar_functions for new code; agent.similar is kept for back-compat.
+Intelligence subsystem: embedding-based classification, blackboard-driven indexing, and similarity search. Actions: intelligence_status, embedder_status, anchor_status, refresh_anchors, classify_text, classify_function, index_function, index_batch, similar_functions, semantic_search, blackboard_search, export_index_summary, evidence_card. Corpus is blackboard entries (curated hypotheses/IOCs/vulns), not raw decompiled functions — indexing never blocks IDA on full-binary pseudocode embedding. index_function needs a blackboard note at the address (write one first via blackboard(action='write')); index_batch pulls every blackboard entry (filtered by category, capped by max_items, gated by IDA_MCP_EMBED_CORPUS_GATE); similar_functions builds a query doc from the address's blackboard context and runs k-NN over the entry index. semantic_search and blackboard_search use the same vector index; the first is text→vector, the second is text→related_by_behavior on the blackboard store.
 
 ## Actions
 - `intelligence_status` (tool-specific)

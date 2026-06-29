@@ -6,7 +6,7 @@
 - Load this doc on demand from the router skill to minimize startup context.
 
 ## Description
-Detect and analyze network protocol structures, parsers, endpoints, and state machines in a binary. Actions: detect, parsers, serializers, handlers, endpoints, tls_config, socket_flow, packet_struct, magic_numbers, state_machine.
+Detect and analyze network protocol structures, parsers, endpoints, state machines, and reconstruct full protocol specs from dispatch tables. Actions: detect, parsers, serializers, handlers, endpoints, tls_config, socket_flow, packet_struct, magic_numbers, state_machine, reconstruct, trace_handler, export_spec.
 
 ## Actions
 - `detect` (analysis)
@@ -19,6 +19,9 @@ Detect and analyze network protocol structures, parsers, endpoints, and state ma
 - `packet_struct` (tool-specific)
 - `magic_numbers` (tool-specific)
 - `state_machine` (tool-specific)
+- `reconstruct` (tool-specific)
+- `trace_handler` (tool-specific)
+- `export_spec` (tool-specific)
 
 ### Host wrapper actions (accepted by host dispatcher)
 - `grep`: run another action, then grep output lines.
