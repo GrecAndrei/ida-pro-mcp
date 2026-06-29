@@ -1216,7 +1216,39 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             args.get("max_age_days", 30), 30, min_value=1, max_value=3650
         )
         deleted = self.session_mgr.cleanup_stale(max_age_days=max_age)
-        return {"ok": True, "deleted_sids": deleted, "count": len(deleted)}
+
+        # Also prune sessions whose binary path no longer exists — those
+        # are "stale-by-evidence" rather than age-stale, and they're usually
+        # the bulk of clutter when /tmp scratch paths get reaped.
+        also_pruned_orphans: list[str] = []
+        if bool(args.get("prune_orphans", True)):
+            sessions = self.session_mgr.list_sessions(offset=0, limit=10_000).get("sessions", [])
+            for raw in sessions:
+                sid = _normalize_session_id(raw.get("session_id") or "")
+                if not sid:
+                    sid = raw.get("session_id") or ""
+                    if isinstance(sid, str) and re.fullmatch(r"[A-Za-z0-9]+", sid):
+                        sid = sid.upper()
+                    else:
+                        continue
+                binary = raw.get("binary_path") or ""
+                idb = raw.get("idb_path") or ""
+                bin_missing = bool(binary) and not os.path.isfile(binary)
+                idb_missing = bool(idb) and not os.path.isfile(idb)
+                # Only prune when both reference paths have gone; we don't
+                # want to nuke a session that's mid-save.
+                if bin_missing and idb_missing:
+                    if self.session_mgr.delete_session(sid):
+                        also_pruned_orphans.append(sid)
+
+        return {
+            "ok": True,
+            "deleted_sids": deleted,
+            "orphan_sids": also_pruned_orphans,
+            "count": len(deleted),
+            "deleted_count": len(deleted),
+            "orphan_count": len(also_pruned_orphans),
+        }
 
     def _session_action_stats(self, args: dict) -> dict:
         return {"ok": True, "stats": self.session_mgr.get_stats()}
