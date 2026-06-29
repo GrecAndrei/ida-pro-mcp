@@ -1650,13 +1650,17 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     exit_code = server_process.poll()
                     if exit_code is not None:
                         diag = self._get_ida_diagnostics(stdout_log, stderr_log)
-                        return {
-                            "error": True,
-                            "exit_code": exit_code,
-                            "log": diag,
-                            "library_init": self._extract_library_init_failure(diag),
-                            "sanitize_env": sanitize_env,
-                        }
+                        return make_error(
+                            MCPError.IDA_CRASHED,
+                            f"IDA runtime exited with code {exit_code} during startup",
+                            details={
+                                "exit_code": exit_code,
+                                "log": diag,
+                                "library_init": self._extract_library_init_failure(diag),
+                                "sanitize_env": sanitize_env,
+                            },
+                            hint="Inspect the IDA log; common causes: missing IDAPython, broken plugin, missing license.",
+                        )
 
                     try:
                         res = self._send_rpc_raw(

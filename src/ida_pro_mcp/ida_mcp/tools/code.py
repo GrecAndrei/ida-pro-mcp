@@ -919,7 +919,13 @@ def code(
                         "note": "callers/callees show first 8 lines only. Use code(action='decompile') for full pseudocode.",
                     })
                 except Exception as e:
-                    results.append({"addr": addr, "error": str(e)})
+                    results.append(
+                        make_error(
+                            MCPError.IDA_ERROR,
+                            f"callgraph collection failed at {addr}: {type(e).__name__}: {e}",
+                            details={"addr": addr, "exception_type": type(e).__name__},
+                        )
+                    )
 
             elif action == "disasm":
                 func = idaapi.get_func(ea)
@@ -1305,15 +1311,32 @@ def code(
                     continue
                 cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
                 if not cfunc:
-                    results.append(
-                        {
-                            "addr": addr,
-                            "error": dec_err.get("message", "Decompilation failed") if isinstance(dec_err, dict) else "Decompilation failed",
-                            "error_code": dec_err.get("code") if isinstance(dec_err, dict) else MCPError.DECOMPILER_FAILED,
-                            "hint": dec_err.get("hint") if isinstance(dec_err, dict) else None,
-                            "details": dec_err.get("details") if isinstance(dec_err, dict) else None,
-                        }
-                    )
+                    err_entry: dict = {
+                        "addr": addr,
+                        "code": (
+                            dec_err.get("code")
+                            if isinstance(dec_err, dict)
+                            else MCPError.DECOMPILER_FAILED
+                        ),
+                        "category": (
+                            dec_err.get("category")
+                            if isinstance(dec_err, dict)
+                            else "runtime"
+                        ),
+                        "message": (
+                            dec_err.get("message", "Decompilation failed")
+                            if isinstance(dec_err, dict)
+                            else "Decompilation failed"
+                        ),
+                    }
+                    if isinstance(dec_err, dict):
+                        if dec_err.get("hint"):
+                            err_entry["hint"] = dec_err["hint"]
+                        if dec_err.get("details"):
+                            err_entry["details"] = dec_err["details"]
+                    else:
+                        err_entry["hint"] = ERROR_HINTS.get(MCPError.DECOMPILER_FAILED)
+                    results.append(err_entry)
                     continue
                 pseudo = str(cfunc)
                 cfg_semantics = _compute_cfg_semantics(func)
@@ -1338,15 +1361,32 @@ def code(
                     continue
                 cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
                 if not cfunc:
-                    results.append(
-                        {
-                            "addr": addr,
-                            "error": dec_err.get("message", "Decompilation failed") if isinstance(dec_err, dict) else "Decompilation failed",
-                            "error_code": dec_err.get("code") if isinstance(dec_err, dict) else MCPError.DECOMPILER_FAILED,
-                            "hint": dec_err.get("hint") if isinstance(dec_err, dict) else None,
-                            "details": dec_err.get("details") if isinstance(dec_err, dict) else None,
-                        }
-                    )
+                    err_entry = {
+                        "addr": addr,
+                        "code": (
+                            dec_err.get("code")
+                            if isinstance(dec_err, dict)
+                            else MCPError.DECOMPILER_FAILED
+                        ),
+                        "category": (
+                            dec_err.get("category")
+                            if isinstance(dec_err, dict)
+                            else "runtime"
+                        ),
+                        "message": (
+                            dec_err.get("message", "Decompilation failed")
+                            if isinstance(dec_err, dict)
+                            else "Decompilation failed"
+                        ),
+                    }
+                    if isinstance(dec_err, dict):
+                        if dec_err.get("hint"):
+                            err_entry["hint"] = dec_err["hint"]
+                        if dec_err.get("details"):
+                            err_entry["details"] = dec_err["details"]
+                    else:
+                        err_entry["hint"] = ERROR_HINTS.get(MCPError.DECOMPILER_FAILED)
+                    results.append(err_entry)
                     continue
                 flow = _build_decompiler_dataflow(cfunc, max_items=max(200, min(1600, int(max_items))))
                 edge_lines = [
@@ -1499,7 +1539,20 @@ def code(
                     continue
                 cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
                 if not cfunc:
-                    results.append({"addr": addr, "error": "Decompilation failed — cannot explain"})
+                    err_entry = {
+                        "addr": addr,
+                        "code": MCPError.DECOMPILER_FAILED,
+                        "category": "runtime",
+                        "message": "Decompilation failed — cannot explain",
+                    }
+                    if isinstance(dec_err, dict):
+                        if dec_err.get("hint"):
+                            err_entry["hint"] = dec_err["hint"]
+                        if dec_err.get("details"):
+                            err_entry["details"] = dec_err["details"]
+                    else:
+                        err_entry["hint"] = ERROR_HINTS.get(MCPError.DECOMPILER_FAILED)
+                    results.append(err_entry)
                     continue
 
                 pseudo = str(cfunc)

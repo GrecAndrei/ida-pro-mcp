@@ -165,7 +165,11 @@ class SessionBootstrapMonitoringMixin:
             data = self._load_skills(sid)
             bootstrap = data.get("bootstrap") or {}
             if not bootstrap:
-                return {"ok": False, "error": "bootstrap_not_initialized"}
+                return make_error(
+                    MCPError.NOT_IMPLEMENTED,
+                    "Bootstrap not initialized",
+                    hint="Initialize the bootstrap first (see skills/session bootstrap tool).",
+                )
             snaps = bootstrap.setdefault("metric_snapshots", [])
             snap_id = f"bsnap_{uuid.uuid4().hex[:8]}"
             row = {
