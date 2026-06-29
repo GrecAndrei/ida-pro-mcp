@@ -275,21 +275,6 @@ class SessionManager(SessionSkillsMixin):
         skills.sort(key=lambda x: x.get("q_value", 0), reverse=True)
         return skills[:limit]
 
-    def _mark_global_skill_used(self, skill_id: str) -> None:
-        import sqlite3
-        try:
-            conn = sqlite3.connect(self._global_skills_db)
-            cur = conn.cursor()
-            cur.execute("""
-                UPDATE global_skills
-                SET usage_count_total = usage_count_total + 1, last_used = ?
-                WHERE skill_id = ?
-            """, (datetime.now().isoformat(), skill_id))
-            conn.commit()
-            conn.close()
-        except Exception:
-            pass
-
     # ------------------------------------------------------------------
     # Sanitization
     # ------------------------------------------------------------------
@@ -925,55 +910,6 @@ class SessionManager(SessionSkillsMixin):
         except Exception as e:
             log_rpc(f"Failed to save notebook for {sid}: {e}")
 
-    def notebook_append(self, sid: str, entry: str, section: str | None = None) -> dict:
-        """Append to the analysis notebook. Auto-links addresses and bookmarks."""
-        with self._lock:
-            session = self.sessions.get(sid)
-            if not session:
-                return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
-            notebook = self._load_notebook(sid)
-            lines = notebook.split("\n") if notebook else []
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            if section:
-                lines.append(f"\n## {section}")
-            lines.append(f"\n> [{timestamp}]")
-            lines.append(entry)
-            self._save_notebook(sid, "\n".join(lines))
-            session.update_access()
-            self._save_metadata(session)
-            return {"ok": True, "notebook_lines": len(lines)}
-
-    def notebook_read(self, sid: str, lines: str | None = None) -> dict:
-        """Read the analysis notebook."""
-        with self._lock:
-            notebook = self._load_notebook(sid)
-            if not notebook:
-                return {"ok": True, "notebook": "", "note": "Notebook is empty. Use notebook_append to add entries."}
-            all_lines = notebook.split("\n")
-            if lines:
-                try:
-                    if "-" in lines:
-                        start, end = lines.split("-")
-                        slice_lines = all_lines[int(start):int(end)]
-                    else:
-                        slice_lines = all_lines[-int(lines):]
-                    return {"ok": True, "notebook": "\n".join(slice_lines), "total_lines": len(all_lines)}
-                except (ValueError, TypeError):
-                    return {"ok": True, "notebook": "\n".join(all_lines[-50:]), "total_lines": len(all_lines)}
-            return {"ok": True, "notebook": notebook, "total_lines": len(all_lines)}
-
-    def notebook_section(self, sid: str, section_name: str) -> dict:
-        """Extract a specific section from the notebook."""
-        notebook = self._load_notebook(sid)
-        pattern = re.compile(rf"^## {re.escape(section_name)}\s*$", re.MULTILINE)
-        match = pattern.search(notebook)
-        if not match:
-            return {"ok": True, "content": "", "note": f"Section '{section_name}' not found"}
-        start = match.end()
-        next_section = re.search(r"^## ", notebook[start:], re.MULTILINE)
-        end = start + next_section.start() if next_section else len(notebook)
-        return {"ok": True, "content": notebook[start:end].strip()}
-
     # ====================================================================
     # HYPOTHESIS TRACKER
     # ====================================================================
@@ -1019,19 +955,6 @@ class SessionManager(SessionSkillsMixin):
                 self._save_skills(sid, data)
                 return {"ok": True, "hypothesis_id": hid, "hypothesis": h}
         return make_error(MCPError.NOT_FOUND, f"Hypothesis {hid} not found")
-
-    def list_hypotheses(self, sid: str, status: str | None = None) -> dict:
-        data = self._load_skills(sid)
-        hyps = data.get("hypotheses", [])
-        if status:
-            hyps = [h for h in hyps if h.get("status") == status]
-        return {
-            "ok": True, "total": len(hyps),
-            "confirmed": sum(1 for h in hyps if h.get("status") == "confirmed"),
-            "refuted": sum(1 for h in hyps if h.get("status") == "refuted"),
-            "pending": sum(1 for h in hyps if h.get("status") == "pending"),
-            "hypotheses": hyps,
-        }
 
     # ====================================================================
     # SKILL CRYSTALLIZATION (L3 + Global Registry)

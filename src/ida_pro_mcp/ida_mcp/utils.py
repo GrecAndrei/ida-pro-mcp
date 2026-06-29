@@ -1,7 +1,6 @@
 import json
 import os
 import struct
-import sys
 import tempfile
 from collections.abc import Callable
 from typing import (
@@ -26,7 +25,6 @@ except ImportError:
 
 import ida_funcs
 import ida_hexrays
-import ida_kernwin
 import ida_nalt
 import ida_typeinf
 import idaapi
@@ -627,14 +625,7 @@ def get_prototype(fn: ida_funcs.func_t) -> Optional[str]:
         return None
 
 
-DEMANGLED_TO_EA = {}
-
-
-def create_demangled_to_ea_map():
-    for ea in idautils.Functions():
-        demangled = idaapi.demangle_name(idc.get_name(ea, 0), idaapi.MNG_NODEFINIT)
-        if demangled:
-            DEMANGLED_TO_EA[demangled] = ea
+DEMANGLED_TO_EA = {}  # populated on demand by callers (legacy demangle cache)
 
 
 def get_type_by_name(type_name: str) -> ida_typeinf.tinfo_t:
@@ -750,18 +741,6 @@ def get_type_by_name(type_name: str) -> ida_typeinf.tinfo_t:
     raise IDAError(f"Unable to retrieve {type_name} type info object")
 
 
-def paginate(data: list[T], offset: int, count: int) -> Page[T]:
-    if count == 0:
-        count = len(data)
-    next_offset = offset + count
-    if next_offset >= len(data):
-        next_offset = None
-    return {
-        "data": data[offset : offset + count],
-        "next_offset": next_offset,
-    }
-
-
 def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:
     if not pattern:
         return data
@@ -776,14 +755,6 @@ def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:
         return "" if v is None else str(v)
 
     return [item for item in data if matcher(get_value(item))]
-
-
-def refresh_decompiler_widget():
-    widget = ida_kernwin.get_current_widget()
-    if widget is not None:
-        vu = ida_hexrays.get_widget_vdui(widget)
-        if vu is not None:
-            vu.refresh_ctext()
 
 
 def refresh_decompiler_ctext(fn_addr: int):
@@ -808,42 +779,6 @@ class my_modifier_t(ida_hexrays.user_lvar_modifier_t):
                 lvar_saved.type = self.new_type
                 return True
         return False
-
-
-def parse_decls_ctypes(decls: str, hti_flags: int) -> tuple[int, list[str]]:
-    if sys.platform == "win32":
-        import ctypes
-
-        assert isinstance(decls, str), "decls must be a string"
-        assert isinstance(hti_flags, int), "hti_flags must be an int"
-        c_decls = decls.encode("utf-8")
-        c_til = None
-        ida_dll = ctypes.CDLL("ida")
-        ida_dll.parse_decls.argtypes = [
-            ctypes.c_void_p,
-            ctypes.c_char_p,
-            ctypes.c_void_p,
-            ctypes.c_int,
-        ]
-        ida_dll.parse_decls.restype = ctypes.c_int
-
-        messages: list[str] = []
-
-        @ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p)
-        def magic_printer(fmt: bytes, arg1: bytes):
-            if fmt.count(b"%") == 1 and b"%s" in fmt:
-                formatted = fmt.replace(b"%s", arg1)
-                messages.append(formatted.decode("utf-8"))
-                return len(formatted) + 1
-            else:
-                messages.append(f"unsupported magic_printer fmt: {repr(fmt)}")
-                return 0
-
-        errors = ida_dll.parse_decls(c_til, c_decls, magic_printer, hti_flags)
-    else:
-        errors = ida_typeinf.parse_decls(None, decls, False, hti_flags)
-        messages = []
-    return errors, messages
 
 
 def get_stack_frame_variables_internal(
@@ -882,44 +817,6 @@ def get_stack_frame_variables_internal(
                 )
             )
     return members
-
-
-def decompile_checked(addr: int):
-    """Decompile a function and raise IDAError on failure"""
-    if not ida_hexrays.init_hexrays_plugin():
-        raise IDAError("Hex-Rays decompiler is not available")
-    error = ida_hexrays.hexrays_failure_t()
-    cfunc = ida_hexrays.decompile_func(addr, error, ida_hexrays.DECOMP_WARNINGS)
-    if not cfunc:
-        if error.code == ida_hexrays.MERR_LICENSE:
-            raise IDAError(
-                "Decompiler license is not available. Use `disassemble_function` to get the assembly code instead."
-            )
-
-        message = f"Decompilation failed at {hex(addr)}"
-        if error.str:
-            message += f": {error.str}"
-        if error.errea != idaapi.BADADDR:
-            message += f" (address: {hex(error.errea)})"
-        raise IDAError(message)
-    return cfunc
-
-
-def decompile_function_safe(ea: int) -> Optional[str]:
-    """Safely decompile a function, returning None on failure"""
-    import ida_lines
-
-    try:
-        if not ida_hexrays.init_hexrays_plugin():
-            return None
-        error = ida_hexrays.hexrays_failure_t()
-        cfunc = ida_hexrays.decompile_func(ea, error, ida_hexrays.DECOMP_WARNINGS)
-        if not cfunc:
-            return None
-        sv = cfunc.get_pseudocode()
-        return "\n".join(ida_lines.tag_remove(sl.line) for sl in sv)
-    except Exception:
-        return None
 
 
 def get_assembly_lines(ea: int) -> str:

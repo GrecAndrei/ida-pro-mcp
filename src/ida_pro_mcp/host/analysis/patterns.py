@@ -377,32 +377,6 @@ class GlobalFactsDatabase:
             self._conn.commit()
         return fact_id
 
-    def get_fact(self, category: str, key: str) -> dict[str, Any] | None:
-        """Retrieve a single fact by category and key."""
-        with self._lock:
-            cursor = self._conn.execute(
-                "SELECT fact_id, category, fact_key, fact_value, confidence, source, timestamp, access_count FROM global_facts WHERE category = ? AND fact_key = ?",
-                (category, key),
-            )
-            row = cursor.fetchone()
-            if row:
-                self._conn.execute(
-                    "UPDATE global_facts SET access_count = access_count + 1, last_accessed = ? WHERE fact_id = ?",
-                    (time.time(), row[0]),
-                )
-                self._conn.commit()
-                return {
-                    "fact_id": row[0],
-                    "category": row[1],
-                    "key": row[2],
-                    "value": row[3],
-                    "confidence": row[4],
-                    "source": row[5],
-                    "timestamp": row[6],
-                    "access_count": row[7] + 1,
-                }
-            return None
-
     def query_facts(self, category: str | None = None, key_pattern: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
         """
         Query facts by category and/or key pattern (substring match).
@@ -445,49 +419,6 @@ class GlobalFactsDatabase:
                     "access_count": row[7],
                 })
             return results
-
-    def delete_fact(self, fact_id: str) -> bool:
-        """Delete a fact by ID."""
-        with self._lock:
-            cursor = self._conn.execute("DELETE FROM global_facts WHERE fact_id = ?", (fact_id,))
-            self._conn.commit()
-            return cursor.rowcount > 0
-
-    def get_stale_facts(self, staleness_days: int = 30, limit: int = 50) -> list[dict[str, Any]]:
-        """Return facts not accessed recently with low access count (demotion candidates)."""
-        cutoff = time.time() - (staleness_days * 86400)
-        with self._lock:
-            cursor = self._conn.execute(
-                "SELECT fact_id, category, fact_key, access_count, last_accessed FROM global_facts WHERE last_accessed < ? AND access_count < 5 ORDER BY last_accessed ASC LIMIT ?",
-                (cutoff, limit),
-            )
-            return [
-                {
-                    "fact_id": row[0],
-                    "category": row[1],
-                    "key": row[2],
-                    "access_count": row[3],
-                    "last_accessed": row[4],
-                }
-                for row in cursor.fetchall()
-            ]
-
-    def get_popular_facts(self, min_accesses: int = 5, limit: int = 20) -> list[dict[str, Any]]:
-        """Return frequently accessed facts (promotion candidates to L1)."""
-        with self._lock:
-            cursor = self._conn.execute(
-                "SELECT fact_id, category, fact_key, access_count FROM global_facts WHERE access_count >= ? ORDER BY access_count DESC LIMIT ?",
-                (min_accesses, limit),
-            )
-            return [
-                {
-                    "fact_id": row[0],
-                    "category": row[1],
-                    "key": row[2],
-                    "access_count": row[3],
-                }
-                for row in cursor.fetchall()
-            ]
 
     def count(self) -> int:
         with self._lock:

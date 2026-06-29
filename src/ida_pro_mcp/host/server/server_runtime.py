@@ -47,21 +47,6 @@ NATIVE_LOADERS = (
 )
 
 
-def _is_raw_bin_load(opts: dict) -> bool:
-    """True when IDA loads the binary as a raw blob (-Tbin), so segments need
-    post-load repair. For native PE/ELF/Mach-O, IDA's loader already sets the
-    correct class/type/perm/bitness and repair is destructive."""
-    proc = str(opts.get("processor") or "").lower()
-    loader = str(opts.get("loader") or "").lower()
-    if loader in NATIVE_LOADERS:
-        return False
-    if loader == "bin":
-        return True
-    # No explicit loader: raw-bin only for firmware archs. metapc with no
-    # loader is left to IDA auto-detection (PE/ELF native, or raw x86 blob).
-    return proc in FIRMWARE_RAW_PROCS
-
-
 def _resolve_max_rpc_bytes() -> int:
     try:
         cap = int(os.environ.get("IDA_MCP_MAX_RPC_BYTES", str(64 * 1024 * 1024)))
@@ -947,101 +932,6 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             except Exception as e:
                 log_rpc(f"[idle-index] function seed failed for {session_id}: {e}")
             return targets
-
-    def _start_idle_index_worker(self, session_id: str, server_port: int) -> None:
-            self._stop_idle_index_worker(session_id, join_timeout=0.2)
-            stop_event = threading.Event()
-
-            def _worker() -> None:
-                seeded = False
-                indexed: set[str] = set()
-                self._update_session_indexing_metadata(
-                    session_id,
-                    indexing_mode="hotset_idle",
-                    indexing_state="scheduled",
-                    hot_indexed_count=0,
-                    indexing_complete=False,
-                )
-                log_rpc(f"[idle-index] Scheduled hotset warmup for {session_id}")
-                while not stop_event.wait(1.0):
-                    with self._runtime_lock:
-                        runtime = self.session_runtimes.get(session_id)
-                    if not self._runtime_alive(runtime):
-                        return
-                    if int(self._session_inflight_calls.get(session_id, 0) or 0) > 0:
-                        continue
-                    last_activity = float(self._session_last_activity.get(session_id, 0.0) or 0.0)
-                    if last_activity and (time.time() - last_activity) < float(self._idle_index_delay_seconds):
-                        continue
-
-                    targets = self._collect_idle_index_targets(
-                        session_id,
-                        limit=max(int(self._idle_index_slice_size) * 4, int(self._idle_index_seed_limit)),
-                    )
-                    if not targets and not seeded:
-                        targets = self._seed_idle_index_targets(
-                            session_id,
-                            server_port,
-                            limit=int(self._idle_index_seed_limit),
-                        )
-                        seeded = True
-                    pending = [addr for addr in targets if addr not in indexed]
-                    if not pending:
-                        continue
-
-                    self._update_session_indexing_metadata(
-                        session_id,
-                        indexing_mode="hotset_idle",
-                        indexing_state="warming",
-                        hot_indexed_count=len(indexed),
-                        indexing_complete=bool(indexed),
-                    )
-                    worked = 0
-                    for addr in pending[: int(self._idle_index_slice_size)]:
-                        if stop_event.is_set():
-                            return
-                        if int(self._session_inflight_calls.get(session_id, 0) or 0) > 0:
-                            break
-                        last_activity = float(self._session_last_activity.get(session_id, 0.0) or 0.0)
-                        if last_activity and (time.time() - last_activity) < float(self._idle_index_delay_seconds):
-                            break
-                        try:
-                            res = self._send_rpc_raw(
-                                {
-                                    "tool": "intelligence",
-                                    "args": {"action": "structural_refresh", "addr": addr},
-                                },
-                                server_port,
-                                timeout=float(self._idle_index_rpc_timeout),
-                            )
-                            if isinstance(res, dict) and not is_error_result(res) and res.get("ok"):
-                                indexed.add(addr)
-                                worked += 1
-                        except Exception as e:
-                            log_rpc(f"[idle-index] structural_refresh failed for {session_id} {addr}: {e}")
-                            break
-                    if worked:
-                        self._update_session_indexing_metadata(
-                            session_id,
-                            indexing_mode="hotset_idle",
-                            indexing_state="partial",
-                            hot_indexed_count=len(indexed),
-                            indexing_complete=True,
-                        )
-                        log_rpc(
-                            f"[idle-index] Warmed {worked} hot function(s) for {session_id}; total={len(indexed)}"
-                        )
-
-            t = threading.Thread(
-                target=_worker,
-                daemon=True,
-                name=f"idle-index-{session_id}",
-            )
-            with self._idle_index_lock:
-                self._idle_index_stop_events[session_id] = stop_event
-                self._idle_index_threads[session_id] = t
-            t.start()
-
     def _stop_idle_index_worker(self, session_id: str, join_timeout: float = 1.0) -> None:
             with self._idle_index_lock:
                 stop_event = self._idle_index_stop_events.pop(session_id, None)
@@ -1339,69 +1229,6 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     log_rpc(f"Removed stale IDB artifact: {path}")
                 except Exception as e:
                     log_rpc(f"Failed to remove stale IDB artifact {path}: {e}")
-
-    def _cleanup_packed_idb_siblings(self, packed_idb_path: str) -> list[str]:
-            """Remove stale unpacked siblings (.id0/.id1/.nam/.til/.schemaboot.db/...) next
-            to a packed .i64 IDB. Leaving them in place causes IDA to find the unpacked
-            base, refuse to start (Permission denied / error 4), and abort the open
-            before the existing packed IDB is even consulted.
-
-            Two naming patterns exist depending on the IDA workflow:
-              1) Legacy: <binary>.id0 / .id1 / .nam / .til (base strips .i64)
-              2) Modern: <binary>.i64.blackboard.db / .embeddings.db (base keeps .i64)
-            We cover both forms by computing both the splitext base and the full stem.
-            """
-            removed: list[str] = []
-            if not packed_idb_path:
-                return removed
-            base, ext = os.path.splitext(packed_idb_path)
-            sibling_exts = [
-                ".id0",
-                ".id1",
-                ".id2",
-                ".id3",
-                ".id4",
-                ".nam",
-                ".til",
-                ".dmp",
-                ".asm",
-                ".i64",
-                ".idb",
-                ".schemaboot.db",
-                ".schemaboot.db-shm",
-                ".schemaboot.db-wal",
-                ".blackboard.db",
-                ".blackboard.db-shm",
-                ".blackboard.db-wal",
-                ".embeddings.db",
-                ".embeddings.db-shm",
-                ".embeddings.db-wal",
-            ]
-            seen_paths: set = set()
-            for stem in (base, packed_idb_path):
-                if not stem:
-                    continue
-                for fam_ext in sibling_exts:
-                    path = f"{stem}{fam_ext}"
-                    if path in seen_paths:
-                        continue
-                    seen_paths.add(path)
-                    if not os.path.exists(path):
-                        continue
-                    # Don't clobber the actual packed IDB the user is opening.
-                    try:
-                        if os.path.realpath(path) == os.path.realpath(packed_idb_path):
-                            continue
-                    except Exception:
-                        pass
-                    try:
-                        os.remove(path)
-                        removed.append(path)
-                        log_rpc(f"Removed packed-IDB sibling: {path}")
-                    except Exception as e:
-                        log_rpc(f"Failed to remove packed-IDB sibling {path}: {e}")
-            return removed
-
     def _terminate_ida_processes_for_path(self, target_path: str) -> list[int]:
             """Best-effort terminate any idat/ida processes whose command line references
             the given target. Returns the list of PIDs that were killed. Used to recover

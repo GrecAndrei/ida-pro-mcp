@@ -354,27 +354,8 @@ def reset_taxonomy() -> None:
     _YARA_TAINT_PATTERNS.clear()
 
 
-def get_extra_sources() -> Set[str]:
-    return set(_TAINT_SOURCES_EXTRA)
-
-
 def get_extra_sinks() -> Dict[str, str]:
     return dict(_DANGEROUS_SINKS_EXTRA)
-
-
-def get_yara_taint_patterns() -> Dict[str, str]:
-    return dict(_YARA_TAINT_PATTERNS)
-
-
-def effective_sources(base: Iterable[str]) -> Set[str]:
-    return set(base) | set(_TAINT_SOURCES_EXTRA)
-
-
-def effective_sinks(base: Dict[str, str]) -> Dict[str, str]:
-    merged = dict(base)
-    for k, v in _DANGEROUS_SINKS_EXTRA.items():
-        merged.setdefault(k, v)
-    return merged
 
 
 # ── Corpus → taxonomy extension ──────────────────────────────────────────────

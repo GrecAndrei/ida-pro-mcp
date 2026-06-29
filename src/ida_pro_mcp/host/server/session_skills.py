@@ -750,40 +750,6 @@ class SessionSkillsMixin(SessionBootstrapMixin):
                 out["dead_end_warning"] = dead_end
             return out
 
-    def check_state_contract(self, sid: str, window: int = 8) -> dict:
-        """Check if analyst has persisted findings to blackboard within recent window."""
-        with self._lock:
-            session = self.sessions.get(sid)
-            if not session:
-                return {"ok": False, "error": "session_not_found"}
-            data = self._load_skills(sid)
-            log = data.get("activity_log", [])
-            recent = log[-window:]
-            bb_writes = sum(
-                1
-                for e in recent
-                if isinstance(e, dict)
-                and e.get("tool") == "blackboard"
-                and str(e.get("action") or "").startswith("write")
-            )
-            return {
-                "ok": True,
-                "session_id": sid,
-                "contract_met": bb_writes > 0,
-                "blackboard_writes_in_window": bb_writes,
-                "window_size": len(recent),
-                "recommended_action": {
-                    "tool": "blackboard",
-                    "arguments": {
-                        "action": "write",
-                        "name": "finding_summary",
-                        "notes": "<concise finding from recent analysis>",
-                        "category": "analysis",
-                        "priority": 3,
-                    },
-                },
-            }
-
     def _detect_dead_end(self, activity_log: list[dict]) -> dict | None:
         """Detect stalled analysis patterns."""
         if len(activity_log) < 10:
@@ -896,61 +862,3 @@ class SessionSkillsMixin(SessionBootstrapMixin):
             phase_info = _ANALYSIS_PHASES.get(session.phase, {})
             return {"ok": True, "phase": session.phase, "description": phase_info.get("description", ""),
                     "suggested_tools": phase_info.get("suggested_tools", [])}
-
-    def advance_phase(self, sid: str) -> dict:
-        with self._lock:
-            session = self.sessions.get(sid)
-            if not session:
-                return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
-            phases = sorted(_ANALYSIS_PHASES.keys(), key=lambda p: _ANALYSIS_PHASES[p]["order"])
-            try:
-                idx = phases.index(session.phase)
-                if idx < len(phases) - 1:
-                    session.phase = phases[idx + 1]
-            except ValueError:
-                session.phase = "triage"
-            session.update_access()
-            self._save_metadata(session)
-            phase_info = _ANALYSIS_PHASES.get(session.phase, {})
-            return {"ok": True, "phase": session.phase, "description": phase_info.get("description", ""),
-                    "suggested_tools": phase_info.get("suggested_tools", [])}
-
-    # ====================================================================
-    # FEDERATED SESSION LINKING
-    # ====================================================================
-
-    def link_session(self, sid: str, other_sid: str) -> dict:
-        with self._lock:
-            session = self.sessions.get(sid)
-            other = self.sessions.get(other_sid)
-            if not session or not other:
-                return make_error(MCPError.SESSION_NOT_FOUND, "One or both sessions not found")
-            if other_sid not in session.linked_sessions:
-                session.linked_sessions.append(other_sid)
-            if sid not in other.linked_sessions:
-                other.linked_sessions.append(sid)
-            session.update_access()
-            self._save_metadata(session)
-            self._save_metadata(other)
-            return {"ok": True, "linked": [sid, other_sid]}
-
-    def cross_reference_sessions(self, sid: str) -> dict:
-        """Find shared functions/strings across linked sessions."""
-        with self._lock:
-            session = self.sessions.get(sid)
-            if not session:
-                return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
-            linked = session.linked_sessions
-            if not linked:
-                return {"ok": True, "shared": [], "note": "No linked sessions. Use link_session to share findings."}
-            # Collect function names from all linked sessions' skills data
-            shared_funcs: dict[str, list[str]] = {}
-            for lsid in [sid] + linked:
-                data = self._load_skills(lsid)
-                for entry in data.get("activity_log", []):
-                    func = entry.get("result", "")
-                    if func:
-                        shared_funcs.setdefault(func, []).append(lsid)
-            # Only keep functions appearing in multiple sessions
-            cross = {k: v for k, v in shared_funcs.items() if len(set(v)) > 1}
-            return {"ok": True, "shared_functions": list(cross.keys()), "details": cross}

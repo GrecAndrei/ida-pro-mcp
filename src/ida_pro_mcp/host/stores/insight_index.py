@@ -125,21 +125,6 @@ class InsightIndex:
                 if addr not in self._tag_map[tag]:
                     self._tag_map[tag].append(addr)
 
-    def remove_function(self, func_addr: str) -> bool:
-        """Remove a function and its tag mappings. Returns True if found."""
-        addr = str(func_addr).lower()
-        with self._lock:
-            if addr not in self._func_map:
-                return False
-            old_tags = self._func_map[addr].get("tags", [])
-            for tag in old_tags:
-                lst = self._tag_map.get(tag)
-                if lst and addr in lst:
-                    lst.remove(addr)
-            del self._func_map[addr]
-            self._access_log.pop(addr, None)
-            return True
-
     def rebuild(self, functions: list[tuple[str, dict[str, Any]]]) -> None:
         """
         Bulk-rebuild the entire index. Used on binary load.
@@ -159,84 +144,6 @@ class InsightIndex:
     # Querying
     # ------------------------------------------------------------------
 
-    def query_by_tag(self, tag: str) -> list[dict[str, Any]]:
-        """
-        Query functions by a single behavior tag.
-
-        Returns list of function metadata dicts in <1ms for any tag.
-        """
-        tag = tag.lower()
-        with self._lock:
-            addrs = self._tag_map.get(tag, [])
-            results = []
-            for addr in addrs:
-                meta = self._func_map.get(addr)
-                if meta:
-                    meta["access_count"] = meta.get("access_count", 0) + 1
-                    results.append(dict(meta))
-            return results
-
-    def query_by_tags(
-        self, tags: list[str], mode: str = "and"
-    ) -> list[dict[str, Any]]:
-        """
-        Query functions by multiple behavior tags.
-
-        Parameters
-        ----------
-        tags : list of str
-            Behavior tags to match.
-        mode : str
-            "and" — function must have ALL tags (intersection).
-            "or"  — function must have ANY tag (union).
-
-        Returns list of function metadata dicts.
-        """
-        tags = [t.lower() for t in tags if t]
-        if not tags:
-            return []
-
-        with self._lock:
-            if mode == "and":
-                # Start with the shortest candidate list
-                candidates: set | None = None
-                for tag in tags:
-                    addrs = set(self._tag_map.get(tag, []))
-                    if candidates is None:
-                        candidates = addrs
-                    else:
-                        candidates &= addrs
-                    if not candidates:
-                        return []
-                result_addrs = list(candidates) if candidates else []
-            else:  # "or"
-                result_addrs = []
-                seen = set()
-                for tag in tags:
-                    for addr in self._tag_map.get(tag, []):
-                        if addr not in seen:
-                            seen.add(addr)
-                            result_addrs.append(addr)
-
-            results = []
-            for addr in result_addrs:
-                meta = self._func_map.get(addr)
-                if meta:
-                    meta["access_count"] = meta.get("access_count", 0) + 1
-                    results.append(dict(meta))
-            return results
-
-    def query_by_name(self, name_pattern: str) -> list[dict[str, Any]]:
-        """Substring match against function names (case-insensitive)."""
-        pattern = name_pattern.lower()
-        with self._lock:
-            results = []
-            for _addr, meta in self._func_map.items():
-                if pattern in meta.get("name", "").lower():
-                    meta["access_count"] = meta.get("access_count", 0) + 1
-                    results.append(dict(meta))
-            return results
-
     def get_function(self, func_addr: str) -> dict[str, Any] | None:
         """Get metadata for a single function by address."""
         addr = str(func_addr).lower()
@@ -246,16 +153,6 @@ class InsightIndex:
                 meta["access_count"] = meta.get("access_count", 0) + 1
                 return dict(meta)
             return None
-
-    def get_all_tags(self) -> list[str]:
-        """Return all known tags sorted alphabetically."""
-        with self._lock:
-            return sorted(self._tag_map.keys())
-
-    def get_tag_histogram(self) -> dict[str, int]:
-        """Return {tag: count} for all indexed tags."""
-        with self._lock:
-            return {tag: len(addrs) for tag, addrs in self._tag_map.items()}
 
     # ------------------------------------------------------------------
     # Persistence
@@ -298,31 +195,6 @@ class InsightIndex:
                     self._tag_map[tag] = list(addrs)
         except Exception:
             pass
-
-    # ------------------------------------------------------------------
-    # Promotion / Demotion helpers
-    # ------------------------------------------------------------------
-
-    def get_hot_functions(self, min_accesses: int = 3, limit: int = 50) -> list[dict[str, Any]]:
-        """Return functions accessed >= min_accesses (promotion candidates)."""
-        with self._lock:
-            items = [
-                dict(meta) for meta in self._func_map.values()
-                if meta.get("access_count", 0) >= min_accesses
-            ]
-            items.sort(key=lambda x: -x.get("access_count", 0))
-            return items[:limit]
-
-    def get_stale_functions(self, max_accesses: int = 1, staleness_days: int = 30) -> list[str]:
-        """Return function addresses with low access and old index time (demotion candidates)."""
-        cutoff = time.time() - (staleness_days * 86400)
-        with self._lock:
-            return [
-                meta["addr"]
-                for meta in self._func_map.values()
-                if meta.get("access_count", 0) <= max_accesses
-                and meta.get("indexed_at", 0) < cutoff
-            ]
 
     # ------------------------------------------------------------------
     # Stats

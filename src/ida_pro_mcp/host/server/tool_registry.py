@@ -235,27 +235,8 @@ ACTION_ALIASES: dict[str, dict[str, str]] = {}
 
 # === Public API ===========================================================
 
-def all_tools() -> list[str]:
-    return list(_TOOL_ACTIONS.keys())
-
-
-def advertised_tools() -> list[str]:
-    """Return the advertised (user-facing) tool names."""
-    from ..schemas_data import ADVERTISED_TOOLS
-
-    return [t for t in ADVERTISED_TOOLS if t in _TOOL_ACTIONS]
-
-
 def tool_actions() -> dict[str, list[str]]:
     return _TOOL_ACTIONS
-
-
-def tool_action_names(tool: str) -> list[str]:
-    return _TOOL_ACTIONS.get(tool, [])
-
-
-def has_tool(tool: str) -> bool:
-    return tool in _TOOL_ACTIONS
 
 
 def register_tool_actions(tool: str, actions: list[str]) -> None:

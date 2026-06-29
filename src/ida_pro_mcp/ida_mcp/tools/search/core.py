@@ -53,14 +53,6 @@ def _cache_set(key: str, value) -> None:
         _SEARCH_CACHE.popitem(last=False)
 
 
-def _cache_clear() -> None:
-    _SEARCH_CACHE.clear()
-    global _CONSTANT_DB_CACHE, _IMPORTS_CACHE, _STRINGS_CACHE, _DB_FINGERPRINT
-    _CONSTANT_DB_CACHE = None
-    _IMPORTS_CACHE = None
-    _STRINGS_CACHE = None
-    _DB_FINGERPRINT = None
-
 
 class SearchTimeout:
     """Simple timeout helper for long-running search loops."""
