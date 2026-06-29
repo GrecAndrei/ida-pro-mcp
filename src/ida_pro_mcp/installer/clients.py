@@ -5,7 +5,7 @@ import json
 import os
 import re
 import shutil
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .common import InstallReport
@@ -69,7 +69,7 @@ def load_client_map(source_root: Path) -> dict:
 def backup_file(path: Path, report: InstallReport, dry_run: bool) -> Path | None:
     if not path.exists():
         return None
-    stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    stamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
     backup = path.with_suffix(path.suffix + f".bak.{stamp}")
     if not dry_run:
         backup.parent.mkdir(parents=True, exist_ok=True)

@@ -781,6 +781,17 @@ class BgeCodeEmbedder:
         self._fallback     = _TFIDFEmbedder()
         self._use_llama    = (bool(self._server_bin) and bool(self._model_path)
                               and not EMBED_DISABLED)
+        # Bootstrap domain synonyms from the threat corpus when available.
+        # Skipped on first-call latency budget; failures are tolerated.
+        try:
+            from .threat_corpus import load_corpus  # type: ignore[import-not-found]
+            _corpus = load_corpus()
+            if _corpus is not None:
+                derived = derive_synonyms_from_corpus(_corpus, max_per_source=32)
+                if derived:
+                    self._fallback.extend_synonyms(derived, reset=True)
+        except Exception:
+            pass  # noqa: S110 — optional dependency; no impact on runtime
         # Cached anchor embeddings for BehaviorClassifier
         self._anchor_cache: dict[str, list[float]] = {}
         self._batch_size = int(os.environ.get("IDA_MCP_EMBED_BATCH", "16"))
