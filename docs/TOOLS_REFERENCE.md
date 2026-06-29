@@ -11,6 +11,19 @@ Generated from `schemas.py` (`TOOLS`, `TOOL_ACTIONS`, `TOOL_DESCRIPTIONS`, `buil
 - Host normalization is intentionally permissive for noisy LLM calls on `threat_hunt`, `search`, `session`, and `code` (wrapped action names, noisy arg keys, bracketed address/list values) when mapping is unambiguous.
 - All tool responses containing hex addresses include `llm_address_calculation` containing pre-computed decimal values, alignment states, and offsets relative to the active session's image base address (RVA) to support automated reasoning and prevent manual arithmetic errors.
 
+### Response shape
+
+Every tool returns a uniform envelope:
+
+- Success: `{ok: true, ...}` plus tool-specific fields.
+- Failure: `{ok: false, error: true, code, category, message, hint?, recoverable?, details?}`. Match on `code` (uppercase machine-readable, see `host/errors.py::MCPError`). Categories: `user`, `runtime`, `policy`, `internal`.
+
+Cached responses from `@idaread`-backed tools (`code(smart_decompile)` and friends) annotate the dict with `_cache_hit: true` and `_cache_age_seconds: <int>` so callers can decide whether to trust the hot path. Clients that don't care can ignore those keys.
+
+### Hang protection
+
+Full-program walks (`analysis.*`, `summarize.binary`, `intelligence.index_batch`, `search.semantic`, `firmware_view.smart_carve`, `funcs.metrics`, `session.idle_purge`, ...) are in the dispatcher's `LONG_RUNNING_ACTIONS` whitelist (`host/server/server_dispatch.py`) and get an extended socket recv timeout. The cap is `IDA_MCP_RPC_MAX_RECV_TIMEOUT` (default `600s`). The *entire* call path is bounded by `IDA_MCP_RPC_HARD_WALLCLOCK_SEC` (default `900s`); past that the IDA process is terminated and `IDA_TIMEOUT` is returned, `recoverable=true`. Connection-layer failures are retried with linear backoff up to `IDA_MCP_RPC_MAX_RETRIES` (default `2`); `socket.timeout` / `TimeoutError` are not retried.
+
 ## Aliases
 
 | Alias | Canonical |

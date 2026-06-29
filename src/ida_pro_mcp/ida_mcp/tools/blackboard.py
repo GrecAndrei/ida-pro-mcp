@@ -504,7 +504,7 @@ def blackboard(
 
     if action == "write":
         if not title:
-            return {"ok": False, "error": "title required"}
+            return make_error(MCPError.INVALID_ARGS, "title required")
         eid = store.write(
             title, content, category, addr, addr_end, tags, confidence,
             source="manual", ioc_type=ioc_type, ioc_value=ioc_value,
@@ -553,9 +553,9 @@ def blackboard(
 
     elif action == "read":
         if not entry_id:
-            return {"ok": False, "error": "entry_id required"}
+            return make_error(MCPError.INVALID_ARGS, "entry_id required")
         entry = store.read(entry_id)
-        return {"ok": True, "entry": entry} if entry else {"ok": False, "error": f"Entry '{entry_id}' not found"}
+        return {"ok": True, "entry": entry} if entry else make_error(MCPError.NOT_FOUND, f"Entry \'{entry_id}\' not found", details={"entry_id": entry_id})
 
     elif action == "list":
         entries = store.list(
@@ -570,7 +570,7 @@ def blackboard(
 
     elif action == "search":
         if not query:
-            return {"ok": False, "error": "query required"}
+            return make_error(MCPError.INVALID_ARGS, "query required")
         results = store.semantic_search(
             query=query, top_k=top_k, threshold=threshold,
             category=category or None,
@@ -594,7 +594,7 @@ def blackboard(
 
     elif action == "related_by_behavior":
         if not query:
-            return {"ok": False, "error": "query required"}
+            return make_error(MCPError.INVALID_ARGS, "query required")
         thr = threshold
         try:
             thr = float(threshold)
@@ -636,7 +636,7 @@ def blackboard(
 
     elif action == "update":
         if not entry_id:
-            return {"ok": False, "error": "entry_id required"}
+            return make_error(MCPError.INVALID_ARGS, "entry_id required")
         fields: Dict = {}
         if title: fields["title"] = title
         if content: fields["content"] = content
@@ -647,15 +647,15 @@ def blackboard(
         fields.update({k: v for k, v in kwargs.items()
                        if k in {"title","content","category","addr","confidence","q_value","resolved"}})
         if not fields:
-            return {"ok": False, "error": "No fields to update"}
+            return make_error(MCPError.INVALID_ARGS, "No fields to update")
         ok = store.update(entry_id, **fields)
-        return {"ok": ok} if ok else {"ok": False, "error": f"Entry '{entry_id}' not found"}
+        return {"ok": ok} if ok else make_error(MCPError.NOT_FOUND, f"Entry \'{entry_id}\' not found", details={"entry_id": entry_id})
 
     elif action == "delete":
         if not entry_id:
-            return {"ok": False, "error": "entry_id required"}
+            return make_error(MCPError.INVALID_ARGS, "entry_id required")
         ok = store.delete(entry_id)
-        return {"ok": ok} if ok else {"ok": False, "error": f"Entry '{entry_id}' not found"}
+        return {"ok": ok} if ok else make_error(MCPError.NOT_FOUND, f"Entry \'{entry_id}\' not found", details={"entry_id": entry_id})
 
     elif action == "clear":
         count = store.clear(category=category if category != "general" else None)
@@ -674,17 +674,17 @@ def blackboard(
 
     elif action == "contradict":
         if not entry_id:
-            return {"ok": False, "error": "entry_id required"}
+            return make_error(MCPError.INVALID_ARGS, "entry_id required")
         if not reason:
-            return {"ok": False, "error": "reason required"}
+            return make_error(MCPError.INVALID_ARGS, "reason required")
         ok = store.contradict(entry_id, reason)
-        return {"ok": ok} if ok else {"ok": False, "error": f"Entry '{entry_id}' not found"}
+        return {"ok": ok} if ok else make_error(MCPError.NOT_FOUND, f"Entry \'{entry_id}\' not found", details={"entry_id": entry_id})
 
     elif action == "resolve":
         if not entry_id:
-            return {"ok": False, "error": "entry_id required"}
+            return make_error(MCPError.INVALID_ARGS, "entry_id required")
         ok = store.mark_resolved(entry_id)
-        return {"ok": ok} if ok else {"ok": False, "error": f"Entry '{entry_id}' not found"}
+        return {"ok": ok} if ok else make_error(MCPError.NOT_FOUND, f"Entry \'{entry_id}\' not found", details={"entry_id": entry_id})
 
     elif action == "next_target":
         targets = store.next_target(limit=limit or 5)
@@ -751,29 +751,29 @@ def blackboard(
 
     elif action == "accept":
         if not proposal_id:
-            return {"ok": False, "error": "proposal_id required"}
+            return make_error(MCPError.INVALID_ARGS, "proposal_id required")
         crawler = _BackgroundCrawler.instance()
         eid = crawler.accept(proposal_id)
-        return {"ok": bool(eid), "entry_id": eid} if eid else {"ok": False, "error": f"Proposal '{proposal_id}' not found"}
+        return {"ok": bool(eid), "entry_id": eid} if eid else make_error(MCPError.NOT_FOUND, f"Proposal \'{proposal_id}\' not found", details={"proposal_id": proposal_id})
 
     elif action == "reject":
         if not proposal_id:
-            return {"ok": False, "error": "proposal_id required"}
+            return make_error(MCPError.INVALID_ARGS, "proposal_id required")
         crawler = _BackgroundCrawler.instance()
         ok = crawler.reject(proposal_id)
-        return {"ok": ok} if ok else {"ok": False, "error": f"Proposal '{proposal_id}' not found"}
+        return {"ok": ok} if ok else make_error(MCPError.NOT_FOUND, f"Proposal \'{proposal_id}\' not found", details={"proposal_id": proposal_id})
 
     elif action == "add_evidence":
         if not entry_id:
-            return {"ok": False, "error": "entry_id required"}
+            return make_error(MCPError.INVALID_ARGS, "entry_id required")
         if not evidence_type or not evidence_value:
-            return {"ok": False, "error": "evidence_type and evidence_value required"}
+            return make_error(MCPError.INVALID_ARGS, "evidence_type and evidence_value required")
         ok = store.add_evidence(entry_id, evidence_type, evidence_value, evidence_weight)
         return {"ok": ok}
 
     elif action == "calibrate":
         if not entry_id:
-            return {"ok": False, "error": "entry_id required"}
+            return make_error(MCPError.INVALID_ARGS, "entry_id required")
         new_conf = store.calibrate_confidence(entry_id)
         return {"ok": new_conf is not None, "confidence": new_conf}
 
@@ -799,11 +799,11 @@ def blackboard(
             _spec.loader.exec_module(_kgmod)
             kg = _kgmod.KnowledgeGraph(db_path=store.db_path)
         except Exception as e:
-            return {"ok": False, "error": f"KnowledgeGraph unavailable: {e}"}
+            return make_error(MCPError.IDA_ERROR, f"KnowledgeGraph unavailable: {e}", details={"exception_type": type(e).__name__})
 
         if action == "add_system":
             if not title:
-                return {"ok": False, "error": "title required (system name)"}
+                return make_error(MCPError.INVALID_ARGS, "title required (system name)")
             members = kwargs.get("members") or []
             entry_points = kwargs.get("entry_points") or []
             exit_points = kwargs.get("exit_points") or []
@@ -814,7 +814,7 @@ def blackboard(
 
         elif action == "add_struct":
             if not title:
-                return {"ok": False, "error": "title required (struct name)"}
+                return make_error(MCPError.INVALID_ARGS, "title required (struct name)")
             members_data = kwargs.get("members") or []
             size = int(kwargs.get("size_bytes") or 0)
             sid = kg.add_struct(title, members=members_data, size_bytes=size,
@@ -823,7 +823,7 @@ def blackboard(
 
         elif action == "add_gap":
             if not title:
-                return {"ok": False, "error": "title required (expected capability)"}
+                return make_error(MCPError.INVALID_ARGS, "title required (expected capability)")
             hints = kwargs.get("hints") or []
             gap_type = kwargs.get("gap_type") or "capability"
             binary_type = kwargs.get("binary_type") or ""
@@ -835,14 +835,14 @@ def blackboard(
         elif action == "fill_gap":
             gap_id = kwargs.get("gap_id") or entry_id
             if not gap_id:
-                return {"ok": False, "error": "gap_id or entry_id required"}
+                return make_error(MCPError.INVALID_ARGS, "gap_id or entry_id required")
             filled_by = addr or kwargs.get("filled_by") or ""
             ok = kg.fill_gap(gap_id, filled_by)
             return {"ok": ok}
 
         elif action == "add_state_machine":
             if not title:
-                return {"ok": False, "error": "title required (state machine name)"}
+                return make_error(MCPError.INVALID_ARGS, "title required (state machine name)")
             state_var = addr or kwargs.get("state_var") or ""
             states = kwargs.get("states") or []
             sid = kg.add_state_machine(title, state_var=state_var, states=states,
@@ -851,7 +851,7 @@ def blackboard(
 
         elif action == "add_peripheral":
             if not addr:
-                return {"ok": False, "error": "addr required (MMIO base address)"}
+                return make_error(MCPError.INVALID_ARGS, "addr required (MMIO base address)")
             periph_type = kwargs.get("periph_type") or "unknown"
             drivers = kwargs.get("drivers") or []
             pid = kg.add_peripheral(addr, name=title, periph_type=periph_type,
@@ -860,7 +860,7 @@ def blackboard(
 
         elif action == "add_attack_surface":
             if not addr:
-                return {"ok": False, "error": "addr required (entry point address)"}
+                return make_error(MCPError.INVALID_ARGS, "addr required (entry point address)")
             reachable_from = kwargs.get("reachable_from") or "unknown"
             input_type = kwargs.get("input_type") or "unknown"
             call_stack = kwargs.get("call_stack") or []
@@ -1013,4 +1013,4 @@ def blackboard(
         return knowledge(action="import_symbols", min_confidence=min_confidence, limit=limit, **kwargs)
 
     else:
-        return {"ok": False, "error": f"Unknown action: {action}"}
+        return make_error(MCPError.ACTION_NOT_FOUND, f"Unknown action: {action}")

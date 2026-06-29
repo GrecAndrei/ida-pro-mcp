@@ -129,9 +129,11 @@ Recommended pattern:
 1. `session(action='create', binary_path='...')` — open session
 2. `session(action='state')` — read full state (binary, coverage, blackboard, next actions)
 3. `blackboard(action='frontier', limit=10)` — ranked unvisited functions
-4. `code(action='smart_decompile', addrs='...')` — decompile prioritized targets
-5. `blackboard(action='write', ...)` — persist findings
-6. `predictor(action='recommend_bundle')` — next recommended actions if stuck
+4. `code(action='smart_decompile', addrs='...')` — decompile prioritized targets (results carry `_cache_hit` / `_cache_age_seconds`; inspect these to decide whether to trust a hot cache)
+5. `code(action='disasm', addrs='0x...', window=20)` — centered ±20-line slice around the focus address; response carries `"window": 20` for cache consumers
+6. `data(action='functions', min_xrefs=2)` / `funcs.list(min_xrefs=2)` — drop the long tail of one-off thunks before paging
+7. `blackboard(action='write', ...)` — persist findings
+8. `predictor(action='recommend_bundle')` — next recommended actions if stuck
 
 Practical rules:
 - Prefer compact results, then zoom in with filters
@@ -139,6 +141,8 @@ Practical rules:
 - Paginate large result sets with tool-level `offset`/`count`
 - Save milestones via bookmarks, blackboard entries, and session notes
 - Write ops require `_risk_ack=true` to bypass the governance gate
+- Match envelopes on `error.code` (uppercase), not `error.message` (free text)
+- When a long tool call returns `IDA_TIMEOUT`, retry with a higher `IDA_MCP_RPC_HARD_WALLCLOCK_SEC` — not a crash
 
 ## Skills
 
@@ -255,7 +259,17 @@ SQLite-backed persistent working memory.
 - `dashboard` — session overview
 - `recent_workset` — resume from recent activity + bookmarks
 - `macro_set`/`macro_run` — reusable call sequences
-- `cleanup_stale` — remove sessions older than `max_age_days` (default 30)
+- `cleanup_stale` — remove sessions older than `max_age_days` (default 30); also prunes orphans whose binary + idb are both gone (`prune_orphans=true`)
+- `idle_purge` — drop live runtimes whose `last_used` exceeds `idle_seconds` seconds. Companion to `cleanup_stale` (which owns db-only rows). Args: `idle_seconds` (int, required), `prune_orphans` (bool, default `true`). Returns `{closed_sids, orphan_sids, skipped_sids, count, ...}`.
+
+## Hang Protection
+
+Two layers make runaway calls impossible:
+
+1. **Whitelist + cap** — full-program walks (`analysis.*`, `summarize.binary`, `intelligence.index_batch`, `search.semantic`, `firmware_view.smart_carve`, `funcs.metrics`, ...) get an extended socket recv timeout (≥120s + caller-requested `timeout`). The cap is `IDA_MCP_RPC_MAX_RECV_TIMEOUT` (default `600s`). No caller can pin the dispatcher open longer than this.
+2. **Wall-clock watchdog** — `IDA_MCP_RPC_HARD_WALLCLOCK_SEC` (default `900s`) bounds the *entire* `call_tool` path including retries. Past the cap, the host terminates the IDA process and returns `IDA_TIMEOUT, recoverable=true`. The next call re-spawns IDA fresh.
+
+Connection-layer failures (`ConnectionRefusedError`, `EOFError`, `ConnectionReset`, `ConnectionAborted`) are retried up to `IDA_MCP_RPC_MAX_RETRIES` (default 2) with linear backoff. `socket.timeout` / `TimeoutError` propagate so the dispatcher can still tell "IDA was busy" from "IDA went away".
 
 ## Guardrails
 

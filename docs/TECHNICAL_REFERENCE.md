@@ -126,7 +126,8 @@ When a session is created with a binary_path:
 - **Skill Registry:** cross-session global SQLite DB (`global_skills.db`)
 - **Activity Log:** last 500 entries, dead-end pattern detection
 - **Merge/Link:** session merging and cross-binary linking
-- **Cleanup:** stale sessions removed after 30 days
+- **Cleanup:** stale sessions removed after 30 days via `cleanup_stale(max_age_days, prune_orphans=true)`; `prune_orphans` also drops sessions whose binary + idb paths are both missing on disk
+- **TTL-based runtime teardown:** `idle_purge(idle_seconds, prune_orphans=true)` closes live IDA runtimes for any session whose `last_used` exceeds the threshold. Mirrors the `cleanup_stale` envelope (`{closed_sids, orphan_sids, skipped_sids, count, ...}`). db-only stale sessions stay in `cleanup_stale`'s scope.
 
 ---
 
@@ -153,7 +154,30 @@ Every `tools/call` passes through this sequence:
 15. Audit logging            (audit.log)
 ```
 
-### 3.2 Host-Side vs IDA-Side
+### 3.2 Hang-Sentinel Layer
+
+Three independent guards protect against the "forever-wait for analysis" hang. Each alone catches a distinct failure mode; together they make a runaway call effectively impossible.
+
+```
+                       ┌──────────────────────────────────────────────┐
+                       │ call_tool                                    │
+  caller ────────────► │ 1. resolve session + start runtime          │
+                       │ 2. compute sock recv timeout (clamped)      │──── cap  : IDA_MCP_RPC_MAX_RECV_TIMEOUT   (default 600s)
+                       │ 3. _send_rpc_with_retry (connection retry)  │─── retry: IDA_MCP_RPC_MAX_RETRIES        (default 2)
+                       │ 4. wall-clock watchdog                      │──── cap  : IDA_MCP_RPC_HARD_WALLCLOCK_SEC (default 900s)
+                       │ 5. response shaping                         │
+                       └──────────────────────────────────────────────┘
+```
+
+**A. Long-running whitelist** — `LONG_RUNNING_ACTIONS` (41 entries) is a module-level `set[(tool, action)]` in `host/server/server_dispatch.py`. Whitelisted actions get ≥120s of socket recv timeout instead of the 30s default. Whitelisted: `analysis.{wait,analyze,reanalyze}`, `background.wait`, `agent.analyze_function`, `summarize.{binary,statistics,imports_by_category,strings_by_category,security_posture,report}`, `intelligence.{index_batch,index_function,refresh_anchors,semantic_search}`, `search.{semantic,path}`, `blackboard.{semantic_rebuild,trace_ingest,trace_run}`, `firmware_view.{smart_carve,multi_region_campaign,campaign,segment_sweep,region_profile,pointer_sweep,scan_region}`, `funcs.{metrics,suggest_names,find_similar}`, `session.{idle_purge,cleanup_stale,macro_run,rate_skill}`, `threat_hunt.{run,malware,vuln,deep,legacy}`, `workflow.{execute_plan,plan}`.
+
+**B. Hard cap** — `IDA_MCP_RPC_MAX_RECV_TIMEOUT` (default `600`). No matter how large a `timeout`, `max_wait`, or `poll_timeout` the caller passes, the dispatcher caps the socket recv at this value. Floor for whitelisted calls is `120s`; floor for everything else is `IDA_MCP_RPC_TIMEOUT` (default `30s`). The cap math: `recv_timeout = min(max(120, requested + 30), cap)`.
+
+**C. Wall-clock watchdog** — `IDA_MCP_RPC_HARD_WALLCLOCK_SEC` (default `900`). Bounds the *entire* `call_tool` path including retries. Past the cap, the dispatcher force-terminates the IDA process (`proc.terminate`, escalated to `proc.kill` after a 2s wait) and returns `MCPError.IDA_TIMEOUT, recoverable=True`. The next call re-spawns IDA fresh.
+
+**Retry surface** — `_send_rpc_with_retry` retries transient connection failures (`ConnectionRefusedError`, `EOFError`, `ConnectionResetError`, `ConnectionAbortedError`) with linear backoff (`base_backoff * (attempt + 1)`, default `0.15s`). `socket.timeout` / `TimeoutError` / `OSError` are *deliberately not* retried — they propagate so the dispatcher can still tell "IDA was busy" (`IDA_TIMEOUT`) from "IDA went away" (`RPC_CONNECTION_ERROR`). The retry counter is `IDA_MCP_RPC_MAX_RETRIES` (default `2`).
+
+### 3.3 Host-Side vs IDA-Side
 
 **Host-side tools** (no IDA process required):
 - `session` — lifecycle management
@@ -171,7 +195,7 @@ Every `tools/call` passes through this sequence:
 The host also provides **MCP Resources** (65 `ida://` URIs) as a virtual filesystem over the IDB,
 accessible via `resources/read`.
 
-### 3.3 Alias Resolution
+### 3.4 Alias Resolution
 
 Tool aliases are automatically built from snake_case, camelCase, and noisy variants. 200+ explicit
 aliases defined in `_EXTRA_TOOL_ALIASES`:
@@ -182,7 +206,7 @@ aliases defined in `_EXTRA_TOOL_ALIASES`:
 
 Action aliases per tool also exist (e.g., `"rename"` → `"set_name"` for funcs).
 
-### 3.4 Wrapper Actions
+### 3.5 Wrapper Actions
 
 Six wrapper actions are injected at the schema level for all action-based tools:
 
@@ -197,7 +221,7 @@ Six wrapper actions are injected at the schema level for all action-based tools:
 
 All wrappers require `source_action` (or alias `on`/`target_action`/`subaction`).
 
-### 3.5 Arg Normalization
+### 3.6 Arg Normalization
 
 `_normalize_tool_call_args` handles LLM noise:
 - Strips action wrappers like `action: "decompile"` → `"decompile"`
@@ -206,7 +230,7 @@ All wrappers require `source_action` (or alias `on`/`target_action`/`subaction`)
 - Normalizes field variants (bracketed `[0x401000]` → `0x401000`, comma-separated addrs → list)
 - Handles nested dict actions, JSON payloads in action strings
 
-### 3.6 Silent Tool Rerouting
+### 3.7 Silent Tool Rerouting
 
 `get_reroute` in `auto_nudge.py` fixes common LLM errors:
 - Explicit map: `("search", "text")` → `("search", "name")`
@@ -269,6 +293,69 @@ Configurable semantic ASM index:
 
 Resources are resolved through a `ResourceResolver` that dispatches to the appropriate
 IDA tool and caches results through the insight index.
+
+### 4.7 Tool-Result Cache
+
+`ida_pro_mcp/ida_mcp/cache.py::ToolResultCache` is an LRU + TTL cache keyed on `(tool_name, kwargs)`. Every `@idaread`-wrapped tool calls `cache.get(name, kwargs)` first and falls through to a fresh computation on miss.
+
+When a result is served from cache, the `@idaread` wrapper annotates the returned dict with two keys:
+
+- `_cache_hit: true`
+- `_cache_age_seconds: <int>`
+
+This is done with `dict.setdefault` so cached and fresh responses stay shape-identical — consumers that don't care can ignore the keys; consumers that want freshness visibility get it without an extra round-trip. The helper `cache.get(..., with_age=True)` returns `(result, age)` for callers that prefer a tuple.
+
+### 4.8 Canonical Error Envelope
+
+Every tool returns a uniform response contract:
+
+```jsonc
+// success
+{ "ok": true, "addr": "0x401000", /* tool-specific */ ... }
+
+// failure
+{
+  "ok": false,
+  "error": true,
+  "code": "INVALID_ARGS",        // machine-readable, uppercase
+  "category": "user",            // user | runtime | policy | internal
+  "message": "...",              // free-form explanation
+  "hint": "Set min_xrefs to 0.", // optional recovery hint
+  "recoverable": true,           // optional, default unset
+  "details": { /* tool-specific */ } // optional
+}
+```
+
+`MCPError` is the canonical catalog (`host/errors.py`). Codes span:
+
+| Category | Codes |
+|---|---|
+| File / IO | `FILE_NOT_FOUND`, `FILE_LOCKED`, `IO_ERROR` |
+| Validation | `INVALID_ARGS`, `NOT_FOUND`, `BATCH_EMPTY`, `BATCH_TOO_LARGE` |
+| IDA runtime | `IDA_TIMEOUT`, `IDA_CRASHED`, `IDA_ERROR`, `DECOMPILER_FAILED`, `RPC_CONNECTION_ERROR` |
+| Session / routing | `SESSION_REQUIRED`, `SESSION_NOT_FOUND`, `TOOL_NOT_FOUND`, `ACTION_NOT_FOUND`, `BOOKMARK_NOT_FOUND`, `TRUNCATION_TOKEN_EXPIRED` / `_INVALID` / `_FIELD_MISSING` |
+| Storage / data | `DB_ERROR`, `NO_RESULTS`, `NOT_IMPLEMENTED` |
+| YARA-specific | `YARA_COMPILE_ERROR`, `YARA_SCAN_ERROR`, `YARA_DISABLED` |
+| Policy / phase | `POLICY_DENIED`, `PHASE_GATE` |
+
+Match on `code` (uppercase), not `message` (free text). Use `category` to decide recovery posture: `user` → fix the call, `runtime` → retry or restart, `policy` → provide the missing ack, `internal` → bug report.
+
+### 4.9 Pagination Envelope
+
+All list-style `data()` and `funcs.list` actions (and their ilk) emit a uniform envelope:
+
+```jsonc
+{
+  "ok": true,
+  "items": [ /* rows */ ],
+  "total": 4127,           // total AFTER filters; reflects min_xrefs etc.
+  "offset": 0,
+  "count": 50,
+  "truncated": false       // optional, only when item count hits the cap
+}
+```
+
+Filter order matters: `min_xrefs` is applied *before* the `total` counter so the total reflects the filtered set. Tests pin this contract in `tests/other/test_pagination_consistency.py`.
 
 ---
 

@@ -517,13 +517,19 @@ def run_firmware_bootstrap(
                         _ida_auto.auto_mark_range(mn, mx, _ida_auto.AU_FINAL)
                 report["details"][action] = {"ok": True, "note": "scheduled (non-blocking)"}
             except Exception as e:
-                report["details"][action] = {"ok": False, "error": str(e)}
+                report["details"][action] = make_error(
+                    MCPError.IDA_ERROR,
+                    f"Failed to schedule analysis: {e}",
+                    details={"exception_type": type(e).__name__, "subaction": action},
+                )
         elif action == "define_strings":
             r = _fwb_define_ascii_strings()
             report["details"][action] = r
             report["strings_defined"] += int(r.get("strings_defined", 0) or 0)
         else:
-            report["details"][action] = {"ok": False, "note": "unknown action"}
+            report["details"][action] = make_error(
+                MCPError.ACTION_NOT_FOUND, f"Unknown bootstrap subaction: '{action}'"
+            )
 
     try:
         fn_count = sum(1 for _ in idautils.Functions())

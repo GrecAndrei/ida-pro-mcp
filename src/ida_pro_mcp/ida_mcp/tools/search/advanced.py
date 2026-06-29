@@ -733,14 +733,25 @@ def _sql_pre_filter_functions(
         engine = HybridSearchEngine(db_path)
         eas, elapsed_ms, meta = engine.pre_filter(sql_constraints)
         if eas is None:
-            return None, {"note": "sql_error", "detail": meta.get("error", "")}
+            return None, {
+                "note": "sql_error",
+                "exception_type": type(meta).__name__,
+                "message": meta.get("error", ""),
+            }
         return eas, {
             "note": "sql_pre_filter",
             "total_matches": meta.get("total", 0),
             "sql_ms": elapsed_ms,
         }
     except Exception as e:
-        return None, {"note": "sql_exception", "error": str(e)}
+        # Helper-internal: this dict never reaches the user (sql_used
+        # stays False when sql_candidates is None), but keep it clean:
+        # {note, exception_type, message} mirrors the envelope shape.
+        return None, {
+            "note": "sql_exception",
+            "exception_type": type(e).__name__,
+            "message": str(e),
+        }
 
 
 def _verify_sql_coverage(

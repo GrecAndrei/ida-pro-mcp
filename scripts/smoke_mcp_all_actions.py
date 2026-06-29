@@ -533,6 +533,9 @@ ACTION_ARGS: dict[tuple[str, str], dict] = {
     ("session", "suggest_strategy"): {},
     ("session", "suggest_triage"): {},
     ("session", "suggest_analogy"): {"context": "entry"},
+    # idle_purge — never actually closes anything (9.99e9s ≈ centuries).
+    ("session", "idle_purge"): {"idle_seconds": 9_999_999_999},
+
     # stack_analysis covered above
     # string_ops covered above
     # symbols

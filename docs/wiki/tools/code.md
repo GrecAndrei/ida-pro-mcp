@@ -5,7 +5,8 @@ Decompilation, disassembly, cross-references, and control-flow analysis for func
 ## Actions
 
 - `decompile` — returns Hex-Rays pseudocode for a function; params: `addr` or `name`
-- `disasm` — returns disassembly listing; params: `addr`, `count` (number of instructions)
+- `disasm` — returns disassembly listing; params: `addr`, `count` (number of instructions), `end` (optional end address), `limit` (alias for `count`), `window` (centered ±N instructions around `addr` instead of function-bounded), `disasm_style` (`csmini` / `classic` / `annotated`), `include_bytes` (bool)
+- `smart_decompile` — decompile prioritized targets; results are cached via `ToolResultCache` and tagged with `_cache_hit: true` and `_cache_age_seconds: <n>` on every cached response
 - `xrefs_to` — lists all cross-references to an address; params: `addr`
 - `xrefs_from` — lists all cross-references from an address; params: `addr`
 - `xrefs_to_field` — lists cross-references to a specific struct field; params: `struct_name`, `field_name`
@@ -34,6 +35,9 @@ Decompilation, disassembly, cross-references, and control-flow analysis for func
 ```json
 {"name": "code", "arguments": {"action": "disasm", "addr": "0x401000", "count": 20}}
 ```
+```json
+{"name": "code", "arguments": {"action": "disasm", "addr": "0x4010a0", "window": 20}}
+```
 
 ```json
 {"name": "code", "arguments": {"action": "semantic_decompile", "name": "main"}}
@@ -60,3 +64,5 @@ Decompilation, disassembly, cross-references, and control-flow analysis for func
 - `diff_functions` is useful for patch diffing or comparing similar functions across binaries.
 - Use `addr` (hex string) or `name` (symbol name) interchangeably where supported.
 - Do not perform mental address arithmetic — use `calc` tool instead.
+- `disasm` with `window=N` returns up to N instructions *before* and *after* the input address, with the focus line preserved even when `max_items` clamps the total. Output is ordered oldest→newest. The response record carries an explicit `"window": N` field. `window < 0` or non-int `window` is rejected with `INVALID_ARGS`.
+- `smart_decompile` and any other `@idaread`-backed action that lives in `ToolResultCache` returns annotated cached responses: `_cache_hit: true` and `_cache_age_seconds: <int>`. Clients that don't care can ignore the keys; clients that want freshness visibility get it without an extra round-trip.

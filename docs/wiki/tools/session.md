@@ -24,7 +24,8 @@ Manages analysis sessions, notebooks, hypotheses, skills, macros, and session li
 - `export_session` — exports session to portable format; params: `session_id`, `path`
 - `import_session` — imports a previously exported session; params: `path`
 - `validate` — validates session integrity; params: `session_id`
-- `cleanup_stale` — removes stale/broken sessions
+- `cleanup_stale` — removes stale/broken sessions; params: `max_age_days` (default 30), `prune_orphans` (default true: drops sessions whose binary + idb paths are both gone)
+- `idle_purge` — drops live IDA runtimes whose `last_used` exceeds `idle_seconds`. Required arg `idle_seconds` (int, positive). Optional `prune_orphans` (default true). Returns `{ok, closed_sids, orphan_sids, skipped_sids, count, closed_count, orphan_count, skipped_count, idle_seconds}`. db-only stale sessions are skipped — `cleanup_stale` owns that path. The active session, if purged, has `current_session` cleared so the next call re-spawns IDA.
 - `merge` — merges two sessions; params: `source_id`, `target_id`
 - `bulk_delete` — deletes multiple sessions; params: `session_ids`
 - `dashboard` — returns overview of all sessions with key metrics
