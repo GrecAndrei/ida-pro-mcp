@@ -181,14 +181,26 @@ def idawrite(f):
 
 
 def idaread(f):
-    """Decorator for marking a function as reading from the IDB."""
+    """Decorator for marking a function as reading from the IDB.
+
+    Cache contract:
+    - On a cache hit the returned dict is annotated with
+      ``{"_cache_hit": True, "_cache_age_seconds": <float>}`` so the
+      caller (and agent) can verify whether IDA was hit or the result
+      was served from the LRU cache.
+    - On a cache miss the dict is stored unchanged; consumers that need
+      a stable shape across hits/misses should ignore the ``_cache_*``
+      fields.
+    - The TTL is governed by ``ToolResultCache(ttl_seconds=...)`` and
+      the cache is invalidated wholesale by ``@idawrite`` ops.
+    """
 
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
         # Check cache first
         cache = None
         try:
-            from ida_pro_mcp.ida_mcp.cache import TOOL_CACHE
+            from ida_mcp.ida_mcp.cache import TOOL_CACHE
             cache = TOOL_CACHE
         except ImportError:
             try:
@@ -198,8 +210,11 @@ def idaread(f):
                 pass
 
         if cache is not None:
-            cached = cache.get(f.__name__, kwargs)
+            cached, age = cache.get(f.__name__, kwargs, with_age=True)
             if cached is not None:
+                if isinstance(cached, dict):
+                    cached.setdefault("_cache_hit", True)
+                    cached["_cache_age_seconds"] = round(age, 3)
                 return cached
 
         ff = functools.partial(f, *args, **kwargs)

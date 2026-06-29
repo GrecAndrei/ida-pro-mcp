@@ -12,7 +12,7 @@ import json
 import threading
 import time
 from collections import OrderedDict
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 
 class ToolResultCache:
@@ -39,31 +39,40 @@ class ToolResultCache:
         canonical = json.dumps({"tool": tool_name, "args": kwargs}, sort_keys=True, default=str)
         return hashlib.sha256(canonical.encode()).hexdigest()
 
-    def get(self, tool_name: str, kwargs: dict) -> Optional[Any]:
-        """Retrieve a cached result, or None if not found/expired."""
+    def get(self, tool_name: str, kwargs: dict, *, with_age: bool = False):
+        """Retrieve a cached result, or None if not found/expired.
+
+        If ``with_age`` is False (default), returns the stored result or
+        None (legacy single-return contract).
+
+        If ``with_age`` is True, returns ``(result, age_seconds)`` where
+        ``age_seconds`` is how long ago the entry was stored. On miss,
+        ``result is None`` and ``age_seconds == 0.0``.
+        """
         key = self._make_key(tool_name, kwargs)
         with self._lock:
             entry = self._cache.get(key)
             if entry is None:
                 self._misses += 1
-                return None
+                return (None, 0.0) if with_age else None
 
             timestamp, gen, result = entry
             # Check TTL
             if time.time() - timestamp > self._ttl:
                 del self._cache[key]
                 self._misses += 1
-                return None
+                return (None, 0.0) if with_age else None
             # Check if a write has happened since this was cached
             if gen != self._write_generation:
                 del self._cache[key]
                 self._misses += 1
-                return None
+                return (None, 0.0) if with_age else None
 
             # Move to end (most recently used)
             self._cache.move_to_end(key)
             self._hits += 1
-            return result
+            age = time.time() - timestamp
+            return (result, age) if with_age else result
 
     def put(self, tool_name: str, kwargs: dict, result: Any) -> None:
         """Store a result in the cache."""

@@ -27,6 +27,7 @@ def graph(
     Actions:
     - callgraph: Generate function call graph starting from addr
     - cfg: Generate control flow graph for function at addr
+    - dominators: Compute dominator tree (forward or reverse) for the function at addr
     - xref_graph: Generate cross-reference graph
 
     Output formats:
