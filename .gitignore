@@ -61,11 +61,12 @@ htmlcov/
 *.code-workspace
 
 # Tool-specific working dirs
+.opencode/
 .opencode-swarm/
 .codex/
-ida_mcp_cache/
 .claude/
 .commandcode/
+ida_mcp_cache/
 
 # Local probe/report artifacts
 reports/*.json

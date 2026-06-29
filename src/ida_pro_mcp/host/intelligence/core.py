@@ -51,6 +51,7 @@ import time
 import urllib.error
 import urllib.request
 from collections import Counter
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -547,10 +548,83 @@ class _TFIDFEmbedder:
     """
     _TOKENIZE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|\b0x[0-9a-fA-F]+\b|\b\d+\b")
 
+    # Common RE-domain synonym pairs to expand short natural-language queries
+    # into the same bucket as decompiler identifiers in fallback mode.
+    BASE_SYNONYMS: dict[str, tuple[str, ...]] = {
+        "aes": ("crypto", "cipher", "encrypt", "decrypt"),
+        "cipher": ("crypto", "encrypt", "decrypt"),
+        "http": ("network", "socket", "headers", "request", "response"),
+        "recv": ("receive", "socket", "network"),
+        "send": ("socket", "network"),
+        "socket": ("network", "connect", "recv", "send"),
+        "debugger": ("antidebug", "debug"),
+        "sandbox": ("vm", "evasion"),
+        "overflow": ("bounds", "memcpy", "strcpy"),
+        "uaf": ("use", "after", "free"),
+    }
+
     def __init__(self, dim: int = EMBED_DIM):
         self._dim = dim
         self._idf: dict[str, float] = {}
         self._doc_count = 0
+        self._extras: dict[str, tuple[str, ...]] = {}
+
+    @property
+    def effective_synonyms(self) -> dict[str, tuple[str, ...]]:
+        """BASE_SYNONYMS layered with any extras added via extend_synonyms."""
+        merged: dict[str, tuple[str, ...]] = {}
+        for k, v in self.BASE_SYNONYMS.items():
+            merged[k] = v
+        for k, v in self._extras.items():
+            existing = merged.get(k)
+            if existing:
+                merged[k] = tuple(dict.fromkeys((*existing, *v)))
+            else:
+                merged[k] = tuple(v)
+        return merged
+
+    def extend_synonyms(
+        self,
+        mapping: dict[str, tuple[str, ...]] | dict[str, Iterable[str]],
+        reset: bool = False,
+        max_keys: int = 256,
+        max_vals_per_key: int = 8,
+    ) -> dict[str, int]:
+        """Add runtime synonym overrides.
+
+        Returns a small report with added_keys / added_vals counts.
+        Trivially keyed values (empty key) and trivially short values
+        (< 2 chars) are filtered. Caps enforced: max_keys and
+        max_vals_per_key.
+        """
+        if reset:
+            self._extras = {}
+        added_keys = 0
+        added_vals = 0
+        for raw_key, raw_vals in list(mapping.items()):
+            key = str(raw_key).strip()
+            if not key:
+                continue
+            if len(self._extras) >= max_keys and key not in self._extras:
+                continue
+            cleaned: list[str] = []
+            for v in raw_vals:
+                s = str(v).strip()
+                if len(s) < 2:
+                    continue
+                if s in cleaned:
+                    continue
+                cleaned.append(s)
+                if len(cleaned) >= max_vals_per_key:
+                    break
+            if not cleaned:
+                continue
+            new_pair = tuple(cleaned)
+            if key not in self._extras or self._extras[key] != new_pair:
+                added_keys += 1
+            added_vals += len(cleaned)
+            self._extras[key] = new_pair
+        return {"added_keys": added_keys, "added_vals": added_vals}
 
     def _tokens(self, text: str) -> list[str]:
         out: list[str] = []
@@ -559,20 +633,8 @@ class _TFIDFEmbedder:
                 low = term.lower()
                 if low and low not in NOISE_WORDS and not (low.isdigit() and len(low) < 3):
                     out.append(low)
-        # Expand common RE-domain synonyms so short natural-language queries can
-        # still land near decompiler identifiers in fallback mode.
-        synonyms = {
-            "aes": ("crypto", "cipher", "encrypt", "decrypt"),
-            "cipher": ("crypto", "encrypt", "decrypt"),
-            "http": ("network", "socket", "headers", "request", "response"),
-            "recv": ("receive", "socket", "network"),
-            "send": ("socket", "network"),
-            "socket": ("network", "connect", "recv", "send"),
-            "debugger": ("antidebug", "debug"),
-            "sandbox": ("vm", "evasion"),
-            "overflow": ("bounds", "memcpy", "strcpy"),
-            "uaf": ("use", "after", "free"),
-        }
+        # Expand common RE-domain synonyms via the unified map (base + extras).
+        synonyms = self.effective_synonyms
         expanded = list(out)
         for tok in out:
             expanded.extend(synonyms.get(tok, ()))
@@ -604,6 +666,87 @@ class _TFIDFEmbedder:
         # L2 normalize
         norm = math.sqrt(sum(x * x for x in vec)) or 1.0
         return [x / norm for x in vec]
+
+
+def derive_synonyms_from_corpus(
+    corpus: Any | None,
+    max_per_source: int = 32,
+) -> dict[str, tuple[str, ...]]:
+    """Derive runtime synonym tokens from a ThreatCorpus (or any object
+    with the same attribute shape). Used by the TF-IDF fallback to
+    bootstrap domain vocabulary when no training data is available.
+
+    Pulls per-source titles/names/aliases and the CWE description,
+    then maps those tokens into the same canonical buckets the
+    ``_TFIDFEmbedder.effective_synonyms`` layer is keyed on.
+
+    Returns a fresh dict every call; callers should hand it to
+    ``_TFIDFEmbedder.extend_synonyms(..., reset=True)``.
+    """
+    if corpus is None:
+        return {}
+
+    derived: dict[str, list[str]] = {}
+
+    def _absorb(tok: str, values: Iterable[str]) -> None:
+        if not tok or not values:
+            return
+        bucket = derived.setdefault(tok, [])
+        for v in values:
+            v = str(v).strip().lower()
+            if len(v) < 2 or v == tok:
+                continue
+            if v in bucket:
+                continue
+            bucket.append(v)
+            if len(bucket) >= max_per_source:
+                break
+
+    # CWE entries (id + name + description → primary tokens).
+    try:
+        for entry in getattr(corpus, "cwe", []) or []:
+            cid = str(entry.get("id", "")).strip().lower()
+            name = str(entry.get("name", "")).strip().lower()
+            description_words = re.findall(r"[a-z][a-z0-9_-]+", str(entry.get("description", "")).lower())
+            if cid and name:
+                _absorb(name, description_words)
+    except Exception:
+        pass
+
+    # Malware entries: cross-link aliases and name → description tokens.
+    try:
+        for entry in getattr(corpus, "malware", []) or []:
+            mal_name = str(entry.get("name", "")).strip().lower()
+            if not mal_name:
+                continue
+            aliases = [
+                str(a).strip().lower()
+                for a in entry.get("aliases", []) or []
+                if str(a).strip()
+            ]
+            # Cross-link every pair of name+aliases.
+            if aliases:
+                cross = [mal_name, *aliases]
+                _absorb(mal_name, aliases)
+                for alias in aliases:
+                    _absorb(alias, [mal_name])
+                _absorb("malware", cross)
+    except Exception:
+        pass
+
+    # Attack patterns / intrusion sets / tools: name + description tokens.
+    for attr in ("attack_patterns", "intrusion_sets", "tools", "mitigations"):
+        try:
+            for entry in getattr(corpus, attr, []) or []:
+                name = str(entry.get("name", "")).strip().lower()
+                if not name:
+                    continue
+                desc = re.findall(r"[a-z][a-z0-9_-]+", str(entry.get("description", "")).lower())
+                _absorb(name, desc)
+        except Exception:
+            pass
+
+    return {k: tuple(v) for k, v in derived.items()}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
