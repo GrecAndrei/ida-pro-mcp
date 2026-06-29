@@ -844,10 +844,10 @@ except ImportError:
             message = args[1] if len(args) > 1 else kwargs.get("message", str(kwargs) or "unknown")
             return {"error": True, "code": str(code), "message": str(message)}
         class MCPError:
-            GOVERNANCE_BLOCKED = "governance_blocked"
-            INVALID_ARGS = "invalid_args"
-            IDA_ERROR = "ida_error"
-            NOT_FOUND = "not_found"
+            GOVERNANCE_BLOCKED = "GOVERNANCE_BLOCKED"
+            INVALID_ARGS = "INVALID_ARGS"
+            IDA_ERROR = "IDA_ERROR"
+            NOT_FOUND = "NOT_FOUND"
             UNKNOWN_ERROR = "UNKNOWN_ERROR"
 
 

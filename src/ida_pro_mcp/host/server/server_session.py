@@ -816,7 +816,11 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                     # Surface the failure but keep the switch logically valid.
                     self._last_spawn_error = start_res
             except Exception as exc:  # pragma: no cover - exercised only at runtime
-                self._last_spawn_error = {"error": True, "message": str(exc)}
+                self._last_spawn_error = make_error(
+                    MCPError.IDA_CRASHED,
+                    f"Runtime spawn failed: {exc}",
+                    details={"exception_type": type(exc).__name__},
+                )
 
         runtime_attached = runtime_alive
         response = {

@@ -1755,7 +1755,7 @@ def _prefetch_function_context(ea):
                     "string_value": val_str or None,
                 }
     except Exception as e:
-        emulation_insights = {"error": str(e)}
+        emulation_insights = handle_error(e, context="emulation_insights")
 
     # 5. Call Graph Neighborhood
     callers = []
