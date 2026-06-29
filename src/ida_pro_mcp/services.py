@@ -127,8 +127,6 @@ __all__ = [
     "coerce_int",
     "estimate_tokens",
     "parse_str_list",
-    "StructuralIndex",
-    "get_structural_db_path",
     "get_db_path",
     "ensure_tables",
     "upsert_functions_batch",

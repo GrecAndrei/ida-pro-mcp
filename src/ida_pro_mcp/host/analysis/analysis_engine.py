@@ -25,7 +25,6 @@ import uuid
 from collections.abc import Callable
 from contextlib import closing, suppress
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from ..intelligence.helpers import (
     cosine_similarity as _cosine,
@@ -93,8 +92,8 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
     def __init__(
         self,
         session_id: str,
-        rpc_fn: Callable[[str, Dict], Dict],
-        notify_fn: Callable[[Dict], None],
+        rpc_fn: Callable[[str, dict], dict],
+        notify_fn: Callable[[dict], None],
         bb_path: str,
         proposals_path: str,
         embeddings_dir: str = "",
@@ -107,7 +106,7 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
         self._embeddings_dir = embeddings_dir or os.path.dirname(bb_path)
 
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._proposals = ProposalStore(proposals_path)
 
         # Track what we've already processed to avoid re-work
@@ -222,7 +221,7 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
         if not classifier:
             return
 
-        batch: List[Dict] = []
+        batch: list[dict] = []
         for fn in unnamed:
             addr = fn.get("start_ea") or fn.get("addr")
             if not addr or addr in self._classified:
@@ -271,7 +270,7 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
             return
 
         # Group by dominant tag for cleaner proposals
-        by_tag: Dict[str, List] = {}
+        by_tag: dict[str, list] = {}
         for item in batch:
             tag = item["behavior_tags"][0]
             by_tag.setdefault(tag, []).append(item)
@@ -298,7 +297,7 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
         # Also write a blackboard region entry if we found a cluster
         self._write_cluster_regions(by_tag)
 
-    def _write_cluster_regions(self, by_tag: Dict[str, List]):
+    def _write_cluster_regions(self, by_tag: dict[str, list]):
         """If a tag cluster spans a contiguous address range, write a region entry."""
         store = self._bb_store()
         if not store:
@@ -363,7 +362,7 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
             if not blob:
                 continue
             vec = _unpack(blob)
-            sim_candidates: List[Tuple[float, str, tuple, List[float]]] = []
+            sim_candidates: list[tuple[float, str, tuple, list[float]]] = []
 
             for other_id, (other_row, other_vec) in all_vecs.items():
                 if other_id == eid:
@@ -457,7 +456,7 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
             self._tainted.add(source["id"])
             self._trace_taint_from(source, store)
 
-    def _trace_taint_from(self, source: Dict, store):
+    def _trace_taint_from(self, source: dict, store):
         """BFS from source address through xrefs, looking for dangerous sinks."""
         start_addr = source.get("addr", "")
         if not start_addr:
@@ -497,7 +496,7 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
             queue = next_queue
             depth += 1
 
-    def _report_taint_sink(self, source: Dict, sink: Dict, store, depth: int):
+    def _report_taint_sink(self, source: dict, sink: dict, store, depth: int):
         """Write a vuln entry and push a notification for a taint path."""
         sink_name = sink.get("name", "unknown")
         sink_addr = sink.get("addr") or sink.get("ea", "?")
@@ -603,7 +602,7 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
             vec = _unpack(blob)
             self._match_against_other_sessions(eid, title, addr, vec, other_dbs, store)
 
-    def _find_other_embedding_dbs(self) -> List[str]:
+    def _find_other_embedding_dbs(self) -> list[str]:
         """Find *.embeddings.db files from other sessions."""
         results = []
         try:
@@ -620,7 +619,7 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
 
     def _match_against_other_sessions(
         self, eid: str, title: str, addr: str,
-        vec: List[float], other_dbs: List[str], store
+        vec: list[float], other_dbs: list[str], store
     ):
         """Scan other session embedding DBs for similar functions."""
         import sqlite3
@@ -628,7 +627,7 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
         best_sim = -1.0
         best_match = None
         best_db = None
-        all_sims: List[float] = []
+        all_sims: list[float] = []
 
         for db_path in other_dbs:
             try:
@@ -1112,7 +1111,7 @@ class AnalysisEngine(AnalysisEngineKnowledgeGraphMixin):
     def proposals(self) -> ProposalStore:
         return self._proposals
 
-    def status(self) -> Dict:
+    def status(self) -> dict:
         return {
             "running": self.is_running(),
             "session_id": self.session_id,

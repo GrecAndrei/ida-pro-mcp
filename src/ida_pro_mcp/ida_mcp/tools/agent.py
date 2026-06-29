@@ -1156,7 +1156,6 @@ def agent(
             if current_idx.size == 0:
                 return {"ok": True, "note": "No functions indexed. Run code(action='decompile') first.", "matches": []}
 
-            import os
             fingerprint_eas = list(current_idx._cache.keys())[:20]
             fingerprint_vecs = [current_idx._cache[ea] for ea in fingerprint_eas]
 

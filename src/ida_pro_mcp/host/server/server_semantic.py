@@ -13,7 +13,7 @@ import re
 import sqlite3
 import struct
 import time
-from typing import Any, List, Optional
+from typing import Any
 
 from ..config import (
     EMBEDDING_FIRST_MODE,
@@ -27,6 +27,7 @@ from ..config import (
     _parse_str_list,
 )
 from ..errors import MCPError, is_error_result, make_error
+from .session import Session
 
 
 class ServerSemanticMixin:
@@ -339,7 +340,7 @@ class ServerSemanticMixin:
 
         ranked: list[tuple[float, tuple[Any, Any, Any, Any, Any, Any]]] = []
         embedding_failed = False
-        query_vec: Optional[List[float]] = None
+        query_vec: list[float] | None = None
         embedder = None
         if EMBEDDING_FIRST_MODE:
             try:

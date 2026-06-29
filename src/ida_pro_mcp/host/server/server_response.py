@@ -10,7 +10,7 @@ from __future__ import annotations
 import contextlib
 import json
 import time
-from typing import Any, Optional
+from typing import Any
 
 from ..config import (
     _COMPACT_DROP,
@@ -155,7 +155,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                         score += 1.0
                 score += self._pointer_note_signal_from_value(v)
         if isinstance(payload, dict):
-            payload_focus: Dict[str, Any] = {}
+            payload_focus: dict[str, Any] = {}
             for key in (
                 "address",
                 "addr",
@@ -230,7 +230,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         action: str,
         payload: dict,
         addr: str,
-        opts: Optional[dict] = None,
+        opts: dict | None = None,
     ) -> None:
         """
         Build a context_pack via the intelligence layer (bge-code-v1) and inject
@@ -345,10 +345,10 @@ class ServerResponseMixin(ServerResponseCompactMixin):
     def _guardrail_reason_tags(self, tool_name: str, call_args: Any, payload: Any) -> list[str]:
         tags: list[str] = []
         tn = str(tool_name or "").lower()
-        if tn in {"code", "graph", "graph", "ctree", "static_trace", "memory", "calc"}:
+        if tn in {"code", "graph", "ctree", "static_trace", "memory", "calc"}:
             tags.append("address-heavy-tool")
         if isinstance(call_args, dict):
-            keys = {str(k).lower() for k in call_args.keys()}
+            keys = {str(k).lower() for k in call_args}
             if {"addr", "address", "target"} & keys:
                 tags.append("explicit-address-arg")
             if {"offset", "offsets", "base", "size"} & keys:
@@ -429,7 +429,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
 
         return payload
 
-    def _build_llm_execution_directive(self, payload: dict) -> Optional[str]:
+    def _build_llm_execution_directive(self, payload: dict) -> str | None:
         """Build a compact directive from tool-first gating fields."""
         if not isinstance(payload, dict):
             return None
@@ -457,7 +457,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             "and cite returned evidence."
         )
 
-    def _get_session_imagebase(self, session_id: Optional[str]) -> int:
+    def _get_session_imagebase(self, session_id: str | None) -> int:
         if not session_id:
             return 0x140000000
 
@@ -505,7 +505,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
 
         return 0x140000000
 
-    def _add_address_calculations(self, compacted: dict, session_id: Optional[str]) -> None:
+    def _add_address_calculations(self, compacted: dict, session_id: str | None) -> None:
         try:
             serialized = json.dumps(compacted, ensure_ascii=False)
         except Exception:

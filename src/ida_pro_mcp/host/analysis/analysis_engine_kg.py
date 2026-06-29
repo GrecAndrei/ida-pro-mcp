@@ -74,7 +74,7 @@ class AnalysisEngineKnowledgeGraphMixin:
         """
         entries = store.list(limit=500, include_resolved=False)
         # Group by dominant tag
-        tag_groups: Dict[str, List[str]] = {}
+        tag_groups: dict[str, list[str]] = {}
         for e in entries:
             addr = e.get("addr", "")
             if not addr:
@@ -139,7 +139,7 @@ class AnalysisEngineKnowledgeGraphMixin:
             return
 
         # Group by register name
-        reg_groups: Dict[str, List[Dict]] = {}
+        reg_groups: dict[str, list[dict]] = {}
         for e in df_entries:
             reg = e.get("register", "")
             if reg:
@@ -191,7 +191,7 @@ class AnalysisEngineKnowledgeGraphMixin:
         """
         # Look for entries that mention state variables
         entries = store.list(limit=200, include_resolved=False)
-        state_vars: Dict[str, List[Dict]] = {}
+        state_vars: dict[str, list[dict]] = {}
         for e in entries:
             tags = e.get("tags", [])
             if "state_machine" in tags or "state_var" in tags:
@@ -224,7 +224,7 @@ class AnalysisEngineKnowledgeGraphMixin:
         that reference MMIO-like regions.
         """
         regions = store.list(category="region", include_resolved=True, limit=100)
-        addr_vals: List[int] = []
+        addr_vals: list[int] = []
         for r in regions:
             try:
                 if r.get("addr"):

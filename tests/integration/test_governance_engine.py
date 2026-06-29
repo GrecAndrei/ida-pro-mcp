@@ -6,6 +6,8 @@ Run with: python3 -m pytest tests/test_governance_engine.py -v
 Or standalone: python3 tests/test_governance_engine.py
 """
 
+import sys
+
 from tests._isolated_repo_loader import load_tool_module
 
 _governance_engine = load_tool_module("governance_engine")

@@ -438,7 +438,7 @@ def run_server():
             conn.sendall((len(resp_json)).to_bytes(4, 'big') + resp_json)
 
             log_ev("Request finished")
-        except socket.timeout: log_ev("Socket timeout")
+        except TimeoutError: log_ev("Socket timeout")
         except KeyboardInterrupt: break
         except Exception as e: log_ev(f"Loop error: {e}")
         finally:
@@ -644,9 +644,13 @@ if __name__ == "__main__":
     # The host-side analysis watchdog polls auto_is_ok() periodically, and
     # tools that need a complete analysis call idc.auto_wait() themselves
     # via execute_sync if needed.
-    if hasattr(idaapi, "auto_is_ok") and idaapi.auto_is_ok():
-        log_ev("Auto-analysis already complete.")
-    else:
-        log_ev("Auto-analysis in progress (server starting without waiting).")
+    try:
+        import idaapi as _idaapi
+        if hasattr(_idaapi, "auto_is_ok") and _idaapi.auto_is_ok():
+            log_ev("Auto-analysis already complete.")
+        else:
+            log_ev("Auto-analysis in progress (server starting without waiting).")
+    except ImportError:
+        log_ev("Auto-analysis status unknown (idaapi not importable).")
     log_ev("Starting server...")
     run_server()

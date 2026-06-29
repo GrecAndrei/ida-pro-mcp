@@ -148,6 +148,10 @@ def test_blackboard_semantic_search_fallback():
 
 @pytest.mark.skip(reason="auto_capture_memory was intentionally removed")
 def test_auto_capture_memory_pointers():
+    def auto_capture_memory(*_a, **_kw):
+        """No-op stub for the removed function (test is skipped)."""
+        return None
+
     store = _make_store()
     result = {
         "ok": True,
@@ -171,6 +175,10 @@ def test_auto_capture_memory_pointers():
 
 @pytest.mark.skip(reason="auto_capture_memory was intentionally removed")
 def test_auto_capture_memory_entropy():
+    def auto_capture_memory(*_a, **_kw):
+        """No-op stub for the removed function (test is skipped)."""
+        return None
+
     store = _make_store()
     result = {"ok": True, "_action": "entropy", "entropy": 7.9}
     orig_cls = _bb_mod.BlackboardStore
@@ -372,8 +380,8 @@ def _load_gadgets():
     mod.__dict__["MCPError"] = _MCPError
     from typing import Any, Dict, List, Optional
     mod.__dict__["Optional"] = Optional
-    mod.__dict__["Dict"] = Dict
-    mod.__dict__["List"] = List
+    mod.__dict__["Dict"] = dict
+    mod.__dict__["List"] = list
     mod.__dict__["Any"] = Any
     exec(compile(mini_src, "<gadgets_score>", "exec"), mod.__dict__)
     return mod
@@ -445,7 +453,7 @@ def test_build_decompiler_dataflow_assignment_with_comparison():
 
     # Create mock _common module
     mock_common = types.ModuleType("_common")
-    mock_common.hex_ea = lambda ea: hex(ea)
+    mock_common.hex_ea = hex
     mock_common.validate_addr = lambda addr, *a, **kw: (int(addr, 16) if isinstance(addr, str) and addr.startswith("0x") else 0x401000, None)
     mock_common.make_error = lambda *a, **kw: {"error": True}
     mock_common.handle_error = lambda *a, **kw: {"error": True}

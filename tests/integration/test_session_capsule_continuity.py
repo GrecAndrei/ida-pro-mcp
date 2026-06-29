@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ida_pro_mcp.capsule import CapsuleStore
+from ida_pro_mcp.host.server.server import IDAMCPServer
 
 
 def _make_server(tmp_path, monkeypatch):

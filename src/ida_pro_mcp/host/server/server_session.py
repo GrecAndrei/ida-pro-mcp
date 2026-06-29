@@ -7,7 +7,7 @@ import contextlib
 import os
 import re
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 from ..analysis.arch_profile import normalize_arch_options
 from ..config import (
@@ -21,6 +21,7 @@ from ..config import (
     _bounded_int,
     _coerce_bool,
     _normalize_session_id,
+    log_rpc,
 )
 from ..errors import MCPError, is_error_result, make_error
 from ..intelligence.helpers import parse_str_list
@@ -198,8 +199,8 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         *,
         requested_capsule: Any = None,
         event_type: str = "session_update",
-        event: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        event: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         sid = getattr(session, "session_id", "") if session else ""
         if not sid:
             return {"enabled": False, "persisted": False, "capsule": ""}
@@ -344,7 +345,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             hint=f"Valid session actions: {', '.join(TOOL_ACTIONS['session'])}",
         )
 
-    def _require_session_sid(self, args: dict) -> tuple[Optional[str], Optional[dict]]:
+    def _require_session_sid(self, args: dict) -> tuple[str | None, dict | None]:
         """Resolve the target session_id, returning (sid, error_capsule).
 
         On success sid is set and error is None. On any failure sid is None and
@@ -387,7 +388,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         # raw: return the manager result unchanged.
         return mgr_call(sid, **coerced)
 
-    def _resolve_session_id(self, args: dict, key: str = "session_id", allow_current: bool = True) -> tuple[Optional[str], Optional[dict]]:
+    def _resolve_session_id(self, args: dict, key: str = "session_id", allow_current: bool = True) -> tuple[str | None, dict | None]:
         raw_sid = args.get(key)
         if raw_sid is None and allow_current and self.current_session:
             raw_sid = self.current_session.session_id
@@ -782,7 +783,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             self.current_session = session
             new_idb = getattr(session, "idb_path", None)
             if old_idb and new_idb and old_idb != new_idb:
-                _trigger_session_diff(old_idb, new_idb)
+                self._trigger_session_diff(old_idb, new_idb)
             return {
                 "ok": True,
                 "session": self.current_session.to_dict(),
@@ -836,7 +837,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
 
             from .resources import ResourceResolver
             resolver = ResourceResolver(
-                lambda name, kwargs: self._execute_tool(name, kwargs),
+                self._execute_tool,
                 session_mgr=getattr(self, "session_mgr", None),
                 engine=getattr(self, "_analysis_engines", {}).get(
                     getattr(self.current_session, "session_id", "") or ""

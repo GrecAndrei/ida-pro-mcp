@@ -18,7 +18,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from ..config import (
     _bounded_int,
@@ -27,6 +27,7 @@ from ..config import (
 )
 from ..errors import MCPError, is_error_result, make_error
 from .server_runtime_leases import ServerRuntimeLeasesMixin
+from .session import Session
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -141,7 +142,7 @@ def _kill_process_tree(proc: subprocess.Popen, grace_seconds: float = 2.0) -> No
 
 
 class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
-    def _ida_binary_names(self) -> List[str]:
+    def _ida_binary_names(self) -> list[str]:
             if sys.platform == "win32":
                 base_names = ["idat.exe", "idat64.exe", "ida.exe", "ida64.exe"]
             else:
@@ -182,7 +183,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 if self._is_executable_file(env_idat):
                     return os.path.dirname(env_idat)
 
-            cands: List[str] = []
+            cands: list[str] = []
             if sys.platform == "win32":
                 cands.extend(
                     [
@@ -263,7 +264,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 return ""
             return ""
 
-    def _tail_text_file(self, path: Optional[str], tail_lines: int = 40) -> str:
+    def _tail_text_file(self, path: str | None, tail_lines: int = 40) -> str:
             if not path:
                 return ""
             if not os.path.exists(path):
@@ -298,12 +299,12 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
 
     def _collect_ida_state_snapshot(
         self,
-        runtime: Optional[dict] = None,
-        stdout_log: Optional[str] = None,
-        stderr_log: Optional[str] = None,
-        current_tool: Optional[str] = None,
-        current_args: Optional[dict] = None,
-        call_started_at: Optional[float] = None,
+        runtime: dict | None = None,
+        stdout_log: str | None = None,
+        stderr_log: str | None = None,
+        current_tool: str | None = None,
+        current_args: dict | None = None,
+        call_started_at: float | None = None,
         tail_lines: int = 5,
         include_process_stats: bool = True,
     ) -> dict:
@@ -386,7 +387,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
 
         return snapshot
 
-    def _send_rpc_raw(self, request, port, timeout=5, auth_token: Optional[str] = None, recv_timeout: Optional[int] = None):
+    def _send_rpc_raw(self, request, port, timeout=5, auth_token: str | None = None, recv_timeout: int | None = None):
             import socket
 
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -490,7 +491,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             result["final_wait_error"] = str(e)[:200]
         return result
 
-    def _extract_library_init_failure(self, diag: str) -> Optional[dict]:
+    def _extract_library_init_failure(self, diag: str) -> dict | None:
             if not isinstance(diag, str) or not diag.strip():
                 return None
             low = diag.lower()
@@ -508,8 +509,8 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             if not has_phrase and not has_err2:
                 return None
 
-            causes: List[str] = []
-            hints: List[str] = []
+            causes: list[str] = []
+            hints: list[str] = []
             if (
                 "cannot open shared object file" in low
                 or "no such file or directory" in low
@@ -579,8 +580,8 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             return bool(info.get("detected"))
 
     def _normalize_ida_args(
-            self, ida_args: Optional[Union[str, List[str]]]
-        ) -> List[str]:
+            self, ida_args: str | list[str] | None
+        ) -> list[str]:
             if ida_args is None:
                 return []
             if isinstance(ida_args, str):
@@ -618,7 +619,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             return cleaned
 
     @staticmethod
-    def _pop_first(mapping: dict, keys: List[str], default: Any = None) -> Any:
+    def _pop_first(mapping: dict, keys: list[str], default: Any = None) -> Any:
             for key in keys:
                 if key in mapping:
                     return mapping.pop(key)
@@ -657,7 +658,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             except Exception:
                 pass
 
-    def _normalize_macro_name(self, value: Any) -> Optional[str]:
+    def _normalize_macro_name(self, value: Any) -> str | None:
             if value is None:
                 return None
             name = str(value).strip()
@@ -672,7 +673,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             call_args: Any,
             result: Any,
             *,
-            session_id: Optional[str] = None,
+            session_id: str | None = None,
         ):
             if not isinstance(call_args, dict):
                 return
@@ -712,7 +713,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             except Exception:
                 pass
 
-            addresses: List[str] = []
+            addresses: list[str] = []
             for field in ("addr", "address", "ea"):
                 raw_addr = call_args.get(field)
                 if isinstance(raw_addr, int):
@@ -740,7 +741,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             matches = result.get("matches")
             if isinstance(matches, str):
                 addresses.extend(re.findall(r"0x[0-9a-fA-F]+", matches)[:16])
-            deduped_addresses: List[str] = []
+            deduped_addresses: list[str] = []
             seen = set()
             for addr in addresses:
                 a = addr.lower()
@@ -789,7 +790,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             include_items: bool,
         ) -> dict:
             n = _bounded_int(n, 20, min_value=1, max_value=200)
-            entries: List[Dict[str, Any]] = []
+            entries: list[dict[str, Any]] = []
             seen = set()
             for row in reversed(self._activity_log):
                 if row.get("session_id") != sid:
@@ -836,7 +837,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     if len(entries) >= (n * 2):
                         break
 
-            lines: List[str] = []
+            lines: list[str] = []
             for item in entries:
                 if item.get("kind") == "bookmark":
                     lines.append(
@@ -876,8 +877,8 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             except Exception:
                 pass
 
-    def _collect_idle_index_targets(self, session_id: str, limit: int = 16) -> List[str]:
-            targets: List[str] = []
+    def _collect_idle_index_targets(self, session_id: str, limit: int = 16) -> list[str]:
+            targets: list[str] = []
             seen = set()
             for row in reversed(self._activity_log):
                 if row.get("session_id") != session_id:
@@ -894,8 +895,8 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         return targets
             return targets
 
-    def _seed_idle_index_targets(self, session_id: str, server_port: int, limit: int = 12) -> List[str]:
-            targets: List[str] = []
+    def _seed_idle_index_targets(self, session_id: str, server_port: int, limit: int = 12) -> list[str]:
+            targets: list[str] = []
             seen = set()
 
             def _push(addr: Any) -> None:
@@ -1063,7 +1064,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
     # previously (mis)reported as "analysis_ready".
     # ------------------------------------------------------------------
 
-    def _query_ida_state(self, sid: str, timeout: float = 3.0) -> Optional[dict]:
+    def _query_ida_state(self, sid: str, timeout: float = 3.0) -> dict | None:
             """Fresh, honest IDA state snapshot via idb(action='state').
 
             Returns the idb_state() dict (analysis.is_ok, analysis.active,
@@ -1103,8 +1104,8 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             stall_threshold = float(getattr(self, "_analysis_watchdog_stall_seconds", 120))
 
             def _worker() -> None:
-                last_funcs: Optional[int] = None
-                stall_since: Optional[float] = None  # ts when progress last stalled
+                last_funcs: int | None = None
+                stall_since: float | None = None  # ts when progress last stalled
                 self._update_session_indexing_metadata(
                     session_id,
                     analysis_state="starting",
@@ -1229,7 +1230,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
     def _build_ida_command(
-            self, session, log_file, script_path, use_existing_idb: bool, effective_idb_path: Optional[str] = None
+            self, session, log_file, script_path, use_existing_idb: bool, effective_idb_path: str | None = None
         ):
             cmd = [self.idat_exe, "-A"]
             cmd.extend(session.ida_args or [])
@@ -1301,7 +1302,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     cmd.append(session.binary_path)
             return cmd
 
-    def _backup_idb(self, idb_path: str) -> Optional[str]:
+    def _backup_idb(self, idb_path: str) -> str | None:
             if not idb_path or not os.path.exists(idb_path):
                 return None
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1339,7 +1340,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 except Exception as e:
                     log_rpc(f"Failed to remove stale IDB artifact {path}: {e}")
 
-    def _cleanup_packed_idb_siblings(self, packed_idb_path: str) -> List[str]:
+    def _cleanup_packed_idb_siblings(self, packed_idb_path: str) -> list[str]:
             """Remove stale unpacked siblings (.id0/.id1/.nam/.til/.schemaboot.db/...) next
             to a packed .i64 IDB. Leaving them in place causes IDA to find the unpacked
             base, refuse to start (Permission denied / error 4), and abort the open
@@ -1350,7 +1351,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
               2) Modern: <binary>.i64.blackboard.db / .embeddings.db (base keeps .i64)
             We cover both forms by computing both the splitext base and the full stem.
             """
-            removed: List[str] = []
+            removed: list[str] = []
             if not packed_idb_path:
                 return removed
             base, ext = os.path.splitext(packed_idb_path)
@@ -1401,12 +1402,12 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         log_rpc(f"Failed to remove packed-IDB sibling {path}: {e}")
             return removed
 
-    def _terminate_ida_processes_for_path(self, target_path: str) -> List[int]:
+    def _terminate_ida_processes_for_path(self, target_path: str) -> list[int]:
             """Best-effort terminate any idat/ida processes whose command line references
             the given target. Returns the list of PIDs that were killed. Used to recover
             from orphaned IDA processes that still hold the IDB / unpacked sidecars.
             """
-            killed: List[int] = []
+            killed: list[int] = []
             if not target_path:
                 return killed
             target_norm = os.path.realpath(os.path.abspath(target_path)).lower()
@@ -1990,7 +1991,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             # The MCP stdio server is serial, so a client cannot poll
             # session(status) mid-create; instead we emit live progress
             # notifications and mirror the current step into session metadata.
-            apply_steps: List[Dict[str, Any]] = []
+            apply_steps: list[dict[str, Any]] = []
 
             def _progress(step: str, status: str = "start", detail: Any = None) -> None:
                 with contextlib.suppress(Exception):
@@ -2003,7 +2004,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         },
                     )
                 try:
-                    params: Dict[str, Any] = {
+                    params: dict[str, Any] = {
                         "progressToken": f"apply:{session.session_id}",
                         "progress": {"step": step, "status": status},
                     }
@@ -2258,7 +2259,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 self._cleanup_runtime(sid)
             self._adopt_or_cleanup_stale_runtime_leases()
 
-    def _resolve_session_from_idb_ref(self, idb_ref: Any) -> Optional[Session]:
+    def _resolve_session_from_idb_ref(self, idb_ref: Any) -> Session | None:
             """Resolve idb references from session id, SID_* idb id/name, path, or basename."""
             if not isinstance(idb_ref, str):
                 return None
