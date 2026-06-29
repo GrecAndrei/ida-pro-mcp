@@ -6,8 +6,11 @@ import time
 import pytest
 
 from ida_pro_mcp.host.intelligence.yara_scanner import (
+    YaraRuleMatch,
     YaraScanner,
+    YaraStringHit,
     compile_rules,
+    compile_text,
     default_compiled_path,
     default_rules_dir,
     is_yara_available,
@@ -279,3 +282,89 @@ def test_yara_scanner_real_dataset_cached_reload(tmp_path, monkeypatch):
     assert status["loaded"] is True
     assert status["from_cache"] is True
     assert elapsed < 0.5
+
+
+def test_compile_text_valid_rule():
+    rules = compile_text(_TINY_RULE)
+    assert rules is not None
+    buf = b"the quick brown fox /login.php?id=42 hello world"
+    matches = scan_bytes(rules, buf, base_offset=0x1000)
+    assert matches, "expected at least one match for hello world string"
+    m = matches[0]
+    assert isinstance(m, YaraRuleMatch)
+    assert m.rule == "TestRule"
+    assert m.namespace == "default"
+    assert m.meta.get("description") == "test rule for scanner tests"
+    assert isinstance(m.strings, list) and m.strings
+    hit = m.strings[0]
+    assert isinstance(hit, YaraStringHit)
+    assert hit.identifier in ("$hello", "$login")
+    # base_offset shifts the absolute offset by region_base
+    assert hit.offset >= 0x1000
+
+
+def test_compile_text_invalid_rule_returns_none():
+    """compile_text must swallow yara-python errors and return None —
+    callers (yara_hunt) fall back to the regex scanner when this returns None."""
+    rules = compile_text("not a real yara rule -- syntax error {")
+    assert rules is None
+
+
+def test_compile_text_empty_source_returns_none():
+    assert compile_text("") is None
+
+
+def test_scan_bytes_empty_data_returns_empty():
+    rules = compile_text(_TINY_RULE)
+    assert rules is not None
+    assert scan_bytes(rules, b"") == []
+    assert scan_bytes(rules, b"no match here") == []
+
+
+def test_scan_bytes_none_rules_returns_empty():
+    """scan_bytes(None, data) is the documented graceful-degradation path
+    used when yara-python is unavailable or the rule failed to compile."""
+    assert scan_bytes(None, b"hello world") == []
+
+
+def test_yara_string_hit_to_dict_shape():
+    """yara_hunt builds its entry dict from these fields:
+    match.rule, hit.identifier, hit.offset, hit.data.
+    Lock the data-class contract so the integration doesn't drift."""
+    hit = YaraStringHit(identifier="$a", offset=42, data="abc")
+    assert hit.identifier == "$a"
+    assert hit.offset == 42
+    assert hit.data == "abc"
+    assert hit.to_dict() == {"identifier": "$a", "offset": 42, "data": "abc"}
+
+
+def test_yara_rule_match_to_dict_shape():
+    m = YaraRuleMatch(
+        rule="R",
+        namespace="ns",
+        tags=["tlp_red"],
+        meta={"author": "test"},
+        strings=[YaraStringHit(identifier="$x", offset=10, data="x")],
+    )
+    d = m.to_dict()
+    assert d["rule"] == "R"
+    assert d["namespace"] == "ns"
+    assert d["tags"] == ["tlp_red"]
+    assert d["meta"] == {"author": "test"}
+    assert d["string_count"] == 1
+    assert d["strings"] == [{"identifier": "$x", "offset": 10, "data": "x"}]
+
+
+@pytest.mark.skipif(not is_yara_available(), reason="yara-python not installed")
+def test_compile_text_matches_substring_at_offset():
+    rules = compile_text(
+        'rule Needle {\n'
+        '   strings: $needle = "needle"\n'
+        '   condition: $needle\n'
+        '}\n'
+    )
+    data = b"AAAAA needle BBBBB"
+    matches = scan_bytes(rules, data, base_offset=0)
+    assert matches
+    assert matches[0].rule == "Needle"
+    assert any(h.offset == 6 and h.identifier == "$needle" for h in matches[0].strings)

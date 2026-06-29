@@ -40,6 +40,7 @@ __all__ = [
     "default_rules_dir",
     "default_compiled_path",
     "compile_rules",
+    "compile_text",
     "load_compiled_rules",
 ]
 
@@ -222,6 +223,26 @@ def load_compiled_rules(path: str) -> Any | None:
         return yara.load(path)
     except Exception as e:
         logger.warning("yara load failed: %s", e)
+        return None
+
+
+def compile_text(source: str) -> Any | None:
+    """Compile a single YARA rule source string. Returns the compiled
+    rules object on success or ``None`` on any error (including
+    ``yara-python`` not being installed or the source being invalid).
+
+    Use this for ad-hoc single-rule scans; for a directory of rule
+    files prefer :func:`compile_rules`, which caches the result on
+    disk and reports per-file errors.
+    """
+    if not source or not is_yara_available():
+        return None
+    import yara
+
+    try:
+        return yara.compile(source=source)
+    except Exception as e:
+        logger.warning("yara compile_text failed: %s", e)
         return None
 
 

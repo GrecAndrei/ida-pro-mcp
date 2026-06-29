@@ -4,17 +4,20 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
-import hashlib
 import re
-from collections import OrderedDict
+
+from ida_pro_mcp.host.intelligence.yara_scanner import (
+    YaraRuleMatch,
+    compile_text,
+    is_yara_available,
+    scan_bytes,
+)
 
 # ============================================================================
 # YARA_HUNT - Surgical Pattern Matching with Context & Attribution
 # ============================================================================
 
-# LRU cache for compiled YARA rules: hash -> compiled_rule
-_RULE_CACHE = OrderedDict()
-_MAX_RULE_CACHE = 32
+MAX_SCAN_RESULTS = 500
 
 
 def _get_rules_dir():
@@ -33,6 +36,16 @@ def _load_rule_text(spec: str) -> tuple[Optional[str], Optional[dict]]:
         return None, make_error(MCPError.FILE_NOT_FOUND, f"Rule file not found: {rule_path}")
     with open(rule_path, encoding="utf-8", errors="replace") as f:
         return f.read(), None
+
+
+def _compile_rule(rule_source: str) -> object | None:
+    """Compile a YARA source string via the host scanner helper.
+
+    Returns the compiled rules object, or ``None`` if yara-python is
+    unavailable or the source is invalid. The caller falls back to the
+    regex-only scanner when this returns None.
+    """
+    return compile_text(rule_source)
 
 
 def _parse_hex_pattern(expr: str):
@@ -166,19 +179,6 @@ def _extract_strings_from_match(region_base: int, match_offset: int, data: bytes
     return strings
 
 
-def _compile_rule_cached(rule_text: str, yara_module):
-    """Compile a YARA rule with LRU caching."""
-    rule_hash = hashlib.sha256(rule_text.encode()).hexdigest()
-    if rule_hash in _RULE_CACHE:
-        _RULE_CACHE.move_to_end(rule_hash)
-        return _RULE_CACHE[rule_hash]
-    compiled = yara_module.compile(source=rule_text)
-    _RULE_CACHE[rule_hash] = compiled
-    if len(_RULE_CACHE) > _MAX_RULE_CACHE:
-        _RULE_CACHE.popitem(last=False)
-    return compiled
-
-
 @tool
 @idaread
 def yara_hunt(
@@ -219,21 +219,16 @@ def yara_hunt(
             files = [f for f in os.listdir(rules_dir) if f.endswith((".yar", ".yara"))]
             return {"ok": True, "rules": files, "dir": rules_dir}
 
-        yara = None
-        try:
-            import yara
-        except ImportError:
-            yara = None
+        yara_available = is_yara_available()
 
         if action == "compile":
             if not rules:
                 return make_error(MCPError.INVALID_ARGS, "rules required")
-            if yara is not None:
-                try:
-                    yara.compile(source=rules)
+            if yara_available:
+                compiled = compile_text(rules)
+                if compiled is not None:
                     return {"ok": True, "status": "Valid YARA rule", "engine": "yara-python"}
-                except Exception as e:
-                    return make_error(MCPError.INVALID_ARGS, f"YARA compilation failed: {e}")
+                return make_error(MCPError.INVALID_ARGS, "YARA compilation failed: invalid rule")
             rule_text, load_err = _load_rule_text(rules)
             if load_err:
                 return load_err
@@ -261,19 +256,24 @@ def yara_hunt(
                 return load_err
 
             compiled = None
-            if yara is not None:
+            if yara_available:
                 try:
                     if "rule" in rules and "{" in rules:
-                        compiled = _compile_rule_cached(rules, yara)
+                        compiled = _compile_rule(rules)
                     else:
                         rule_path, err = validate_path_safe(rules)
                         if err:
                             return err
                         with open(rule_path, encoding="utf-8", errors="replace") as f:
                             file_text = f.read()
-                        compiled = _compile_rule_cached(file_text, yara)
+                        compiled = _compile_rule(file_text)
                 except Exception as e:
                     return make_error(MCPError.INVALID_ARGS, f"YARA compilation failed: {e}")
+                if compiled is None:
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        "yara-python rejected the rule text; falling back requires quoted literals or hex patterns.",
+                    )
             else:
                 literal_patterns, hex_patterns = _extract_fallback_patterns(rule_text or "")
                 if not literal_patterns and not hex_patterns:
@@ -301,38 +301,22 @@ def yara_hunt(
                     if data:
                         scan_regions.append((seg.start_ea, data))
 
-            results = []
+            results: list[dict] = []
             if compiled is not None:
                 for region_base, data in scan_regions:
-                    matches = compiled.match(data=data)
-                    for m in matches:
-                        for off, name, val in m.strings:
-                            abs_addr = region_base + off
-                            entry = {
-                                "rule": m.rule,
-                                "addr": hex(abs_addr),
-                                "string": name,
-                                "data": val.hex(" ")[:32] if hasattr(val, "hex") else "",
-                            }
-                            if include_func:
-                                entry["function"] = _get_function_for_addr(abs_addr)
-                            if action in ("match_context", "extract_strings", "xref_matches"):
-                                entry["context"] = _get_match_context(region_base, off, data, context_bytes)
-                            if action in ("extract_strings", "xref_matches"):
-                                entry["near_strings"] = _extract_strings_from_match(region_base, off, data)
-                            if action == "xref_matches":
-                                xrefs = []
-                                for xref in idautils.XrefsTo(abs_addr, 0):
-                                    xrefs.append(f"{hex(xref.frm)}  ({'code' if xref.iscode else 'data'})")
-                                entry["xrefs"] = xrefs[:10]
-                            results.append(entry)
-                            if len(results) >= 500:
-                                break
-                        if len(results) >= 500:
-                            break
-                    if len(results) >= 500:
+                    if len(results) >= MAX_SCAN_RESULTS:
                         break
-                return {"ok": True, "matches": results, "engine": "yara-python", "action": action}
+                    matches = scan_bytes(compiled, data, base_offset=region_base)
+                    for m in matches:
+                        if len(results) >= MAX_SCAN_RESULTS:
+                            break
+                        results.extend(_match_to_entries(m, region_base, action, data, context_bytes, include_func))
+                return {
+                    "ok": True,
+                    "matches": results,
+                    "engine": "yara-python",
+                    "action": action,
+                }
 
             # Fallback lightweight matcher
             literal_patterns, hex_patterns = _extract_fallback_patterns(rule_text or "")
@@ -361,12 +345,12 @@ def yara_hunt(
                                 xrefs.append(f"{hex(xref.frm)}  ({'code' if xref.iscode else 'data'})")
                             entry["xrefs"] = xrefs[:10]
                         results.append(entry)
-                        if len(results) >= 500:
+                        if len(results) >= MAX_SCAN_RESULTS:
                             break
                         start = idx + 1
-                    if len(results) >= 500:
+                    if len(results) >= MAX_SCAN_RESULTS:
                         break
-                if len(results) >= 500:
+                if len(results) >= MAX_SCAN_RESULTS:
                     break
                 for hpat in hex_patterns:
                     for idx in _find_hex_matches(data, hpat):
@@ -388,11 +372,11 @@ def yara_hunt(
                                 xrefs.append(f"{hex(xref.frm)}  ({'code' if xref.iscode else 'data'})")
                             entry["xrefs"] = xrefs[:10]
                         results.append(entry)
-                        if len(results) >= 500:
+                        if len(results) >= MAX_SCAN_RESULTS:
                             break
-                    if len(results) >= 500:
+                    if len(results) >= MAX_SCAN_RESULTS:
                         break
-                if len(results) >= 500:
+                if len(results) >= MAX_SCAN_RESULTS:
                     break
 
             return {
@@ -408,3 +392,39 @@ def yara_hunt(
 
     except Exception as e:
         return handle_error(e)
+
+
+def _match_to_entries(
+    match: YaraRuleMatch,
+    region_base: int,
+    action: str,
+    data: bytes,
+    context_bytes: int,
+    include_func: bool,
+) -> list[dict]:
+    """Convert a YaraRuleMatch from the host scanner into the legacy
+    flat entry list shape that ``yara_hunt`` callers expect."""
+    out: list[dict] = []
+    for hit in match.strings:
+        abs_addr = region_base + hit.offset
+        entry: dict = {
+            "rule": match.rule,
+            "addr": hex(abs_addr),
+            "string": hit.identifier,
+            "data": hit.data[:64],
+        }
+        if include_func:
+            entry["function"] = _get_function_for_addr(abs_addr)
+        if action in ("match_context", "extract_strings", "xref_matches"):
+            entry["context"] = _get_match_context(region_base, hit.offset, data, context_bytes)
+        if action in ("extract_strings", "xref_matches"):
+            entry["near_strings"] = _extract_strings_from_match(region_base, hit.offset, data)
+        if action == "xref_matches":
+            xrefs = []
+            for xref in idautils.XrefsTo(abs_addr, 0):
+                xrefs.append(f"{hex(xref.frm)}  ({'code' if xref.iscode else 'data'})")
+            entry["xrefs"] = xrefs[:10]
+        out.append(entry)
+        if len(out) >= MAX_SCAN_RESULTS:
+            break
+    return out
