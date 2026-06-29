@@ -28,7 +28,7 @@ def test_intelligence_no_legacy_error_only_dict():
     src = (REPO / "src/ida_pro_mcp/ida_mcp/tools/intelligence.py").read_text()
     legacy = re.findall(r'\{\s*"error":\s*True,\s*"message":[^}]*\}', src)
     assert not legacy, (
-        f"intelligence.py still has legacy inline error dicts (no code/hint):\n"
+        "intelligence.py still has legacy inline error dicts (no code/hint):\n"
         + "\n".join(legacy[:10])
     )
     assert "MCPError.NO_RESULTS" in src, (
