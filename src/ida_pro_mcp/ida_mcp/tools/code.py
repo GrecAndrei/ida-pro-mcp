@@ -629,6 +629,83 @@ def _disasm_range(
     return lines
 
 
+def _disasm_window(
+    center_ea: int,
+    *,
+    radius: int,
+    max_items: int,
+    style: str,
+    include_bytes: bool,
+) -> list[str]:
+    """Disassemble up to ``radius`` instructions on each side of
+    ``center_ea``. Output order is: [oldest ... center-1, center, center+1 ... newest]
+    so the natural reading flow is preserved around the focus address.
+
+    ``radius`` is clamped to ``max_items // 2`` so we never blow the
+    parent budget, and the final line count never exceeds ``max_items``.
+    The walk stops early if IDA stops emitting valid head bytes
+    (function/data boundaries, unmapped segments, etc.).
+    """
+    radius = max(radius, 0)
+    max_items = max(max_items, 1)
+    radius = min(radius, max_items // 2 if max_items >= 2 else 0)
+
+    before: list[str] = []
+    curr = center_ea
+    # Walk backwards collecting "radius" instructions whose start_ea is
+    # strictly less than center_ea. PrevHead returns BADADDR when we
+    # cross the function/binary boundary.
+    steps_back = 0
+    while steps_back < radius:
+        prev = idc.prev_head(curr, 0)
+        if prev == idaapi.BADADDR or prev >= curr:
+            break
+        before.append(_format_disasm_line(prev, style=style, include_bytes=include_bytes))
+        curr = prev
+        steps_back += 1
+    before.reverse()
+
+    after: list[str] = []
+    curr = center_ea
+    steps_fwd = 0
+    while steps_fwd < radius:
+        next_ea = idc.next_head(curr, idaapi.BADADDR)
+        if next_ea == idaapi.BADADDR or next_ea <= curr:
+            # Non-head aligned; fall through one byte at a time until
+            # we find a valid head or hit the budget.
+            item_size = int(idc.get_item_size(curr) or 1)
+            item_size = max(item_size, 1)
+            curr = curr + item_size
+            if curr <= center_ea:
+                continue
+            steps_fwd += 1
+            after.append(_format_disasm_line(curr, style=style, include_bytes=include_bytes))
+            continue
+        # Even when next_ea == center_ea exactly we still want to move.
+        curr = next_ea
+        if curr <= center_ea:
+            continue
+        steps_fwd += 1
+        after.append(_format_disasm_line(curr, style=style, include_bytes=include_bytes))
+
+    # center line itself (if it points at a head).
+    center_line = _format_disasm_line(
+        center_ea, style=style, include_bytes=include_bytes
+    )
+    lines = before + [center_line] + after
+    if len(lines) > max_items:
+        # Keep the central slice — drop the head of `before` so the focus
+        # address is preserved if the budget is tight.
+        keep = max_items
+        tail_budget = keep - 1 - len(after)
+        tail_budget = max(tail_budget, 0)
+        before = before[-tail_budget:] if tail_budget else []
+        lines = before + [center_line] + after
+        if len(lines) > max_items:
+            lines = lines[:max_items]
+    return lines
+
+
 # ============================================================================
 # 2. CODE - Decompilation & Disassembly
 # ============================================================================
@@ -651,6 +728,7 @@ def code(
     include_bytes: Annotated[bool, "Include instruction bytes in disassembly output"] = False,
     end: Annotated[Optional[str], "Optional end address for disasm range"] = None,
     limit: Annotated[Optional[int], "Alias for max_items (especially useful with disasm)"] = None,
+    window: Annotated[Optional[int], "Disasm: number of instructions BEFORE and AFTER the start address (centered view). Overrides function-bounded default."] = None,
     field_name: Annotated[Optional[str], "Struct field name (for xrefs_to_field)"] = None,
     target: Annotated[Optional[str], "Target address (for find_paths)"] = None,
     comment: Annotated[Optional[str], "Comment text (for annotate action)"] = None,
@@ -668,10 +746,12 @@ def code(
         Example: code(action="decompile", addrs=["main", "0x402000"])
 
     disasm - Get assembly listing (LLM-compact text, one line per instruction)
-        Params: addrs (REQUIRED), optional end, disasm_style (csmini|classic|annotated), include_bytes, limit
+        Params: addrs (REQUIRED), optional end, window (±N instructions around addrs),
+                disasm_style (csmini|classic|annotated), include_bytes, limit
         Returns: [{addr, name, disasm: "*addr:instr\\n*addr:instr\\n...", count, style, range}]
         Example: code(action="disasm", addrs="0x401000")
         Example: code(action="disasm", addrs="0x125b0", end="0x12640", limit=160, disasm_style="csmini")
+        Example: code(action="disasm", addrs="0x4010a0", window=20)   # ±20 instructions around 0x4010a0
 
     xrefs_to - Get cross-references TO an address (compact text, includes function names)
         Params: addrs (REQUIRED)
@@ -938,6 +1018,51 @@ def code(
                     if end_ea <= ea:
                         results.append({"addr": addr, **make_error(MCPError.INVALID_ARGS, "end must be greater than start address")})
                         continue
+                # window=N: capture ±N instructions around the start address,
+                # centered on `ea`. Wins over function-bounded extraction so
+                # that a caller with a known hot address gets exactly the slice
+                # they asked for without paging through the rest of the body.
+                if window is not None:
+                    try:
+                        radius = int(window)
+                    except (TypeError, ValueError):
+                        results.append(make_error(
+                            MCPError.INVALID_ARGS,
+                            "window must be a non-negative integer",
+                            details={"got": str(window), "type": type(window).__name__},
+                        ))
+                        continue
+                    if radius < 0:
+                        results.append(make_error(
+                            MCPError.INVALID_ARGS,
+                            "window must be non-negative",
+                            details={"got": radius},
+                        ))
+                        continue
+                    lines = _disasm_window(
+                        ea,
+                        radius=radius,
+                        max_items=max_items,
+                        style=disasm_style,
+                        include_bytes=include_bytes,
+                    )
+                    fname = ida_funcs.get_func_name(func.start_ea) if func else ""
+                    first_addr = lines[0].split(":", 1)[0] if lines else hex_ea(ea)
+                    last_addr = lines[-1].split(":", 1)[0] if lines else hex_ea(ea)
+                    entry = {
+                        "ok": True,
+                        "addr": hex_ea(ea),
+                        "name": fname,
+                        "disasm": "\n".join(lines),
+                        "count": len(lines),
+                        "style": disasm_style,
+                        "range": f"{first_addr}-{last_addr}",
+                        "window": radius,
+                    }
+                    if not func:
+                        entry["warning"] = "Address is not within a defined function. Showing raw disassembly."
+                    results.append(entry)
+                    continue
                 if not func:
                     # Disassemble raw bytes even without function
                     lines = _disasm_range(
