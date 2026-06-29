@@ -58,7 +58,7 @@ include = ["src/ida_pro_mcp"]
 
 [tool.ruff]
 exclude = ["src/ida_pro_mcp/ida_mcp/zeromcp/*.py"]
-line-length = 120
+line-length = 130
 
 [tool.ruff.lint]
 # Star-imports from `._common` in IDA tool modules are deliberate (see
@@ -84,6 +84,17 @@ ignore = [
     "RET504", "RET505", "RET507", "RET508", "RET503",
 ]
 
+[tool.ruff.lint.pylint]
+# The project has wide contract functions (large Literal action enums,
+# comprehensive dispatch tables). The default thresholds flag otherwise-
+# reasonable code. Bump to match the codebase's typical envelope.
+max-branches = 25
+max-returns = 12
+max-statements = 80
+max-args = 12
+max-positional-args = 12
+max-locals = 25
+
 [tool.ruff.lint.per-file-ignores]
 # IDA tool modules: tolerate star-import + long Annotated signatures.
 "src/ida_pro_mcp/ida_mcp/tools/**/*.py" = [
@@ -96,6 +107,7 @@ ignore = [
     "PLR2004",  # magic-value-comparison   (IDA has many small-int constants)
     "B008",  # function-call-in-default-argument  (Annotated defaults)
     "UP006", "UP045",  # old typing.Dict/Optional — matching codebase style
+    "E701",  # multiple-statements-on-one-line-colon  (one-line guard pattern)
 ]
 # calc.py has tests that source-slice its `_calc_persist_capture` function
 # and exec it with a minimal namespace. Don't introduce `contextlib` (or
@@ -111,11 +123,18 @@ ignore = [
     "PLR2004",
     "B008",
     "UP006", "UP045",
+    "F403",  # `from ._common import *` lives in query_lang.py too
+    "E701",
+]
+# server_script.py runs in IDA's embedded interpreter; same relaxation.
+"src/ida_pro_mcp/server_script.py" = [
+    "E501", "E701",
 ]
 # Tests can be lenient on a few style rules.
 "tests/**/*.py" = [
     "E402",  # module-import-not-top  (sys.path tweaks before imports)
     "E501",
+    "E701",  # one-line guards in test bodies
     "PLR2004",
     "PLC0415",
     "F401",  # fixtures often import names just for side effects
