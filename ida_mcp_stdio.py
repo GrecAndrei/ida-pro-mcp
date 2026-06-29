@@ -5,8 +5,8 @@ IDA Pro MCP Server — stdio entry point (thin shim).
 All implementation lives in src/ida_pro_mcp/host/.
 This file preserves backward compatibility for tests and MCP clients.
 """
-import sys
 import os
+import sys
 
 # =============================================================================
 # STREAM ISOLATION — must happen before ANY other imports
@@ -22,58 +22,69 @@ _src_dir = os.path.join(_SCRIPT_DIR, "src")
 if _src_dir not in sys.path:
     sys.path.insert(0, _src_dir)
 
-# Inject the original stdout into the server module before it is imported
-import ida_pro_mcp.host.server as _server_mod  # noqa: E402
-_server_mod._real_stdout = _real_stdout
+# Inject the original stdout into the server module before it is imported.
+# CRITICAL: `ida_pro_mcp.host.server` is a *package* with a lazy __init__,
+# so we must reach into the submodule `ida_pro_mcp.host.server.server`
+# (where `_real_stdout` is defined at module level, server.py:794).
+# Setting the attribute on the package alone has no effect — `IDAMCPServer.run()`
+# uses the submodule's name binding, which captures `sys.stdout` at module
+# import time (already swapped to stderr by then).
+import ida_pro_mcp.host.server as _server_pkg  # noqa: E402
+import ida_pro_mcp.host.server.server as _server_mod  # noqa: E402
 
-# Re-export everything from the host package so existing imports keep working
-from ida_pro_mcp.host import *  # noqa: E402,F403
-from ida_pro_mcp.host.server.session import (  # noqa: E402
-    Session,
-    SessionManager,
-    BookmarkManager,
-)
-from ida_pro_mcp.host.server.server import IDAMCPServer  # noqa: E402
-from ida_pro_mcp.host.errors import MCPError, make_error  # noqa: E402
-from ida_pro_mcp.host.analysis.patterns import (  # noqa: E402
+_server_mod._real_stdout = _real_stdout
+_server_pkg._real_stdout = _real_stdout  # type: ignore[attr-defined]  # belt-and-braces in case anything else imports from the package
+
+# Re-export everything from the host package so existing imports keep working.
+# All re-exports marked `noqa: F401` — they exist for backward compatibility
+# with external callers that do `from ida_mcp_stdio import <name>`.
+from ida_pro_mcp.host import *  # noqa: E402,F403,F401
+from ida_pro_mcp.host.analysis.patterns import (  # noqa: E402,F401
     compile_smart_pattern,
     smart_match,
 )
-from ida_pro_mcp.host.config import (  # noqa: E402
-    CACHE_DIR,
+from ida_pro_mcp.host.config import (  # noqa: E402,F401
     BRIDGE_LOG,
-    log_rpc,
-    validate_path,
+    CACHE_DIR,
     _bounded_int,
     _coerce_bool,
     _env_bool,
-    _parse_str_list,
-    _parse_line_range,
     _normalize_session_id,
     _parse_iso_datetime,
+    _parse_line_range,
+    _parse_str_list,
+    log_rpc,
+    validate_path,
 )
-from ida_pro_mcp.host.schemas import (  # noqa: E402
-    TOOLS,
-    TOOL_DESCRIPTIONS,
-    TOOL_ACTIONS,
-    TOOL_ARG_SCHEMAS,
-    TOOL_ALIASES,
-    ARG_ALIASES_BY_TOOL,
+from ida_pro_mcp.host.errors import MCPError, make_error  # noqa: E402,F401
+from ida_pro_mcp.host.schemas import (  # noqa: E402,F401
     ACTION_ALIASES_BY_TOOL,
     ADVERTISED_TOOLS,
+    ARG_ALIASES_BY_TOOL,
+    TOOL_ACTIONS,
+    TOOL_ALIASES,
+    TOOL_ARG_SCHEMAS,
+    TOOL_DESCRIPTIONS,
+    TOOLS,
+    _resolve_tool_alias,
+    _strip_balanced_wrappers,
     build_input_schema,
     build_input_schema_lean,
     build_input_schema_ultra,
-    build_tool_description_ultra,
     build_tool_description_lean,
+    build_tool_description_ultra,
     classify_tool_category,
     sanitize_schema_for_vertex,
-    _strip_balanced_wrappers,
-    _resolve_tool_alias,
 )
-from ida_pro_mcp.host.stores.truncation import (  # noqa: E402
-    truncate_response,
+from ida_pro_mcp.host.server.server import IDAMCPServer  # noqa: E402,F401
+from ida_pro_mcp.host.server.session import (  # noqa: E402,F401
+    BookmarkManager,
+    Session,
+    SessionManager,
+)
+from ida_pro_mcp.host.stores.truncation import (  # noqa: E402,F401
     continue_truncated,
+    truncate_response,
 )
 
 if __name__ == "__main__":
