@@ -126,10 +126,22 @@ class ServerDispatchMixin:
                         _rpc_sock_timeout = max(120, int(_requested) + 30) if _requested is not None else 120
                     except Exception:
                         _rpc_sock_timeout = 120
-                res = self._send_rpc_raw(
-                    {"tool": tool_name, "args": rpc_args}, port,
-                    recv_timeout=_rpc_sock_timeout,
-                )
+                try:
+                    res = self._send_rpc_with_retry(
+                        {"tool": tool_name, "args": rpc_args}, port,
+                        recv_timeout=_rpc_sock_timeout,
+                    )
+                except (ConnectionRefusedError, EOFError) as exc:
+                    # Connection-layer failure that exhausted retries. Surface as
+                    # runtime error so the agent can decide to restart.
+                    return make_error(
+                        MCPError.RPC_CONNECTION_ERROR,
+                        f"RPC to IDA failed after retries: {exc}",
+                        details={"exception_type": type(exc).__name__, "tool": tool_name},
+                    )
+                # Other socket errors (TimeoutError, OSError) propagate to the
+                # existing handler below, which distinguishes IDA_TIMEOUT from
+                # RPC_CONNECTION_ERROR based on the process liveness check.
                 _elapsed = time.time() - _t0
                 if isinstance(res, dict) and "error" not in res and "ok" not in res:
                     res = {"ok": True, **res}

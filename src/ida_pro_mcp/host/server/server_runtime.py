@@ -426,6 +426,64 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             finally:
                 s.close()
 
+    def _send_rpc_with_retry(
+        self,
+        request,
+        port: int,
+        *,
+        max_retries: int | None = None,
+        base_backoff: float = 0.15,
+        timeout: int = 5,
+        auth_token: str | None = None,
+        recv_timeout: int | None = None,
+    ) -> dict:
+        """Call ``_send_rpc_raw`` with bounded retry on transient connection errors.
+
+        Retries are bounded to transient connection errors (socket-level
+        failures and EOF) — they do NOT retry on IDA-side errors that
+        came back over the wire. Each retry sleeps for ``base_backoff *
+        (attempt + 1)`` (linear) by default; the caller can swap that
+        strategy in tests by passing ``base_backoff=0``.
+
+        Controlled by ``IDA_MCP_RPC_MAX_RETRIES`` (default 2). Set 0 to
+        disable retries entirely.
+        """
+        if max_retries is None:
+            try:
+                max_retries = int(os.environ.get("IDA_MCP_RPC_MAX_RETRIES", "2"))
+            except Exception:
+                max_retries = 2
+        max_retries = max(0, max_retries)
+
+        import time as _time
+        last_exc: Exception | None = None
+        attempts = max_retries + 1
+        for attempt in range(attempts):
+            try:
+                return self._send_rpc_raw(
+                    request,
+                    port,
+                    timeout=timeout,
+                    auth_token=auth_token,
+                    recv_timeout=recv_timeout,
+                )
+            except (ConnectionRefusedError, EOFError, ConnectionResetError, ConnectionAbortedError) as exc:
+                # Transient connection-layer failures that suggest the
+                # runtime came back online recently (or was momentarily
+                # busy). Retry with linear backoff.
+                last_exc = exc
+                if attempt >= max_retries:
+                    break
+                _time.sleep(base_backoff * (attempt + 1))
+            except (TimeoutError, OSError):
+                # Timeouts and other OS-layer errors are NOT retried —
+                # they're surfaced as IDA_TIMEOUT / RPC_CONNECTION_ERROR
+                # so the caller can distinguish "IDA was busy" from
+                # "IDA went away".
+                raise
+        # Out of attempts — surface the last transient failure.
+        raise last_exc  # type: ignore[misc]
+
     def _kill_ida_process(self, runtime: dict, grace_sec: float = 3.0) -> dict:
         """
         Forcefully terminate the IDA process associated with a session runtime.

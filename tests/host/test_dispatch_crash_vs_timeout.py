@@ -60,6 +60,10 @@ class _Dispatch(ServerDispatchMixin):
     def _send_rpc_raw(self, payload, port, **kwargs):
         raise self._rpc_exc
 
+    # The dispatcher also goes through the retry wrapper; forward the
+    # raw exception so the test exercises the same downstream handler.
+    _send_rpc_with_retry = _send_rpc_raw
+
     def _get_ida_diagnostics(self, *a, **k):
         return ""
 
