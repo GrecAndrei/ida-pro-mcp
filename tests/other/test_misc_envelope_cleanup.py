@@ -47,14 +47,13 @@ def test_misc_no_legacy_unbounded_error_message_dict():
             # legacy shape is 'error/message' without code. This pattern
             # uniquely identifies the legacy writes; if the line is part
             # of a dict whose FIRST key is `code` it is fine.
-            stripped = line.strip()
             # Detect make_error outputs - the dict starts with code, not error.
             if 'code":' in line[: line.find('"error":')]:
                 continue
             bad.append((ln, line.strip()))
     assert not bad, (
-        f"misc.py still has legacy `{{'error': True, 'message': ...}}` "
-        f"returns without code/hint. Each must be wrapped with make_error:\n"
+        "misc.py still has legacy `{{'error': True, 'message': ...}}` "
+        "returns without code/hint. Each must be wrapped with make_error:\n"
         + "\n".join(f"  {ln}: {line}" for ln, line in bad)
     )
 
