@@ -378,32 +378,31 @@ class TestSessionExecuteTool(unittest.TestCase):
 
 
 class TestMiscReadWriteFile(unittest.TestCase):
-    """Test memory tool read_file and write_file actions.
+    """Test misc tool read_file and write_file actions.
 
-    read_file/write_file moved from misc to memory. Verify the schema and
-    action list are correctly updated on the new tool.
+    ``read_file``/``write_file`` live on ``misc`` (not ``memory``); the
+    schema and action list must agree with the IDA-side Literal.
     """
 
-    def test_memory_actions_include_read_write(self):
-        """Verify TOOL_ACTIONS for memory includes read_file and write_file."""
+    def test_misc_actions_include_read_write(self):
+        """Verify TOOL_ACTIONS for misc includes read_file and write_file."""
         from ida_mcp_stdio import TOOL_ACTIONS
-        self.assertIn("read_file", TOOL_ACTIONS["memory"])
-        self.assertIn("write_file", TOOL_ACTIONS["memory"])
+        self.assertIn("read_file", TOOL_ACTIONS["misc"])
+        self.assertIn("write_file", TOOL_ACTIONS["misc"])
 
-    def test_memory_description_includes_read_write(self):
-        """Verify TOOL_DESCRIPTIONS for memory mentions read_file/write_file."""
+    def test_memory_actions_do_not_include_read_write(self):
+        """Verify memory tool does NOT advertise file_io actions (those
+        live on misc; otherwise dispatch would fail on the runtime)."""
+        from ida_mcp_stdio import TOOL_ACTIONS
+        self.assertNotIn("read_file", TOOL_ACTIONS["memory"])
+        self.assertNotIn("write_file", TOOL_ACTIONS["memory"])
+
+    def test_misc_description_includes_read_write(self):
+        """Verify TOOL_DESCRIPTIONS for misc mentions read_file/write_file."""
         from ida_mcp_stdio import TOOL_DESCRIPTIONS
-        desc = TOOL_DESCRIPTIONS["memory"]
+        desc = TOOL_DESCRIPTIONS["misc"]
         self.assertIn("read_file", desc)
         self.assertIn("write_file", desc)
-
-    def test_memory_schema_has_path_and_content(self):
-        """Verify TOOL_ARG_SCHEMAS for memory has path and content params."""
-        from ida_mcp_stdio import TOOL_ARG_SCHEMAS
-        schema = TOOL_ARG_SCHEMAS["memory"]
-        self.assertIn("path", schema)
-        self.assertIn("content", schema)
-        self.assertIn("encoding", schema)
 
 
 class TestFuncsToolActions(unittest.TestCase):
@@ -416,7 +415,8 @@ class TestFuncsToolActions(unittest.TestCase):
         self.assertNotIn("set_name", TOOL_ACTIONS["funcs"])
         self.assertNotIn("rename", TOOL_ACTIONS["funcs"])
         self.assertNotIn("add_comment", TOOL_ACTIONS["funcs"])
-        self.assertNotIn("list", TOOL_ACTIONS["funcs"])
+        # `funcs(action='list')` was added in cleanup_stale era — delegated to data(functions)
+        self.assertIn("list", TOOL_ACTIONS["funcs"])
 
     def test_funcs_description_mentions_regex(self):
         from ida_mcp_stdio import TOOL_DESCRIPTIONS

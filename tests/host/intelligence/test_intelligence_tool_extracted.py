@@ -123,8 +123,15 @@ def test_schemas_py_knows_about_intelligence_tool():
     assert "intelligence" in TOOL_ACTIONS
     assert "intelligence" in ADVERTISED_TOOLS
     # The wrapper actions (grep/pick/head/tail/next/stats) extend the
-    # enum at schema-build time; the raw TOOL_ACTIONS has 13.
-    assert len(TOOL_ACTIONS["intelligence"]) == 13
+    # enum at schema-build time; the raw TOOL_ACTIONS source has 21
+    # (13 baseline + 8 structural_* added during cleanup_stale era).
+    assert len(TOOL_ACTIONS["intelligence"]) == 21
+    # Spot-check the structural_* family was wired in
+    structural = {a for a in TOOL_ACTIONS["intelligence"] if a.startswith("structural_")}
+    assert {"structural_extract", "structural_query", "structural_get",
+            "structural_refresh", "structural_stats",
+            "structural_delete", "structural_ingest",
+            "structural_extract_single"} <= structural
 
 
 def test_intelligence_arg_schema_includes_intelligence_specific_args():

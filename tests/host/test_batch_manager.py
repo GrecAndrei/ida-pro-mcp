@@ -71,7 +71,12 @@ def test_status_nonexistent():
 def test_result_nonexistent():
     mgr = BatchManager()
     result = mgr.result("nonexistent")
-    assert result["error"] == "task nonexistent not found"
+    # Now goes through make_error — carries code/category/hint per error
+    # envelope convention (see src/ida_pro_mcp/host/errors.py).
+    assert result.get("error") is True
+    assert result.get("category") == "user"
+    assert "task nonexistent not found" in result.get("message", "")
+    assert result.get("code") == "NOT_FOUND"
 
 
 def test_wait_timeout():

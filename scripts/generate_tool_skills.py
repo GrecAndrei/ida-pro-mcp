@@ -306,14 +306,28 @@ def main() -> None:
     )
     tools: list[str] = _extract_literal_assignment(module, "TOOLS")
 
+    # Filter to tools that the runtime will actually advertise so the router
+    # doesn't try to route to hidden/internal helpers like `background` or
+    # `colorize`. Falls back to all TOOLS if ADVERTISED_TOOLS can't be parsed.
+    advertised_tools_set: set | None = None
+    try:
+        advertised_tools_list = _extract_literal_assignment(module, "ADVERTISED_TOOLS")
+        advertised_tools_set = set(advertised_tools_list)
+    except Exception:
+        advertised_tools_set = None
+
     # Preserve advertised order from TOOLS list, then append any extras from descriptions.
     ordered_tools = []
     seen = set()
     for t in tools:
+        if advertised_tools_set is not None and t not in advertised_tools_set:
+            continue
         if t not in seen:
             ordered_tools.append(t)
             seen.add(t)
     for t in sorted(tool_descriptions.keys()):
+        if advertised_tools_set is not None and t not in advertised_tools_set:
+            continue
         if t not in seen:
             ordered_tools.append(t)
             seen.add(t)

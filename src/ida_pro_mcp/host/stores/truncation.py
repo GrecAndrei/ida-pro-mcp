@@ -5,6 +5,8 @@ import uuid
 from collections import deque
 from typing import Any
 
+from ..errors import MCPError, make_error
+
 # Minimum sensible token limit to prevent degenerate truncation
 _MIN_MAX_TOKENS = 500
 _MAX_TRUNCATION_STORE = 20
@@ -28,36 +30,52 @@ def continue_truncated(
 ) -> dict[str, Any]:
     entry = _TRUNCATION_STORE.get(token)
     if not entry:
-        return {"error": True, "message": "Unknown or expired continuation token"}
+        return make_error(
+            MCPError.TRUNCATION_TOKEN_INVALID,
+            "Unknown or expired continuation token",
+        )
 
     fields = entry.get("fields", {})
     if not fields:
-        return {"error": True, "message": "No truncated fields available for this token"}
+        return make_error(
+            MCPError.TRUNCATION_TOKEN_INVALID,
+            "No truncated fields available for this token",
+        )
 
     if field is None:
         if len(fields) == 1:
             field = next(iter(fields))
         else:
-            return {
-                "error": True,
-                "message": "field is required when multiple truncated fields exist",
-                "fields": sorted(fields.keys()),
-            }
+            err = make_error(
+                MCPError.TRUNCATION_FIELD_MISSING,
+                "field is required when multiple truncated fields exist",
+            )
+            err["fields"] = sorted(fields.keys())
+            return err
 
     info = fields.get(field)
     if not info:
-        return {"error": True, "message": f"Unknown field: {field}", "fields": sorted(fields.keys())}
+        err = make_error(MCPError.TRUNCATION_FIELD_MISSING, f"Unknown field: {field}")
+        err["fields"] = sorted(fields.keys())
+        return err
 
     response = entry.get("response", {})
     value = response.get(field)
     if value is None:
-        return {"error": True, "message": f"Field not found in response: {field}"}
+        return make_error(
+            MCPError.TRUNCATION_FIELD_MISSING,
+            f"Field not found in response: {field}",
+        )
 
     if info.get("type") == "list" and isinstance(value, list):
         start = info.get("next_offset", 0) if offset is None else max(0, int(offset))
         chunk = count if count is not None else info.get("chunk_size", 0)
         if chunk <= 0:
-            return {"error": True, "message": "Invalid count for continuation"}
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "Invalid count for continuation",
+                hint="Pass count=N with N>0.",
+            )
         items = value[start : start + chunk]
         next_offset = start + len(items)
         info["next_offset"] = next_offset
@@ -76,7 +94,11 @@ def continue_truncated(
         start = info.get("next_offset", 0) if offset is None else max(0, int(offset))
         chunk = count if count is not None else info.get("chunk_size", 0)
         if chunk <= 0:
-            return {"error": True, "message": "Invalid count for continuation"}
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "Invalid count for continuation",
+                hint="Pass count=N with N>0.",
+            )
         text = value[start : start + chunk]
         next_offset = start + len(text)
         info["next_offset"] = next_offset
@@ -91,7 +113,10 @@ def continue_truncated(
             "next_offset": next_offset if next_offset < info.get("total", len(value)) else None,
         }
 
-    return {"error": True, "message": f"Field {field} is not a supported truncated type"}
+    return make_error(
+        MCPError.TRUNCATION_FIELD_MISSING,
+        f"Field {field} is not a supported truncated type",
+    )
 
 def truncate_response(response: dict[str, Any], max_tokens: int = 4000) -> dict[str, Any]:
     """

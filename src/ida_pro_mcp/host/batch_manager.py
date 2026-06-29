@@ -11,6 +11,8 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
+from .errors import MCPError, make_error
+
 _MAX_TASK_HISTORY = 1000
 _DEFAULT_MAX_WORKERS = int(os.environ.get("IDA_MCP_BATCH_MAX_WORKERS", "4"))
 _PERSIST_PATH = os.path.join(
@@ -117,7 +119,7 @@ class BatchManager:
         with self._lock:
             task = self._tasks.get(task_id)
         if task is None:
-            return {"error": f"task {task_id} not found"}
+            return make_error(MCPError.NOT_FOUND, f"task {task_id} not found")
         if task._future:
             with contextlib.suppress(Exception):
                 task._future.result(timeout=0)
@@ -127,9 +129,13 @@ class BatchManager:
         with self._lock:
             task = self._tasks.get(task_id)
         if task is None:
-            return {"error": f"task {task_id} not found"}
+            return make_error(MCPError.NOT_FOUND, f"task {task_id} not found")
         if task.state in ("done", "failed", "cancelled"):
-            return {"error": f"task {task_id} already {task.state}"}
+            return make_error(
+                MCPError.INVALID_ARGS,
+                f"task {task_id} already {task.state}",
+                hint="Cancellation only applies to pending or running tasks.",
+            )
         task._cancel_event.set()
         if task._future and not task._future.done():
             task._future.cancel()
@@ -142,7 +148,7 @@ class BatchManager:
         with self._lock:
             task = self._tasks.get(task_id)
         if task is None:
-            return {"error": f"task {task_id} not found"}
+            return make_error(MCPError.NOT_FOUND, f"task {task_id} not found")
         if task._future is None:
             return task.to_dict()
         with contextlib.suppress(Exception):

@@ -1693,7 +1693,11 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         pass
                     time.sleep(0.5)
 
-                return {"error": True, "reason": "timeout"}
+                return make_error(
+                    MCPError.IDA_TIMEOUT,
+                    "Runtime startup timed out before the runtime reported a port.",
+                    hint="Increase IDA_MCP_STARTUP_TIMEOUT_SEC or check the IDB log for clues.",
+                )
             finally:
                 if not _handles_transferred:
                     for fh in (stdout_fh, stderr_fh):

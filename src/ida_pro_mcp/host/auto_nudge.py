@@ -31,6 +31,19 @@ _REROUTE_MAP: dict[tuple[str, str], tuple[str, str]] = {
     ("search", "text"): ("search", "name"),
     ("search", "instruction"): ("search", "insns"),
     ("compare", "compare"): ("compare", "functions"),
+    # graph's old xref-style actions live on the dedicated xref_analysis tool
+    # (which IDA exports). The IDA `graph` Literal only accepts callgraph/cfg/
+    # dominators/xref_graph, so any other historical action must be rerouted.
+    ("graph", "call_chain"): ("xref_analysis", "call_chain"),
+    ("graph", "common_callers"): ("xref_analysis", "common_callers"),
+    ("graph", "common_callees"): ("xref_analysis", "common_callees"),
+    ("graph", "hub_functions"): ("xref_analysis", "hub_functions"),
+    ("graph", "leaf_functions"): ("xref_analysis", "leaf_functions"),
+    ("graph", "recursive"): ("xref_analysis", "recursive"),
+    ("graph", "dominator"): ("xref_analysis", "dominator"),
+    ("graph", "influence"): ("xref_analysis", "influence"),
+    ("graph", "dependency_graph"): ("xref_analysis", "dependency_graph"),
+    ("graph", "dead_functions"): ("xref_analysis", "dead_functions"),
 }
 
 # Rule-based reroute: memory.read with explicit disasm intent.

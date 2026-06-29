@@ -339,9 +339,18 @@ class ServerDispatchMixin:
             try:
                 if action == "read_file":
                     if not _os.path.exists(canonical):
-                        return {"error": True, "message": "File not found"}
+                        return make_error(
+                            MCPError.FILE_NOT_FOUND,
+                            "File not found",
+                            details={"path": canonical},
+                        )
                     if not _os.path.isfile(canonical):
-                        return {"error": True, "message": "Not a file"}
+                        return make_error(
+                            MCPError.INVALID_ARGS,
+                            "Not a file",
+                            hint="Pass a regular file path, not a directory or device.",
+                            details={"path": canonical},
+                        )
                     file_size = _os.path.getsize(canonical)
                     if file_size > self._MEMORY_MAX_BYTES:
                         return make_error(
@@ -380,7 +389,11 @@ class ServerDispatchMixin:
                         try:
                             raw = bytes.fromhex(str(content))
                         except ValueError:
-                            return {"error": True, "message": "Invalid hex content"}
+                            return make_error(
+                                MCPError.INVALID_ARGS,
+                                "Invalid hex content",
+                                hint="Pass content as an even-length hex string when encoding='binary'.",
+                            )
                         if len(raw) > self._MEMORY_MAX_BYTES:
                             return make_error(
                                 MCPError.INVALID_ARGS,
@@ -409,9 +422,17 @@ class ServerDispatchMixin:
                         "encoding": enc,
                     }
             except (OSError, ValueError) as exc:
-                return {"error": True, "message": f"memory tool: {type(exc).__name__}"}
+                return make_error(
+                    MCPError.IO_ERROR,
+                    f"memory tool: {type(exc).__name__}: {exc}",
+                    hint="Check the file path, permissions, and that the file content is well-formed.",
+                )
             except Exception:
-                return {"error": True, "message": "memory tool: operation failed"}
+                return make_error(
+                    MCPError.IO_ERROR,
+                    "memory tool: operation failed",
+                    hint="Retry, or capture a reproduce before reporting an upstream bug.",
+                )
             return make_error(
                 MCPError.ACTION_NOT_FOUND,
                 f"Unsupported memory filesystem action: '{action}'",
@@ -435,7 +456,7 @@ class ServerDispatchMixin:
                     hint="Open a session first with session(action='create', binary_path='...').",
                 )
             return self._send_rpc_raw(
-                {"tool": "analysis", "args": {"action": "plugin_run", "name": name, "arg": arg}},
+                {"tool": "misc", "args": {"action": "plugin_run", "name": name, "arg": arg}},
                 runtime.get("port"),
             )
 

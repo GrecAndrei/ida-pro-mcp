@@ -776,7 +776,7 @@ def code(
                     elif next_func:
                         suggestion = f" Try {hex_ea(next_func.start_ea)} ({ida_funcs.get_func_name(next_func.start_ea) or 'unnamed'})"
 
-                    results.append({"addr": addr, "error": f"No function at {hex_ea(ea)}.{suggestion}"})
+                    results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}.{suggestion}", details={"addr": addr}))
                     continue
 
                 try:
@@ -807,15 +807,45 @@ def code(
                             pass
                         results.append(result_entry)
                     else:
-                        results.append({
+                        # Aggregate errors per-address carry `code`, `category`,
+                        # `message`, and `hint` so per-batch decomp failures
+                        # match the host error-envelope contract.
+                        code_val = (
+                            dec_err.get("code")
+                            if isinstance(dec_err, dict)
+                            else MCPError.DECOMPILER_FAILED
+                        )
+                        entry: dict = {
                             "addr": addr,
-                            "error": dec_err.get("message", "Decompilation failed") if isinstance(dec_err, dict) else "Decompilation failed",
-                            "error_code": dec_err.get("code") if isinstance(dec_err, dict) else MCPError.DECOMPILER_FAILED,
-                            "hint": dec_err.get("hint") if isinstance(dec_err, dict) else None,
-                            "details": dec_err.get("details") if isinstance(dec_err, dict) else None,
-                        })
+                            "code": code_val,
+                            "category": (
+                                dec_err.get("category")
+                                if isinstance(dec_err, dict)
+                                else "runtime"
+                            ),
+                            "message": (
+                                dec_err.get("message", "Decompilation failed")
+                                if isinstance(dec_err, dict)
+                                else "Decompilation failed"
+                            ),
+                        }
+                        if isinstance(dec_err, dict):
+                            if dec_err.get("hint"):
+                                entry["hint"] = dec_err["hint"]
+                            if dec_err.get("details"):
+                                entry["details"] = dec_err["details"]
+                        else:
+                            entry["hint"] = ERROR_HINTS.get(MCPError.DECOMPILER_FAILED)
+                        results.append(entry)
                 except Exception as e:
-                    results.append({"addr": addr, "error": str(e)})
+                    entry = {
+                        "addr": addr,
+                        "code": MCPError.DECOMPILER_FAILED,
+                        "category": "runtime",
+                        "message": f"Decompilation exception: {e}",
+                        "hint": ERROR_HINTS.get(MCPError.DECOMPILER_FAILED),
+                    }
+                    results.append(entry)
 
             elif action == "decompile_chain":
                 func = idaapi.get_func(ea)
@@ -827,7 +857,7 @@ def code(
                         suggestion = f" Try {hex_ea(prev_func.start_ea)} ({ida_funcs.get_func_name(prev_func.start_ea) or 'unnamed'})"
                     elif next_func:
                         suggestion = f" Try {hex_ea(next_func.start_ea)} ({ida_funcs.get_func_name(next_func.start_ea) or 'unnamed'})"
-                    results.append({"addr": addr, "error": f"No function at {hex_ea(ea)}.{suggestion}"})
+                    results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}.{suggestion}", details={"addr": addr}))
                     continue
                 chain_depth = max(1, min(max_depth, 3))  # hard cap at 3
                 try:
