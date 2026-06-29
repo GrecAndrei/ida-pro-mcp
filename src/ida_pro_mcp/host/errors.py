@@ -1,7 +1,29 @@
 #!/usr/bin/env python3
 """
 Host-side error codes, hints, and error factory.
+
+Each error code has a ``category`` — a coarse classification callers can
+use to decide whether to retry, give up, or surface to a user. Categories:
+
+  * "user"       — bad input from the caller (wrong arg, unknown action, etc.)
+  * "runtime"    — IDA, filesystem, or DB problem at the host
+  * "policy"     — governance / safety gate denied the call (needs ack or
+                   falls into a phase that requires follow-up)
+  * "internal"   — bug or unclassified failure
+
+Clients can match on ``error.category`` instead of parsing the code.
 """
+
+from __future__ import annotations
+
+from typing import Any
+
+
+class ErrorCategory:
+    USER = "user"
+    RUNTIME = "runtime"
+    POLICY = "policy"
+    INTERNAL = "internal"
 
 
 class MCPError:
@@ -13,6 +35,7 @@ class MCPError:
     SESSION_REQUIRED = "SESSION_REQUIRED"
     INVALID_ARGS = "INVALID_ARGS"
     ACTION_NOT_FOUND = "ACTION_NOT_FOUND"
+    TOOL_NOT_FOUND = "TOOL_NOT_FOUND"
     SESSION_NOT_FOUND = "SESSION_NOT_FOUND"
     BATCH_EMPTY = "BATCH_EMPTY"
     BATCH_TOO_LARGE = "BATCH_TOO_LARGE"
@@ -25,6 +48,38 @@ class MCPError:
     DB_ERROR = "DB_ERROR"
     NOT_FOUND = "NOT_FOUND"
     IDA_ERROR = "IDA_ERROR"
+    POLICY_DENIED = "POLICY_DENIED"
+    PHASE_GATE = "PHASE_GATE"
+    DECOMPILER_FAILED = "DECOMPILER_FAILED"
+
+
+# Code → category. Codes absent from this map fall back to "internal".
+_ERROR_CATEGORIES: dict[str, str] = {
+    MCPError.FILE_NOT_FOUND: ErrorCategory.USER,
+    MCPError.FILE_LOCKED: ErrorCategory.RUNTIME,
+    MCPError.NOT_FOUND: ErrorCategory.USER,
+    MCPError.TOOL_NOT_FOUND: ErrorCategory.USER,
+    MCPError.ACTION_NOT_FOUND: ErrorCategory.USER,
+    MCPError.INVALID_ARGS: ErrorCategory.USER,
+    MCPError.BOOKMARK_NOT_FOUND: ErrorCategory.USER,
+    MCPError.SESSION_NOT_FOUND: ErrorCategory.USER,
+    MCPError.SESSION_REQUIRED: ErrorCategory.USER,
+    MCPError.BATCH_EMPTY: ErrorCategory.USER,
+    MCPError.BATCH_TOO_LARGE: ErrorCategory.USER,
+    MCPError.TRUNCATION_TOKEN_EXPIRED: ErrorCategory.USER,
+    MCPError.TRUNCATION_TOKEN_INVALID: ErrorCategory.USER,
+    MCPError.TRUNCATION_FIELD_MISSING: ErrorCategory.USER,
+    MCPError.NOT_IMPLEMENTED: ErrorCategory.USER,
+    MCPError.IDA_TIMEOUT: ErrorCategory.RUNTIME,
+    MCPError.IDA_CRASHED: ErrorCategory.RUNTIME,
+    MCPError.RPC_CONNECTION_ERROR: ErrorCategory.RUNTIME,
+    MCPError.IDA_ERROR: ErrorCategory.RUNTIME,
+    MCPError.DECOMPILER_FAILED: ErrorCategory.RUNTIME,
+    MCPError.IO_ERROR: ErrorCategory.RUNTIME,
+    MCPError.DB_ERROR: ErrorCategory.RUNTIME,
+    MCPError.POLICY_DENIED: ErrorCategory.POLICY,
+    MCPError.PHASE_GATE: ErrorCategory.POLICY,
+}
 
 
 _HOST_ERROR_HINTS = {
@@ -37,6 +92,7 @@ _HOST_ERROR_HINTS = {
     MCPError.SESSION_REQUIRED: "No active session. Create one with session(action='create', binary_path='...').",
     MCPError.INVALID_ARGS: "Invalid arguments. Check the tool description for valid parameters.",
     MCPError.ACTION_NOT_FOUND: "Unknown action. Check the tool description for valid actions.",
+    MCPError.TOOL_NOT_FOUND: "Unknown tool. Call tools/list to see valid tool names.",
     MCPError.SESSION_NOT_FOUND: "Session not found. Use session(action='list') to see available sessions.",
     MCPError.BATCH_EMPTY: "The batch call list is empty. Provide at least one call.",
     MCPError.BATCH_TOO_LARGE: "Too many batch calls. Limit to 50 calls per batch.",
@@ -47,6 +103,9 @@ _HOST_ERROR_HINTS = {
     MCPError.RPC_CONNECTION_ERROR: "Cannot connect to IDA. The process may have crashed.",
     MCPError.IO_ERROR: "I/O error while writing to disk. Check disk space and permissions.",
     MCPError.DB_ERROR: "Database error. The index may be corrupted. Try schemaboot(action='delete') then re-ingest.",
+    MCPError.POLICY_DENIED: "Action denied by the safety policy. Retry with the required acknowledgement, or operate in a different mode.",
+    MCPError.PHASE_GATE: "The session phase requires a follow-up call before this tool can return a final answer. See required_followup_call in the response.",
+    MCPError.DECOMPILER_FAILED: "The decompiler refused this function. Try code(action='disasm') for assembly or code(action='semantic_decompile').",
 }
 
 
@@ -54,10 +113,16 @@ def make_error(
     code: str,
     message: str,
     recoverable: bool = False,
-    details: dict = None,
-    hint: str = None,
+    details: dict | None = None,
+    hint: str | None = None,
 ) -> dict:
-    res = {"error": True, "code": code, "message": message, "recoverable": recoverable}
+    res: dict[str, Any] = {
+        "error": True,
+        "code": code,
+        "category": _ERROR_CATEGORIES.get(code, ErrorCategory.INTERNAL),
+        "message": message,
+        "recoverable": recoverable,
+    }
     resolved_hint = hint or _HOST_ERROR_HINTS.get(code)
     if resolved_hint:
         res["hint"] = resolved_hint
