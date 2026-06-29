@@ -51,6 +51,10 @@ class MCPError:
     POLICY_DENIED = "POLICY_DENIED"
     PHASE_GATE = "PHASE_GATE"
     DECOMPILER_FAILED = "DECOMPILER_FAILED"
+    YARA_COMPILE_ERROR = "YARA_COMPILE_ERROR"
+    YARA_SCAN_ERROR = "YARA_SCAN_ERROR"
+    YARA_DISABLED = "YARA_DISABLED"
+    NO_RESULTS = "NO_RESULTS"
 
 
 # Code → category. Codes absent from this map fall back to "internal".
@@ -79,6 +83,10 @@ _ERROR_CATEGORIES: dict[str, str] = {
     MCPError.DB_ERROR: ErrorCategory.RUNTIME,
     MCPError.POLICY_DENIED: ErrorCategory.POLICY,
     MCPError.PHASE_GATE: ErrorCategory.POLICY,
+    MCPError.YARA_COMPILE_ERROR: ErrorCategory.USER,
+    MCPError.YARA_SCAN_ERROR: ErrorCategory.RUNTIME,
+    MCPError.YARA_DISABLED: ErrorCategory.RUNTIME,
+    MCPError.NO_RESULTS: ErrorCategory.USER,
 }
 
 
@@ -106,6 +114,10 @@ _HOST_ERROR_HINTS = {
     MCPError.POLICY_DENIED: "Action denied by the safety policy. Retry with the required acknowledgement, or operate in a different mode.",
     MCPError.PHASE_GATE: "The session phase requires a follow-up call before this tool can return a final answer. See required_followup_call in the response.",
     MCPError.DECOMPILER_FAILED: "The decompiler refused this function. Try code(action='disasm') for assembly or code(action='semantic_decompile').",
+    MCPError.YARA_COMPILE_ERROR: "YARA rule compilation failed. Check rule syntax.",
+    MCPError.YARA_SCAN_ERROR: "YARA scan failed. Check rule and target.",
+    MCPError.YARA_DISABLED: "yara-python is not installed. Run `pip install yara-python` in the MCP host venv.",
+    MCPError.NO_RESULTS: "No results found for this query.",
 }
 
 

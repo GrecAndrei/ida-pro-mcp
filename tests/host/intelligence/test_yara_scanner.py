@@ -85,13 +85,18 @@ def test_compile_rules_tiny(tmp_path):
 def test_compile_rules_no_files(tmp_path):
     rules, fe, ce = compile_rules(str(tmp_path / "missing"))
     assert rules is None
-    assert "no rule files" in ce[0]["error"]
+    assert ce
+    assert "no rule files" in ce[0]["message"]
+    assert ce[0].get("code") == "NO_RESULTS"
+    assert ce[0].get("error") is True
+    assert ce[0].get("hint")
 
 
 def test_compile_rules_missing_dir_returns_error():
     rules, fe, ce = compile_rules("/nonexistent/path")
     assert rules is None
     assert ce
+    assert ce[0].get("error") is True
 
 
 def test_compile_rules_writes_to_output(tmp_path):

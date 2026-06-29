@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..config import CACHE_DIR
+from ..errors import MCPError, make_error
 
 __all__ = [
     "YaraScanner",
@@ -161,7 +162,12 @@ def compile_rules(
     overridden per-scan via the yara-python ``externals`` kwarg on match.
     """
     if not is_yara_available():
-        return None, [], [{"error": "yara-python not available", "path": rules_dir}]
+        return (
+            None,
+            [],
+            [make_error(MCPError.YARA_DISABLED, "yara-python not available",
+                        details={"path": rules_dir})],
+        )
     import yara
 
     if externals is None:
@@ -190,25 +196,52 @@ def compile_rules(
             with open(full, encoding="utf-8", errors="replace") as f:
                 f.read(2048)
         except OSError as e:
-            file_errors.append({"namespace": namespace, "path": full, "error": str(e)})
+            file_errors.append(
+                make_error(
+                    MCPError.FILE_NOT_FOUND,
+                    str(e),
+                    details={"namespace": namespace, "path": full,
+                             "errno": e.errno, "exception_type": type(e).__name__},
+                )
+            )
             continue
         filepaths[namespace] = full
     if not filepaths:
-        return None, file_errors, [{"error": "no rule files found", "path": rules_dir}]
+        return (
+            None,
+            file_errors,
+            [make_error(MCPError.NO_RESULTS, "no rule files found",
+                        details={"path": rules_dir})],
+        )
     compile_errors: list[dict[str, Any]] = []
     rules: Any | None = None
     try:
         rules = yara.compile(filepaths=filepaths, externals=externals)
     except yara.SyntaxError as e:
-        compile_errors.append({"error": str(e), "path": rules_dir})
+        compile_errors.append(
+            make_error(MCPError.YARA_COMPILE_ERROR, str(e),
+                       details={"path": rules_dir})
+        )
     except Exception as e:
-        compile_errors.append({"error": f"{type(e).__name__}: {e}", "path": rules_dir})
+        compile_errors.append(
+            make_error(
+                MCPError.YARA_SCAN_ERROR,
+                f"{type(e).__name__}: {e}",
+                details={"path": rules_dir, "exception_type": type(e).__name__},
+            )
+        )
     if rules is not None and output_path:
         try:
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             rules.save(output_path)
         except Exception as e:
-            compile_errors.append({"error": f"save failed: {e}", "path": output_path})
+            compile_errors.append(
+                make_error(
+                    MCPError.IO_ERROR,
+                    f"save failed: {e}",
+                    details={"path": output_path, "exception_type": type(e).__name__},
+                )
+            )
     return rules, file_errors, compile_errors
 
 

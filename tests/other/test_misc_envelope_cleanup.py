@@ -20,6 +20,29 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def test_yara_scanner_uses_envelope_per_error():
+    """yara_scanner.compile_rules used to ship per-file/per-error dicts
+    shaped like `{"error": str(e)}`. They must now be full envelopes with
+    code/category/hint/details.
+    """
+    src = (REPO / "src/ida_pro_mcp/host/intelligence/yara_scanner.py").read_text()
+    # No remaining legacy `{... "error": str(e) ...}` style error entries.
+    bad = re.findall(r'\{[^{}]*"error":\s*str\([^{}]*\)[^{}]*\}', src)
+    assert not bad, f"yara_scanner.py still has legacy per-error dicts: {bad}"
+    # Codes used must exist in the host catalog.
+    for code in ("YARA_DISABLED", "NO_RESULTS", "YARA_COMPILE_ERROR",
+                 "YARA_SCAN_ERROR", "IO_ERROR", "FILE_NOT_FOUND"):
+        assert f'MCPError.{code}' in src, f"yara_scanner.py must use MCPError.{code}"
+
+
+def test_host_errors_catalog_includes_security_codes():
+    """The host-side MCPError should mirror IDA-side YARA codes so callers
+    can match on category without reverse-engineering dict shapes."""
+    src = (REPO / "src/ida_pro_mcp/host/errors.py").read_text()
+    for code in ("YARA_COMPILE_ERROR", "YARA_SCAN_ERROR", "YARA_DISABLED", "NO_RESULTS"):
+        assert code in src, f"host/errors.py MCPError must define {code}"
+
+
 def test_intelligence_no_legacy_error_only_dict():
     """intelligence.py had ~12 inline `{"error": True, "message": ...}`
     branches in the structural_* actions. Each must now go through
