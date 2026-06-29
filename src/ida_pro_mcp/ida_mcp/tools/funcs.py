@@ -695,19 +695,30 @@ def _funcs_impl(
 
 @tool
 def funcs(
-    action: Annotated[Literal["create", "delete", "set_flags", "info", "metrics", "find_similar", "suggest_names"],
-                      "Action: create|delete|set_flags|info|metrics|find_similar|suggest_names"],
+    action: Annotated[Literal[
+        "create", "delete", "set_flags", "info", "metrics", "find_similar",
+        "suggest_names", "list",
+    ],
+                      "Action: create|delete|set_flags|info|metrics|find_similar|suggest_names|list"],
     addr: Annotated[Optional[str], "Address"] = None,
     end: Annotated[Optional[str], "Optional end address (for create)"] = None,
     name: Annotated[Optional[str], "Function name (for create)"] = None,
     flags: Annotated[int, "Function flags (e.g. FUNC_NORET)"] = 0,
     force: Annotated[bool, "Force creation by deleting overlapping functions/data"] = False,
+    query: Annotated[Optional[str], "Substring/regex filter for list"] = None,
+    offset: Annotated[int, "Pagination offset for list"] = 0,
+    count: Annotated[int, "Pagination count for list (0=all)"] = 50,
+    min_size: Annotated[int, "Skip functions smaller than this for list"] = 0,
+    named_only: Annotated[bool, "Skip sub_* for list"] = False,
     **kwargs
 ) -> dict:
     """
     Create, modify, and analyze function definitions.
 
     Actions:
+    - list: Read-only function enumeration. Returns {functions, total, count, offset}.
+      Filters: query (substring/regex), min_size, named_only. Paginated with offset/count.
+      Alias of data(action='functions', ...) — same payload, no _risk_ack needed.
     - create: Define a new function at `addr`. Automatically converts bytes to code
       if needed. If address is inside an existing function, offers to split or
       suggests using the existing function's start. Optionally set `end`, `name`,
@@ -721,6 +732,22 @@ def funcs(
     - find_similar: Find functions with similar bytecode patterns to the function at `addr`.
       Returns ranked list with similarity scores.
     """
+    if action == "list":
+        # Delegate to data(action='functions', ...) so callers get the same
+        # payload — but classify as READ so no _risk_ack is required.
+        from ida_pro_mcp.ida_mcp.tools.data import data  # noqa: PLC0415
+
+        return data(
+            action="functions",
+            query=query or "",
+            offset=offset,
+            count=count,
+            include_prototype=False,
+            include_xrefs=True,
+            min_size=min_size,
+            named_only=named_only,
+        )
+
     call_kwargs = {
         "action": action,
         "addr": addr,

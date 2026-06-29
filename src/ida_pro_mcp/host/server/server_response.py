@@ -42,6 +42,8 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             return
         if str(tool_name or "").strip().lower() == "blackboard":
             return
+        if not getattr(self, "_phase_gates_enabled", False):
+            return
         if not hasattr(self, "_bb_policy_state") or not hasattr(self, "_bb_policy_check"):
             return
         try:
@@ -71,6 +73,8 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         if not isinstance(payload, dict):
             return
         if str(tool_name or "").strip().lower() == "blackboard":
+            return
+        if not getattr(self, "_phase_gates_enabled", False):
             return
         if not hasattr(self, "_phase_followup_for_response"):
             return

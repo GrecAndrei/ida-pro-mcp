@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path  # noqa: F401,E402
 
 
 def _default_state_dir() -> str:
@@ -50,14 +51,26 @@ def _discover_venv_python():
     return None
 
 
+def _resolve_server_script() -> str:
+    """Find ida_mcp_stdio.py relative to this script or the repo root."""
+    here = Path(__file__).resolve()
+    for candidate in (here.parent, here.parent.parent):
+        probe = candidate / "ida_mcp_stdio.py"
+        if probe.is_file():
+            return str(probe)
+    raise FileNotFoundError(
+        "ida_mcp_stdio.py not found. Place this script in scripts/ of the "
+        "ida-pro-mcp repo, or pass server_cmd explicitly to MCPClient()."
+    )
+
+
 class MCPClient:
     def __init__(self, server_cmd=None, env=None, cache_dir=None):
         """Spawn the MCP server and establish communication."""
         if server_cmd is None:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            server_script = os.path.join(script_dir, "ida_mcp_stdio.py")
+            server_script = _resolve_server_script()
             venv_python = _discover_venv_python()
-            server_cmd = [venv_python, server_script] if venv_python else [sys.executable, server_script]
+            server_cmd = [venv_python, server_script] if venv_python else [sys.executable, server_script]  # noqa: E501
 
         # Environment setup
         run_env = os.environ.copy()

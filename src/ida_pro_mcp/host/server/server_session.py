@@ -784,15 +784,26 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             new_idb = getattr(session, "idb_path", None)
             if old_idb and new_idb and old_idb != new_idb:
                 self._trigger_session_diff(old_idb, new_idb)
-            return {
+            runtime = self.session_runtimes.get(sid) if hasattr(self, "session_runtimes") else None
+            runtime_attached = bool(runtime) and bool(self._runtime_alive(runtime))
+            response = {
                 "ok": True,
                 "session": self.current_session.to_dict(),
+                "runtime_attached": runtime_attached,
                 "capsule": self._sync_session_to_capsule(
                     self.current_session,
                     event_type="session_switch",
                     event={"from_idb": old_idb or "", "to_idb": new_idb or ""},
                 ),
             }
+            idb_path = getattr(session, "idb_path", None)
+            if idb_path and not os.path.isfile(idb_path):
+                response["idb_exists"] = False
+                response["hint"] = (
+                    "IDB file not on disk at the recorded path. Run "
+                    "session(action='create', reopen=true) or project(action='open') to attach a runtime."
+                )
+            return response
         return make_error(
             MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
         )

@@ -166,6 +166,8 @@ FILESYSTEM_READ_ACTIONS = {
 
 READ_ONLY_ACTIONS = {
     ("funcs", "info"),
+    ("funcs", "list"),
+    ("funcs", "find_similar"),
     ("session", "health"),
     ("session", "create"),
     ("governance", "list_rules"),

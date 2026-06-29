@@ -261,6 +261,10 @@ class IDAMCPServer(
         self._pointer_note_last_shown_at = 0.0
         self._pointer_note_pending_signal = 0.0
         self._guardrail_strict_writes = _env_bool("IDA_MCP_GUARDRAIL_STRICT_WRITES", False)
+        # Blackboard phase gates (decision_card / working_set follow-ups) inject
+        # noise into every tool response. Disabled by default — opt in with
+        # IDA_MCP_PHASE_GATES=1 if a strict LLM agent needs the steering.
+        self._phase_gates_enabled = _env_bool("IDA_MCP_PHASE_GATES", False)
         # Translation layer for Google Vertex AI / Gemini API schema compatibility
         self.vertex_compat = _env_bool(
             "IDA_MCP_VERTEX_COMPAT",

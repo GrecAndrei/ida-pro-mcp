@@ -21,12 +21,23 @@ class IDAMCPClient:
 
     def start(self):
         print("[*] Starting MCP server...")
+        # Locate ida_mcp_stdio.py: it sits at the repo root, not in scripts/.
+        here = os.path.dirname(os.path.abspath(__file__))
+        stdio_candidates = [
+            os.path.join(os.path.dirname(here), "ida_mcp_stdio.py"),
+            os.path.join(here, "ida_mcp_stdio.py"),
+        ]
+        stdio_entry = next((p for p in stdio_candidates if os.path.isfile(p)), None)
+        if stdio_entry is None:
+            raise FileNotFoundError(
+                f"ida_mcp_stdio.py not found; tried: {stdio_candidates}"
+            )
         self.proc = subprocess.Popen(
-            [sys.executable, "-u", "ida_mcp_stdio.py"],
+            [sys.executable, "-u", stdio_entry],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            cwd=os.path.dirname(__file__) or ".",
+            cwd=os.path.dirname(here) or ".",
             bufsize=0
         )
 

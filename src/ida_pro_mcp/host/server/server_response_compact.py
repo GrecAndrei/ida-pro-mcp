@@ -239,6 +239,20 @@ class ServerResponseCompactMixin:
             table["total"] = len(rows)
         return table
 
+    # Top-level boolean keys that carry semantic state. These MUST survive
+    # response compaction even when ``drop_false`` is enabled, because the
+    # absence of the key vs. a literal False is the difference between
+    # "unknown / not yet computed" and "we checked, the answer is no".
+    _STATE_BOOLEAN_KEYS = frozenset({
+        "is_current",
+        "is_running",
+        "runtime_attached",
+        "idb_exists",
+        "binary_exists",
+        "analysis_applied",
+        "ok",
+    })
+
     def _compact_value(self, value: Any, opts: dict) -> Any:
         max_items = max(1, int(opts.get("max_items", 10_000)))
         max_string = max(64, int(opts.get("max_string", 500_000)))
@@ -252,6 +266,11 @@ class ServerResponseCompactMixin:
                     continue
                 if key == "ok" and raw is False:
                     out[key] = False
+                    continue
+                if key in self._STATE_BOOLEAN_KEYS and isinstance(raw, bool):
+                    # Semantic state flags must survive drop_false so callers
+                    # can distinguish "false" from "key absent".
+                    out[key] = raw
                     continue
                 if key == "details":
                     compact_details = self._compact_error_details(raw, opts)
