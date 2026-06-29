@@ -25,6 +25,102 @@ from ..schemas import (
 )
 from .server_response import truncate_response
 
+# Actions that legitimately walk the IDB at scale (full-program scans,
+# embedding pipelines, decompile pumps, multi-region firmware carving,
+# bulk-session housekeeping). For these we extend the socket recv
+# timeout past the IDA_MCP_RPC_TIMEOUT default so the host doesn't
+# kill the connection before IDA finishes.
+#
+# Each entry is a (tool, action) tuple. Adding a new entry is a one-line
+# acknowledgement that the action may take minutes — keep this list
+# curated. Anything not in the set gets the IDA_MCP_RPC_TIMEOUT default.
+LONG_RUNNING_ACTIONS: set[tuple[str, str]] = {
+    # analysis — auto-analysis pumps (canonical hang-risk surface)
+    ("analysis", "wait"),
+    ("analysis", "analyze"),
+    ("analysis", "reanalyze"),
+    # background — long-poll tasks
+    ("background", "wait"),
+    # agent — full-program algorithmic analysis
+    ("agent", "analyze_function"),
+    # summarize — full-binary summary walks
+    ("summarize", "binary"),
+    ("summarize", "statistics"),
+    ("summarize", "imports_by_category"),
+    ("summarize", "strings_by_category"),
+    ("summarize", "security_posture"),
+    ("summarize", "report"),
+    # intelligence — embedding-heavy ops
+    ("intelligence", "index_batch"),
+    ("intelligence", "index_function"),
+    ("intelligence", "refresh_anchors"),
+    ("intelligence", "semantic_search"),
+    # search — graph BFS / embedding
+    ("search", "semantic"),
+    ("search", "path"),
+    # blackboard — large semantic rebuild / trace operations
+    ("blackboard", "semantic_rebuild"),
+    ("blackboard", "trace_ingest"),
+    ("blackboard", "trace_run"),
+    # firmware_view — range / multi-region carves
+    ("firmware_view", "smart_carve"),
+    ("firmware_view", "multi_region_campaign"),
+    ("firmware_view", "campaign"),
+    ("firmware_view", "segment_sweep"),
+    ("firmware_view", "region_profile"),
+    ("firmware_view", "pointer_sweep"),
+    ("firmware_view", "scan_region"),
+    # funcs — whole-program walks
+    ("funcs", "metrics"),
+    ("funcs", "suggest_names"),
+    ("funcs", "find_similar"),
+    # session — bulk housekeeping / full-program operations
+    ("session", "idle_purge"),
+    ("session", "cleanup_stale"),
+    ("session", "macro_run"),
+    ("session", "rate_skill"),
+    # threat_hunt / workflow — composite passes
+    ("threat_hunt", "run"),
+    ("threat_hunt", "malware"),
+    ("threat_hunt", "vuln"),
+    ("threat_hunt", "deep"),
+    ("threat_hunt", "legacy"),
+    ("workflow", "execute_plan"),
+    ("workflow", "plan"),
+}
+
+
+def _long_running_sock_timeout(tool_name: str, rpc_args: dict) -> int:
+    """Compute the socket recv timeout for a (tool, action) call.
+
+    Returns -1 (= caller default / ``IDA_MCP_RPC_TIMEOUT``) for
+    anything not in ``LONG_RUNNING_ACTIONS``. For whitelist entries,
+    returns at least 120s, adds 30s on top of any caller-supplied
+    timeout arg, and always clamps to the ``IDA_MCP_RPC_MAX_RECV_TIMEOUT``
+    env cap so no caller can pin the dispatcher forever.
+    """
+    try:
+        cap = int(os.environ.get("IDA_MCP_RPC_MAX_RECV_TIMEOUT", "600"))
+    except Exception:
+        cap = 600
+    cap = max(cap, 30)
+
+    action = str(rpc_args.get("action") or "")
+    if (tool_name, action) not in LONG_RUNNING_ACTIONS:
+        return -1
+
+    requested = (
+        rpc_args.get("timeout")
+        or rpc_args.get("max_wait")
+        or rpc_args.get("poll_timeout")
+    )
+    try:
+        n = int(requested) if requested is not None else 0
+    except Exception:
+        n = 0
+    candidate = max(120, n + 30) if n else 120
+    return min(candidate, cap)
+
 
 class ServerDispatchMixin:
     @staticmethod
@@ -111,21 +207,26 @@ class ServerDispatchMixin:
                     import logging
                     logging.getLogger(__name__).debug("arg schema filter failed: %s", _e)
                 _t0 = time.time()
-                # Long-running actions (analysis/wait, background/wait, etc.) pass a
-                # timeout arg to IDA.  The socket recv timeout must be at least that
-                # long or the host kills the connection before IDA finishes.
-                _LONG_RUNNING_ACTIONS = {
-                    ("analysis", "wait"), ("analysis", "analyze"), ("analysis", "reanalyze"),
-                    ("background", "wait"), ("agent", "analyze_function"),
-                }
-                _rpc_sock_timeout = None  # None → _send_rpc_raw uses IDA_MCP_RPC_TIMEOUT default
-                _action_key = (tool_name, str(rpc_args.get("action") or ""))
-                if _action_key in _LONG_RUNNING_ACTIONS:
-                    _requested = rpc_args.get("timeout") or rpc_args.get("max_wait") or rpc_args.get("poll_timeout")
-                    try:
-                        _rpc_sock_timeout = max(120, int(_requested) + 30) if _requested is not None else 120
-                    except Exception:
-                        _rpc_sock_timeout = 120
+                # Long-running actions get an extended socket recv timeout
+                # so the host doesn't kill the connection before IDA
+                # finishes. _long_running_sock_timeout also clamps to the
+                # IDA_MCP_RPC_MAX_RECV_TIMEOUT cap so no caller can pin
+                # the dispatcher forever. Result of -1 means
+                # "use IDA_MCP_RPC_TIMEOUT default" (30s).
+                _rpc_sock_timeout = _long_running_sock_timeout(tool_name, rpc_args)
+                if _rpc_sock_timeout == -1:
+                    _rpc_sock_timeout = None
+                # Hard wall-clock cap on the entire call_tool path (RPC +
+                # retries + IDA). Anything beyond this gets the process
+                # signalled and we surface IDA_TIMEOUT so the user can
+                # decide whether to restart.
+                try:
+                    _wallclock_cap = float(
+                        os.environ.get("IDA_MCP_RPC_HARD_WALLCLOCK_SEC", "900")
+                    )
+                except Exception:
+                    _wallclock_cap = 900.0
+                _wallclock_cap = max(_wallclock_cap, 30.0)
                 try:
                     res = self._send_rpc_with_retry(
                         {"tool": tool_name, "args": rpc_args}, port,
@@ -138,6 +239,40 @@ class ServerDispatchMixin:
                         MCPError.RPC_CONNECTION_ERROR,
                         f"RPC to IDA failed after retries: {exc}",
                         details={"exception_type": type(exc).__name__, "tool": tool_name},
+                    )
+                # Wall-clock watchdog: catches the case where IDA is alive
+                # but stuck in an unwatched infinite loop (no socket
+                # progress, no timeout firing). Force-kill the process and
+                # surface IDA_TIMEOUT so the next call re-spawns.
+                _elapsed_wallclock = time.time() - _t0
+                if _elapsed_wallclock >= _wallclock_cap:
+                    try:
+                        proc = runtime.get("process") if isinstance(runtime, dict) else None
+                        if proc is not None and hasattr(proc, "poll"):
+                            alive = proc.poll() is None
+                            if alive and hasattr(proc, "terminate"):
+                                proc.terminate()
+                                try:
+                                    proc.wait(timeout=2.0)
+                                except Exception:
+                                    if hasattr(proc, "kill"):
+                                        proc.kill()
+                    except Exception as _kill_e:
+                        import logging
+                        logging.getLogger(__name__).debug(
+                            "wallclock watchdog term failed: %s", _kill_e
+                        )
+                    return make_error(
+                        MCPError.IDA_TIMEOUT,
+                        f"Tool call exceeded wall-clock cap of {_wallclock_cap:.0f}s "
+                        f"(IDA_MCP_RPC_HARD_WALLCLOCK_SEC). The IDA process was "
+                        "terminated — the next call will re-spawn it.",
+                        recoverable=True,
+                        details={
+                            "tool": tool_name,
+                            "wallclock_cap_sec": _wallclock_cap,
+                            "elapsed_sec": round(_elapsed_wallclock, 2),
+                        },
                     )
                 # Other socket errors (TimeoutError, OSError) propagate to the
                 # existing handler below, which distinguishes IDA_TIMEOUT from
