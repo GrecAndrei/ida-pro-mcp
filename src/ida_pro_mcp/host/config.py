@@ -347,9 +347,19 @@ def _parse_line_range(value: Any) -> tuple[Optional[int], Optional[int]]:
 
 
 def _normalize_session_id(value: Any) -> Optional[str]:
+    """Return the canonical 8-char uppercase session id, or None if invalid.
+
+    Accepts the canonical form ("A1B2C3D4") and the disk-encoding form
+    ("SID_A1B2C3D4" — used by IDB filenames on disk). Strips the SID_
+    prefix and upper-cases. Rejects anything else.
+    """
     if not isinstance(value, str):
         return None
-    sid = value.strip().upper()
+    sid = value.strip()
+    # Strip optional SID_ prefix (used by on-disk filenames).
+    if sid.upper().startswith("SID_"):
+        sid = sid[4:]
+    sid = sid.upper()
     if not SESSION_ID_RE.fullmatch(sid):
         return None
     return sid
