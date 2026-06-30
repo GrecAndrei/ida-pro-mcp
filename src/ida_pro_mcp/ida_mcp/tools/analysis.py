@@ -522,8 +522,19 @@ def analysis(
         if action == "wait":
             # Since idc.auto_wait() runs before the server starts, analysis is
             # always complete by the time we get here. Just report the state.
+            #
+            # In headless -A mode auto_is_ok() returns False even when analysis
+            # has finished, because there's no UI to "ok" against. So we use
+            # get_auto_state() (AU_NONE == 0) as the authoritative signal, and
+            # fall back to function/string counts as a stability check.
+            analysis_ok = True
             try:
-                analysis_ok = bool(idaapi.auto_is_ok()) if hasattr(idaapi, "auto_is_ok") else True
+                if hasattr(idaapi, "get_auto_state"):
+                    analysis_ok = int(idaapi.get_auto_state()) == int(
+                        getattr(idaapi, "AU_NONE", 0)
+                    )
+                elif hasattr(idaapi, "auto_is_ok"):
+                    analysis_ok = bool(idaapi.auto_is_ok())
             except Exception:
                 analysis_ok = True
             try:

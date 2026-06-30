@@ -247,9 +247,20 @@ def _extract_var_rename_hints(cfunc) -> list:
             try:
                 tinfo = getattr(v, "type", None)
                 if tinfo is not None:
-                    type_str = str(tinfo).lower().strip("* ")
-                    # Strip pointer/array decorators for name inference
-                    base = re.sub(r'[\*\[\]0-9]', '', type_str).strip()
+                    # tinfo's __str__ can return a hex memory address for
+                    # anonymous lvars — only feed a clean printable name
+                    # to the inference regex. Fall back to type name only
+                    # when it's a real type string, not a memory address.
+                    type_str = str(tinfo).strip()
+                    if not type_str or type_str.startswith("0x") or type_str.startswith("0X"):
+                        raise ValueError("anonymous lvar (no type name)")
+                    type_str = type_str.lower().strip("* ")
+                    # Strip pointer/array decorators for name inference.
+                    # Keep letter segments; drop pure numerics so we don't
+                    # delete real identifiers (e.g. 'id0' stays 'id', 'v1'
+                    # stays 'v' if it ever leaked into the type name).
+                    base = re.sub(r'[\*\[\]]', '', type_str)
+                    base = re.sub(r'\b\d+\b', '', base).strip()
                     if base and base not in ("void", "int", "char", "byte", "word", "dword",
                                              "qword", "bool", "unsigned", "signed", "__int"):
                         # Use last component of type name (e.g. wifi_frame_t → frame)
@@ -257,7 +268,9 @@ def _extract_var_rename_hints(cfunc) -> list:
                         parts = [p for p in parts if len(p) > 2 and p not in ("type", "ptr", "ref")]
                         if parts:
                             suggestion = parts[-1].rstrip("t").rstrip("_") or parts[-1]
-                            reason = f"type={tinfo}"
+                            # Use the cleaned type name in the reason, NOT the
+                            # tinfo object itself (which str()s to a hex address).
+                            reason = f"type={type_str}"
             except Exception:
                 pass
 
