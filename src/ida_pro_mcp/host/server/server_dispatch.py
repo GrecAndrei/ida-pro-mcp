@@ -634,9 +634,9 @@ class ServerDispatchMixin:
             port = runtime.get("port")
 
             try:
-                max_wait = float(args.get("max_wait") or args.get("timeout") or 300.0)
+                max_wait = float(args.get("max_wait") or args.get("timeout") or 0.0)
             except Exception:
-                max_wait = 300.0
+                max_wait = 0.0
             max_wait = max(0.0, min(max_wait, 3600.0))
 
             try:
@@ -645,17 +645,35 @@ class ServerDispatchMixin:
                 poll_interval = 5.0
             poll_interval = max(1.0, min(poll_interval, 30.0))
 
+            # Hard wall-clock cap so a wedged IDA round-trip can't pin the
+            # MCP client forever. Mirrors call_tool's IDA_MCP_RPC_HARD_WALLCLOCK_SEC.
+            try:
+                _wallclock_cap = float(
+                    os.environ.get("IDA_MCP_RPC_HARD_WALLCLOCK_SEC", "900")
+                )
+            except Exception:
+                _wallclock_cap = 900.0
+            _wallclock_cap = max(_wallclock_cap, 30.0)
+            # If the caller asked for a bounded wait, never exceed the larger
+            # of max_wait+30s and the 30s floor — keeps the call responsive
+            # when smoke/MCP clients have smaller budgets.
+            _local_cap = max(30.0, max_wait + 30.0) if max_wait > 0 else 30.0
+            _wallclock_cap = min(_wallclock_cap, _local_cap)
+
             import time as _time
             start = _time.time()
             last_result = None
 
             while True:
+                # Wall-clock cap check (covers both the RPC and the poll sleep)
+                if _time.time() - start >= _wallclock_cap:
+                    break
                 # Ask IDA for current state without blocking (timeout=0)
                 try:
                     res = self._send_rpc_raw(
                         {"tool": "analysis", "args": {"action": "wait", "timeout": 0, "pump": False}},
                         port,
-                        recv_timeout=15,
+                        recv_timeout=10,
                     )
                 except Exception as e:
                     import socket as _socket
