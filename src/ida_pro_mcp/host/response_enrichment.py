@@ -299,10 +299,9 @@ def digest_decompiled(pseudocode: str, func_name: str = "", func_addr: str = "",
     return digest
 
 
-# build_session_resume + _update_kg_from_hypothesis live in response_signals.py
-# (their previous location before the split). Re-export here for backward
-# compatibility — only build_session_resume is still wired into the
-# response pipeline.
-from .response_signals import (  # noqa: E402
-    build_session_resume,  # noqa: F401
-    )
+# `build_session_resume` was moved to response_signals.py during the
+# ghost-chain cleanup. Re-export here so prior call sites that
+# imported from response_enrichment keep working.
+from .response_signals import (  # noqa: E402,F401  (legacy re-export)
+    build_session_resume,
+)

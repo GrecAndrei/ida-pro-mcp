@@ -9,14 +9,14 @@ Original 746-line implementation had:
     decompile, with the canned-hypothesis loop
   - `GHOST_CHAINS` + `get_ghost_chain` (deleted) — the 7-phase runtime
     ghost-chain inlining that fired `_execute_tool` recursively per decompile
+  - `_update_kg_from_hypothesis` (deleted) — declared as "still wired by the
+    few remaining callers" but had no callers since the decompile auto-hook
+    was removed in the same pass
 
 Kept:
   - `build_session_resume` — first 2 calls get a small session context block
     (the original `estimated_completion: f"{min(99, total_actions // 5)}%"`
     was removed; that formula is a marketing number).
-  - `_update_kg_from_hypothesis` — knowledge-graph side-effect; still wired
-    by the few remaining callers (manual hypothesis records, not auto).
-  - `_TAG_TO_SYSTEM` — knowledge-graph tag map.
 
 The host pipeline now exposes only:
   - `_digest` (auto-extracted API calls, patterns, security notes, behavior tags)
@@ -31,7 +31,6 @@ If the LLM wants a recommendation, it calls
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
 
 # ==========================================================================
@@ -42,7 +41,7 @@ from typing import Any
 def build_session_resume(
     session_manager,
     sid: str,
-    blackboard_entries: list[dict] | None = None,
+    _blackboard_entries: list[dict] | None = None,
 ) -> dict | None:
     """Build a session resume context block for reconnecting LLMs.
 
@@ -126,65 +125,3 @@ def build_session_resume(
         resume["last_notebook_entry"] = "\n".join(last_lines)
 
     return resume if resume else None
-
-
-# ==========================================================================
-# Knowledge graph side-effect (called manually, not on every decompile)
-# ==========================================================================
-
-_TAG_TO_SYSTEM = {
-    "crypto_symmetric": "Crypto subsystem",
-    "crypto_asymmetric": "Crypto subsystem",
-    "crypto_hash": "Crypto subsystem",
-    "network_http": "Network stack",
-    "network_socket": "Network stack",
-    "network_dns": "Network stack",
-    "memory_alloc": "Memory management",
-    "memory_free": "Memory management",
-    "file_io": "File I/O",
-    "process_exec": "Process management",
-    "auth_check": "Authentication",
-    "auth_bypass": "Authentication",
-    "firmware_init": "Firmware initialization",
-    "interrupt_handler": "Interrupt handling",
-    "dma_transfer": "DMA subsystem",
-}
-
-
-def _update_kg_from_hypothesis(db_path: str, addr: str,
-                                behavior_tags: list, hypotheses: list) -> None:
-    """Add the function address to a knowledge-graph subsystem for the first
-    matching behavior tag. Intended for explicit hypothesis writes (via
-    blackboard(action="write", category="hypothesis", ...)) — not auto-fired
-    on every decompile.
-    """
-    if not db_path or not addr:
-        return
-    try:
-        import importlib.util
-        # response_signals.py is in host/; knowledge_graph.py is in host/stores/.
-        _kg_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "stores", "knowledge_graph.py",
-        )
-        if not os.path.exists(_kg_path):
-            return
-        spec = importlib.util.spec_from_file_location("_re_kg", _kg_path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        kg = mod.KnowledgeGraph(db_path)
-    except Exception:
-        return
-
-    for tag in behavior_tags:
-        sys_name = _TAG_TO_SYSTEM.get(tag)
-        if not sys_name:
-            continue
-        existing = [s for s in kg.list_systems() if s["name"] == sys_name]
-        if existing:
-            kg.add_member_to_system(existing[0]["id"], addr)
-        else:
-            kg.add_system(sys_name, members=[addr],
-                          description=f"Auto-detected from {tag}",
-                          tags=[tag], confidence=0.6)
-        break

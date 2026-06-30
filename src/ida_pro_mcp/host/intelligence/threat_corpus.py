@@ -244,32 +244,6 @@ def _attack_phases(obj: dict[str, Any]) -> list[str]:
     return out
 
 
-def _attack_related(obj: dict[str, Any]) -> list[dict[str, str]]:
-    bundle = obj.get("__bundle_objects") or []
-    bundle_index = obj.get("__bundle_index")
-    if not isinstance(bundle_index, dict):
-        return []
-    target_ref = obj.get("id")
-    out: list[dict[str, str]] = []
-    for rel in bundle:
-        if rel.get("type") != "relationship":
-            continue
-        if rel.get("source_ref") != target_ref and rel.get("target_ref") != target_ref:
-            continue
-        other_ref = rel.get("target_ref") if rel.get("source_ref") == target_ref else rel.get("source_ref")
-        if not other_ref:
-            continue
-        other = bundle_index.get(other_ref)
-        if not isinstance(other, dict):
-            continue
-        rel_type = rel.get("relationship_type") or ""
-        other_type = other.get("type") or ""
-        other_name = other.get("name") or ""
-        out.append({"type": rel_type, "target_type": other_type, "target_name": other_name})
-        if len(out) >= 16:
-            break
-    return out
-
 
 def parse_attack_stix(path: str) -> dict[str, list[dict[str, Any]]]:
     """Parse a MITRE ATT&CK STIX bundle and return normalized entries by type.

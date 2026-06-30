@@ -813,19 +813,6 @@ DAEMON_SOCKET = os.path.join(tempfile.gettempdir(), "ida-mcp-daemon.sock")
 DAEMON_PIDFILE = os.path.join(tempfile.gettempdir(), "ida-mcp-daemon.pid")
 
 
-def _daemon_running() -> bool:
-    if not os.path.exists(DAEMON_SOCKET):
-        return False
-    try:
-        s = _socket_mod.socket(_socket_mod.AF_UNIX, _socket_mod.SOCK_STREAM)
-        s.settimeout(0.5)
-        s.connect(DAEMON_SOCKET)
-        s.close()
-        return True
-    except Exception:
-        return False
-
-
 def _write_pidfile() -> None:
     with open(DAEMON_PIDFILE, "w") as f:
         f.write(str(os.getpid()))
