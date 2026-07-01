@@ -524,7 +524,7 @@ TOOL_ARG_SCHEMAS = {
     },
     "bookmarks": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["bookmarks"]},
-        "addr": {"type": "string"},
+        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
         "id": {"type": "integer"},
         "name": {"type": "string"},
         "notes": {"type": "string"},
@@ -535,7 +535,7 @@ TOOL_ARG_SCHEMAS = {
     },
     "funcs": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["funcs"]},
-        "addr": {"type": "string"},
+        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
         "end": {"type": "string"},
         "name": {"type": "string"},
         "flags": {"type": "integer"},
@@ -569,7 +569,7 @@ TOOL_ARG_SCHEMAS = {
     "calc": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["calc"]},
         "expr": {"type": "string"},
-        "addr": {"type": "string"},
+        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
         "target": {"type": "string"},
         "value": {"type": ["string", "integer"]},
         "bit_op": {"type": "string"},
@@ -585,7 +585,7 @@ TOOL_ARG_SCHEMAS = {
     },
     "memory": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["memory"]},
-        "addr": {"type": "string"},
+        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
         "type": {
             "type": "string",
             "enum": [
@@ -676,7 +676,7 @@ TOOL_ARG_SCHEMAS = {
         "action": {"type": "string", "enum": TOOL_ACTIONS["search"]},
         "pattern": {"type": "string"},
         "query": {"type": "string"},
-        "addr": {"type": "string"},
+        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
         "limit": {"type": "integer"},
         "offset": {"type": "integer"},
         "start": {"type": "string"},
@@ -720,7 +720,7 @@ TOOL_ARG_SCHEMAS = {
         },
         "addr": {
             "type": "string",
-            "description": "Optional address focus for underlying scanners where supported.",
+            "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion.",
         },
         "include_tracing": {
             "type": "boolean",
@@ -834,7 +834,7 @@ TOOL_ARG_SCHEMAS = {
         },
         "addr": {
             "type": "string",
-            "description": "Optional address focus for the workflow.",
+            "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion.",
         },
         "limit": {
             "type": "integer",
@@ -878,7 +878,7 @@ TOOL_ARG_SCHEMAS = {
         # parity with the handler's alias normalization block.
         "name2": {"type": "string"},
         "address": {"type": "string"},
-        "addr": {"type": "string"},
+        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
         "ea": {"type": "string"},
         "segment": {"type": "string"},
         "address2": {"type": "string"},
@@ -890,7 +890,7 @@ TOOL_ARG_SCHEMAS = {
     },
     "agent": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["agent"]},
-        "addr": {"type": "string"},
+        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
         "query": {"type": "string"},
         "depth": {"type": "integer"},
         "include_pseudocode": {"type": "boolean"},
@@ -912,7 +912,7 @@ TOOL_ARG_SCHEMAS = {
     },
     "intelligence": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["intelligence"]},
-        "addr": {"type": "string"},
+        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
         "query": {"type": "string"},
         "max_items": {"type": "integer"},
         "threshold": {"type": "number"},
@@ -948,8 +948,8 @@ TOOL_ARG_SCHEMAS = {
     },
     "code": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["code"]},
-        "addrs": {"type": ["array", "string"], "items": {"type": "string"}},
-        "addr": {"type": "string"},
+        "addrs": {"type": ["array", "string"], "items": {"type": "string"}, "description": "Hex address string(s) (e.g. \"0x356f8\") or function name(s). Pass verbatim from search results — no mental math, no decimal conversion."},
+        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
         "max_items": {"type": "integer"},
         "max_depth": {"type": "integer"},
         "format": {"type": "string"},
@@ -962,13 +962,13 @@ TOOL_ARG_SCHEMAS = {
     },
     "ctree": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["ctree"]},
-        "addr": {"type": "string"},
+        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
         "query": {"type": "string"},
         "depth": {"type": "integer"},
     },
     "entropy": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["entropy"]},
-        "addr": {"type": "string"},
+        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
         "size": {"type": "integer"},
         "threshold": {"type": "number"},
         "end_addr": {"type": "string"},
@@ -978,7 +978,7 @@ TOOL_ARG_SCHEMAS = {
     },
     "gadgets": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["gadgets"]},
-        "addr": {"type": "string"},
+        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
         "query": {"type": "string"},
         "limit": {"type": "integer"},
         "max_insns": {"type": "integer"},
@@ -1065,7 +1065,7 @@ TOOL_ARG_SCHEMAS = {
         "title": {"type": "string", "description": "Title for write/update"},
         "content": {"type": "string", "description": "Content/body text"},
         "category": {"type": "string", "description": "Category (default: general)"},
-        "addr": {"type": "string", "description": "Associated address"},
+        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
         "query": {"type": "string", "description": "Semantic/behavior query for search and related_by_behavior"},
         "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags for categorization"},
         "confidence": {"type": "number", "description": "Confidence score 0-1"},
@@ -1109,7 +1109,7 @@ TOOL_ARG_SCHEMAS = {
     },
     "fixups": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["fixups"]},
-        "addr": {"type": "string", "description": "Address of the fixup"},
+        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
         "target": {"type": "string", "description": "Target address (for add)"},
         "fixup_type": {"type": "integer", "description": "Fixup type id (processor specific)"},
         "start": {"type": "string", "description": "Start address for list range"},
@@ -1120,7 +1120,7 @@ TOOL_ARG_SCHEMAS = {
     "governance": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["governance"]},
         "operation_type": {"type": "string", "description": "Operation type for check: patch, comment, rename, type_change, execution, annotation"},
-        "addr": {"type": "string", "description": "Target address for the operation"},
+        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
         "proposed_value": {"type": "string", "description": "The proposed value to check or redact"},
         "context": {"type": "object", "description": "Optional context dict for governance check"},
         "metadata": {"type": "object", "description": "Optional metadata dict for governance check"},
