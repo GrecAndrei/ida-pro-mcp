@@ -24,6 +24,7 @@ from tests._isolated_repo_loader import load_repo_module
 
 ida_mcp_stdio = load_repo_module("ida_mcp_stdio.py", module_name="ida_mcp_stdio")
 IDAMCPServer = ida_mcp_stdio.IDAMCPServer
+Session = ida_mcp_stdio.Session
 SessionManager = ida_mcp_stdio.SessionManager
 
 
@@ -172,6 +173,57 @@ class TestSessionCreateReuseNoExisting(_SessionReuseBase):
         self.assertIn("session", result)
 
 
+class TestSessionCreateReuseMixedArch(_SessionReuseBase):
+    """Multiple sessions for the same binary with DIFFERENT arch options.
+
+    Regression test: the old find_session_by_path returned the first match
+    (which could be metapc when the caller asked for arm). The new code picks
+    the session whose recorded arch matches the request."""
+
+    def _all_sessions_for_binary(self):
+        rows = self.server.session_mgr.list_sessions(offset=0, limit=1000).get("sessions", [])
+        return [
+            r for r in rows
+            if r.get("binary_path") == self.test_binary
+        ]
+
+    def test_reuse_arm_when_metapc_also_exists(self):
+        # Create a metapc session first
+        metapc = self._create(processor="metapc", bitness=64, endian="little")
+        self.assertTrue(metapc.get("ok"))
+        metapc_sid = metapc["session"]["session_id"]
+
+        # Now create with arm — should NOT reuse metapc, should create new arm session
+        arm = self._create(processor="arm", bitness=64, endian="little")
+        self.assertTrue(arm.get("ok"))
+        arm_sid = arm["session"]["session_id"]
+        self.assertNotEqual(arm_sid, metapc_sid)
+
+        # Third call with arm — must reuse the arm session
+        arm2 = self._create(processor="arm", bitness=64, endian="little")
+        self.assertTrue(arm2.get("ok"))
+        self.assertEqual(arm2["session"]["session_id"], arm_sid)
+
+        # Fourth call with metapc — must reuse the metapc session
+        metapc2 = self._create(processor="metapc", bitness=64, endian="little")
+        self.assertTrue(metapc2.get("ok"))
+        self.assertEqual(metapc2["session"]["session_id"], metapc_sid)
+
+        # Total: exactly 2 sessions for this binary
+        all_sids = sorted(r["session_id"] for r in self._all_sessions_for_binary())
+        self.assertEqual(len(all_sids), 2, f"Expected 2 sessions, got {len(all_sids)}: {all_sids}")
+
+    def test_many_arm_calls_with_metapc_present_no_explosion(self):
+        # Seed a metapc session
+        self._create(processor="metapc", bitness=64, endian="little")
+        # Now hammer with arm
+        for _ in range(6):
+            self._create(processor="arm", bitness=64, endian="little")
+        # Should be exactly 2 sessions (1 metapc + 1 arm), not 7
+        all_sids = self._all_sessions_for_binary()
+        self.assertEqual(len(all_sids), 2, f"Expected 2 sessions, got {len(all_sids)}")
+
+
 class TestSessionCreateReuseIdempotent(_SessionReuseBase):
     """The original bug: 6 calls to create on the same binary produced 6 sessions.
 
@@ -183,6 +235,50 @@ class TestSessionCreateReuseIdempotent(_SessionReuseBase):
             self.assertTrue(result.get("ok"))
         sids = self._all_session_ids()
         self.assertEqual(len(sids), 1, f"Expected 1 session, got {len(sids)}: {sids}")
+
+
+class TestFindSessionsByPath(unittest.TestCase):
+    """Unit tests for SessionManager.find_sessions_by_path."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.test_binary = os.path.join(self.tmpdir, "test.exe")
+        with open(self.test_binary, "wb") as f:
+            f.write(b"\x00" * 100)
+        self.mgr = SessionManager(self.tmpdir)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _make_session(self, sid, binary_path, opts=None, last_accessed="2026-01-01T00:00:00"):
+        s = Session(
+            session_id=sid,
+            binary_path=binary_path,
+            idb_path=os.path.join(self.tmpdir, f"{sid}.i64"),
+            analysis_options=opts or {},
+            last_accessed=last_accessed,
+            auto_name="test",
+        )
+        self.mgr.sessions[sid] = s
+        return s
+
+    def test_returns_all_matching_sessions_sorted_by_recency(self):
+        self._make_session("AAAA1111", self.test_binary, {"processor": "arm"}, "2026-01-01T00:00:01")
+        self._make_session("BBBB2222", self.test_binary, {"processor": "metapc"}, "2026-01-01T00:00:03")
+        self._make_session("CCCC3333", self.test_binary, {"processor": "arm"}, "2026-01-01T00:00:02")
+        self._make_session("ZZZZ0000", "/dev/null", {}, "2026-01-01T00:00:05")  # different path
+
+        results = self.mgr.find_sessions_by_path(self.test_binary)
+        self.assertEqual(len(results), 3)
+        # Sorted by last_accessed descending → BBBB (03), CCCC (02), AAAA (01)
+        self.assertEqual(results[0].session_id, "BBBB2222")
+        self.assertEqual(results[1].session_id, "CCCC3333")
+        self.assertEqual(results[2].session_id, "AAAA1111")
+
+    def test_empty_when_no_match(self):
+        self._make_session("AAAA1111", "/dev/null")
+        results = self.mgr.find_sessions_by_path(self.test_binary)
+        self.assertEqual(results, [])
 
 
 if __name__ == "__main__":

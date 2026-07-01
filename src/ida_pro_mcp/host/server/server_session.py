@@ -550,14 +550,35 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
 
         existing = None
         if binary_path:
-            existing = self.session_mgr.find_session_by_path(binary_path)
+            # Among all sessions on this binary, find one whose recorded
+            # arch options match the requested arch options. The plain
+            # find_session_by_path returns an arbitrary match (often one
+            # with different arch, e.g. metapc instead of arm), which
+            # would cause a fresh session + duplicate idat every call.
+            candidates = self.session_mgr.find_sessions_by_path(binary_path)
+            preload_keys = ("processor", "bitness", "endian", "loader", "flags", "loader_options", "value")
+            for cand in candidates:
+                if not cand.analysis_options:
+                    existing = cand
+                    break
+                cand_opts = dict(cand.analysis_options or {})
+                mismatch = any(
+                    str(cand_opts.get(k) or "") != str((analysis_options or {}).get(k) or "")
+                    for k in preload_keys
+                    if k in (analysis_options or {})
+                )
+                if not mismatch:
+                    existing = cand
+                    break
+            if not existing and candidates:
+                existing = candidates[0]
+
         # Even when the caller passes loader/architecture preload options,
         # reuse the existing session if those options already match — this
-        # stops smoke runs from spawning a new idat child for the same
-        # binary on every restart. force_new=true still wins.
+         # stops smoke runs from spawning a new idat child for the same
+         # binary on every restart. force_new=true still wins.
         if existing and not force_new and has_preload_request and analysis_options:
             existing_opts = dict(existing.analysis_options or {})
-            preload_keys = ("processor", "bitness", "endian", "loader", "flags", "loader_options", "value")
             mismatch = any(
                 str(existing_opts.get(k) or "") != str(analysis_options.get(k) or "")
                 for k in preload_keys

@@ -433,6 +433,19 @@ class SessionManager(SessionSkillsMixin):
                     return copy.copy(s)
             return None
 
+    def find_sessions_by_path(self, path: str) -> list[Session]:
+        """Return all sessions whose binary or idb path matches, most recent first."""
+        with self._lock:
+            norm = os.path.realpath(os.path.abspath(path))
+            matches: list[Session] = []
+            for s in self.sessions.values():
+                bp_match = s.binary_path and os.path.realpath(os.path.abspath(s.binary_path)) == norm
+                idb_match = bool(s.idb_path) and os.path.realpath(os.path.abspath(s.idb_path or "")) == norm
+                if bp_match or idb_match:
+                    matches.append(copy.copy(s))
+            matches.sort(key=lambda m: m.last_accessed or "", reverse=True)
+            return matches
+
     def discover_sessions(self, query: str = "") -> list[Session]:
         with self._lock:
             if not query:
