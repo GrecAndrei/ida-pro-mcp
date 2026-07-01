@@ -631,7 +631,10 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
 
         python_exe = install_root / ".venv" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
         if _phase_enabled(opts, "runtime"):
-            ui.info("Setting up runtime environment")
+            if opts.runtime_source == "local":
+                ui.info("Setting up runtime environment (development mode)")
+            else:
+                ui.info("Setting up runtime environment")
             python_exe = setup_runtime_environment(
                 install_root=install_root,
                 source_root=source_root,
@@ -640,7 +643,10 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                 report=report,
             )
             report.add_step("runtime", "ok", str(python_exe))
-            ui.ok("Runtime environment ready")
+            if opts.runtime_source == "local":
+                ui.ok("Development mode: using source tree")
+            else:
+                ui.ok("Runtime environment ready")
         else:
             report.add_step("runtime", "skipped", "filtered by --only")
 

@@ -12,6 +12,8 @@ import time
 
 import ida_ida
 import ida_loader
+import ida_segment
+import ida_entry
 
 _infer_arch = None  # type: ignore[misc]
 """Optional helper for refining filetype. Reserved for future arch
@@ -449,44 +451,67 @@ def analysis(
             # Schedule analysis (non-blocking by default). Use plan_range or
             # auto_mark_range (fire-and-forget) so IDA's idle loop picks up the
             # work after this RPC call returns.
-            import ida_auto as _ida_auto
-            if hasattr(_ida_auto, "plan_range"):
-                _ida_auto.plan_range(s_ea, e_ea)
-                mode = "plan_range"
-            elif hasattr(_ida_auto, "auto_mark_range"):
-                _ida_auto.auto_mark_range(s_ea, e_ea, _ida_auto.AU_FINAL)
-                mode = "auto_mark_range"
-            elif hasattr(idaapi, "auto_mark_range"):
-                idaapi.auto_mark_range(s_ea, e_ea, idaapi.AU_FINAL)
-                mode = "idaapi.auto_mark_range"
-            else:
-                mode = "none"
-            # Optionally poll until analysis completes.
+            #
+            # When the caller does NOT supply an explicit range, we route
+            # through _auto_reanalyze_text_segments() instead of blindly
+            # scheduling plan_range(min_ea, max_ea). The whole-image default
+            # is a no-op on stripped ARM64 ELF binaries: the loader creates
+            # 8-byte PLT stubs for the dynamic symbols but never enqueues
+            # analysis for .text, so plan_range over the full range returns
+            # immediately with the queue empty and coverage stays 0%.
+            mode = "none"
+            range_label = None
+            if start and end:
+                import ida_auto as _ida_auto
+                if hasattr(_ida_auto, "plan_range"):
+                    _ida_auto.plan_range(s_ea, e_ea)
+                    mode = "plan_range"
+                elif hasattr(_ida_auto, "auto_mark_range"):
+                    _ida_auto.auto_mark_range(s_ea, e_ea, _ida_auto.AU_FINAL)
+                    mode = "auto_mark_range"
+                elif hasattr(idaapi, "auto_mark_range"):
+                    idaapi.auto_mark_range(s_ea, e_ea, idaapi.AU_FINAL)
+                    mode = "idaapi.auto_mark_range"
+                range_label = "explicit"
             blocking = kwargs.get("blocking") or kwargs.get("wait") or False
+            poll_timeout = 10.0
+            if "poll_timeout" in kwargs and kwargs["poll_timeout"] is not None:
+                poll_timeout = float(kwargs["poll_timeout"] or 0.0)
+            # The poll budget must fit safely inside the host RPC recv
+            # deadline (IDA_MCP_RPC_TIMEOUT, default 30s).
+            poll_timeout = max(0.0, min(poll_timeout, 25.0))
             waited = 0.0
-            if blocking:
-                # Default to a bounded 10s observe window when the caller does
-                # not specify one, safely under the host RPC recv deadline
-                # (IDA_MCP_RPC_TIMEOUT, default 30s). A bare blocking call with
-                # the old 60s default raced the 30s deadline and the host
-                # reported a false crash (process still alive, just polling).
-                if "poll_timeout" in kwargs and kwargs["poll_timeout"] is not None:
-                    poll_timeout = float(kwargs["poll_timeout"] or 0.0)
-                else:
-                    poll_timeout = 10.0
+            rean = None
+            if blocking and not start:
+                # Whole-image reanalyze: use the smarter helper that targets
+                # only the eligible executable segments (skips PLT/INIT/FINI
+                # and the tiny LOAD trampolines) and waits for the auto
+                # analyzer to actually drain.
+                rean = _auto_reanalyze_text_segments(
+                    wait_seconds=max(poll_timeout, 0.5)
+                )
+                # Ensure JNI / ELF exports become functions even if the
+                # auto-analyzer failed to trace into them.
+                ep = _ensure_entry_point_functions()
+                waited = float(rean.get("waited_seconds") or 0.0)
+                mode = "auto_reanalyze_text_segments"
+                range_label = "eligible_text"
+                if ep.get("created"):
+                    rean["entry_point_funcs_created"] = ep
+            elif blocking:
+                # Explicit range: poll auto_is_ok() for the budget.
                 start_time = time.time()
-                while time.time() - start_time < poll_timeout:
-                    analysis_ok = bool(idaapi.auto_is_ok()) if hasattr(idaapi, "auto_is_ok") else True
-                    if analysis_ok:
-                        break
-                    time.sleep(0.2)
-                    waited += 0.2
-                    try:
-                        import ida_kernwin
-                        if hasattr(ida_kernwin, "process_ui_action"):
-                            pass  # pump the event loop
-                    except Exception:
-                        pass
+                import ida_auto as _ida_auto
+                if hasattr(_ida_auto, "auto_wait"):
+                    _ida_auto.auto_wait()
+                    waited = time.time() - start_time
+                else:
+                    while time.time() - start_time < poll_timeout:
+                        analysis_ok = bool(idaapi.auto_is_ok()) if hasattr(idaapi, "auto_is_ok") else True
+                        if analysis_ok:
+                            break
+                        time.sleep(0.2)
+                        waited += 0.2
             try:
                 func_count = sum(1 for _ in idautils.Functions())
             except Exception:
@@ -494,9 +519,14 @@ def analysis(
             boot = {"seeded_entries": 0}
             # Only seed entry points for raw blobs (no known file format).
             # ELF/PE/Mach-O loaders handle this themselves.
-            _is_raw = idaapi.get_inf_structure().filetype in (
-                getattr(idaapi, "f_BIN", 0), getattr(idaapi, "f_BINARY", 0)
-            ) if hasattr(idaapi, "get_inf_structure") else False
+            _is_raw = False
+            try:
+                if hasattr(idaapi, "get_inf_structure"):
+                    _is_raw = idaapi.get_inf_structure().filetype in (
+                        getattr(idaapi, "f_BIN", 0), getattr(idaapi, "f_BINARY", 0)
+                    )
+            except Exception:
+                _is_raw = False
             if func_count == 0 and _is_raw:
                 boot = _bootstrap_raw_entry_points(s_ea, e_ea)
             analysis_ok = bool(idaapi.auto_is_ok()) if hasattr(idaapi, "auto_is_ok") else False
@@ -509,12 +539,15 @@ def analysis(
                 "start": hex(s_ea),
                 "end": hex(e_ea),
                 "mode": mode,
+                "range_source": range_label,
                 "analysis_complete": analysis_ok,
                 "functions": func_count,
                 "note": "Analysis scheduled (non-blocking). Poll with analysis(action='wait', timeout=30) or session(action='status') until analysis_complete=true.",
                 **boot,
             }
             if blocking:
+                if rean is not None and isinstance(rean, dict):
+                    result["reanalyze"] = rean
                 result["blocking_waited"] = round(waited, 2)
                 result["note"] = "Analysis ran blocking. Ready to query."
             return result
@@ -545,18 +578,90 @@ def analysis(
                 string_count = idaapi.get_strlist_qty() if hasattr(idaapi, "get_strlist_qty") else -1
             except Exception:
                 string_count = -1
-            return {
+            # Coverage diagnostic: "auto-analysis finished" is meaningless if
+            # the loader never enqueued work for .text. We surface the
+            # defined/total code bytes so callers can detect the failure mode
+            # where the auto queue is empty but the code section is
+            # completely unanalyzed (defined=0 over a non-trivial total).
+            coverage = {"defined_code_bytes": 0, "total_code_bytes": 0,
+                        "coverage_pct": 0.0, "code_heads": 0}
+            try:
+                total = 0
+                defined = 0
+                heads = 0
+                for seg_ea in idautils.Segments():
+                    seg = idaapi.getseg(seg_ea)
+                    if not seg or not (seg.perm & idaapi.SEGPERM_EXEC):
+                        continue
+                    s = int(seg.start_ea)
+                    e = int(seg.end_ea)
+                    if e - s < 0x100:
+                        continue
+                    name = ""
+                    try:
+                        name = ida_segment.get_segm_name(seg)
+                    except Exception:
+                        name = ""
+                    if name in _SKIP_SEGMENT_NAMES:
+                        continue
+                    total += e - s
+                    head = s
+                    while head < e:
+                        try:
+                            f = ida_bytes.get_flags(head)
+                            if ida_bytes.is_code(f):
+                                defined += int(idc.get_item_size(head))
+                                heads += 1
+                        except Exception:
+                            pass
+                        try:
+                            nxt = idc.next_head(head, e)
+                        except Exception:
+                            break
+                        if nxt == idaapi.BADADDR or nxt <= head:
+                            break
+                        head = int(nxt)
+                coverage = {
+                    "defined_code_bytes": defined,
+                    "total_code_bytes": total,
+                    "coverage_pct": round(defined / total * 100, 2) if total else 0.0,
+                    "code_heads": heads,
+                }
+            except Exception:
+                pass
+            # Heuristic: if the queue is empty and we have >= 32KB of
+            # unanalyzed executable code, the loader is the most likely
+            # culprit. Surface a clear note so the caller can decide to
+            # run ``analysis(action='analyze', blocking=True)`` to trigger
+            # a targeted reanalysis.
+            coverage_failed = (
+                analysis_ok
+                and coverage["total_code_bytes"] >= 0x8000
+                and coverage["defined_code_bytes"] == 0
+            )
+            note = (
+                "Analysis complete. Safe to call code/data/funcs tools."
+                if analysis_ok else
+                "Analysis may still be running. Try again shortly."
+            )
+            if coverage_failed:
+                note = (
+                    "Auto-analysis queue is empty but the code section is "
+                    "completely unanalyzed. Run analysis(action='analyze', "
+                    "blocking=True) to schedule a targeted reanalysis over "
+                    "the executable segments."
+                )
+            result = {
                 "ok": True,
                 "analysis_complete": analysis_ok,
                 "functions": func_count,
                 "strings": string_count,
                 "seconds_waited": 0.0,
-                "note": (
-                    "Analysis complete. Safe to call code/data/funcs tools."
-                    if analysis_ok else
-                    "Analysis may still be running. Try again shortly."
-                ),
+                "coverage": coverage,
+                "coverage_failed": coverage_failed,
+                "note": note,
             }
+            return result
 
         return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
@@ -615,3 +720,244 @@ def _bootstrap_raw_entry_points(start_ea: int, end_ea: int) -> dict:
         except Exception:
             continue
     return {"seeded_entries": seeded}
+
+
+_SKIP_SEGMENT_NAMES = {
+    ".plt", ".plt.got", ".plt.sec", ".plt.bnd",
+    ".init", ".fini", ".init_array", ".fini_array",
+    ".plt_indirect", ".plt_resolve",
+    ".got", ".got.plt", ".got.off", ".got.sec",
+}
+
+
+def _segment_code_score(seg) -> tuple[int, int, int]:
+    """Return (defined_code_bytes, total_code_bytes, code_head_count) for a segment.
+
+    The score is used by the auto-reanalysis logic to detect "loader finished but
+    never analyzed the code" failures — a typical symptom on stripped ARM64 ELF
+    binaries (e.g. Android NDK ``libidmservicemgr.so``) where IDA's loader creates
+    8-byte PLT stubs for the dynamic symbols but never enqueues work for ``.text``.
+    """
+    import idc as _idc
+    defined = 0
+    total = 0
+    heads = 0
+    if seg is None:
+        return 0, 0, 0
+    try:
+        if not (seg.perm & idaapi.SEGPERM_EXEC):
+            return 0, 0, 0
+    except Exception:
+        return 0, 0, 0
+    total = int(seg.end_ea) - int(seg.start_ea)
+    if total <= 0:
+        return 0, 0, 0
+    head = int(seg.start_ea)
+    end_ea = int(seg.end_ea)
+    while head < end_ea:
+        try:
+            flags = ida_bytes.get_flags(head)
+        except Exception:
+            break
+        try:
+            if ida_bytes.is_code(flags):
+                defined += int(_idc.get_item_size(head))
+                heads += 1
+        except Exception:
+            pass
+        try:
+            nxt = _idc.next_head(head, end_ea)
+        except Exception:
+            break
+        if nxt == idaapi.BADADDR or nxt <= head:
+            break
+        head = int(nxt)
+    return defined, total, heads
+
+
+def _find_text_segments() -> list[tuple[int, int, str]]:
+    """Return [(start, end, name), ...] for segments that should be re-analyzed.
+
+    Skips PLT/INIT/FINI/GOT style segments and the tiny ``LOAD`` trampolines
+    that some ELF linkers emit (e.g. ``LOAD 0x0-0x35070`` is the read-only file
+    header view; ``LOAD 0x35eb0-0x35ec0`` is a 16-byte trampoline). The result
+    is sorted by start address and de-duplicated.
+    """
+    out: list[tuple[int, int, str]] = []
+    seen: set[tuple[int, int]] = set()
+    for seg_ea in idautils.Segments():
+        seg = idaapi.getseg(seg_ea)
+        if not seg:
+            continue
+        try:
+            if not (seg.perm & idaapi.SEGPERM_EXEC):
+                continue
+        except Exception:
+            continue
+        s = int(seg.start_ea)
+        e = int(seg.end_ea)
+        if e - s < 0x100:
+            continue
+        name = ""
+        try:
+            name = ida_segment.get_segm_name(seg)
+        except Exception:
+            name = ""
+        if name in _SKIP_SEGMENT_NAMES:
+            continue
+        key = (s, e)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((s, e, name))
+    out.sort(key=lambda t: t[0])
+    return out
+
+
+def _auto_reanalyze_text_segments(
+    wait_seconds: float = 60.0,
+    *,
+    min_coverage_pct: float = 1.0,
+) -> dict:
+    """Best-effort: schedule ``ida_auto.plan_range`` over all eligible
+    executable segments and ``auto_wait``. Use as a fallback when the
+    initial auto-analysis left the code section unanalyzed (e.g. the
+    ELF loader created 8-byte PLT stubs but never created any real
+    functions in ``.text``).
+
+    Returns a dict with coverage before/after, number of functions
+    created, ranges scheduled, and the wall-clock time spent waiting.
+    Caller is responsible for saving the IDB if it wants persistence.
+    """
+    import ida_auto as _ida_auto
+
+    ranges = _find_text_segments()
+    before_funcs = 0
+    before_defined = 0
+    before_total = 0
+    try:
+        before_funcs = int(idaapi.get_func_qty())
+    except Exception:
+        pass
+    for s, _e, _name in ranges:
+        try:
+            d, t, _h = _segment_code_score(idaapi.getseg(s))
+            before_defined += d
+            before_total += t
+        except Exception:
+            pass
+    scheduled = 0
+    for s, e, _name in ranges:
+        try:
+            if hasattr(_ida_auto, "plan_range"):
+                _ida_auto.plan_range(s, e)
+            elif hasattr(_ida_auto, "auto_mark_range"):
+                _ida_auto.auto_mark_range(s, e, _ida_auto.AU_FINAL)
+            elif hasattr(idaapi, "auto_mark_range"):
+                idaapi.auto_mark_range(s, e, idaapi.AU_FINAL)
+            else:
+                continue
+            scheduled += 1
+        except Exception:
+            continue
+    waited = 0.0
+    started = time.time()
+    if scheduled > 0 and wait_seconds > 0:
+        try:
+            if hasattr(_ida_auto, "auto_wait"):
+                _ida_auto.auto_wait()
+            waited = time.time() - started
+        except Exception:
+            waited = time.time() - started
+    after_funcs = 0
+    after_defined = 0
+    after_total = 0
+    after_heads = 0
+    try:
+        after_funcs = int(idaapi.get_func_qty())
+    except Exception:
+        pass
+    for s, _e, _name in ranges:
+        try:
+            d, t, h = _segment_code_score(idaapi.getseg(s))
+            after_defined += d
+            after_total += t
+            after_heads += h
+        except Exception:
+            pass
+    coverage_before = (
+        round(before_defined / before_total * 100, 2) if before_total else 0.0
+    )
+    coverage_after = (
+        round(after_defined / after_total * 100, 2) if after_total else 0.0
+    )
+    eligible = [
+        {"start": hex(s), "end": hex(e), "name": name}
+        for s, e, name in ranges
+    ]
+    return {
+        "eligible_ranges": eligible,
+        "scheduled": scheduled,
+        "functions_before": before_funcs,
+        "functions_after": after_funcs,
+        "functions_added": max(0, after_funcs - before_funcs),
+        "defined_code_bytes_before": before_defined,
+        "defined_code_bytes_after": after_defined,
+        "total_code_bytes": after_total,
+        "code_heads_after": after_heads,
+        "coverage_pct_before": coverage_before,
+        "coverage_pct_after": coverage_after,
+        "waited_seconds": round(waited, 2),
+        "reanalysis_triggered": (
+            after_funcs > before_funcs or after_defined > before_defined
+        ),
+    }
+
+
+def _entry_point_addrs() -> list[int]:
+    """Return deduped, sorted list of entry-point EAs (JNI exports, ELF
+    entry, etc.) that should always have a function created, even if
+    IDA's auto-analysis missed them."""
+    out: set[int] = set()
+    try:
+        qty = int(ida_entry.get_entry_qty())
+        for i in range(qty):
+            ord_val = ida_entry.get_entry_ordinal(i)
+            ea = int(ida_entry.get_entry(ord_val))
+            if ea and ea != idaapi.BADADDR:
+                out.add(ea)
+    except Exception:
+        pass
+    return sorted(out)
+
+
+def _ensure_entry_point_functions() -> dict:
+    """Create functions for any entry point that doesn't have one yet.
+    Useful when the auto-analyzer didn't trace into JNI exports because
+    they were stripped or the loader didn't enqueue them."""
+    import ida_funcs
+    created = []
+    skipped = []
+    failed = []
+    for ea in _entry_point_addrs():
+        try:
+            if idaapi.get_func(ea):
+                skipped.append(hex(ea))
+                continue
+            ok = False
+            try:
+                ok = bool(ida_funcs.add_func(ea))
+            except Exception:
+                ok = False
+            if ok:
+                created.append(hex(ea))
+            else:
+                failed.append(hex(ea))
+        except Exception:
+            failed.append(hex(ea))
+    return {
+        "entry_points_total": len(created) + len(skipped) + len(failed),
+        "created": created,
+        "skipped_already_func": skipped,
+        "failed": failed,
+    }

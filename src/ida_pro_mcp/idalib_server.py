@@ -60,6 +60,50 @@ def main():
     logger.debug("idalib: waiting for analysis...")
     ida_auto.auto_wait()
 
+    # Some stripped ELF binaries (notably Android NDK arm64-v8a libraries)
+    # have the loader create 8-byte PLT stubs for dynamic symbols but never
+    # enqueue work for .text. IDA's auto-analysis then exits with the queue
+    # empty and the code section is left completely unanalyzed
+    # (defined_code_bytes == 0 over a non-trivial total). Detect that
+    # failure mode and trigger a targeted reanalysis over the eligible
+    # executable segments so the runtime starts with a useful IDB.
+    try:
+        from ida_pro_mcp.ida_mcp.tools.analysis import (
+            _auto_reanalyze_text_segments,
+            _ensure_entry_point_functions,
+        )
+
+        rean = _auto_reanalyze_text_segments(wait_seconds=60.0)
+        if rean.get("reanalysis_triggered"):
+            logger.info(
+                "Auto-reanalysis scheduled %d range(s); functions %d -> %d, "
+                "defined_code_bytes %d -> %d (coverage %.1f%% -> %.1f%%)",
+                rean.get("scheduled", 0),
+                rean.get("functions_before", 0),
+                rean.get("functions_after", 0),
+                rean.get("defined_code_bytes_before", 0),
+                rean.get("defined_code_bytes_after", 0),
+                rean.get("coverage_pct_before", 0.0),
+                rean.get("coverage_pct_after", 0.0),
+            )
+        ep = _ensure_entry_point_functions()
+        if ep.get("created"):
+            logger.info(
+                "Created %d entry-point function(s) the auto-analyzer missed: %s",
+                len(ep["created"]),
+                ", ".join(ep["created"][:8]),
+            )
+        # Persist the upgraded IDB so subsequent restarts don't re-run
+        # the expensive reanalysis. Use ida_diskio.save_database to keep
+        # the same on-disk path the loader opened.
+        try:
+            import ida_diskio
+            ida_diskio.save_database("")
+        except Exception as exc:
+            logger.debug("save_database after auto-reanalysis failed: %s", exc)
+    except Exception as exc:
+        logger.debug("auto-reanalysis post-step failed (non-fatal): %s", exc)
+
     # Setup signal handlers to ensure IDA database is properly closed on shutdown.
     # When a signal arrives, our handlers execute first, allowing us to close the
     # IDA database cleanly before the process terminates.

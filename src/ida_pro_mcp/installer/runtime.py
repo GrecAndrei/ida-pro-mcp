@@ -654,6 +654,48 @@ def _wipe_venv(venv_dir: Path) -> None:
         ) from exc
 
 
+def _write_dev_pth(venv_dir: Path, source_root: Path, dry_run: bool, report: InstallReport) -> Path:
+    """Write a ``.pth`` file in the venv site-packages so imports resolve from
+    the working source tree instead of a copied package.
+
+    Called when ``--runtime-source local`` is used explicitly.
+    Also removes any previously pip-installed ``ida_pro_mcp`` package from
+    site-packages so the ``.pth``-based source tree takes precedence.
+    """
+    python_exe = _venv_python_exe(venv_dir)
+    result = subprocess.run(
+        [str(python_exe), "-c", "import site; print(site.getsitepackages()[0])"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("Could not determine site-packages directory")
+    site_packages = Path(result.stdout.strip())
+    pth_path = site_packages / "ida_pro_mcp_dev.pth"
+    src_path = source_root / "src"
+    if dry_run:
+        report.add_step("dev_pth", "dry-run", f"would write {pth_path} -> {src_path}")
+        return pth_path
+    pth_path.parent.mkdir(parents=True, exist_ok=True)
+    pth_path.write_text(f"{src_path}\n", encoding="utf-8")
+    report.add_modified(pth_path)
+    report.add_step("dev_pth", "ok", f"{pth_path} -> {src_path}")
+
+    # Remove any stale pip-installed copy so the .pth source takes precedence
+    stale_pkg_dir = site_packages / "ida_pro_mcp"
+    if stale_pkg_dir.is_dir():
+        shutil.rmtree(stale_pkg_dir)
+        report.add_step("dev_pth", "cleanup", f"removed stale {stale_pkg_dir}")
+    stale_distinfo = site_packages / "ida_pro_mcp-*.dist-info"
+    for p in site_packages.glob("ida_pro_mcp-*.dist-info"):
+        if p.is_dir():
+            shutil.rmtree(p)
+            report.add_step("dev_pth", "cleanup", f"removed stale {p}")
+
+    return pth_path
+
+
 def setup_runtime_environment(
     install_root: Path,
     source_root: Path,
@@ -694,8 +736,17 @@ def setup_runtime_environment(
     run_checked([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
 
     resolved_source = choose_runtime_source(runtime_source, source_root)
-    package_spec = str(source_root) if resolved_source == "local" else "ida-pro-mcp"
-    run_checked([str(python_exe), "-m", "pip", "install", package_spec])
+
+    if runtime_source == "local":
+        _write_dev_pth(venv_dir, source_root, dry_run, report)
+        report.metadata["runtime_source"] = "local-dev"
+        report.metadata["runtime_package"] = f"pth:{source_root / 'src'}"
+    else:
+        package_spec = str(source_root) if resolved_source == "local" else "ida-pro-mcp"
+        run_checked([str(python_exe), "-m", "pip", "install", package_spec])
+        report.metadata["runtime_source"] = resolved_source
+        report.metadata["runtime_package"] = package_spec
+
     run_checked(
         [
             str(python_exe),
@@ -703,8 +754,6 @@ def setup_runtime_environment(
             "import ida_pro_mcp.host.server, ida_pro_mcp.cli, requests, numpy, tomli_w; print('ok')",
         ]
     )
-    report.metadata["runtime_source"] = resolved_source
-    report.metadata["runtime_package"] = package_spec
     report.metadata["venv_python"] = str(python_exe)
     return python_exe
 def build_stdio_config(
