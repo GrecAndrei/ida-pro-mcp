@@ -1550,7 +1550,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 )
 
                 # WAIT FOR STARTUP using ping
-                startup_timeout = int(os.environ.get("IDA_MCP_STARTUP_TIMEOUT", "90"))
+                startup_timeout = int(os.environ.get("IDA_MCP_STARTUP_TIMEOUT", "240"))
                 start_time = time.time()
                 ida_crashed = False
                 exit_code = None
@@ -1709,7 +1709,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     **_popen_new_session_kwargs(),
                 )
 
-                startup_timeout = int(os.environ.get("IDA_MCP_STARTUP_TIMEOUT", "90"))
+                startup_timeout = int(os.environ.get("IDA_MCP_STARTUP_TIMEOUT", "240"))
                 start_time = time.time()
                 while time.time() - start_time < startup_timeout:
                     exit_code = server_process.poll()

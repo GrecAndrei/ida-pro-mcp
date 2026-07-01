@@ -639,59 +639,51 @@ if __name__ == "__main__":
     _apply_pre_analysis_options()
     load_tools()
 
-    # Run (possibly long) auto-reanalysis in a background thread so the
-    # server can start accepting pings immediately. The MCP host waits for
-    # the ping, not for analysis to complete — tool calls that need the
-    # final state block on auto_wait() internally.
-    def _background_reanalysis():
+    # Block on the main thread until initial auto-analysis completes, then
+    # run a targeted reanalysis for stripped ELF binaries (Android NDK
+    # arm64-v8a) that only produced PLT stubs on initial load. The MCP
+    # host's startup ping has a long default timeout (see
+    # IDA_MCP_STARTUP_TIMEOUT, default 180s) so the server can afford to
+    # wait here — every subsequent session reuse skips this entirely.
+    try:
+        import ida_auto as _ida_auto
+        import idaapi as _idaapi
+
+        log_ev("Waiting for initial auto-analysis...")
+        if hasattr(_ida_auto, "auto_wait"):
+            _ida_auto.auto_wait()
+        log_ev("Initial auto-analysis complete.")
+
         try:
-            import ida_auto as _ida_auto
-            import idaapi as _idaapi
-
-            # 1. Wait for the initial auto-analysis to finish.
-            log_ev("[bg] Waiting for initial auto-analysis...")
-            if hasattr(_ida_auto, "auto_wait"):
-                _ida_auto.auto_wait()
-            log_ev("[bg] Initial auto-analysis complete.")
-
-            # 2. Best-effort reanalysis for stripped ELFs.
-            try:
-                from ida_pro_mcp.ida_mcp.tools.analysis import (
-                    _auto_reanalyze_text_segments,
-                    _ensure_entry_point_functions,
+            from ida_pro_mcp.ida_mcp.tools.analysis import (
+                _auto_reanalyze_text_segments,
+                _ensure_entry_point_functions,
+            )
+            rean = _auto_reanalyze_text_segments(wait_seconds=120.0)
+            if rean.get("scheduled", 0):
+                log_ev(
+                    "Auto-reanalysis: %d range(s); funcs %d -> %d, "
+                    "code bytes %d -> %d (coverage %.1f%% -> %.1f%%)",
+                    rean.get("scheduled", 0),
+                    rean.get("functions_before", 0),
+                    rean.get("functions_after", 0),
+                    rean.get("defined_code_bytes_before", 0),
+                    rean.get("defined_code_bytes_after", 0),
+                    rean.get("coverage_pct_before", 0.0),
+                    rean.get("coverage_pct_after", 0.0),
                 )
-                rean = _auto_reanalyze_text_segments(wait_seconds=120.0)
-                if rean.get("scheduled", 0):
-                    log_ev(
-                        "[bg] Auto-reanalysis: %d range(s); funcs %d -> %d, "
-                        "code bytes %d -> %d (coverage %.1f%% -> %.1f%%)",
-                        rean.get("scheduled", 0),
-                        rean.get("functions_before", 0),
-                        rean.get("functions_after", 0),
-                        rean.get("defined_code_bytes_before", 0),
-                        rean.get("defined_code_bytes_after", 0),
-                        rean.get("coverage_pct_before", 0.0),
-                        rean.get("coverage_pct_after", 0.0),
-                    )
-                _ensure_entry_point_functions()
-            except Exception as _e:
-                log_ev("[bg] Auto-reanalysis skipped: %s" % _e)
-
-            # 3. Persist the upgraded IDB so subsequent spawns reuse it.
-            try:
-                import ida_diskio as _ida_diskio
-                _ida_diskio.save_database("")
-                log_ev("[bg] IDB saved after reanalysis.")
-            except Exception as _e:
-                log_ev("[bg] save_database after reanalysis failed: %s" % _e)
-        except ImportError:
-            log_ev("[bg] idaapi/ida_auto not importable; skipping reanalysis.")
+            _ensure_entry_point_functions()
         except Exception as _e:
-            log_ev("[bg] Reanalysis thread error: %s" % _e)
+            log_ev("Auto-reanalysis skipped: %s" % _e)
 
-    import threading as _threading
-    _rean_thread = _threading.Thread(target=_background_reanalysis, daemon=True)
-    _rean_thread.start()
+        try:
+            import ida_diskio as _ida_diskio
+            _ida_diskio.save_database("")
+            log_ev("IDB saved after reanalysis.")
+        except Exception as _e:
+            log_ev("save_database after reanalysis failed: %s" % _e)
+    except ImportError:
+        log_ev("idaapi/ida_auto not importable; skipping reanalysis.")
 
     log_ev("Starting server...")
     run_server()
