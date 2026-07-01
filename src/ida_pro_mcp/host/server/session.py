@@ -133,6 +133,25 @@ class Session:
     def update_access(self):
         self.last_accessed = datetime.now()
 
+    def idb_on_disk(self) -> bool:
+        """True if any IDB artifact exists on disk.
+
+        Covers both the bare ``.i64``/``.idb`` layout and the legacy
+        component-file layout (``.id0`` + ``.nam`` + ``.til``)."""
+        if self.idb_path and os.path.exists(self.idb_path):
+            return True
+        idb_dir = os.path.dirname(self.idb_path or ".")
+        sid_prefix = f"SID_{self.session_id}"
+        try:
+            for name in os.listdir(idb_dir):
+                if name.startswith(sid_prefix) and (
+                    name.endswith(".id0") or name.endswith(".nam")
+                ):
+                    return True
+        except OSError:
+            pass
+        return False
+
     def to_dict(self) -> dict:
         return {
             "session_id": self.session_id,
@@ -142,7 +161,7 @@ class Session:
             "analysis_applied": self.analysis_applied,
             "ida_args": self.ida_args,
             "binary_exists": bool(self.binary_path and os.path.exists(self.binary_path)),
-            "idb_exists": bool(self.idb_path and os.path.exists(self.idb_path)),
+            "idb_exists": self.idb_on_disk(),
             "created_at": self.created_at.isoformat(),
             "last_accessed": self.last_accessed.isoformat(),
             "tags": self.tags,

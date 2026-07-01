@@ -731,6 +731,18 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                     ]
         out["imported_symbol_count"] = int(imported_symbol_count)
         out["cross_session_imported"] = int(cross_session_imported)
+
+        # Spawn idat and wait for the IDB so the caller gets a usable
+        # session on the first call. Previously _session_action_create
+        # returned immediately with idb_exists=false and the LLM had to
+        # discover + re-trigger analysis.
+        self._ensure_runtime_and_idb(self.current_session)
+        # Refresh the snapshot with idb_exists etc. after wait
+        out["session"] = self.current_session.to_dict()
+        if out["session"].get("idb_exists"):
+            out["note"] = (out.get("note") or "") + (
+                " IDB ready." if out.get("note") else "IDB ready."
+            )
         return out
 
     def _session_action_discover(self, args: dict) -> dict:
@@ -938,22 +950,46 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         analysis, session(action='create') blocks here so the returned
         session has a useful IDB.
 
+        IDA may store the database as a bare file (``.i64``) or as the
+        legacy component files (``.id0``, ``.id1``, ...). We accept either
+        signal so the wait terminates as soon as any IDB artifact lands.
+
         Returns True if the IDB appeared within *timeout* seconds."""
         if not hasattr(session, "idb_path"):
             return False
         idb_path = getattr(session, "idb_path", None) or ""
-        if not idb_path or os.path.isfile(idb_path):
+        if not idb_path:
+            return False
+        idb_dir = os.path.dirname(idb_path)
+        sid_prefix = f"SID_{session.session_id}"
+
+        def _idb_on_disk() -> bool:
+            # Fast path: bare .i64 / .idb file
+            if os.path.isfile(idb_path):
+                return True
+            # Legacy component-file layout: SID_xxx.*, nam, til
+            try:
+                for name in os.listdir(idb_dir or "."):
+                    if name.startswith(sid_prefix) and (
+                        name.endswith(".id0") or name.endswith(".nam")
+                    ):
+                        return True
+            except OSError:
+                pass
+            return False
+
+        if _idb_on_disk():
             return True
         deadline = time.time() + timeout
         while time.time() < deadline:
-            if os.path.isfile(idb_path):
+            if _idb_on_disk():
                 return True
             time.sleep(0.5)
             # Give idat a chance to yield (cooperative with idapro threads)
             runtime = self.session_runtimes.get(session.session_id) if hasattr(self, "session_runtimes") else None
             if runtime and not self._runtime_alive(runtime):
                 return False
-        return os.path.isfile(idb_path)
+        return _idb_on_disk()
 
     def _session_action_close(self, args: dict) -> dict:
         sid, sid_err = self._resolve_session_id(args)
