@@ -168,25 +168,25 @@ The same tool-doc skills for Codex agents live in `.agents/skills/` (auto-genera
 
 ## Tool Surface
 
-67 tools, hundreds of actions. Default `tools/list` mode is `ultra` — short routing hints plus action enums, ~9.5k tokens total. Skills carry the reference docs; the tools carry live data.
+69 tools, hundreds of actions. Default `tools/list` mode is `ultra` — short routing hints plus action enums, ~9.5k tokens total. Skills carry the reference docs; the tools carry live data.
 
-`IDA_MCP_TOOLS_LIST_MODE` controls verbosity:
+ `IDA_MCP_TOOLS_LIST_MODE` controls verbosity:
 - `ultra` (default): action enums + short description (~9.5k tokens)
 - `lean`: full action descriptions, stripped footnotes (~21k tokens)
 - `full`: complete descriptions + full JSON Schema (~58k tokens)
 
-Do **not** set `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS=1` — it overrides `TOOLS_LIST_MODE` to `full` unconditionally.
-
 ### Tool categories
 
-- Core/session: `session`, `batch`, `bookmarks`, `wiki`, `truncation`
-- Data access: `idb`, `data`, `code`, `search`, `types`, `memory`, `query`
+- Core/session: `session`, `multi_session`, `batch`, `bookmarks`, `wiki`, `truncation`
+- Data access: `idb`, `data`, `data_ops`, `code`, `search`, `bridge_search`, `types`, `memory`, `query`
 - Editing: `modify`, `funcs`, `segments`, `bulk`, `annotation`
-- Analysis: `cfg_analysis`, `stack_analysis`, `abi`, `protocol`, `classify`, `compare`, `summarize`, `agent`
+- Analysis: `cfg_analysis`, `stack_analysis`, `abi`, `protocol`, `classify`, `bindiff`, `compare`, `summarize`, `agent`, `entropy`, `packer`, `fixups`
 - Security RE: `threat_hunt`, `taint`, `gadgets`, `deobfuscate`, `crypto_id`, `yara_hunt`
-- Debug/trace: `debug`, `trace_analysis`, `coverage`
-- Structural: `ctree`, `microcode`, `graph`, `imports_deep`, `symbols`, `patterns`
-- Utilities: `analysis`, `project`, `export`, `history`, `misc`, `calc`, `llm_helpers`, `binary_info`, `string_ops`
+- Debug/trace: `debug`, `trace_analysis`, `coverage`, `emulate`
+- Structural: `ctree`, `microcode`, `graph`, `imports_deep`, `symbols`, `patterns`, `struct_recover`, `hooks`
+- AI/intelligence: `intelligence`, `knowledge`, `lumina`, `predictor`, `llm_helpers`, `workflow`
+- Firmware: `firmware_view`, `nav`
+- Utilities: `analysis`, `project`, `export`, `history`, `misc`, `calc`, `binary_info`, `string_ops`
 - Infrastructure: `blackboard`, `governance`, `filter`
 
 ### Tool aliases
@@ -334,7 +334,7 @@ Tool Modules  (ida_mcp.tools.*)  →  IDA SDK + Hex-Rays APIs
 ## Security Controls
 
 - **Memory tool path validation**: enforces allowlist root (`IDA_MCP_MEMORY_ROOT`, default IDB dir)
-- **RPC size caps**: 64 MB limits on both IDA-side and host-side
+- **RPC size caps**: IDA-side caps requests at 1 MB by default (`IDA_MCP_MAX_RPC_REQUEST_BYTES`); host-side caps requests + responses at 64 MB by default (`IDA_MCP_MAX_RPC_BYTES`).
 - **Atomic config writes**: tmp/fsync/replace prevents corruption on crash
 - **`@idaread`/`@idawrite` safety net**: active by default, scoped bypass via `bypass_sync()` context
 
@@ -362,7 +362,7 @@ Client config locations handled for all supported clients using XDG-aware paths.
 
 **"No active session"**: Call `session(action='create', binary_path='...')` first.
 
-**Large context usage**: Verify `IDA_MCP_TOOLS_LIST_MODE=ultra` and `IDA_MCP_MONOLITHIC_TOOL_DESCRIPTIONS` is unset (or `0`). Each `tools/list` call is ~9.5k tokens in ultra mode; `full` mode is ~58k tokens.
+**Large context usage**: Verify `IDA_MCP_TOOLS_LIST_MODE=ultra`. Each `tools/list` call is ~9.5k tokens in ultra mode; `full` mode is ~58k tokens.
 
 **MCP resources not working**: MCP resources (`ida://state` etc.) require user action in the client UI — the LLM cannot read them autonomously. Use `session(action='state')` instead.
 

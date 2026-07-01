@@ -23,7 +23,7 @@ TMP_DIR="$(mktemp -d)"
 python -m venv "$TMP_DIR/.venv"
 "$TMP_DIR/.venv/bin/python" -m pip install --upgrade pip
 "$TMP_DIR/.venv/bin/python" -m pip install dist/*.whl
-"$TMP_DIR/.venv/bin/python" -c "import ida_pro_mcp.server, ida_pro_mcp.cli; print('wheel smoke-test ok')"
+"$TMP_DIR/.venv/bin/python" -c "import ida_pro_mcp.host.server, ida_pro_mcp.cli; print('wheel smoke-test ok')"
 rm -rf "$TMP_DIR"
 
 echo "[6/6] Publishing package"
