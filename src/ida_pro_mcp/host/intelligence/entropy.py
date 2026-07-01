@@ -122,7 +122,7 @@ class FunctionEntropyCalculator:
         ctx_vec: list[float] | None = None
         if context and context.strip():
             try:
-                ctx_vec = embedder.embed(context)
+                ctx_vec = embedder.embed_vector(context)
             except Exception:
                 ctx_vec = None
 

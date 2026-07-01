@@ -262,8 +262,10 @@ class MultiHopBridgeIndex:
         embedder = self._get_embedder()
         if embedder is not None and BgeCodeEmbedder is not None:
             try:
-                sv = embedder.embed(seed_text[:1200])
-                cv = embedder.embed(cand_text[:1200])
+                sv = embedder.embed_vector(seed_text[:1200])
+                cv = embedder.embed_vector(cand_text[:1200])
+                if sv is None or cv is None:
+                    raise RuntimeError("embedding unavailable")
                 sim = float(BgeCodeEmbedder.cosine(sv, cv))
                 return max(0.0, min(1.0, sim))
             except Exception:

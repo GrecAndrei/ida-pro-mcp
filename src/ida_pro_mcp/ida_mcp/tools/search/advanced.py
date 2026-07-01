@@ -291,16 +291,77 @@ def _spread_sample_functions(all_funcs: list[int], seen: set[int], remaining: in
     return out
 
 
+def _enumerate_taint_sources():
+    """Return a set of function-entry EAs that are taint sources.
+
+    A taint source is any function that receives external/user-controlled
+    input: network recv, file read, ioctl handlers, environment variables,
+    etc. We detect them by import name against a known set.
+    """
+    TAINT_SOURCE_NAMES = {
+        "recv", "recvfrom", "recvmsg", "read", "fread", "fgets", "gets",
+        "ioctl", "DeviceIoControl", "NtDeviceIoControlFile",
+        "GetEnvironmentVariable", "getenv", "NtQueryInformationFile",
+        "URLDownloadToFile", "URLDownloadToCacheFile", "WinHttpReceiveResponse",
+        "InternetReadFile", "WinHttpReadData", "sic_recv", "uart_read",
+        "spi_receive", "i2c_read", "DMA_Callback", "vfs_readt",
+    }
+    sources = set()
+    for ea, name in idautils.Names():
+        base = name.split("@")[0].split("$")[0]
+        if base in TAINT_SOURCE_NAMES:
+            func = idaapi.get_func(ea)
+            if func:
+                sources.add(func.start_ea)
+    return sources
+
+
+def _callers_bfs(root_ea, max_depth):
+    """Return the set of function-entry EAs reachable as callers of root_ea
+    within max_depth hops through the call graph."""
+    visited = {root_ea}
+    frontier = {root_ea}
+    for _ in range(max_depth):
+        if not frontier:
+            break
+        next_frontier = set()
+        for ea in frontier:
+            for ref in idautils.CodeRefsTo(ea, 0):
+                func = idaapi.get_func(ref)
+                if func and func.start_ea not in visited:
+                    visited.add(func.start_ea)
+                    next_frontier.add(func.start_ea)
+        frontier = next_frontier
+    return visited
+
+
 def search_vulnerable(pattern, include_context, offset, limit, include_items, include_breakdown, **kwargs):
-    """Search for potentially vulnerable API call patterns."""
-    rows = []
+    """Find dangerous API calls reachable from taint sources via the call graph.
+
+    For each call to a dangerous API (memcpy, strcpy, sprintf, etc.) we
+    walk the call graph backward up to `taint_depth` hops and check whether
+    any taint source (recv, read, ioctl, …) is reachable. Only those
+    reachable from untrusted input are reported — this eliminates the
+    overwhelming false positives from the old flat listing.
+    """
     max_xrefs = int(kwargs.get("max_xrefs", 100000))
+    taint_depth = max(2, min(int(kwargs.get("taint_depth", 5)), 12))
+
+    # Phase 1: enumerate all taint sources and expand their caller trees.
+    sources = _enumerate_taint_sources()
+    reachable_from_source = set()
+    for src in sources:
+        reachable_from_source.update(_callers_bfs(src, taint_depth))
+
+    # Phase 2: find dangerous API calls and filter by reachability.
+    rows = []
     xref_count = 0
     for seg_start, seg_end in iter_segments(None, None, require_exec=True):
         for func_ea in idautils.Functions(seg_start, seg_end):
             func = idaapi.get_func(func_ea)
             if not func:
                 continue
+            func_reachable = func_ea in reachable_from_source
             for head in idautils.Heads(func.start_ea, func.end_ea):
                 for xref in idautils.XrefsFrom(head):
                     if xref_count >= max_xrefs:
@@ -311,21 +372,24 @@ def search_vulnerable(pattern, include_context, offset, limit, include_items, in
                     callee = idc.get_name(xref.to)
                     if not callee:
                         continue
-                    if callee in DANGEROUS_APIS:
-                        fn_name = idc.get_func_name(func_ea)
-                        line = f"{hex(head)}  sev={DANGEROUS_APIS.get(callee, 'medium')}  {callee}  in:{fn_name}"
-                        if include_context:
-                            disasm_line = safe_generate_disasm_line(head)
-                            line += f"  {clip_text(ida_lines.tag_remove(disasm_line) if disasm_line else '')}"
-                        rows.append({
-                            "address": hex(head),
-                            "function": fn_name,
-                            "api": callee,
-                            "vuln_type": DANGEROUS_APIS.get(callee, "unknown"),
-                            "severity": DANGEROUS_APIS.get(callee, "medium"),
-                            "score": 0,
-                            "line": line,
-                        })
+                    if callee not in DANGEROUS_APIS:
+                        continue
+                    if not func_reachable:
+                        continue
+                    fn_name = idc.get_func_name(func_ea)
+                    line = f"{hex(head)}  {callee}  in:{fn_name}"
+                    if include_context:
+                        disasm_line = safe_generate_disasm_line(head)
+                        line += f"  {clip_text(ida_lines.tag_remove(disasm_line) if disasm_line else '')}"
+                    rows.append({
+                        "address": hex(head),
+                        "function": fn_name,
+                        "api": callee,
+                        "vuln_type": DANGEROUS_APIS.get(callee, "unknown"),
+                        "severity": "reachable",
+                        "score": 1,
+                        "line": line,
+                    })
                 if xref_count >= max_xrefs:
                     break
             if xref_count >= max_xrefs:
@@ -354,6 +418,7 @@ def search_vulnerable(pattern, include_context, offset, limit, include_items, in
         result["type_totals"] = by_type
     if pattern:
         result["query"] = pattern
+    result["taint_sources"] = len(sources)
     return result
 
 

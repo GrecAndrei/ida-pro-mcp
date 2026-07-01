@@ -93,7 +93,7 @@ class ServerWikiMixin:
         try:
             from ..intelligence.core import BgeCodeEmbedder
             embedder = BgeCodeEmbedder()
-            vec = embedder.embed(key)
+            vec = embedder.embed_vector(key)
         except Exception:
             return None
         if len(self._wiki_embed_cache) >= self._wiki_embed_cache_max:

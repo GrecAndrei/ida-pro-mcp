@@ -105,9 +105,10 @@ class TestCrossBinaryAnalogyEngine(unittest.TestCase):
         # 1. Setup mock BgeCodeEmbedder
         mock_embedder = MagicMock()
         mock_embedder.dim = 1536
-        mock_embedder.backend = "tfidf-fallback"
+        mock_embedder.backend = "unavailable"
         # Deterministic fixed-size vector
         mock_embedder.embed.return_value = [1.0] + [0.0] * 1535
+        mock_embedder.embed_vector.return_value = [1.0] + [0.0] * 1535
         mock_embedder_class.return_value = mock_embedder
         mock_embedder_class.cosine.side_effect = lambda a, b: sum(x * y for x, y in zip(a, b, strict=False))
 
@@ -162,8 +163,9 @@ class TestCrossBinaryAnalogyEngine(unittest.TestCase):
     def test_session_manager_integration(self, mock_embedder_class):
         mock_embedder = MagicMock()
         mock_embedder.dim = 1536
-        mock_embedder.backend = "tfidf-fallback"
+        mock_embedder.backend = "unavailable"
         mock_embedder.embed.return_value = [1.0] + [0.0] * 1535
+        mock_embedder.embed_vector.return_value = [1.0] + [0.0] * 1535
         mock_embedder_class.return_value = mock_embedder
         mock_embedder_class.cosine.side_effect = lambda a, b: sum(x * y for x, y in zip(a, b, strict=False))
 

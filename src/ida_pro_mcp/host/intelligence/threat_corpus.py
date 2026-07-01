@@ -13,10 +13,8 @@ on demand via the ``intelligence(action="load_threat_taxonomy", rebuild=True)``
 action or the ``download-bron-corpus`` installer subcommand.
 
 The corpus is consumed by:
-  - ``BehaviorClassifier.ANCHORS`` extension (Phase 2a)
-  - ``_TFIDFEmbedder._tokens`` synonym expansion (Phase 2b)
-  - ``taint`` module signature patterns (Phase 2c)
-  - ``intelligence(classify_threat)`` action (Phase 2d)
+  - ``taint`` module signature patterns
+  - ``intelligence(classify_threat)`` action
   - ``SecBertStaticEmbedder`` corpus selection (Phase 3)
 """
 

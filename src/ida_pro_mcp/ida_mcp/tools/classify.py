@@ -419,40 +419,14 @@ def classify(
                 total_funcs += 1
                 cat, _, _ = _classify_func(ea)
                 category_counts[cat] = category_counts.get(cat, 0) + 1
-            # Collect imports
             nimps = ida_nalt.get_import_module_qty()
             import_modules = []
             for i in range(nimps):
                 mod = ida_nalt.get_import_module_name(i)
                 if mod:
                     import_modules.append(mod)
-            # Heuristic binary type classification
-            binary_type = "unknown"
-            c = category_counts
-            if c.get("network", 0) > 5 and c.get("crypto", 0) > 2:
-                binary_type = "malware_or_security_tool"
-            elif c.get("network", 0) > 10:
-                binary_type = "server_or_network_app"
-            elif c.get("ui", 0) > 10:
-                binary_type = "gui_application"
-            elif c.get("file_io", 0) > 10 and c.get("string_ops", 0) > 5:
-                binary_type = "utility"
-            elif c.get("crypto", 0) > 5:
-                binary_type = "crypto_tool"
-            elif c.get("math", 0) > 5:
-                binary_type = "scientific_or_game"
-            elif c.get("registry", 0) > 5 or c.get("process", 0) > 5:
-                binary_type = "system_tool"
-            elif total_funcs > 0 and c.get("unknown", 0) == total_funcs:
-                binary_type = "library_or_driver"
-            # Check for driver indicators
-            for mod in import_modules:
-                if mod.lower() in ("ntoskrnl.exe", "hal.dll", "ndis.sys", "wdm"):
-                    binary_type = "driver"
-                    break
             return {
                 "ok": True,
-                "binary_type": binary_type,
                 "function_count": total_funcs,
                 "category_distribution": category_counts,
                 "import_modules": import_modules[:30],
@@ -592,32 +566,20 @@ def classify(
         # ACTION: initializers
         # ----------------------------------------------------------------
         elif action == "initializers":
-            init_patterns = [
-                "init", "setup", "start", "create", "register", "install",
-                "configure", "bootstrap", "prepare", "open", "begin",
-                "ctor", "constructor", "dllmain", "winmain", "main",
-                "_init", "__init", ".init",
-            ]
             initializers = []
+            init_segs = {".init", ".ctors", ".CRT$XCU", ".CRT$XIA", ".init_array"}
             for ea in idautils.Functions():
-                fname = idc.get_func_name(ea).lower()
+                fn = ida_funcs.get_func(ea)
+                if not fn:
+                    continue
                 matched = False
-                for pat in init_patterns:
-                    if pat in fname:
-                        matched = True
-                        break
-                if not matched:
-                    # Check if function is called from known init contexts
-                    # e.g., in .init_array / .ctors segments
-                    fn = ida_funcs.get_func(ea)
-                    if fn:
-                        for xref in idautils.XrefsTo(ea, 0):
-                            seg = ida_segment.getseg(xref.frm)
-                            if seg:
-                                seg_name = ida_segment.get_segm_name(seg).lower()
-                                if any(s in seg_name for s in (".init", ".ctors", ".CRT")):
-                                    matched = True
-                                    break
+                for xref in idautils.XrefsTo(ea, 0):
+                    seg = ida_segment.getseg(xref.frm)
+                    if seg:
+                        seg_name = ida_segment.get_segm_name(seg).lower()
+                        if any(s.lower() in seg_name for s in init_segs):
+                            matched = True
+                            break
                 if matched:
                     fname_orig = idc.get_func_name(ea)
                     initializers.append(f"{hex(ea)}  {fname_orig}")
@@ -632,19 +594,10 @@ def classify(
             error_apis = set()
             for api in _CATEGORY_APIS.get("error_handling", []):
                 error_apis.add(api.lower())
-            error_name_patterns = [
-                "error", "err_", "fail", "exception", "cleanup",
-                "handler", "abort", "panic", "fatal", "throw",
-                "catch", "finally", "unwind", "terminate",
-            ]
             results = []
             for ea in idautils.Functions():
-                fname = idc.get_func_name(ea).lower()
-                # Check name patterns
-                name_match = any(pat in fname for pat in error_name_patterns)
-                # Check if function calls error-related APIs
-                api_match = False
                 callees = _get_func_callees(ea)
+                matched = []
                 for callee in callees:
                     base = callee
                     for suffix in ("A", "W", "@plt", "@PLT"):
@@ -652,12 +605,10 @@ def classify(
                             base = base[:-len(suffix)]
                             break
                     if base.lower() in error_apis:
-                        api_match = True
-                        break
-                if name_match or api_match:
+                        matched.append(callee)
+                if matched:
                     fname_orig = idc.get_func_name(ea)
-                    reason = "name" if name_match else "api"
-                    results.append(f"{hex(ea)}  {fname_orig}  [{reason}]")
+                    results.append(f"{hex(ea)}  {fname_orig}  [{','.join(matched)}]")
                     if len(results) >= limit:
                         break
             return {"ok": True, "error_handlers": results, "count": len(results)}

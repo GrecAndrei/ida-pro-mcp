@@ -6,7 +6,7 @@ from ida_pro_mcp.services import FunctionEmbeddingIndex
 
 
 class _FakeEmbedder:
-    backend = "tfidf-fallback"
+    backend = "unavailable"
     dim = 1536
 
     def embed(self, text: str):
@@ -14,6 +14,9 @@ class _FakeEmbedder:
         v = [0.0] * self.dim
         v[0] = 1.0 if text else 0.0
         return v
+
+    def embed_vector(self, text: str):
+        return self.embed(text)
 
     def status(self, probe: bool = False):
         return {"model_path": "", "server_bin": ""}
@@ -24,7 +27,7 @@ def test_embedding_meta_created_and_readable(tmp_path):
     idx = FunctionEmbeddingIndex(str(db), _FakeEmbedder())
     meta = idx.metadata()
     assert meta["index_schema_version"] == 2
-    assert meta["embedding_backend"] == "tfidf-fallback"
+    assert meta["embedding_backend"] == "unavailable"
     assert meta["embedding_dim"] == 1536
     assert "source_idb_path" in meta
     assert "source_fingerprint" in meta
@@ -85,7 +88,7 @@ def test_capsule_state_contains_embedder_and_index_snapshot(tmp_path):
         recent_limit=1,
     )
 
-    assert state["backend"] == "tfidf-fallback"
+    assert state["backend"] == "unavailable"
     assert state["embedding_dim"] == 1536
     assert state["index_metadata"]["implementation"] == "FunctionEmbeddingIndex"
     assert state["index_metadata"]["function_count"] == 2

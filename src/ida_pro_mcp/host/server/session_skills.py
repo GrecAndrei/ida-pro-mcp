@@ -543,7 +543,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
                 try:
                     from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder
                     embedder = BgeCodeEmbedder()
-                    ctx_vec = embedder.embed((context or "")[:1200])
+                    ctx_vec = embedder.embed_vector((context or "")[:1200])
                 except Exception:
                     embedder = None
                     ctx_vec = None
@@ -554,8 +554,9 @@ class SessionSkillsMixin(SessionBootstrapMixin):
                 if ctx_has_text:
                     if embedder is not None and ctx_vec is not None and desc.strip():
                         try:
-                            dvec = embedder.embed(desc[:1200])
-                            context_relevance = float(BgeCodeEmbedder.cosine(ctx_vec, dvec))
+                            dvec = embedder.embed_vector(desc[:1200])
+                            if dvec is not None and ctx_vec is not None:
+                                context_relevance = float(BgeCodeEmbedder.cosine(ctx_vec, dvec))
                         except Exception:
                             context_relevance = 0.0
                     elif ctx_lower and any(word in desc for word in ctx_lower.split()):
@@ -592,8 +593,9 @@ class SessionSkillsMixin(SessionBootstrapMixin):
                     if ctx_has_text:
                         if embedder is not None and ctx_vec is not None and desc.strip():
                             try:
-                                dvec = embedder.embed(desc[:1200])
-                                context_relevance = float(BgeCodeEmbedder.cosine(ctx_vec, dvec))
+                                dvec = embedder.embed_vector(desc[:1200])
+                                if dvec is not None and ctx_vec is not None:
+                                    context_relevance = float(BgeCodeEmbedder.cosine(ctx_vec, dvec))
                             except Exception:
                                 context_relevance = 0.0
                         elif ctx_lower and any(word in desc for word in ctx_lower.split()):

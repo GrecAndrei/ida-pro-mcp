@@ -193,7 +193,10 @@ class BlackboardStore:
         if embedder is None:
             return None
         try:
-            return _pack_vec(embedder.embed(text))
+            vec = embedder.embed_vector(text)
+            if vec is None:
+                raise RuntimeError("embedding unavailable")
+            return _pack_vec(vec)
         except Exception:
             return None
 
@@ -385,7 +388,9 @@ class BlackboardStore:
             return results[:top_k]
 
         try:
-            q_vec = embedder.embed(query)
+            q_vec = embedder.embed_vector(query)
+            if q_vec is None:
+                raise RuntimeError("embedding unavailable")
         except Exception:
             return []
 
@@ -636,7 +641,9 @@ class BlackboardStore:
             try:
                 embedder = self._get_embedder()
                 if embedder is not None:
-                    query_vec = embedder.embed(query)
+                    query_vec = embedder.embed_vector(query)
+                    if query_vec is None:
+                        raise RuntimeError("embedding unavailable")
             except Exception:
                 pass
 

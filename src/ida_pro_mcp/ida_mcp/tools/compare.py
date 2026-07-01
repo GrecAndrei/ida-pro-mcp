@@ -422,8 +422,10 @@ def compare(
                 p1 = "\n".join(_decompile_lines(ea1))[:8000]
                 p2 = "\n".join(_decompile_lines(ea2))[:8000]
                 if p1 and p2:
-                    v1 = asm._embedder.embed(p1)
-                    v2 = asm._embedder.embed(p2)
+                    v1 = asm._embedder.embed_vector(p1)
+                    v2 = asm._embedder.embed_vector(p2)
+                    if v1 is None or v2 is None:
+                        raise RuntimeError("embedding unavailable")
                     sim = sum(float(a) * float(b) for a, b in zip(v1, v2, strict=False))
                     embedding_similarity = round(sim, 4)
                     try:

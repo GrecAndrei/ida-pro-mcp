@@ -353,7 +353,9 @@ class ServerPredictorMixin:
                         asm = get_assembler()
                         idx = asm._get_index(idb_path)
                         if getattr(idx, "size", 0) > 0:
-                            q_vec = asm._embedder.embed(context_text[:500])
+                            q_vec = asm._embedder.embed_vector(context_text[:500])
+                            if q_vec is None:
+                                raise RuntimeError("embedding unavailable")
                             hits = idx.search(q_vec, top_k=max(6, min(9, max(1, limit) * 3)), threshold=0.0)
                             if hits:
                                 vals = sorted(float(h.get("similarity") or 0.0) for h in hits)
@@ -444,7 +446,9 @@ class ServerPredictorMixin:
                         asm = get_assembler()
                         idx = asm._get_index(idb_path)
                         if getattr(idx, "size", 0) > 0:
-                            q_vec = asm._embedder.embed(context_text[:500])
+                            q_vec = asm._embedder.embed_vector(context_text[:500])
+                            if q_vec is None:
+                                raise RuntimeError("embedding unavailable")
                             hits = idx.search(q_vec, top_k=max(limit * 3, 6), threshold=0.0)
                             if hits:
                                 vals = sorted(float(h.get("similarity") or 0.0) for h in hits)

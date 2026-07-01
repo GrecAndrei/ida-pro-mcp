@@ -481,55 +481,15 @@ def search_bool(expr: str, case_sensitive: bool, offset: int, limit: int) -> dic
 # ============================================================================
 
 _HUNT_RECIPES: dict[str, dict] = {
-    "backdoor": {
-        "description": "Hardcoded backdoor / master-password patterns",
-        "expression": "(string:backdoor OR string:master OR string:god OR string:wizard OR string:admin123) OR (api:strcmp AND api:GetWindowText*)",
-        "rationale": "Backdoors typically use hardcoded comparison constants or a single auth bypass string.",
-    },
     "anti_debug": {
         "description": "Anti-debugging checks",
         "expression": "api:IsDebuggerPresent OR api:CheckRemoteDebuggerPresent OR api:NtQueryInformationProcess OR api:OutputDebugString*",
         "rationale": "Classic anti-debug API set.",
     },
-    "anti_vm": {
-        "description": "VM / sandbox detection",
-        "expression": "(api:RegOpenKey* AND string:VMWARE) OR (api:RegOpenKey* AND string:VBOX) OR api:SetupDiGetClassDevs OR string:\\\\.\\pipe\\",
-        "rationale": "VM detection via registry keys and device paths.",
-    },
-    "license_check": {
-        "description": "License / registration validation",
-        "expression": "(string:license OR string:serial OR string:register OR string:trial OR string:expired) AND NOT (api:RegCloseKey)",
-        "rationale": "License logic involves persistent state and validation strings, but pure registry code is excluded.",
-    },
-    "update_check": {
-        "description": "Auto-update logic",
-        "expression": "(string:update OR string:upgrade OR string:newversion) AND (api:InternetOpen* OR api:URLDownloadToFile* OR api:WinHttpOpen*)",
-        "rationale": "Update routines hit the network with download APIs and look for version keywords.",
-    },
-    "c2": {
-        "description": "C2 / command-and-control beacon",
-        "expression": "(string:beacon OR string:command OR string:task) AND (api:InternetOpen* OR api:WSAStartup OR api:WinHttp* OR api:send)",
-        "rationale": "C2 routines combine a network transport with command dispatch keywords.",
-    },
-    "parser": {
-        "description": "Input parsers (JSON / XML / config / URL)",
-        "expression": "(string:{\" OR string:<?xml OR string:%s=%s OR string:http:// OR string:https://) AND (api:strchr OR api:strtok OR api:sscanf OR api:strncmp)",
-        "rationale": "Parsers leave format strings behind and use string-decomposition helpers.",
-    },
     "crypto": {
         "description": "Cryptographic routines",
         "expression": "api:Crypt* OR api:BCrypt* OR api:NCrypt* OR api:EVP_* OR api:AES_* OR api:SHA* OR mnem:aesenc OR mnem:aesenclast OR mnem:sha256rnds",
         "rationale": "Crypto routines call crypto APIs or use crypto-specific SIMD instructions.",
-    },
-    "string_decode": {
-        "description": "Runtime string-decoding routines (XOR / base64 / custom)",
-        "expression": "(mnem:xor AND string:.*) AND (api:VirtualAlloc* OR api:HeapAlloc* OR api:malloc)",
-        "rationale": "Decoded strings are typically XOR'd and copied into freshly-allocated memory.",
-    },
-    "hardcoded_creds": {
-        "description": "Hardcoded credentials / API keys / tokens",
-        "expression": "string:[A-Za-z0-9]{32} OR string:AKIA[0-9A-Z]{16} OR string:ghp_[A-Za-z0-9]{36} OR string:eyJ[A-Za-z0-9_\\-]{20,}",
-        "rationale": "Common credential formats: random 32-byte keys, AWS access keys, GitHub PATs, JWTs.",
     },
     "network_io": {
         "description": "Network I/O functions",
@@ -545,11 +505,6 @@ _HUNT_RECIPES: dict[str, dict] = {
         "description": "Process injection / hollowing primitives",
         "expression": "(api:CreateProcess* AND api:WriteProcessMemory) OR api:NtUnmapViewOfSection OR api:VirtualAllocEx OR api:SetThreadContext",
         "rationale": "Process injection requires remote allocation + write + thread context hijack.",
-    },
-    "registry_persistence": {
-        "description": "Registry-based persistence (Run keys, services)",
-        "expression": "(api:RegSetValueEx* OR api:RegCreateKey*) AND (string:CurrentVersion\\Run OR string:RunOnce OR string:Winlogon)",
-        "rationale": "Persistence typically writes Run keys or hijacks Winlogon.",
     },
 }
 

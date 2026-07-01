@@ -10,11 +10,14 @@ BlackboardStore = _bb.BlackboardStore
 
 class _FakeEmbedder:
     dim = 4
-    backend = "tfidf-fallback"
+    backend = "unavailable"
 
     def embed(self, text: str):
         n = float(max(1, len(text.strip())))
         return [1.0 / n, 2.0 / n, 3.0 / n, 4.0 / n]
+
+    def embed_vector(self, text: str):
+        return self.embed(text)
 
 
 def test_blackboard_capsule_sync_on_write(monkeypatch, tmp_path):

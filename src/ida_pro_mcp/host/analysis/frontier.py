@@ -336,7 +336,9 @@ class FrontierEngine:
             embedder = BgeCodeEmbedder()
             classifier = BehaviorClassifier.instance(embedder)
             if query and query.strip():
-                query_vec = embedder.embed(query)
+                query_vec = embedder.embed_vector(query)
+                if query_vec is None:
+                    raise RuntimeError("embedding unavailable")
         except Exception:
             pass
 

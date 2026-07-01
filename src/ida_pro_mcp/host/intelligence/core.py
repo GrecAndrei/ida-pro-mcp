@@ -539,214 +539,25 @@ def _extract_signature(pseudocode: str, max_idents: int = 40) -> str:
 # TF-IDF fallback (works with zero dependencies when llama-server is absent)
 # ─────────────────────────────────────────────────────────────────────────────
 
-class _TFIDFEmbedder:
+class _EmbedResult:
+    """Result of an embedding call.
+
+    Production invariant: ``vector`` is *always* from the declared
+    ``backend``.  When ``ok`` is False, ``vector`` is None and callers
+    MUST surface the failure rather than proceed as if nothing happened.
+    The old TF-IDF fallback violated this by returning garbage vectors
+    whenever the model was unavailable.
     """
-    Deterministic TF-IDF bag-of-words embedding.
-    Dimensionality is fixed at EMBED_DIM via hash bucketing.
-    Not as good as bge-code-v1 but orders of magnitude better than
-    random Hadamard projections.
-    """
-    _TOKENIZE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|\b0x[0-9a-fA-F]+\b|\b\d+\b")
 
-    # Common RE-domain synonym pairs to expand short natural-language queries
-    # into the same bucket as decompiler identifiers in fallback mode.
-    BASE_SYNONYMS: dict[str, tuple[str, ...]] = {
-        "aes": ("crypto", "cipher", "encrypt", "decrypt"),
-        "cipher": ("crypto", "encrypt", "decrypt"),
-        "http": ("network", "socket", "headers", "request", "response"),
-        "recv": ("receive", "socket", "network"),
-        "send": ("socket", "network"),
-        "socket": ("network", "connect", "recv", "send"),
-        "debugger": ("antidebug", "debug"),
-        "sandbox": ("vm", "evasion"),
-        "overflow": ("bounds", "memcpy", "strcpy"),
-        "uaf": ("use", "after", "free"),
-    }
+    __slots__ = ("vector", "backend", "ok")
 
-    def __init__(self, dim: int = EMBED_DIM):
-        self._dim = dim
-        self._idf: dict[str, float] = {}
-        self._doc_count = 0
-        self._extras: dict[str, tuple[str, ...]] = {}
+    def __init__(self, vector: list[float] | None, backend: str, ok: bool):
+        self.vector = vector
+        self.backend = backend
+        self.ok = ok
 
-    @property
-    def effective_synonyms(self) -> dict[str, tuple[str, ...]]:
-        """BASE_SYNONYMS layered with any extras added via extend_synonyms."""
-        merged: dict[str, tuple[str, ...]] = {}
-        for k, v in self.BASE_SYNONYMS.items():
-            merged[k] = v
-        for k, v in self._extras.items():
-            existing = merged.get(k)
-            if existing:
-                merged[k] = tuple(dict.fromkeys((*existing, *v)))
-            else:
-                merged[k] = tuple(v)
-        return merged
-
-    def extend_synonyms(
-        self,
-        mapping: dict[str, tuple[str, ...]] | dict[str, Iterable[str]],
-        reset: bool = False,
-        max_keys: int = 256,
-        max_vals_per_key: int = 8,
-    ) -> dict[str, int]:
-        """Add runtime synonym overrides.
-
-        Returns a small report with added_keys / added_vals counts.
-        Trivially keyed values (empty key) and trivially short values
-        (< 2 chars) are filtered. Caps enforced: max_keys and
-        max_vals_per_key.
-        """
-        if reset:
-            self._extras = {}
-        added_keys = 0
-        added_vals = 0
-        for raw_key, raw_vals in list(mapping.items()):
-            key = str(raw_key).strip()
-            if not key:
-                continue
-            if len(self._extras) >= max_keys and key not in self._extras:
-                continue
-            cleaned: list[str] = []
-            for v in raw_vals:
-                s = str(v).strip()
-                if len(s) < 2:
-                    continue
-                if s in cleaned:
-                    continue
-                cleaned.append(s)
-                if len(cleaned) >= max_vals_per_key:
-                    break
-            if not cleaned:
-                continue
-            new_pair = tuple(cleaned)
-            if key not in self._extras or self._extras[key] != new_pair:
-                added_keys += 1
-            added_vals += len(cleaned)
-            self._extras[key] = new_pair
-        return {"added_keys": added_keys, "added_vals": added_vals}
-
-    def _tokens(self, text: str) -> list[str]:
-        out: list[str] = []
-        for raw in self._TOKENIZE.findall(str(text or "")):
-            for term in _identifier_terms(raw):
-                low = term.lower()
-                if low and low not in NOISE_WORDS and not (low.isdigit() and len(low) < 3):
-                    out.append(low)
-        # Expand common RE-domain synonyms via the unified map (base + extras).
-        synonyms = self.effective_synonyms
-        expanded = list(out)
-        for tok in out:
-            expanded.extend(synonyms.get(tok, ()))
-        return expanded
-
-    def fit_many(self, texts: list[str]) -> None:
-        df: Counter = Counter()
-        for t in texts:
-            df.update(set(self._tokens(t)))
-        n = max(1, len(texts))
-        self._idf = {tok: math.log((n + 1) / (cnt + 1)) + 1
-                     for tok, cnt in df.items()}
-        self._doc_count = n
-
-    def embed(self, text: str) -> list[float]:
-        toks = self._tokens(text)
-        if not toks:
-            return [0.0] * self._dim
-        tf: Counter = Counter(toks)
-        vec = [0.0] * self._dim
-        for tok, count in tf.items():
-            idf = self._idf.get(tok, 1.0)
-            weight = (1 + math.log(count)) * idf
-            # Hash bucketing into fixed dim
-            h = int(hashlib.md5(tok.encode()).hexdigest(), 16)
-            idx = h % self._dim
-            sign = 1 if (h >> 127) & 1 else -1
-            vec[idx] += sign * weight
-        # L2 normalize
-        norm = math.sqrt(sum(x * x for x in vec)) or 1.0
-        return [x / norm for x in vec]
-
-
-def derive_synonyms_from_corpus(
-    corpus: Any | None,
-    max_per_source: int = 32,
-) -> dict[str, tuple[str, ...]]:
-    """Derive runtime synonym tokens from a ThreatCorpus (or any object
-    with the same attribute shape). Used by the TF-IDF fallback to
-    bootstrap domain vocabulary when no training data is available.
-
-    Pulls per-source titles/names/aliases and the CWE description,
-    then maps those tokens into the same canonical buckets the
-    ``_TFIDFEmbedder.effective_synonyms`` layer is keyed on.
-
-    Returns a fresh dict every call; callers should hand it to
-    ``_TFIDFEmbedder.extend_synonyms(..., reset=True)``.
-    """
-    if corpus is None:
-        return {}
-
-    derived: dict[str, list[str]] = {}
-
-    def _absorb(tok: str, values: Iterable[str]) -> None:
-        if not tok or not values:
-            return
-        bucket = derived.setdefault(tok, [])
-        for v in values:
-            v = str(v).strip().lower()
-            if len(v) < 2 or v == tok:
-                continue
-            if v in bucket:
-                continue
-            bucket.append(v)
-            if len(bucket) >= max_per_source:
-                break
-
-    # CWE entries (id + name + description → primary tokens).
-    try:
-        for entry in getattr(corpus, "cwe", []) or []:
-            cid = str(entry.get("id", "")).strip().lower()
-            name = str(entry.get("name", "")).strip().lower()
-            description_words = re.findall(r"[a-z][a-z0-9_-]+", str(entry.get("description", "")).lower())
-            if cid and name:
-                _absorb(name, description_words)
-    except Exception:
-        pass
-
-    # Malware entries: cross-link aliases and name → description tokens.
-    try:
-        for entry in getattr(corpus, "malware", []) or []:
-            mal_name = str(entry.get("name", "")).strip().lower()
-            if not mal_name:
-                continue
-            aliases = [
-                str(a).strip().lower()
-                for a in entry.get("aliases", []) or []
-                if str(a).strip()
-            ]
-            # Cross-link every pair of name+aliases.
-            if aliases:
-                cross = [mal_name, *aliases]
-                _absorb(mal_name, aliases)
-                for alias in aliases:
-                    _absorb(alias, [mal_name])
-                _absorb("malware", cross)
-    except Exception:
-        pass
-
-    # Attack patterns / intrusion sets / tools: name + description tokens.
-    for attr in ("attack_patterns", "intrusion_sets", "tools", "mitigations"):
-        try:
-            for entry in getattr(corpus, attr, []) or []:
-                name = str(entry.get("name", "")).strip().lower()
-                if not name:
-                    continue
-                desc = re.findall(r"[a-z][a-z0-9_-]+", str(entry.get("description", "")).lower())
-                _absorb(name, desc)
-        except Exception:
-            pass
-
-    return {k: tuple(v) for k, v in derived.items()}
+    def __repr__(self) -> str:
+        return f"_EmbedResult(backend={self.backend!r}, ok={self.ok})"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -757,7 +568,11 @@ class BgeCodeEmbedder:
     """
     Manages a llama-server subprocess running bge-code-v1.
     Lazy start on first embed() call.  Thread-safe singleton per process.
-    Falls back to TF-IDF if binary or model not found.
+
+    No silent fallback: if the model binary or server is unavailable,
+    ``embed()`` returns an ``_EmbedResult`` with ``ok=False`` so that
+    callers can surface the degraded state to the user rather than
+    proceeding with garbage vectors.
     """
 
     _instance: BgeCodeEmbedder | None = None
@@ -778,20 +593,8 @@ class BgeCodeEmbedder:
         self._proc: subprocess.Popen | None = None
         self._ready        = False
         self._start_lock   = threading.Lock()
-        self._fallback     = _TFIDFEmbedder()
         self._use_llama    = (bool(self._server_bin) and bool(self._model_path)
                               and not EMBED_DISABLED)
-        # Bootstrap domain synonyms from the threat corpus when available.
-        # Skipped on first-call latency budget; failures are tolerated.
-        try:
-            from .threat_corpus import load_corpus  # type: ignore[import-not-found]
-            _corpus = load_corpus()
-            if _corpus is not None:
-                derived = derive_synonyms_from_corpus(_corpus, max_per_source=32)
-                if derived:
-                    self._fallback.extend_synonyms(derived, reset=True)
-        except Exception:
-            pass  # noqa: S110 — optional dependency; no impact on runtime
         # Cached anchor embeddings for BehaviorClassifier
         self._anchor_cache: dict[str, list[float]] = {}
         self._batch_size = int(os.environ.get("IDA_MCP_EMBED_BATCH", "16"))
@@ -1017,42 +820,58 @@ class BgeCodeEmbedder:
                 self.stop()
             return None
 
-    def embed(self, text: str) -> list[float]:
-        """Return L2-normalized 1536-dim embedding for text."""
+    def embed(self, text: str) -> _EmbedResult:
+        """Return an :class:`_EmbedResult` for *text*.
+
+        When the real model is unavailable, ``result.ok`` is False and
+        ``result.vector`` is None — callers MUST check this.  There is
+        no silent fallback to a weaker backend.
+        """
         if self._use_llama:
             vec = self._llama_embed(text)
             if vec is not None:
-                return vec
-        # Fallback
-        return self._fallback.embed(text)
+                return _EmbedResult(vec, "bge-code-v1", True)
+        return _EmbedResult(None, "unavailable", False)
 
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+    def embed_vector(self, text: str) -> list[float] | None:
+        """Convenience wrapper returning the embedding vector or None.
+
+        Use this when you only need the vector and want None to mean
+        "embedding unavailable" without inspecting the full result object.
+        """
+        result = self.embed(text)
+        return result.vector if result.ok else None
+
+    def embed_batch(self, texts: list[str]) -> list[_EmbedResult]:
+        """Batch version of :meth:`embed`.  Each text gets its own result
+        object so callers can identify exactly which items failed."""
         if not texts:
             return []
-        if self._use_llama:
-            out: list[list[float]] = []
-            i = 0
-            while i < len(texts):
+        if not self._use_llama:
+            return [_EmbedResult(None, "unavailable", False) for _ in texts]
+        out: list[_EmbedResult] = []
+        i = 0
+        while i < len(texts):
+            with self._batch_lock:
+                bs = self._batch_size
+            chunk = texts[i : i + bs]
+            vecs = self._llama_embed_batch(chunk)
+            if vecs is None:
                 with self._batch_lock:
-                    bs = self._batch_size
-                chunk = texts[i : i + bs]
-                vecs = self._llama_embed_batch(chunk)
-                if vecs is None:
-                    with self._batch_lock:
-                        self._batch_size = max(1, self._batch_size // 2)
-                    # fallback chunk-by-chunk to preserve forward progress
-                    for t in chunk:
-                        out.append(self.embed(t))
-                    i += len(chunk)
-                    continue
-                out.extend(vecs)
-                # gentle increase when stable
-                with self._batch_lock:
-                    if self._batch_size < 64 and len(chunk) == self._batch_size:
-                        self._batch_size += 1
+                    self._batch_size = max(1, self._batch_size // 2)
+                # Real failure — mark the whole chunk so callers see it.
+                for _ in chunk:
+                    out.append(_EmbedResult(None, "unavailable", False))
                 i += len(chunk)
-            return out
-        return [self._fallback.embed(t) for t in texts]
+                continue
+            for v in vecs:
+                out.append(_EmbedResult(v, "bge-code-v1", True))
+            # gentle increase when stable
+            with self._batch_lock:
+                if self._batch_size < 64 and len(chunk) == self._batch_size:
+                    self._batch_size += 1
+            i += len(chunk)
+        return out
 
     @property
     def dim(self) -> int:
@@ -1060,7 +879,7 @@ class BgeCodeEmbedder:
 
     @property
     def backend(self) -> str:
-        return "bge-code-v1" if self._use_llama else "tfidf-fallback"
+        return "bge-code-v1" if self._use_llama else "unavailable"
 
     @staticmethod
     def cosine(a: list[float], b: list[float]) -> float:
@@ -1116,32 +935,6 @@ class BehaviorClassifier:
         "integer_overflow": 0.35,
         "path_traversal": 0.35,
     }
-    _ANCHOR_TOKEN_BONUS_WEIGHT = 0.18
-    _ANCHOR_TOKEN_ALIASES: dict[str, tuple[str, ...]] = {
-        "crypto_symmetric": ("aes", "cipher", "encrypt", "decrypt", "round", "sbox", "sub_bytes", "mix_columns", "round_key", "key_schedule"),
-        "crypto_hash": ("hash", "digest", "sha", "md5", "hmac", "compress", "finalize"),
-        "network_http": ("http", "header", "headers", "request", "response", "user_agent", "chunked", "post", "get", "recv", "send"),
-        "network_raw": ("socket", "connect", "recv", "send", "tcp", "udp", "inet", "htons"),
-        "process_injection": ("openprocess", "virtualallocex", "writeprocessmemory", "createremotethread", "remote", "process"),
-        "file_operations": ("createfile", "readfile", "writefile", "fopen", "read", "write", "deletefile", "movefile"),
-        "anti_debug": ("isdebuggerpresent", "debugger", "rdtsc", "processdebugport", "checkremotedebuggerpresent"),
-        "anti_vm": ("cpuid", "hypervisor", "vmware", "vbox", "virtualbox", "sandbox"),
-        "persistence": ("regcreatekey", "run", "service", "autorun", "startup", "createservice"),
-        "evasion": ("sleep", "sandbox", "virtualprotect", "decrypt", "payload", "xor", "delay"),
-        "string_decrypt": ("xor", "rolling_key", "decrypt", "printable", "string", "rotl", "decode"),
-        "c2_communication": ("beacon", "c2", "command", "download", "http_post", "base64", "host_id"),
-        "privilege_escalation": ("sedebugprivilege", "adjusttokenprivileges", "token", "elevated", "system"),
-        "memory_manipulation": ("virtualalloc", "virtualprotect", "mmap", "memcpy", "execute", "page_execute"),
-        "rop_gadget": ("ret", "gadget", "pop", "pivot", "chain", "syscall", "rop"),
-        "heap_spray": ("malloc", "spray", "chunk", "nop", "shellcode", "trigger"),
-        "use_after_free": ("free", "dangling", "vtable", "uaf", "temporal", "after_free"),
-        "buffer_overflow": ("overflow", "memcpy", "strcpy", "strcat", "bounds", "stack", "fixed", "corruption"),
-        "format_string_vuln": ("printf", "syslog", "snprintf", "format", "variadic", "%s", "%n"),
-        "race_condition": ("pthread", "thread", "lock", "shared", "race", "check_then_use", "rename"),
-        "integer_overflow": ("overflow", "wrap", "truncation", "malloc", "count", "size", "multiply"),
-        "path_traversal": ("..", "canonical", "path", "extract", "archive", "base_dir", "traversal"),
-    }
-
     # Module-level singleton so anchors are loaded exactly once per process.
     _shared: BehaviorClassifier | None = None
     _shared_lock = threading.Lock()
@@ -1201,7 +994,18 @@ class BehaviorClassifier:
             generation = current_generation
         # Compute outside the lock so other calls aren't blocked
         try:
-            vec = self._embedder.embed(self.ANCHORS[behavior])
+            result = self._embedder.embed(self.ANCHORS[behavior])
+            # Production always returns _EmbedResult; some tests mock the
+            # embedder to return a raw list. Treat anything without .ok
+            # as a failure so the preload thread doesn't crash.
+            if hasattr(result, "ok"):
+                if not result.ok or result.vector is None:
+                    return None
+                vec = result.vector
+            elif isinstance(result, list):
+                vec = result
+            else:
+                return None
         except Exception:
             return None
         with self._anchor_lock:
@@ -1215,7 +1019,10 @@ class BehaviorClassifier:
         def _load():
             with self._anchor_lock:
                 generation = self._anchor_generation
-            for b in self.ANCHORS:
+            # Snapshot the keys so a concurrent clear_cache can't mutate
+            # the dict mid-iteration (RuntimeError: dict changed size).
+            behaviors = list(self.ANCHORS)
+            for b in behaviors:
                 with self._anchor_lock:
                     if b in self._anchor_embs:
                         continue
@@ -1295,19 +1102,6 @@ class BehaviorClassifier:
             out.add(literal.lower())
         return out
 
-    def _token_bonus(self, behavior: str, query_text: str) -> tuple[float, list[str]]:
-        aliases = set(self._ANCHOR_TOKEN_ALIASES.get(behavior, ()))
-        if not aliases:
-            return 0.0, []
-        q_tokens = self._text_tokens(query_text)
-        anchor_tokens = self._text_tokens(self.ANCHORS.get(behavior, ""))
-        targets = aliases.union(anchor_tokens)
-        hits = sorted(q_tokens.intersection(targets))
-        if not hits:
-            return 0.0, []
-        denom = max(4, min(12, len(aliases) or len(targets)))
-        return min(1.0, len(hits) / denom), hits[:12]
-
     def classify(
         self,
         text: str,
@@ -1319,49 +1113,24 @@ class BehaviorClassifier:
         """
         Zero-shot behavior classification of decompiled pseudocode.
         Embeds text and delegates to classify_vec.
+
+        Each result carries a ``backend`` field so callers can tell whether
+        the score came from bge-code-v1 or from a failed embedding.  No
+        keyword-bonus is applied on top of the embedding score — the cosine
+        similarity is the confidence.
         """
         if not text or not text.strip():
             return []
-        # Collapse verbose pseudocode into a compact signature so anchors and
-        # queries live in the same code-signature space.
         query = _extract_signature(text[:max_tokens]) or text[:max_tokens]
-        q = self._embedder.embed(query)
-        rows = self.classify_vec(q, threshold=threshold, top_k=top_k, block=block)
+        result = self._embedder.embed(query)
+        if not result.ok or result.vector is None:
+            return []
+        rows = self.classify_vec(result.vector, threshold=threshold, top_k=top_k, block=block)
         if not rows and not block:
-            # First-call correctness matters more than returning an empty set
-            # while the async anchor preload is still warming up.
-            rows = self.classify_vec(q, threshold=threshold, top_k=top_k, block=True)
-        existing = {str(row.get("behavior") or "") for row in rows}
-        for behavior in self.ANCHORS:
-            if behavior in existing:
-                continue
-            token_bonus, matched_tokens = self._token_bonus(behavior, query)
-            if token_bonus < 0.25:
-                continue
-            anchor = self._get_anchor(behavior)
-            sim = BgeCodeEmbedder.cosine(q, anchor) if anchor is not None else 0.0
-            adjusted = min(1.0, max(sim, token_bonus * self._ANCHOR_TOKEN_BONUS_WEIGHT))
-            min_thr = float(threshold or 0.0) if threshold is not None else 0.0
-            if min_thr >= 0.20:
-                min_thr = max(min_thr, float(self.ANCHOR_MIN_CONFIDENCE.get(behavior, 0.30)))
-            if adjusted >= min_thr:
-                rows.append(
-                    {
-                        "behavior": behavior,
-                        "confidence": round(adjusted, 4),
-                        "embedding_confidence": round(sim, 4),
-                        "matched_tokens": matched_tokens,
-                    }
-                )
+            rows = self.classify_vec(result.vector, threshold=threshold, top_k=top_k, block=True)
         for row in rows:
+            row["backend"] = result.backend
             b = str(row.get("behavior") or "")
-            token_bonus, matched_tokens = self._token_bonus(b, query)
-            if token_bonus > 0:
-                original = float(row.get("confidence") or 0.0)
-                adjusted = min(1.0, max(original, token_bonus * self._ANCHOR_TOKEN_BONUS_WEIGHT) + (0.5 * self._ANCHOR_TOKEN_BONUS_WEIGHT * token_bonus))
-                row["confidence"] = round(adjusted, 4)
-                row["embedding_confidence"] = round(original, 4)
-                row["matched_tokens"] = matched_tokens
             row["explain"] = self._anchor_explain(self.ANCHORS.get(b, ""), query)
         rows.sort(key=lambda x: x.get("confidence", 0.0), reverse=True)
         return rows
@@ -1382,8 +1151,9 @@ class BehaviorClassifier:
                 if not cfunc:
                     continue
                 sig = _extract_signature(str(cfunc)[:3000]) or str(cfunc)[:1200]
-                vec = self._embedder.embed(sig)
-                cache.append((ea, vec))
+                result = self._embedder.embed(sig)
+                if result.ok and result.vector is not None:
+                    cache.append((ea, result.vector))
             except Exception:
                 continue
         for label in self.ANCHORS:

@@ -256,7 +256,7 @@ class ServerThreatHuntMixin:
             try:
                 from ..intelligence.core import BgeCodeEmbedder
                 embedder = BgeCodeEmbedder()
-                query_vec = embedder.embed(text)
+                query_vec = embedder.embed_vector(text)
                 anchors = [
                     "malware command and control beaconing persistence injection",
                     "memory corruption vulnerability overflow format string unsafe copy",
@@ -266,7 +266,9 @@ class ServerThreatHuntMixin:
                 ]
                 sims = []
                 for a in anchors:
-                    av = embedder.embed(a)
+                    av = embedder.embed_vector(a)
+                    if av is None or query_vec is None:
+                        raise RuntimeError("embedding unavailable")
                     sims.append(BgeCodeEmbedder.cosine(query_vec, av))
                 emb_score = max(sims) if sims else 0.0
                 corroboration = min(0.2, 0.05 * max(0, freq - 1))

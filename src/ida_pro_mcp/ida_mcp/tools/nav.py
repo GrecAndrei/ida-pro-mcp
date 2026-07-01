@@ -165,7 +165,9 @@ def nav(
                         idx = FunctionEmbeddingIndex(idb_path + ".embeddings.db", emb)
                         if idx.size > 0:
                             semantic_backend = "embedding+keywords"
-                            qv = emb.embed(query)
+                            qv = emb.embed_vector(query)
+                            if qv is None:
+                                raise RuntimeError("embedding unavailable")
                             sem = idx.similar_vec(qv, top_k=5, threshold=0.0)
                             by_addr = {int(c["addr"]): c for c in candidates if isinstance(c.get("addr"), int)}
                             for row in sem:

@@ -39,12 +39,14 @@ class TestBgeCodeEmbedderFailOpen(unittest.TestCase):
             side_effect=urllib.error.URLError("forced timeout"),
         ):
             out1 = emb.embed("first request")
-            self.assertEqual(len(out1), emb.dim)
+            self.assertFalse(out1.ok)
+            self.assertIsNone(out1.vector)
             self.assertTrue(emb._use_llama)
             self.assertEqual(emb._consecutive_rpc_failures, 1)
 
             out2 = emb.embed("second request")
-            self.assertEqual(len(out2), emb.dim)
+            self.assertFalse(out2.ok)
+            self.assertIsNone(out2.vector)
             self.assertFalse(emb._use_llama)
             self.assertEqual(emb._consecutive_rpc_failures, 2)
 
@@ -64,7 +66,8 @@ class TestBgeCodeEmbedderFailOpen(unittest.TestCase):
             "ida_pro_mcp.host.intelligence.core.urllib.request.urlopen",
             return_value=good_response,
         ):
-            emb.embed("healthy request")
+            result = emb.embed("healthy request")
+        self.assertTrue(result.ok)
         self.assertEqual(emb._consecutive_rpc_failures, 0)
         self.assertTrue(emb._use_llama)
 
@@ -87,6 +90,9 @@ class TestBgeCodeEmbedderFailOpen(unittest.TestCase):
         self.assertFalse(emb._use_llama)
         self.assertEqual(emb._consecutive_rpc_failures, 2)
         self.assertEqual(emb._batch_size, 1)
+        for r in out:
+            self.assertFalse(r.ok)
+            self.assertIsNone(r.vector)
 
     def test_embed_batch_resets_failure_counter_on_successful_rpc(self):
         emb = BgeCodeEmbedder()
@@ -110,6 +116,8 @@ class TestBgeCodeEmbedderFailOpen(unittest.TestCase):
         self.assertEqual(len(out), 2)
         self.assertEqual(emb._consecutive_rpc_failures, 0)
         self.assertTrue(emb._use_llama)
+        for r in out:
+            self.assertTrue(r.ok)
 
 
 if __name__ == "__main__":

@@ -547,7 +547,9 @@ class FunctionEmbeddingIndex:
         except Exception:
             pass
 
-        vec = self._embedder.embed(pseudocode)
+        vec = self._embedder.embed_vector(pseudocode)
+        if vec is None:
+            return None
         blob = self._pack(vec)
         with self._cache_lock:
             self._cache[func_ea] = vec
@@ -660,7 +662,9 @@ class FunctionEmbeddingIndex:
             if not self._cache:
                 return []
             cache_items = list(self._cache.items())
-        q = self._embedder.embed(pseudocode)
+        q = self._embedder.embed_vector(pseudocode)
+        if q is None:
+            return []
         scored: list[tuple[float, str]] = []
         for ea, vec in cache_items:
             if ea == exclude_ea:
@@ -774,7 +778,9 @@ class FunctionEmbeddingIndex:
         )
         try:
             query_text = _extract_signature_text(query, max_tokens=64) or str(query)
-            query_vec = self._embedder.embed(query_text)
+            query_vec = self._embedder.embed_vector(query_text)
+            if query_vec is None:
+                raise RuntimeError("embedding unavailable")
             semantic_hits = self.similar_vec(
                 query_vec,
                 top_k=max(max(1, int(top_k)) * 6, 48),

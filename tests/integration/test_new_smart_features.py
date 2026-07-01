@@ -415,6 +415,8 @@ def test_score_gadgets_behavior_with_fake_embedder():
         backend = "test"
         def embed(self, text):
             return [1.0, 0.0]
+        def embed_vector(self, text):
+            return self.embed(text)
         @staticmethod
         def cosine(a, b):
             return sum(x*y for x,y in zip(a,b, strict=False))
@@ -430,11 +432,13 @@ def test_score_gadgets_behavior_with_fake_embedder():
         def classify_vec(self, vec, **kw): return [{"behavior": "rop_chain", "confidence": 0.8}]
         def clear_cache(self): pass
 
-    fake_intel = types.ModuleType("ida_pro_mcp.host.intelligence")
-    fake_intel.BgeCodeEmbedder = _FakeEmb
-    fake_intel.BehaviorClassifier = _FakeClassifier
+    # _score_gadgets_behavior imports from ida_pro_mcp.services, so patch
+    # that module (not host.intelligence) to inject the fakes.
+    fake_services = types.ModuleType("ida_pro_mcp.services")
+    fake_services.BehaviorClassifier = _FakeClassifier
+    fake_services.BgeCodeEmbedder = _FakeEmb
 
-    with mock.patch.dict("sys.modules", {"ida_pro_mcp.host.intelligence": fake_intel}):
+    with mock.patch.dict("sys.modules", {"ida_pro_mcp.services": fake_services}):
         result = _score_gadgets_behavior(
             [{"gadget": "pop rdi; ret"}, {"gadget": "pop rsi; ret"}], "rop"
         )

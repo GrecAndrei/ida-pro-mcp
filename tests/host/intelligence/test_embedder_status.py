@@ -22,15 +22,17 @@ def _restore_singleton(old):
     BgeCodeEmbedder._instance = old
 
 
-def test_embedder_falls_back_without_model_or_server(monkeypatch):
+def test_embedder_unavailable_without_model_or_server(monkeypatch):
     old = _reset_singleton()
     monkeypatch.setattr("ida_pro_mcp.host.intelligence.core._find_llama_server", lambda: "")
     monkeypatch.setattr("ida_pro_mcp.host.intelligence.core._find_model", lambda: "")
     try:
         emb = BgeCodeEmbedder()
-        assert emb.backend == "tfidf-fallback"
+        assert emb.backend == "unavailable"
         out = emb.embed("unsafe memcpy sample -> buffer_overflow top hit")
-        assert len(out) == emb.dim
+        assert out.ok is False
+        assert out.vector is None
+        assert out.backend == "unavailable"
     finally:
         _restore_singleton(old)
 
@@ -42,7 +44,7 @@ def test_embedder_respects_env_disable(monkeypatch):
     monkeypatch.setattr("ida_pro_mcp.host.intelligence.core._find_model", lambda: "/tmp/model.gguf")
     try:
         emb = BgeCodeEmbedder()
-        assert emb.backend == "tfidf-fallback"
+        assert emb.backend == "unavailable"
         assert emb.status()["disabled_by_env"] is True
     finally:
         _restore_singleton(old)
@@ -56,8 +58,9 @@ def test_embedder_repeated_text_is_deterministic(monkeypatch):
         emb = BgeCodeEmbedder()
         a = emb.embed("same text same vector")
         b = emb.embed("same text same vector")
-        assert a == b
-        assert len(a) == emb.dim
+        # Both should be unavailable (no model) and structurally equal
+        assert a.ok == b.ok
+        assert a.vector == b.vector
     finally:
         _restore_singleton(old)
 
@@ -73,7 +76,9 @@ def test_embed_batch_empty_returns_empty(monkeypatch):
         _restore_singleton(old)
 
 
-def test_embed_batch_fallback_preserves_length(monkeypatch):
+def test_embed_batch_rpc_failure_returns_unavailable_results(monkeypatch):
+    """When the RPC server is unreachable, embed_batch returns results with
+    ok=False for each item rather than silently degrading to a weaker backend."""
     old = _reset_singleton()
     monkeypatch.setattr("ida_pro_mcp.host.intelligence.core._find_llama_server", lambda: "/bin/echo")
     monkeypatch.setattr("ida_pro_mcp.host.intelligence.core._find_model", lambda: "/tmp/model.gguf")
@@ -89,7 +94,20 @@ def test_embed_batch_fallback_preserves_length(monkeypatch):
         ):
             out = emb.embed_batch(["a", "b", "c", "d"])
         assert len(out) == 4
-        assert all(len(v) == emb.dim for v in out)
+        assert all(r.ok is False for r in out)
+        assert all(r.vector is None for r in out)
+    finally:
+        _restore_singleton(old)
+
+
+def test_embed_vector_returns_none_when_unavailable(monkeypatch):
+    """embed_vector() is the convenience wrapper: returns the vector or None."""
+    old = _reset_singleton()
+    monkeypatch.setattr("ida_pro_mcp.host.intelligence.core._find_llama_server", lambda: "")
+    monkeypatch.setattr("ida_pro_mcp.host.intelligence.core._find_model", lambda: "")
+    try:
+        emb = BgeCodeEmbedder()
+        assert emb.embed_vector("any text") is None
     finally:
         _restore_singleton(old)
 

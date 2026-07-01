@@ -745,7 +745,8 @@ def protocol(
                             "CustomBinary": _PROTOCOL_ANCHORS.get("custom_binary", ""),
                             "SMTP/FTP": _PROTOCOL_ANCHORS.get("smtp_ftp", ""),
                         }
-                        anchor_vecs = {k: embedder.embed(v) for k, v in anchor_map.items() if v}
+                        anchor_vecs = {k: embedder.embed_vector(v) for k, v in anchor_map.items() if v}
+                        anchor_vecs = {k: vec for k, vec in anchor_vecs.items() if vec is not None}
                         proto_scores = dict.fromkeys(anchor_vecs, 0.0)
                         proto_hits = {k: [] for k in anchor_vecs}
                         string_candidate_sims: List[float] = []
@@ -757,7 +758,9 @@ def protocol(
                             if len(text) < 4:
                                 continue
                             try:
-                                sv = embedder.embed(text[:200])
+                                sv = embedder.embed_vector(text[:200])
+                                if sv is None:
+                                    continue
                             except Exception:
                                 continue
                             best_proto = None
@@ -786,7 +789,9 @@ def protocol(
                         api_candidates: List[Tuple[str, float]] = []
                         for api_name in list(api_usage.keys())[: min(400, limit * 20)]:
                             try:
-                                av = embedder.embed(str(api_name)[:80])
+                                av = embedder.embed_vector(str(api_name)[:80])
+                                if av is None:
+                                    continue
                             except Exception:
                                 continue
                             best_proto = None

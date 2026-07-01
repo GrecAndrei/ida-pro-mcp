@@ -346,7 +346,7 @@ class ServerSemanticMixin:
             try:
                 from ..intelligence.core import BgeCodeEmbedder
                 embedder = BgeCodeEmbedder()
-                query_vec = embedder.embed(query)
+                query_vec = embedder.embed_vector(query)
             except Exception:
                 embedding_failed = True
         for row in rows:
@@ -354,7 +354,9 @@ class ServerSemanticMixin:
             sim = 0.0
             if embedder is not None and query_vec is not None and norm_text:
                 try:
-                    row_vec = embedder.embed(norm_text)
+                    row_vec = embedder.embed_vector(norm_text)
+                    if row_vec is None:
+                        raise RuntimeError("embedding unavailable")
                     sim = float(embedder.cosine(query_vec, row_vec))
                 except Exception:
                     sim = 0.0

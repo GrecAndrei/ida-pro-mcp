@@ -19,6 +19,9 @@ class FakeEmbedder:
     def embed(self, text):
         return [0.1] * self.dim
 
+    def embed_vector(self, text):
+        return self.embed(text)
+
     def status(self, probe=False):
         return {"model_path": "", "server_bin": ""}
 

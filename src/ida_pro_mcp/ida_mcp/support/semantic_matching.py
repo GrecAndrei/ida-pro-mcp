@@ -47,7 +47,9 @@ def _embed_text(text: str) -> Optional[list[float]]:
     if embedder is None:
         return None
     try:
-        vec = embedder.embed(key)
+        vec = embedder.embed_vector(key)
+        if vec is None:
+            raise RuntimeError("embedding unavailable")
     except Exception:
         return None
     if len(_EMB_CACHE) >= _EMB_CACHE_MAX:

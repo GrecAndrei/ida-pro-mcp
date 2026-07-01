@@ -138,7 +138,9 @@ def run_embedder_doctor(opts: InstallerOptions, ui: UI) -> int:
         status["embed_test_ok"] = False
         status["embed_test_dim"] = 0
         try:
-            vec = emb.embed("embedder doctor quick check")
+            vec = emb.embed_vector("embedder doctor quick check")
+            if vec is None:
+                raise RuntimeError("embedding unavailable")
             status["embed_test_ok"] = bool(vec)
             status["embed_test_dim"] = len(vec or [])
         except Exception as exc:

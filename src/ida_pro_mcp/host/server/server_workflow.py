@@ -665,13 +665,20 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 try:
                     from ..intelligence.core import BgeCodeEmbedder
                     embedder = BgeCodeEmbedder()
-                    qv = embedder.embed(plan_text)
+                    qv = embedder.embed_vector(plan_text)
+                    if qv is None:
+                        raise RuntimeError("embedding unavailable")
                     anchors = [
                         "low risk orientation metadata summary listing imports",
                         "medium risk protocol and threat triage suspicious indicators",
                         "high risk exploit vulnerability deobfuscation patch and malware deep analysis",
                     ]
-                    sims = [float(embedder.cosine(qv, embedder.embed(a))) for a in anchors]
+                    sims = []
+                    for a in anchors:
+                        av = embedder.embed_vector(a)
+                        if av is None:
+                            raise RuntimeError("embedding unavailable")
+                        sims.append(float(embedder.cosine(qv, av)))
                     if sims:
                         risk_score = int(round(max(0.0, min(1.0, max(sims))) * 100.0))
                 except Exception:

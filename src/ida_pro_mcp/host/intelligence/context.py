@@ -931,7 +931,9 @@ class ContextAssembler:
         query_vec: list[float] | None = None
         if idb_path:
             try:
-                query_vec = self._embedder.embed(pseudocode[:3000])
+                query_vec = self._embedder.embed_vector(pseudocode[:3000])
+                if query_vec is None:
+                    raise RuntimeError("embedding unavailable")
                 idx = self._get_index(idb_path)
                 # Update cache + persist async
                 idx.cache_store(addr, query_vec)
@@ -1204,7 +1206,9 @@ class ContextAssembler:
                 "high value reverse engineering target with suspicious behavior, "
                 "complex control flow, many cross references, and high analysis payoff"
             )
-            qv = self._embedder.embed(anchor)
+            qv = self._embedder.embed_vector(anchor)
+            if qv is None:
+                raise RuntimeError("embedding unavailable")
             text_rows: list[str] = []
             ea_rows: list[int] = []
             for row in rows:
@@ -1219,9 +1223,10 @@ class ContextAssembler:
                 text_rows.append(summary)
                 ea_rows.append(ea_int)
             if text_rows:
-                vecs = self._embedder.embed_batch(text_rows)
-                for ea_int, v in zip(ea_rows, vecs, strict=False):
-                    row_scores[ea_int] = float(BgeCodeEmbedder.cosine(qv, v))
+                batch = self._embedder.embed_batch(text_rows)
+                for ea_int, res in zip(ea_rows, batch, strict=False):
+                    if res.ok and res.vector is not None:
+                        row_scores[ea_int] = float(BgeCodeEmbedder.cosine(qv, res.vector))
         except Exception:
             row_scores = {}
 

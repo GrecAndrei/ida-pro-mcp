@@ -1367,8 +1367,10 @@ def llm_helpers(
                 embedder = BgeCodeEmbedder()
                 classifier = BehaviorClassifier.instance(embedder)
                 if pseudo_a and pseudo_b:
-                    vec_a = embedder.embed(pseudo_a)
-                    vec_b = embedder.embed(pseudo_b)
+                    vec_a = embedder.embed_vector(pseudo_a)
+                    vec_b = embedder.embed_vector(pseudo_b)
+                    if vec_a is None or vec_b is None:
+                        raise RuntimeError("embedding unavailable")
                     dot = sum(x * y for x, y in zip(vec_a, vec_b, strict=False))
                     import math
                     na = math.sqrt(sum(x*x for x in vec_a))
