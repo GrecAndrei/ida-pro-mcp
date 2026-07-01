@@ -1220,6 +1220,14 @@ class ServerDispatchMixin:
                 return make_error(MCPError.INVALID_ARGS, "arguments must be an object")
             args = self._normalize_tool_call_args(tool_name, args)
             sid = getattr(self.current_session, "session_id", None) if self.current_session else None
+            # Capture ack before the policy block pops _risk_ack below. The
+            # phase gate at the bottom of this function wants to skip when
+            # the caller already acknowledged the risk explicitly — but
+            # args has _risk_ack popped by the time the gate runs, so we
+            # need a captured value. (Bug: LLM passed _risk_ack=true on
+            # funcs.create in prove phase and still hit "prove phase
+            # requires evidence cards" gate.)
+            _risk_ack_passed = bool(_coerce_bool(args.get("_risk_ack"), False)) or _coerce_bool(args.get("_guardrail_ack"), False)
 
             # ---- Deterministic policy preflight ----
             if tool_name not in {"blackboard", "background"}:
@@ -1271,8 +1279,13 @@ class ServerDispatchMixin:
             args.pop("_risk_ack", None)
 
             # ---- Blackboard strict policy preflight (global tool boundary) ----
+            # Skipped on _risk_ack=true: explicit ack supersedes the strict
+            # blackboard evidence chain requirement.
             try:
-                if tool_name != "blackboard" and hasattr(self, "_bb_policy_bump") and hasattr(self, "_bb_policy_check"):
+                if (tool_name != "blackboard"
+                        and not _risk_ack_passed
+                        and hasattr(self, "_bb_policy_bump")
+                        and hasattr(self, "_bb_policy_check")):
                     bb_state = self._bb_policy_bump()
                     exempt_tools = {
                         "session",
@@ -1319,7 +1332,7 @@ class ServerDispatchMixin:
             try:
                 _args_for_phase = args if isinstance(args, dict) else {}
                 if (tool_name != "blackboard"
-                        and not bool(_args_for_phase.get("_risk_ack", False))
+                        and not _risk_ack_passed
                         and hasattr(self, "_phase_preflight_for_tool")):
                     phase_block = self._phase_preflight_for_tool(tool_name, _args_for_phase)
                     if isinstance(phase_block, dict) and phase_block.get("error"):

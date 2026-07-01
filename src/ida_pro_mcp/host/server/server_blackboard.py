@@ -430,6 +430,13 @@ class ServerBlackboardMixin:
         try:
             if str(tool_name or "").strip().lower() == "blackboard":
                 return None
+            # Phase gates are opt-in (default off). The followup injection
+            # in server_response.py already respects _phase_gates_enabled;
+            # this preflight gate must do the same or the default config
+            # silently blocks the LLM on prove-phase writes — exactly the
+            # opposite of the env-var contract.
+            if not getattr(self, "_phase_gates_enabled", False):
+                return None
             store = self._get_blackboard_store()
             if store is None:
                 return None
