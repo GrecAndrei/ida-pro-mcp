@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import os
 import re
+import time
 from datetime import datetime
 from typing import Any
 
@@ -850,6 +851,14 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 if isinstance(start_res, dict) and "error" not in start_res:
                     runtime = self.session_runtimes.get(sid)
                     runtime_alive = bool(runtime) and bool(self._runtime_alive(runtime))
+                    # Block until the IDB is on disk so callers don't need to
+                    # poll or manually trigger analysis.
+                    if runtime_alive and os.path.isfile(getattr(session, "binary_path", "") or ""):
+                        idb_path = getattr(session, "idb_path", None)
+                        if idb_path and not os.path.isfile(idb_path):
+                            self._wait_for_idb(session, timeout=120.0)
+                            runtime = self.session_runtimes.get(sid)
+                            runtime_alive = bool(runtime) and bool(self._runtime_alive(runtime))
                 else:
                     # Surface the failure but keep the switch logically valid.
                     self._last_spawn_error = start_res
@@ -884,6 +893,31 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             response["spawn_error"] = spawn_error
             self._last_spawn_error = None
         return response
+
+    def _wait_for_idb(self, session: Any, timeout: float = 120.0) -> bool:
+        """Block until the IDB for *session* is written to disk.
+
+        idat runs auto-analysis + targeted reanalysis asynchronously after
+        spawn. Instead of making the caller poll or manually re-trigger
+        analysis, session(action='create') blocks here so the returned
+        session has a useful IDB.
+
+        Returns True if the IDB appeared within *timeout* seconds."""
+        if not hasattr(session, "idb_path"):
+            return False
+        idb_path = getattr(session, "idb_path", None) or ""
+        if not idb_path or os.path.isfile(idb_path):
+            return True
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if os.path.isfile(idb_path):
+                return True
+            time.sleep(0.5)
+            # Give idat a chance to yield (cooperative with idapro threads)
+            runtime = self.session_runtimes.get(session.session_id) if hasattr(self, "session_runtimes") else None
+            if runtime and not self._runtime_alive(runtime):
+                return False
+        return os.path.isfile(idb_path)
 
     def _session_action_close(self, args: dict) -> dict:
         sid, sid_err = self._resolve_session_id(args)

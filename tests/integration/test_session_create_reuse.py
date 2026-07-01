@@ -20,7 +20,18 @@ import shutil
 import tempfile
 import unittest
 
+from ida_pro_mcp.host.server.server_session import ServerSessionMixin
+
 from tests._isolated_repo_loader import load_repo_module
+
+
+class _IdbWaitHarness(ServerSessionMixin):
+    """Minimal subclass that has the runtime attrs _wait_for_idb needs."""
+    session_runtimes: dict = {}
+
+    def __init__(self):
+        self.session_runtimes = {}
+        self._runtime_alive = lambda r: True
 
 ida_mcp_stdio = load_repo_module("ida_mcp_stdio.py", module_name="ida_mcp_stdio")
 IDAMCPServer = ida_mcp_stdio.IDAMCPServer
@@ -279,6 +290,51 @@ class TestFindSessionsByPath(unittest.TestCase):
         self._make_session("AAAA1111", "/dev/null")
         results = self.mgr.find_sessions_by_path(self.test_binary)
         self.assertEqual(results, [])
+
+
+class TestWaitForIdb(unittest.TestCase):
+    """Unit tests for ServerSessionMixin._wait_for_idb."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.test_binary = os.path.join(self.tmpdir, "test.exe")
+        with open(self.test_binary, "wb") as f:
+            f.write(b"\x00" * 100)
+        from tests._isolated_repo_loader import load_repo_module
+        ida_mcp_stdio = load_repo_module("ida_mcp_stdio.py", module_name="ida_mcp_stdio")
+        self.Session = ida_mcp_stdio.Session
+        self.harness = _IdbWaitHarness()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_returns_true_when_idb_already_exists(self):
+        idb_path = os.path.join(self.tmpdir, "test.i64")
+        with open(idb_path, "wb") as f:
+            f.write(b"IDB")
+        s = self.Session(session_id="W1", binary_path=self.test_binary, idb_path=idb_path)
+        self.assertTrue(self.harness._wait_for_idb(s, timeout=1.0))
+
+    def test_polls_until_idb_appears(self):
+        idb_path = os.path.join(self.tmpdir, "test.i64")
+        s = self.Session(session_id="W2", binary_path=self.test_binary, idb_path=idb_path)
+
+        def writer():
+            import time as _t
+            _t.sleep(0.5)
+            with open(idb_path, "wb") as f:
+                f.write(b"IDB")
+
+        import threading
+        t = threading.Thread(target=writer, daemon=True)
+        t.start()
+        self.assertTrue(self.harness._wait_for_idb(s, timeout=5.0))
+        t.join()
+
+    def test_returns_false_on_timeout(self):
+        idb_path = os.path.join(self.tmpdir, "missing.i64")
+        s = self.Session(session_id="W3", binary_path=self.test_binary, idb_path=idb_path)
+        self.assertFalse(self.harness._wait_for_idb(s, timeout=0.3))
 
 
 if __name__ == "__main__":
