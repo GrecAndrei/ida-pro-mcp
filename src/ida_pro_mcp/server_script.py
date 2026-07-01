@@ -663,22 +663,24 @@ if __name__ == "__main__":
             if rean.get("scheduled", 0):
                 log_ev(
                     "Auto-reanalysis: %d range(s); funcs %d -> %d, "
-                    "code bytes %d -> %d (coverage %.1f%% -> %.1f%%)",
-                    rean.get("scheduled", 0),
-                    rean.get("functions_before", 0),
-                    rean.get("functions_after", 0),
-                    rean.get("defined_code_bytes_before", 0),
-                    rean.get("defined_code_bytes_after", 0),
-                    rean.get("coverage_pct_before", 0.0),
-                    rean.get("coverage_pct_after", 0.0),
+                    "code bytes %d -> %d (coverage %.1f%% -> %.1f%%)"
+                    % (
+                        rean.get("scheduled", 0),
+                        rean.get("functions_before", 0),
+                        rean.get("functions_after", 0),
+                        rean.get("defined_code_bytes_before", 0),
+                        rean.get("defined_code_bytes_after", 0),
+                        rean.get("coverage_pct_before", 0.0),
+                        rean.get("coverage_pct_after", 0.0),
+                    )
                 )
             _ensure_entry_point_functions()
         except Exception as _e:
             log_ev("Auto-reanalysis skipped: %s" % _e)
 
         try:
-            import ida_diskio as _ida_diskio
-            _ida_diskio.save_database("")
+            import ida_loader as _ida_loader
+            _ida_loader.save_database("", 0)
             log_ev("IDB saved after reanalysis.")
         except Exception as _e:
             log_ev("save_database after reanalysis failed: %s" % _e)
