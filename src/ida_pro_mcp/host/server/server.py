@@ -845,7 +845,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# Compatibility anchors for source-based regression tests.
-# legacy_threat_tools = {
-# chain = GHOST_CHAINS.get(ghost_key, [])

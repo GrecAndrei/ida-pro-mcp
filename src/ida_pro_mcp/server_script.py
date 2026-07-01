@@ -642,9 +642,9 @@ if __name__ == "__main__":
     # Block on the main thread until initial auto-analysis completes, then
     # run a targeted reanalysis for stripped ELF binaries (Android NDK
     # arm64-v8a) that only produced PLT stubs on initial load. The MCP
-    # host's startup ping has a long default timeout (see
-    # IDA_MCP_STARTUP_TIMEOUT, default 180s) so the server can afford to
-    # wait here — every subsequent session reuse skips this entirely.
+    # host's startup ping timeout (IDA_MCP_STARTUP_TIMEOUT, default 240s)
+    # accommodates this blocking wait. Every subsequent session reuse
+    # skips this entirely since the IDB is already built.
     try:
         import ida_auto as _ida_auto
         import idaapi as _idaapi

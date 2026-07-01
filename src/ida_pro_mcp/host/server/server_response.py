@@ -736,8 +736,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             # ---- Real gating: blackboard policy + phase + must_call ----
             # (Only fires when the blackboard has a strict policy or a phase
             # gate. The shotgun _next_calls / suggested / prefetch / 7-phase
-            # ghost chain have all been removed; see HACKING for the
-            # history of those features.)
+            # ghost chain have all been removed in a previous cleanup pass.)
             try:
                 self._inject_blackboard_policy_followup(compacted, tool_name, call_args)
                 self._inject_blackboard_phase_followup(compacted, tool_name)

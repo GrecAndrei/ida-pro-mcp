@@ -1481,6 +1481,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             env["IDA_MCP_BYPASS_SYNC"] = "1"
             env["IDA_MCP_SESSION_ID"] = session.session_id
             env["IDA_MCP_CACHE_DIR"] = self.cache_dir
+            env["IDA_MCP_IDB_PATH"] = session.idb_path
             env["IDA_MCP_PRE_ANALYSIS_OPTS"] = json.dumps(session.analysis_options or {})
             # For packed .i64 IDBs, never force pre-analysis architecture
             # overrides onto an existing database — the IDB already encodes the
@@ -1660,6 +1661,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             env["IDA_MCP_BYPASS_SYNC"] = "1"
             env["IDA_MCP_SESSION_ID"] = session.session_id
             env["IDA_MCP_CACHE_DIR"] = self.cache_dir
+            env["IDA_MCP_IDB_PATH"] = session.idb_path
             env["IDA_MCP_PRE_ANALYSIS_OPTS"] = json.dumps(session.analysis_options or {})
             opts = session.analysis_options or {}
             preload_keys = {"processor", "bitness", "endian", "loader", "value", "loader_options", "flags"}
@@ -1765,7 +1767,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 return make_error(
                     MCPError.IDA_TIMEOUT,
                     "Runtime startup timed out before the runtime reported a port.",
-                    hint="Increase IDA_MCP_STARTUP_TIMEOUT_SEC or check the IDB log for clues.",
+                    hint="Increase IDA_MCP_STARTUP_TIMEOUT or check the IDB log for clues.",
                 )
             finally:
                 if not _handles_transferred:

@@ -1,32 +1,17 @@
 """
-Signal injection helpers — minimal version.
+Session resume context builder.
 
-Original 746-line implementation had:
-  - `build_signal_directives` (deleted) — emitted the `_next_calls` shotgun
-  - `_HYPOTHESIS_TEMPLATES` + `generate_hypotheses` (deleted) — canned lies
-    that fired on any function with matching API names
-  - `auto_blackboard_write` (deleted) — silently wrote entries on every
-    decompile, with the canned-hypothesis loop
-  - `GHOST_CHAINS` + `get_ghost_chain` (deleted) — the 7-phase runtime
-    ghost-chain inlining that fired `_execute_tool` recursively per decompile
-  - `_update_kg_from_hypothesis` (deleted) — declared as "still wired by the
-    few remaining callers" but had no callers since the decompile auto-hook
-    was removed in the same pass
+Exposes a single function, ``build_session_resume``, which injects a
+small context block into the first 2 calls of a session so a reconnecting
+LLM can see previously-decompiled functions, pending hypotheses, and
+confirmed findings without re-querying.
 
-Kept:
-  - `build_session_resume` — first 2 calls get a small session context block
-    (the original `estimated_completion: f"{min(99, total_actions // 5)}%"`
-    was removed; that formula is a marketing number).
-
-The host pipeline now exposes only:
-  - `_digest` (auto-extracted API calls, patterns, security notes, behavior tags)
-  - `llm_address_calculation` (decimal/RVA of hex addresses)
-  - `llm_guardrail_mode` / `llm_guardrail_reason_tags` (safety)
-  - `llm_address_lockstep_warnings` (cross-checks requested vs returned addresses)
-  - `_session_resume` (first 2 calls)
-
-If the LLM wants a recommendation, it calls
-`intelligence(action="suggest", tool=..., action=...)` explicitly.
+This file replaced a 746-line implementation that contained signal
+injection, auto-blackboard writes, and recursive ghost-chain tool calls —
+all removed because they produced silent side effects and misleading
+directives. The removed names (``build_signal_directives``,
+``generate_hypotheses``, ``auto_blackboard_write``, ``get_ghost_chain``,
+``_update_kg_from_hypothesis``) are gone; do not look for them.
 """
 from __future__ import annotations
 

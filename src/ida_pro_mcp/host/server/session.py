@@ -139,8 +139,8 @@ class Session:
         Checks three locations:
         1. ``idb_path`` from metadata (may be absent).
         2. The bare ``<binary>.i64`` / ``<idb_path>.idb`` file next to
-           the source binary — this is where ``idalib_server`` actually
-           saves the database by default.
+           the source binary — the default save path used by IDA's
+           ``save_database`` when no explicit ``IDA_MCP_IDB_PATH`` is set.
         3. Legacy component files (``.id0`` + ``.nam`` + ``.til``)
            alongside ``idb_path``."""
         if self.idb_path and os.path.exists(self.idb_path):

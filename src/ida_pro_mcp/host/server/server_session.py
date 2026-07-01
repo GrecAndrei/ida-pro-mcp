@@ -952,8 +952,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
 
         Checks three locations:
         1. session.idb_path (from metadata).
-        2. <binary_path>.i64 next to the source binary — this is where
-           idalib_server actually saves the database.
+        2. <binary_path>.i64 next to the source binary — the default
+           save path used by IDA's save_database when no explicit
+           IDA_MCP_IDB_PATH is set.
         3. Legacy component files alongside session.idb_path.
 
         If an IDB is found at a different path than session.idb_path, the

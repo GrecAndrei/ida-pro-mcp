@@ -1,15 +1,13 @@
-"""
-Response Enrichment — minimal version.
+"""Response enrichment: address patching + decompile digest.
 
-Original 339-line implementation had:
-  - `patch_addresses`: keep (legitimate — resolves rip-relative in pseudocode)
-  - `digest_decompiled`: keep core (api_calls, patterns, security_notes, behavior_tags)
-    - dropped `density` (made-up formula)
-    - dropped `severity` (useless count-based heuristic)
-  - GHOST_CHAINS: dropped (folded callers/callees/strings into code:decompile response
-    directly by the IDA-side tool; the runtime ghost-chain was emitting 7 phases
-    of recursive tool calls per decompile)
-  - auto_blackboard_write: dropped (silent side effects + canned hypotheses)
+Two working helpers:
+  - ``patch_addresses`` — resolves rip-relative / base+offset references
+    in pseudocode back to absolute addresses.
+  - ``digest_decompiled`` — extracts api_calls, patterns, security_notes,
+    behavior_tags from decompiled output.
+
+Replaced a 339-line predecessor that also emitted density scores, severity
+heuristics, and recursive ghost-chain tool calls — all removed.
 """
 from __future__ import annotations
 
