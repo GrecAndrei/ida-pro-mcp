@@ -618,6 +618,16 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 event_type="session_reuse",
                 event={"binary_path": binary_path, "reuse": True},
             )
+            # If the runtime for this session is dead, spawn a fresh
+            # idat and block until the IDB is on disk. The caller then
+            # gets a usable session without extra round-trips.
+            self._ensure_runtime_and_idb(updated)
+            idb_path = updated.idb_path
+            if idb_path and os.path.isfile(idb_path):
+                out["idb_exists"] = True
+                # Refresh the snapshot after the IDB is ready.
+                if hasattr(updated, "to_dict"):
+                    out["session"] = updated.to_dict()
             return out
 
         create_note = None
@@ -893,6 +903,32 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             response["spawn_error"] = spawn_error
             self._last_spawn_error = None
         return response
+
+    def _ensure_runtime_and_idb(self, session: Any, timeout: float = 120.0) -> None:
+        """Spawn idat for *session* if its runtime is dead and wait for the IDB.
+
+        Used by the reuse path so a session restored from disk without a
+        live runtime is immediately usable. No-op if the runtime is already
+        attached and the IDB exists."""
+        if not hasattr(self, "_start_server") or not hasattr(self, "session_runtimes"):
+            return
+        sid = session.session_id
+        runtime = self.session_runtimes.get(sid)
+        if runtime and self._runtime_alive(runtime):
+            # Runtime is alive — just make sure the IDB is on disk
+            idb_path = getattr(session, "idb_path", None)
+            if idb_path and not os.path.isfile(idb_path):
+                self._wait_for_idb(session, timeout=timeout)
+            return
+        # Runtime is dead or missing — spawn a replacement
+        try:
+            start_res = self._start_server(session)
+            if isinstance(start_res, dict) and "error" not in start_res:
+                runtime = self.session_runtimes.get(sid)
+                if runtime and self._runtime_alive(runtime):
+                    self._wait_for_idb(session, timeout=timeout)
+        except Exception:
+            pass  # Surface via the caller's spawn_error if needed
 
     def _wait_for_idb(self, session: Any, timeout: float = 120.0) -> bool:
         """Block until the IDB for *session* is written to disk.

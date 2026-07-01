@@ -184,6 +184,20 @@ class TestSessionCreateReuseNoExisting(_SessionReuseBase):
         self.assertIn("session", result)
 
 
+class TestSessionCreateReuseFallsThroughToSpawn(_SessionReuseBase):
+    """Reused session should fall through to spawn + _wait_for_idb."""
+
+    def test_reused_session_returns_reuse_note_and_attempts_spawn(self):
+        first = self._create(processor="arm", bitness=64, endian="little")
+        self.assertTrue(first.get("ok"))
+        first_sid = first["session"]["session_id"]
+
+        second = self._create(processor="arm", bitness=64, endian="little")
+        self.assertTrue(second.get("ok"))
+        self.assertEqual(second["session"]["session_id"], first_sid)
+        self.assertIn("Reusing", str(second.get("note") or ""))
+
+
 class TestSessionCreateReuseMixedArch(_SessionReuseBase):
     """Multiple sessions for the same binary with DIFFERENT arch options.
 
