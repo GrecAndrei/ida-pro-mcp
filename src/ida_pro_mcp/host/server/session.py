@@ -136,12 +136,23 @@ class Session:
     def idb_on_disk(self) -> bool:
         """True if any IDB artifact exists on disk.
 
-        Covers both the bare ``.i64``/``.idb`` layout and the legacy
-        component-file layout (``.id0`` + ``.nam`` + ``.til``)."""
+        Checks three locations:
+        1. ``idb_path`` from metadata (may be absent).
+        2. The bare ``<binary>.i64`` / ``<idb_path>.idb`` file next to
+           the source binary — this is where ``idalib_server`` actually
+           saves the database by default.
+        3. Legacy component files (``.id0`` + ``.nam`` + ``.til``)
+           alongside ``idb_path``."""
         if self.idb_path and os.path.exists(self.idb_path):
             return True
+        # Next to the source binary
+        if self.binary_path:
+            for suffix in (".i64", ".idb"):
+                if os.path.exists(self.binary_path + suffix):
+                    return True
+        # Legacy component-file layout
         idb_dir = os.path.dirname(self.idb_path or ".")
-        sid_prefix = f"SID_{self.session_id}"
+        sid_prefix = f"SID_{self.idb_path_basename()}"
         try:
             for name in os.listdir(idb_dir):
                 if name.startswith(sid_prefix) and (
@@ -151,6 +162,12 @@ class Session:
         except OSError:
             pass
         return False
+
+    def idb_path_basename(self) -> str:
+        """The basename of ``idb_path`` without directory."""
+        if not self.idb_path:
+            return ""
+        return os.path.basename(self.idb_path)
 
     def to_dict(self) -> dict:
         return {

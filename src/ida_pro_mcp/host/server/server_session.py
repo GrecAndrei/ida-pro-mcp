@@ -950,46 +950,75 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         analysis, session(action='create') blocks here so the returned
         session has a useful IDB.
 
-        IDA may store the database as a bare file (``.i64``) or as the
-        legacy component files (``.id0``, ``.id1``, ...). We accept either
-        signal so the wait terminates as soon as any IDB artifact lands.
+        Checks three locations:
+        1. session.idb_path (from metadata).
+        2. <binary_path>.i64 next to the source binary — this is where
+           idalib_server actually saves the database.
+        3. Legacy component files alongside session.idb_path.
+
+        If an IDB is found at a different path than session.idb_path, the
+        session object is updated so subsequent tool calls use the
+        correct path.
 
         Returns True if the IDB appeared within *timeout* seconds."""
         if not hasattr(session, "idb_path"):
             return False
         idb_path = getattr(session, "idb_path", None) or ""
-        if not idb_path:
-            return False
-        idb_dir = os.path.dirname(idb_path)
-        sid_prefix = f"SID_{session.session_id}"
+        binary_path = getattr(session, "binary_path", None) or ""
 
-        def _idb_on_disk() -> bool:
-            # Fast path: bare .i64 / .idb file
-            if os.path.isfile(idb_path):
-                return True
-            # Legacy component-file layout: SID_xxx.*, nam, til
-            try:
-                for name in os.listdir(idb_dir or "."):
-                    if name.startswith(sid_prefix) and (
-                        name.endswith(".id0") or name.endswith(".nam")
-                    ):
-                        return True
-            except OSError:
-                pass
-            return False
+        def _find_idb() -> str | None:
+            # 1. idb_path from metadata
+            if idb_path and os.path.isfile(idb_path):
+                return idb_path
+            # 2. Next to the source binary
+            if binary_path:
+                for suffix in (".i64", ".idb"):
+                    candidate = binary_path + suffix
+                    if os.path.isfile(candidate):
+                        return candidate
+            # 3. Legacy component-file layout
+            if idb_path:
+                idb_dir = os.path.dirname(idb_path)
+                sid_prefix = f"SID_{session.session_id}"
+                try:
+                    for name in os.listdir(idb_dir or "."):
+                        if name.startswith(sid_prefix) and (
+                            name.endswith(".id0") or name.endswith(".nam")
+                        ):
+                            return name  # any component signals presence
+                except OSError:
+                    pass
+            return None
 
-        if _idb_on_disk():
+        existing = _find_idb()
+        if existing and existing != idb_path:
+            # Fix up session metadata so tool calls target the right path
+            if not idb_path or os.path.dirname(existing) != os.path.dirname(idb_path):
+                try:
+                    session.idb_path = existing if os.path.isfile(existing) else idb_path
+                    if hasattr(self, "session_mgr"):
+                        self.session_mgr.update_session(session.session_id, idb_path=session.idb_path)
+                except Exception:
+                    pass
+        if existing:
             return True
         deadline = time.time() + timeout
         while time.time() < deadline:
-            if _idb_on_disk():
+            found = _find_idb()
+            if found:
+                if found != idb_path:
+                    try:
+                        session.idb_path = found if os.path.isfile(found) else idb_path
+                        if hasattr(self, "session_mgr"):
+                            self.session_mgr.update_session(session.session_id, idb_path=session.idb_path)
+                    except Exception:
+                        pass
                 return True
             time.sleep(0.5)
-            # Give idat a chance to yield (cooperative with idapro threads)
             runtime = self.session_runtimes.get(session.session_id) if hasattr(self, "session_runtimes") else None
             if runtime and not self._runtime_alive(runtime):
                 return False
-        return _idb_on_disk()
+        return bool(_find_idb())
 
     def _session_action_close(self, args: dict) -> dict:
         sid, sid_err = self._resolve_session_id(args)
