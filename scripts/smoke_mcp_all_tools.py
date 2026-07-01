@@ -382,11 +382,42 @@ def main() -> int:
     rows: list[tuple[str, str, str, str]] = []
     counts = {"OK": 0, "CLEAN": 0, "CRASH": 0, "TIMEOUT": 0, "OTHER": 0}
 
+    sid_holder = {"value": ""}
+
+    def _purge_idle_sessions() -> None:
+        """Best-effort: nuke any other live session+runtime for this binary
+        so a fresh smoke run doesn't leave orphan idat children behind. The
+        host's ``session(idle_purge, idle_seconds=1)`` closes any session
+        whose ``last_used`` is older than 1s and has a live runtime attached.
+        Errors are swallowed — this is a cleanup, not part of the test."""
+        with contextlib.suppress(Exception):
+            cli.tool_call("session", {
+                "action": "idle_purge",
+                "idle_seconds": 1,
+                "prune_orphans": True,
+                "_risk_ack": True,
+            })
+
     def restart() -> bool:
+        # Close the session we created last time, so the idat child dies
+        # before we kill the host (the host's shutdown would kill it too,
+        # but only if its atexit handler runs — be defensive).
+        with contextlib.suppress(Exception):
+            if sid_holder["value"]:
+                cli.tool_call("session", {
+                    "action": "close",
+                    "session_id": sid_holder["value"],
+                    "_risk_ack": True,
+                })
+                sid_holder["value"] = ""
         cli.stop()
         cli.start()
         if not cli.initialize():
             return False
+        # Nuke any other live sessions for this binary (smoke orphans from
+        # previous runs that didn't shut down cleanly). 1s threshold keeps
+        # the *current* session alive (last_used is updated per-call).
+        _purge_idle_sessions()
         # create session
         payload, err = cli.tool_call("session", {
             "action": "create",
@@ -414,6 +445,7 @@ def main() -> int:
                 sid = p.get("session_id") or (p.get("session") or {}).get("session_id", "")
             except Exception:
                 pass
+        sid_holder["value"] = sid
         # idb path for compare
         idb_path = ""
         sp = cli.call("tools/call", {"name": "idb", "arguments": {"action": "meta", "_risk_ack": True}})
@@ -489,6 +521,19 @@ def main() -> int:
                     break
 
     finally:
+        # Close the session we created so its idat child dies, then stop
+        # the host. We do this BEFORE cli.stop() so the host's normal
+        # shutdown path can cleanly terminate the idat via the runtime
+        # cleanup. If the host is already wedged, cli.stop() falls back
+        # to SIGTERM/SIGKILL.
+        with contextlib.suppress(Exception):
+            if sid_holder["value"]:
+                cli.tool_call("session", {
+                    "action": "close",
+                    "session_id": sid_holder["value"],
+                    "_risk_ack": True,
+                })
+                sid_holder["value"] = ""
         cli.stop()
 
     print()

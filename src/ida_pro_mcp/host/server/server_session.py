@@ -551,6 +551,22 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         existing = None
         if binary_path:
             existing = self.session_mgr.find_session_by_path(binary_path)
+        # Even when the caller passes loader/architecture preload options,
+        # reuse the existing session if those options already match — this
+        # stops smoke runs from spawning a new idat child for the same
+        # binary on every restart. force_new=true still wins.
+        if existing and not force_new and has_preload_request and analysis_options:
+            existing_opts = dict(existing.analysis_options or {})
+            preload_keys = ("processor", "bitness", "endian", "loader", "flags", "loader_options", "value")
+            mismatch = any(
+                str(existing_opts.get(k) or "") != str(analysis_options.get(k) or "")
+                for k in preload_keys
+                if k in analysis_options
+            )
+            if not mismatch:
+                # Pretend preload request was absent so the existing reuse
+                # branch runs.
+                has_preload_request = False
         if existing and not force_new and not has_preload_request:
             # Update the REAL session through the manager, not the shallow copy
             update_kwargs = {"analysis_applied": False}
