@@ -678,10 +678,20 @@ if __name__ == "__main__":
         except Exception as _e:
             log_ev("Auto-reanalysis skipped: %s" % _e)
 
+        # Persist the upgraded IDB at the canonical session path so the
+        # MCP host and reuse spawns find it via session.idb_path. Saving at
+        # the empty string path writes next to the source binary which
+        # leaves the sessions-dir metadata idb_exists=false and breaks
+        # reuse detection.
         try:
             import ida_loader as _ida_loader
-            _ida_loader.save_database("", 0)
-            log_ev("IDB saved after reanalysis.")
+            _idb_target = os.environ.get("IDA_MCP_IDB_PATH", "")
+            if _idb_target:
+                _ida_loader.save_database(_idb_target, 0)
+                log_ev("IDB saved to %s after reanalysis." % _idb_target)
+            else:
+                _ida_loader.save_database("", 0)
+                log_ev("IDB saved (default path) after reanalysis.")
         except Exception as _e:
             log_ev("save_database after reanalysis failed: %s" % _e)
     except ImportError:
