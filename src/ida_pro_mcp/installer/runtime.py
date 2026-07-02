@@ -79,8 +79,11 @@ def run_checked(
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
     timeout: float | None = 300.0,
-) -> None:
+) -> subprocess.CompletedProcess:
     """Run `cmd` and raise RuntimeError on non-zero exit or hang.
+
+    Returns the completed process so callers that need stdout (e.g. site-
+    package discovery) can read it.
 
     `timeout` defaults to 300 s (5 minutes). Pass `None` to disable
     the timeout for legitimately long operations (the installer never
@@ -102,7 +105,7 @@ def run_checked(
             f"{' '.join(cmd)} timed out after {timeout}s"
         ) from exc
     if result.returncode == 0:
-        return
+        return result
     details = (result.stderr or result.stdout or "").strip()
     tail = " | ".join([ln for ln in details.splitlines() if ln.strip()][-8:])[:800]
     raise RuntimeError(f"{' '.join(cmd)} failed ({result.returncode}): {tail}")
@@ -663,14 +666,10 @@ def _write_dev_pth(venv_dir: Path, source_root: Path, dry_run: bool, report: Ins
     site-packages so the ``.pth``-based source tree takes precedence.
     """
     python_exe = _venv_python_exe(venv_dir)
-    result = subprocess.run(
+    result = run_checked(
         [str(python_exe), "-c", "import site; print(site.getsitepackages()[0])"],
-        capture_output=True,
-        text=True,
         timeout=15,
     )
-    if result.returncode != 0:
-        raise RuntimeError("Could not determine site-packages directory")
     site_packages = Path(result.stdout.strip())
     pth_path = site_packages / "ida_pro_mcp_dev.pth"
     src_path = source_root / "src"

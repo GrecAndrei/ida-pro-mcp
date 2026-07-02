@@ -53,8 +53,20 @@ from .schemas import (
     classify_tool_category,
     sanitize_schema_for_vertex,
 )
-from .server.server import IDAMCPServer
 from .stores.truncation import continue_truncated, truncate_response
+
+
+# Lazy import to break a module-load cycle:
+#   host.__init__ → server.server → server.server_blackboard → host.config
+# When server_blackboard does ``from ..config import _bounded_int`` it re-enters
+# host.__init__, which would otherwise re-trigger ``from .server.server import
+# IDAMCPServer`` before that submodule has finished loading.  Deferring the
+# import to attribute access time means the submodule is fully loaded by then.
+def __getattr__(name: str):  # noqa: E501 — PEP 562 lazy import
+    if name == "IDAMCPServer":
+        from .server.server import IDAMCPServer as _srv
+        return _srv
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     "CACHE_DIR",

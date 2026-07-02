@@ -107,6 +107,7 @@ class _DummyDispatchServer(ServerBlackboardMixin, ServerDispatchMixin, Backgroun
         self._tool_calls = []
         self._usage_intel = None
         self._guardrail_strict_writes = False
+        self._phase_gates_enabled = True
 
     def _get_blackboard_store(self):
         return self._store
@@ -330,13 +331,14 @@ def test_dispatch_strict_policy_allows_tool_after_fresh_cycle():
     assert res.get("tool") == "code"
 
 
-def test_dispatch_phase_prove_blocks_modify_until_receipts():
+def test_dispatch_phase_prove_blocks_modify_until_receipts(monkeypatch):
+    monkeypatch.setenv("IDA_MCP_POLICY_MODE", "permissive")
     srv = _DummyDispatchServer()
     srv._handle_blackboard({"action": "phase_set", "phase": "prove"})
     res = srv._execute_tool_inner(
         "modify",
         "modify",
-        {"action": "set_name", "addr": "0x401000", "name": "f_cfg", "_risk_ack": True},
+        {"action": "set_name", "addr": "0x401000", "name": "f_cfg"},
     )
     assert res.get("error") is True
     assert "prove phase requires evidence cards" in str(res.get("message") or "").lower()

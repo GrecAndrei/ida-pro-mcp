@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -216,12 +217,14 @@ def test_setup_runtime_environment_reuses_healthy_venv(monkeypatch, tmp_path: Pa
     from ida_pro_mcp.installer.common import InstallReport
 
     calls = {"venv": 0, "wipe": 0, "probe": 0}
+    _fake_site = str(tmp_path / "fake_site")
 
     monkeypatch.setattr(runtime_mod, "_probe_venv", lambda p: (calls.__setitem__("probe", calls["probe"] + 1) or True))
     monkeypatch.setattr(
         runtime_mod,
         "run_checked",
-        lambda cmd, **kwargs: calls.__setitem__("venv", calls["venv"] + 1) or None,
+        lambda cmd, **kwargs: calls.__setitem__("venv", calls["venv"] + 1)
+        or subprocess.CompletedProcess(cmd, 0, stdout=_fake_site),
     )
     monkeypatch.setattr(runtime_mod, "_wipe_venv", lambda d: calls.__setitem__("wipe", calls["wipe"] + 1))
 
@@ -253,18 +256,20 @@ def test_setup_runtime_environment_wipes_stale_venv(monkeypatch, tmp_path: Path)
 
     monkeypatch.setattr(runtime_mod, "_probe_venv", lambda p: probe_calls.pop(0))
     monkeypatch.setattr(runtime_mod, "_wipe_venv", lambda d: calls.__setitem__("wipe", calls["wipe"] + 1) or (d.rmdir() if d.exists() else None))
+    _fake_site = str(tmp_path / "fake_site")
     monkeypatch.setattr(
         runtime_mod,
         "run_checked",
-        lambda cmd, **kwargs: calls.__setitem__("venv", calls["venv"] + 1) or None,
+        lambda cmd, **kwargs: calls.__setitem__("venv", calls["venv"] + 1)
+        or subprocess.CompletedProcess(cmd, 0, stdout=_fake_site),
     )
 
     py = runtime_mod.setup_runtime_environment(
         install_root=install_root,
         source_root=tmp_path,
-        runtime_source="local",
         dry_run=False,
         report=InstallReport(),
+        runtime_source="local",
     )
     # Probe was called, venv was wiped, then re-created.
     assert calls["wipe"] == 1
@@ -280,12 +285,14 @@ def test_setup_runtime_environment_creates_missing_venv(monkeypatch, tmp_path: P
 
     calls = {"venv": 0, "wipe": 0}
 
+    _fake_site = str(tmp_path / "fake_site")
     monkeypatch.setattr(runtime_mod, "_probe_venv", lambda p: True)
     monkeypatch.setattr(runtime_mod, "_wipe_venv", lambda d: calls.__setitem__("wipe", calls["wipe"] + 1))
     monkeypatch.setattr(
         runtime_mod,
         "run_checked",
-        lambda cmd, **kwargs: calls.__setitem__("venv", calls["venv"] + 1) or None,
+        lambda cmd, **kwargs: calls.__setitem__("venv", calls["venv"] + 1)
+        or subprocess.CompletedProcess(cmd, 0, stdout=_fake_site),
     )
 
     runtime_mod.setup_runtime_environment(
