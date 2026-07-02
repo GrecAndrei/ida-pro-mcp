@@ -76,11 +76,30 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
     common.normalize_dict_list = lambda val: val
     common.get_function = lambda *a, **kw: None
     common.get_image_size = lambda *a, **kw: 0
-    common.looks_like_address = lambda *a, **kw: False
+    def _default_looks_like_address(val):
+        if val is None:
+            return False
+        s = str(val).strip().lower()
+        if s.startswith("0x") or s.startswith("0x"):
+            return True
+        if len(s) >= 6 and all(c in "0123456789abcdef" for c in s):
+            return True
+        if s.endswith("h") and len(s) > 1 and all(c in "0123456789abcdef" for c in s[:-1]):
+            return True
+        return False
+    common.looks_like_address = _default_looks_like_address
     common.get_stack_frame_variables_internal = lambda *a, **kw: []
     common.get_type_by_name = lambda *a, **kw: None
     common.smart_match = lambda *a, **kw: False
-    common.compile_smart_pattern = lambda *a, **kw: None
+    def _default_compile_smart_pattern(pattern, case_sensitive=False, **kwargs):
+        """Build a simple substring callable (matches FakeIDB test expectations)."""
+        if not pattern:
+            return lambda v: False
+        pat = pattern if case_sensitive else pattern.lower()
+        if case_sensitive:
+            return lambda v: pat in str(v) if v else False
+        return lambda v: pat in str(v).lower() if v else False
+    common.compile_smart_pattern = _default_compile_smart_pattern
     common.resolve_symbol = lambda *a, **kw: None
     common.validate_range = lambda *a, **kw: (None, None)
     common.check_debugger = lambda *a, **kw: None
@@ -104,6 +123,9 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
         FUNCTION_NOT_FOUND = "FUNCTION_NOT_FOUND"
         ACTION_NOT_FOUND = "ACTION_NOT_FOUND"
         FILE_NOT_FOUND = "FILE_NOT_FOUND"
+        NO_RESULTS = "NO_RESULTS"
+        NOT_FOUND = "NOT_FOUND"
+        IDA_ERROR = "IDA_ERROR"
 
     common.MCPError = _MCPError
 

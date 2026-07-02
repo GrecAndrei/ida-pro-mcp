@@ -206,10 +206,17 @@ class FakeIDB:
         def _get_strlit_contents(ea, length, stype):
             return None
 
+        def _get_name_ea_simple(name):
+            for ea, n in self._names.items():
+                if n == name:
+                    return ea
+            return 0xFFFFFFFF  # BADADDR
+
         m.get_func_name = _get_func_name
         m.get_name = _get_name
         m.get_str_type = _get_str_type
         m.get_strlit_contents = _get_strlit_contents
+        m.get_name_ea_simple = _get_name_ea_simple
 
     def _patch_idautils(self) -> None:
         m = sys.modules["idautils"]
@@ -285,7 +292,16 @@ class FakeIDB:
             f = self._funcs.get(ea)
             return MockFunc(f["start"], f["end"], f["flags"]) if f else None
 
+        def _get_func_name(ea):
+            if ea in self._names:
+                return self._names[ea]
+            for fea, info in self._funcs.items():
+                if info["start"] <= ea < info["end"]:
+                    return info["name"]
+            return ""
+
         m.get_func = _get_func
+        m.get_func_name = _get_func_name
 
     def _patch_ida_segment(self) -> None:
         m = sys.modules["ida_segment"]

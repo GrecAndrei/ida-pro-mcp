@@ -1,6 +1,7 @@
 """SEARCH.UNIFIED - Smart unified find, callers, callees, and API usage."""
 
 import heapq
+import re
 
 try:
     from .._common import *
@@ -501,3 +502,398 @@ def search_api(pattern, include_context, offset, limit, include_items, include_b
         result["matched_apis"] = api_summary
         result["total_calls"] = total
     return result
+
+
+# ---------------------------------------------------------------------------
+# Symbol demangle — expose idc.demangle_name as a standalone action
+# ---------------------------------------------------------------------------
+
+def search_demangle(pattern, limit=50, offset=0):
+    """Demangle one or more C++ symbol names (comma or newline separated)."""
+    raw = (pattern or "").strip()
+    if not raw:
+        return make_error(MCPError.INVALID_ARGS, "pattern required: mangled name(s) to demangle")
+
+    names = [n.strip() for n in re.split(r"[,\n]", raw) if n.strip()]
+    names = names[offset:offset + limit] if offset else names[:limit]
+
+    try:
+        typeinf = idc.get_inf_attr(idc.INF_SHORT_DN)
+    except Exception:
+        typeinf = 0
+    try:
+        typeinf_long = idc.get_inf_attr(idc.INF_LONG_DN)
+    except Exception:
+        typeinf_long = 0
+    rows = []
+    for mangled in names:
+        short = idc.demangle_name(mangled, typeinf)
+        long_ = idc.demangle_name(mangled, typeinf_long)
+        rows.append({
+            "mangled": mangled,
+            "short": short or mangled,
+            "long": long_ or short or mangled,
+            "is_mangled": short is not None,
+        })
+
+    lines = [f"{r['mangled']}  ->  {r['short']}" for r in rows]
+    return {
+        "ok": True,
+        "action": "demangle",
+        "results": "\n".join(lines),
+        "count": len(rows),
+        "items": rows,
+        "note": "short uses INF_SHORT_DN, long uses INF_LONG_DN. Unmangled names pass through as-is.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# symbol — find_symbol_by_name (exact match with fallback to fuzzy)
+# ---------------------------------------------------------------------------
+
+def search_symbol(pattern, include_alternatives=True, offset=0, limit=20):
+    """Resolve a symbol by name. Exact first, then substring/pattern fallback."""
+    raw = (pattern or "").strip()
+    if not raw:
+        return make_error(MCPError.INVALID_ARGS, "pattern required: symbol name or address")
+
+    # --- Fast path 1: address literal ---
+    if looks_like_address(raw):
+        ea, err = validate_addr(raw)
+        if not err and ea != idaapi.BADADDR:
+            name = idc.get_name(ea) or ""
+            func = idaapi.get_func(ea)
+            seg = idaapi.getseg(ea)
+            typeinf = idc.get_inf_attr(idc.INF_SHORT_DN)
+            demangled = idc.demangle_name(name, typeinf) or name
+            return {
+                "ok": True,
+                "action": "symbol",
+                "match": "address",
+                "addr": hex(ea),
+                "name": name,
+                "demangled": demangled,
+                "is_function": func is not None,
+                "type": "function" if func else ("data" if idc.is_data(idc.get_full_flags(ea)) else "code" if idc.is_code(idc.get_full_flags(ea)) else "unknown"),
+                "segment": seg.getName() if seg else "",
+                "xrefs_to": xref_count_limited(ea, 512),
+                "alternatives": [],
+            }
+
+    # --- Fast path 2: exact name ---
+    ea = idc.get_name_ea_simple(raw)
+    if ea != idaapi.BADADDR:
+        func = idaapi.get_func(ea)
+        seg = idaapi.getseg(ea)
+        typeinf = idc.get_inf_attr(idc.INF_SHORT_DN)
+        demangled = idc.demangle_name(raw, typeinf) or raw
+        return {
+            "ok": True,
+            "action": "symbol",
+            "match": "exact_name",
+            "addr": hex(ea),
+            "name": raw,
+            "demangled": demangled,
+            "is_function": func is not None,
+            "type": "function" if func else ("data" if idc.is_data(idc.get_full_flags(ea)) else "code" if idc.is_code(idc.get_full_flags(ea)) else "unknown"),
+            "segment": seg.getName() if seg else "",
+            "xrefs_to": xref_count_limited(ea, 512),
+            "alternatives": _alternatives_for_name(raw, exclude_ea=ea, limit=5) if include_alternatives else [],
+        }
+
+    # --- Slow path: substring + semantic ---
+    matcher = compile_smart_pattern(raw, case_sensitive=False)
+    candidates = []
+    for cand_ea, cand_name in idautils.Names():
+        if not cand_name or not matcher(cand_name):
+            continue
+        is_func = bool(idaapi.get_func(cand_ea))
+        score = SCORE_SUBSTRING if raw.lower() in cand_name.lower() else 0.0
+        candidates.append({
+            "addr": hex(cand_ea),
+            "name": cand_name,
+            "type": "function" if is_func else "symbol",
+            "xrefs_to": xref_count_limited(cand_ea, 256),
+            "exact": cand_name.lower() == raw.lower(),
+            "_score": score,
+        })
+
+    if not candidates:
+        return make_error(MCPError.NO_RESULTS, f"No symbol matching '{raw}' found")
+
+    candidates.sort(key=lambda c: (c["_score"], c["xrefs_to"]), reverse=True)
+    best = candidates[0]
+    typeinf = idc.get_inf_attr(idc.INF_SHORT_DN)
+    best_demangled = idc.demangle_name(best["name"], typeinf) or best["name"]
+    page, total, truncated = paginate_records(candidates, offset, limit, sort_key=None)
+    for p in page:
+        p.pop("_score", None)
+    return {
+        "ok": True,
+        "action": "symbol",
+        "match": "fuzzy" if not best.get("exact") else "exact_case_insensitive",
+        "query": raw,
+        "addr": best["addr"],
+        "name": best["name"],
+        "demangled": best_demangled,
+        "type": best["type"],
+        "xrefs_to": best["xrefs_to"],
+        "total_candidates": total,
+        "truncated": truncated,
+        "alternatives": page[1:] if include_alternatives else [],
+    }
+
+
+def _alternatives_for_name(query, exclude_ea=None, limit=5):
+    """Return substring-similar names (excluding exact match at exclude_ea)."""
+    matcher = compile_smart_pattern(query, case_sensitive=False)
+    alts = []
+    for cand_ea, cand_name in idautils.Names():
+        if not cand_name or not matcher(cand_name):
+            continue
+        if exclude_ea is not None and cand_ea == exclude_ea:
+            continue
+        alts.append({"addr": hex(cand_ea), "name": cand_name,
+                     "type": "function" if idaapi.get_func(cand_ea) else "symbol"})
+        if len(alts) >= limit:
+            break
+    return alts
+
+
+# ---------------------------------------------------------------------------
+# symbol_info — rich symbol inspector
+# ---------------------------------------------------------------------------
+
+def search_symbol_info(pattern, include_xrefs=False):
+    """Return detailed info for a single symbol: type, size, xrefs, segment, flags, demangled, prototype."""
+    raw = (pattern or "").strip()
+    if not raw:
+        return make_error(MCPError.INVALID_ARGS, "pattern required: symbol name or address")
+
+    # Resolve to address
+    if looks_like_address(raw):
+        ea, err = validate_addr(raw)
+        if err or ea == idaapi.BADADDR:
+            return make_error(MCPError.INVALID_ARGS, f"Invalid address: {raw}")
+        name = idc.get_name(ea) or ""
+    else:
+        ea = idc.get_name_ea_simple(raw)
+        if ea == idaapi.BADADDR:
+            return make_error(MCPError.NO_RESULTS, f"Symbol '{raw}' not found")
+        name = raw or idc.get_name(ea)
+
+    func = idaapi.get_ea(ea)  # potentially the function containing this addr
+    containing_func = idaapi.get_func(ea)
+    seg = idaapi.getseg(ea)
+    flags = idc.get_full_flags(ea)
+    typeinf = idc.get_inf_attr(idc.INF_SHORT_DN)
+    demangled = idc.demangle_name(name, typeinf) if name else ""
+
+    info = {
+        "ok": True,
+        "action": "symbol_info",
+        "addr": hex(ea),
+        "name": name,
+        "demangled": demangled or name,
+        "segment": seg.getName() if seg else "",
+        "segment_perms": _perm_str(seg) if seg else "",
+        "is_function": containing_func is not None,
+    }
+
+    if containing_func:
+        info["function"] = {
+            "start": hex(containing_func.start_ea),
+            "end": hex(containing_func.end_ea),
+            "size": containing_func.end_ea - containing_func.start_ea,
+            "flags": _func_flags(containing_func),
+        }
+        try:
+            proto = idc.get_type(containing_func.start_ea)
+            if proto:
+                info["function"]["prototype"] = proto
+        except Exception:
+            pass
+    elif idc.is_data(flags):
+        info["data"] = {
+            "size": idc.get_item_size(ea),
+            "flags": _data_flags(flags),
+        }
+    elif idc.is_code(flags):
+        info["code"] = {
+            "size": idc.get_item_size(ea),
+        }
+
+    info["xrefs_to_count"] = xref_count_limited(ea, 1024)
+    info["xrefs_from_count"] = _count_xrefs_from_limited(ea, 1024)
+
+    if include_xrefs:
+        xrefs_to = []
+        for xr in idautils.XrefsTo(ea, 0):
+            src_func = idaapi.get_func(xr.frm)
+            xrefs_to.append({
+                "from": hex(xr.frm),
+                "type": "code" if xr.iscode else "data",
+                "function": ida_funcs.get_func_name(src_func.start_ea) if src_func else "",
+            })
+            if len(xrefs_to) >= 64:
+                break
+        info["xrefs_to_samples"] = xrefs_to
+
+    return info
+
+
+def _count_xrefs_from_limited(ea, max_count):
+    """Count xrefs FROM ea, up to max_count. For code addresses, walk the function."""
+    count = 0
+    flags_src = idc.get_full_flags(ea)
+    if idc.is_code(flags_src):
+        end = idc.find_func_end(ea)
+        if end == idaapi.BADADDR:
+            end = idc.next_head(ea, ea + 256)
+        cur = ea
+        while cur < end and cur != idaapi.BADADDR:
+            for _ in idautils.XrefsFrom(cur, 0):
+                count += 1
+                if count >= max_count:
+                    return count
+            cur = idc.next_head(cur, end)
+            if cur == idaapi.BADADDR:
+                break
+    else:
+        for _ in idautils.XrefsFrom(ea, 0):
+            count += 1
+            if count >= max_count:
+                break
+    return count
+
+
+def _perm_str(seg):
+    perms = []
+    if seg.perm & idaapi.SEGPERM_EXEC:
+        perms.append("R")
+    if seg.perm & idaapi.SEGPERM_WRITE:
+        perms.append("W")
+    if seg.perm & idaapi.SEGPERM_READ:
+        perms.append("X")
+    return "".join(perms)
+
+
+def _func_flags(func):
+    out = []
+    if func.flags & idaapi.FUNC_NORET:
+        out.append("noreturn")
+    if func.flags & idaapi.FUNC_LIB:
+        out.append("library")
+    if func.flags & idaapi.FUNC_THUNK:
+        out.append("thunk")
+    if func.flags & idaapi.FUNC_STATIC:
+        out.append("static")
+    if func.flags & idaapi.FUNC_FRAME:
+        out.append("frame")
+    return out
+
+
+def _data_flags(flags):
+    out = []
+    if idc.is_byte(flags):
+        out.append("byte")
+    elif idc.is_word(flags):
+        out.append("word")
+    elif idc.is_dword(flags):
+        out.append("dword")
+    elif idc.is_qword(flags):
+        out.append("qword")
+    elif idc.is_strlit(flags):
+        out.append("string")
+    elif idc.is_struct(flags):
+        out.append("struct")
+    elif idc.is_align(flags):
+        out.append("align")
+    if idc.is_comm(flags):
+        out.append("has_comment")
+    return out if out else ["unknown"]
+
+
+# ---------------------------------------------------------------------------
+# xrefs_to_string — find all functions referencing a string literal
+# ---------------------------------------------------------------------------
+
+def search_xrefs_to_string(pattern, include_context=False, offset=0, limit=100, timeout_ms=0):
+    """Find all functions referencing a string literal (by value or address)."""
+    raw = (pattern or "").strip()
+    if not raw:
+        return make_error(MCPError.INVALID_ARGS, "pattern required: string value or address to find xrefs for")
+
+    timer = SearchTimeout(timeout_ms)
+    timed_out = False
+
+    # Try address literal first (direct xref lookup on a known string address)
+    target_eas = []
+    if looks_like_address(raw):
+        ea, err = validate_addr(raw)
+        if not err and ea != idaapi.BADADDR:
+            target_eas = [ea]
+
+    # If not an address, search string cache for matches
+    if not target_eas:
+        matcher = compile_smart_pattern(raw, case_sensitive=False)
+        for srec in get_cached_strings():
+            s = srec.get("string") or ""
+            if matcher(s):
+                target_eas.append(srec["ea"])
+
+    if not target_eas:
+        return make_error(MCPError.NO_RESULTS, f"No string matching '{raw}' found")
+
+    merged = {}  # string_ea -> {string, value, xrefs: [{addr, function}]}
+    for te_a in target_eas:
+        try:
+            timer.check()
+        except TimeoutError:
+            timed_out = True
+            break
+        s_value = idc.get_strlit_contents(te_a)
+        if s_value:
+            try:
+                s_value = s_value.decode("utf-8", errors="replace")
+            except Exception:
+                s_value = str(s_value)
+        else:
+            s_value = ""
+        refs = []
+        ref_funcs = set()
+        for xr in idautils.XrefsTo(te_a, 0):
+            if not xr.iscode:
+                continue
+            src_func = idaapi.get_func(xr.frm)
+            fn_name = ida_funcs.get_func_name(src_func.start_ea) if src_func else ""
+            ref_addr = hex(src_func.start_ea) if src_func else ""
+            if ref_addr not in ref_funcs:
+                ref_funcs.add(ref_addr)
+                entry = {"addr": ref_addr, "call_site": hex(xr.frm), "function": fn_name}
+                if include_context:
+                    disasm_line = safe_generate_disasm_line(xr.frm)
+                    entry["context"] = clip_text(ida_lines.tag_remove(disasm_line) if disasm_line else "", 160)
+                refs.append(entry)
+        merged[te_a] = {"string_ea": hex(te_a), "value": clip_text(s_value, 200), "xref_count": len(refs), "xrefs": refs}
+
+    if not merged:
+        return {"ok": True, "query": raw, "results": "", "count": 0, "items": [],
+                "note": "String(s) found but no code xrefs to them."}
+
+    rows = sorted(merged.values(), key=lambda r: r["xref_count"], reverse=True)
+    page, total, truncated = paginate_records(rows, offset, limit)
+
+    lines = [f"{r['string_ea']}  xrefs={r['xref_count']}  {r['value']}" for r in page]
+    return {
+        "ok": True,
+        "action": "xrefs_to_string",
+        "query": raw,
+        "results": "\n".join(lines),
+        "count": total,
+        "total": total,
+        "truncated": truncated or timed_out,
+        "items": page,
+        "note": "Functions referencing each matching string. Sorted by xref count desc.",
+        **({"note": "Functions referencing each matching string. Sorted by xref count desc. TIMED OUT — results may be partial."} if timed_out else {}),
+    }

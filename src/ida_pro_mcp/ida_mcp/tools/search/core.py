@@ -195,13 +195,14 @@ SEARCH_ACTIONS = {
     "find", "semantic", "smart_bundle", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
     "type", "export", "summary", "nl", "behavior",
     "bool", "hunt", "neighborhood", "outlier", "fingerprint", "path", "reach", "noreach",
+    "symbol", "symbol_info", "demangle", "xrefs_to_string",
 }
 
 SEARCH_ALIASES = {
     "byte": "bytes", "bytesearch": "bytes",
     "str": "string", "strings": "string", "literal": "string",
     "imm": "immediate", "constant": "immediate",
-    "symbol": "name", "names": "name",
+    "names": "name",
     "instruction_seq": "insns", "instruction_sequence": "insns",
     "instructions": "instruction", "mnemonics": "mnemonic", "mnem": "mnemonic",
     "opcode": "mnemonic", "opcodes": "mnemonic",

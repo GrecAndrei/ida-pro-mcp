@@ -48,7 +48,17 @@ from .core import (
 )
 from .meta import search_export, search_summary, search_type
 from .refs import search_code_ref, search_data_ref, search_func_by_sig, search_regex
-from .unified import search_api, search_callees, search_callers, search_find, search_semantic
+from .unified import (
+    search_api,
+    search_callees,
+    search_callers,
+    search_demangle,
+    search_find,
+    search_semantic,
+    search_symbol,
+    search_symbol_info,
+    search_xrefs_to_string,
+)
 
 # ============================================================================
 # L1 Insight Index Pre-filtering
@@ -143,7 +153,8 @@ def search(
         "find", "semantic", "smart_bundle", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
         "type", "export", "summary", "query_lang", "nl", "behavior",
         "bool", "hunt", "neighborhood", "outlier", "fingerprint", "path", "reach", "noreach",
-    ], "Action: bytes|string|immediate|name|insns|mnemonic|instruction|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|semantic|smart_bundle|callers|callees|api|vulnerable|constants|decompiled|structured|type|export|summary|query_lang|nl|behavior|bool|hunt|neighborhood|outlier|fingerprint|path|reach|noreach"],
+        "symbol", "symbol_info", "demangle", "xrefs_to_string",
+    ], "Action: bytes|string|immediate|name|insns|mnemonic|instruction|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|semantic|smart_bundle|callers|callees|api|vulnerable|constants|decompiled|structured|type|export|summary|query_lang|nl|behavior|bool|hunt|neighborhood|outlier|fingerprint|path|reach|noreach|symbol|symbol_info|demangle|xrefs_to_string"],
     pattern: Annotated[Optional[str], "Pattern to search for"] = None,
     query: Annotated[Optional[str], "Alias for pattern"] = None,
     limit: Annotated[int, "Max results"] = 100,
@@ -240,7 +251,7 @@ def search(
                         break
 
         # Validate pattern
-        pattern_not_required = {"vulnerable", "constants", "summary", "outlier", "noreach", "hunt"}
+        pattern_not_required = {"vulnerable", "constants", "summary", "outlier", "noreach", "hunt", "demangle", "symbol_info"}
         if not actual_pattern and action not in pattern_not_required:
             return make_error(MCPError.INVALID_ARGS, "pattern or query required")
         if action == "export" and not actual_pattern:
@@ -588,6 +599,33 @@ def search(
         elif action == "noreach":
             depth = int(kwargs.get("depth", 20))
             response = search_noreach(depth, offset, limit)
+
+        elif action == "symbol":
+            response = search_symbol(
+                actual_pattern,
+                include_alternatives=kwargs.get("include_alternatives", True),
+                offset=offset,
+                limit=limit,
+            )
+        elif action == "symbol_info":
+            response = search_symbol_info(
+                actual_pattern or "",
+                include_xrefs=kwargs.get("include_xrefs", False),
+            )
+        elif action == "demangle":
+            response = search_demangle(
+                actual_pattern or "",
+                limit=limit,
+                offset=offset,
+            )
+        elif action == "xrefs_to_string":
+            response = search_xrefs_to_string(
+                actual_pattern,
+                include_context=include_context,
+                offset=offset,
+                limit=limit,
+                timeout_ms=timeout_ms,
+            )
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

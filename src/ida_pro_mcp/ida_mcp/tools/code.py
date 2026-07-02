@@ -1,4 +1,5 @@
 import contextlib
+import re
 
 try:
     from ._common import *
@@ -730,7 +731,8 @@ def code(
         "decompile", "disasm", "xrefs_to", "xrefs_from", "xrefs_to_field",
         "callees", "callers", "blocks", "callgraph", "export",
         "find_paths", "strings_in_func", "diff_functions", "semantic_decompile",
-        "decomp_dataflow", "decompile_chain", "smart_decompile", "explain"
+        "decomp_dataflow", "decompile_chain", "smart_decompile", "explain",
+        "trace_argument_origin"
     ], "Action"],
     addrs: Annotated[Optional[list[str] | str], "Address(es) - hex string or name"] = None,
     addr: Annotated[Optional[str], "Single address (alias for addrs)"] = None,
@@ -832,6 +834,14 @@ def code(
         Params: addrs (REQUIRED), max_depth (default 2 for callers/callees count)
         Returns: [{addr, function, pseudocode, callers_context: [{addr, name, pseudocode}], callees_context: [{addr, name, pseudocode}]}]
         Best for: Understanding a function within its call graph neighborhood.
+
+    trace_argument_origin - Trace a function argument backward through callers.
+        Params: addrs (REQUIRED - target function), arg_index (REQUIRED - 0-based argument index),
+                max_depth (default 4), max_callers_per_level (default 10)
+        Returns: {target, argument_name, prototype, trace_tree: [...]}
+        Each trace entry: {depth, caller_addr, caller_name, call_site, call_line, arg_source, arg_type}
+        Example: code(action="trace_argument_origin", addrs="0x401000", arg_index=2)
+        Best for: Finding where a specific value (e.g., a key, buffer size, or flag) originates.
     """
     try:
         # Support both addr (singular) and addrs (plural) for compatibility
@@ -1791,6 +1801,16 @@ def code(
                     "callees": sorted(callees_set)[:12],
                 })
 
+            elif action == "trace_argument_origin":
+                func = idaapi.get_func(ea)
+                if not func:
+                    results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
+                    continue
+                arg_index = int(kwargs.get("arg_index", 0))
+                max_depth = int(kwargs.get("max_depth", 4))
+                max_callers = int(kwargs.get("max_callers_per_level", 10))
+                results.append(_trace_argument_origin(func, arg_index, max_depth, max_callers))
+
             else:
                 return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
 
@@ -1802,3 +1822,162 @@ def code(
 # ============================================================================
 # 3. DATA - Functions, Globals, Strings, Imports
 # ============================================================================
+
+
+# ---------------------------------------------------------------------------
+# Argument origin tracer — backward BFS through callers
+# ---------------------------------------------------------------------------
+
+def _extract_arg_from_decompiled(caller_pseudo, target_name, arg_index):
+    """Extract the argument expression at a call site from decompiled text.
+
+    Looks for `target_name(...)` in the decompiled text and returns the
+    arg_index-th argument expression as a string. Returns None if parsing
+    fails (multi-line, unusual formatting, etc.).
+    """
+    # Find all occurrences of `target_name (` in the decompiled text
+    pattern = re.compile(r'\b' + re.escape(target_name) + r'\s*\(', re.IGNORECASE)
+    for m in pattern.finditer(caller_pseudo):
+        start = m.end()
+        depth = 1
+        i = start
+        arg_start = start
+        arg_idx = 0
+        args = []
+        while i < len(caller_pseudo) and depth > 0:
+            c = caller_pseudo[i]
+            if c == '(':
+                depth += 1
+            elif c == ')':
+                depth -= 1
+                if depth == 0:
+                    if arg_idx == arg_index:
+                        return caller_pseudo[arg_start:i].strip()
+                    args.append(caller_pseudo[arg_start:i].strip())
+            elif c == ',' and depth == 1:
+                if arg_idx == arg_index:
+                    return caller_pseudo[arg_start:i].strip()
+                args.append(caller_pseudo[arg_start:i].strip())
+                arg_idx += 1
+                arg_start = i + 1
+            i += 1
+    return None
+
+
+def _trace_argument_origin(func, arg_index, max_depth, max_callers_per_level):
+    """Trace a function argument backward through callers.
+
+    Returns a tree structure showing each caller and the argument expression
+    they pass for the specified argument index.
+    """
+    target_addr = func.start_ea
+    fname = ida_funcs.get_func_name(target_addr) or hex(target_addr)
+
+    # Get argument names from prototype if available
+    arg_names = []
+    proto = idc.get_type(target_addr)
+    if proto:
+        try:
+            func_type = idc.parse_decl(proto, idc.PT_SILENT)
+            if func_type:
+                _, _, _, args = idc.get_type(target_addr) or ("", "", "", [])
+        except Exception:
+            pass
+    if not arg_names:
+        arg_names = [f"arg{i}" for i in range(arg_index + 1)]
+    if arg_index >= len(arg_names):
+        return {
+            "ok": True,
+            "target": hex(target_addr),
+            "target_name": fname,
+            "arg_index": arg_index,
+            "argument_name": f"arg{arg_index}",
+            "prototype": proto or "unknown",
+            "trace_tree": [],
+            "note": f"Argument index {arg_index} exceeds known arguments; showing callers without argument extraction.",
+        }
+
+    arg_name = arg_names[arg_index]
+
+    # BFS through callers
+    trace_tree = []
+    visited = {target_addr}
+    current_level = [target_addr]
+
+    for depth in range(max_depth + 1):
+        next_level = []
+        for func_ea in current_level:
+            callers = []
+            for xr in idautils.XrefsTo(func_ea, 0):
+                if not xr.iscode:
+                    continue
+                caller_func = idaapi.get_func(xr.frm)
+                if not caller_func:
+                    continue
+                caller_ea = caller_func.start_ea
+                caller_name = ida_funcs.get_func_name(caller_ea) or hex(caller_ea)
+                call_site = hex(xr.frm)
+
+                # Get the decompiled line at the call site
+                caller_pseudo = ""
+                arg_source = ""
+                arg_type = "unknown"
+                try:
+                    cfunc = ida_hexrays.decompile(caller_ea)
+                    if cfunc:
+                        caller_pseudo = str(cfunc)
+                        extracted = _extract_arg_from_decompiled(caller_pseudo, fname, arg_index)
+                        if not extracted:
+                            # Try matching by demangled name or partial name
+                            extracted = _extract_arg_from_decompiled(caller_pseudo, fname.split("::")[-1], arg_index)
+                        if extracted:
+                            arg_source = extracted
+                            # Classify the argument
+                            if extracted.startswith('"') or extracted.startswith("'"):
+                                arg_type = "string_literal"
+                            elif extracted.startswith("0x") or extracted.isdigit():
+                                arg_type = "constant"
+                            elif "(" in extracted and ")" in extracted:
+                                arg_type = "function_call"
+                            elif extracted.startswith("&"):
+                                arg_type = "address_of"
+                            elif arg_type == "unknown":
+                                arg_type = "variable"
+                        else:
+                            arg_source = ""
+                            arg_type = "parse_failed"
+                except Exception as e:
+                    arg_source = ""
+                    arg_type = f"decompile_error: {e}"
+
+                call_entry = {
+                    "depth": depth,
+                    "caller_addr": hex(caller_ea),
+                    "caller_name": caller_name,
+                    "call_site": call_site,
+                    "call_line": arg_source,
+                    "arg_source": arg_source,
+                    "arg_type": arg_type,
+                }
+                callers.append(call_entry)
+
+                if caller_ea not in visited and len(next_level) < max_callers_per_level:
+                    visited.add(caller_ea)
+                    next_level.append(caller_ea)
+
+            trace_tree.extend(callers[:max_callers_per_level])
+        current_level = next_level
+        if not current_level:
+            break
+
+    return {
+        "ok": True,
+        "action": "trace_argument_origin",
+        "target": hex(target_addr),
+        "target_name": fname,
+        "arg_index": arg_index,
+        "argument_name": arg_name,
+        "prototype": proto or "unknown",
+        "trace_tree": trace_tree,
+        "note": f"Backward trace of argument {arg_index} ({arg_name}) up to {max_depth} levels deep. arg_type: string_literal, constant, function_call, address_of, variable, or parse_failed.",
+    }
