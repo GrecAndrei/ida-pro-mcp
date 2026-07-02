@@ -379,6 +379,18 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
         default=True if not opts.rollback_on_fail else opts.rollback_on_fail,
     )
 
+    ui.info(
+        "Policy gates are ON by default — they require evidence cards and "
+        "acknowledgements for write-surface tools. Disable them only if you "
+        "trust every MCP client and LLM with full edit access to your IDB."
+    )
+    opts.disable_policy = _prompt_yes_no(
+        "Disable ALL policy gates (strict-blackboard, phase choreography, ack requirements)?",
+        default=False,
+    )
+    if opts.disable_policy:
+        ui.warn("Policy gates DISABLED — all tools run without restrictions.")
+
     if not _prompt_yes_no("Proceed with installation now?", default=True):
         raise RuntimeError("Installation cancelled by user.")
     return opts
@@ -530,11 +542,6 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         action="store_true",
         help="do not prompt for IDA install selection; pick highest-version automatically",
     )
-    parser.add_argument(
-        "--disable-policy",
-        action="store_true",
-        help="set IDA_MCP_POLICY_MODE=off in the spawned server (bypass all policy gates)",
-    )
     args = parser.parse_args(argv)
     opts = InstallerOptions(
         dry_run=args.dry_run,
@@ -554,7 +561,6 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         setup_embedder=args.setup_embedder,
         capsule_path=Path(args.capsule).expanduser() if args.capsule else None,
         only=set(args.only),
-        disable_policy=args.disable_policy,
     )
     if opts.setup_embedder:
         opts.embed_auto = True

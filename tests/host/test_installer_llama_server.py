@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
+import types
 from pathlib import Path
 
 import ida_pro_mcp.installer.main as main_mod
@@ -340,9 +341,34 @@ def test_build_stdio_config_omits_policy_mode_by_default():
     assert "IDA_MCP_POLICY_MODE" not in py["env"]
 
 
-def test_parse_args_disable_policy_flag():
-    from ida_pro_mcp.installer.main import parse_args
-    opts = parse_args(["--disable-policy"])
-    assert opts.disable_policy is True
-    opts_default = parse_args([])
-    assert opts_default.disable_policy is False
+def test_interactive_wizard_prompts_disable_policy(monkeypatch):
+    """The interactive wizard must explicitly ask whether to disable policy gates."""
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    prompts = []
+
+    def fake_prompt_yes_no(question, default):
+        prompts.append(question)
+        if "Disable ALL policy gates" in question:
+            return True  # user says yes
+        return default
+
+    monkeypatch.setattr(main_mod, "_prompt_yes_no", fake_prompt_yes_no)
+    monkeypatch.setattr(main_mod, "_prompt_choice", lambda q, choices, d: d)
+    monkeypatch.setattr(main_mod, "_is_interactive_terminal", lambda: True)
+
+    ui = types.SimpleNamespace(
+        info=lambda *a: None,
+        ok=lambda *a: None,
+        warn=lambda *a: None,
+        error=lambda *a: None,
+    )
+
+    opts = InstallerOptions(interactive=True)
+    opts.source_root = Path("/tmp")
+    opts.install_root = Path("/tmp/test_install")
+    result = main_mod._run_interactive_wizard(opts, ui)
+
+    assert result.disable_policy is True
+    assert any("Disable ALL policy gates" in q for q in prompts)
