@@ -644,7 +644,6 @@ if __name__ == "__main__":
     # skips this entirely since the IDB is already built.
     try:
         import ida_auto as _ida_auto
-        import idaapi as _idaapi
 
         log_ev("Waiting for initial auto-analysis...")
         if hasattr(_ida_auto, "auto_wait"):

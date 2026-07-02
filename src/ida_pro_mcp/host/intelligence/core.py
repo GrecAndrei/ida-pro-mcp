@@ -50,8 +50,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from collections import Counter
-from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
