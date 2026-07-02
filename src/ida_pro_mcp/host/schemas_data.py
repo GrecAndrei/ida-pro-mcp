@@ -10,8 +10,6 @@ from .server.tool_registry import tool_actions as _tool_actions_from_registry
 
 BASE_TOOL_ALIASES = {
     "plugins": "misc",
-    "xref_analysis": "graph",
-    "xfer_analysis": "graph",
     "schemaboot": "intelligence",
 }
 
@@ -52,6 +50,7 @@ TOOLS = [
     "agent",
     "microcode",
     "graph",
+    "xref_analysis",
     "ctree",
     "entropy",
     # Structure and type recovery
@@ -350,7 +349,8 @@ TOOL_DESCRIPTIONS = {
     "funcs": "Function boundary management (≈ IDA P/Delete keys). create: define a function at addr (≡ pressing P in IDA). delete: remove function definition. info: full function metadata — pass include_xrefs/include_prototype/include_stack for richer output. metrics: size/complexity/call counts. find_similar: structural similarity search. suggest_names: name candidates from heuristics. list: paginated function listing (like data(functions)) with structured output. Note: regex-based filters live in search, while renames and comments live on modify. Actions: create, delete, set_flags, info, metrics, find_similar, suggest_names, list.",
     "gadgets": "Find ROP/JOP/COP gadgets, stack pivots, and classify exploit chains. Actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains, classify_chain.",
     "governance": "Pre-flight validation for edits: detect contradictions, PII, dangerous patches. Actions: check, redact, list_rules, stats.",
-    "graph": "Generate call graphs, CFGs, xref graphs, and cross-reference graph analysis. Actions: callgraph, cfg, dominators, xref_graph, call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, dependency_graph, dead_functions.",
+    "graph": "Generate call graphs, CFGs, and xref graphs for visualization. Actions: callgraph, cfg, dominators, xref_graph.",
+    "xref_analysis": "Cross-reference and callgraph analysis: call chains, common callers/callees, hub/leaf functions, recursion detection, dominator analysis, influence reachability, dependency graphs, dead function detection. Actions: call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, dependency_graph, dead_functions.",
     "history": "Undo/redo IDB changes, create snapshots, restore, and diff states. Actions: undo, redo, list, snapshot, restore, diff.",
     "hooks": "Generate dynamic instrumentation hooks (Frida, Detours) for target functions. Actions: suggest, generate_frida, generate_detours, find_targets, inline_hooks.",
     "idb": "Query top-level IDB metadata: binary info, segments, entrypoints, bookmarks, and architecture profile guidance for raw binaries. Actions: meta, summary, segments, entrypoints, bookmarks, overview, architecture_profile.",
