@@ -32,6 +32,7 @@ class InstallerOptions:
     ida_dir: str = ""  # explicit path override
     ida_version: str = ""  # explicit version override (e.g. "9.3" or "9.3.260421")
     no_ida_prompt: bool = False  # don't prompt; pick highest-version automatically
+    disable_policy: bool = False  # set IDA_MCP_POLICY_MODE=off in the spawned server
 
 
 @dataclass

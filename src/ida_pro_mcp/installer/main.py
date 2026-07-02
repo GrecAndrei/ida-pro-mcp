@@ -530,6 +530,11 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         action="store_true",
         help="do not prompt for IDA install selection; pick highest-version automatically",
     )
+    parser.add_argument(
+        "--disable-policy",
+        action="store_true",
+        help="set IDA_MCP_POLICY_MODE=off in the spawned server (bypass all policy gates)",
+    )
     args = parser.parse_args(argv)
     opts = InstallerOptions(
         dry_run=args.dry_run,
@@ -549,6 +554,7 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         setup_embedder=args.setup_embedder,
         capsule_path=Path(args.capsule).expanduser() if args.capsule else None,
         only=set(args.only),
+        disable_policy=args.disable_policy,
     )
     if opts.setup_embedder:
         opts.embed_auto = True
@@ -696,6 +702,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                 embed_model=embed_model,
                 embed_server_bin=embed_server,
                 ida_install=getattr(opts, "_ida_install", None),
+                disable_policy=opts.disable_policy,
             )
             configured = configure_clients(
                 source_root=source_root,

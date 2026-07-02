@@ -134,3 +134,36 @@ def test_audit_record_contains_policy_result_fields():
     assert record["session_id"] == "SID_TEST"
     assert record["decision"] == "require_ack"
     assert record["risk"] == "local_code_exec"
+
+
+def test_off_mode_bypasses_all_gates():
+    """IDA_MCP_POLICY_MODE=off should allow any tool/action without ack."""
+    for tool, action in [
+        ("misc", "python"),
+        ("modify", "set_name"),
+        ("funcs", "create"),
+        ("segments", "add"),
+        ("bookmarks", "delete"),
+    ]:
+        result = evaluate_policy(tool, action, mode=PolicyMode.OFF)
+        assert result.decision == PolicyDecision.ALLOW, f"{tool}/{action} was {result.decision}"
+        assert result.risk == RiskTier.READ, f"{tool}/{action} risk was {result.risk}"
+        assert result.requires_ack is False
+        assert result.reasons == ()
+        assert result.flags == ()
+
+
+def test_off_mode_bypasses_disallowed_purpose_block():
+    result = evaluate_policy(
+        "misc", "python", mode=PolicyMode.OFF, purpose="malware_analysis",
+    )
+    assert result.decision == PolicyDecision.ALLOW
+    assert "disallowed_purpose" not in result.flags
+
+
+def test_off_mode_bypasses_unknown_purpose_flag():
+    result = evaluate_policy(
+        "analysis", "strings", mode=PolicyMode.OFF, purpose="xyzzy_random",
+    )
+    assert result.decision == PolicyDecision.ALLOW
+    assert "unknown_purpose" not in result.flags

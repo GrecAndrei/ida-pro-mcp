@@ -1281,8 +1281,12 @@ class ServerDispatchMixin:
             # ---- Blackboard strict policy preflight (global tool boundary) ----
             # Skipped on _risk_ack=true: explicit ack supersedes the strict
             # blackboard evidence chain requirement.
+            # Skipped when policy mode is OFF: all gates disabled.
             try:
-                if (tool_name != "blackboard"
+                _policy_mode_cached = self._resolve_policy_mode()
+                if _policy_mode_cached == "off":
+                    pass
+                elif (tool_name != "blackboard"
                         and not _risk_ack_passed
                         and hasattr(self, "_bb_policy_bump")
                         and hasattr(self, "_bb_policy_check")):
@@ -1329,10 +1333,12 @@ class ServerDispatchMixin:
             # Skipped when _risk_ack=true: the caller already acknowledged the
             # risk explicitly, so demanding a blackboard evidence chain on top
             # is redundant friction.
+            # Skipped when policy mode is OFF: all gates disabled.
             try:
                 _args_for_phase = args if isinstance(args, dict) else {}
                 if (tool_name != "blackboard"
                         and not _risk_ack_passed
+                        and _policy_mode_cached != "off"
                         and hasattr(self, "_phase_preflight_for_tool")):
                     phase_block = self._phase_preflight_for_tool(tool_name, _args_for_phase)
                     if isinstance(phase_block, dict) and phase_block.get("error"):

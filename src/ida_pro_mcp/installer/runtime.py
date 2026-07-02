@@ -761,6 +761,7 @@ def build_stdio_config(
     embed_model: str = "",
     embed_server_bin: str = "",
     ida_install: object | None = None,
+    disable_policy: bool = False,
 ) -> dict:
     """Build the stdio MCP server config for a specific IDA install.
 
@@ -789,6 +790,8 @@ def build_stdio_config(
         "IDA_MCP_COMPACT_CHAR_BUDGET": "30000",
         "IDA_MCP_TRUNCATE_TOKENS": "2000",
     }
+    if disable_policy:
+        env["IDA_MCP_POLICY_MODE"] = "off"
     if idadir:
         env["IDADIR"] = idadir
     wiki_dir = install_root / "wiki"

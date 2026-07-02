@@ -319,3 +319,30 @@ def test_setup_runtime_environment_dry_run_short_circuits(tmp_path: Path):
     )
     assert not (install_root / ".venv").exists()
     assert py.name in ("python.exe", "python")
+
+
+def test_build_stdio_config_injects_policy_mode_off():
+    from ida_pro_mcp.installer.runtime import build_stdio_config
+    py = build_stdio_config(
+        Path("/tmp/fake"),
+        Path("/tmp/root"),
+        disable_policy=True,
+    )
+    assert py["env"]["IDA_MCP_POLICY_MODE"] == "off"
+
+
+def test_build_stdio_config_omits_policy_mode_by_default():
+    from ida_pro_mcp.installer.runtime import build_stdio_config
+    py = build_stdio_config(
+        Path("/tmp/fake"),
+        Path("/tmp/root"),
+    )
+    assert "IDA_MCP_POLICY_MODE" not in py["env"]
+
+
+def test_parse_args_disable_policy_flag():
+    from ida_pro_mcp.installer.main import parse_args
+    opts = parse_args(["--disable-policy"])
+    assert opts.disable_policy is True
+    opts_default = parse_args([])
+    assert opts_default.disable_policy is False

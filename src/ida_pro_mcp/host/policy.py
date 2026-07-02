@@ -21,6 +21,7 @@ class PolicyMode(StrEnum):
     PERMISSIVE = "permissive"
     ASSIST = "assist"
     ENFORCE = "enforce"
+    OFF = "off"
 
 
 class RiskTier(StrEnum):
@@ -311,6 +312,20 @@ def evaluate_policy(
     action_name = normalize_name(action)
     policy_mode = normalize_mode(mode)
     normalized_purpose = normalize_name(purpose) or None
+
+    if policy_mode == PolicyMode.OFF:
+        return PolicyResult(
+            decision=PolicyDecision.ALLOW,
+            risk=RiskTier.READ,
+            tool=tool_name,
+            action=action_name,
+            mode=policy_mode,
+            purpose=normalized_purpose,
+            requires_ack=False,
+            reasons=(),
+            flags=(),
+        )
+
     risk = classify_tool_action(tool_name, action_name)
     acknowledged = truthy(ack)
 
