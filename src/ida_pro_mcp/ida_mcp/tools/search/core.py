@@ -6,7 +6,7 @@ Architecture:
 - Structured Semantic Retrieval: schema helpers
 """
 
-import re
+import re as _re  # import first so wildcard can't shadow it
 import time as _time
 from collections import OrderedDict
 from typing import Optional
@@ -15,6 +15,10 @@ try:
     from .._common import *
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
+
+# Use _re throughout to guarantee stdlib re even if a module in the
+# wildcard chain pollutes the local ``re`` binding (e.g. MagicMock in CI).
+re = _re
 
 try:
     from ...support.semantic_matching import normalize_action, semantic_score, semantic_tokens  # noqa: F401

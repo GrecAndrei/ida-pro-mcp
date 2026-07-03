@@ -357,6 +357,7 @@ def test_interactive_wizard_prompts_disable_policy(monkeypatch):
     monkeypatch.setattr(main_mod, "_prompt_yes_no", fake_prompt_yes_no)
     monkeypatch.setattr(main_mod, "_prompt_choice", lambda q, choices, d: d)
     monkeypatch.setattr(main_mod, "_is_interactive_terminal", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "")
 
     ui = types.SimpleNamespace(
         info=lambda *a: None,
