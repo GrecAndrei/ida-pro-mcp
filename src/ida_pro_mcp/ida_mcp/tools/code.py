@@ -1933,7 +1933,7 @@ def _trace_argument_origin(func, arg_index, max_depth, max_callers_per_level):
                         if extracted:
                             arg_source = extracted
                             # Classify the argument
-                            if extracted.startswith(("'", '"')):
+                            if extracted.startswith(('"', "'")):
                                 arg_type = "string_literal"
                             elif extracted.startswith("0x") or extracted.isdigit():
                                 arg_type = "constant"

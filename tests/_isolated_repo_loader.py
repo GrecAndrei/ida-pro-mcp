@@ -76,23 +76,28 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
     common.normalize_dict_list = lambda val: val
     common.get_function = lambda *a, **kw: None
     common.get_image_size = lambda *a, **kw: 0
-    common.looks_like_address = lambda *a, **kw: False
+    def _default_looks_like_address(val):
+        if val is None:
+            return False
+        s = str(val).strip().lower()
+        if s.startswith("0x"):
+            return True
+        if len(s) >= 6 and all(c in "0123456789abcdef" for c in s):
+            return True
+        return s.endswith("h") and len(s) > 1 and all(c in "0123456789abcdef" for c in s[:-1])
+    common.looks_like_address = _default_looks_like_address
     common.get_stack_frame_variables_internal = lambda *a, **kw: []
     common.get_type_by_name = lambda *a, **kw: None
     common.smart_match = lambda *a, **kw: False
     def _default_compile_smart_pattern(pattern, case_sensitive=False, **kwargs):
-        """Build a simple substring callable (matches FakeIDB test expectations).
-
-        Returns None when pattern is empty — matches the original mock
-        behavior so existing code paths that check `if matcher:` keep working.
-        """
+        """Build a simple substring callable (matches FakeIDB test expectations)."""
         if not pattern:
-            return None
+            return lambda v: False
         pat = pattern if case_sensitive else pattern.lower()
         if case_sensitive:
             return lambda v: pat in str(v) if v else False
         return lambda v: pat in str(v).lower() if v else False
-    common.compile_smart_pattern = lambda *a, **kw: None
+    common.compile_smart_pattern = _default_compile_smart_pattern
     common.resolve_symbol = lambda *a, **kw: None
     common.validate_range = lambda *a, **kw: (None, None)
     common.check_debugger = lambda *a, **kw: None
@@ -130,19 +135,28 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
     ):
         mod = sys.modules.setdefault(name, types.ModuleType(name))
         setattr(common, name, mod)
-    # Ensure base idautils always has essential attributes so tests that
-    # replace the module (e.g. test_packer_detector) don't break later tests
-    # that rely on these via the _isolate_sys_modules snapshot restore.
-    _base_idautils = sys.modules["idautils"]
-    _base_idautils.Segments = list
-    _base_idautils.Functions = list
-    _base_idautils.Names = lambda: iter([])
-    _base_idautils.Heads = lambda s, e: iter(range(s, e, 2))
-    _base_idautils.CodeRefsFrom = lambda ea, *a: []
-    _base_idautils.CodeRefsTo = lambda ea, *a: []
-    _base_idautils.XrefsFrom = lambda ea, *a: []
-    _base_idautils.XrefsTo = lambda ea, *a: []
-    _base_idautils.FuncItems = lambda ea: iter([])
+    # Ensure base idc mock has commonly-used SDK functions so that
+    # tools work regardless of test ordering (test_packer_detector replaces
+    # idautils with a blank module; _isolate_sys_modules restores the
+    # snapshot but the base idc must have these attrs from the start).
+    _base_idc = sys.modules["idc"]
+    _base_idc.get_full_flags = lambda ea: 0
+    _base_idc.is_data = lambda f: False
+    _base_idc.is_code = lambda f: False
+    _base_idc.is_byte = lambda f: False
+    _base_idc.is_word = lambda f: False
+    _base_idc.is_dword = lambda f: False
+    _base_idc.is_qword = lambda f: False
+    _base_idc.is_strlit = lambda f: False
+    _base_idc.is_struct = lambda f: False
+    _base_idc.is_align = lambda f: False
+    _base_idc.is_comm = lambda f: False
+    _base_idc.get_item_size = lambda ea: 1
+    _base_idc.get_type = lambda ea: None
+    _base_idc.parse_decl = lambda *a, **kw: None
+    _base_idc.get_inf_attr = lambda attr: 0
+    _base_idc.find_func_end = lambda ea: 0xFFFFFFFF
+    _base_idc.next_head = lambda ea, end: ea + 1
 
     if overrides:
         for key, value in overrides.items():

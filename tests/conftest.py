@@ -55,6 +55,7 @@ _ORIG_RATE = os.environ.get("IDA_MCP_DISABLE_RATE_LIMIT")
 # location" errors. We snapshot sys.modules once and restore it between
 # tests.
 _PRESERVED_SYS_MODULES: dict[str, object] | None = None
+_ORIGINAL_TOOL_ACTIONS: dict[str, list[str]] | None = None
 
 
 def _freeze_sys_modules() -> dict[str, object]:
@@ -70,6 +71,41 @@ def _restore_sys_modules(snapshot: dict[str, object]) -> None:
             sys.modules[name] = mod
 
 
+def _reset_tool_state() -> None:
+    """Reset mutable module-level state that leaks between tests."""
+    global _ORIGINAL_TOOL_ACTIONS
+    # Reset tool_registry._TOOL_ACTIONS to original values
+    try:
+        from ida_pro_mcp.host.server import tool_registry
+        if _ORIGINAL_TOOL_ACTIONS is None:
+            _ORIGINAL_TOOL_ACTIONS = {k: list(v) for k, v in tool_registry._TOOL_ACTIONS.items()}
+        else:
+            tool_registry._TOOL_ACTIONS.clear()
+            for k, v in _ORIGINAL_TOOL_ACTIONS.items():
+                tool_registry._TOOL_ACTIONS[k] = list(v)
+    except Exception:
+        pass
+    # Rebind idautils/idc/idaapi in _common to current sys.modules
+    # versions. This is needed because FakeIDB replaces these modules
+    # per-test, but _common captured references at import time.
+    _common_name = "ida_pro_mcp.ida_mcp.tools._common"
+    if _common_name in sys.modules:
+        common = sys.modules[_common_name]
+        for mod_name in ("idautils", "idc", "idaapi", "ida_funcs", "ida_segment",
+                         "ida_nalt", "ida_hexrays", "ida_lines", "ida_name",
+                         "ida_typeinf", "ida_bytes", "ida_frame", "ida_struct",
+                         "ida_ua", "ida_kernwin", "ida_loader", "ida_dbg"):
+            if mod_name in sys.modules:
+                setattr(common, mod_name, sys.modules[mod_name])
+    # Purge cached ida_mcp.tools.* submodules so they reimport with
+    # fresh references. Only purge leaf modules, not _common itself
+    # (we just patched it above) and not ida_mcp.rpc/sync/etc.
+    _prefix = "ida_pro_mcp.ida_mcp.tools."
+    for name in list(sys.modules.keys()):
+        if name.startswith(_prefix) and name != _common_name and name in sys.modules:
+            del sys.modules[name]
+
+
 @pytest.fixture(autouse=True)
 def _isolate_sys_modules():
     global _PRESERVED_SYS_MODULES
@@ -80,6 +116,7 @@ def _isolate_sys_modules():
         yield
     finally:
         _restore_sys_modules(snapshot)
+        _reset_tool_state()
 
 
 # ---------------------------------------------------------------------------

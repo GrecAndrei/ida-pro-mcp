@@ -24,6 +24,8 @@ import types
 from typing import Any
 
 MOCK_EXEC = 1
+MOCK_READ = 4
+MOCK_WRITE = 2
 MOCK_FL_CN = 21
 MOCK_FL_CF = 22
 MOCK_FL_JF = 17
@@ -31,6 +33,9 @@ MOCK_FL_JN = 18
 MOCK_BADADDR = 0xFFFFFFFF
 MOCK_FUNC_LIB = 0x00000004
 MOCK_FUNC_THUNK = 0x00000008
+MOCK_FUNC_NORET = 0x00000010
+MOCK_FUNC_STATIC = 0x00000020
+MOCK_FUNC_FRAME = 0x00000040
 
 
 class MockXref:
@@ -187,6 +192,11 @@ class FakeIDB:
         m.get_next_seg = _get_next_seg
         m.FUNC_LIB = MOCK_FUNC_LIB
         m.FUNC_THUNK = MOCK_FUNC_THUNK
+        m.FUNC_NORET = MOCK_FUNC_NORET
+        m.FUNC_STATIC = MOCK_FUNC_STATIC
+        m.FUNC_FRAME = MOCK_FUNC_FRAME
+        m.SEGPERM_READ = MOCK_READ
+        m.SEGPERM_WRITE = MOCK_WRITE
 
     def _patch_idc(self) -> None:
         m = sys.modules["idc"]
@@ -217,6 +227,28 @@ class FakeIDB:
         m.get_str_type = _get_str_type
         m.get_strlit_contents = _get_strlit_contents
         m.get_name_ea_simple = _get_name_ea_simple
+        # Provide commonly-used SDK functions so tools work regardless of
+        # test ordering (test_packer_detector replaces sys.modules entries
+        # with blank modules at import time).
+        m.get_full_flags = lambda ea: 0
+        m.is_data = lambda f: False
+        m.is_code = lambda f: False
+        m.is_byte = lambda f: False
+        m.is_word = lambda f: False
+        m.is_dword = lambda f: False
+        m.is_qword = lambda f: False
+        m.is_strlit = lambda f: False
+        m.is_struct = lambda f: False
+        m.is_align = lambda f: False
+        m.is_comm = lambda f: False
+        m.get_item_size = lambda ea: 1
+        m.get_type = lambda ea: None
+        m.parse_decl = lambda *a, **kw: None
+        m.get_inf_attr = lambda attr: 0
+        m.INF_SHORT_DN = 0
+        m.INF_LONG_DN = 1
+        m.demangle_name = lambda name, inf: None
+        m.print_insn_mnem = lambda ea: ""
 
     def _patch_idautils(self) -> None:
         m = sys.modules["idautils"]

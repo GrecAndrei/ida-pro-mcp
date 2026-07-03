@@ -557,7 +557,30 @@ def search_symbol(pattern, include_alternatives=True, offset=0, limit=20):
     if not raw:
         return make_error(MCPError.INVALID_ARGS, "pattern required: symbol name or address")
 
-    # --- Fast path 1: exact name ---
+    # --- Fast path 1: address literal ---
+    if looks_like_address(raw):
+        ea, err = validate_addr(raw)
+        if not err and ea != idaapi.BADADDR:
+            name = idc.get_name(ea) or ""
+            func = idaapi.get_func(ea)
+            seg = idaapi.getseg(ea)
+            typeinf = idc.get_inf_attr(idc.INF_SHORT_DN)
+            demangled = idc.demangle_name(name, typeinf) or name
+            return {
+                "ok": True,
+                "action": "symbol",
+                "match": "address",
+                "addr": hex(ea),
+                "name": name,
+                "demangled": demangled,
+                "is_function": func is not None,
+                "type": "function" if func else ("data" if idc.is_data(idc.get_full_flags(ea)) else "code" if idc.is_code(idc.get_full_flags(ea)) else "unknown"),
+                "segment": seg.getName() if seg else "",
+                "xrefs_to": xref_count_limited(ea, 512),
+                "alternatives": [],
+            }
+
+    # --- Fast path 2: exact name ---
     ea = idc.get_name_ea_simple(raw)
     if ea != idaapi.BADADDR:
         func = idaapi.get_func(ea)
@@ -578,47 +601,21 @@ def search_symbol(pattern, include_alternatives=True, offset=0, limit=20):
             "alternatives": _alternatives_for_name(raw, exclude_ea=ea, limit=5) if include_alternatives else [],
         }
 
-    # --- Fast path 2: address literal (fallback) ---
-    try:
-        ea_v, err_v = validate_addr(raw) if validate_addr else (None, "no validator")
-    except Exception:
-        ea_v, err_v = None, "validate failed"
-    if not err_v and ea_v != idaapi.BADADDR:
-        name = idc.get_name(ea_v) or ""
-        func = idaapi.get_func(ea_v)
-        seg = idaapi.getseg(ea_v)
-        typeinf = idc.get_inf_attr(idc.INF_SHORT_DN)
-        demangled = idc.demangle_name(name, typeinf) or name
-        return {
-            "ok": True,
-            "action": "symbol",
-            "match": "address",
-            "addr": hex(ea_v),
-            "name": name,
-            "demangled": demangled,
-            "is_function": func is not None,
-            "type": "function" if func else ("data" if idc.is_data(idc.get_full_flags(ea_v)) else "code" if idc.is_code(idc.get_full_flags(ea_v)) else "unknown"),
-            "segment": seg.getName() if seg else "",
-            "xrefs_to": xref_count_limited(ea_v, 512),
-            "alternatives": [],
-        }
-
     # --- Slow path: substring + semantic ---
-    matcher = compile_smart_pattern(raw, case_sensitive=False) if compile_smart_pattern else None
+    matcher = compile_smart_pattern(raw, case_sensitive=False)
     candidates = []
     for cand_ea, cand_name in idautils.Names():
-        if not cand_name:
-            continue
-        if matcher and not matcher(cand_name):
+        if not cand_name or not matcher(cand_name):
             continue
         is_func = bool(idaapi.get_func(cand_ea))
+        score = SCORE_SUBSTRING if raw.lower() in cand_name.lower() else 0.0
         candidates.append({
             "addr": hex(cand_ea),
             "name": cand_name,
             "type": "function" if is_func else "symbol",
             "xrefs_to": xref_count_limited(cand_ea, 256),
             "exact": cand_name.lower() == raw.lower(),
-            "_score": 0.0,
+            "_score": score,
         })
 
     if not candidates:
@@ -678,12 +675,16 @@ def search_symbol_info(pattern, include_xrefs=False):
     if ea == idaapi.BADADDR:
         # Fallback: try parsing as address literal
         try:
-            ea, err = validate_addr(raw) if validate_addr else (None, "no validator")
-        except Exception:
-            ea, err = None, "validate failed"
-        if err or ea == idaapi.BADADDR:
+            parsed = int(raw, 0)
+            if parsed != idaapi.BADADDR:
+                ea = parsed
+                name = idc.get_name(ea) or raw
+            else:
+                return make_error(MCPError.NO_RESULTS, f"Symbol '{raw}' not found")
+        except (ValueError, TypeError):
             return make_error(MCPError.NO_RESULTS, f"Symbol '{raw}' not found")
-    name = idc.get_name(ea) or raw
+    else:
+        name = raw or idc.get_name(ea)
 
     containing_func = idaapi.get_func(ea)
     seg = idaapi.getseg(ea)

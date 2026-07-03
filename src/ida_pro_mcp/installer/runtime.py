@@ -686,6 +686,7 @@ def _write_dev_pth(venv_dir: Path, source_root: Path, dry_run: bool, report: Ins
     if stale_pkg_dir.is_dir():
         shutil.rmtree(stale_pkg_dir)
         report.add_step("dev_pth", "cleanup", f"removed stale {stale_pkg_dir}")
+    site_packages / "ida_pro_mcp-*.dist-info"
     for p in site_packages.glob("ida_pro_mcp-*.dist-info"):
         if p.is_dir():
             shutil.rmtree(p)

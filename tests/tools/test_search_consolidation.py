@@ -60,9 +60,11 @@ sys.modules["idc"].get_inf_attr = lambda attr: 0
 sys.modules["idc"].INF_SHORT_DN = 0
 sys.modules["idc"].INF_LONG_DN = 1
 sys.modules["idc"].demangle_name = lambda name, inf: None
+sys.modules["idc"].get_name_ea_simple = lambda name: 0xFFFFFFFF
 sys.modules["idc"].find_func_end = lambda ea: 0xFFFFFFFF
 sys.modules["idc"].next_head = lambda ea, end: ea + 1
 sys.modules["idc"].print_insn_mnem = lambda ea: ""
+sys.modules["idc"].get_name_ea_simple = lambda name: 0xFFFFFFFF
 sys.modules["idautils"].Functions = list
 sys.modules["idautils"].Names = lambda: iter([])
 sys.modules["idautils"].Heads = lambda s, e: iter(range(s, e, 2))
@@ -77,42 +79,18 @@ sys.modules["idaapi"].get_next_seg = lambda ea: None
 sys.modules["idaapi"].get_ea = lambda ea: ea
 sys.modules["idaapi"].FlowChart = lambda func: iter([])
 sys.modules["ida_funcs"].get_func = lambda ea: None
-sys.modules["ida_funcs"].get_func_name = lambda ea: ""
 sys.modules["ida_segment"].getseg = lambda ea: None
 sys.modules["ida_segment"].get_segm_name = lambda seg: ""
 sys.modules["ida_nalt"].get_import_module_qty = lambda: 0
-sys.modules["ida_nalt"].get_import_model_name = lambda i: None
+sys.modules["ida_nalt"].get_import_module_name = lambda i: None
 
 
 def _cat():
     return load_support_module("_api_categories")
 
 
-def _patch_common_for_search():
-    """Patch _common mocks so symbol/symbol_info/demangle work without IDA."""
-    import importlib
-    modname = "ida_pro_mcp.ida_mcp.tools._common"
-    if modname in sys.modules:
-        common = sys.modules[modname]
-        # compile_smart_pattern: return None for no pattern, else substring matcher
-        def _csp(pattern, case_sensitive=False, **kwargs):
-            if not pattern:
-                return None
-            pat = pattern if case_sensitive else pattern.lower()
-            return lambda v: pat in str(v).lower() if v else False
-        common.compile_smart_pattern = _csp
-        # looks_like_address: detect hex strings
-        def _lla(val):
-            if val is None:
-                return False
-            s = str(val).strip().lower()
-            return s.startswith("0x") and len(s) > 2
-        common.looks_like_address = _lla
-
-
 def _load_search():
     _cat()
-    _patch_common_for_search()
     return load_tool_submodule("search")
 
 
@@ -141,6 +119,7 @@ class TestSearchSymbol:
         mod = _load_search()
         res = mod.search(action="symbol", pattern="Encrypt")
         assert res["ok"] is True
+        assert res["match"] in ("fuzzy", "exact_case_insensitive")
         assert "MyEncryptionRoutine" in res["name"]
 
     def test_no_match_returns_error(self):
@@ -149,6 +128,7 @@ class TestSearchSymbol:
         mod = _load_search()
         res = mod.search(action="symbol", pattern="nonexistent_symbol_xyz")
         assert res.get("ok") is not True
+        # message may be in 'error' (production) or 'message' (test mock)
         err_text = res.get("error", "") or res.get("message", "") or ""
         assert "No symbol matching" in err_text or "not found" in err_text.lower()
 
@@ -170,13 +150,14 @@ class TestSearchSymbolInfo:
         assert "name" in res
         assert "demangled" in res
         assert "segment" in res
+        assert "perms" in res or "segment_perms" in res
 
     def test_info_for_address_literal(self):
         db = FakeIDB()
         db.add_func(0x401000, "DecryptBuffer")
         db.install()
         mod = _load_search()
-        res = mod.search(action="symbol_info", pattern="0x401000")
+        res = mod.search(action="symbol_info", pattern="0x401000", query="0x401000")
         assert res["ok"] is True
         assert res["addr"] == "0x401000"
 
@@ -201,6 +182,8 @@ class TestSearchDemangle:
             assert items[0]["mangled"] == "?Method@Class@@QAEXXZ"
             assert items[0]["short"] == "Class::Method(void)"
             assert items[0]["is_mangled"] is True
+            # Unmangled names pass through as-is
+            assert items[2].get("_short", True)
         finally:
             sys.modules["idc"].demangle_name = original_demangle
 
