@@ -253,7 +253,7 @@ def _extract_var_rename_hints(cfunc) -> list:
                     # to the inference regex. Fall back to type name only
                     # when it's a real type string, not a memory address.
                     type_str = str(tinfo).strip()
-                    if not type_str or type_str.startswith("0x") or type_str.startswith("0X"):
+                    if not type_str or type_str.startswith(("0x", "0X")):
                         raise ValueError("anonymous lvar (no type name)")
                     type_str = type_str.lower().strip("* ")
                     # Strip pointer/array decorators for name inference.
@@ -1933,7 +1933,7 @@ def _trace_argument_origin(func, arg_index, max_depth, max_callers_per_level):
                         if extracted:
                             arg_source = extracted
                             # Classify the argument
-                            if extracted.startswith('"') or extracted.startswith("'"):
+                            if extracted.startswith(("'", '"')):
                                 arg_type = "string_literal"
                             elif extracted.startswith("0x") or extracted.isdigit():
                                 arg_type = "constant"

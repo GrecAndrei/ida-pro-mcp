@@ -182,8 +182,8 @@ class TestSearchDemangle:
             assert items[0]["mangled"] == "?Method@Class@@QAEXXZ"
             assert items[0]["short"] == "Class::Method(void)"
             assert items[0]["is_mangled"] is True
-            # Unmangled names pass through as-is
-            assert items[2]["_short"] if "_short" in items[2] else True
+            # Unmangled names pass through as-is — may be in 'short' key
+            assert items[2].get("short", items[2].get("_short", True))
         finally:
             sys.modules["idc"].demangle_name = original_demangle
 

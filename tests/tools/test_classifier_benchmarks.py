@@ -188,7 +188,7 @@ class TestSearchVulnerable:
         eas = [0x401000 + i * 0x100 for i in range(6)]
         db.add_func(eas[0], "recv")
         for i in range(1, 6):
-            db.add_func(eas[i], "hop_%d" % i)
+            db.add_func(eas[i], f"hop_{i}")
         # caller direction: hop_1 calls recv, hop_2 calls hop_1, ...
         for i in range(1, 6):
             db._callees.setdefault(eas[i], set()).add(eas[i - 1])
@@ -212,7 +212,7 @@ class TestSearchVulnerable:
         eas = [0x401000 + i * 0x100 for i in range(10)]
         db.add_func(eas[0], "recv")
         for i in range(1, 10):
-            db.add_func(eas[i], "hop_%d" % i)
+            db.add_func(eas[i], f"hop_{i}")
         for i in range(1, 10):
             db._callees.setdefault(eas[i], set()).add(eas[i - 1])
             db._callers.setdefault(eas[i - 1], set()).add(eas[i])
@@ -276,7 +276,7 @@ class TestSearchVulnerable:
         db.add_func(0x401000, "recv")
         db.add_func(0x401100, "read")
         for i in range(2, 500):
-            db.add_func(0x401000 + i * 0x100, "func_%d" % i)
+            db.add_func(0x401000 + i * 0x100, f"func_{i}")
         # caller direction: mid_50 calls recv AND strcpy
         mid = 0x401000 + 50 * 0x100
         db._callees[mid] = {0x401000}
@@ -382,7 +382,7 @@ class TestClassifyBinary:
         db = FakeIDB()
         db.add_segment(".text", 0x401000, 0x402000)
         for i in range(10):
-            db.add_func(0x401000 + i * 0x100, "sub_%d" % i, callees=[])
+            db.add_func(0x401000 + i * 0x100, f"sub_{i}", callees=[])
         db.install()
         mod = _load_classify()
         res = mod.classify(action="binary", limit=50)
@@ -404,7 +404,7 @@ class TestClassifyBinary:
         for cat, apis in callee_sets.items():
             for _ in range(50):
                 ea = 0x401000 + idx * 0x100
-                db.add_func(ea, "%s_func_%d" % (cat, idx), callees=apis)
+                db.add_func(ea, f"{cat}_func_{idx}", callees=apis)
                 idx += 1
         db.install()
         mod = _load_classify()
@@ -413,7 +413,7 @@ class TestClassifyBinary:
         assert res["function_count"] == 250
         dist = res["category_distribution"]
         for cat in callee_sets:
-            assert dist.get(cat, 0) >= 40, "%s: %d" % (cat, dist.get(cat, 0))
+            assert dist.get(cat, 0) >= 40, f"{cat}: {dist.get(cat, 0)}"
 
 
 # =========================================================================

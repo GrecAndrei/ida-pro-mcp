@@ -13,7 +13,7 @@ These tests pin that contract.
 """
 import os
 import sys
-from unittest.mock import patch, Mock
+from unittest.mock import Mock, patch
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 SRC = os.path.join(ROOT, "src")

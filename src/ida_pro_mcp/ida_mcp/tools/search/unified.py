@@ -682,7 +682,6 @@ def search_symbol_info(pattern, include_xrefs=False):
             return make_error(MCPError.NO_RESULTS, f"Symbol '{raw}' not found")
         name = raw or idc.get_name(ea)
 
-    func = idaapi.get_ea(ea)  # potentially the function containing this addr
     containing_func = idaapi.get_func(ea)
     seg = idaapi.getseg(ea)
     flags = idc.get_full_flags(ea)

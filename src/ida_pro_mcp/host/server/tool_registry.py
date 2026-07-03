@@ -100,7 +100,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "funcs": ["create", "delete", "set_flags", "info", "metrics", "find_similar", "suggest_names", "list"],
     "gadgets": ["rop", "jop", "cop", "syscall", "write_what_where", "stack_pivot", "shellcode_space", "mitigations", "seh_handlers", "pivot_chains", "classify_chain"],
     "governance": ["check", "redact", "list_rules", "stats"],
-    "graph": ["callgraph", "cfg", "dominators", "xref_graph", "call_chain", "common_callers", "common_callees", "hub_functions", "leaf_functions", "recursive", "dominator", "influence", "dependency_graph", "dead_functions"],
+    "graph": ["callgraph", "cfg", "dominators", "xref_graph"],
     "history": ["undo", "redo", "list", "snapshot", "restore", "diff"],
     "hooks": ["suggest", "generate_frida", "generate_detours", "find_targets", "inline_hooks"],
     "idb": ["meta", "summary", "segments", "entrypoints", "bookmarks", "overview", "architecture_profile", "state"],
@@ -196,6 +196,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "estimate", "explain", "plan", "catalog", "triage_fast",
         "malware_deep", "vuln_audit", "recon_sweep", "patch_review",
     ],
+    "xref_analysis": ["call_chain", "common_callers", "common_callees", "hub_functions", "leaf_functions", "recursive", "dominator", "influence", "dependency_graph", "dead_functions"],
     "yara_hunt": ["scan", "compile", "list_rules", "match_context", "extract_strings", "xref_matches"],
 }
 

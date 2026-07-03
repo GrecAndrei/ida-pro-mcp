@@ -86,7 +86,7 @@ class FakeIDB:
     # ------------------------------------------------------------------
     # Builder
     # ------------------------------------------------------------------
-    def add_segment(self, name: str, start: int, end: int, perm: int = MOCK_EXEC) -> "FakeIDB":
+    def add_segment(self, name: str, start: int, end: int, perm: int = MOCK_EXEC) -> FakeIDB:
         self._segments.append({"name": name, "start": start, "end": end, "perm": perm})
         return self
 
@@ -98,7 +98,7 @@ class FakeIDB:
         segment: str = ".text",
         callees: list | None = None,
         flags: int = 0,
-    ) -> "FakeIDB":
+    ) -> FakeIDB:
         self._funcs[ea] = {
             "ea": ea,
             "name": name,
@@ -125,19 +125,19 @@ class FakeIDB:
             self._callers.setdefault(ce, set()).add(ea)
         return self
 
-    def add_import(self, name: str) -> "FakeIDB":
+    def add_import(self, name: str) -> FakeIDB:
         if name not in self._imports:
             self._imports.append(name)
         return self
 
-    def add_string(self, func_ea: int, text: str) -> "FakeIDB":
+    def add_string(self, func_ea: int, text: str) -> FakeIDB:
         self._strings.setdefault(func_ea, []).append(text)
         return self
 
     # ------------------------------------------------------------------
     # Install / patch IDA stubs
     # ------------------------------------------------------------------
-    def install(self) -> "FakeIDB":
+    def install(self) -> FakeIDB:
         for name in (
             "idaapi", "idc", "idautils", "ida_funcs", "ida_segment",
             "ida_nalt", "ida_hexrays", "ida_lines", "ida_loader",
@@ -222,7 +222,7 @@ class FakeIDB:
         m = sys.modules["idautils"]
 
         m.Functions = lambda start=None, end=None: [
-            ea for ea in self._funcs.keys()
+            ea for ea in self._funcs
             if start is None or (start <= ea < end)
         ]
         m.Segments = lambda: [s["start"] for s in self._segments]
@@ -244,8 +244,7 @@ class FakeIDB:
             fn = self._find_func_containing(ea)
             if not fn:
                 return
-            for cal in self._callees.get(fn["ea"], set()):
-                yield cal
+            yield from self._callees.get(fn["ea"], set())
 
         def _code_refs_to(ea, flags=0):
             """Yield source EAs (caller function start) — raw ints like real IDA."""
@@ -295,7 +294,7 @@ class FakeIDB:
         def _get_func_name(ea):
             if ea in self._names:
                 return self._names[ea]
-            for fea, info in self._funcs.items():
+            for _fea, info in self._funcs.items():
                 if info["start"] <= ea < info["end"]:
                     return info["name"]
             return ""

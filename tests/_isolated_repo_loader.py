@@ -80,11 +80,10 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
         if val is None:
             return False
         s = str(val).strip().lower()
-        if s.startswith("0x") or s.startswith("0x"):
-            return True
-        if len(s) >= 6 and all(c in "0123456789abcdef" for c in s):
-            return True
-        if s.endswith("h") and len(s) > 1 and all(c in "0123456789abcdef" for c in s[:-1]):
+        if s.startswith(("0x",)):
+            if len(s) > 2 and all(c in "0123456789abcdef" for c in s[2:]):
+                return True
+        elif len(s) >= 6 and all(c in "0123456789abcdef" for c in s) or s.endswith("h") and len(s) > 1 and all(c in "0123456789abcdef" for c in s[:-1]):
             return True
         return False
     common.looks_like_address = _default_looks_like_address

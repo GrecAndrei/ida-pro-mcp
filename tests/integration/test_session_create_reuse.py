@@ -21,7 +21,6 @@ import tempfile
 import unittest
 
 from ida_pro_mcp.host.server.server_session import ServerSessionMixin
-
 from tests._isolated_repo_loader import load_repo_module
 
 

@@ -32,7 +32,6 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-
 # Make the source tree importable
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -153,13 +152,10 @@ class TestPhasePreflightOptIn(unittest.TestCase):
 
     def test_enabled_allows_read_tools_in_prove(self):
         """Read tools (code, search, etc.) are never blocked in prove."""
-        host = _MinimalHost(phase_gates_enabled=True, phase="prove")
+        _host = _MinimalHost(phase_gates_enabled=True, phase="prove")  # gate infrastructure
         tool = "code"  # not in risky set
         risky = {"modify", "bulk", "segments", "funcs", "annotation"}
-        if tool in risky:
-            result = "blocked"
-        else:
-            result = None
+        result = "blocked" if tool in risky else None
         self.assertIsNone(result, "Read tools must not be blocked")
 
 

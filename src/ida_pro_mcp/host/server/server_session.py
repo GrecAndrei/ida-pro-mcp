@@ -984,7 +984,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 try:
                     for name in os.listdir(idb_dir or "."):
                         if name.startswith(sid_prefix) and (
-                            name.endswith(".id0") or name.endswith(".nam")
+                            name.endswith((".id0", ".nam"))
                         ):
                             return name  # any component signals presence
                 except OSError:
