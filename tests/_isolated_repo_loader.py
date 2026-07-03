@@ -76,29 +76,23 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
     common.normalize_dict_list = lambda val: val
     common.get_function = lambda *a, **kw: None
     common.get_image_size = lambda *a, **kw: 0
-    def _default_looks_like_address(val):
-        if val is None:
-            return False
-        s = str(val).strip().lower()
-        if s.startswith(("0x",)):
-            if len(s) > 2 and all(c in "0123456789abcdef" for c in s[2:]):
-                return True
-        elif len(s) >= 6 and all(c in "0123456789abcdef" for c in s) or s.endswith("h") and len(s) > 1 and all(c in "0123456789abcdef" for c in s[:-1]):
-            return True
-        return False
-    common.looks_like_address = _default_looks_like_address
+    common.looks_like_address = lambda *a, **kw: False
     common.get_stack_frame_variables_internal = lambda *a, **kw: []
     common.get_type_by_name = lambda *a, **kw: None
     common.smart_match = lambda *a, **kw: False
     def _default_compile_smart_pattern(pattern, case_sensitive=False, **kwargs):
-        """Build a simple substring callable (matches FakeIDB test expectations)."""
+        """Build a simple substring callable (matches FakeIDB test expectations).
+
+        Returns None when pattern is empty — matches the original mock
+        behavior so existing code paths that check `if matcher:` keep working.
+        """
         if not pattern:
-            return lambda v: False
+            return None
         pat = pattern if case_sensitive else pattern.lower()
         if case_sensitive:
             return lambda v: pat in str(v) if v else False
         return lambda v: pat in str(v).lower() if v else False
-    common.compile_smart_pattern = _default_compile_smart_pattern
+    common.compile_smart_pattern = lambda *a, **kw: None
     common.resolve_symbol = lambda *a, **kw: None
     common.validate_range = lambda *a, **kw: (None, None)
     common.check_debugger = lambda *a, **kw: None
@@ -136,6 +130,19 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
     ):
         mod = sys.modules.setdefault(name, types.ModuleType(name))
         setattr(common, name, mod)
+    # Ensure base idautils always has essential attributes so tests that
+    # replace the module (e.g. test_packer_detector) don't break later tests
+    # that rely on these via the _isolate_sys_modules snapshot restore.
+    _base_idautils = sys.modules["idautils"]
+    _base_idautils.Segments = list
+    _base_idautils.Functions = list
+    _base_idautils.Names = lambda: iter([])
+    _base_idautils.Heads = lambda s, e: iter(range(s, e, 2))
+    _base_idautils.CodeRefsFrom = lambda ea, *a: []
+    _base_idautils.CodeRefsTo = lambda ea, *a: []
+    _base_idautils.XrefsFrom = lambda ea, *a: []
+    _base_idautils.XrefsTo = lambda ea, *a: []
+    _base_idautils.FuncItems = lambda ea: iter([])
 
     if overrides:
         for key, value in overrides.items():
