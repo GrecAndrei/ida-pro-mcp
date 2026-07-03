@@ -122,6 +122,32 @@ Use installer-managed client config, or run manually (above).
 }
 ```
 
+### Symbol resolution
+
+```json
+{"name": "search", "arguments": {"action": "symbol", "pattern": "main"}}
+{"name": "search", "arguments": {"action": "symbol_info", "pattern": "0x401000"}}
+{"name": "search", "arguments": {"action": "demangle", "pattern": "?_Func@Class@@QEAAHXZ"}}
+```
+
+`symbol` resolves a name to an address (exact then fuzzy), returns demangled name, type, segment, xref count, and alternatives. `symbol_info` returns a rich symbol inspector (type, size, xrefs, segment flags, function prototype). `demangle` exposes IDA's `idc.demangle_name` for raw C++ mangled names — returns both INF_SHORT_DN and INF_LONG_DN forms.
+
+### String xref search
+
+```json
+{"name": "search", "arguments": {"action": "xrefs_to_string", "pattern": "password"}}
+```
+
+Finds every function that references a matching string literal, sorted by xref count descending. Pass a hex address for direct lookup, or a substring to search string values.
+
+### Argument origin tracing
+
+```json
+{"name": "code", "arguments": {"action": "trace_argument_origin", "addrs": "0x401000", "arg_index": 2, "max_depth": 4}}
+```
+
+Backward BFS through callers. At each call site, decompiles the caller and extracts the argument expression for `arg_index`. Classifies the origin as `string_literal`, `constant`, `function_call`, `address_of`, `variable`, or `parse_failed`. Use to trace where a specific value (key, buffer size, flag) originates.
+
 ## How LLMs Should Use It
 
 Recommended pattern:
@@ -143,6 +169,7 @@ Practical rules:
 - Write ops require `_risk_ack=true` to bypass the governance gate
 - Match envelopes on `error.code` (uppercase), not `error.message` (free text)
 - When a long tool call returns `IDA_TIMEOUT`, retry with a higher `IDA_MCP_RPC_HARD_WALLCLOCK_SEC` — not a crash
+- Use `search(action='symbol')` and `search(action='demangle')` when working with C++ binaries — name resolution and demangling save multiple round-trips vs. disasm scraping
 
 ## Skills
 
@@ -168,7 +195,7 @@ The same tool-doc skills for Codex agents live in `.agents/skills/` (auto-genera
 
 ## Tool Surface
 
-69 tools, hundreds of actions. Default `tools/list` mode is `ultra` — short routing hints plus action enums, ~9.5k tokens total. Skills carry the reference docs; the tools carry live data.
+72 tools, hundreds of actions. Default `tools/list` mode is `ultra` — short routing hints plus action enums, ~9.5k tokens total. Skills carry the reference docs; the tools carry live data.
 
  `IDA_MCP_TOOLS_LIST_MODE` controls verbosity:
 - `ultra` (default): action enums + short description (~9.5k tokens)
@@ -183,7 +210,7 @@ The same tool-doc skills for Codex agents live in `.agents/skills/` (auto-genera
 - Analysis: `cfg_analysis`, `stack_analysis`, `abi`, `protocol`, `classify`, `bindiff`, `compare`, `summarize`, `agent`, `entropy`, `packer`, `fixups`
 - Security RE: `threat_hunt`, `taint`, `gadgets`, `deobfuscate`, `crypto_id`, `yara_hunt`
 - Debug/trace: `debug`, `trace_analysis`, `coverage`, `emulate`
-- Structural: `ctree`, `microcode`, `graph`, `imports_deep`, `symbols`, `patterns`, `struct_recover`, `hooks`
+- Structural: `ctree`, `microcode`, `graph`, `xref_analysis`, `imports_deep`, `symbols`, `patterns`, `struct_recover`, `hooks`
 - AI/intelligence: `intelligence`, `knowledge`, `lumina`, `predictor`, `llm_helpers`, `workflow`
 - Firmware: `firmware_view`, `nav`
 - Utilities: `analysis`, `project`, `export`, `history`, `misc`, `calc`, `binary_info`, `string_ops`
