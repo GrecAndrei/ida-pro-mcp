@@ -139,12 +139,18 @@ class ServerDispatchMixin:
         """Resolve the governance policy mode.
 
         Precedence (highest first):
-          1. IDA_MCP_POLICY_MODE env var
-          2. ~/.config/ida-pro-mcp/policy.json `mode` key (live override,
+          1. Session-level policy_mode (set via session create or set_policy)
+          2. IDA_MCP_POLICY_MODE env var
+          3. ~/.config/ida-pro-mcp/policy.json `mode` key (live override,
              readable on every call so the user can change it without
              restarting the bridge)
-          3. Default "assist"
+          4. Default "assist"
         """
+        session = getattr(self, "current_session", None)
+        if session is not None:
+            session_mode = getattr(session, "policy_mode", None)
+            if isinstance(session_mode, str) and session_mode:
+                return session_mode
         env_mode = os.environ.get("IDA_MCP_POLICY_MODE")
         if env_mode:
             return env_mode

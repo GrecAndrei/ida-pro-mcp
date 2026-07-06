@@ -649,6 +649,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         inferred = (arch_meta.get("inferred_profile") or {}) if isinstance(arch_meta, dict) else {}
         is_packed_idb = isinstance(inferred, dict) and inferred.get("file_kind") == "packed_idb"
 
+        policy_mode = args.get("policy_mode")
         self.current_session = self.session_mgr.create_session(
             binary_path or "",
             analysis_options=analysis_options,
@@ -656,6 +657,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             tags=tags,
             notes=notes,
             packed_idb=is_packed_idb,
+            policy_mode=policy_mode,
         )
         out = {"ok": True, "session": self.current_session.to_dict()}
         out["capsule"] = self._sync_session_to_capsule(

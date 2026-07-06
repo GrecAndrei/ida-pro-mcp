@@ -104,6 +104,7 @@ class Session:
         phase: str = "triage",
         linked_sessions: list[str] | None = None,
         packed_idb: bool = False,
+        policy_mode: str | None = None,
     ):
         self.session_id = session_id
         self.idb_path = idb_path
@@ -119,6 +120,7 @@ class Session:
         self.phase = phase
         self.linked_sessions = linked_sessions or []
         self.packed_idb = bool(packed_idb)
+        self.policy_mode = policy_mode
 
     def _derive_auto_name(self) -> str:
         if self.binary_path:
@@ -187,6 +189,7 @@ class Session:
             "phase": self.phase,
             "linked_sessions": self.linked_sessions,
             "packed_idb": self.packed_idb,
+            "policy_mode": self.policy_mode,
         }
 
     @classmethod
@@ -216,6 +219,7 @@ class Session:
             data.get("phase", "triage"),
             data.get("linked_sessions", []) or [],
             data.get("packed_idb", False),
+            data.get("policy_mode"),
         )
 
 
@@ -427,6 +431,7 @@ class SessionManager(SessionSkillsMixin):
         analysis_options: dict | None = None, idb_path: str | None = None,
         ida_args: list[str] | None = None, tags: list[str] | None = None,
         notes: str = "", packed_idb: bool = False,
+        policy_mode: str | None = None,
     ) -> Session:
         with self._lock:
             sid = self._new_session_id()
@@ -446,6 +451,7 @@ class SessionManager(SessionSkillsMixin):
                 ida_args=ida_args or [], packed_idb=packed_idb,
                 tags=self._sanitize_tags(tags),
                 notes=self._sanitize_note(notes),
+                policy_mode=policy_mode,
             )
             self.sessions[sid] = session
             self._save_metadata(session)

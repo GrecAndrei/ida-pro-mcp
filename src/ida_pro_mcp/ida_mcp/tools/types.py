@@ -42,9 +42,9 @@ def _is_fully_mapped(ea: int, size: int) -> bool:
 def types(
     action: Annotated[Literal["list", "get", "set_prototype", "parse_decl", "declare", "apply",
                               "search_structs", "infer", "read_struct", "import_header",
-                              "diff", "visualize", "propagate", "enum_values", "type_graph"],
+                              "diff", "visualize", "propagate", "enum_values", "type_graph", "vtable"],
                       "Action: list|get|set_prototype|parse_decl|declare|apply|search_structs|"
-                      "infer|read_struct|import_header|diff|visualize|propagate|enum_values|type_graph"],
+                      "infer|read_struct|import_header|diff|visualize|propagate|enum_values|type_graph|vtable"],
     name: Annotated[Optional[str], "Type name (or variable name for apply)"] = None,
     addr: Annotated[Optional[str], "Address (for set_prototype/apply/infer/read_struct)"] = None,
     decl: Annotated[Optional[str], "Type declaration string (or header content)"] = None,
@@ -1022,6 +1022,113 @@ def types(
             }
 
         # ====================================================================
+        # vtable - Find and dump a C++ vtable by class name or address
+        # ====================================================================
+        elif action == "vtable":
+            if not name and not addr:
+                return make_error(MCPError.INVALID_ARGS,
+                                  "name or addr required. Provide class name (e.g. 'SystemKloProxy') "
+                                  "or vtable address (e.g. '_ZTVN7android14SystemKloProxyE').")
+            # Resolve vtable address from name or addr
+            vtable_ea = None
+            vtable_name = None
+            if addr:
+                vtable_ea, error = validate_addr(addr)
+                if error:
+                    return error
+                vtable_name = idc.get_name(vtable_ea) or addr
+            else:
+                # Search for vtable symbol by class name
+                clean_name = name.strip()
+                mangled_vtable = f"_ZTVN{len(clean_name)}{clean_name}E"
+                # Try demangled form: "vtable for ClassName"
+                fangled_forms = [
+                    mangled_vtable,
+                    f"vtable for {clean_name}",
+                    clean_name,
+                ]
+                for form in fangled_forms:
+                    ea = idc.get_name_ea_simple(form)
+                    if ea != idaapi.BADADDR:
+                        vtable_ea = ea
+                        vtable_name = form
+                        break
+                if vtable_ea is None:
+                    # Scan all names for partial match
+                    for ea, n in idautils.Names():
+                        if clean_name.lower() in n.lower() and ("_ZTV" in n or "vtable" in n.lower()):
+                            vtable_ea = ea
+                            vtable_name = n
+                            break
+            if vtable_ea is None:
+                return make_error(MCPError.NOT_FOUND,
+                                  f"No vtable found for '{name or addr}'. "
+                                  "Try the mangled name (e.g. '_ZTVN7android14SystemKloProxyE').")
+
+            # Determine pointer size
+            ptr_size = 8 if _inf_is_64bit() else 4
+            # Read vtable entries: each entry is a pointer to a virtual function
+            entries = []
+            cur = vtable_ea
+            idx = 0
+            max_entries = 64  # safety cap
+            seen_targets = set()
+            while idx < max_entries:
+                raw = ida_bytes.get_bytes(cur, ptr_size)
+                if not raw or len(raw) < ptr_size:
+                    break
+                import struct
+                fmt = "<Q" if ptr_size == 8 else "<I"
+                target = struct.unpack(fmt, raw)[0]
+                if target == 0:
+                    break
+                if not ida_bytes.is_loaded(target):
+                    break
+                if target in seen_targets:
+                    break
+                seen_targets.add(target)
+                func = idaapi.get_func(target)
+                func_name = idc.get_name(target) or ""
+                demangled = func_name
+                try:
+                    import ida_nalt
+                    demangled = ida_nalt.demangle_name(func_name, ida_nalt.get_short_name_synonym()) or func_name
+                    # Strip parameters for readability: "Class::method(int)" -> "Class::method"
+                    if "(" in demangled:
+                        demangled = demangled[:demangled.index("(")].strip()
+                except Exception:
+                    pass
+                func_size = 0
+                if func:
+                    func_size = int(func.end_ea - func.start_ea)
+                entries.append({
+                    "index": idx,
+                    "addr": hex(target),
+                    "name": demangled,
+                    "mangled": func_name,
+                    "size": func_size,
+                })
+                cur += ptr_size
+                idx += 1
+
+            if not entries:
+                return {"ok": True, "vtable_addr": hex(vtable_ea), "name": vtable_name,
+                        "entries": [], "count": 0,
+                        "note": "Vtable found but no valid function pointers detected."}
+
+            return {
+                "ok": True,
+                "vtable_addr": hex(vtable_ea),
+                "name": vtable_name,
+                "class": clean_name if name else idc.get_name(vtable_ea) or "",
+                "entries": entries,
+                "count": len(entries),
+                "vtable": "\n".join(
+                    f"  [{e['index']}] {e['addr']}  {e['name']}" for e in entries
+                ),
+            }
+
+        # ====================================================================
         # Unknown action
         # ====================================================================
         else:
@@ -1030,7 +1137,7 @@ def types(
                 f"Unknown action: '{action}'. "
                 f"Supported actions: list|get|set_prototype|parse_decl|declare|apply|"
                 f"search_structs|infer|read_struct|import_header|diff|visualize|"
-                f"propagate|enum_values|type_graph",
+                f"propagate|enum_values|type_graph|vtable",
             )
 
     except Exception as e:

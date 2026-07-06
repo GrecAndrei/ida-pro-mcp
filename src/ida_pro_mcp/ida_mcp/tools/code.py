@@ -732,7 +732,7 @@ def code(
         "callees", "callers", "blocks", "callgraph", "export",
         "find_paths", "strings_in_func", "diff_functions", "semantic_decompile",
         "decomp_dataflow", "decompile_chain", "smart_decompile", "explain",
-        "trace_argument_origin"
+        "trace_argument_origin", "decompile_all"
     ], "Action"],
     addrs: Annotated[Optional[list[str] | str], "Address(es) - hex string or name"] = None,
     addr: Annotated[Optional[str], "Single address (alias for addrs)"] = None,
@@ -844,6 +844,46 @@ def code(
         Best for: Finding where a specific value (e.g., a key, buffer size, or flag) originates.
     """
     try:
+        # decompile_all doesn't need addrs — it uses a name filter
+        if action == "decompile_all":
+            query = kwargs.get("query")
+            matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
+            all_funcs = []
+            for func_ea in idautils.Functions():
+                name = ida_funcs.get_func_name(func_ea) or ""
+                if matcher and not matcher(name):
+                    continue
+                all_funcs.append(func_ea)
+            if not all_funcs:
+                return {"ok": True, "results": [], "count": 0,
+                        "note": f"No functions matching '{query}'."}
+            all_results = []
+            for func_ea in all_funcs:
+                try:
+                    cfunc, dec_err = _decompile_with_diagnostics(func_ea)
+                    if cfunc:
+                        all_results.append({
+                            "ok": True,
+                            "addr": hex_ea(func_ea),
+                            "name": ida_funcs.get_func_name(func_ea) or "",
+                            "code": str(cfunc),
+                            "prototype": get_prototype(idaapi.get_func(func_ea)),
+                        })
+                    else:
+                        all_results.append({
+                            "addr": hex_ea(func_ea),
+                            "name": ida_funcs.get_func_name(func_ea) or "",
+                            "error": dec_err.get("message", "Decompilation failed") if isinstance(dec_err, dict) else "Decompilation failed",
+                        })
+                except Exception as e:
+                    all_results.append({
+                        "addr": hex_ea(func_ea),
+                        "name": ida_funcs.get_func_name(func_ea) or "",
+                        "error": str(e),
+                    })
+            return {"ok": True, "results": all_results, "count": len(all_results),
+                    "query": query or "", "total_functions": len(all_funcs)}
+
         # Support both addr (singular) and addrs (plural) for compatibility
         if not addrs and addr:
             addrs = addr
@@ -882,10 +922,32 @@ def code(
                     results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}.{suggestion}", details={"addr": addr}))
                     continue
 
+                # Thunk auto-resolution: if this is a thunk, follow to the real implementation
+                thunk_target = None
+                flags = func.flags if hasattr(func, 'flags') else 0
+                if flags & ida_funcs.FUNC_THUNK:
+                    try:
+                        target_ea = idaapi.calc_thunk_func_target(func)
+                        if target_ea and target_ea != idaapi.BADADDR:
+                            thunk_target = target_ea
+                    except Exception:
+                        pass
+
                 try:
                     cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
                     if cfunc:
                         pseudo = str(cfunc)
+                        # If thunk, append the real implementation info
+                        if thunk_target:
+                            target_name = idc.get_name(thunk_target) or ""
+                            try:
+                                import ida_nalt
+                                demangled = ida_nalt.demangle_name(target_name, ida_nalt.get_short_name_synonym()) or target_name
+                                if "(" in demangled:
+                                    demangled = demangled[:demangled.index("(")].strip()
+                            except Exception:
+                                demangled = target_name
+                            pseudo = f"// THUNK -> {hex(thunk_target)} ({demangled})\n{pseudo}"
                         result_entry = {
                             "ok": True,
                             "addr": hex_ea(func.start_ea),
