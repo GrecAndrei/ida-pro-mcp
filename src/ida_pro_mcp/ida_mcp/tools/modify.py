@@ -381,6 +381,12 @@ def _trigger_rename_propagation(func_ea: int, new_name: str) -> None:
             if not callees or not pseudo:
                 return
 
+            # Skip similarity if index is empty
+            if idx.size == 0:
+                _result["embedding_suggestions"] = []
+                _result["embedding_note"] = "No index — run intelligence(action='index_fast') for rename suggestions."
+                return
+
             # Step 3: For each unnamed callee, check embedding similarity
             suggestions = []
             for callee_ea in set(callees[:20]):

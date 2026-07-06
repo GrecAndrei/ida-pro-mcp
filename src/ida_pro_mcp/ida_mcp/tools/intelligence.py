@@ -956,6 +956,13 @@ def intelligence(
             if not pseudo:
                 return make_error(MCPError.IDA_ERROR, "failed to decompile function")
             idx, db_path = _index_for_current_idb()
+            if idx.size == 0:
+                return make_error(
+                    MCPError.NOT_FOUND,
+                    "No functions indexed yet. Run intelligence(action='index_fast') first.",
+                    hint="index_fast builds an index from disassembly in seconds. "
+                         "For better quality, use index_batch (decompile-based).",
+                )
             qname = ida_funcs.get_func_name(ea) or hex(ea)
             idx.index_async(hex(ea), qname, pseudo)
             similar = idx.similar(pseudo, top_k=top_k, exclude_ea=hex(ea), threshold=threshold)
@@ -979,6 +986,13 @@ def intelligence(
             top_k = max(1, int(kwargs.get("top_k", max_items)))
             threshold = float(kwargs.get("threshold", 0.0))
             idx, db_path = _index_for_current_idb()
+            if idx.size == 0:
+                return make_error(
+                    MCPError.NOT_FOUND,
+                    "No functions indexed yet. Run intelligence(action='index_fast') first.",
+                    hint="index_fast builds an index from disassembly in seconds. "
+                         "For better quality, use index_batch (decompile-based).",
+                )
             rows = idx.search(str(query), top_k=top_k, threshold=threshold)
             persisted_state = _persist_embedder_state(
                 idx,
@@ -1057,6 +1071,12 @@ def intelligence(
             top_k = int(kwargs.get("top_k", 4))
             behavior_rows = classifier.classify(pseudo, threshold=threshold, top_k=top_k, block=False)
             idx, db_path = _index_for_current_idb()
+            if idx.size == 0:
+                return make_error(
+                    MCPError.NOT_FOUND,
+                    "No functions indexed yet. Run intelligence(action='index_fast') first.",
+                    hint="index_fast builds an index from disassembly in seconds.",
+                )
             qname = ida_funcs.get_func_name(ea) or hex(ea)
             idx.index_async(hex(ea), qname, pseudo)
             similar = idx.similar(pseudo, top_k=max(1, int(kwargs.get("similar_top_k", 3))), exclude_ea=hex(ea), threshold=0.0)

@@ -164,11 +164,72 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
 
 
 def search_semantic(pattern, include_context, range_start, range_end, offset, limit, include_items, timeout_ms=0):
-    """Natural-language semantic search across symbols, imports, strings, and code lines."""
+    """Natural-language semantic search using the embedding index.
+
+    Requires a prior intelligence(action='index_fast') or index_batch call.
+    Falls back to heuristic search only if the index is unavailable.
+    """
     query = (pattern or "").strip()
     if not query:
         return make_error(MCPError.INVALID_ARGS, "pattern or query required")
 
+    # Try embedding-index search first (proper semantic search)
+    try:
+        from ida_pro_mcp.services import get_assembler
+        asm = get_assembler()
+        idb_path = idc.get_idb_path() if hasattr(idc, "get_idb_path") else ""
+        if idb_path:
+            idx = asm._get_index(idb_path)
+            if idx and idx.size > 0:
+                hits = idx.search(query, top_k=max(limit * 3, 48), threshold=0.0)
+                rows = []
+                seen_eas = set()
+                for hit in hits:
+                    ea_str = hit.get("ea", "")
+                    if not ea_str or ea_str in seen_eas:
+                        continue
+                    try:
+                        ea_int = int(ea_str, 16)
+                    except Exception:
+                        continue
+                    # range filter
+                    if range_start is not None and range_end is not None:
+                        if not (range_start <= ea_int < range_end):
+                            continue
+                    seen_eas.add(ea_str)
+                    name = hit.get("name", ea_str)
+                    sim = float(hit.get("similarity") or 0.0)
+                    func = idaapi.get_func(ea_int)
+                    kind = "func" if func else "symbol"
+                    xr = xref_count_limited(ea_int, 64)
+                    line = f"{hex(ea_int)}  {kind}  {name}  sim={sim:.2f}  xrefs={xr}"
+                    rows.append({"type": kind, "address": hex(ea_int), "address_ea": ea_int,
+                                 "score": sim, "feature": "embedding", "line": line})
+                page, total, is_truncated = paginate_records(
+                    rows, offset, limit, sort_key=lambda r: (r["score"], r["address_ea"]),
+                )
+                result = build_response(
+                    [r["line"] for r in page],
+                    offset, limit, total, is_truncated,
+                    pattern=query, search_mode="semantic_embedding",
+                )
+                result["backend"] = asm._embedder.backend if hasattr(asm, "_embedder") else "bge"
+                if include_items:
+                    result["items"] = [{"address": r["address"], "name": r.get("name", ""),
+                                        "similarity": r["score"]} for r in page]
+                return result
+    except Exception:
+        pass
+
+    # Index not available — tell the user to index first
+    return make_error(
+        MCPError.NOT_FOUND,
+        "No functions indexed yet. Run intelligence(action='index_fast') first.",
+        hint="index_fast builds an index from disassembly in seconds (no decompile needed). "
+             "Then search(action='semantic') uses proper embedding-based similarity.",
+    )
+
+    # --- fallback heuristic (only if explicitly requested via _fallback=true) ---
     ranked_heap = []
     heap_cap = max(_FIND_INSTRUCTION_CAP, limit * _FIND_INSTRUCTION_LIMIT_MULTIPLIER)
     timer = SearchTimeout(timeout_ms)
@@ -262,7 +323,7 @@ def search_semantic(pattern, include_context, range_start, range_end, offset, li
 
     result = build_response(
         [r["line"] for r in page],
-        offset,
+    offset,
         limit,
         total,
         is_truncated,

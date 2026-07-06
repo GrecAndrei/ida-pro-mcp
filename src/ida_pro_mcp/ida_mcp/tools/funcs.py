@@ -178,6 +178,12 @@ def _embedding_rename_suggestions(
         return make_error(MCPError.INVALID_ARGS, "No IDB path available")
 
     idx = FunctionEmbeddingIndex(idb_path + ".embeddings.db", embedder)
+    if idx.size == 0:
+        return make_error(
+            MCPError.NOT_FOUND,
+            "No functions indexed yet. Run intelligence(action='index_fast') first.",
+            hint="index_fast builds an index from disassembly in seconds.",
+        )
     target_eas: list[int] = []
     if addr:
         ea, err = validate_addr(addr, require_func=True)

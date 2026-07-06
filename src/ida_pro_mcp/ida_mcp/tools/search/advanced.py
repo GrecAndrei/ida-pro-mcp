@@ -478,7 +478,11 @@ def search_constants(pattern, range_start, range_end, include_context, offset, l
 
 
 def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, limit, include_items, **kwargs):
-    """Search decompiled pseudocode with caching."""
+    """Search decompiled pseudocode using the embedding index for ranking.
+
+    Requires a prior intelligence(action='index_fast') or index_batch call.
+    The index narrows the search to the most relevant functions before decompiling.
+    """
     matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
 
     if not hasattr(ida_hexrays, "init_hexrays_plugin") or not ida_hexrays.init_hexrays_plugin():
@@ -486,6 +490,16 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
             MCPError.DECOMPILER_UNAVAILABLE,
             "Hex-Rays decompiler not available",
             hint=ERROR_HINTS.get(MCPError.DECOMPILER_UNAVAILABLE),
+        )
+
+    # Check embedding index — required for efficient search
+    asm, idx, _idb_path = _get_intelligence_index()
+    if idx is None or idx.size == 0:
+        return make_error(
+            MCPError.NOT_FOUND,
+            "No functions indexed yet. Run intelligence(action='index_fast') first.",
+            hint="index_fast builds an index from disassembly in seconds. "
+                 "search_decompiled uses it to find relevant functions before decompiling.",
         )
 
     scope_addr = kwargs.get("addr") or kwargs.get("func") or kwargs.get("function") or kwargs.get("scope")
@@ -506,7 +520,7 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
         "seeded_candidates": 0,
         "seed_reasons": {"cached": 0, "names": 0, "strings": 0, "imports": 0, "intelligence": 0, "behavior": 0},
         "planning_timed_out": False,
-        "intelligence_index_size": 0,
+        "intelligence_index_size": idx.size,
         "expansion_queries": [],
     }
     total_available = 0

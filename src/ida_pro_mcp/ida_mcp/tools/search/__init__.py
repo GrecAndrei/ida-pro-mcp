@@ -339,11 +339,15 @@ def search(
         elif action == "semantic":
             response = search_semantic(actual_pattern, include_context, range_start, range_end, offset, limit, include_items, timeout_ms)
         elif action == "smart_bundle":
+            # smart_bundle: find (exact) + semantic (embedding-index) fused view
             find_res = search_find(actual_pattern, case_sensitive, range_start, range_end, include_context, include_items, include_breakdown, offset, limit, timeout_ms)
             sem_res = search_semantic(actual_pattern, include_context, range_start, range_end, offset, limit, include_items, timeout_ms)
             if isinstance(find_res, dict) and find_res.get("error"):
                 return find_res
             if isinstance(sem_res, dict) and sem_res.get("error"):
+                # If semantic failed due to no index, still return find results
+                if sem_res.get("code") == "NOT_FOUND" and not (isinstance(find_res, dict) and find_res.get("error")):
+                    return {**find_res, "warning": "Semantic search unavailable — run intelligence(action='index_fast') first."}
                 return sem_res
 
             find_items = list((find_res or {}).get("items") or []) if isinstance(find_res, dict) else []
