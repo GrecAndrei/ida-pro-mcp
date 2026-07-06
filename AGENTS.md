@@ -5,37 +5,28 @@
 IDA Pro MCP — JSON-RPC stdio server exposing IDA Pro RE capabilities to LLMs.
 Tool-action model: each tool exposes multiple actions.
 
-## Test Registry
+## Testing
 
-Every test file MUST declare what it interacts with:
+Test behavior through stable interfaces, not implementation details.
 
-```python
-"""
-@@TEST_REGISTRY@@
-interacts:
-  - tool:<name>
-  - tool_actions:<name>
-  - dispatch:<name>
-  - schema:<NAME>
-format: v1
-description: What this tests
-created: YYYY-MM-DD
-"""
-```
+**Rules:**
+- Mock at the network/process boundary (`urllib.request.urlopen`, `subprocess.Popen`), not internals
+- Assert on inputs/outputs — if someone changes the algorithm but the output stays correct, the test should still pass
+- When behavior intentionally changes, the test SHOULD fail — update both together in the same commit
+- No test registry ceremony. Tests don't need magic headers or hash tracking.
 
-Entity types: `tool:X` (module), `tool_actions:X` (action list),
-`dispatch:X` (handler/route), `schema:X` (TOOLS, ADVERTISED_TOOLS, TOOL_ACTIONS).
+**Anti-patterns:**
+- Asserting on private variable names, internal data structures, or file hashes → breaks on refactors
+- Testing that "the function was called" instead of "the result is correct"
+- Coarse bindings (hash of entire file) → false positives on unrelated changes
 
-```bash
-python scripts/test_registry_check.py              # check
-python scripts/test_registry_check.py --discover   # auto-detect bindings
-python scripts/test_registry_check.py --strict     # fail on violations (pre-commit)
-python scripts/test_registry_check.py --mark-fp "tests/foo.py" --entities "tool:search" --reason "why"
-python scripts/test_registry_check.py --update-hashes  # accept current state
-```
+**What to test:**
+- Host-side logic that doesn't require IDA (embeddings, server management, response parsing)
+- Schema/dispatch integrity (no missing handlers, no duplicate tools)
+- Docs sync (every tool documented, no removed tools in docs)
 
-**Rule:** If you change a code entity, all tests binding to it must also change
-or be marked as false positive with a reason.
+**What not to test:**
+- IDA-side tools that need a live IDA session (these are validated via MCP integration)
 
 ## Adding a Tool
 
@@ -45,14 +36,12 @@ or be marked as false positive with a reason.
 4. Add description to `TOOL_DESCRIPTIONS`
 5. Add to `ida_mcp/tools/__init__.py::__all__`
 6. If host-side only: add `tool_name == "<name>"` branch in `server_dispatch.py`
-7. Create test with `@@TEST_REGISTRY@@` header
-8. `python scripts/test_registry_check.py --discover`
+7. Add tests for any host-side logic (embeddings, config parsing, etc.)
 
 ## Removing a Tool
 
 1. `grep -rn '"<name>"' src/ docs/ tests/ .agents/ --include="*.py" --include="*.md"`
 2. Delete tool file, remove from all registry files, remove tests
-3. `python scripts/test_registry_check.py --discover`
 
 ## Key Files
 
@@ -62,14 +51,12 @@ or be marked as false positive with a reason.
 | `host/schemas_data.py` | `TOOLS`, `ADVERTISED_TOOLS`, `TOOL_DESCRIPTIONS` |
 | `host/server/server_dispatch.py` | Tool routing and handlers |
 | `ida_mcp/tools/__init__.py` | `__all__` list, `_TOOL_MODULE_MAP` |
-| `.test-registry.json` | Test binding registry |
 
 ## Invariants
 
 - Every tool in `TOOLS` has entry in `_TOOL_ACTIONS`
 - Every tool in `ADVERTISED_TOOLS` is in `TOOLS`
 - Every tool has description in `TOOL_DESCRIPTIONS`
-- `tool_registry_check.py --strict` passes
 
 ## Conventions
 
@@ -77,7 +64,3 @@ or be marked as false positive with a reason.
 - Descriptions: one sentence + "Actions: a, b, c"
 - `@tool` decorator on IDA-side functions, `@idaread` for read-only
 - Wrapper actions (grep/pick/head/tail/next/stats) are dynamic — don't list in `_TOOL_ACTIONS`
-
-## Pre-commit
-
-`python scripts/test_registry_check.py --strict` runs on every commit.

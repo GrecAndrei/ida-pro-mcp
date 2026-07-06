@@ -1,20 +1,6 @@
 """
-@@TEST_REGISTRY@@
-interacts:
-  - schema:TOOLS
-  - schema:ADVERTISED_TOOLS
-  - schema:TOOL_ACTIONS
-  - tool_actions:intelligence
-  - tool_actions:search
-  - tool_actions:blackboard
-  - tool_actions:code
-  - tool_actions:data
-  - tool_actions:session
-  - tool_actions:modify
-  - tool_actions:types
-format: v1
-description: Tool registry matches code - every tool in schemas has a module and vice versa
-created: 2025-07-06
+Tool registry matches code: every tool in schemas has a module and vice versa.
+Created: 2025-07-06
 """
 
 from __future__ import annotations

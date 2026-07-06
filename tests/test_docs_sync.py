@@ -1,19 +1,6 @@
 """
-@@TEST_REGISTRY@@
-interacts:
-  - schema:TOOLS
-  - schema:ADVERTISED_TOOLS
-  - tool:search
-  - tool:data
-  - tool:code
-  - tool:intelligence
-  - tool_actions:search
-  - tool_actions:data
-  - tool_actions:code
-  - tool_actions:intelligence
-format: v1
-description: Docs are in sync - all tools are documented and no removed tools appear
-created: 2025-07-06
+Docs are in sync: all tools are documented and no removed tools appear.
+Created: 2025-07-06
 """
 
 from __future__ import annotations

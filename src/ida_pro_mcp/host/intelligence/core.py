@@ -737,7 +737,7 @@ class BgeCodeEmbedder:
                     cmd,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                     env=_env,
+                    env=_env,
                 )
                 self._owns_proc = True
             except OSError:

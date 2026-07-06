@@ -1,17 +1,6 @@
 """
-@@TEST_REGISTRY@@
-interacts:
-  - dispatch:search
-  - dispatch:blackboard
-  - dispatch:code
-  - dispatch:data
-  - dispatch:intelligence
-  - dispatch:session
-  - dispatch:modify
-  - dispatch:types
-format: v1
-description: Dispatch handlers exist for all advertised tools
-created: 2025-07-06
+Dispatch handlers exist for all advertised tools.
+Created: 2025-07-06
 """
 
 from __future__ import annotations
