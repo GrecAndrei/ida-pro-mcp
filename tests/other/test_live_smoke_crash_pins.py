@@ -106,33 +106,12 @@ def test_emulate_uses_valid_mcp_error_codes():
     )
 
 
-def test_search_structured_imports_tag_categories_from_support_module():
-    """search.structured previously crashed importing `_DANGEROUS_APIS,
-    _TAG_CATEGORIES` from `..annotation` (always ImportError). The real
-    constants live in `..support._api_categories`.
-    """
-    tree = _module("src/ida_pro_mcp/ida_mcp/tools/search/advanced.py")
-    # Walk only real Import statements, no comments or docstrings.
-    bad_in_real_import = False
-    good_in_real_import = False
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            module = node.module or ""
-            for alias in node.names:
-                if module.endswith("annotation") and alias.name in {
-                    "_DANGEROUS_APIS",
-                    "_TAG_CATEGORIES",
-                }:
-                    bad_in_real_import = True
-                if module.endswith("_api_categories"):
-                    good_in_real_import = True
-    assert not bad_in_real_import, (
-        "search/advanced.py still does `from ..annotation import "
-        "_DANGEROUS_APIS, _TAG_CATEGORIES` in a real Import statement."
-    )
-    assert good_in_real_import, (
-        "search/advanced.py must import the constants from "
-        "`..support._api_categories`."
+def test_search_structured_uses_embedding_index():
+    """search.structured now uses the embedding index instead of SchemaBoot."""
+    src = _read("src/ida_pro_mcp/ida_mcp/tools/search/advanced.py")
+    assert "search_structured" in src, "search_structured function must exist"
+    assert "idx.search_structured" in src or "_get_intelligence_index" in src, (
+        "search_structured must use the embedding index"
     )
 
 

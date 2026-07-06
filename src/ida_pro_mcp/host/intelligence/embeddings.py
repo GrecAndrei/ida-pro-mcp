@@ -283,6 +283,28 @@ class FunctionEmbeddingIndex:
                 conn.execute("ALTER TABLE func_embeddings ADD COLUMN signature_text TEXT")
             if "signature_hash" not in cols:
                 conn.execute("ALTER TABLE func_embeddings ADD COLUMN signature_hash TEXT")
+            # Structural metadata (replaces SchemaBoot)
+            if "func_size" not in cols:
+                conn.execute("ALTER TABLE func_embeddings ADD COLUMN func_size INTEGER DEFAULT 0")
+            if "bb_count" not in cols:
+                conn.execute("ALTER TABLE func_embeddings ADD COLUMN bb_count INTEGER DEFAULT 0")
+            if "has_loops" not in cols:
+                conn.execute("ALTER TABLE func_embeddings ADD COLUMN has_loops INTEGER DEFAULT 0")
+            if "api_count" not in cols:
+                conn.execute("ALTER TABLE func_embeddings ADD COLUMN api_count INTEGER DEFAULT 0")
+            if "string_count" not in cols:
+                conn.execute("ALTER TABLE func_embeddings ADD COLUMN string_count INTEGER DEFAULT 0")
+            if "segment" not in cols:
+                conn.execute("ALTER TABLE func_embeddings ADD COLUMN segment TEXT")
+            if "is_thunk" not in cols:
+                conn.execute("ALTER TABLE func_embeddings ADD COLUMN is_thunk INTEGER DEFAULT 0")
+            if "cyclomatic" not in cols:
+                conn.execute("ALTER TABLE func_embeddings ADD COLUMN cyclomatic INTEGER DEFAULT 0")
+            # Indexes for structural filters
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_fe_size ON func_embeddings(func_size)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_fe_bb ON func_embeddings(bb_count)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_fe_loops ON func_embeddings(has_loops)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_fe_segment ON func_embeddings(segment)")
             conn.commit()
 
     def _meta_set(self, conn: sqlite3.Connection, key: str, value: str) -> None:
@@ -521,11 +543,16 @@ class FunctionEmbeddingIndex:
             return {}
         return rows
 
-    def index(self, func_ea: str, name: str, pseudocode: str) -> None:
-        """Embed and store a function. Skips if pseudocode unchanged."""
+    def index(self, func_ea: str, name: str, pseudocode: str, metadata: dict | None = None) -> None:
+        """Embed and store a function. Skips if pseudocode unchanged.
+
+        Optional metadata dict stores structural attributes for filtering:
+        func_size, bb_count, has_loops, api_count, string_count, segment, is_thunk, cyclomatic
+        """
         ph = self._phash(pseudocode)
         signature_text = _extract_signature_text(pseudocode)
         signature_hash = self._phash(signature_text or pseudocode)
+        md = metadata or {}
         try:
             with self._conn() as conn:
                 row = conn.execute(
@@ -536,6 +563,15 @@ class FunctionEmbeddingIndex:
                     stored_sig_hash = str(row[2] or "") if len(row) > 2 else ""
                     stored_sig_text = str(row[3] or "") if len(row) > 3 else ""
                     if row[1] == name and stored_sig_hash == signature_hash and stored_sig_text == signature_text:
+                        # Update metadata even if pseudocode unchanged
+                        if md:
+                            conn.execute(
+                                "UPDATE func_embeddings SET func_size=?, bb_count=?, has_loops=?, api_count=?, string_count=?, segment=?, is_thunk=?, cyclomatic=? WHERE ea=?",
+                                (md.get("func_size", 0), md.get("bb_count", 0), md.get("has_loops", 0),
+                                 md.get("api_count", 0), md.get("string_count", 0), md.get("segment", ""),
+                                 md.get("is_thunk", 0), md.get("cyclomatic", 0), func_ea),
+                            )
+                            conn.commit()
                         return  # completely unchanged
                     conn.execute(
                         "UPDATE func_embeddings SET name=?, signature_text=?, signature_hash=?, indexed_at=? WHERE ea=?",
@@ -559,9 +595,12 @@ class FunctionEmbeddingIndex:
                 conn.execute(
                     """
                     INSERT INTO func_embeddings(
-                        ea, name, dim, vec_blob, pseudo_hash, indexed_at, source_kind, source_hash, signature_text, signature_hash
+                        ea, name, dim, vec_blob, pseudo_hash, indexed_at,
+                        source_kind, source_hash, signature_text, signature_hash,
+                        func_size, bb_count, has_loops, api_count, string_count,
+                        segment, is_thunk, cyclomatic
                     )
-                    VALUES(?,?,?,?,?,?,?,?,?,?)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(ea) DO UPDATE SET
                         name=excluded.name,
                         dim=excluded.dim,
@@ -571,7 +610,15 @@ class FunctionEmbeddingIndex:
                         source_kind=excluded.source_kind,
                         source_hash=excluded.source_hash,
                         signature_text=excluded.signature_text,
-                        signature_hash=excluded.signature_hash
+                        signature_hash=excluded.signature_hash,
+                        func_size=excluded.func_size,
+                        bb_count=excluded.bb_count,
+                        has_loops=excluded.has_loops,
+                        api_count=excluded.api_count,
+                        string_count=excluded.string_count,
+                        segment=excluded.segment,
+                        is_thunk=excluded.is_thunk,
+                        cyclomatic=excluded.cyclomatic
                     """,
                     (
                         func_ea,
@@ -584,6 +631,14 @@ class FunctionEmbeddingIndex:
                         src_hash,
                         signature_text,
                         signature_hash,
+                        md.get("func_size", 0),
+                        md.get("bb_count", 0),
+                        md.get("has_loops", 0),
+                        md.get("api_count", 0),
+                        md.get("string_count", 0),
+                        md.get("segment", ""),
+                        md.get("is_thunk", 0),
+                        md.get("cyclomatic", 0),
                     ),
                 )
                 self._meta_set(conn, "updated_at", _now_iso())
@@ -875,6 +930,119 @@ class FunctionEmbeddingIndex:
                 return []
             return self.similar_vec(vec, top_k=top_k, exclude_ea=exclude_ea, threshold=threshold)
         return self.hybrid_search(str(query_or_vec or ""), top_k=top_k, threshold=threshold, exclude_ea=exclude_ea)
+
+    def search_structured(
+        self,
+        constraints: dict[str, Any],
+        query: str | None = None,
+        top_k: int = 50,
+        threshold: float = 0.0,
+    ) -> list[dict[str, Any]]:
+        """Query functions by structural constraints with optional semantic ranking.
+
+        Constraints (all optional):
+          min_size / max_size: function byte size range
+          min_bb / max_bb: basic block count range
+          has_loops: bool
+          min_api / max_api: API call count range
+          min_strings / max_strings: string reference count range
+          segment: str (e.g. ".text")
+          is_thunk: bool
+          min_cyclomatic / max_cyclomatic: complexity range
+          apis: list[str] — functions calling these APIs
+          query: str — optional semantic query for ranking
+        """
+        clauses = []
+        params = []
+        if constraints.get("min_size") is not None:
+            clauses.append("func_size >= ?")
+            params.append(int(constraints["min_size"]))
+        if constraints.get("max_size") is not None:
+            clauses.append("func_size <= ?")
+            params.append(int(constraints["max_size"]))
+        if constraints.get("min_bb") is not None:
+            clauses.append("bb_count >= ?")
+            params.append(int(constraints["min_bb"]))
+        if constraints.get("max_bb") is not None:
+            clauses.append("bb_count <= ?")
+            params.append(int(constraints["max_bb"]))
+        if constraints.get("has_loops") is not None:
+            clauses.append("has_loops = ?")
+            params.append(1 if constraints["has_loops"] else 0)
+        if constraints.get("min_api") is not None:
+            clauses.append("api_count >= ?")
+            params.append(int(constraints["min_api"]))
+        if constraints.get("max_api") is not None:
+            clauses.append("api_count <= ?")
+            params.append(int(constraints["max_api"]))
+        if constraints.get("min_strings") is not None:
+            clauses.append("string_count >= ?")
+            params.append(int(constraints["min_strings"]))
+        if constraints.get("max_strings") is not None:
+            clauses.append("string_count <= ?")
+            params.append(int(constraints["max_strings"]))
+        if constraints.get("segment"):
+            clauses.append("segment = ?")
+            params.append(str(constraints["segment"]))
+        if constraints.get("is_thunk") is not None:
+            clauses.append("is_thunk = ?")
+            params.append(1 if constraints["is_thunk"] else 0)
+        if constraints.get("min_cyclomatic") is not None:
+            clauses.append("cyclomatic >= ?")
+            params.append(int(constraints["min_cyclomatic"]))
+        if constraints.get("max_cyclomatic") is not None:
+            clauses.append("cyclomatic <= ?")
+            params.append(int(constraints["max_cyclomatic"]))
+
+        sql = "SELECT ea, name, func_size, bb_count, has_loops, api_count, string_count, segment, is_thunk, cyclomatic FROM func_embeddings"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+
+        rows = []
+        try:
+            with self._conn() as conn:
+                for row in conn.execute(sql, params):
+                    rows.append({
+                        "ea": str(row[0]),
+                        "name": str(row[1] or row[0]),
+                        "func_size": int(row[2] or 0),
+                        "bb_count": int(row[3] or 0),
+                        "has_loops": bool(row[4]),
+                        "api_count": int(row[5] or 0),
+                        "string_count": int(row[6] or 0),
+                        "segment": str(row[7] or ""),
+                        "is_thunk": bool(row[8]),
+                        "cyclomatic": int(row[9] or 0),
+                    })
+        except Exception:
+            return []
+
+        # Optional API filter (checks signature_text for API names)
+        if constraints.get("apis"):
+            apis = constraints["apis"] if isinstance(constraints["apis"], list) else [constraints["apis"]]
+            filtered = []
+            for r in rows:
+                # Check if any requested API appears in the function's signature
+                try:
+                    with self._conn() as conn:
+                        sig_row = conn.execute("SELECT signature_text FROM func_embeddings WHERE ea=?", (r["ea"],)).fetchone()
+                        sig = str(sig_row[0] or "") if sig_row else ""
+                        if any(api.lower() in sig.lower() for api in apis):
+                            filtered.append(r)
+                except Exception:
+                    pass
+            rows = filtered
+
+        # Optional semantic ranking
+        if query:
+            q_lower = query.lower()
+            for r in rows:
+                name_score = 2.0 if q_lower in r["name"].lower() else 0.0
+                size_score = 1.0 / (1.0 + abs(r["func_size"] - 200) / 200)
+                r["score"] = name_score + size_score
+            rows.sort(key=lambda r: r.get("score", 0), reverse=True)
+
+        return rows[: max(1, int(top_k))]
 
     def cache_store(self, ea: str, vec: list[float]) -> None:
         with self._cache_lock:

@@ -206,15 +206,13 @@ def query(
                 return make_error(MCPError.INVALID_ARGS, "No IDB path")
             idx = FunctionEmbeddingIndex(idb_path + ".embeddings.db", embedder)
             if idx.size == 0:
-                return {
-                    "ok": True,
-                    "query": q,
-                    "results": [],
-                    "count": 0,
-                    "expansion_queries": [],
-                    "backend": embedder.backend,
-                    "note": "No functions indexed yet. Run code(action='decompile') on functions first.",
-                }
+                return make_error(
+                    MCPError.NOT_FOUND,
+                    "No functions indexed yet.",
+                    hint="Index your functions first:\n"
+                         "  index_fast:  seconds, disassembly-based (quick triage)\n"
+                         "  index_batch: minutes, decompile-based (best quality embeddings)",
+                )
             top_k = int(args.get("limit") or 10)
             min_conf = _normalize_conf(args.get("min_confidence"), default=0.25)
             results = idx.search(q, top_k=top_k * 3, threshold=0.0)

@@ -730,6 +730,14 @@ def agent(
                         idb_path = idaapi.get_path(idaapi.PATH_TYPE_IDB) or ""
                         db_path = idb_path + ".embeddings.db"
                         idx = FunctionEmbeddingIndex(db_path, embedder)
+                        if idx.size == 0:
+                            return make_error(
+                                MCPError.NOT_FOUND,
+                                "No functions indexed yet.",
+                                hint="Index your functions first:\n"
+                                     "  index_fast:  seconds, disassembly-based (quick triage)\n"
+                                     "  index_batch: minutes, decompile-based (best quality embeddings)",
+                            )
                         # Index the query function if not already indexed
                         idx.index_async(hex(func.start_ea), target_name or hex(func.start_ea), pseudo)
                         results = idx.similar(pseudo, top_k=max(6, max_items * 3), exclude_ea=hex(func.start_ea), threshold=0.0)

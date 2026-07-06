@@ -336,16 +336,52 @@ def _callers_bfs(root_ea, max_depth):
 
 
 def search_vulnerable(pattern, include_context, offset, limit, include_items, include_breakdown, **kwargs):
-    """Find dangerous API calls reachable from taint sources via the call graph.
+    """Find dangerous API calls reachable from taint sources.
 
-    For each call to a dangerous API (memcpy, strcpy, sprintf, etc.) we
-    walk the call graph backward up to `taint_depth` hops and check whether
-    any taint source (recv, read, ioctl, …) is reachable. Only those
-    reachable from untrusted input are reported — this eliminates the
-    overwhelming false positives from the old flat listing.
+    Uses the embedding index to pre-filter functions semantically similar
+    to vulnerability patterns, then runs call-graph taint analysis on
+    those candidates. This eliminates the old brute-force scan of every
+    function in the binary.
+
+    Requires a prior intelligence(action='index_fast') or index_batch call.
     """
     max_xrefs = int(kwargs.get("max_xrefs", 100000))
     taint_depth = max(2, min(int(kwargs.get("taint_depth", 5)), 12))
+
+    # Phase 0: use embedding index to find candidate functions
+    asm, idx, _idb_path = _get_intelligence_index()
+    candidate_funcs = None  # None = scan all (fallback)
+    index_used = False
+    if idx is not None and idx.size > 0:
+        index_used = True
+        vuln_queries = [
+            "buffer overflow vulnerable memcpy strcpy",
+            "command injection system exec",
+            "integer overflow arithmetic",
+            "use after free dangling pointer",
+            "format string vulnerability sprintf printf",
+            "uninitialized memory read",
+            "race condition concurrency",
+            "hardcoded credential password key",
+        ]
+        if pattern:
+            vuln_queries.insert(0, pattern)
+        candidate_set = set()
+        for q in vuln_queries[:4]:
+            try:
+                hits = idx.search(q, top_k=30, threshold=0.0)
+                for hit in hits:
+                    try:
+                        ea = int(hit.get("ea", ""), 16)
+                        func = idaapi.get_func(ea)
+                        if func:
+                            candidate_set.add(func.start_ea)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        if candidate_set:
+            candidate_funcs = candidate_set
 
     # Phase 1: enumerate all taint sources and expand their caller trees.
     sources = _enumerate_taint_sources()
@@ -356,48 +392,50 @@ def search_vulnerable(pattern, include_context, offset, limit, include_items, in
     # Phase 2: find dangerous API calls and filter by reachability.
     rows = []
     xref_count = 0
-    for seg_start, seg_end in iter_segments(None, None, require_exec=True):
-        for func_ea in idautils.Functions(seg_start, seg_end):
-            func = idaapi.get_func(func_ea)
-            if not func:
-                continue
-            func_reachable = func_ea in reachable_from_source
-            for head in idautils.Heads(func.start_ea, func.end_ea):
-                for xref in idautils.XrefsFrom(head):
-                    if xref_count >= max_xrefs:
-                        break
-                    xref_count += 1
-                    if xref.type not in (idaapi.fl_CN, idaapi.fl_CF):
-                        continue
-                    callee = idc.get_name(xref.to)
-                    if not callee:
-                        continue
-                    if callee not in DANGEROUS_APIS:
-                        continue
-                    if not func_reachable:
-                        continue
-                    fn_name = idc.get_func_name(func_ea)
-                    line = f"{hex(head)}  {callee}  in:{fn_name}"
-                    if include_context:
-                        disasm_line = safe_generate_disasm_line(head)
-                        line += f"  {clip_text(ida_lines.tag_remove(disasm_line) if disasm_line else '')}"
-                    rows.append({
-                        "address": hex(head),
-                        "function": fn_name,
-                        "api": callee,
-                        "vuln_type": DANGEROUS_APIS.get(callee, "unknown"),
-                        "severity": "reachable",
-                        "score": 1,
-                        "line": line,
-                    })
-                if xref_count >= max_xrefs:
-                    break
-            if xref_count >= max_xrefs:
-                break
+    funcs_to_scan = []
+    if candidate_funcs:
+        funcs_to_scan = sorted(candidate_funcs)
+    else:
+        funcs_to_scan = list(idautils.Functions())
+    for func_ea in funcs_to_scan:
         if xref_count >= max_xrefs:
             break
+        func = idaapi.get_func(func_ea)
+        if not func:
+            continue
+        func_reachable = func_ea in reachable_from_source
+        for head in idautils.Heads(func.start_ea, func.end_ea):
+            for xref in idautils.XrefsFrom(head):
+                if xref_count >= max_xrefs:
+                    break
+                xref_count += 1
+                if xref.type not in (idaapi.fl_CN, idaapi.fl_CF):
+                    continue
+                callee = idc.get_name(xref.to)
+                if not callee:
+                    continue
+                if callee not in DANGEROUS_APIS:
+                    continue
+                if not func_reachable:
+                    continue
+                fn_name = idc.get_func_name(func_ea)
+                line = f"{hex(head)}  {callee}  in:{fn_name}"
+                if include_context:
+                    disasm_line = safe_generate_disasm_line(head)
+                    line += f"  {clip_text(ida_lines.tag_remove(disasm_line) if disasm_line else '')}"
+                rows.append({
+                    "address": hex(head),
+                    "function": fn_name,
+                    "api": callee,
+                    "vuln_type": DANGEROUS_APIS.get(callee, "unknown"),
+                    "severity": "reachable",
+                    "score": 1,
+                    "line": line,
+                })
+            if xref_count >= max_xrefs:
+                break
 
-    if pattern:
+    if pattern and not index_used:
         matcher = compile_smart_pattern(pattern, case_sensitive=False)
         rows = [r for r in rows if matcher(r.get("api", "")) or matcher(r.get("function", ""))]
 
@@ -406,6 +444,8 @@ def search_vulnerable(pattern, include_context, offset, limit, include_items, in
     )
 
     result = build_response([r["line"] for r in page], offset, limit, total, is_truncated, total_findings=total)
+    result["index_used"] = index_used
+    result["candidate_functions"] = len(candidate_funcs) if candidate_funcs else 0
     if include_items:
         result["items"] = [
             {"address": r["address"], "function": r["function"], "type": r["vuln_type"], "severity": r["severity"], "api": r["api"], "score": r["score"]}
@@ -848,268 +888,109 @@ def _verify_sql_coverage(
 
 
 def search_structured(constraints, pattern, range_start, range_end, include_context, offset, limit, include_items, timeout_ms=0):
-    """Schema-based structured semantic retrieval with SQL pre-filtering.
+    """Structured function search using the embedding index.
 
-    Two-phase hybrid approach:
-      Phase 0: SQL pre-filter via schemaboot DB (if filterable constraints exist)
-      Phase 1: Schema induction + behavior matching on the reduced candidate pool
+    Supports structural constraints (size, bb_count, loops, api_count, segment)
+    and optional semantic query for ranking. Requires a prior
+    intelligence(action='index_fast') or index_batch call.
 
-    Falls back to full iteration if schemaboot DB is unavailable.
-    Supports both legacy constraints (min_size, apis, has_loops) and
-    operator format ({"size": (">=", 100), "name": ("~", "pattern")}).
+    Constraint keys:
+      min_size, max_size: function byte size
+      min_bb, max_bb: basic block count
+      has_loops: bool
+      min_api, max_api: API call count
+      min_strings, max_strings: string reference count
+      segment: str (e.g. ".text")
+      is_thunk: bool
+      min_cyclomatic, max_cyclomatic: cyclomatic complexity
+      apis: list[str] — functions calling these APIs
     """
     if not isinstance(constraints, dict):
         return make_error(MCPError.INVALID_ARGS, "constraints must be a dict")
     if not constraints and not pattern:
         return make_error(MCPError.INVALID_ARGS, "constraints or pattern required")
 
-    try:
-        from ..classify import _classify_func, _induce_function_schema
-    except ImportError:
-        from classify import _classify_func, _induce_function_schema  # type: ignore[import-not-found]
-    # NOTE: legacy version did
-    # from ..annotation import _DANGEROUS_APIS, _TAG_CATEGORIES which always
-    # ImportErrored — the real constants live in support/_api_categories
-    # under their canonical (non-_) names. Import from the right module
-    # and rebind to the historical underscored names for the rest of the
-    # function body to keep working unchanged.
-    try:
-        from ..support._api_categories import (
-            DANGEROUS_APIS as _DANGEROUS_APIS,
-            TAG_CATEGORIES as _TAG_CATEGORIES,
+    # Map legacy constraint names to new format
+    query_constraints = {}
+    c = constraints
+    if "min_size" in c or "size" in c:
+        op_size = c.get("size", c.get("min_size"))
+        if isinstance(op_size, tuple):
+            op, val = op_size
+            if op == ">=": query_constraints["min_size"] = val
+            elif op == "<=": query_constraints["max_size"] = val
+        else:
+            query_constraints["min_size"] = op_size
+    if "max_size" in c and "size" not in c:
+        query_constraints["max_size"] = c["max_size"]
+    if "min_bb" in c or "bb_count" in c:
+        query_constraints["min_bb"] = c.get("min_bb", c.get("bb_count"))
+    if "max_bb" in c:
+        query_constraints["max_bb"] = c["max_bb"]
+    if "has_loops" in c:
+        query_constraints["has_loops"] = c["has_loops"]
+    if "min_api" in c or "api_count" in c:
+        query_constraints["min_api"] = c.get("min_api", c.get("api_count"))
+    if "max_api" in c:
+        query_constraints["max_api"] = c["max_api"]
+    if "min_strings" in c or "string_count" in c:
+        query_constraints["min_strings"] = c.get("min_strings", c.get("string_count"))
+    if "max_strings" in c:
+        query_constraints["max_strings"] = c["max_strings"]
+    if "segment" in c:
+        query_constraints["segment"] = c["segment"]
+    if "is_thunk" in c:
+        query_constraints["is_thunk"] = c["is_thunk"]
+    if "min_cyclomatic" in c or "cyclomatic" in c:
+        query_constraints["min_cyclomatic"] = c.get("min_cyclomatic", c.get("cyclomatic"))
+    if "max_cyclomatic" in c:
+        query_constraints["max_cyclomatic"] = c["max_cyclomatic"]
+    if "apis" in c:
+        query_constraints["apis"] = c["apis"]
+
+    # Get embedding index
+    asm, idx, _idb_path = _get_intelligence_index()
+    if idx is None or idx.size == 0:
+        return make_error(
+            MCPError.NOT_FOUND,
+            "No functions indexed yet.",
+            hint="Index your functions first:\n"
+                 "  index_fast:  seconds, disassembly-based (quick triage)\n"
+                 "  index_batch: minutes, decompile-based (best quality embeddings)",
         )
-    except ImportError:
-        from support._api_categories import (  # type: ignore[import-not-found]
-            DANGEROUS_APIS as _DANGEROUS_APIS,
-            TAG_CATEGORIES as _TAG_CATEGORIES,
-        )
 
-    def induce_schema(func_ea):
-        db_fp = _get_db_fingerprint()
-        cache_key = _cache_key("schema", db_fp, func_ea)
-        cached = _cache_get(cache_key)
-        if cached is not None:
-            return cached
+    # Use embedding index structured search
+    query = pattern if pattern else None
+    rows = idx.search_structured(query_constraints, query=query, top_k=limit + offset)
 
-        schema = {
-            "addr": hex(func_ea),
-            "behavior_tags": set(),
-            "dangerous_apis": set(),
-            "string_refs": set(),
-            "vuln_class": set(),
-            "compiler_hints": set(),
-            "structural_features": set(),
-        }
-        fn = ida_funcs.get_func(func_ea)
-        if not fn:
-            _cache_set(cache_key, schema)
-            return schema
-
-        try:
-            timer.check()
-        except TimeoutError:
-            return schema
-
-        cat, matched_apis, all_callees = _classify_func(func_ea)
-        if cat != "unknown":
-            schema["behavior_tags"].add(cat)
-        for c, apis in matched_apis.items():
-            schema["behavior_tags"].add(c)
-            for api in apis:
-                if api in _DANGEROUS_APIS:
-                    schema["dangerous_apis"].add(api)
-                    schema["vuln_class"].add("dangerous_api")
-
-        # Reuse the classifier-side schema induction so the structured search
-        # and direct classify() path stay aligned.
-        try:
-            richer = _induce_function_schema(func_ea)
-            if isinstance(richer, dict):
-                for key in ("behavior_tags", "dangerous_apis", "string_refs", "vuln_class", "compiler_hints", "structural_features"):
-                    values = richer.get(key, [])
-                    if isinstance(values, (list, tuple, set)):
-                        schema[key].update(values)
-        except Exception:
-            pass
-
-        try:
-            timer.check()
-        except TimeoutError:
-            _cache_set(cache_key, schema)
-            return schema
-
-        for callee_name in all_callees:
-            base = callee_name
-            for suffix in ("A", "W", "@plt", "@PLT"):
-                if base.endswith(suffix):
-                    base = base[:-len(suffix)]
-                    break
-            for tag, apis in _TAG_CATEGORIES.items():
-                if any(api.lower() == base.lower() for api in apis):
-                    schema["behavior_tags"].add(tag)
-
-        try:
-            timer.check()
-        except TimeoutError:
-            _cache_set(cache_key, schema)
-            return schema
-
-        for head in idautils.Heads(fn.start_ea, fn.end_ea):
-            for dref in idautils.DataRefsFrom(head):
-                stype = idc.get_str_type(dref)
-                if stype is not None and stype >= 0:
-                    s = idc.get_strlit_contents(dref, -1, stype)
-                    if s:
-                        s = s.decode("utf-8", errors="replace") if isinstance(s, bytes) else s
-                        schema["string_refs"].add(s[:60])
-                        if any(proto in s for proto in ("http://", "https://", "ftp://", "tcp://")):
-                            schema["behavior_tags"].add("network")
-                        if "HKEY_" in s or "Software\\" in s:
-                            schema["behavior_tags"].add("registry")
-                        if s.startswith("C:\\") or "/home/" in s or "/usr/" in s or "/etc/" in s:
-                            schema["behavior_tags"].add("file_io")
-
-        _cache_set(cache_key, schema)
-        return schema
-
-    def _norm_hex(v):
-        try:
-            s = str(v).strip().lower()
-            if not s:
-                return None
-            if s.startswith("0x"):
-                return s
-            return hex(int(s, 0)).lower()
-        except Exception:
-            return None
-
-    def schema_matches(schema, constraints):
-        allow_addrs = constraints.get("addrs")
-        if allow_addrs:
-            allowed = set()
-            seq = allow_addrs if isinstance(allow_addrs, (list, tuple, set)) else [allow_addrs]
-            for a in seq:
-                na = _norm_hex(a)
-                if na:
-                    allowed.add(na)
-            fn_addr = _norm_hex(schema.get("addr", ""))
-            if allowed and fn_addr not in allowed:
-                return False
-        for key, val in constraints.items():
-            if key == "addrs":
-                continue
-            if key == "behavior_tags":
-                vals = val if isinstance(val, (list, set, tuple)) else [val]
-                if not any(v in schema["behavior_tags"] for v in vals):
-                    return False
-            elif key == "dangerous_apis":
-                vals = val if isinstance(val, (list, set, tuple)) else [val]
-                if not any(v in schema["dangerous_apis"] for v in vals):
-                    return False
-            elif key == "compiler_hints":
-                vals = val if isinstance(val, (list, set, tuple)) else [val]
-                if not any(v in schema["compiler_hints"] for v in vals):
-                    return False
-            elif key == "vuln_class":
-                vals = val if isinstance(val, (list, set, tuple)) else [val]
-                if not any(v in schema["vuln_class"] for v in vals):
-                    return False
-            elif key == "structural_features":
-                vals = val if isinstance(val, (list, set, tuple)) else [val]
-                if not any(v in schema["structural_features"] for v in vals):
-                    return False
-            elif key == "string_refs":
-                matcher = compile_smart_pattern(str(val), case_sensitive=False)
-                if not any(matcher(s) for s in schema["string_refs"]):
-                    return False
-            else:
-                all_vals = []
-                for v in schema.values():
-                    if isinstance(v, (list, tuple, set)):
-                        all_vals.extend(str(item) for item in v)
-                    elif v is not None:
-                        all_vals.append(str(v))
-                if str(val).lower() not in " ".join(all_vals).lower():
-                    return False
-        return True
+    # Apply offset
+    rows = rows[offset:offset + limit]
 
     results = []
     schema_hits = {}
-    matcher = compile_smart_pattern(pattern, case_sensitive=False) if pattern else None
-    timer = SearchTimeout(timeout_ms)
-    timed_out = False
-    matches_seen = 0
-
-    # ---- Phase 0: SQL pre-filter (if applicable) ----
-    sql_constraints, schema_constraints = _split_constraints(constraints)
-    sql_candidates, sql_info = _sql_pre_filter_functions(sql_constraints)
-    sql_used = sql_candidates is not None
-    pre_filter_note = ""
-
-    if sql_used:
-        if sql_candidates:
-            pre_filter_note = (
-                f"SQL pre-filter narrowed {sql_info.get('total_matches', 0)} candidates "
-                f"in {sql_info.get('sql_ms', 0):.1f}ms"
-            )
-        else:
-            pre_filter_note = "SQL pre-filter: no candidates matched"
-
-    # Build function iterator: SQL candidates or full scan
-    func_iter = sql_candidates if sql_used and sql_candidates is not None else idautils.Functions()
-
-    # ---- Phase 1: Schema induction + matching on candidate pool ----
-    for func_ea in func_iter:
-        try:
-            timer.check()
-        except TimeoutError:
-            timed_out = True
-            break
-
-        schema = induce_schema(func_ea)
-
-        # Apply schema-only constraints (behavior_tags, etc.)
-        if not schema_matches(schema, schema_constraints if schema_constraints else constraints):
-            continue
-
-        fname = idc.get_func_name(func_ea) or f"sub_{func_ea:x}"
-        tags = ", ".join(sorted(schema["behavior_tags"]))
-        dangerous = ", ".join(sorted(schema["dangerous_apis"]))
-        line = f"{hex(func_ea)}  {fname}  tags=[{tags}]"
-        if dangerous:
-            line += f"  dangerous=[{dangerous}]"
-        if pattern and not matcher(line):
-            continue
-        matches_seen += 1
-        if matches_seen <= offset:
-            continue
+    for r in rows:
+        line = f"{r['ea']}  {r['name']}  size={r['func_size']}  bb={r['bb_count']}  apis={r['api_count']}"
+        if r.get("has_loops"):
+            line += "  loops"
+        if r.get("segment"):
+            line += f"  seg={r['segment']}"
         results.append(line)
-        schema_hits[hex(func_ea)] = {
-            "name": fname,
-            "behavior_tags": sorted(schema["behavior_tags"]),
-            "dangerous_apis": sorted(schema["dangerous_apis"]),
-            "string_refs": sorted(schema["string_refs"])[:5],
-            "compiler_hints": sorted(schema["compiler_hints"]),
-            "structural_features": sorted(schema["structural_features"]),
+        schema_hits[r["ea"]] = {
+            "name": r["name"],
+            "func_size": r["func_size"],
+            "bb_count": r["bb_count"],
+            "has_loops": r["has_loops"],
+            "api_count": r["api_count"],
+            "string_count": r["string_count"],
+            "segment": r["segment"],
+            "is_thunk": r["is_thunk"],
+            "cyclomatic": r["cyclomatic"],
         }
-        if len(results) >= limit:
-            break
 
-    out = {
+    return {
         "ok": True, "action": "structured", "constraints": constraints,
         "matches": "\n".join(results), "count": len(results),
         "schema_hits": schema_hits,
-        "note": "Structured semantic retrieval pre-filters by induced function schema.",
+        "note": f"Structured search via embedding index ({'semantic ranking' if query else 'structural only'}).",
+        "index_used": True,
     }
-    if sql_used:
-        out["sql_pre_filter"] = True
-        out["sql_info"] = {
-            "candidates": len(sql_candidates) if sql_candidates else 0,
-            "total_matches": sql_info.get("total_matches", 0),
-            "sql_ms": round(sql_info.get("sql_ms", 0), 2),
-        }
-        out["note"] += f" | {pre_filter_note}"
-    if timed_out:
-        out["timed_out"] = True
-        out["hint"] = "Search timed out. Increase timeout_ms or tighten constraints."
-    return out

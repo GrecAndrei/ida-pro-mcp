@@ -924,7 +924,40 @@ def intelligence(
                         text = pseudo
                     else:
                         text = _build_fast_signature(fea, func)
-                    idx.index(hex(fea), name, text)
+                    # Collect structural metadata for filtering
+                    flow = idaapi.FlowChart(func)
+                    bb_count = sum(1 for _ in flow)
+                    # Count API calls and string refs
+                    api_count = 0
+                    string_count = 0
+                    for head in idautils.Heads(func.start_ea, func.end_ea):
+                        for ref in idautils.CodeRefsFrom(head, 0):
+                            ref_name = idc.get_name(ref) or ""
+                            if ref_name:
+                                api_count += 1
+                        if api_count > 200:
+                            break
+                    for head in idautils.Heads(func.start_ea, func.end_ea):
+                        for ref in idautils.DataRefsFrom(head):
+                            s = idc.get_strlit_contents(ref, -1, 0)
+                            if s:
+                                string_count += 1
+                        if string_count > 100:
+                            break
+                    seg = ida_segment.get_segm_name(idaapi.getseg(fea)) or ""
+                    is_thunk = 1 if (func.flags & idaapi.FUNC_THUNK) else 0
+                    cyclomatic = max(0, bb_count - 1)
+                    md = {
+                        "func_size": func_size,
+                        "bb_count": bb_count,
+                        "has_loops": 0,
+                        "api_count": min(api_count, 999),
+                        "string_count": min(string_count, 999),
+                        "segment": seg,
+                        "is_thunk": is_thunk,
+                        "cyclomatic": cyclomatic,
+                    }
+                    idx.index(hex(fea), name, text, metadata=md)
                     count += 1
                 except Exception:
                     failures += 1
