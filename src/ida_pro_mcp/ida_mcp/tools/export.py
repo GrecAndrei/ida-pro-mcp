@@ -44,8 +44,8 @@ def _redact_content(content: str, patterns: list = None) -> tuple[str, list[str]
 @tool
 @idaread
 def export(
-    action: Annotated[Literal["listing", "html", "idc", "json", "sarif", "binexport", "headers", "redact"],
-                      "Action: listing|html|idc|json|sarif|binexport|headers|redact"],
+    action: Annotated[Literal["listing", "html", "idc", "json", "sarif", "binexport", "headers", "redact", "vtable"],
+                      "Action: listing|html|idc|json|sarif|binexport|headers|redact|vtable"],
     path: Annotated[Optional[str], "Output file path"] = None,
     addr: Annotated[Optional[str], "Address or range (for partial export)"] = None,
     include_decompile: Annotated[bool, "Include decompiled code"] = False,
@@ -554,6 +554,40 @@ def export(
                     "redacted": redacted[:20000],
                     "note": "Redacted sensitive patterns (IPs, emails, hashes, URLs, base64). Review before sharing externally.",
                 }
+
+        elif action == "vtable":
+            # Export vtable(s) as structured JSON
+            if not path:
+                path = os.path.join(tempfile.gettempdir(), "vtable_export.json")
+            query = kwargs.get("query")
+            matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
+            ptr_size = 8 if _inf_is_64bit() else 4
+            import struct as _struct
+            vtables = []
+            for ea, name in idautils.Names():
+                if matcher and not matcher(name):
+                    continue
+                if "_ZTV" not in name and "vtable" not in name.lower():
+                    continue
+                # Try to read as vtable
+                entries = []
+                cur = ea
+                for idx in range(64):
+                    raw = ida_bytes.get_bytes(cur, ptr_size)
+                    if not raw or len(raw) < ptr_size:
+                        break
+                    fmt = "<Q" if ptr_size == 8 else "<I"
+                    target = _struct.unpack(fmt, raw)[0]
+                    if target == 0 or not ida_bytes.is_loaded(target):
+                        break
+                    func_name = idc.get_name(target) or ""
+                    entries.append({"index": idx, "addr": hex(target), "name": func_name})
+                    cur += ptr_size
+                if entries:
+                    vtables.append({"vtable_addr": hex(ea), "name": name, "entries": entries, "count": len(entries)})
+            with open(path, "w") as f:
+                json_module.dump({"vtables": vtables, "count": len(vtables)}, f, indent=2)
+            return {"ok": True, "exported": True, "path": path, "count": len(vtables)}
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

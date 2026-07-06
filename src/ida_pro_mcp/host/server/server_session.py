@@ -756,6 +756,18 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             except Exception:
                 pass
 
+        # ELF dependency detection: parse NEEDED entries for shared libraries
+        if out.get("idb_exists") and binary_path:
+            try:
+                dependencies = self._parse_elf_dependencies(binary_path)
+                if dependencies:
+                    out["elf_dependencies"] = dependencies
+                    out["note"] = (out.get("note") or "") + (
+                        f" {len(dependencies)} shared lib(s) needed."
+                    )
+            except Exception:
+                pass
+
         # Refresh the snapshot with idb_exists etc. after wait
         out["session"] = self.current_session.to_dict()
         if out["session"].get("idb_exists"):
@@ -763,6 +775,103 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 " IDB ready." if out.get("note") else "IDB ready."
             )
         return out
+
+    @staticmethod
+    def _parse_elf_dependencies(binary_path: str) -> list[str]:
+        """Parse ELF NEEDED entries to find shared library dependencies.
+        Uses only struct/bytes — no external tools needed."""
+        try:
+            with open(binary_path, "rb") as f:
+                # Check ELF magic
+                magic = f.read(4)
+                if magic != b"\x7fELF":
+                    return []
+                # Read ELF header
+                f.seek(0)
+                ident = f.read(16)
+                is_64 = ident[4] == 2  # ELFCLASS64
+                is_be = ident[5] == 2  # ELFDATA2MSB
+                endian = ">" if is_be else "<"
+                if is_64:
+                    f.seek(40)  # e_shoff offset for 64-bit
+                    shoff = int.from_bytes(f.read(8), "big" if is_be else "little")
+                    f.seek(58)  # e_shentsize
+                    shentsize = int.from_bytes(f.read(2), "big" if is_be else "little")
+                    f.seek(60)  # e_shnum
+                    shnum = int.from_bytes(f.read(2), "big" if is_be else "little")
+                    f.seek(62)  # e_shstrndx
+                    shstrndx = int.from_bytes(f.read(2), "big" if is_be else "little")
+                else:
+                    f.seek(32)  # e_shoff for 32-bit
+                    shoff = int.from_bytes(f.read(4), "big" if is_be else "little")
+                    f.seek(46)  # e_shentsize
+                    shentsize = int.from_bytes(f.read(2), "big" if is_be else "little")
+                    f.seek(48)  # e_shnum
+                    shnum = int.from_bytes(f.read(2), "big" if is_be else "little")
+                    f.seek(50)  # e_shstrndx
+                    shstrndx = int.from_bytes(f.read(2), "big" if is_be else "little")
+                if not shoff or not shnum:
+                    return []
+                # Read section header string table
+                f.seek(shoff + shstrndx * shentsize)
+                if is_64:
+                    f.seek(24, 1)  # skip to sh_offset
+                    str_offset = int.from_bytes(f.read(8), "big" if is_be else "little")
+                    f.seek(8, 1)  # skip to sh_size
+                    str_size = int.from_bytes(f.read(8), "big" if is_be else "little")
+                else:
+                    f.seek(16, 1)  # skip to sh_offset
+                    str_offset = int.from_bytes(f.read(4), "big" if is_be else "little")
+                    f.seek(4, 1)  # skip to sh_size
+                    str_size = int.from_bytes(f.read(4), "big" if is_be else "little")
+                f.seek(str_offset)
+                strtab = f.read(str_size)
+                # Find DYNAMIC section and parse NEEDED entries
+                needed = []
+                for i in range(shnum):
+                    f.seek(shoff + i * shentsize)
+                    if is_64:
+                        sh_name = int.from_bytes(f.read(4), "big" if is_be else "little")
+                        sh_type = int.from_bytes(f.read(4), "big" if is_be else "little")
+                    else:
+                        sh_name = int.from_bytes(f.read(4), "big" if is_be else "little")
+                        sh_type = int.from_bytes(f.read(4), "big" if is_be else "little")
+                    if sh_type == 11:  # SHT_DYNAMIC (6) or SHT_DYNSYM — check for 6
+                        pass
+                    if sh_type == 6:  # SHT_DYNAMIC
+                        if is_64:
+                            f.seek(16, 1)  # skip to sh_offset
+                            dyn_offset = int.from_bytes(f.read(8), "big" if is_be else "little")
+                            dyn_size = int.from_bytes(f.read(8), "big" if is_be else "little")
+                        else:
+                            f.seek(8, 1)  # skip to sh_offset
+                            dyn_offset = int.from_bytes(f.read(4), "big" if is_be else "little")
+                            dyn_size = int.from_bytes(f.read(4), "big" if is_be else "little")
+                        f.seek(dyn_offset)
+                        dyn_data = f.read(dyn_size)
+                        # Parse dynamic entries
+                        entry_size = 16 if is_64 else 8
+                        for j in range(0, len(dyn_data), entry_size):
+                            if j + entry_size > len(dyn_data):
+                                break
+                            if is_64:
+                                d_tag = int.from_bytes(dyn_data[j:j+8], "big" if is_be else "little", signed=True)
+                                d_val = int.from_bytes(dyn_data[j+8:j+16], "big" if is_be else "little")
+                            else:
+                                d_tag = int.from_bytes(dyn_data[j:j+4], "big" if is_be else "little", signed=True)
+                                d_val = int.from_bytes(dyn_data[j+4:j+8], "big" if is_be else "little")
+                            if d_tag == 1:  # DT_NEEDED
+                                # d_val is offset into string table
+                                end = strtab.find(b"\x00", d_val)
+                                if end == -1:
+                                    end = len(strtab)
+                                lib_name = strtab[d_val:end].decode("utf-8", errors="replace")
+                                if lib_name:
+                                    needed.append(lib_name)
+                        break
+                return needed
+        except Exception:
+            return []
 
     def _session_action_discover(self, args: dict) -> dict:
         self.session_mgr._load_orphaned_idbs()

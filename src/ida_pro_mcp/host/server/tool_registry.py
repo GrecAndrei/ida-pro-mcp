@@ -93,7 +93,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "debug": ["status", "start", "stop", "continue", "step_into", "step_over", "run_to", "run_until", "breakpoints", "add_bp", "del_bp", "enable_bp", "add_hw_bp", "add_watch", "regs", "set_reg", "reg_diff", "snapshot_regs", "threads", "modules", "callstack", "read_mem", "write_mem", "search_mem", "stack_dump", "mem_map", "bp_context", "trace_start", "trace_stop", "trace_read", "mem_diff"],
     "deobfuscate": ["detect", "detect_encoding", "stack_strings", "dead_code", "api_hashing", "dynamic_dispatch", "anti_disasm", "decode_attempt"],
     "entropy": ["section", "region", "packed_detect", "crypto_detect", "compare", "window", "summary"],
-    "export": ["listing", "html", "idc", "json", "sarif", "binexport", "headers", "redact"],
+    "export": ["listing", "html", "idc", "json", "sarif", "binexport", "headers", "redact", "vtable"],
     "filter": ["filter"],
     "firmware_view": ["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign", "detect_load_address", "detect_vector_table", "detect_mmio", "rtos_scan", "triage_snapshot", "bootstrap"],
     "fixups": ["list", "get", "add", "delete"],
@@ -109,7 +109,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "intelligence": [
         "intelligence_status", "embedder_status", "anchor_status",
         "refresh_anchors", "classify_text", "classify_function",
-        "index_function", "index_batch", "similar_functions",
+        "index_function", "index_batch", "index_fast", "similar_functions",
         "semantic_search", "blackboard_search", "export_index_summary",
         "evidence_card", "structural_extract", "structural_extract_single",
         "structural_query", "structural_get", "structural_refresh",

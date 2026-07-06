@@ -529,6 +529,7 @@ def intelligence(
             "classify_function",
             "index_function",
             "index_batch",
+            "index_fast",
             "similar_functions",
             "semantic_search",
             "blackboard_search",
@@ -781,6 +782,77 @@ def intelligence(
                 "failed": failures,
                 "index": {"path": db_path, "size": idx.size},
                 "capsule_embedding_state": persisted_state,
+            }
+
+        if action == "index_fast":
+            # Build embedding index from disassembly + signatures (no decompile).
+            # Much faster than index_batch for large binaries — O(n) disassembly
+            # vs O(n) decompilation. Uses function name, API calls, string refs,
+            # and first 30 instructions as the embedding text.
+            limit = max(1, int(kwargs.get("limit", 0)))
+            idx, db_path = _index_for_current_idb()
+            count = 0
+            failures = 0
+            for fea in idautils.Functions():
+                if limit and count >= limit:
+                    break
+                try:
+                    func = idaapi.get_func(fea)
+                    if not func:
+                        failures += 1
+                        continue
+                    name = ida_funcs.get_func_name(fea) or hex(fea)
+                    # Build a signature string from disassembly + metadata
+                    parts = [name]
+                    # Add API calls (CodeRefsFrom)
+                    apis = set()
+                    for head in idautils.Heads(func.start_ea, func.end_ea):
+                        for ref in idautils.CodeRefsFrom(head, 0):
+                            ref_name = idc.get_name(ref) or ""
+                            if ref_name:
+                                apis.add(ref_name)
+                        if len(apis) > 20:
+                            break
+                    if apis:
+                        parts.append("apis:" + ",".join(sorted(apis)[:20]))
+                    # Add string refs
+                    str_refs = set()
+                    for head in idautils.Heads(func.start_ea, func.end_ea):
+                        for ref in idautils.DataRefsFrom(head):
+                            s = idc.get_strlit_contents(ref, -1, 0)
+                            if s:
+                                try:
+                                    s = s.decode("utf-8", errors="replace")[:60]
+                                    str_refs.add(s)
+                                except Exception:
+                                    pass
+                        if len(str_refs) > 10:
+                            break
+                    if str_refs:
+                        parts.append("strings:" + ",".join(sorted(str_refs)[:10]))
+                    # Add first 15 instructions
+                    insns = []
+                    for head in idautils.Heads(func.start_ea, min(func.start_ea + 256, func.end_ea)):
+                        dis = idc.generate_disasm_line(head, 0)
+                        if dis:
+                            insns.append(idc.tag_remove(dis)[:80])
+                        if len(insns) >= 15:
+                            break
+                    if insns:
+                        parts.append("code:" + "; ".join(insns))
+                    signature = " | ".join(parts)
+                    idx.index(hex(fea), name, signature)
+                    count += 1
+                except Exception:
+                    failures += 1
+            persisted_state = _persist_embedder_state(idx, "index_fast")
+            return {
+                "ok": True,
+                "indexed": count,
+                "failed": failures,
+                "index": {"path": db_path, "size": idx.size},
+                "capsule_embedding_state": persisted_state,
+                "note": "Fast index built from disassembly + signatures (no decompilation).",
             }
 
         if action == "similar_functions":

@@ -43,8 +43,8 @@ def test_intelligence_tool_no_residual_agent_dispatcher_branches():
     assert "if action == \"classify_text\":" not in text
 
 
-def test_intelligence_tool_action_enum_has_13_entries():
-    """The Literal enum in the new tool has exactly 13 actions."""
+def test_intelligence_tool_action_enum_has_22_entries():
+    """The Literal enum in the new tool has exactly 22 actions."""
     text = _read("src/ida_pro_mcp/ida_mcp/tools/intelligence.py")
     # Pull out the Literal block.
     lit_match = re.search(
@@ -56,7 +56,7 @@ def test_intelligence_tool_action_enum_has_13_entries():
     expected = {
         "intelligence_status", "embedder_status", "anchor_status",
         "refresh_anchors", "classify_text", "classify_function",
-        "index_function", "index_batch", "similar_functions",
+        "index_function", "index_batch", "index_fast", "similar_functions",
         "semantic_search", "blackboard_search", "export_index_summary",
         "evidence_card",
         "structural_ingest", "structural_query", "structural_get",
@@ -123,9 +123,9 @@ def test_schemas_py_knows_about_intelligence_tool():
     assert "intelligence" in TOOL_ACTIONS
     assert "intelligence" in ADVERTISED_TOOLS
     # The wrapper actions (grep/pick/head/tail/next/stats) extend the
-    # enum at schema-build time; the raw TOOL_ACTIONS source has 21
-    # (13 baseline + 8 structural_* added during cleanup_stale era).
-    assert len(TOOL_ACTIONS["intelligence"]) == 21
+    # enum at schema-build time; the raw TOOL_ACTIONS source has 22
+    # (13 baseline + 8 structural_* + index_fast).
+    assert len(TOOL_ACTIONS["intelligence"]) == 22
     # Spot-check the structural_* family was wired in
     structural = {a for a in TOOL_ACTIONS["intelligence"] if a.startswith("structural_")}
     assert {"structural_extract", "structural_query", "structural_get",
