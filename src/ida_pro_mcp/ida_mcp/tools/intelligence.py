@@ -99,6 +99,54 @@ def _parse_register_offset(op_str: str) -> Optional[tuple[str, int]]:
     return None
 
 
+def _build_fast_signature(fea: int, func=None) -> str:
+    """Build a fast signature string from disassembly + metadata (no decompile).
+    Used by index_fast and index_range for fast embedding indexing."""
+    if func is None:
+        func = idaapi.get_func(fea)
+    if not func:
+        return ida_funcs.get_func_name(fea) or hex(fea)
+    name = ida_funcs.get_func_name(fea) or hex(fea)
+    parts = [name]
+    # API calls
+    apis = set()
+    for head in idautils.Heads(func.start_ea, func.end_ea):
+        for ref in idautils.CodeRefsFrom(head, 0):
+            ref_name = idc.get_name(ref) or ""
+            if ref_name:
+                apis.add(ref_name)
+        if len(apis) > 20:
+            break
+    if apis:
+        parts.append("apis:" + ",".join(sorted(apis)[:20]))
+    # String refs
+    str_refs = set()
+    for head in idautils.Heads(func.start_ea, func.end_ea):
+        for ref in idautils.DataRefsFrom(head):
+            s = idc.get_strlit_contents(ref, -1, 0)
+            if s:
+                try:
+                    s = s.decode("utf-8", errors="replace")[:60]
+                    str_refs.add(s)
+                except Exception:
+                    pass
+        if len(str_refs) > 10:
+            break
+    if str_refs:
+        parts.append("strings:" + ",".join(sorted(str_refs)[:10]))
+    # First 15 instructions
+    insns = []
+    for head in idautils.Heads(func.start_ea, min(func.start_ea + 256, func.end_ea)):
+        dis = idc.generate_disasm_line(head, 0)
+        if dis:
+            insns.append(idc.tag_remove(dis)[:80])
+        if len(insns) >= 15:
+            break
+    if insns:
+        parts.append("code:" + "; ".join(insns))
+    return " | ".join(parts)
+
+
 def _extract_function_attributes(func_ea: int) -> dict[str, Any]:
     """Extract deterministic attributes for a single function using only IDA APIs.
 
@@ -530,6 +578,7 @@ def intelligence(
             "index_function",
             "index_batch",
             "index_fast",
+            "index_range",
             "similar_functions",
             "semantic_search",
             "blackboard_search",
@@ -544,7 +593,7 @@ def intelligence(
             "structural_extract",
             "structural_extract_single",
         ],
-        "Action: intelligence_status|embedder_status|anchor_status|refresh_anchors|classify_text|classify_function|index_function|index_batch|similar_functions|semantic_search|blackboard_search|export_index_summary|evidence_card|structural_ingest|structural_query|structural_get|structural_stats|structural_delete|structural_refresh|structural_extract|structural_extract_single",
+        "Action: intelligence_status|embedder_status|anchor_status|refresh_anchors|classify_text|classify_function|index_function|index_batch|index_fast|index_range|similar_functions|semantic_search|blackboard_search|export_index_summary|evidence_card|structural_ingest|structural_query|structural_get|structural_stats|structural_delete|structural_refresh|structural_extract|structural_extract_single",
     ],
     addr: Annotated[Optional[str], "Address"] = None,
     query: Annotated[Optional[str], "Free-form text or comma-separated list"] = None,
@@ -756,43 +805,88 @@ def intelligence(
                 "capsule_embedding_state": persisted_state,
             }
 
-        if action == "index_batch":
-            limit = max(1, int(kwargs.get("limit", max_items)))
-            idx, db_path = _index_for_current_idb()
-            count = 0
-            failures = 0
-            for fea in idautils.Functions():
-                if count >= limit:
-                    break
-                try:
-                    cfunc = _safe_decompile(fea)
-                    pseudo = str(cfunc) if cfunc else ""
-                    if not pseudo:
-                        failures += 1
-                        continue
-                    name = ida_funcs.get_func_name(fea) or hex(fea)
-                    idx.index(hex(fea), name, pseudo)
-                    count += 1
-                except Exception:
-                    failures += 1
-            persisted_state = _persist_embedder_state(idx, "index_batch")
-            return {
-                "ok": True,
-                "indexed": count,
-                "failed": failures,
-                "index": {"path": db_path, "size": idx.size},
-                "capsule_embedding_state": persisted_state,
-            }
+        if action in ("index_batch", "index_fast", "index_range"):
+            # Shared range-resolution logic for all indexing actions.
+            #
+            # Range spec (all optional, combine freely):
+            #   start / end     — single address range [start, end)
+            #   addr + radius   — range [addr-radius, addr+radius)
+            #   ranges          — list of {start, end} dicts for multiple areas
+            #   min_size / max_size — filter functions by byte size
+            #   limit           — max functions to index
+            #   query           — only index functions matching name filter
+            #
+            # Examples:
+            #   index everything:                index_fast()
+            #   single range:                    index_fast(start="0x401000", end="0x405000")
+            #   radius around a function:        index_fast(addr="0x401000", radius=0x1000)
+            #   multiple ranges:                 index_fast(ranges=[{"start":"0x401000","end":"0x402000"}, {"start":"0x500000","end":"0x501000"}])
+            #   size filter:                     index_fast(min_size=100, max_size=5000)
+            #   named functions in a range:      index_fast(query="octvm_*", start="0x400000", end="0x500000")
 
-        if action == "index_fast":
-            # Build embedding index from disassembly + signatures (no decompile).
-            # Much faster than index_batch for large binaries — O(n) disassembly
-            # vs O(n) decompilation. Uses function name, API calls, string refs,
-            # and first 30 instructions as the embedding text.
-            limit = max(1, int(kwargs.get("limit", 0)))
+            # ---- resolve target ranges ----
+            ranges = []
+            raw_ranges = args.get("ranges") or kwargs.get("ranges")
+            if raw_ranges and isinstance(raw_ranges, list):
+                for r in raw_ranges:
+                    if isinstance(r, dict):
+                        r_start = r.get("start") or r.get("addr") or r.get("begin")
+                        r_end = r.get("end") or r.get("stop")
+                        if r_start and r_end:
+                            try:
+                                s = int(str(r_start), 0)
+                                e = int(str(r_end), 0)
+                                if e > s:
+                                    ranges.append((s, e))
+                            except (ValueError, TypeError):
+                                pass
+            # single range via start/end
+            if not ranges:
+                raw_start = args.get("start") or kwargs.get("addr") or args.get("addr") or args.get("begin")
+                raw_end = args.get("end") or args.get("stop")
+                raw_radius = args.get("radius") or kwargs.get("radius")
+                if raw_start and raw_end:
+                    try:
+                        s = int(str(raw_start), 0)
+                        e = int(str(raw_end), 0)
+                        if e > s:
+                            ranges.append((s, e))
+                    except (ValueError, TypeError):
+                        pass
+                elif raw_start and raw_radius:
+                    try:
+                        c = int(str(raw_start), 0)
+                        r = abs(int(str(raw_radius), 0))
+                        ranges.append((c - r, c + r))
+                    except (ValueError, TypeError):
+                        pass
+            # size filters
+            min_size = args.get("min_size") or kwargs.get("min_size")
+            max_size = args.get("max_size") or kwargs.get("max_size")
+            try:
+                min_size = int(min_size) if min_size is not None else None
+            except (ValueError, TypeError):
+                min_size = None
+            try:
+                max_size = int(max_size) if max_size is not None else None
+            except (ValueError, TypeError):
+                max_size = None
+            # name filter
+            name_filter = args.get("query") or kwargs.get("query")
+            name_matcher = compile_smart_pattern(name_filter, case_sensitive=False) if name_filter else None
+            # limit
+            try:
+                limit = max(1, int(kwargs.get("limit", args.get("limit", 0)) or 0))
+            except (ValueError, TypeError):
+                limit = 0  # 0 = unlimited
+            # mode
+            use_decompile = (action == "index_batch")
+            action_label = action
+
             idx, db_path = _index_for_current_idb()
             count = 0
             failures = 0
+            skipped = 0
             for fea in idautils.Functions():
                 if limit and count >= limit:
                     break
@@ -801,58 +895,49 @@ def intelligence(
                     if not func:
                         failures += 1
                         continue
+                    # range filter: function must overlap at least one range
+                    if ranges:
+                        in_range = any(s <= fea < e or s < func.end_ea <= e for s, e in ranges)
+                        if not in_range:
+                            skipped += 1
+                            continue
+                    # size filter
+                    func_size = int(func.end_ea - func.start_ea)
+                    if min_size is not None and func_size < min_size:
+                        skipped += 1
+                        continue
+                    if max_size is not None and func_size > max_size:
+                        skipped += 1
+                        continue
+                    # name filter
                     name = ida_funcs.get_func_name(fea) or hex(fea)
-                    # Build a signature string from disassembly + metadata
-                    parts = [name]
-                    # Add API calls (CodeRefsFrom)
-                    apis = set()
-                    for head in idautils.Heads(func.start_ea, func.end_ea):
-                        for ref in idautils.CodeRefsFrom(head, 0):
-                            ref_name = idc.get_name(ref) or ""
-                            if ref_name:
-                                apis.add(ref_name)
-                        if len(apis) > 20:
-                            break
-                    if apis:
-                        parts.append("apis:" + ",".join(sorted(apis)[:20]))
-                    # Add string refs
-                    str_refs = set()
-                    for head in idautils.Heads(func.start_ea, func.end_ea):
-                        for ref in idautils.DataRefsFrom(head):
-                            s = idc.get_strlit_contents(ref, -1, 0)
-                            if s:
-                                try:
-                                    s = s.decode("utf-8", errors="replace")[:60]
-                                    str_refs.add(s)
-                                except Exception:
-                                    pass
-                        if len(str_refs) > 10:
-                            break
-                    if str_refs:
-                        parts.append("strings:" + ",".join(sorted(str_refs)[:10]))
-                    # Add first 15 instructions
-                    insns = []
-                    for head in idautils.Heads(func.start_ea, min(func.start_ea + 256, func.end_ea)):
-                        dis = idc.generate_disasm_line(head, 0)
-                        if dis:
-                            insns.append(idc.tag_remove(dis)[:80])
-                        if len(insns) >= 15:
-                            break
-                    if insns:
-                        parts.append("code:" + "; ".join(insns))
-                    signature = " | ".join(parts)
-                    idx.index(hex(fea), name, signature)
+                    if name_matcher and not name_matcher(name):
+                        skipped += 1
+                        continue
+                    # build signature / pseudocode
+                    if use_decompile:
+                        cfunc = _safe_decompile(fea)
+                        pseudo = str(cfunc) if cfunc else ""
+                        if not pseudo:
+                            failures += 1
+                            continue
+                        text = pseudo
+                    else:
+                        text = _build_fast_signature(fea, func)
+                    idx.index(hex(fea), name, text)
                     count += 1
                 except Exception:
                     failures += 1
-            persisted_state = _persist_embedder_state(idx, "index_fast")
+            persisted_state = _persist_embedder_state(idx, action_label)
             return {
                 "ok": True,
                 "indexed": count,
                 "failed": failures,
+                "skipped": skipped,
+                "ranges_specified": len(ranges),
                 "index": {"path": db_path, "size": idx.size},
                 "capsule_embedding_state": persisted_state,
-                "note": "Fast index built from disassembly + signatures (no decompilation).",
+                "mode": "decompile" if use_decompile else "fast",
             }
 
         if action == "similar_functions":

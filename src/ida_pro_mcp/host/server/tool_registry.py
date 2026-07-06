@@ -109,7 +109,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "intelligence": [
         "intelligence_status", "embedder_status", "anchor_status",
         "refresh_anchors", "classify_text", "classify_function",
-        "index_function", "index_batch", "index_fast", "similar_functions",
+        "index_function", "index_batch", "index_fast", "index_range", "similar_functions",
         "semantic_search", "blackboard_search", "export_index_summary",
         "evidence_card", "structural_extract", "structural_extract_single",
         "structural_query", "structural_get", "structural_refresh",
