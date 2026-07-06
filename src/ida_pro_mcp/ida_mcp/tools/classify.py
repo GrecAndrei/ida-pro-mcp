@@ -320,7 +320,7 @@ def classify(
         Params: limit
         Returns: {orphans}
 
-    induce_schema - Induce structured attribute-value schema for a function (SchemaBoot).
+    induce_schema - Induce structured attribute-value schema for a function.
         Params: addr (required)
         Returns: {schema: {behavior_tags, dangerous_apis, string_refs, vuln_class, compiler_hints, structural_features}}
         Use for structured semantic retrieval and precise filtering.
@@ -650,7 +650,7 @@ def classify(
             return {"ok": True, "orphans": orphans, "count": len(orphans)}
 
         # ----------------------------------------------------------------
-        # ACTION: induce_schema (SchemaBoot for RE)
+        # ACTION: induce_schema (structural schema)
         # ----------------------------------------------------------------
         elif action == "induce_schema":
             if not addr:

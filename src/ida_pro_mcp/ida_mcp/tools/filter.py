@@ -251,16 +251,16 @@ def filter(
 
     Examples:
         # Get first 10 functions with size > 100, sorted by entropy desc
-        filter(data=schemaboot_result, query=".functions[?size > 100] | sort(-entropy) | first(10)")
+        filter(data=structured_result, query=".functions[?size > 100] | sort(-entropy) | first(10)")
 
         # Count candidates
-        filter(data=bridge_search_result, query=".candidates | count")
+        filter(data=structured_result, query=".candidates | count")
 
         # Get unique API names
-        filter(data=schemaboot_result, query=".functions | pluck(apis) | unique")
+        filter(data=structured_result, query=".functions | pluck(apis) | unique")
 
         # Group functions by segment
-        filter(data=schemaboot_result, query=".functions | group_by(segment)")
+        filter(data=structured_result, query=".functions | group_by(segment)")
     """
     if data is None:
         return make_error(MCPError.INVALID_ARGS, "data required")

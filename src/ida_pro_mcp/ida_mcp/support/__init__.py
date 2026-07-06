@@ -7,7 +7,7 @@ Layout:
   - arch_utils:           Multi-architecture instruction helpers
   - firmware_heuristics:  Firmware entropy/fingerprint helpers
   - semantic_matching:    Token-level semantic helpers for search
-  - hybrid_search:        SQL pre-filtering for structured search
+  - structural filters:   size/bb/loops/api_count via embedding index
   - query_lang:           Query-language parser/executor
   - _api_categories:      API category mappings
 """

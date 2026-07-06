@@ -831,12 +831,12 @@ def llm_helpers(
                     confidence = min(0.95, 0.7 + (limit / max(matched, 1)) * 0.25)
                     if matched > limit:
                         coverage = f"top {limit} of {matched} matches"
-                        suggestions.append(f"schemaboot(action='query', constraints=..., limit={min(matched, 50)}, offset={limit})")
+                        suggestions.append(f"search(action='structured', constraints=..., limit={min(matched, 50)}, offset={limit})")
                     else:
                         coverage = "all matches returned"
                     if matched == 0:
                         confidence = 0.1
-                        suggestions.append("Broaden constraints or use schemaboot(action='stats') to see index coverage")
+                        suggestions.append("Broaden constraints or use intelligence(action='index_fast') then check sessions(action='status') to see index coverage")
 
                 # Bridge search results
                 if "candidates" in data and "bridges" in data:
@@ -863,7 +863,7 @@ def llm_helpers(
                     if "ACTION_NOT_FOUND" in code:
                         suggestions.append("Call tools/list to see available actions")
                     if "DB_ERROR" in code or "index" in str(data.get("hint", "")).lower():
-                        suggestions.append("schemaboot(action='ingest') to rebuild the index")
+                        suggestions.append("intelligence(action='index_fast') to rebuild the index")
 
             # Context budget estimation
             payload_json = json.dumps(data, separators=(",", ":"))

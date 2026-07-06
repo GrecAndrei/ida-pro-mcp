@@ -19,14 +19,6 @@ from collections import defaultdict
 from typing import Any
 
 from . import helpers as _helpers
-from .api_patterns import (
-    ALL_INTERESTING_APIS,
-    actions_from_apis,
-    actions_from_schemaboot,
-    detect_crypto_constants,
-    extract_api_calls,
-    extract_string_refs,
-)
 from .core import (
     EMBED_DIM,
     BehaviorClassifier,
@@ -34,7 +26,6 @@ from .core import (
     FunctionEmbeddingIndex,
     _extract_signature,
 )
-from .structural_index import get_db_path
 
 
 def _intel_profile_enabled() -> bool:
@@ -463,39 +454,6 @@ class ContextAssembler:
         except Exception:
             return
 
-    def _get_bb_by_api_signals(
-        self,
-        bb_store,
-        api_calls: list[str],
-        addr: str,
-        top_k: int = 4,
-    ) -> list[dict[str, Any]]:
-        """
-        Retrieve blackboard findings related to the same behavior signal (APIs/tags),
-        not just exact address matches.
-        """
-        if bb_store is None or not api_calls:
-            return []
-        try:
-            ranked: list[tuple[int, float, dict[str, Any]]] = []
-            seen_ids: set = set()
-            # Query per API tag; blackboard tags are stored as JSON arrays and
-            # list(tag=...) already supports LIKE matching.
-            for api in api_calls[:8]:
-                for entry in bb_store.list(tag=api, limit=6):
-                    eid = entry.get("id")
-                    if not eid or eid in seen_ids:
-                        continue
-                    seen_ids.add(eid)
-                    eaddr = str(entry.get("addr") or "")
-                    same_addr_penalty = 0 if (addr and eaddr and eaddr != addr) else 1
-                    conf = float(entry.get("confidence") or 0.0)
-                    ranked.append((same_addr_penalty, -int(conf * 1000), entry))
-            ranked.sort(key=lambda x: (x[0], x[1]))
-            return [e for _, _, e in ranked[:top_k]]
-        except Exception:
-            return []
-
     def _record_related_addresses(self, session_id: str, anchor_addr: str, related_addrs: list[str]) -> None:
         """Record caller/callee/xref relations observed in tool outputs."""
         if not session_id or not anchor_addr or not related_addrs:
@@ -591,7 +549,7 @@ class ContextAssembler:
         if ta_count >= 5:
             pivots = {
                 "code:decompile":   ["code:callers", "code:callees", "search:semantic"],
-                "search:find":      ["schemaboot:query", "data:imports", "code:decompile"],
+                "search:find":      ["search:structured", "data:imports", "code:decompile"],
                 "code:disasm":      ["code:decompile", "code:blocks", "ctree:get"],
             }
             return {
@@ -661,7 +619,7 @@ class ContextAssembler:
 
         # ── 2b. Search/xref result enrichment ─────────────────────────────
         # When a search returns a list of addresses, enrich each with
-        # schemaboot structural data so the LLM doesn't need extra tool calls
+        # structural data so the LLM doesn't need extra tool calls
         # to assess which hits are interesting.
         is_search = tool in ("search", "graph", "code") and action in (
             "find", "api", "callers", "callees", "xrefs_to", "xrefs_from",
@@ -697,7 +655,7 @@ class ContextAssembler:
             self._perf_end(session_id, "search_enrich", t_search)
 
         # ── 2c. Suggest next unanalyzed targets (after any tool call) ─────
-        # Use schemaboot to recommend high-interest functions not yet seen.
+        # Use the embedding index to recommend high-interest functions not yet seen.
         if idb_path:
             try:
                 # Only inject next_targets occasionally — every 5 calls per session
@@ -719,52 +677,6 @@ class ContextAssembler:
 
         return pack
 
-    def _query_schemaboot(self, idb_path: str, addr: str) -> dict[str, Any] | None:
-        """Pull structural attributes from schemaboot for this function address."""
-        if not idb_path or not addr:
-            return None
-        db = get_db_path(idb_path)
-        if not os.path.exists(db):
-            return None
-        try:
-            ea = _helpers.coerce_int(addr)
-            with sqlite3.connect(db) as conn:
-                cur = conn.cursor()
-                cur.execute("""
-                    SELECT ea, name, size, entropy, bb_count, cyclomatic_complexity,
-                           incoming_xrefs, outgoing_xrefs, call_count, xor_count,
-                           api_count, string_count, has_loops
-                    FROM function_attrs WHERE ea = ?
-                """, (ea,))
-                row = cur.fetchone()
-                # Also fetch API list from junction table
-                apis: list[str] = []
-                if row:
-                    cur.execute(
-                        "SELECT api_name FROM function_apis WHERE func_ea = ? LIMIT 60",
-                        (ea,),
-                    )
-                    apis = [r[0] for r in cur.fetchall()]
-            if not row:
-                return None
-            return {
-                "ea": hex(row[0]),
-                "name": row[1],
-                "size": row[2],
-                "entropy": float(row[3] or 0),
-                "bb_count": row[4],
-                "cyclomatic_complexity": row[5],
-                "incoming_xrefs": row[6],
-                "outgoing_xrefs": row[7],
-                "call_count": row[8],
-                "xor_count": row[9],
-                "api_count": row[10],
-                "string_count": row[11],
-                "has_loops": bool(row[12]),
-                "known_apis": apis,
-            }
-        except Exception:
-            return None
 
     def _enrich_decompile(
         self,
@@ -790,59 +702,7 @@ class ContextAssembler:
         _full = mode == "full"
         func_name = payload.get("name") or f"sub_{addr}"
 
-        # ── Step 1: Deterministic API extraction (no ML, instant) ─────────
-        api_calls: list[str] = []
-        string_refs: list[str] = []
-        crypto_consts: list[str] = []
-        try:
-            api_calls = extract_api_calls(pseudocode)
-            string_refs = extract_string_refs(pseudocode)
-            crypto_consts = detect_crypto_constants(pseudocode)
-        except Exception:
-            pass
-
-        # ── Step 2: Schemaboot structural attributes (fast SQL) ──────────
-        sb_attrs: dict[str, Any] | None = None
-        try:
-            sb_attrs = self._query_schemaboot(idb_path, addr)
-            # Merge API list from schemaboot with what we found in pseudocode
-            if sb_attrs and sb_attrs.get("known_apis"):
-                extra = [a for a in sb_attrs["known_apis"] if a not in api_calls]
-                api_calls = (api_calls + extra)[:40]
-        except Exception:
-            pass
-
-        # ── Step 3: Surface the extracted facts ───────────────────────────
-        if _full and api_calls:
-            pack["api_calls"] = api_calls
-        if _full and string_refs:
-            pack["string_refs"] = string_refs
-        if _full and crypto_consts:
-            pack["crypto_constants_detected"] = crypto_consts
-
-        if sb_attrs:
-            structural: dict[str, Any] = {}
-            if sb_attrs.get("incoming_xrefs") is not None:
-                structural["xref_count"] = sb_attrs["incoming_xrefs"]
-            if sb_attrs.get("xor_count", 0) > 0:
-                structural["xor_count"] = sb_attrs["xor_count"]
-            if sb_attrs.get("entropy", 0) > 0:
-                structural["entropy"] = round(sb_attrs["entropy"], 2)
-            if sb_attrs.get("cyclomatic_complexity", 0) > 0:
-                structural["cyclomatic_complexity"] = sb_attrs["cyclomatic_complexity"]
-            if sb_attrs.get("has_loops"):
-                structural["has_loops"] = True
-            if sb_attrs.get("bb_count", 0) > 0:
-                structural["bb_count"] = sb_attrs["bb_count"]
-            if _full and structural:
-                pack["structural"] = structural
-
-        # ── Step 3b: Behavior classification via the shared zero-shot classifier
-        # This is intentionally separate from API/structural extraction so the
-        # response can expose both deterministic and semantic signals.
-        # Skip the embedding work in compact mode — the result is only surfaced
-        # in full mode, so computing it would be pure waste.
-        behavior_hits: list[dict[str, Any]] = []
+        # ── Behavior classification via the shared zero-shot classifier ──
         if _full and pseudocode.strip():
             try:
                 behavior_hits = self._behavior_classifier().classify(
@@ -863,23 +723,6 @@ class ContextAssembler:
         if _full:
             actions: list[dict[str, Any]] = []
             seen_act: set = set()
-            try:
-                for act in actions_from_apis(api_calls, addr):
-                    key = f"{act['tool']}:{act['action']}"
-                    if key not in seen_act:
-                        seen_act.add(key)
-                        actions.append(act)
-            except Exception:
-                pass
-            try:
-                if sb_attrs:
-                    for act in actions_from_schemaboot(sb_attrs, addr):
-                        key = f"{act['tool']}:{act['action']}"
-                        if key not in seen_act:
-                            seen_act.add(key)
-                            actions.append(act)
-            except Exception:
-                pass
             # Always suggest callers if we haven't already
             if "code:callers" not in seen_act and addr:
                 actions.append({
@@ -889,43 +732,6 @@ class ContextAssembler:
             if actions:
                 pack["suggested_next_actions"] = actions[:6]
 
-
-        # -- Step 4b: Auto-blackboard -- write dangerous findings automatically --
-        # The LLM should not have to manually blackboard every dangerous finding.
-        if bb_store is not None and addr and api_calls:
-            try:
-                _DANGEROUS_COMBOS = [
-                    ({"VirtualAllocEx", "WriteProcessMemory"}, "process_injection",
-                     "Process injection", ["injection", "shellcode", "dangerous"]),
-                    ({"CreateRemoteThread"}, "remote_exec",
-                     "Remote thread creation", ["injection", "dangerous"]),
-                    ({"IsDebuggerPresent", "CheckRemoteDebuggerPresent",
-                      "NtQueryInformationProcess"}, "anti_debug",
-                     "Anti-debugging", ["anti_debug", "evasion"]),
-                    ({"AdjustTokenPrivileges"}, "privilege_escalation",
-                     "Privilege escalation", ["privesc", "dangerous"]),
-                    ({"RegSetValueEx", "CreateService"}, "persistence",
-                     "Persistence mechanism", ["persistence"]),
-                ]
-                api_set = set(api_calls)
-                for required, category, label, tags in _DANGEROUS_COMBOS:
-                    if required & api_set:
-                        matched = sorted(required & api_set)
-                        title = f"{label} at {addr}"
-                        if not bb_store.exists(addr, category, title):
-                            bb_store.write(
-                                title=title,
-                                content=(
-                                    f"Function {func_name} ({addr}) uses: "
-                                    f"{', '.join(matched)}. Detected automatically."
-                                ),
-                                category=category,
-                                addr=addr,
-                                tags=tags,
-                                confidence=0.92,
-                            )
-            except Exception:
-                pass
 
         # ── Step 5: Embedding-based function similarity (background-safe) ─
         query_vec: list[float] | None = None
@@ -1002,16 +808,7 @@ class ContextAssembler:
             except Exception:
                 pass
 
-        # ── Step 7: Cross-address blackboard retrieval (API/tag linked) ───
-        if bb_store is not None and api_calls:
-            try:
-                api_bb = self._get_bb_by_api_signals(bb_store, api_calls, addr, top_k=4)
-                if api_bb:
-                    self._merge_related_findings(pack, api_bb, "api_linked", session_id=session_id)
-            except Exception:
-                pass
-
-        # ── Step 8: Semantic blackboard retrieval (if bb_store populated) ─
+        # ── Step 7: Semantic blackboard retrieval ─────────────────────────
         # Runs in all modes: this is the recall that makes the blackboard useful
         # to the LLM — semantically related past findings are surfaced without
         # the LLM having to query for them. BlackboardStore.semantic_search
@@ -1046,71 +843,36 @@ class ContextAssembler:
         idb_path: str,
         limit: int = 20,
     ) -> list[dict[str, Any]]:
-        """
-        Enrich a list of addresses with schemaboot structural data.
-        Used to annotate search/xref results without extra tool calls.
-        Returns a list of enriched entries (only for addresses that exist in schemaboot).
-        """
+        """Enrich addresses with structural data from the embedding index."""
         if not addresses or not idb_path:
             return []
-        db = get_db_path(idb_path)
-        if not os.path.exists(db):
-            return []
         try:
+            idx = self._get_index(idb_path)
+            if idx is None or idx.size == 0:
+                return []
             eas: list[int] = []
             for a in addresses[:limit]:
                 with contextlib.suppress(ValueError, TypeError):
                     eas.append(_helpers.coerce_int(a))
             if not eas:
                 return []
-            with sqlite3.connect(db) as conn:
-                cur = conn.cursor()
-                ph = ",".join("?" * len(eas))
-                cur.execute(f"""
-                    SELECT ea, name, size, entropy, cyclomatic_complexity,
-                           xor_count, incoming_xrefs, api_count, has_loops
-                    FROM function_attrs WHERE ea IN ({ph})
-                """, eas)
-                rows = {row[0]: row for row in cur.fetchall()}
-                # Fetch APIs for these functions
-                cur.execute(f"""
-                    SELECT func_ea, api_name FROM function_apis
-                    WHERE func_ea IN ({ph}) LIMIT 200
-                """, eas)
-                apis_by_ea: dict[int, list[str]] = {}
-                for func_ea, api_name in cur.fetchall():
-                    apis_by_ea.setdefault(func_ea, []).append(api_name)
-
+            # Query embedding index for structural metadata
             enriched = []
-            for a_str in addresses[:limit]:
-                try:
-                    ea_int = _helpers.coerce_int(a_str)
-                except (ValueError, TypeError):
-                    continue
-                row = rows.get(ea_int)
-                if not row:
-                    continue
-                entry: dict[str, Any] = {
-                    "ea":   hex(row[0]),
-                    "name": row[1],
-                }
-                if row[2]:
-                    entry["size"] = row[2]
-                if float(row[3] or 0) > 4.5:
-                    entry["entropy"] = round(float(row[3]), 2)
-                if (row[4] or 0) > 5:
-                    entry["cyclomatic"] = row[4]
-                if (row[5] or 0) > 3:
-                    entry["xor_count"] = row[5]
-                if row[6] is not None:
-                    entry["callers"] = row[6]
-                apis = [a for a in apis_by_ea.get(ea_int, [])
-                        if a in ALL_INTERESTING_APIS][:5]
-                if apis:
-                    entry["dangerous_apis"] = apis
-                if row[8]:
-                    entry["has_loops"] = True
-                enriched.append(entry)
+            with idx._conn() as conn:
+                ph = ",".join("?" * len(eas))
+                for row in conn.execute(
+                    f"SELECT ea, name, func_size, bb_count, has_loops, api_count, string_count, segment, cyclomatic "
+                    f"FROM func_embeddings WHERE ea IN ({ph})", eas
+                ):
+                    entry = {"ea": hex(int(row[0], 16)) if row[0] else "", "name": row[1] or ""}
+                    if row[2]: entry["size"] = row[2]
+                    if row[3]: entry["bb_count"] = row[3]
+                    if row[4]: entry["has_loops"] = True
+                    if row[5]: entry["api_count"] = row[5]
+                    if row[6]: entry["string_count"] = row[6]
+                    if row[7]: entry["segment"] = row[7]
+                    if row[8]: entry["cyclomatic"] = row[8]
+                    enriched.append(entry)
             return enriched
         except Exception:
             return []
@@ -1121,141 +883,48 @@ class ContextAssembler:
         idb_path: str,
         limit: int = 5,
     ) -> list[dict[str, Any]]:
-        """
-        Recommend unanalyzed functions worth examining next, ranked by
-        embedding similarity over structural summaries.
+        """Recommend unanalyzed functions worth examining next.
 
-        Excludes functions already in the embedding index (already seen).
-        Returns an empty list if schemaboot has not been ingested yet.
+        Uses the embedding index to find high-value structural candidates.
         """
         if not idb_path:
             return []
-        db = get_db_path(idb_path)
-        if not os.path.exists(db):
-            return []
-
-        # Functions already indexed (= already decompiled this session)
         try:
             idx = self._get_index(idb_path)
+            if idx is None or idx.size == 0:
+                return []
+            # Query embedding index for interesting functions
+            rows = idx.search_structured(
+                {"min_size": 64, "min_bb": 3},
+                query="high value reverse engineering target",
+                top_k=limit * 4,
+            )
             analyzed = idx.cache_keys()
-        except Exception:
-            analyzed = set()
-
-        try:
-            with sqlite3.connect(db) as conn:
-                cur = conn.cursor()
-                cur.execute("""
-                    SELECT ea, name,
-                           xor_count, entropy, cyclomatic_complexity,
-                           api_count, incoming_xrefs, string_count, has_loops
-                    FROM function_attrs
-                    WHERE size > 64
-                    LIMIT 200
-                """)
-                rows = cur.fetchall()
-
-                # Fetch top dangerous-API functions separately
-                cur.execute("""
-                    SELECT DISTINCT fa.ea, fa.name, fa.xor_count, fa.entropy,
-                           fa.cyclomatic_complexity, fa.api_count, fa.incoming_xrefs,
-                           fa.string_count, fa.has_loops
-                    FROM function_attrs fa
-                    JOIN function_apis fapi ON fapi.func_ea = fa.ea
-                    WHERE fapi.api_name IN (
-                        'VirtualAllocEx','WriteProcessMemory','CreateRemoteThread',
-                        'IsDebuggerPresent','AdjustTokenPrivileges',
-                        'RegSetValueEx','CreateService',
-                        'WSASocket','InternetOpen','WinHttpOpen'
-                    )
-                    LIMIT 50
-                """)
-                danger_rows = cur.fetchall()
+            results = []
+            seen = set()
+            dangerous_apis = {
+                'virtualallocex', 'writeprocessmemory', 'createremotethread',
+                'isdebuggerpresent', 'adjusttokenprivileges',
+                'regsetvalueex', 'createservice',
+                'wsasocket', 'internetopen', 'winhttpopen'
+            }
+            for r in rows:
+                ea = r["ea"]
+                if ea in analyzed or ea in seen:
+                    continue
+                seen.add(ea)
+                results.append({
+                    "ea": ea,
+                    "name": r["name"],
+                    "reason": f"size={r['func_size']}, bb={r['bb_count']}, apis={r['api_count']}",
+                    "interest_score": 0.5,
+                    "api_count": r["api_count"],
+                    "bb_count": r["bb_count"],
+                    "has_loops": r["has_loops"],
+                })
+            return results[:limit]
         except Exception:
             return []
-
-        seen_eas: set = set()
-        results: list[dict[str, Any]] = []
-
-        def _add(row, reason: str, interest_score: float):
-            ea_int = row[0]
-            ea = hex(ea_int)
-            if ea in analyzed or ea in seen_eas:
-                return
-            seen_eas.add(ea)
-            xor   = row[2] or 0
-            entr  = float(row[3] or 0)
-            cc    = row[4] or 0
-            apis  = row[5] or 0
-            xrefs = row[6] or 0
-            results.append({
-                "ea":    ea,
-                "name":  row[1] or f"sub_{ea_int:X}",
-                "reason": reason,
-                "interest_score": round(float(interest_score), 3),
-                "xor_count":  xor,
-                "entropy":    round(entr, 2),
-                "cyclomatic": cc,
-                "api_count":  apis,
-                "callers":    xrefs,
-            })
-
-        # Embedding-first structural ranking
-        row_scores: dict[int, float] = {}
-        try:
-            anchor = (
-                "high value reverse engineering target with suspicious behavior, "
-                "complex control flow, many cross references, and high analysis payoff"
-            )
-            qv = self._embedder.embed_vector(anchor)
-            if qv is None:
-                raise RuntimeError("embedding unavailable")
-            text_rows: list[str] = []
-            ea_rows: list[int] = []
-            for row in rows:
-                ea_int = int(row[0] or 0)
-                if not ea_int:
-                    continue
-                summary = (
-                    f"name={row[1] or ''} xor_count={row[2] or 0} entropy={float(row[3] or 0):.2f} "
-                    f"cyclomatic={row[4] or 0} api_count={row[5] or 0} callers={row[6] or 0} "
-                    f"strings={row[7] or 0} loops={bool(row[8])}"
-                )
-                text_rows.append(summary)
-                ea_rows.append(ea_int)
-            if text_rows:
-                batch = self._embedder.embed_batch(text_rows)
-                for ea_int, res in zip(ea_rows, batch, strict=False):
-                    if res.ok and res.vector is not None:
-                        row_scores[ea_int] = float(BgeCodeEmbedder.cosine(qv, res.vector))
-        except Exception:
-            row_scores = {}
-
-        # Dangerous-API functions first (highest priority)
-        for row in danger_rows:
-            base = row_scores.get(int(row[0] or 0), 0.0)
-            _add(row, "calls dangerous API", min(1.0, base + 0.15))
-            if len(results) >= limit:
-                break
-
-        # Then highest-scoring structural candidates
-        ranked_rows = sorted(
-            rows,
-            key=lambda r: row_scores.get(int(r[0] or 0), float((r[6] or 0) / 1000.0)),
-            reverse=True,
-        )
-        for row in ranked_rows:
-            if len(results) >= limit:
-                break
-            row[1] or ""
-            reason = (
-                f"xor={row[2]}, entropy={row[3]:.1f}"
-                if (row[2] or 0) > 3 or float(row[3] or 0) > 5.5
-                else f"complexity={row[4]}, apis={row[5]}"
-            )
-            _add(row, reason, row_scores.get(int(row[0] or 0), 0.0))
-
-        results.sort(key=lambda x: x["interest_score"], reverse=True)
-        return results[:limit]
 
     def stop(self) -> None:
         """Shut down the llama-server subprocess cleanly."""

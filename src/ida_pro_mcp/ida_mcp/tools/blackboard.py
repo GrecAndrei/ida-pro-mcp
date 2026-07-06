@@ -889,7 +889,7 @@ def blackboard(
 
     elif action == "frontier":
         # Return ranked unvisited functions from FrontierEngine.
-        # Requires embeddings to be indexed (code(action='decompile') or schemaboot).
+        # Requires embeddings to be indexed (code(action='decompile') or index_fast).
         try:
             from ida_pro_mcp.services import FrontierEngine
         except ImportError:

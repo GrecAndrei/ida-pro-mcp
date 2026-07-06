@@ -25,7 +25,6 @@ def test_intelligence_tool_exposes_intelligence_actions():
     assert "\"semantic_search\"" in src
     assert "\"blackboard_search\"" in src
     assert "\"export_index_summary\"" in src
-    assert "\"evidence_card\"" in src
 
 
 def test_intelligence_status_reports_anchor_hash_and_index_counts():
@@ -33,13 +32,6 @@ def test_intelligence_status_reports_anchor_hash_and_index_counts():
     assert "\"anchor_set_hash\"" in src
     assert "\"functions_indexed\"" in src
     assert "embedder.status(probe=bool(kwargs.get(\"probe\", False))" in src
-
-
-def test_evidence_card_uses_backend_neutral_source_ref_shape():
-    src = Path("src/ida_pro_mcp/ida_mcp/tools/intelligence.py").read_text(encoding="utf-8")
-    assert '"object_kind": "function"' in src
-    assert '"stable_ref": hex(ea)' in src
-    assert '"backend": "ida"' in src
 
 
 def test_agent_tool_no_longer_exposes_intelligence_actions():
@@ -57,7 +49,6 @@ def test_agent_tool_no_longer_exposes_intelligence_actions():
         "refresh_anchors", "classify_text", "classify_function",
         "index_function", "index_batch",
         "semantic_search", "blackboard_search", "export_index_summary",
-        "evidence_card",
     ):
         assert f"\"{action}\"" not in dispatcher_block, f"agent.py dispatcher still references {action}"
     # `similar_functions` may only appear in `intelligence` tool, not in `agent` dispatcher.

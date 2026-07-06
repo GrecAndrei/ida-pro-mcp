@@ -218,7 +218,7 @@ class ServerPredictorMixin:
                 base = float(row.get("score", 0.0))
                 row["blended_confidence"] = round((0.7 * base) + (0.3 * bootstrap_prior), 4)
 
-            # Augment with schemaboot-driven next targets (unanalyzed interesting functions)
+            # Augment with embedding-index-driven next targets
             next_targets = []
             idb_path = getattr(self.current_session, "idb_path", None) if self.current_session else None
             if idb_path:
@@ -235,7 +235,7 @@ class ServerPredictorMixin:
                 "model": "markov_plus_qvalue",
                 "suggestions": seq_suggestions,
                 "strategy_suggestions": strategy_rows,
-                "next_targets": next_targets,  # schemaboot-ranked unanalyzed functions
+                "next_targets": next_targets,  # embedding-index-ranked functions
                 "strategy_confidence": round(strategy_confidence, 4),
                 "bootstrap_prior": round(bootstrap_prior, 4),
                 "activity_window": len(log),
@@ -335,7 +335,7 @@ class ServerPredictorMixin:
                 if dtype == "repeated_decompile":
                     pivots = ["code:callers", "code:callees", "graph:dependency_graph"]
                 elif dtype == "repeated_search":
-                    pivots = ["search:structured", "schemaboot:query", "string_ops:indicators"]
+                    pivots = ["search:structured", "string_ops:indicators"]
                 elif dtype == "tool_loop":
                     pivots = ["graph:cfg", "classify:function", "threat_hunt:quick"]
 
@@ -417,7 +417,7 @@ class ServerPredictorMixin:
             except Exception:
                 pass
 
-            # Secondary: schemaboot + embedding index
+            # Secondary: embedding index
             idb_path = getattr(self.current_session, "idb_path", None) if self.current_session else None
             schema_targets = []
             if idb_path:
@@ -428,12 +428,12 @@ class ServerPredictorMixin:
                 except Exception:
                     pass
 
-            # Merge: blackboard first, then schemaboot for any not already covered
+            # Merge: blackboard first, then embedding index for any not already covered
             bb_addrs = {t["addr"] for t in bb_targets}
             merged = list(bb_targets)
             for t in schema_targets:
                 if t.get("addr") not in bb_addrs:
-                    t["source"] = "schemaboot"
+                    t["source"] = "embedding_index"
                     merged.append(t)
 
             # Embedding-guided expansion from context when address set is sparse.
@@ -502,7 +502,7 @@ class ServerPredictorMixin:
                     "Ranked by blackboard priority (confidence x time_decay x xref_boost). "
                     "Use blackboard(action='next_target') for the full priority queue."
                 ) if bb_targets else (
-                    "No blackboard entries yet. Run schemaboot(action='ingest') for smarter suggestions."
+                    "No blackboard entries yet. Run intelligence(action='index_fast') for smarter suggestions."
                 ),
             }
 
@@ -587,7 +587,7 @@ class ServerPredictorMixin:
                         top = targets[0]
                         weights["blackboard_coverage_gap"] = 0.7
                         explanations.append({
-                            "feature": "schemaboot_interest",
+                            "feature": "embedding_interest",
                             "top_target": top.get("ea"),
                             "reason": f"Unanalyzed function with {top.get('reason', 'high interest score')}",
                         })

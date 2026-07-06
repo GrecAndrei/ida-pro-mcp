@@ -57,9 +57,6 @@ def test_intelligence_no_legacy_error_only_dict():
     assert "MCPError.NO_RESULTS" in src, (
         "intelligence.py should use MCPError.NO_RESULTS for missing index."
     )
-    assert "MCPError.IDB_NOT_FOUND" in src
-    assert "MCPError.ANALYSIS_INCOMPLETE" in src
-    assert "MCPError.ADDRESS_INVALID" in src
 
 
 def test_debug_no_legacy_error_only_dict():
@@ -74,17 +71,6 @@ def test_debug_no_legacy_error_only_dict():
     )
     assert "MCPError.DEBUGGER_NOT_RUNNING" in src
     assert "MCPError.DEBUGGER_REGISTER_ERROR" in src
-
-
-def test_hybrid_search_uses_envelope_instead_of_string_codes():
-    """hybrid_search.py used to return `{"error": "db_unavailable"}` or
-    `{"error": "sql_error"}` — bare error strings. They must now look like
-    full envelopes with code and hint.
-    """
-    src = (REPO / "src/ida_pro_mcp/ida_mcp/support/hybrid_search.py").read_text()
-    assert '"error": "db_unavailable"' not in src
-    assert '"error": "sql_error"' not in src
-    assert '"code": "DB_ERROR"' in src or '"code": "DB_UNAVAILABLE"' in src
 
 
 def test_misc_no_inline_error_dumps_with_traceback():

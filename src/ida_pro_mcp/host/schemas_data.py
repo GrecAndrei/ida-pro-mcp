@@ -10,7 +10,6 @@ from .server.tool_registry import tool_actions as _tool_actions_from_registry
 
 BASE_TOOL_ALIASES = {
     "plugins": "misc",
-    "schemaboot": "intelligence",
 }
 
 TOOLS = [
@@ -104,7 +103,6 @@ TOOLS = [
     # LLM helpers
     "llm_helpers",
     # Other components
-    "bridge_search",
     # --- New infrastructure tools ---
     "blackboard",
     "filter",
@@ -165,7 +163,6 @@ ADVERTISED_TOOLS = [
     # RE-useful tools (previously hidden)
     "abi",
     "agent",
-    "bridge_search",
     "cfg_analysis",
     "classify",
     "coverage",
@@ -325,11 +322,10 @@ TOOL_DESCRIPTIONS = {
     "binary_info": "Retrieves binary metadata including PE/ELF headers, sections, and build info. Actions: headers, sections, relocations, resources, debug_info, compiler, linker, timestamps, checksums, overlay.",
     "blackboard": "Persistent RE knowledge base: findings, hypotheses, IOCs, decisions, and knowledge graph. write/read/list/search/update/delete: CRUD for findings. frontier: ranked unvisited functions — read this when choosing what to analyze next. next_target: priority queue by confidence×recency×xrefs. decision_card: record a verified claim with evidence citations (required before write-surface tools in prove phase). contradict/resolve/add_evidence/calibrate: evidence lifecycle. Actions: write, read, list, search, update, delete, clear, stats, frontier, next_target, decision_card, working_set, state_health, contradict, resolve, add_evidence, calibrate, campaign_summary, propagate_labels, start_crawler, stop_crawler, phase_set, phase_status, policy_set, policy_check.",
     "bookmarks": "Manages named address bookmarks for quick navigation and milestone tracking. Actions: add, list, delete, update, clear, find, export.",
-    "bridge_search": "Multi-hop bridge-conditioned search for discovering indirect relationships between entities. Actions: search, bridges.",
     "bulk": "Applies batch edits (renames, comments, types) to multiple addresses in one call. Actions: rename, comment, apply_type, rename_stack, import_annotations, export_annotations.",
     "calc": "Safe address arithmetic and pointer resolution—use instead of mental math. Includes bitwise helper operations. Actions: eval, offset, convert, resolve, deref, chain, align, bitops.",
     "cfg_analysis": "Analyzes control flow graph structure including loops, dominators, and complexity. Actions: complexity, loops, branches, paths, dominators, post_dominators, back_edges, natural_loops, irreducible, flatten_detect.",
-    "classify": "Classify functions and binaries by purpose. function: single function — embedding-driven BehaviorClassifier (bge-code-v1). binary: overall binary type. all_functions: classify all functions — unnamed functions use BehaviorClassifier. library_code/wrappers/callbacks/initializers/error_handlers: structural classification. hot_functions: most-called functions. orphans: no-caller functions (entry points / dead code). induce_schema: SchemaBoot attribute-value schema for structured retrieval. anchor_coverage: report per-anchor coverage over current IDB. NOTE: the binary and function actions share names with summarize.binary / summarize.function but produce DIFFERENT output — classify returns categories/behavior tags, summarize returns counts/structure. Pick the one that matches the question.",
+    "classify": "Classify functions and binaries by purpose. function: single function — embedding-driven BehaviorClassifier (bge-code-v1). binary: overall binary type. all_functions: classify all functions — unnamed functions use BehaviorClassifier. library_code/wrappers/callbacks/initializers/error_handlers: structural classification. hot_functions: most-called functions. orphans: no-caller functions (entry points / dead code). induce_schema: structural attribute-value schema for retrieval. anchor_coverage: report per-anchor coverage over current IDB. NOTE: the binary and function actions share names with summarize.binary / summarize.function but produce DIFFERENT output — classify returns categories/behavior tags, summarize returns counts/structure. Pick the one that matches the question.",
     "code": "Decompilation, disassembly, and code analysis (≈ IDA View menu / F5/Tab). smart_decompile: best first call — pseudocode + behavior tags + callers/callees + crypto hints + suggested next actions. decompile: pseudocode only. disasm: assembly listing. decompile_chain: function + compact caller/callee context. semantic_decompile: pseudocode + CFG semantics + variable dependency graph. diff_functions: unified diff of two functions. trace_argument_origin: backward BFS through callers to trace where an argument value originates (returns call chain with arg expressions and types: string_literal, constant, function_call, address_of, variable). Actions: smart_decompile, decompile, disasm, decompile_chain, semantic_decompile, diff_functions, trace_argument_origin, xrefs_to, xrefs_from, callees, callers, blocks, callgraph, find_paths, strings_in_func, decomp_dataflow, export.",
     "colorize": "Sets and queries color highlighting on functions, ranges, and instructions. Actions: set_func, set_range, set_insn, get, clear, palette, highlight_pattern.",
     "compare": "Diff two IDB databases or functions across binaries. Actions: functions, blocks, apis, strings, constants, structure, semantics, batch_compare, find_clones, changelog.",
@@ -355,7 +351,7 @@ TOOL_DESCRIPTIONS = {
     "hooks": "Generate dynamic instrumentation hooks (Frida, Detours) for target functions. Actions: suggest, generate_frida, generate_detours, find_targets, inline_hooks.",
     "idb": "Query top-level IDB metadata: binary info, segments, entrypoints, bookmarks, and architecture profile guidance for raw binaries. Actions: meta, summary, segments, entrypoints, bookmarks, overview, architecture_profile.",
     "imports_deep": "Deep import analysis: thunks, delay-loads, forwarded, ordinal, and API set resolution. Actions: thunks, delay, forwarded, ordinal, api_sets, resolve.",
-     "intelligence": "Intelligence subsystem: embedding-based classification, blackboard-driven indexing, and similarity search. Actions: intelligence_status, embedder_status, anchor_status, refresh_anchors, classify_text, classify_function, index_function, index_batch, similar_functions, semantic_search, blackboard_search, export_index_summary, evidence_card, structural_extract, structural_extract_single, structural_query, structural_get, structural_refresh, structural_stats, structural_delete, structural_ingest. Corpus is blackboard entries (curated hypotheses/IOCs/vulns), not raw decompiled functions — indexing never blocks IDA on full-binary pseudocode embedding. index_function needs a blackboard note at the address (write one first via blackboard(action='write')); index_batch pulls every blackboard entry (filtered by category, capped by max_items, gated by IDA_MCP_EMBED_CORPUS_GATE); similar_functions builds a query doc from the address's blackboard context and runs k-NN over the entry index. semantic_search and blackboard_search use the same vector index; the first is text→vector, the second is text→related_by_behavior on the blackboard store. structural_* actions manage the structural index (extract/get/query/refresh/stats/delete/ingest).",
+     "intelligence": "Intelligence subsystem: embedding-based classification, blackboard-driven indexing, and similarity search. Actions: intelligence_status, embedder_status, anchor_status, refresh_anchors, classify_text, classify_function, index_function, index_batch, similar_functions, semantic_search, blackboard_search, export_index_summary, evidence_card,  Corpus is blackboard entries (curated hypotheses/IOCs/vulns), not raw decompiled functions — indexing never blocks IDA on full-binary pseudocode embedding. index_function needs a blackboard note at the address (write one first via blackboard(action='write')); index_batch pulls every blackboard entry (filtered by category, capped by max_items, gated by IDA_MCP_EMBED_CORPUS_GATE); similar_functions builds a query doc from the address's blackboard context and runs k-NN over the entry index. semantic_search and blackboard_search use the same vector index; the first is text→vector, the second is text→related_by_behavior on the blackboard store. structural_* actions manage the structural index (extract/get/query/refresh/stats/delete/ingest).",
     "knowledge": "Cross-session firmware knowledge base: chip family identification, persistent symbol memory, and symbol transfer across binaries. Actions: chip_identify, symbol_lookup, import_symbols, export_session, chip_families.",
     "llm_helpers": "Context-optimized helpers for LLM agents. bootstrap: first-turn call list. context_window/function_digest/binary_digest/explain_address: compact analysis helpers. suggest_next/progress_report/focus_area: navigation and planning. behavioral_signature_search: find functions by behavior tag. function_role_classifier: entry_point/callback/dispatcher/wrapper. dangerous_pattern_explainer: exploitation path + mitigation for an address. api_contract_extractor: infer preconditions/postconditions. global_state_influence_mapper: globals a function reads/writes. interprocedural_data_lineage_graph: trace data flow across functions. semantic_diff_explainer: diff two functions by embedding+behavior. path_constrained_search: BFS from addr filtered by behavior tag. cross_artifact_correlation_search: correlate strings/names/blackboard.",
     "lumina": "Interface to Hex-Rays Lumina server for collaborative function metadata sharing. Actions: pull, push, status, history, search, get_metadata.",
@@ -1049,15 +1045,6 @@ TOOL_ARG_SCHEMAS = {
         "dry_run": {"type": "boolean"},
         "template": {"type": "string", "description": "Predefined template name"},
         "template_vars": {"type": "object", "description": "Variables for template expansion"},
-    },
-    "bridge_search": {
-        "action": {"type": "string", "enum": TOOL_ACTIONS["bridge_search"]},
-        "query_constraints": {"type": "object", "description": "SchemaBoot-style constraints for seed selection"},
-        "func_ea": {"type": "string", "description": "Hex address of seed function (for action='bridges')"},
-        "func_name": {"type": "string", "description": "Name of seed function (for action='bridges')"},
-        "bridge_types": {"type": "array", "items": {"type": "string"}, "description": "Bridge types: ['apis'], ['strings'], or ['apis', 'strings']"},
-        "top_k": {"type": "integer", "description": "Max candidates to return"},
-        "hops": {"type": "integer", "description": "Number of hops (2=standard, >2=extended)"},
     },
     "blackboard": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["blackboard"]},

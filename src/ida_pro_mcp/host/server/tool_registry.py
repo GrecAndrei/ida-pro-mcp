@@ -77,7 +77,6 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "deref", "chain",
     ],
     "bookmarks": ["add", "list", "delete", "update", "clear", "find", "export"],
-    "bridge_search": ["bridges", "search"],
     "bulk": ["rename", "comment", "apply_type", "rename_stack", "import_annotations", "export_annotations"],
     "calc": ["eval", "offset", "convert", "resolve", "deref", "chain", "align", "bitops"],
     "cfg_analysis": ["complexity", "loops", "branches", "paths", "dominators", "post_dominators", "back_edges", "natural_loops", "irreducible", "flatten_detect"],
@@ -111,9 +110,6 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "refresh_anchors", "classify_text", "classify_function",
         "index_function", "index_batch", "index_fast", "index_range", "similar_functions",
         "semantic_search", "blackboard_search", "export_index_summary",
-        "evidence_card", "structural_extract", "structural_extract_single",
-        "structural_query", "structural_get", "structural_refresh",
-        "structural_stats", "structural_delete", "structural_ingest",
     ],
     "knowledge": ["chip_identify", "symbol_lookup", "import_symbols", "export_session", "chip_families"],
     "llm_helpers": [

@@ -525,15 +525,6 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         if self.current_session:
             idb_path = self.current_session.idb_path
 
-        ppaa = None
-        if idb_path:
-            # Cache the PPAAEngine instance to avoid recreating it on every compacted response
-            if not hasattr(self, "_ppaa_cache") or getattr(self, "_ppaa_cache_idb", None) != idb_path:
-                from ..intelligence.ppaa import PPAAEngine
-                self._ppaa_cache = PPAAEngine(idb_path)
-                self._ppaa_cache_idb = idb_path
-            ppaa = self._ppaa_cache
-
         hex_addrs = sorted(set(matches))
         valid_addrs = []
         for ha in hex_addrs:
@@ -541,14 +532,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                 val = int(ha, 16)
                 if val >= 0x1000:
                     valid_addrs.append((ha, val))
-                elif ppaa:
-                    rebased_val = imagebase + val
-                    # Smarter threshold: accept values < 0x1000 if they actually exist in metadata indexes
-                    if (ppaa.query_function_metadata(val) or
-                        ppaa.query_function_metadata(rebased_val) or
-                        ppaa.query_string_metadata(val) or
-                        ppaa.query_string_metadata(rebased_val)):
-                        valid_addrs.append((ha, val))
+
             except ValueError:
                 pass
 
@@ -561,12 +545,10 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             is_rva = False
 
             # Check if val is likely an RVA (i.e. smaller than imagebase)
-            if val < imagebase and ppaa:
+            if val < imagebase:
                 rebased_val = imagebase + val
-                # Check if the rebased address matches any function or string in SchemaBoot
-                if ppaa.query_function_metadata(rebased_val) or ppaa.query_string_metadata(rebased_val):
-                    target_val = rebased_val
-                    is_rva = True
+                target_val = rebased_val
+                is_rva = True
 
             offset = target_val - imagebase
             sign = "+" if offset >= 0 else "-"

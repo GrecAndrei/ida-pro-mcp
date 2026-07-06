@@ -110,7 +110,7 @@ _HOST_ERROR_HINTS = {
     MCPError.TRUNCATION_FIELD_MISSING: "Requested field not in truncated response.",
     MCPError.RPC_CONNECTION_ERROR: "Cannot connect to IDA. The process may have crashed.",
     MCPError.IO_ERROR: "I/O error while writing to disk. Check disk space and permissions.",
-    MCPError.DB_ERROR: "Database error. The index may be corrupted. Try schemaboot(action='delete') then re-ingest.",
+    MCPError.DB_ERROR: "Database error. The index may be corrupted. Delete the .embeddings.db file and re-index.",
     MCPError.POLICY_DENIED: "Action denied by the safety policy. Retry with the required acknowledgement, or operate in a different mode.",
     MCPError.PHASE_GATE: "The session phase requires a follow-up call before this tool can return a final answer. See required_followup_call in the response.",
     MCPError.DECOMPILER_FAILED: "The decompiler refused this function. Try code(action='disasm') for assembly or code(action='semantic_decompile').",

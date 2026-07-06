@@ -289,7 +289,7 @@ def digest_decompiled(pseudocode: str, func_name: str = "", func_addr: str = "",
                 if api not in digest["api_calls"]:
                     digest["api_calls"].append(api)
         if schema_attrs.get("has_crypto_constants"):
-            digest["patterns"].append("Crypto constants (verified by SchemaBoot)")
+            digest["patterns"].append("Crypto constants (verified by structural analysis)")
             if "crypto" not in digest["behavior_tags"]:
                 digest["behavior_tags"].append("crypto")
 

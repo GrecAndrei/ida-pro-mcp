@@ -29,11 +29,6 @@ from ida_pro_mcp.host.config import CACHE_DIR
 from ida_pro_mcp.host.errors import MCPError, make_error
 
 # --- Intelligence layer ---------------------------------------------------
-from ida_pro_mcp.host.intelligence.analogy import CrossBinaryAnalogyEngine
-from ida_pro_mcp.host.intelligence.bridge_retrieval import (
-    MultiHopBridgeIndex,
-    _resolve_schemaboot_db_path,
-)
 from ida_pro_mcp.host.intelligence.context import (
     ContextAssembler,
     get_assembler,
@@ -48,22 +43,12 @@ from ida_pro_mcp.host.intelligence.core import (
 
 # AgentMacroCrystallizer removed (cleanup cut)
 # FederationBridge removed (cleanup cut)
-from ida_pro_mcp.host.intelligence.entropy import FunctionEntropyCalculator
 from ida_pro_mcp.host.intelligence.helpers import (
     best_match,
     coerce_int,
     estimate_tokens,
     parse_str_list,
     quantile,
-)
-from ida_pro_mcp.host.intelligence.structural_index import (
-    _detect_global_facts,
-    add_global_facts,
-    ensure_tables,
-    execute_host_query,
-    get_db_path,
-    upsert_functions_batch,
-    write_insight_index,
 )
 from ida_pro_mcp.host.intelligence.usage import UsageIntelligence
 from ida_pro_mcp.host.mbagcn_engine import (
@@ -117,19 +102,11 @@ __all__ = [
     "ContextAssembler",
     "get_assembler",
     "MultiHopBridgeIndex",
-    "_resolve_schemaboot_db_path",
     "CrossBinaryAnalogyEngine",
     "FunctionEntropyCalculator",
     "coerce_int",
     "estimate_tokens",
     "parse_str_list",
-    "get_db_path",
-    "ensure_tables",
-    "upsert_functions_batch",
-    "execute_host_query",
-    "write_insight_index",
-    "add_global_facts",
-    "_detect_global_facts",
     "UsageIntelligence",
     "infer_binary_arch_profile",
     "normalize_arch_options",

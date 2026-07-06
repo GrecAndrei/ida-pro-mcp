@@ -43,8 +43,8 @@ def test_intelligence_tool_no_residual_agent_dispatcher_branches():
     assert "if action == \"classify_text\":" not in text
 
 
-def test_intelligence_tool_action_enum_has_23_entries():
-    """The Literal enum in the new tool has exactly 23 actions."""
+def test_intelligence_tool_action_enum_has_14_entries():
+    """The Literal enum in the new tool has exactly 14 actions."""
     text = _read("src/ida_pro_mcp/ida_mcp/tools/intelligence.py")
     # Pull out the Literal block.
     lit_match = re.search(
@@ -59,10 +59,6 @@ def test_intelligence_tool_action_enum_has_23_entries():
         "index_function", "index_batch", "index_fast", "index_range",
         "similar_functions",
         "semantic_search", "blackboard_search", "export_index_summary",
-        "evidence_card",
-        "structural_ingest", "structural_query", "structural_get",
-        "structural_stats", "structural_delete", "structural_refresh",
-        "structural_extract", "structural_extract_single",
     }
     assert set(actions) == expected, f"mismatch: got {set(actions)}"
 
@@ -124,15 +120,9 @@ def test_schemas_py_knows_about_intelligence_tool():
     assert "intelligence" in TOOL_ACTIONS
     assert "intelligence" in ADVERTISED_TOOLS
     # The wrapper actions (grep/pick/head/tail/next/stats) extend the
-    # enum at schema-build time; the raw TOOL_ACTIONS source has 22
-    # (13 baseline + 8 structural_* + index_fast).
-    assert len(TOOL_ACTIONS["intelligence"]) == 23
-    # Spot-check the structural_* family was wired in
-    structural = {a for a in TOOL_ACTIONS["intelligence"] if a.startswith("structural_")}
-    assert {"structural_extract", "structural_query", "structural_get",
-            "structural_refresh", "structural_stats",
-            "structural_delete", "structural_ingest",
-            "structural_extract_single"} <= structural
+    # enum at schema-build time; the raw TOOL_ACTIONS source has 15
+    # (14 baseline + index_range + index_fast).
+    assert len(TOOL_ACTIONS["intelligence"]) == 14
 
 
 def test_intelligence_arg_schema_includes_intelligence_specific_args():
@@ -257,9 +247,6 @@ def test_intelligence_capsule_uses_intelligence_owner_string():
     `created_by='ida-pro-mcp-intelligence'` (not `ida-pro-mcp-agent`)."""
     text = _read("src/ida_pro_mcp/ida_mcp/tools/intelligence.py")
     assert "created_by=\"ida-pro-mcp-intelligence\"" in text
-    # And both `evidence_card` and the embedder-state use the
-    # intelligence owner string.
-    assert text.count("ida-pro-mcp-intelligence") >= 2
 
 
 def test_agent_capsule_owner_no_longer_used_for_intelligence():
@@ -307,7 +294,6 @@ def test_intelligence_payload_preserved_verbatim():
     expected_keys = (
         "embedder", "anchors", "indexes", "capsule_embedding_state",
         "behaviors", "matches", "similar", "blackboard",
-        "card", "persisted", "persisted_id",
     )
     for key in expected_keys:
         assert f'"{key}"' in text, f"intelligence.py missing payload key {key}"

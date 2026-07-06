@@ -426,7 +426,7 @@ def search(
                 if idx.size == 0:
                     return make_error(MCPError.INVALID_ARGS,
                                       "No embeddings indexed yet. Decompile some functions first "
-                                      "or run schemaboot(action='ingest').")
+                                      "or run intelligence(action='index_fast').")
                 # Hybrid search over indexed functions, then behavior-driven expansion.
                 results_raw = idx.search(actual_pattern, top_k=max(6, limit * 3), threshold=0.0)
                 expansion_queries = []
@@ -506,7 +506,7 @@ def search(
         elif action == "behavior":
             # Find all functions matching a behavior tag using BehaviorClassifier
             # Example: search(action="behavior", pattern="crypto_symmetric")
-            # Falls back to schemaboot tag search if embedder unavailable
+            # Requires embedding index (run index_fast first)
             if not actual_pattern:
                 return make_error(MCPError.INVALID_ARGS,
                                   "pattern required: behavior tag to search for "

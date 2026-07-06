@@ -59,13 +59,12 @@ _ANALYSIS_PHASES = {
     "deep_analysis": {
         "order": 2,
         "threshold": {"functions_decompiled": 10, "function_attrs_indexed": 1},
-        "suggested_tools": ["code.decompile", "ctree.get", "crypto_id.detect", "schemaboot.ingest"],
+        "suggested_tools": ["code.decompile", "ctree.get", "crypto_id.detect"],
         "description": "Deep decompilation and semantic analysis.",
     },
     "behavior_mapping": {
         "order": 3,
         "threshold": {"functions_analyzed": 50, "xrefs_traced": 30},
-        "suggested_tools": ["graph.call_chain", "bridge_search.search", "code.callers"],
         "description": "Map control flow and cross-reference chains.",
     },
     "vulnerability": {

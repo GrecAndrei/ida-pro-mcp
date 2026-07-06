@@ -253,15 +253,7 @@ _TOOL_ARG_EXTRA_ALIASES = {
         "field_name": {"field", "member"},
         "target": {"to", "destination"},
     },
-    "schemaboot": {
-        "constraints": {"filters", "where", "criteria"},
-        "addr": {"address", "ea", "va"},
-        "limit": {"max", "count", "n"},
-        "offset": {"skip"},
-        "order_by": {"sort", "order"},
-        "include_apis": {"apis", "with_apis"},
-        "include_strings": {"strings", "with_strings"},
-    },
+
     "governance": {
         "operation_type": {"op_type", "type", "op"},
         "proposed_value": {"value", "text", "content", "input"},

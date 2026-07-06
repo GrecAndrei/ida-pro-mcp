@@ -241,7 +241,7 @@ ERROR_HINTS: Dict[str, str] = {
     MCPError.DATABASE_CORRUPTED: "The IDB appears corrupted. Use session(action='rebuild') to recreate.",
     MCPError.DATABASE_READ_ONLY: "The database is read-only. Close other IDA instances.",
     MCPError.DATABASE_NOT_LOADED: "No database is loaded. Create a session first.",
-    MCPError.DB_ERROR: "Database error. The index may be corrupted. Try schemaboot(action='delete') then re-ingest.",
+    MCPError.DB_ERROR: "Database error. The index may be corrupted. Delete the .embeddings.db file and re-index.",
     MCPError.IDB_NOT_FOUND: "The IDB file was not found. The session may need to be rebuilt.",
     MCPError.IDB_VERSION_MISMATCH: "IDB version mismatch. The IDB may have been created by a different IDA version.",
     MCPError.SIZE_LIMIT_EXCEEDED: "The requested size exceeds the limit. Use a smaller range or pagination.",

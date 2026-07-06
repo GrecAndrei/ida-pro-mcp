@@ -269,7 +269,7 @@ class GlobalFactsDatabase:
         "calling_convention", "obfuscator_signature"
 
     Integration:
-        - SchemaBoot auto-adds compiler signatures on ingest.
+        - Structural metadata is indexed alongside embeddings.
         - L3 skills reference L2 facts by ID.
         - L4 archive queries L2 for context.
 
