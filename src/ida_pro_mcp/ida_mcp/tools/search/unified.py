@@ -224,8 +224,8 @@ def search_semantic(pattern, include_context, range_start, range_end, offset, li
     # Index not available — tell the user to index first
     return make_error(
         MCPError.NOT_FOUND,
-        "No functions indexed yet. Run intelligence(action='index_fast') first.",
-        hint="index_fast builds an index from disassembly in seconds (no decompile needed). "
+        "No functions indexed yet. Index your functions to enable semantic search.",
+        hint="Index your functions first:\n  index_fast:  seconds, disassembly-based (good for quick triage)\n  index_batch: minutes, decompile-based (best quality embeddings)"
              "Then search(action='semantic') uses proper embedding-based similarity.",
     )
 

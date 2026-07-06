@@ -959,9 +959,8 @@ def intelligence(
             if idx.size == 0:
                 return make_error(
                     MCPError.NOT_FOUND,
-                    "No functions indexed yet. Run intelligence(action='index_fast') first.",
-                    hint="index_fast builds an index from disassembly in seconds. "
-                         "For better quality, use index_batch (decompile-based).",
+                    "No functions indexed yet. Index your functions to enable semantic search.",
+                    hint="Index your functions first:\n  index_fast:  seconds, disassembly-based (good for quick triage)\n  index_batch: minutes, decompile-based (best quality embeddings)",
                 )
             qname = ida_funcs.get_func_name(ea) or hex(ea)
             idx.index_async(hex(ea), qname, pseudo)
@@ -989,9 +988,8 @@ def intelligence(
             if idx.size == 0:
                 return make_error(
                     MCPError.NOT_FOUND,
-                    "No functions indexed yet. Run intelligence(action='index_fast') first.",
-                    hint="index_fast builds an index from disassembly in seconds. "
-                         "For better quality, use index_batch (decompile-based).",
+                    "No functions indexed yet. Index your functions to enable semantic search.",
+                    hint="Index your functions first:\n  index_fast:  seconds, disassembly-based (good for quick triage)\n  index_batch: minutes, decompile-based (best quality embeddings)",
                 )
             rows = idx.search(str(query), top_k=top_k, threshold=threshold)
             persisted_state = _persist_embedder_state(
@@ -1074,8 +1072,8 @@ def intelligence(
             if idx.size == 0:
                 return make_error(
                     MCPError.NOT_FOUND,
-                    "No functions indexed yet. Run intelligence(action='index_fast') first.",
-                    hint="index_fast builds an index from disassembly in seconds.",
+                    "No functions indexed yet. Index your functions to enable semantic search.",
+                    hint="Index your functions first:\n  index_fast:  seconds, disassembly-based (good for quick triage)\n  index_batch: minutes, decompile-based (best quality embeddings)",
                 )
             qname = ida_funcs.get_func_name(ea) or hex(ea)
             idx.index_async(hex(ea), qname, pseudo)

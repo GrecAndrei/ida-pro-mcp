@@ -181,8 +181,8 @@ def _embedding_rename_suggestions(
     if idx.size == 0:
         return make_error(
             MCPError.NOT_FOUND,
-            "No functions indexed yet. Run intelligence(action='index_fast') first.",
-            hint="index_fast builds an index from disassembly in seconds.",
+            "No functions indexed yet. Index your functions to enable semantic search.",
+            hint="Index your functions first:\n  index_fast:  seconds, disassembly-based (good for quick triage)\n  index_batch: minutes, decompile-based (best quality embeddings)",
         )
     target_eas: list[int] = []
     if addr:
