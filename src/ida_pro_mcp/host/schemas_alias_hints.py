@@ -159,35 +159,7 @@ _TOOL_ACTION_EXTRA_ALIASES = {
         "quick": {"fast", "lite", "quick_scan", "quickly"},
         "deep": {"thorough", "intensive", "deep_scan", "full_depth"},
     },
-    "predictor": {
-        "suggest_next_tool": {"next_tool", "recommend_tool", "tool_suggest", "predict_next"},
-        "detect_stuck": {"stuck", "dead_end", "loop_detect", "stalled"},
-        "suggest_focus": {"next_focus", "focus", "suggest_address", "interesting"},
-    },
-    "agent": {
-        "context_pack": {"context", "pack", "summarize_context", "analysis_context"},
-        "explore_address": {"explore", "inspect_address", "addr_overview"},
-        "find_references": {"references", "xrefs", "find_xrefs"},
-        "search_all": {"search", "global_search", "multi_search"},
-    },
-    "llm_helpers": {
-        "bootstrap": {
-            "start",
-            "start_here",
-            "onboard",
-            "onboarding",
-            "quickstart",
-            "first_steps",
-            "where_to_start",
-            "guide",
-            "playbook",
-            "help",
-        },
-        "enrich": {"augment", "post_process", "enhance_output"},
-        "compact": {"compress", "minify", "shrink"},
-        "function_digest": {"func_digest", "summarize_function", "function_summary"},
-        "binary_digest": {"bin_digest", "summarize_binary", "binary_summary"},
-    },
+
     "trace_analysis": {
         "analyze_coverage": {"coverage", "coverage_report", "analyze_trace"},
         "extract_api_calls": {"api_calls", "apis", "extract_apis"},

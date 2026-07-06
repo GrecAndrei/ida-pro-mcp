@@ -630,6 +630,7 @@ class BgeCodeEmbedder:
                                 self._port = lease_port
                                 self._ready = True
                                 self._owns_proc = False
+                                self._use_llama = True
                                 server_ready = True
                 except Exception as exc:
                     probe_error = str(exc)
@@ -670,9 +671,9 @@ class BgeCodeEmbedder:
         with self._start_lock:
             if self._ready:
                 return True
-            if not self._use_llama:
-                return False
             # Reuse existing shared embed server when available.
+            # Check this regardless of _use_llama — paths may not have
+            # been available at init time but a server is already running.
             try:
                 if os.path.isfile(_EMBED_LEASE_FILE):
                     with open(_EMBED_LEASE_FILE, encoding="utf-8") as f:
@@ -687,11 +688,23 @@ class BgeCodeEmbedder:
                                 self._port = port
                                 self._ready = True
                                 self._owns_proc = False
+                                self._use_llama = True
                                 return True
                         except Exception:
                             pass
             except Exception:
                 pass
+            # Re-check paths: they may not have been available at init
+            # (e.g. embedder.json written after singleton creation).
+            if not self._use_llama:
+                self._server_bin = _find_llama_server()
+                self._model_path = _find_model()
+                self._use_llama = (
+                    bool(self._server_bin) and bool(self._model_path)
+                    and not EMBED_DISABLED
+                )
+            if not self._use_llama:
+                return False
             self._port = self._pick_port()
             cmd = [
                 self._server_bin,
@@ -707,14 +720,28 @@ class BgeCodeEmbedder:
                 "--log-disable",
             ]
             try:
+                # Ensure shared libraries are findable (e.g. libllama-server-impl.so
+                # in non-standard locations like /usr/local/lib/ollama).
+                _env = os.environ.copy()
+                _lib_dir = os.path.dirname(self._server_bin)
+                _existing = _env.get("LD_LIBRARY_PATH", "")
+                _paths = [p for p in (_existing.split(":") + [_lib_dir]) if p]
+                _env["LD_LIBRARY_PATH"] = ":".join(_paths)
+                # Also search common install dirs for the shared lib
+                for _d in ("/usr/local/lib/ollama", "/usr/local/lib"):
+                    _so = os.path.join(_d, "libllama-server-impl.so")
+                    if os.path.isfile(_so) and _d not in _paths:
+                        _paths.append(_d)
+                _env["LD_LIBRARY_PATH"] = ":".join(_paths)
                 self._proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
+                     env=_env,
                 )
                 self._owns_proc = True
             except OSError:
-                self._use_llama = False
+                self._ready = False
                 return False
 
             # Wait for server ready (up to 60s — model load takes ~10s on this CPU)
@@ -736,10 +763,10 @@ class BgeCodeEmbedder:
                 except Exception:
                     pass
                 if self._proc.poll() is not None:
-                    self._use_llama = False
+                    self._ready = False
                     return False
 
-            self._use_llama = False
+            self._ready = False
             return False
 
     def stop(self) -> None:
@@ -755,6 +782,25 @@ class BgeCodeEmbedder:
 
     # ── embedding ──────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _extract_embedding(item):
+        """Extract a plain float list from an embedding response item.
+
+        Handles both the old dict format {"data": [{"embedding": [...]}]}
+        and the new list format [{"embedding": [[...]]}] where the vector
+        may be nested inside an outer list-of-lists.
+        """
+        if not isinstance(item, dict):
+            return None
+        vec = item.get("embedding")
+        if vec is None:
+            return None
+        if isinstance(vec, list) and vec and isinstance(vec[0], list):
+            vec = vec[0]
+        if not isinstance(vec, list) or not vec:
+            return None
+        return [float(x) for x in vec]
+
     def _llama_embed(self, text: str) -> list[float] | None:
         if not self._ready and not self._start_server():
             return None
@@ -768,17 +814,24 @@ class BgeCodeEmbedder:
             )
             with urllib.request.urlopen(req, timeout=EMBED_REQUEST_TIMEOUT) as resp:
                 data = json.loads(resp.read())
-            vec = data["data"][0]["embedding"]
-            # Server already L2-normalizes; verify and re-normalize just in case
+            if isinstance(data, dict):
+                item = (data.get("data") or [None])[0]
+            elif isinstance(data, list):
+                item = data[0]
+            else:
+                item = None
+            vec = self._extract_embedding(item) if item else None
+            if vec is None:
+                raise RuntimeError("no embedding in response")
             norm = math.sqrt(sum(x * x for x in vec)) or 1.0
             self._consecutive_rpc_failures = 0
             return [x / norm for x in vec]
         except Exception:
             self._consecutive_rpc_failures += 1
             if self._consecutive_rpc_failures >= self._max_rpc_failures:
-                # Avoid long hangs in latency-sensitive flows (tests/interactive MCP).
-                self._use_llama = False
-                self.stop()
+                # Transient failure — mark not-ready but allow retry.
+                self._ready = False
+                self._consecutive_rpc_failures = 0
             return None
 
     def _llama_embed_batch(self, texts: list[str]) -> list[list[float]] | None:
@@ -799,13 +852,18 @@ class BgeCodeEmbedder:
             )
             with urllib.request.urlopen(req, timeout=max(EMBED_REQUEST_TIMEOUT, 10.0)) as resp:
                 data = json.loads(resp.read())
-            rows = data.get("data") or []
-            if not isinstance(rows, list) or len(rows) != len(texts):
+            if isinstance(data, dict):
+                rows = data.get("data") or []
+            elif isinstance(data, list):
+                rows = data
+            else:
+                rows = []
+            if len(rows) != len(texts):
                 return None
             out: list[list[float]] = []
             for row in rows:
-                vec = row.get("embedding") if isinstance(row, dict) else None
-                if not vec:
+                vec = self._extract_embedding(row) if isinstance(row, dict) else None
+                if vec is None:
                     return None
                 norm = math.sqrt(sum(x * x for x in vec)) or 1.0
                 out.append([x / norm for x in vec])
@@ -814,8 +872,8 @@ class BgeCodeEmbedder:
         except Exception:
             self._consecutive_rpc_failures += 1
             if self._consecutive_rpc_failures >= self._max_rpc_failures:
-                self._use_llama = False
-                self.stop()
+                self._ready = False
+                self._consecutive_rpc_failures = 0
             return None
 
     def embed(self, text: str) -> _EmbedResult:

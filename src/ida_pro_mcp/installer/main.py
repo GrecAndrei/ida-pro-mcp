@@ -64,50 +64,6 @@ def _sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
-def _build_embedder_capsule_state(embed_model: str, embed_server: str) -> dict:
-    from ida_pro_mcp.host.intelligence.core import (
-        EMBED_DIM,
-        BehaviorClassifier,
-    )
-
-    anchor_blob = json.dumps(BehaviorClassifier.ANCHORS, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    anchor_hash = hashlib.sha256(anchor_blob).hexdigest()
-    model_hash = ""
-    if embed_model:
-        try:
-            model_hash = _sha256_file(embed_model)
-        except OSError:
-            model_hash = ""
-
-    return {
-        "backend": "bge-code-v1",
-        "model_path": embed_model or "",
-        "model_hash": model_hash,
-        "embedding_dim": EMBED_DIM,
-        "index_metadata": {
-            "implementation": "FunctionEmbeddingIndex",
-            "storage": "sqlite",
-            "table": "func_embeddings",
-            "db_path_pattern": "<idb_path>.embeddings.db",
-            "pseudo_hash": "md5-16",
-        },
-        "anchor_metadata": {
-            "anchor_count": len(BehaviorClassifier.ANCHORS),
-            "anchor_hash_sha256": anchor_hash,
-            "anchor_version": f"sha256:{anchor_hash[:16]}",
-        },
-        "last_indexed_functions": [],
-        "thresholds": {
-            "classification_default": 0.25,
-            "coverage_default_min_similarity": 0.4,
-            "anchor_min_confidence": dict(BehaviorClassifier.ANCHOR_MIN_CONFIDENCE),
-        },
-        "runtime": {
-            "embed_server_bin": embed_server or "",
-        },
-    }
-
-
 def run_embedder_doctor(opts: InstallerOptions, ui: UI) -> int:
     install_root = opts.install_root or get_install_root()
     embed_model = opts.embed_model_path or (find_embed_model(install_root) if opts.embed_auto else "")
@@ -524,7 +480,7 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
     parser.add_argument("--skills-mode", choices=["router", "full", "none"], default="router", help="Codex skill installation mode")
     parser.add_argument("--install-skills", action="store_true", default=True, help="install auto-generated skills for Claude Code / OpenCode (default: on)")
     parser.add_argument("--no-install-skills", action="store_true", help="skip Claude Code / OpenCode skill installation")
-    parser.add_argument("--capsule", default="", help="optional path to write installer metadata capsule (.sideband)")
+    
     parser.add_argument("--only", action="append", choices=["runtime", "clients", "skills", "shell"], default=[], help="run only selected install phases")
     parser.add_argument("--install-root", default="", help="override install root directory")
     parser.add_argument(
@@ -559,7 +515,7 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         install_llama_server=args.install_llama_server,
         embedder_doctor=args.embedder_doctor,
         setup_embedder=args.setup_embedder,
-        capsule_path=Path(args.capsule).expanduser() if args.capsule else None,
+        
         only=set(args.only),
     )
     if opts.setup_embedder:
@@ -747,61 +703,6 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
         report_path = install_root / "install-report.json"
         report.write(report_path)
 
-        if opts.capsule_path and not opts.dry_run:
-            from ida_pro_mcp.capsule import CapsuleStore
-
-            with CapsuleStore.open(opts.capsule_path) as capsule:
-                if not capsule.is_initialized():
-                    capsule.init(
-                        project_name=install_root.name,
-                        created_by="ida-pro-mcp-installer",
-                    )
-                capsule.add_install_report(
-                    {
-                        "status": report.status,
-                        "started_at": report.started_at,
-                        "finished_at": report.finished_at,
-                        "metadata": report.metadata,
-                        "steps": report.steps,
-                        "warnings": report.warnings,
-                    }
-                )
-                capsule.upsert_backend_profile(
-                    name="ida-primary",
-                    kind="ida",
-                    config={
-                        "idadir": str(chosen_install.path) if chosen_install else "",
-                        "idat_binary": str(chosen_install.idat_binary) if (chosen_install and chosen_install.idat_binary) else "",
-                        "ida_version": chosen_install.full_version_str if chosen_install else "",
-                        "ida_flavor": chosen_install.flavor if chosen_install else "unknown",
-                        "ida_arch": chosen_install.arch if chosen_install else "unknown",
-                        "status": "primary",
-                    },
-                )
-                for client in report.metadata.get("configured_clients", []):
-                    capsule.upsert_client_profile(
-                        name=str(client),
-                        kind="mcp-client",
-                        config={"configured": True, "server": "ida-pro-mcp"},
-                    )
-                if embed_model:
-                    capsule.add_embedding_state(
-                        _build_embedder_capsule_state(
-                            embed_model=embed_model,
-                            embed_server=embed_server,
-                        )
-                    )
-                capsule.add_audit_event(
-                    "installer_completed",
-                    {
-                        "install_root": str(install_root),
-                        "report_path": str(report_path),
-                        "status": report.status,
-                    },
-                )
-
-        ui.ok(f"Install complete. Report: {report_path}")
-        return 0
     except Exception as exc:
         tb_text = traceback.format_exc()
         msg = f"Installation failed: {exc}"
@@ -840,26 +741,6 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
             ui.warn(f"Failure report written to {report_path}")
         except Exception:
             pass
-
-        if opts.capsule_path and not opts.dry_run:
-            try:
-                from ida_pro_mcp.capsule import CapsuleStore
-
-                with CapsuleStore.open(opts.capsule_path) as capsule:
-                    if not capsule.is_initialized():
-                        capsule.init(project_name=(opts.install_root or get_install_root()).name, created_by="ida-pro-mcp-installer")
-                    capsule.add_audit_event(
-                        "installer_failed",
-                        {
-                            "install_root": str(opts.install_root or get_install_root()),
-                            "report_path": str(report_path),
-                            "error": msg,
-                        },
-                    )
-            except Exception as cap_exc:
-                ui.warn(f"Failed to write capsule failure event: {cap_exc}")
-        return 1
-
 
 def main(argv: list[str] | None = None) -> int:
     ui = UI()

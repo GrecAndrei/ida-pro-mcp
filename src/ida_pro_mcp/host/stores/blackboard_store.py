@@ -200,60 +200,7 @@ class BlackboardStore:
         except Exception:
             return None
 
-    def _sync_entry_to_capsule(self, entry: dict[str, Any], vector_blob: bytes | None) -> None:
-        capsule_path = str(os.environ.get("IDA_MCP_CAPSULE", "") or "").strip()
-        if not capsule_path:
-            return
-        try:
-            from ida_pro_mcp.capsule import CapsuleStore
-        except Exception:
-            return
-        try:
-            with CapsuleStore.open(capsule_path) as cap:
-                if not cap.is_initialized():
-                    cap.init(project_name="ida-session", created_by="ida-pro-mcp-blackboard")
-                idx_id = "blackboard-" + uuid.uuid5(uuid.NAMESPACE_URL, self.db_path).hex[:16]
-                embedder = self._get_embedder()
-                backend = str(getattr(embedder, "backend", "unknown")) if embedder is not None else "unknown"
-                dim = int(getattr(embedder, "dim", 1536) or 1536) if embedder is not None else 1536
-                cap.add_semantic_index(
-                    kind="blackboard",
-                    backend=backend,
-                    dim=dim,
-                    model_id="",
-                    source_fingerprint=self.db_path,
-                    metadata={"db_path": self.db_path},
-                    index_id=idx_id,
-                )
-                text = f"{entry.get('title', '')}\n{entry.get('content', '')}".strip()
-                thash = hashlib.md5(text.encode("utf-8", errors="ignore")).hexdigest()
-                vsha = ""
-                if vector_blob:
-                    vsha = cap.store_semantic_vector(vector_blob, dim=dim, dtype="float32")
-                cap.upsert_semantic_item(
-                    index_id=idx_id,
-                    kind="blackboard_entry",
-                    stable_ref=str(entry.get("id") or ""),
-                    title=str(entry.get("title") or ""),
-                    text_hash=thash,
-                    vector_sha256=vsha,
-                    metadata={
-                        "source_ref": {
-                            "backend": "ida",
-                            "binary_id": self.db_path,
-                            "object_kind": "blackboard_entry",
-                            "stable_ref": str(entry.get("id") or ""),
-                            "name": str(entry.get("title") or ""),
-                        },
-                        "category": entry.get("category"),
-                        "addr": entry.get("addr"),
-                        "confidence": entry.get("confidence"),
-                        "source_type": entry.get("source_type"),
-                        "updated_at": entry.get("updated_at"),
-                    },
-                )
-        except Exception:
-            return
+
 
     def write(
         self,
@@ -302,19 +249,6 @@ class BlackboardStore:
                 json.dumps(evidence or []), source_type, entropy, xref_count, 1,
             ))
             conn.commit()
-        self._sync_entry_to_capsule(
-            {
-                "id": entry_id,
-                "title": title,
-                "content": content,
-                "category": category,
-                "addr": addr,
-                "confidence": confidence,
-                "source_type": source_type or "manual",
-                "updated_at": now,
-            },
-            vector_blob,
-        )
         return entry_id
 
     def read(self, entry_id: str) -> dict | None:
@@ -868,7 +802,6 @@ class BlackboardStore:
                         vec_blob = row[0] if row and row[0] else None
                 except Exception:
                     vec_blob = None
-                self._sync_entry_to_capsule(entry, vec_blob)
         return ok
 
     def semantic_index(self, category: str | None = None) -> dict[str, Any]:

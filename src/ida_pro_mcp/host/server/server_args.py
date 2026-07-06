@@ -277,8 +277,6 @@ class ServerArgsMixin:
                 "next_token", "token", "cursor", "stats_include_payload",
             }
             for k in tuple(wrapper_noise):
-                if k == "subaction" and tool_name == "query":
-                    continue
                 if tool_name == "truncation" and k in {"token", "next_token", "cursor"}:
                     continue
                 out.pop(k, None)

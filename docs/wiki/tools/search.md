@@ -29,7 +29,7 @@ Natural language search using bge-code-v1 cosine similarity on indexed function 
 {"name": "search", "arguments": {"action": "nl", "query": "function that handles AES key schedule", "limit": 10}}
 ```
 
-Requires functions to be indexed (decompile some first, or run `schemaboot(action='ingest')`). Returns items with similarity scores.
+Requires functions to be indexed (run `intelligence(action='index_fast')` (seconds) or `intelligence(action='index_batch')` (minutes, better quality). Returns items with similarity scores.
 `nl` also does embedding-driven query expansion by classifying the query into likely behavior tags, re-embedding those tags, and merging high-similarity neighbors.
 
 ### behavior

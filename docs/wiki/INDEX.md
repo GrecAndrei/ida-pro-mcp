@@ -22,8 +22,6 @@ Auto-generated from wiki file structure.
 
 - [abi](tools/abi.md)
 
-- [agent](tools/agent.md)
-
 - [analysis](tools/analysis.md)
 
 - [intelligence](tools/intelligence.md)
@@ -38,7 +36,6 @@ Auto-generated from wiki file structure.
 
 - [bookmarks](tools/bookmarks.md)
 
-- [bridge_search](tools/bridge_search.md)
 
 - [bulk](tools/bulk.md)
 
@@ -49,8 +46,6 @@ Auto-generated from wiki file structure.
 - [classify](tools/classify.md)
 
 - [code](tools/code.md)
-
-- [colorize](tools/colorize.md)
 
 - [compare](tools/compare.md)
 
@@ -93,8 +88,6 @@ Auto-generated from wiki file structure.
 
 - [imports_deep](tools/imports_deep.md)
 
-- [llm_helpers](tools/llm_helpers.md)
-
 - [lumina](tools/lumina.md)
 
 - [memory](tools/memory.md)
@@ -109,13 +102,9 @@ Auto-generated from wiki file structure.
 
 - [patterns](tools/patterns.md)
 
-- [predictor](tools/predictor.md)
-
 - [project](tools/project.md)
 
 - [protocol](tools/protocol.md)
-
-- [query](tools/query.md)
 
 - [search](tools/search.md)
 

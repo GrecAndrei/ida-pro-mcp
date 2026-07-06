@@ -785,11 +785,11 @@ class ResourceResolver:
         return _make_json_content(result)
 
     def _read_function_embedding(self, addr: str) -> dict:
-        result = self._exec("agent", action="cfg_encode", addr=addr)
+        result = self._exec("intelligence", action="classify_function", addr=addr)
         return _make_json_content(result)
 
     def _read_function_similar(self, addr: str) -> dict:
-        result = self._exec("agent", action="cfg_similar", addr=addr, top_k=10)
+        result = self._exec("intelligence", action="similar_functions", addr=addr)
         return _make_json_content(result)
 
     # ------------------------------------------------------------------

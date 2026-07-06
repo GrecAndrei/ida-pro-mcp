@@ -282,8 +282,7 @@ def main() -> int:
             "  ida-pro-mcp-cli rpc tools/list '{}'\n"
             "  ida-pro-mcp-cli tool session '{\"action\":\"status\"}'\n"
             "  ida-pro-mcp-cli raw '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}'\n"
-            "  ida-pro-mcp-cli intelligence status\n"
-            "  ida-pro-mcp-cli capsule semantic-summary project.sideband --json\n"
+             "  ida-pro-mcp-cli intelligence status\n"
             "  ida-pro-mcp-cli background submit '{\"script\":\"print(idc.get_idb_path())\"}'\n"
             "  ida-pro-mcp-cli background status\n"
             "  ida-pro-mcp-cli background result '{\"task_id\":\"abc123\"}'\n"
@@ -291,7 +290,7 @@ def main() -> int:
     )
     parser.add_argument(
         "mode",
-        choices=("rpc", "tool", "raw", "tools-list", "intelligence", "capsule", "background"),
+        choices=("rpc", "tool", "raw", "tools-list", "intelligence", "background"),
         help="Request type to execute",
     )
     parser.add_argument("name", nargs="?", help="RPC method or MCP tool name")
@@ -332,32 +331,15 @@ def main() -> int:
     parser.add_argument(
         "extra",
         nargs="*",
-        help="Additional args (used by capsule mode)",
+        help="Additional args",
     )
-    if "capsule" in sys.argv[1:2]:
-        args, unknown = parser.parse_known_args()
-    else:
-        args = parser.parse_args()
-        unknown = []
+    args = parser.parse_args()
 
     payload = None
-    if args.mode != "capsule":
-        if args.stdin_json:
-            payload = _read_stdin_json(label=args.mode)
-        elif args.payload is not None:
-            payload = _load_json_arg(args.payload, label="payload")
-
-    if args.mode == "capsule":
-        from ida_pro_mcp.capsule.cli import main as capsule_main
-
-        capsule_args = []
-        if args.name:
-            capsule_args.append(args.name)
-        if args.payload is not None:
-            capsule_args.append(args.payload)
-        capsule_args.extend(args.extra)
-        capsule_args.extend(unknown)
-        return int(capsule_main(capsule_args))
+    if args.stdin_json:
+        payload = _read_stdin_json(label=args.mode)
+    elif args.payload is not None:
+        payload = _load_json_arg(args.payload, label="payload")
 
     client = MCPStdioClient(_server_cmd())
     try:

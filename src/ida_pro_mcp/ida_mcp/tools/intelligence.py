@@ -5,7 +5,7 @@ Extracted from `agent.py` in the dedup pass (commit series: shim removal,
 mbagcn fold, comment_mgr merge, firmware_bootstrap fold, **intelligence
 extraction**). The 14 actions previously hung off `agent` now live here
 because they have a distinct operational identity (embedder/classifier
-lifecycle, capsule persistence, evidence card construction) and
+lifecycle) and
 dominated ~400 LOC of the agent dispatcher without sharing any of its
 neighbor actions.
 
@@ -134,16 +134,17 @@ def _build_fast_signature(fea: int, func=None) -> str:
             break
     if str_refs:
         parts.append("strings:" + ",".join(sorted(str_refs)[:10]))
+    _tag_remove = getattr(idc, "tag_remove", None)
     # First 15 instructions
     insns = []
     for head in idautils.Heads(func.start_ea, min(func.start_ea + 256, func.end_ea)):
         dis = idc.generate_disasm_line(head, 0)
         if dis:
-            insns.append(idc.tag_remove(dis)[:80])
+            insns.append(_tag_remove(dis) if _tag_remove else dis)
         if len(insns) >= 15:
             break
     if insns:
-        parts.append("code:" + "; ".join(insns))
+        parts.append("code:" + "; ".join(i[:80] for i in insns))
     return " | ".join(parts)
 
 
@@ -458,8 +459,8 @@ def suggest_next_steps(kwargs: dict, default_addr: Any = None) -> dict:
             sink = str(top.get("sink_addr") or (top.get("path", [""])[-1] if isinstance(top.get("path"), list) else "") or target_addr)
             if sink:
                 suggestions.append({
-                    "tool": "llm_helpers",
-                    "arguments": {"action": "dangerous_pattern_explainer", "addr": sink},
+                    "tool": "code",
+                    "arguments": {"action": "explain", "addr": sink},
                     "reason": "explain the confirmed vulnerability",
                 })
 
@@ -594,7 +595,7 @@ def intelligence(
     """Intelligence subsystem: embedder, anchor classifier, function
     embedding index, semantic/blackboard search, evidence card production.
 
-    intelligence_status - Combined embedder + anchors + indexes + capsule state.
+    intelligence_status - Combined embedder + anchors + indexes.
     embedder_status     - Embedder backend only (alias of the above).
     anchor_status       - BehaviorClassifier ANCHORS count/loaded/hash.
     refresh_anchors     - (re)compute anchor embeddings for the given behaviors.
@@ -605,7 +606,7 @@ def intelligence(
     similar_functions   - k-NN cosine scan over the per-IDB index for `addr`.
     semantic_search     - free-form text → query vector → k-NN over the index.
     blackboard_search   - free-form text → related_by_behavior on the blackboard.
-    export_index_summary - return index path/size/metadata + persist capsule state.
+    export_index_summary - return index path/size/metadata .
     """
     try:
         try:
@@ -648,33 +649,7 @@ def intelligence(
             return FunctionEmbeddingIndex(db_path, embedder), db_path
 
         def _persist_embedder_state(idx, action_name: str, thresholds: dict | None = None):
-            capsule_path = str(os.environ.get("IDA_MCP_CAPSULE", "") or "").strip()
-            if not capsule_path:
-                return {"persisted": False, "capsule_path": "", "embedding_state_id": ""}
-            try:
-                from ida_pro_mcp.capsule import CapsuleStore
-
-                anchor_hash = hashlib.sha256(
-                    json.dumps(classifier.ANCHORS, sort_keys=True, separators=(",", ":")).encode("utf-8")
-                ).hexdigest()
-                anchor_meta = {
-                    "anchor_count": len(classifier.ANCHORS),
-                    "anchor_hash_sha256": anchor_hash,
-                    "anchor_version": f"sha256:{anchor_hash[:16]}",
-                }
-                state = idx.capsule_state(
-                    anchor_metadata=anchor_meta,
-                    thresholds=(thresholds or {}),
-                    recent_limit=64,
-                )
-                state.setdefault("index_metadata", {})["source_action"] = action_name
-                with CapsuleStore.open(capsule_path) as cap:
-                    if not cap.is_initialized():
-                        cap.init(project_name="ida-session", created_by="ida-pro-mcp-intelligence")
-                    sid = cap.add_embedding_state(state)
-                return {"persisted": True, "capsule_path": capsule_path, "embedding_state_id": sid}
-            except Exception:
-                return {"persisted": False, "capsule_path": capsule_path, "embedding_state_id": ""}
+            return {"persisted": False, "embedding_state_id": ""}
 
         if action in ("intelligence_status", "embedder_status"):
             est = embedder.status(probe=bool(kwargs.get("probe", False)), deep_hash=bool(kwargs.get("deep_hash", False)))
@@ -688,7 +663,6 @@ def intelligence(
                 active_indexes = 1 if idx_path else 0
             except Exception:
                 pass
-            persisted_state = {"persisted": False, "capsule_path": "", "embedding_state_id": ""}
             try:
                 if idx_count > 0:
                     persisted_state = _persist_embedder_state(idx, "intelligence_status")
@@ -708,7 +682,6 @@ def intelligence(
                     "active_binaries": active_indexes,
                     "functions_indexed": idx_count,
                 },
-                "capsule_embedding_state": persisted_state,
             }
 
         if action == "anchor_status":
@@ -792,7 +765,6 @@ def intelligence(
                 "addr": hex(ea),
                 "name": name,
                 "index": {"path": db_path, "size": idx.size},
-                "capsule_embedding_state": persisted_state,
             }
 
         if action in ("index_batch", "index_fast", "index_range"):
@@ -816,7 +788,7 @@ def intelligence(
 
             # ---- resolve target ranges ----
             ranges = []
-            raw_ranges = args.get("ranges") or kwargs.get("ranges")
+            raw_ranges = kwargs.get("ranges")
             if raw_ranges and isinstance(raw_ranges, list):
                 for r in raw_ranges:
                     if isinstance(r, dict):
@@ -832,9 +804,9 @@ def intelligence(
                                 pass
             # single range via start/end
             if not ranges:
-                raw_start = args.get("start") or kwargs.get("addr") or args.get("addr") or args.get("begin")
-                raw_end = args.get("end") or args.get("stop")
-                raw_radius = args.get("radius") or kwargs.get("radius")
+                raw_start = kwargs.get("start") or addr or kwargs.get("begin")
+                raw_end = kwargs.get("end") or kwargs.get("stop")
+                raw_radius = kwargs.get("radius")
                 if raw_start and raw_end:
                     try:
                         s = int(str(raw_start), 0)
@@ -851,8 +823,8 @@ def intelligence(
                     except (ValueError, TypeError):
                         pass
             # size filters
-            min_size = args.get("min_size") or kwargs.get("min_size")
-            max_size = args.get("max_size") or kwargs.get("max_size")
+            min_size = kwargs.get("min_size")
+            max_size = kwargs.get("max_size")
             try:
                 min_size = int(min_size) if min_size is not None else None
             except (ValueError, TypeError):
@@ -862,11 +834,11 @@ def intelligence(
             except (ValueError, TypeError):
                 max_size = None
             # name filter
-            name_filter = args.get("query") or kwargs.get("query")
+            name_filter = query or kwargs.get("query")
             name_matcher = compile_smart_pattern(name_filter, case_sensitive=False) if name_filter else None
             # limit
             try:
-                limit = max(1, int(kwargs.get("limit", args.get("limit", 0)) or 0))
+                limit = max(1, int(kwargs.get("limit", max_items) or 0))
             except (ValueError, TypeError):
                 limit = 0  # 0 = unlimited
             # mode
@@ -878,10 +850,6 @@ def intelligence(
             failures = 0
             skipped = 0
             for fea in idautils.Functions():
-                if limit and count >= limit:
-                    break
-                try:
-                    func = idaapi.get_func(fea)
                     if not func:
                         failures += 1
                         continue
@@ -959,7 +927,6 @@ def intelligence(
                 "skipped": skipped,
                 "ranges_specified": len(ranges),
                 "index": {"path": db_path, "size": idx.size},
-                "capsule_embedding_state": persisted_state,
                 "mode": "decompile" if use_decompile else "fast",
             }
 
@@ -999,7 +966,6 @@ def intelligence(
                 "query_name": qname,
                 "similar": similar,
                 "index": {"path": db_path, "size": idx.size},
-                "capsule_embedding_state": persisted_state,
             }
 
         if action == "semantic_search":
@@ -1027,7 +993,6 @@ def intelligence(
                 "search_strategy": "hybrid_function_index",
                 "matches": rows,
                 "index": {"path": db_path, "size": idx.size},
-                "capsule_embedding_state": persisted_state,
             }
 
         if action == "blackboard_search":
@@ -1071,7 +1036,6 @@ def intelligence(
                     "size": idx.size,
                     "metadata": meta,
                 },
-                "capsule_embedding_state": persisted_state,
             }
 
         return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

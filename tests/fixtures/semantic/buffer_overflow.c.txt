@@ -1,9 +1,0 @@
-int parse_user_input(const char *src) {
-    char tmp[128];
-    size_t len = read_input(src, 0x400);
-    memcpy(tmp, src, len);
-    if (len > sizeof(tmp)) {
-        return -1;
-    }
-    return 0;
-}

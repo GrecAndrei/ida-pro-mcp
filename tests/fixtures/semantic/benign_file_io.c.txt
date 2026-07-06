@@ -1,7 +1,0 @@
-int write_report(const char *path, const char *line) {
-    FILE *f = fopen(path, "a");
-    if (!f) return -1;
-    fprintf(f, "%s\n", line);
-    fclose(f);
-    return 0;
-}

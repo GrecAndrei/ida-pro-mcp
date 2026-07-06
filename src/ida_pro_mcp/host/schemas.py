@@ -31,25 +31,6 @@ TOOL_ACTIONS = _TOOL_ACTIONS_DATA
 # "anchor_coverage"
 
 WRAPPER_ACTIONS = ("grep", "pick", "head", "tail", "next", "stats")
-LLM_HELPERS_DEFAULT_ACTIONS = (
-    "bootstrap",
-    "cheatsheet",
-    "binary_digest",
-    "function_digest",
-    "context_window",
-    "explain_address",
-    "suggest_next",
-    "progress_report",
-    "focus_area",
-    "question_answer",
-    "guided_analysis",
-    "compact",
-    "enrich",
-    "behavioral_signature_search",
-    "function_role_classifier",
-    "dangerous_pattern_explainer",
-    "next_best_action_recommender",
-)
 ACTION_PREFIX_RE = re.compile(r"^action[\s\"']*[:=][\s\"']*", re.IGNORECASE)
 ACTION_STRIP_CHARS = "\"'"
 _WRAPPER_PAIRS = (("[", "]"), ("(", ")"), ("{", "}"), ("<", ">"))
@@ -447,9 +428,6 @@ GLOBAL_WRAPPER_ACTION_CONTROLS = {
 
 def _action_enum_with_grep(tool_name: str, *, compact_surface: bool = False) -> list[str]:
     actions = list(TOOL_ACTIONS.get(tool_name, []) or [])
-    if compact_surface and tool_name == "llm_helpers":
-        keep = set(LLM_HELPERS_DEFAULT_ACTIONS)
-        actions = [a for a in actions if a in keep]
     for wrapper_action in WRAPPER_ACTIONS:
         if wrapper_action not in actions:
             actions.append(wrapper_action)
@@ -643,7 +621,6 @@ _TOOL_CATEGORY_ANALYSIS = {
 _TOOL_CATEGORY_DEBUG = {"debug", "coverage", "trace_analysis"}
 _TOOL_CATEGORY_PROJECT = {"project", "misc"}
 _TOOL_CATEGORY_ADVANCED = {
-    "agent",
     "microcode",
     "graph",
     "ctree",
@@ -654,7 +631,6 @@ _TOOL_CATEGORY_ADVANCED = {
     "lumina",
     "export",
     "history",
-    "colorize",
     "data_ops",
     "hooks",
 }

@@ -21,8 +21,7 @@ TOOLS = [
     "batch",
     # Analysis configuration
     "analysis",
-    # Unified query/edit hubs (delegating to sub-tools)
-    "query",
+
     # Primary data access tools
     "idb",
     "code",
@@ -45,8 +44,7 @@ TOOLS = [
     "trace_analysis",
     # Project and file management
     "project",
-    # Advanced analysis
-    "agent",
+
     "microcode",
     "graph",
     "xref_analysis",
@@ -61,7 +59,7 @@ TOOLS = [
     # Export and annotation
     "export",
     "history",
-    "colorize",
+
     "data_ops",
     "firmware_view",
     # Instrumentation
@@ -74,7 +72,6 @@ TOOLS = [
     # --- New LLM-optimized tools ---
     # Security & vulnerability analysis
     "threat_hunt",
-    "predictor",
     "workflow",
     "gadgets",
     "taint",
@@ -100,8 +97,7 @@ TOOLS = [
     "cfg_analysis",
     # Binary info
     "binary_info",
-    # LLM helpers
-    "llm_helpers",
+
     # Other components
     # --- New infrastructure tools ---
     "blackboard",
@@ -128,7 +124,6 @@ ADVERTISED_TOOLS = [
     "batch",
     "wiki",
     "analysis",
-    "query",
     "idb",
     "code",
     "data",
@@ -154,7 +149,6 @@ ADVERTISED_TOOLS = [
     "annotation",
     "binary_info",
     "threat_hunt",
-    "predictor",
     "workflow",
     "compare",
     "firmware_view",
@@ -162,7 +156,6 @@ ADVERTISED_TOOLS = [
     "knowledge",
     # RE-useful tools (previously hidden)
     "abi",
-    "agent",
     "cfg_analysis",
     "classify",
     "coverage",
@@ -175,7 +168,6 @@ ADVERTISED_TOOLS = [
     "gadgets",
     "governance",
     "hooks",
-    "llm_helpers",
     "lumina",
     "microcode",
     "protocol",
@@ -219,8 +211,7 @@ _EXTRA_TOOL_ALIASES = {
     "function": "funcs",
     "functions": "funcs",
     "graphs": "graph",
-    "helper": "llm_helpers",
-    "helpers": "llm_helpers",
+
     "hexrays": "code",
     "i_db": "idb",
     "ida": "idb",
@@ -229,7 +220,7 @@ _EXTRA_TOOL_ALIASES = {
     "notes": "bookmarks",
     "plugins_tool": "misc",
     "python": "misc",
-    "queries": "query",
+
     "vuln": "threat_hunt",
     "vulnerability": "threat_hunt",
     "vulnerabilities": "threat_hunt",
@@ -249,10 +240,6 @@ _EXTRA_TOOL_ALIASES = {
     "yara": "threat_hunt",
     "hunt": "threat_hunt",
     "automated_findings": "threat_hunt",
-    "recommend": "predictor",
-    "predict": "predictor",
-    "next_tool": "predictor",
-    "workflow_predictor": "predictor",
     # Legacy/compat aliases kept for older clients and scripts.
     "comments_ai": "annotation",
     "annotations_ai": "annotation",
@@ -306,15 +293,11 @@ THREAT_LEGACY_CONDITIONAL_PASSTHROUGH = {
         "binary",
         "function",
     },
-    "agent": {
-        "search_all",
-        "find_references",
-    },
 }
 
 TOOL_DESCRIPTIONS = {
     "abi": "Analyzes calling conventions and ABI details of functions. Actions: detect, stack_args, reg_args, return_type, varargs, struct_return, tail_calls, prologue, epilogue, abi_violations.",
-    "agent": "High-level AI-assisted analysis combining search, context packing, multi-hop discovery, and CFG similarity. Actions: analyze_function, explore_address, find_references, search_all, search_structs, context_pack, quick, rename_suggestions, batch_context, similar, bridge_query, reflect, cluster, fingerprint, cfg_encode, cfg_similar, cfg_stats. NOTE: similar and cluster overlap functionally with intelligence.similar_functions (embedding-based nearest neighbors); for embedding-indexed similarity prefer intelligence.*, for the older 'structured context pack' workflow use agent.*. cfg_encode/cfg_similar/cfg_stats are agent-specific structural CFG features not present in graph.*.",
+
     "analysis": "Controls IDA analysis engine settings and triggers reanalysis, and runs IDA plugins. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze, run, analyze, state. Note: analysis(action='plugin_run', name='...') is a host-level alias that forwards to misc(action='plugin_run').",
     "annotation": "Automatically generates and manages comments, labels, and documentation across functions. Actions: auto_comment, auto_comment_function, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, propagate_names, cleanup, validate, get_context, set_structured, bulk_set, export_md, import_md, summary.",
     "background": "Background batch execution for long-running analysis tasks and IDAPython scripts. Submit scripts or tool calls to run in background threads without interrupting IDA. Actions: submit, status, cancel, result, list, wait.",
@@ -327,7 +310,7 @@ TOOL_DESCRIPTIONS = {
     "cfg_analysis": "Analyzes control flow graph structure including loops, dominators, and complexity. Actions: complexity, loops, branches, paths, dominators, post_dominators, back_edges, natural_loops, irreducible, flatten_detect.",
     "classify": "Classify functions and binaries by purpose. function: single function — embedding-driven BehaviorClassifier (bge-code-v1). binary: overall binary type. all_functions: classify all functions — unnamed functions use BehaviorClassifier. library_code/wrappers/callbacks/initializers/error_handlers: structural classification. hot_functions: most-called functions. orphans: no-caller functions (entry points / dead code). induce_schema: structural attribute-value schema for retrieval. anchor_coverage: report per-anchor coverage over current IDB. NOTE: the binary and function actions share names with summarize.binary / summarize.function but produce DIFFERENT output — classify returns categories/behavior tags, summarize returns counts/structure. Pick the one that matches the question.",
     "code": "Decompilation, disassembly, and code analysis (≈ IDA View menu / F5/Tab). smart_decompile: best first call — pseudocode + behavior tags + callers/callees + crypto hints + suggested next actions. decompile: pseudocode only. disasm: assembly listing. decompile_chain: function + compact caller/callee context. semantic_decompile: pseudocode + CFG semantics + variable dependency graph. diff_functions: unified diff of two functions. trace_argument_origin: backward BFS through callers to trace where an argument value originates (returns call chain with arg expressions and types: string_literal, constant, function_call, address_of, variable). Actions: smart_decompile, decompile, disasm, decompile_chain, semantic_decompile, diff_functions, trace_argument_origin, xrefs_to, xrefs_from, callees, callers, blocks, callgraph, find_paths, strings_in_func, decomp_dataflow, export.",
-    "colorize": "Sets and queries color highlighting on functions, ranges, and instructions. Actions: set_func, set_range, set_insn, get, clear, palette, highlight_pattern.",
+
     "compare": "Diff two IDB databases or functions across binaries. Actions: functions, blocks, apis, strings, constants, structure, semantics, batch_compare, find_clones, changelog.",
     "coverage": "Import and analyze code coverage data to identify hit/missed paths. Actions: import_drcov, import_lighthouse, highlight, report, uncovered, filter, function_coverage, gaps, compare, merge.",
     "crypto_id": "Detect cryptographic algorithms, constants, and encoding routines in the binary. Actions: identify, constants, encoding, checksums, entropy_analysis, aes_ni.",
@@ -351,9 +334,9 @@ TOOL_DESCRIPTIONS = {
     "hooks": "Generate dynamic instrumentation hooks (Frida, Detours) for target functions. Actions: suggest, generate_frida, generate_detours, find_targets, inline_hooks.",
     "idb": "Query top-level IDB metadata: binary info, segments, entrypoints, bookmarks, and architecture profile guidance for raw binaries. Actions: meta, summary, segments, entrypoints, bookmarks, overview, architecture_profile.",
     "imports_deep": "Deep import analysis: thunks, delay-loads, forwarded, ordinal, and API set resolution. Actions: thunks, delay, forwarded, ordinal, api_sets, resolve.",
-     "intelligence": "Intelligence subsystem: embedding-based classification, blackboard-driven indexing, and similarity search. Actions: intelligence_status, embedder_status, anchor_status, refresh_anchors, classify_text, classify_function, index_function, index_batch, similar_functions, semantic_search, blackboard_search, export_index_summary, evidence_card,  Corpus is blackboard entries (curated hypotheses/IOCs/vulns), not raw decompiled functions — indexing never blocks IDA on full-binary pseudocode embedding. index_function needs a blackboard note at the address (write one first via blackboard(action='write')); index_batch pulls every blackboard entry (filtered by category, capped by max_items, gated by IDA_MCP_EMBED_CORPUS_GATE); similar_functions builds a query doc from the address's blackboard context and runs k-NN over the entry index. semantic_search and blackboard_search use the same vector index; the first is text→vector, the second is text→related_by_behavior on the blackboard store. structural_* actions manage the structural index (extract/get/query/refresh/stats/delete/ingest).",
+     "intelligence": "Intelligence subsystem: embedding-based classification, blackboard-driven indexing, and similarity search. Actions: intelligence_status, embedder_status, anchor_status, refresh_anchors, classify_text, classify_function, index_function, index_batch, index_fast, index_range, similar_functions, semantic_search, blackboard_search, export_index_summary. Supports multi-region indexing and structural pre-filtering (size, bb_count, loops, api_count, segment).",
     "knowledge": "Cross-session firmware knowledge base: chip family identification, persistent symbol memory, and symbol transfer across binaries. Actions: chip_identify, symbol_lookup, import_symbols, export_session, chip_families.",
-    "llm_helpers": "Context-optimized helpers for LLM agents. bootstrap: first-turn call list. context_window/function_digest/binary_digest/explain_address: compact analysis helpers. suggest_next/progress_report/focus_area: navigation and planning. behavioral_signature_search: find functions by behavior tag. function_role_classifier: entry_point/callback/dispatcher/wrapper. dangerous_pattern_explainer: exploitation path + mitigation for an address. api_contract_extractor: infer preconditions/postconditions. global_state_influence_mapper: globals a function reads/writes. interprocedural_data_lineage_graph: trace data flow across functions. semantic_diff_explainer: diff two functions by embedding+behavior. path_constrained_search: BFS from addr filtered by behavior tag. cross_artifact_correlation_search: correlate strings/names/blackboard.",
+
     "lumina": "Interface to Hex-Rays Lumina server for collaborative function metadata sharing. Actions: pull, push, status, history, search, get_metadata.",
     "memory": "Read, write, and inspect raw memory/bytes in the binary or debuggee, plus host filesystem read/write helpers. Actions: read, write, hexdump, search, compare, pointers, find_pointers, entropy, strings, struct_walk, histogram, read_file, write_file.",
     "microcode": "Access Hex-Rays microcode IR for a function at various maturity levels. Actions: get, blocks, instructions, def_use_graph.",
@@ -361,10 +344,10 @@ TOOL_DESCRIPTIONS = {
     "modify": "Apply edits to the IDB: rename symbols, add comments (regular/repeatable/anterior/posterior), set types, and patch assembly (multi-line instructions separated by semicolons). Actions: rename, comment, set_type, patch_asm.",
     "nav": "Navigate the IDA cursor to addresses or semantically interesting locations. Actions: goto, cursor, interesting, semantic_goto.",
     "patterns": "Generate, match, and manage FLIRT/byte pattern signatures for function identification. Actions: generate, match, list_sigs, apply_sig, create_sig, matched, yara_from_func, flirt_generate, match_yara.",
-    "predictor": "Deterministic prediction of next useful tool, focus address, or stuck-state detection. recommend_bundle returns a bundled next-step pack (tools + focus + addresses + stall risk). Actions: suggest_next_tool, detect_stuck, suggest_focus, suggest_next_address, risk_of_stall, recommend_bundle.",
+
     "project": "Project I/O and evidence management. Actions: save, close, open, load_binary, list_recent, get_cwd, set_cwd, list_dir, exists, evidence_graph, knowledge_merge, confidence_model, replay_pipeline, hypothesis_tracker, temporal_reasoning, semantic_artifact_diff, ai_governance, knowledge_debt, casefile_export.",
     "protocol": "Detect and analyze network protocol structures, parsers, endpoints, state machines, and reconstruct full protocol specs from dispatch tables. Actions: detect, parsers, serializers, handlers, endpoints, tls_config, socket_flow, packet_struct, magic_numbers, state_machine, reconstruct, trace_handler, export_spec.",
-    "query": "Unified query interface combining data, search, code, types, symbols, and natural-language queries. Actions: data, search, idb, code, types, imports_deep, symbols, patterns, nl, nl_batch. NOTE: query.nl and search.nl both expose natural-language search. query.nl routes through the unified query dispatcher (multi-domain NL over the indexed IDB), search.nl uses the bge-code-v1 embedding ranker directly. Use search.nl for behaviorally-precise RE queries; use query.nl when you want the unified dispatcher to pick a target domain.",
+
     "search": "Pattern, reference, and semantic search. nl: NL search via bge-code-v1 embeddings (best for RE queries). find: unified search over names/strings/imports/instructions. api: all call sites of an import. decompiled: grep pseudocode across all functions. vulnerable: scan for dangerous API patterns. outlier: structurally anomalous functions (size/complexity/orphan/hub). hunt: named recipes (backdoor/c2/crypto/anti_debug — pass recipe='list'). path: shortest call-graph path between two symbols. reach/noreach: reachability from a root. symbol: resolve symbol by name (exact then fuzzy, returns demangled + alternatives). symbol_info: rich symbol inspector (type, size, xrefs, segment, flags, prototype). demangle: demangle one or more C++ mangled names (INF_SHORT_DN and INF_LONG_DN). xrefs_to_string: find all functions referencing a string literal by value or address. Actions: nl, behavior, find, semantic, smart_bundle, api, decompiled, structured, vulnerable, constants, callers, callees, bytes, string, immediate, name, insns, mnemonic, comment, regex, func_by_sig, bool, hunt, neighborhood, outlier, fingerprint, path, reach, noreach, symbol, symbol_info, demangle, xrefs_to_string.",
     "segments": "List, create, modify, and analyze binary segments and their permissions/attributes. Actions: list, add, delete, set_attr, set_perms, move, info, analyze, find_code, find_data, compare, merge. For relocations/fixups use the dedicated `fixups` tool.",
      "session": "Full session lifecycle with runtime tracking, analysis notebook, hypothesis tracking. state: full analysis state snapshot (binary, coverage, blackboard summary, engine status, next actions) — call this at the start of every turn instead of reading the ida://state resource. logs: tail IDA stdout/stderr log files directly without an IDA RPC — use this when IDA is busy (e.g. during auto-analysis) and other tool calls time out; accepts lines= param (default 60). Actions: create/switch/close/list/status/state/logs, snapshot/restore, rate_skill/suggest_strategy/suggest_triage/suggest_analogy/apply_analogy, notebook_append/read, track_hypothesis/confirm/refute, get_phase/advance_phase, recent_workset, macro_set/run, dashboard, health, idle_purge. cleanup_stale: remove sessions older than max_age_days (default 30); with prune_orphans=True (default) also deletes sessions whose binary+idb paths are both gone. idle_purge: tear down live IDA runtimes idle longer than idle_seconds (does NOT touch the database; use cleanup_stale for DB rows). health: server, runtime, IDA, session, wiki diagnostics. Plus ~30 more actions (tag, merge, export_session, etc.) — use tools/list for the full enum.",
@@ -757,46 +740,7 @@ TOOL_ARG_SCHEMAS = {
             "description": "For action='legacy', execute exact mapped legacy action in consolidated flow and include mapping metadata.",
         },
     },
-    "predictor": {
-        "action": {"type": "string", "enum": TOOL_ACTIONS["predictor"]},
-        "session_id": {
-            "type": "string",
-            "description": "Optional session ID. If omitted, active session is used.",
-        },
-        "context": {
-            "type": "string",
-            "description": "Optional context text to bias suggestions.",
-        },
-        "limit": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 20,
-            "description": "Maximum suggestions to return.",
-        },
-        "recent_n": {
-            "type": "integer",
-            "minimum": 5,
-            "maximum": 200,
-            "description": "Recent activity window for sequence modeling.",
-        },
-        "target_tool": {
-            "type": "string",
-            "description": "Target tool for explain_decision action.",
-        },
-        "target_action": {
-            "type": "string",
-            "description": "Target action for explain_decision action.",
-        },
-        "tool": {
-            "type": "string",
-            "description": "Tool name for predictor feedback action.",
-        },
-        "outcome": {
-            "type": "string",
-            "enum": ["helpful", "not_helpful"],
-            "description": "Feedback outcome for predictor(action='feedback').",
-        },
-    },
+
     "workflow": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["workflow"]},
         "planned_calls": {
@@ -884,28 +828,7 @@ TOOL_ARG_SCHEMAS = {
         "segment_name": {"type": "string"},
         "segment_name2": {"type": "string"},
     },
-    "agent": {
-        "action": {"type": "string", "enum": TOOL_ACTIONS["agent"]},
-        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
-        "query": {"type": "string"},
-        "depth": {"type": "integer"},
-        "include_pseudocode": {"type": "boolean"},
-        "max_items": {"type": "integer"},
-        "use_cache": {"type": "boolean"},
-        # Knobs for rename_suggestions / cluster / reflect / fingerprint /
-        # cfg_similar. Previously stripped, so these actions ran with fixed
-        # defaults and their tuning/persistence flags were unreachable.
-        "top_k": {"type": "integer"},
-        "limit": {"type": "integer"},
-        "threshold": {"type": "number"},
-        "k": {"type": "integer"},
-        "func_limit": {"type": "integer"},
-        "include_evidence": {"type": "boolean"},
-        "persist_blackboard": {"type": "boolean"},
-        "persist_capsule": {"type": "boolean"},
-        "items": {"type": "array", "items": {"type": "object"}},
-        "db_path": {"type": "string"},
-    },
+
     "intelligence": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["intelligence"]},
         "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
@@ -922,18 +845,10 @@ TOOL_ARG_SCHEMAS = {
         "order_by": {"type": "string", "description": "Column to order by (e.g., 'entropy DESC')"},
         "include_apis": {"type": "boolean", "description": "Include API list in results"},
         "include_strings": {"type": "boolean", "description": "Include string refs in results"},
-        # blackboard_search reads `include_resolved`; evidence_card reads
-        # `similar_top_k`. Previously stripped, so both flags were unreachable
-        # through MCP. (`tool`/`payload` are intentionally NOT admitted: they
-        # belong to the internal suggest_next_steps helper, not an action.)
         "include_resolved": {"type": "boolean"},
         "similar_top_k": {"type": "integer"},
     },
-    "query": {
-        "action": {"type": "string", "enum": TOOL_ACTIONS["query"]},
-        "subaction": {"type": "string"},
-        "args": {"type": "object"},
-    },
+
     "idb": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["idb"]},
         "offset": {"type": "integer"},

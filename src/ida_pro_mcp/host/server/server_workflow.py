@@ -634,7 +634,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 "protocol": "protocol",
                 "summarize": "summary",
                 "firmware_view": "firmware",
-                "llm_helpers": "guidance",
+
                 "code": "code",
                 "graph": "graph",
                 "compare": "diff",
@@ -906,7 +906,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
             ]
             if firmware_detected or raw_binary_mode:
                 step_plan.insert(2, {"name": "firmware_view", "arguments": {"action": "triage_snapshot"}})
-                step_plan.append({"name": "llm_helpers", "arguments": {"action": "focus_area"}})
             workflow_meta["firmware_mode"] = "enabled" if (firmware_detected or raw_binary_mode) else "disabled"
             workflow_meta["firmware_detected"] = firmware_detected
             workflow_meta["raw_binary_mode"] = raw_binary_mode
@@ -958,7 +957,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
             ]
             if firmware_detected or raw_binary_mode:
                 step_plan.insert(2, {"name": "firmware_view", "arguments": {"action": "triage_snapshot"}})
-                step_plan.append({"name": "llm_helpers", "arguments": {"action": "focus_area"}})
             workflow_meta["firmware_mode"] = "enabled" if (firmware_detected or raw_binary_mode) else "disabled"
             workflow_meta["firmware_detected"] = firmware_detected
             workflow_meta["raw_binary_mode"] = raw_binary_mode

@@ -1,0 +1,1543 @@
+{
+  "version": 1,
+  "entities": {
+    "tool:abi": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/abi.py",
+      "type": "tool",
+      "name": "abi",
+      "hash": "c69907800fcde5b5"
+    },
+    "tool:analysis": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/analysis.py",
+      "type": "tool",
+      "name": "analysis",
+      "hash": "da7a158f2fc8c0d3"
+    },
+    "tool:annotation": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/annotation.py",
+      "type": "tool",
+      "name": "annotation",
+      "hash": "8b80b28f5f6b62bb"
+    },
+    "tool:batch": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/batch.py",
+      "type": "tool",
+      "name": "batch",
+      "hash": "04480e85af152c95"
+    },
+    "tool:binary_info": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/binary_info.py",
+      "type": "tool",
+      "name": "binary_info",
+      "hash": "2e1f01113c3891d3"
+    },
+    "tool:bindiff": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/bindiff.py",
+      "type": "tool",
+      "name": "bindiff",
+      "hash": "88ee2fc5737b663e"
+    },
+    "tool:blackboard": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/blackboard.py",
+      "type": "tool",
+      "name": "blackboard",
+      "hash": "fa2fe0ecdfca87ef"
+    },
+    "tool:bulk": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/bulk.py",
+      "type": "tool",
+      "name": "bulk",
+      "hash": "6190f9d3c1af0390"
+    },
+    "tool:calc": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/calc.py",
+      "type": "tool",
+      "name": "calc",
+      "hash": "97e07c947586b101"
+    },
+    "tool:cfg_analysis": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/cfg_analysis.py",
+      "type": "tool",
+      "name": "cfg_analysis",
+      "hash": "40179e2d3e6eb605"
+    },
+    "tool:classify": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/classify.py",
+      "type": "tool",
+      "name": "classify",
+      "hash": "b997fe3df16e9619"
+    },
+    "tool:code": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/code.py",
+      "type": "tool",
+      "name": "code",
+      "hash": "88c3eab645c5d7b9"
+    },
+    "tool:compare": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/compare.py",
+      "type": "tool",
+      "name": "compare",
+      "hash": "c02e7cecc10fba21"
+    },
+    "tool:coverage": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/coverage.py",
+      "type": "tool",
+      "name": "coverage",
+      "hash": "296b9c0ae676305b"
+    },
+    "tool:crypto_id": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/crypto_id.py",
+      "type": "tool",
+      "name": "crypto_id",
+      "hash": "77479861d55ee519"
+    },
+    "tool:ctree": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/ctree.py",
+      "type": "tool",
+      "name": "ctree",
+      "hash": "f590c2e36822b3bf"
+    },
+    "tool:data": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/data.py",
+      "type": "tool",
+      "name": "data",
+      "hash": "bb3294e658921ea0"
+    },
+    "tool:data_ops": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/data_ops.py",
+      "type": "tool",
+      "name": "data_ops",
+      "hash": "6a7ed0095feb430f"
+    },
+    "tool:debug": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/debug.py",
+      "type": "tool",
+      "name": "debug",
+      "hash": "452a1b7ab5499dd8"
+    },
+    "tool:deobfuscate": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/deobfuscate.py",
+      "type": "tool",
+      "name": "deobfuscate",
+      "hash": "fdeab9a7fecb4160"
+    },
+    "tool:emulate": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/emulate.py",
+      "type": "tool",
+      "name": "emulate",
+      "hash": "7b55d3aaa4989a3f"
+    },
+    "tool:entropy": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/entropy.py",
+      "type": "tool",
+      "name": "entropy",
+      "hash": "cead454f5717f9bf"
+    },
+    "tool:export": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/export.py",
+      "type": "tool",
+      "name": "export",
+      "hash": "fb7d4ed93be5c2b8"
+    },
+    "tool:filter": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/filter.py",
+      "type": "tool",
+      "name": "filter",
+      "hash": "f74e256fa0793fe5"
+    },
+    "tool:firmware_view": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/firmware_view.py",
+      "type": "tool",
+      "name": "firmware_view",
+      "hash": "fc03db217d57727c"
+    },
+    "tool:fixups": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/fixups.py",
+      "type": "tool",
+      "name": "fixups",
+      "hash": "9fa85c9d3ea023a1"
+    },
+    "tool:funcs": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/funcs.py",
+      "type": "tool",
+      "name": "funcs",
+      "hash": "b30b68b51669327f"
+    },
+    "tool:gadgets": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/gadgets.py",
+      "type": "tool",
+      "name": "gadgets",
+      "hash": "37dc11d24e1dc808"
+    },
+    "tool:governance_engine": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/governance_engine.py",
+      "type": "tool",
+      "name": "governance_engine",
+      "hash": "9504339a8b10ccca"
+    },
+    "tool:graph": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/graph.py",
+      "type": "tool",
+      "name": "graph",
+      "hash": "31fd227acd10f9ea"
+    },
+    "tool:history": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/history.py",
+      "type": "tool",
+      "name": "history",
+      "hash": "91876ec7dfdac819"
+    },
+    "tool:hooks": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/hooks.py",
+      "type": "tool",
+      "name": "hooks",
+      "hash": "b9e0e34602fc5e24"
+    },
+    "tool:idb": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/idb.py",
+      "type": "tool",
+      "name": "idb",
+      "hash": "780687cfc0acace7"
+    },
+    "tool:imports_deep": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/imports_deep.py",
+      "type": "tool",
+      "name": "imports_deep",
+      "hash": "c485349fd94d3374"
+    },
+    "tool:intelligence": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/intelligence.py",
+      "type": "tool",
+      "name": "intelligence",
+      "hash": "b782491a93e3b5a4"
+    },
+    "tool:knowledge": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/knowledge.py",
+      "type": "tool",
+      "name": "knowledge",
+      "hash": "76f64b970139cba1"
+    },
+    "tool:lumina": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/lumina.py",
+      "type": "tool",
+      "name": "lumina",
+      "hash": "9298aec0eb33ebc0"
+    },
+    "tool:memory": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/memory.py",
+      "type": "tool",
+      "name": "memory",
+      "hash": "32bd35b406e68252"
+    },
+    "tool:microcode": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/microcode.py",
+      "type": "tool",
+      "name": "microcode",
+      "hash": "f02b3d72773469c8"
+    },
+    "tool:misc": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/misc.py",
+      "type": "tool",
+      "name": "misc",
+      "hash": "f41ce493db6ef3c5"
+    },
+    "tool:modify": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/modify.py",
+      "type": "tool",
+      "name": "modify",
+      "hash": "62bda8077827fc12"
+    },
+    "tool:nav": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/nav.py",
+      "type": "tool",
+      "name": "nav",
+      "hash": "3b16a19224e382f3"
+    },
+    "tool:packer": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/packer.py",
+      "type": "tool",
+      "name": "packer",
+      "hash": "f32d68f26f1abbd2"
+    },
+    "tool:patterns": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/patterns.py",
+      "type": "tool",
+      "name": "patterns",
+      "hash": "011c301c3f06fb9d"
+    },
+    "tool:project": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/project.py",
+      "type": "tool",
+      "name": "project",
+      "hash": "727b61bdcfbb2826"
+    },
+    "tool:protocol": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/protocol.py",
+      "type": "tool",
+      "name": "protocol",
+      "hash": "ebfa47cd8508776e"
+    },
+    "tool:search": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/search/__init__.py",
+      "type": "tool",
+      "name": "search",
+      "hash": "95636c2d06d0dd8d"
+    },
+    "tool:segments": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/segments.py",
+      "type": "tool",
+      "name": "segments",
+      "hash": "e4f7a54b6a8a1408"
+    },
+    "tool:stack_analysis": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/stack_analysis.py",
+      "type": "tool",
+      "name": "stack_analysis",
+      "hash": "1f4edcb7e9e2a1b7"
+    },
+    "tool:string_ops": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/string_ops.py",
+      "type": "tool",
+      "name": "string_ops",
+      "hash": "eafd188d0ba3d08b"
+    },
+    "tool:struct_recover": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/struct_recover.py",
+      "type": "tool",
+      "name": "struct_recover",
+      "hash": "857ac005459fd5b1"
+    },
+    "tool:summarize": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/summarize.py",
+      "type": "tool",
+      "name": "summarize",
+      "hash": "6dec1924d3f7deb6"
+    },
+    "tool:symbols": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/symbols.py",
+      "type": "tool",
+      "name": "symbols",
+      "hash": "18c65dd8d4c88df2"
+    },
+    "tool:taint": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/taint.py",
+      "type": "tool",
+      "name": "taint",
+      "hash": "60b507b894d406f6"
+    },
+    "tool:trace_analysis": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/trace_analysis.py",
+      "type": "tool",
+      "name": "trace_analysis",
+      "hash": "9e0887b071cbb23b"
+    },
+    "tool:types": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/types.py",
+      "type": "tool",
+      "name": "types",
+      "hash": "64e512ac19655bbf"
+    },
+    "tool:wiki": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/wiki.py",
+      "type": "tool",
+      "name": "wiki",
+      "hash": "c949fe5cd55ea569"
+    },
+    "tool:xref_analysis": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/xref_analysis.py",
+      "type": "tool",
+      "name": "xref_analysis",
+      "hash": "ca0cba697ad628f0"
+    },
+    "tool:yara_hunt": {
+      "file": "src/ida_pro_mcp/ida_mcp/tools/yara_hunt.py",
+      "type": "tool",
+      "name": "yara_hunt",
+      "hash": "687dbcff526ea912"
+    },
+    "tool_actions:abi": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "abi",
+      "hash": "d3606a7f7fafaa34"
+    },
+    "tool_actions:analysis": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "analysis",
+      "hash": "1aa4fb747964b2f5"
+    },
+    "tool_actions:annotation": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "annotation",
+      "hash": "92bf7981f8f920a5"
+    },
+    "tool_actions:background": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "background",
+      "hash": "175d0694fe542438"
+    },
+    "tool_actions:batch": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "batch",
+      "hash": "287381aa58954d2e"
+    },
+    "tool_actions:binary_info": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "binary_info",
+      "hash": "1553391ab20fa167"
+    },
+    "tool_actions:blackboard": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "blackboard",
+      "hash": "d72bf559a88ca0c7"
+    },
+    "tool_actions:bookmarks": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "bookmarks",
+      "hash": "d51cf2cfa9a58216"
+    },
+    "tool_actions:bulk": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "bulk",
+      "hash": "faf59627d6a97342"
+    },
+    "tool_actions:calc": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "calc",
+      "hash": "2f2bd46b1cd16d71"
+    },
+    "tool_actions:cfg_analysis": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "cfg_analysis",
+      "hash": "94ef52b8e042697c"
+    },
+    "tool_actions:classify": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "classify",
+      "hash": "7d5ddd8c49ec835e"
+    },
+    "tool_actions:code": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "code",
+      "hash": "e45a630fe62a8236"
+    },
+    "tool_actions:compare": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "compare",
+      "hash": "08d38fe88fadde2e"
+    },
+    "tool_actions:coverage": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "coverage",
+      "hash": "767beb67aa013b2a"
+    },
+    "tool_actions:crypto_id": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "crypto_id",
+      "hash": "8129b43f94131399"
+    },
+    "tool_actions:ctree": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "ctree",
+      "hash": "be48e7918f01d996"
+    },
+    "tool_actions:data": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "data",
+      "hash": "7e48421292527611"
+    },
+    "tool_actions:data_ops": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "data_ops",
+      "hash": "c63c1a39598cf769"
+    },
+    "tool_actions:debug": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "debug",
+      "hash": "fcf77354a5da9bc0"
+    },
+    "tool_actions:deobfuscate": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "deobfuscate",
+      "hash": "4b79c26ee6f78a58"
+    },
+    "tool_actions:entropy": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "entropy",
+      "hash": "3057e748b92bb6fc"
+    },
+    "tool_actions:export": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "export",
+      "hash": "d86b647ab457083d"
+    },
+    "tool_actions:filter": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "filter",
+      "hash": "0e1e9caa4953f85a"
+    },
+    "tool_actions:firmware_view": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "firmware_view",
+      "hash": "f46e11a5e602addd"
+    },
+    "tool_actions:fixups": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "fixups",
+      "hash": "63303ca0755957bf"
+    },
+    "tool_actions:funcs": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "funcs",
+      "hash": "6157b76fb13a93b8"
+    },
+    "tool_actions:gadgets": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "gadgets",
+      "hash": "a9dace56045b90f2"
+    },
+    "tool_actions:governance": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "governance",
+      "hash": "96104e56e1c02b81"
+    },
+    "tool_actions:graph": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "graph",
+      "hash": "cd1002665b560bbf"
+    },
+    "tool_actions:xref_analysis": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "xref_analysis",
+      "hash": "aff988f7205f3671"
+    },
+    "tool_actions:history": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "history",
+      "hash": "649cb5ac73944462"
+    },
+    "tool_actions:hooks": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "hooks",
+      "hash": "965186c938f165fb"
+    },
+    "tool_actions:idb": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "idb",
+      "hash": "fc559cf83d735dcc"
+    },
+    "tool_actions:imports_deep": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "imports_deep",
+      "hash": "ddaf338ca9eaa0c0"
+    },
+    "tool_actions:intelligence": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "intelligence",
+      "hash": "64cfc7de088b8ef7"
+    },
+    "tool_actions:knowledge": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "knowledge",
+      "hash": "a4ea8442cf2d75c5"
+    },
+    "tool_actions:lumina": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "lumina",
+      "hash": "3eadedba76d44ae8"
+    },
+    "tool_actions:memory": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "memory",
+      "hash": "2f77d71e88259261"
+    },
+    "tool_actions:microcode": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "microcode",
+      "hash": "f477bafb95a0def6"
+    },
+    "tool_actions:misc": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "misc",
+      "hash": "c31c945cfd9bed6a"
+    },
+    "tool_actions:modify": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "modify",
+      "hash": "d21e1d435139d8bf"
+    },
+    "tool_actions:nav": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "nav",
+      "hash": "814054a964cb7c94"
+    },
+    "tool_actions:patterns": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "patterns",
+      "hash": "ee54389302eb43dd"
+    },
+    "tool_actions:packer": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "packer",
+      "hash": "e4cdaac03500b7b0"
+    },
+    "tool_actions:project": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "project",
+      "hash": "c4c3c09bfc9b4ec4"
+    },
+    "tool_actions:protocol": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "protocol",
+      "hash": "f3d7edb0264955ad"
+    },
+    "tool_actions:search": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "search",
+      "hash": "a70871f6803d9874"
+    },
+    "tool_actions:segments": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "segments",
+      "hash": "4856142d27e54245"
+    },
+    "tool_actions:session": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "session",
+      "hash": "637ec73899b30394"
+    },
+    "tool_actions:stack_analysis": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "stack_analysis",
+      "hash": "00b948629fcab864"
+    },
+    "tool_actions:string_ops": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "string_ops",
+      "hash": "b1b84a17162d4f6c"
+    },
+    "tool_actions:summarize": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "summarize",
+      "hash": "8f7e0da64a887e44"
+    },
+    "tool_actions:symbols": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "symbols",
+      "hash": "111a4f7680896fbb"
+    },
+    "tool_actions:taint": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "taint",
+      "hash": "de0dd156f453679b"
+    },
+    "tool_actions:struct_recover": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "struct_recover",
+      "hash": "44cf932a36a23f53"
+    },
+    "tool_actions:emulate": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "emulate",
+      "hash": "147977f2bc0dbee8"
+    },
+    "tool_actions:bindiff": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "bindiff",
+      "hash": "1d81cb5f4856d957"
+    },
+    "tool_actions:multi_session": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "multi_session",
+      "hash": "f7f0ff8e72effdc4"
+    },
+    "tool_actions:threat_hunt": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "threat_hunt",
+      "hash": "e1a3ae26af5b3de1"
+    },
+    "tool_actions:trace_analysis": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "trace_analysis",
+      "hash": "158ef6138eb7af4b"
+    },
+    "tool_actions:truncation": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "truncation",
+      "hash": "a4fec08fa84f961e"
+    },
+    "tool_actions:types": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "types",
+      "hash": "6c9d457b75ccf681"
+    },
+    "tool_actions:wiki": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "wiki",
+      "hash": "5c541485b83ad75a"
+    },
+    "tool_actions:workflow": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "workflow",
+      "hash": "3aefe64fe183250e"
+    },
+    "tool_actions:yara_hunt": {
+      "file": "src/ida_pro_mcp/host/server/tool_registry.py",
+      "type": "tool_actions",
+      "name": "yara_hunt",
+      "hash": "46bf8bbb35ef6613"
+    },
+    "schema:TOOL_ACTIONS": {
+      "file": "src/ida_pro_mcp/host/schemas_data.py",
+      "type": "schema",
+      "name": "TOOL_ACTIONS",
+      "hash": "a6678229ffdae48b"
+    },
+    "dispatch:session": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "session",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:truncation": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "truncation",
+      "hash": "a25df17a47ea473d"
+    },
+    "dispatch:bookmarks": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "bookmarks",
+      "hash": "073fd7a60eb2e408"
+    },
+    "dispatch:background": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "background",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:batch": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "batch",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:analysis": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "analysis",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:idb": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "idb",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:code": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "code",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:data": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "data",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:search": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "search",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:types": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "types",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:memory": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "memory",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:modify": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "modify",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:funcs": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "funcs",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:segments": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "segments",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:bulk": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "bulk",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:misc": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "misc",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:calc": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "calc",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:nav": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "nav",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:debug": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "debug",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:coverage": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "coverage",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:trace_analysis": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "trace_analysis",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:project": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "project",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:microcode": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "microcode",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:graph": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "graph",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:xref_analysis": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "xref_analysis",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:ctree": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "ctree",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:entropy": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "entropy",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:imports_deep": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "imports_deep",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:patterns": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "patterns",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:symbols": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "symbols",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:lumina": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "lumina",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:export": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "export",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:history": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "history",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:data_ops": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "data_ops",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:firmware_view": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "firmware_view",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:hooks": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "hooks",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:wiki": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "wiki",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:yara_hunt": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "yara_hunt",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:intelligence": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "intelligence",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:threat_hunt": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "threat_hunt",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:workflow": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "workflow",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:gadgets": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "gadgets",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:taint": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "taint",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:deobfuscate": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "deobfuscate",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:crypto_id": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "crypto_id",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:abi": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "abi",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:summarize": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "summarize",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:classify": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "classify",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:compare": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "compare",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:stack_analysis": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "stack_analysis",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:protocol": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "protocol",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:annotation": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "annotation",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:string_ops": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "string_ops",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:cfg_analysis": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "cfg_analysis",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:binary_info": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "binary_info",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:blackboard": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "blackboard",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:filter": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "filter",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:governance": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "governance",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:knowledge": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "knowledge",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:packer": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "packer",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:struct_recover": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "struct_recover",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:emulate": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "emulate",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:bindiff": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "bindiff",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:multi_session": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "multi_session",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "dispatch:fixups": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "fixups",
+      "hash": "9aa8c3e67e6b66b7"
+    },
+    "schema:TOOLS": {
+      "file": "src/ida_pro_mcp/host/schemas_data.py",
+      "type": "schema",
+      "name": "TOOLS",
+      "hash": "2c6be055ba488290"
+    },
+    "schema:ADVERTISED_TOOLS": {
+      "file": "src/ida_pro_mcp/host/schemas_data.py",
+      "type": "schema",
+      "name": "ADVERTISED_TOOLS",
+      "hash": "beb5c614fed4e48b"
+    },
+    "dispatch:session_health": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "session_health",
+      "hash": "0dc3c5d618e1bcee"
+    },
+    "dispatch:memory_filesystem": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "memory_filesystem",
+      "hash": "2c93fea8975b9f26"
+    },
+    "dispatch:analysis_plugin_run": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "analysis_plugin_run",
+      "hash": "e727f482fae6617e"
+    },
+    "dispatch:tool_grep_action": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "tool_grep_action",
+      "hash": "d436b16b276e512e"
+    },
+    "dispatch:tool_pick_action": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "tool_pick_action",
+      "hash": "1a598f08a623a4ea"
+    },
+    "dispatch:tool_head_tail_action": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "tool_head_tail_action",
+      "hash": "8220ee4765980667"
+    },
+    "dispatch:tool_next_action": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "tool_next_action",
+      "hash": "d8ccaa0f58644de2"
+    },
+    "dispatch:tool_stats_action": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "tool_stats_action",
+      "hash": "e70fc5a9a22209e9"
+    },
+    "dispatch:plugins": {
+      "file": "src/ida_pro_mcp/host/server/server_dispatch.py",
+      "type": "dispatch",
+      "name": "plugins",
+      "hash": "e5cc667af43826e9"
+    }
+  },
+  "tests": {
+    "tests/test_dispatch_integrity.py": {
+      "interacts": [
+        "dispatch:search",
+        "dispatch:blackboard",
+        "dispatch:code",
+        "dispatch:data",
+        "dispatch:intelligence",
+        "dispatch:session",
+        "dispatch:modify",
+        "dispatch:types"
+      ],
+      "format": "v1",
+      "description": "Dispatch handlers exist for all advertised tools",
+      "created": "2025-07-06",
+      "false_positives": [],
+      "fp_reason": "",
+      "fp_author": "",
+      "fp_date": "",
+      "requires_format": "",
+      "requires_format_reason": ""
+    },
+    "tests/test_docs_sync.py": {
+      "interacts": [
+        "schema:TOOLS",
+        "schema:ADVERTISED_TOOLS",
+        "tool:search",
+        "tool:data",
+        "tool:code",
+        "tool:intelligence",
+        "tool_actions:search",
+        "tool_actions:data",
+        "tool_actions:code",
+        "tool_actions:intelligence"
+      ],
+      "format": "v1",
+      "description": "Docs are in sync - all tools are documented and no removed tools appear",
+      "created": "2025-07-06",
+      "false_positives": [],
+      "fp_reason": "",
+      "fp_author": "",
+      "fp_date": "",
+      "requires_format": "",
+      "requires_format_reason": ""
+    },
+    "tests/test_tool_registry.py": {
+      "interacts": [
+        "schema:TOOLS",
+        "schema:ADVERTISED_TOOLS",
+        "schema:TOOL_ACTIONS",
+        "tool_actions:intelligence",
+        "tool_actions:search",
+        "tool_actions:blackboard",
+        "tool_actions:code",
+        "tool_actions:data",
+        "tool_actions:session",
+        "tool_actions:modify",
+        "tool_actions:types"
+      ],
+      "format": "v1",
+      "description": "Tool registry matches code - every tool in schemas has a module and vice versa",
+      "created": "2025-07-06",
+      "false_positives": [],
+      "fp_reason": "",
+      "fp_author": "",
+      "fp_date": "",
+      "requires_format": "",
+      "requires_format_reason": ""
+    }
+  },
+  "changes": {
+    "src/ida_pro_mcp/ida_mcp/tools/abi.py": {
+      "hash": "c69907800fcde5b5",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/analysis.py": {
+      "hash": "da7a158f2fc8c0d3",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/annotation.py": {
+      "hash": "8b80b28f5f6b62bb",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/batch.py": {
+      "hash": "04480e85af152c95",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/binary_info.py": {
+      "hash": "2e1f01113c3891d3",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/bindiff.py": {
+      "hash": "88ee2fc5737b663e",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/blackboard.py": {
+      "hash": "fa2fe0ecdfca87ef",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/bulk.py": {
+      "hash": "6190f9d3c1af0390",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/calc.py": {
+      "hash": "97e07c947586b101",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/cfg_analysis.py": {
+      "hash": "40179e2d3e6eb605",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/classify.py": {
+      "hash": "b997fe3df16e9619",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/code.py": {
+      "hash": "88c3eab645c5d7b9",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/compare.py": {
+      "hash": "c02e7cecc10fba21",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/coverage.py": {
+      "hash": "296b9c0ae676305b",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/crypto_id.py": {
+      "hash": "77479861d55ee519",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/ctree.py": {
+      "hash": "f590c2e36822b3bf",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/data.py": {
+      "hash": "bb3294e658921ea0",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/data_ops.py": {
+      "hash": "6a7ed0095feb430f",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/debug.py": {
+      "hash": "452a1b7ab5499dd8",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/deobfuscate.py": {
+      "hash": "fdeab9a7fecb4160",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/emulate.py": {
+      "hash": "7b55d3aaa4989a3f",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/entropy.py": {
+      "hash": "cead454f5717f9bf",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/export.py": {
+      "hash": "fb7d4ed93be5c2b8",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/filter.py": {
+      "hash": "f74e256fa0793fe5",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/firmware_view.py": {
+      "hash": "fc03db217d57727c",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/fixups.py": {
+      "hash": "9fa85c9d3ea023a1",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/funcs.py": {
+      "hash": "b30b68b51669327f",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/gadgets.py": {
+      "hash": "37dc11d24e1dc808",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/governance_engine.py": {
+      "hash": "9504339a8b10ccca",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/graph.py": {
+      "hash": "31fd227acd10f9ea",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/history.py": {
+      "hash": "91876ec7dfdac819",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/hooks.py": {
+      "hash": "b9e0e34602fc5e24",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/idb.py": {
+      "hash": "780687cfc0acace7",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/imports_deep.py": {
+      "hash": "c485349fd94d3374",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/intelligence.py": {
+      "hash": "b782491a93e3b5a4",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/knowledge.py": {
+      "hash": "76f64b970139cba1",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/lumina.py": {
+      "hash": "9298aec0eb33ebc0",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/memory.py": {
+      "hash": "32bd35b406e68252",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/microcode.py": {
+      "hash": "f02b3d72773469c8",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/misc.py": {
+      "hash": "f41ce493db6ef3c5",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/modify.py": {
+      "hash": "62bda8077827fc12",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/nav.py": {
+      "hash": "3b16a19224e382f3",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/packer.py": {
+      "hash": "f32d68f26f1abbd2",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/patterns.py": {
+      "hash": "011c301c3f06fb9d",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/project.py": {
+      "hash": "727b61bdcfbb2826",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/protocol.py": {
+      "hash": "ebfa47cd8508776e",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/search/__init__.py": {
+      "hash": "95636c2d06d0dd8d",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/segments.py": {
+      "hash": "e4f7a54b6a8a1408",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/stack_analysis.py": {
+      "hash": "1f4edcb7e9e2a1b7",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/string_ops.py": {
+      "hash": "eafd188d0ba3d08b",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/struct_recover.py": {
+      "hash": "857ac005459fd5b1",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/summarize.py": {
+      "hash": "6dec1924d3f7deb6",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/symbols.py": {
+      "hash": "18c65dd8d4c88df2",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/taint.py": {
+      "hash": "60b507b894d406f6",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/trace_analysis.py": {
+      "hash": "9e0887b071cbb23b",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/types.py": {
+      "hash": "64e512ac19655bbf",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/wiki.py": {
+      "hash": "c949fe5cd55ea569",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/xref_analysis.py": {
+      "hash": "ca0cba697ad628f0",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/ida_mcp/tools/yara_hunt.py": {
+      "hash": "687dbcff526ea912",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/host/server/tool_registry.py": {
+      "hash": "46bf8bbb35ef6613",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/host/schemas_data.py": {
+      "hash": "beb5c614fed4e48b",
+      "last_verified": "2026-07-06"
+    },
+    "src/ida_pro_mcp/host/server/server_dispatch.py": {
+      "hash": "e5cc667af43826e9",
+      "last_verified": "2026-07-06"
+    }
+  }
+}

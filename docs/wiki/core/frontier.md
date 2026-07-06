@@ -118,5 +118,5 @@ The LLM doesn't need to read 2000 functions. It reads 50, labels them, and the e
 
 - Functions must be indexed in the FunctionEmbeddingIndex (`<idb>.embeddings.db`)
 - Indexing happens automatically when `code(action='decompile')` or `code(action='smart_decompile')` is called
-- Or run `schemaboot(action='ingest')` to batch-index all functions
+- Or run `intelligence(action='index_fast')` to build the embedding index
 - The bge-code-v1 model must be available (configured via `IDA_MCP_EMBEDDER_*` env vars)

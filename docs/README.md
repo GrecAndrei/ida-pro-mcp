@@ -9,7 +9,6 @@ This folder is the canonical documentation source for `ida-pro-mcp`.
 - `POLICY.md` — governance policy reference
 - `TECHNICAL_REFERENCE.md` — implementation-level architecture and runtime details
 - `TOOLS_REFERENCE.md` — generated tool/action/argument reference from live schemas
-- `design/CAPSULES.md` — experimental Sideband capsule architecture
 - `wiki/` — in-tool documentation consumed by the `wiki` MCP tool
   - `wiki/QuickStart.md` — concise operational quickstart
   - `wiki/INDEX.md` — generated index of available wiki topics

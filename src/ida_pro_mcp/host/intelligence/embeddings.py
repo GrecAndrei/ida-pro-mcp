@@ -405,7 +405,7 @@ class FunctionEmbeddingIndex:
         return out
 
     def recent_functions(self, limit: int = 64) -> list[dict[str, Any]]:
-        """Return most recently indexed function refs for capsule snapshots."""
+        """Return most recently indexed function refs for state tracking."""
         rows: list[dict[str, Any]] = []
         try:
             with self._conn() as conn:
@@ -430,14 +430,8 @@ class FunctionEmbeddingIndex:
             return []
         return rows
 
-    def capsule_state(
-        self,
-        *,
-        anchor_metadata: dict[str, Any] | None = None,
-        thresholds: dict[str, Any] | None = None,
-        recent_limit: int = 64,
-    ) -> dict[str, Any]:
-        """Build a capsule-ready embedding state payload."""
+    def build_embedding_state_payload(self) -> dict[str, Any]:
+        """Build an embedding state payload."""
         meta = self.metadata()
         model_head = str(meta.get("model_sha256_head") or "")
         index_metadata = {

@@ -244,7 +244,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         if not isinstance(payload, dict) or is_error_result(payload):
             return
         if tool_name in {"session", "blackboard", "batch", "truncation", "wiki",
-                         "predictor", "workflow"}:
+                         "workflow"}:
             return
 
         try:
@@ -826,7 +826,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             if self.enable_response_enrichment:
                 try:
                     if isinstance(compacted, dict) and addr:
-                        similar = self._exec("agent", action="cfg_similar", addr=addr, top_k=5)
+                        similar = self._exec("intelligence", action="similar_functions", addr=addr)
                         if isinstance(similar, dict) and similar.get("ok"):
                             compacted.setdefault("similar_functions", similar.get("results") or [])
                 except Exception:

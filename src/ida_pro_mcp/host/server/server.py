@@ -56,7 +56,6 @@ from .server_batch import BackgroundMixin  # noqa: E402
 from .server_blackboard import ServerBlackboardMixin  # noqa: E402
 from .server_dispatch import ServerDispatchMixin  # noqa: E402
 from .server_multi_session import ServerMultiSessionMixin  # noqa: E402
-from .server_predictor import ServerPredictorMixin  # noqa: E402
 from .server_response import ServerResponseMixin  # noqa: E402
 from .server_runtime import ServerRuntimeMixin  # noqa: E402
 from .server_semantic import ServerSemanticMixin  # noqa: E402
@@ -77,7 +76,6 @@ class IDAMCPServer(
     ServerWikiMixin,
     ServerThreatHuntMixin,
     ServerBlackboardMixin,
-    ServerPredictorMixin,
     ServerWorkflowMixin,
     ServerMultiSessionMixin,
     ServerRuntimeMixin,
@@ -328,7 +326,6 @@ class IDAMCPServer(
         self._session_macros: dict[str, dict[str, Any]] = {}
         self.current_session = None
         self.session_runtimes = {}
-        self._session_capsules: dict[str, str] = {}
         self._runtime_lock = threading.RLock()
         self._session_startup_locks: dict[str, threading.Lock] = {}
         self._semantic_index_lock = threading.RLock()

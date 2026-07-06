@@ -270,9 +270,9 @@ class _BackgroundCrawler:
         findings = []
         quick = {}
         try:
-            try: from .agent import agent as _agent_tool  # type: ignore
-            except ImportError: from agent import agent as _agent_tool  # type: ignore[import-not-found]
-            quick = _agent_tool(action="quick", addr=addr_str)
+            try: from .code import code as _code_tool  # type: ignore
+            except ImportError: from code import code as _code_tool  # type: ignore[import-not-found]
+            quick = _code_tool(action="smart_decompile", addr=addr_str)
             findings = quick.get("findings") if isinstance(quick, dict) else []
             if not isinstance(findings, list):
                 findings = []

@@ -28,13 +28,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "varargs", "struct_return", "tail_calls",
         "prologue", "epilogue", "abi_violations",
     ],
-    "agent": [
-        "analyze_function", "explore_address", "find_references",
-        "search_all", "search_structs", "context_pack", "quick",
-        "rename_suggestions", "batch_context", "similar",
-        "bridge_query", "reflect", "cluster", "fingerprint",
-        "cfg_encode", "cfg_similar", "cfg_stats",
-    ],
+
     "analysis": [
         "get_options", "set_options", "set_processor",
         "set_loader_options", "set_architecture", "reanalyze",
@@ -82,7 +76,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "cfg_analysis": ["complexity", "loops", "branches", "paths", "dominators", "post_dominators", "back_edges", "natural_loops", "irreducible", "flatten_detect"],
     "classify": ["function", "binary", "all_functions", "library_code", "wrappers", "callbacks", "initializers", "error_handlers", "hot_functions", "orphans", "induce_schema", "anchor_coverage"],
     "code": ["smart_decompile", "decompile", "decompile_all", "disasm", "decompile_chain", "semantic_decompile", "diff_functions", "xrefs_to", "xrefs_from", "xrefs_to_field", "callees", "callers", "blocks", "callgraph", "find_paths", "strings_in_func", "decomp_dataflow", "export", "explain"],
-    "colorize": ["set_func", "set_range", "set_insn", "get", "clear", "palette", "highlight_pattern"],
+
     "compare": ["functions", "blocks", "apis", "strings", "constants", "structure", "semantics", "batch_compare", "find_clones", "changelog"],
     "coverage": ["import_drcov", "import_lighthouse", "highlight", "report", "uncovered", "filter", "function_coverage", "gaps", "compare", "merge"],
     "crypto_id": ["identify", "constants", "encoding", "checksums", "entropy_analysis", "aes_ni"],
@@ -112,19 +106,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "semantic_search", "blackboard_search", "export_index_summary",
     ],
     "knowledge": ["chip_identify", "symbol_lookup", "import_symbols", "export_session", "chip_families"],
-    "llm_helpers": [
-        "bootstrap", "context_window", "function_digest", "binary_digest",
-        "explain_address", "suggest_next", "progress_report", "focus_area",
-        "question_answer", "guided_analysis", "cheatsheet", "compact", "enrich",
-        "intent_tool_compiler", "adaptive_query_planner",
-        "question_type_router",
-        "behavioral_signature_search", "cross_artifact_correlation_search",
-        "path_constrained_search", "argument_semantics_search",
-        "decompile_disasm_consistency_search",
-        "function_role_classifier", "global_state_influence_mapper",
-        "api_contract_extractor", "interprocedural_data_lineage_graph",
-        "semantic_diff_explainer", "dangerous_pattern_explainer",
-    ],
+
     "lumina": ["pull", "push", "status", "history", "search", "get_metadata"],
     "memory": ["read", "write", "hexdump", "search", "compare", "pointers", "find_pointers", "entropy", "strings", "struct_walk", "histogram"],
     "microcode": ["get", "blocks", "instructions", "def_use_graph"],
@@ -133,10 +115,10 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "nav": ["goto", "cursor", "interesting", "semantic_goto"],
     "patterns": ["generate", "match", "list_sigs", "apply_sig", "create_sig", "matched", "yara_from_func", "flirt_generate", "match_yara"],
     "packer": ["detect", "profile", "guide", "status", "script"],
-    "predictor": ["suggest_next_tool", "detect_stuck", "suggest_focus", "suggest_next_address", "risk_of_stall", "recommend_bundle"],
+
     "project": ["save", "close", "open", "load_binary", "list_recent", "get_cwd", "set_cwd", "list_dir", "exists", "evidence_graph", "knowledge_merge", "confidence_model", "replay_pipeline", "hypothesis_tracker", "temporal_reasoning", "semantic_artifact_diff", "ai_governance", "knowledge_debt", "casefile_export"],
     "protocol": ["detect", "parsers", "serializers", "handlers", "endpoints", "tls_config", "socket_flow", "packet_struct", "magic_numbers", "state_machine", "reconstruct", "trace_handler", "export_spec"],
-    "query": ["data", "search", "idb", "code", "types", "imports_deep", "symbols", "patterns", "nl", "nl_batch"],
+
     "search": [
         "nl", "behavior", "find", "semantic", "smart_bundle", "api",
         "decompiled", "structured", "vulnerable", "constants",

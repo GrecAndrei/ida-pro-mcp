@@ -41,7 +41,7 @@ LONG_RUNNING_ACTIONS: set[tuple[str, str]] = {
     # background — long-poll tasks
     ("background", "wait"),
     # agent — full-program algorithmic analysis
-    ("agent", "analyze_function"),
+
     # summarize — full-binary summary walks
     ("summarize", "binary"),
     ("summarize", "statistics"),
@@ -1409,9 +1409,6 @@ class ServerDispatchMixin:
 
             if tool_name == "threat_hunt":
                 return self._handle_threat_hunt(args)
-
-            if tool_name == "predictor":
-                return self._handle_predictor(args)
 
             if tool_name == "workflow":
                 return self._handle_workflow(args)

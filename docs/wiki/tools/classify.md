@@ -27,5 +27,5 @@ Classifies functions and binaries by behavior using zero-shot ML (bge-code-v1) i
 
 ## Notes
 - `function` uses BehaviorClassifier (bge-code-v1 zero-shot) as the primary ranking signal.
-- `induce_schema` produces structured schemas consumed by `schemaboot` for semantic indexing and pre-filtering.
+- `induce_schema` produces structured attribute-value schemas for function classification.
 - Batch actions (`all_functions`, `library_code`, etc.) support `offset`/`count` pagination.

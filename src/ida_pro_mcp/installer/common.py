@@ -24,7 +24,6 @@ class InstallerOptions:
     install_llama_server: bool = False
     embedder_doctor: bool = False
     setup_embedder: bool = False
-    capsule_path: Path | None = None
     only: set[str] = field(default_factory=set)
     install_root: Path | None = None
     source_root: Path | None = None
