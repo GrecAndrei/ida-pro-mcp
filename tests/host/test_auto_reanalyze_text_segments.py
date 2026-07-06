@@ -18,9 +18,9 @@ The fix:
    before/after coverage so the caller can see the upgrade.
 2. ``_ensure_entry_point_functions`` creates functions for any ELF
    entry point the auto-analyzer missed (e.g. JNI exports).
-3. ``analysis(action='wait')`` now reports ``coverage`` and a
-   ``coverage_failed`` boolean so the host/MCP caller can detect
-   the failure and trigger a reanalysis.
+3. ``analysis(action='state')`` reports ``analysis_complete`` so
+   the host/MCP caller can detect incomplete analysis and trigger
+   a reanalysis.
 
 These tests are unit tests with the IDA SDK mocked out — no real IDA
 process required. They pin the contract for ``.text`` reanalysis.

@@ -58,9 +58,9 @@ def test_long_running_actions_constant_exists_at_module_level():
     assert src.index("LONG_RUNNING_ACTIONS:") < src.index("class ServerDispatchMixin")
 
 
-def test_long_running_actions_includes_analysis_wait():
+def test_long_running_actions_includes_analysis_analyze():
     src = _read(DISPATCH)
-    assert '("analysis", "wait")' in src
+    assert '("analysis", "analyze")' in src
 
 
 def test_long_running_actions_includes_summarize_binary():
@@ -219,13 +219,13 @@ def test_watchdog_detail_includes_elapsed_and_cap():
 # ---------------------------------------------------------------------------
 
 
-def test_analysis_wait_is_the_canonical_hang_tuple():
-    """The exact (analysis, wait) tuple the user originally worried
-    about must be present in the LONG_RUNNING_ACTIONS whitelist —
-    if a future refactor drops it, this test fires.
+def test_analysis_analyze_is_the_canonical_hang_tuple():
+    """The (analysis, analyze) tuple must be present in the
+    LONG_RUNNING_ACTIONS whitelist — if a future refactor drops it,
+    this test fires.
     """
     mod = _import("ida_pro_mcp.host.server.server_dispatch")
-    assert ("analysis", "wait") in mod.LONG_RUNNING_ACTIONS
+    assert ("analysis", "analyze") in mod.LONG_RUNNING_ACTIONS
 
 
 def test_call_tool_uses_helper_not_local_constant():

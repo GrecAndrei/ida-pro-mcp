@@ -38,7 +38,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "analysis": [
         "get_options", "set_options", "set_processor",
         "set_loader_options", "set_architecture", "reanalyze",
-        "run", "analyze", "wait",
+        "run", "analyze", "state",
     ],
     "annotation": [
         "auto_comment", "auto_comment_function", "label_loops",

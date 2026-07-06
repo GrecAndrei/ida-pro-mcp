@@ -329,10 +329,45 @@ def make_error(
     return result
 
 
+def _sanitize_exception_message(e: Exception) -> str:
+    """Translate common Python exceptions into user-facing messages.
+
+    Prevents raw tracebacks like "'>' not supported between instances of
+    'str' and 'int'" from leaking to MCP clients.
+    """
+    tn = type(e).__name__
+    raw = str(e)
+    if tn == "TypeError":
+        # Common JSON-RPC coercion failures
+        if "not supported between instances" in raw:
+            return ("Type mismatch in parameter values (string vs int). "
+                    "This is usually a JSON-RPC serialization issue — try again.")
+        if "missing" in raw and "positional argument" in raw:
+            return f"Missing required parameter: {raw}"
+        if "unexpected keyword argument" in raw:
+            return raw  # already user-friendly
+    elif tn == "AttributeError":
+        if "has no attribute" in raw:
+            # e.g. module 'ida_nalt' has no attribute 'array_parameters'
+            return f"IDA API not available in this version: {raw}"
+    elif tn == "KeyError":
+        return f"Key not found: {raw}"
+    elif tn == "ValueError":
+        return raw  # usually already descriptive
+    elif tn == "OverflowError":
+        return f"Value out of range: {raw}"
+    return raw
+
+
 def handle_error(e: Exception, context: str = None) -> Dict[str, Any]:
-    """Standardized error formatter for tool exceptions."""
+    """Standardized error formatter for tool exceptions.
+
+    Returns a user-facing message instead of a raw Python traceback.
+    The full traceback is preserved only in debug details.
+    """
     trace = traceback.format_exc()
-    msg = f"[{context}] {str(e)}" if context else str(e)
+    raw_msg = _sanitize_exception_message(e)
+    msg = f"[{context}] {raw_msg}" if context else raw_msg
     return make_error(MCPError.UNKNOWN, msg, details={"traceback": trace})
 
 # ============================================================================

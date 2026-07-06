@@ -733,10 +733,27 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         out["cross_session_imported"] = int(cross_session_imported)
 
         # Spawn idat and wait for the IDB so the caller gets a usable
-        # session on the first call. Previously _session_action_create
-        # returned immediately with idb_exists=false and the LLM had to
-        # discover + re-trigger analysis.
+        # session on the first call.
         self._ensure_runtime_and_idb(self.current_session)
+
+        # Check analysis state via lightweight RPC (always, not blocking)
+        if out.get("idb_exists"):
+            try:
+                runtime = self.session_runtimes.get(self.current_session.session_id)
+                if runtime and self._runtime_alive(runtime):
+                    port = runtime.get("port")
+                    if isinstance(port, int) and port > 0:
+                        state_res = self._send_rpc_raw(
+                            {"tool": "analysis", "args": {"action": "state"}},
+                            port,
+                            recv_timeout=10,
+                        )
+                        if isinstance(state_res, dict) and "error" not in state_res:
+                            out["analysis_complete"] = state_res.get("analysis_complete", True)
+                            out["analysis_functions"] = state_res.get("functions", -1)
+            except Exception:
+                pass
+
         # Refresh the snapshot with idb_exists etc. after wait
         out["session"] = self.current_session.to_dict()
         if out["session"].get("idb_exists"):

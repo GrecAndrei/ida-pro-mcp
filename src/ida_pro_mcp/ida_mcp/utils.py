@@ -492,7 +492,14 @@ def normalize_list_input(value: list | str) -> list:
     return [value]
 
 def resolve_symbol(query: str) -> dict:
-    """Resolve an address or name to a canonical {addr,name,is_func} dict."""
+    """Resolve an address or name to a canonical {addr,name,is_func} dict.
+
+    Resolution order:
+    1. Address literal (hex/decimal)
+    2. Exact symbol name (idc.get_name_ea_simple)
+    3. Demangled C++ name (ida_name.get_ea with MNG_LONG_FORM)
+    4. Gives up — caller falls back to pattern matching
+    """
     if query is None:
         raise IDAError("query required")
     # Try address forms first
@@ -504,11 +511,26 @@ def resolve_symbol(query: str) -> dict:
             return {"addr": hex(ea), "name": name, "is_func": func is not None}
     except Exception:
         pass
-    # Try as name
+    # Try as exact name
     ea = idc.get_name_ea_simple(str(query))
     if ea != idaapi.BADADDR:
         func = idaapi.get_func(ea)
         return {"addr": hex(ea), "name": str(query), "is_func": func is not None}
+    # Try demangled C++ name (e.g. _ZTVN7android14SystemKloProxyE)
+    try:
+        import ida_name
+        ea = ida_name.get_ea(idaapi.BADADDR, str(query), ida_name.MNG_LONG_FORM)
+        if ea != idaapi.BADADDR:
+            func = idaapi.get_func(ea)
+            return {"addr": hex(ea), "name": str(query), "is_func": func is not None}
+    except Exception:
+        pass
+    # Try scanning all names for an exact match (including renamed symbols)
+    clean = str(query).strip()
+    for ea, name in idautils.Names():
+        if name == clean:
+            func = idaapi.get_func(ea)
+            return {"addr": hex(ea), "name": name, "is_func": func is not None}
     raise IDAError(f"Not found: {query}")
 
 

@@ -44,8 +44,8 @@ def _safe_infer_arch(binary_path: str) -> dict:
 @tool
 @idawrite
 def analysis(
-    action: Annotated[Literal["get_options", "set_options", "set_processor", "set_loader_options", "set_architecture", "reanalyze", "run", "analyze", "wait"],
-                      "Action: get_options|set_options|set_processor|set_loader_options|set_architecture|reanalyze|wait"],
+    action: Annotated[Literal["get_options", "set_options", "set_processor", "set_loader_options", "set_architecture", "reanalyze", "run", "analyze", "state"],
+                      "Action: get_options|set_options|set_processor|set_loader_options|set_architecture|reanalyze|analyze|state"],
     options: Annotated[Optional[dict], "Options dict for set_options"] = None,
     processor: Annotated[Optional[str], "Processor name for set_processor"] = None,
     flags: Annotated[Optional[int], "Processor flags (idaapi.SETPROC_*)"] = None,
@@ -542,7 +542,7 @@ def analysis(
                 "range_source": range_label,
                 "analysis_complete": analysis_ok,
                 "functions": func_count,
-                "note": "Analysis scheduled (non-blocking). Poll with analysis(action='wait', timeout=30) or session(action='status') until analysis_complete=true.",
+                "note": "Analysis scheduled (non-blocking). Check session(action='status') for analysis state.",
                 **boot,
             }
             if blocking:
@@ -552,14 +552,8 @@ def analysis(
                 result["note"] = "Analysis ran blocking. Ready to query."
             return result
 
-        if action == "wait":
-            # Since idc.auto_wait() runs before the server starts, analysis is
-            # always complete by the time we get here. Just report the state.
-            #
-            # In headless -A mode auto_is_ok() returns False even when analysis
-            # has finished, because there's no UI to "ok" against. So we use
-            # get_auto_state() (AU_NONE == 0) as the authoritative signal, and
-            # fall back to function/string counts as a stability check.
+        if action == "state":
+            # Lightweight read-only check of analysis progress.
             analysis_ok = True
             try:
                 if hasattr(idaapi, "get_auto_state"):
@@ -570,98 +564,17 @@ def analysis(
                     analysis_ok = bool(idaapi.auto_is_ok())
             except Exception:
                 analysis_ok = True
+            func_count = -1
             try:
                 func_count = idaapi.get_func_qty() if hasattr(idaapi, "get_func_qty") else -1
             except Exception:
-                func_count = -1
-            try:
-                string_count = idaapi.get_strlist_qty() if hasattr(idaapi, "get_strlist_qty") else -1
-            except Exception:
-                string_count = -1
-            # Coverage diagnostic: "auto-analysis finished" is meaningless if
-            # the loader never enqueued work for .text. We surface the
-            # defined/total code bytes so callers can detect the failure mode
-            # where the auto queue is empty but the code section is
-            # completely unanalyzed (defined=0 over a non-trivial total).
-            coverage = {"defined_code_bytes": 0, "total_code_bytes": 0,
-                        "coverage_pct": 0.0, "code_heads": 0}
-            try:
-                total = 0
-                defined = 0
-                heads = 0
-                for seg_ea in idautils.Segments():
-                    seg = idaapi.getseg(seg_ea)
-                    if not seg or not (seg.perm & idaapi.SEGPERM_EXEC):
-                        continue
-                    s = int(seg.start_ea)
-                    e = int(seg.end_ea)
-                    if e - s < 0x100:
-                        continue
-                    name = ""
-                    try:
-                        name = ida_segment.get_segm_name(seg)
-                    except Exception:
-                        name = ""
-                    if name in _SKIP_SEGMENT_NAMES:
-                        continue
-                    total += e - s
-                    head = s
-                    while head < e:
-                        try:
-                            f = ida_bytes.get_flags(head)
-                            if ida_bytes.is_code(f):
-                                defined += int(idc.get_item_size(head))
-                                heads += 1
-                        except Exception:
-                            pass
-                        try:
-                            nxt = idc.next_head(head, e)
-                        except Exception:
-                            break
-                        if nxt == idaapi.BADADDR or nxt <= head:
-                            break
-                        head = int(nxt)
-                coverage = {
-                    "defined_code_bytes": defined,
-                    "total_code_bytes": total,
-                    "coverage_pct": round(defined / total * 100, 2) if total else 0.0,
-                    "code_heads": heads,
-                }
-            except Exception:
                 pass
-            # Heuristic: if the queue is empty and we have >= 32KB of
-            # unanalyzed executable code, the loader is the most likely
-            # culprit. Surface a clear note so the caller can decide to
-            # run ``analysis(action='analyze', blocking=True)`` to trigger
-            # a targeted reanalysis.
-            coverage_failed = (
-                analysis_ok
-                and coverage["total_code_bytes"] >= 0x8000
-                and coverage["defined_code_bytes"] == 0
-            )
-            note = (
-                "Analysis complete. Safe to call code/data/funcs tools."
-                if analysis_ok else
-                "Analysis may still be running. Try again shortly."
-            )
-            if coverage_failed:
-                note = (
-                    "Auto-analysis queue is empty but the code section is "
-                    "completely unanalyzed. Run analysis(action='analyze', "
-                    "blocking=True) to schedule a targeted reanalysis over "
-                    "the executable segments."
-                )
-            result = {
+            return {
                 "ok": True,
                 "analysis_complete": analysis_ok,
                 "functions": func_count,
-                "strings": string_count,
-                "seconds_waited": 0.0,
-                "coverage": coverage,
-                "coverage_failed": coverage_failed,
-                "note": note,
+                "note": "Analysis complete." if analysis_ok else "Analysis still running.",
             }
-            return result
 
         return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:

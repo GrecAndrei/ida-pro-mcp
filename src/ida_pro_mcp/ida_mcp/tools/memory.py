@@ -109,6 +109,17 @@ def memory(
 
 def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> dict:
     try:
+        # Coerce numeric params that may arrive as strings from JSON-RPC
+        try:
+            size = int(size)
+        except (TypeError, ValueError):
+            return make_error(MCPError.INVALID_ARGS, f"size must be an integer, got {type(size).__name__}",
+                              hint="Provide size as an integer, e.g. size=16")
+        try:
+            depth = int(depth)
+        except (TypeError, ValueError):
+            depth = 2
+
         ea = None
         if addr is not None and str(addr).strip() != "":
             ea, error = validate_addr(str(addr))

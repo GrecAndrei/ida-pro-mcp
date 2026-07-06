@@ -384,6 +384,8 @@ def data(
                         result["func_size"] = hex(func.end_ea - func.start_ea)
                     else:
                         result["is_function"] = False
+                result["exact_match"] = True
+                result["query"] = query
                 return {"ok": True, **result}
             except Exception as e:
                 # Fallback: search names with smart pattern matching when exact resolution fails.
