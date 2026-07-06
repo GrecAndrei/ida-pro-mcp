@@ -850,10 +850,17 @@ class ContextAssembler:
             idx = self._get_index(idb_path)
             if idx is None or idx.size == 0:
                 return []
-            eas: list[int] = []
-            for a in addresses[:limit]:
-                with contextlib.suppress(ValueError, TypeError):
-                    eas.append(_helpers.coerce_int(a))
+            # The ea column stores hex strings like "0x401000", so
+            # convert inputs to hex strings to match exactly.
+            def _to_hex(a: str) -> str | None:
+                try:
+                    n = int(a, 0)
+                    return hex(n)
+                except (ValueError, TypeError):
+                    return None
+
+            eas = [_to_hex(a) for a in addresses[:limit]]
+            eas = [a for a in eas if a is not None]
             if not eas:
                 return []
             # Query embedding index for structural metadata

@@ -126,7 +126,7 @@ class TestLlamaEmbedResponseHandling(unittest.TestCase):
         e = self._make_embedder()
         e._max_rpc_failures = 3
 
-        with patch("urllib.request.urlopen", side_effect=Exception("connection refused")):
+        with patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
             vec = e._llama_embed("test code")
 
         self.assertIsNone(vec)
@@ -138,7 +138,7 @@ class TestLlamaEmbedResponseHandling(unittest.TestCase):
         e = self._make_embedder()
         e._max_rpc_failures = 2
 
-        with patch("urllib.request.urlopen", side_effect=Exception("fail")):
+        with patch("urllib.request.urlopen", side_effect=OSError("fail")):
             e._llama_embed("call 1")
             e._llama_embed("call 2")
 
@@ -219,6 +219,141 @@ class TestLlamaEmbedBatchResponseHandling(unittest.TestCase):
             result = e._llama_embed_batch(["a", "b", "c"])
 
         self.assertIsNone(result)
+
+
+class TestNaNHandling(unittest.TestCase):
+    """Test that NaN values in embeddings don't propagate."""
+
+    def _make_embedder(self):
+        e = BgeCodeEmbedder.__new__(BgeCodeEmbedder)
+        e._port = 12345
+        e._ready = True
+        e._use_llama = True
+        e._consecutive_rpc_failures = 0
+        e._max_rpc_failures = 2
+        return e
+
+    def test_nan_components_filtered(self):
+        """NaN components should be filtered out before normalization."""
+        e = self._make_embedder()
+        mock_response = json.dumps([
+            {"index": 0, "embedding": [[float("nan"), 3.0, 4.0, float("nan")]]}
+        ]).encode()
+
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_ctx = MagicMock()
+            mock_ctx.__enter__ = MagicMock(return_value=mock_ctx)
+            mock_ctx.__exit__ = MagicMock(return_value=False)
+            mock_ctx.read.return_value = mock_response
+            mock_urlopen.return_value = mock_ctx
+
+            vec = e._llama_embed("test code")
+
+        self.assertIsNotNone(vec)
+        # Normalized [3.0, 4.0] -> [0.6, 0.8]
+        self.assertEqual(len(vec), 2)
+        self.assertAlmostEqual(vec[0], 0.6, places=5)
+        self.assertAlmostEqual(vec[1], 0.8, places=5)
+
+    def test_all_nan_returns_unit_vector_of_zeros(self):
+        """If all components are NaN, should not crash."""
+        e = self._make_embedder()
+        mock_response = json.dumps([
+            {"index": 0, "embedding": [[float("nan"), float("nan")]]}
+        ]).encode()
+
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_ctx = MagicMock()
+            mock_ctx.__enter__ = MagicMock(return_value=mock_ctx)
+            mock_ctx.__exit__ = MagicMock(return_value=False)
+            mock_ctx.read.return_value = mock_response
+            mock_urlopen.return_value = mock_ctx
+
+            vec = e._llama_embed("test code")
+
+        # All NaN filtered -> no components -> norm falls back to 1.0 -> empty vec
+        self.assertIsNotNone(vec)
+        self.assertEqual(vec, [])
+
+    def test_finite_values_work_normally(self):
+        """Normal finite values should still work after NaN guard."""
+        e = self._make_embedder()
+        mock_response = json.dumps([
+            {"index": 0, "embedding": [[0.0, 3.0, 4.0]]}
+        ]).encode()
+
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_ctx = MagicMock()
+            mock_ctx.__enter__ = MagicMock(return_value=mock_ctx)
+            mock_ctx.__exit__ = MagicMock(return_value=False)
+            mock_ctx.read.return_value = mock_response
+            mock_urlopen.return_value = mock_ctx
+
+            vec = e._llama_embed("test code")
+
+        self.assertIsNotNone(vec)
+        self.assertEqual(len(vec), 3)
+        norm = math.sqrt(sum(x * x for x in vec))
+        self.assertAlmostEqual(norm, 1.0, places=5)
+
+
+class TestNarrowExceptions(unittest.TestCase):
+    """Test that only network/data exceptions are caught, not programming errors."""
+
+    def _make_embedder(self):
+        e = BgeCodeEmbedder.__new__(BgeCodeEmbedder)
+        e._port = 12345
+        e._ready = True
+        e._use_llama = True
+        e._consecutive_rpc_failures = 0
+        e._max_rpc_failures = 2
+        return e
+
+    def test_keyboard_interrupt_not_swallowed(self):
+        """KeyboardInterrupt should propagate, not be counted as RPC failure."""
+        e = self._make_embedder()
+
+        with patch("urllib.request.urlopen", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                e._llama_embed("test")
+
+        self.assertEqual(e._consecutive_rpc_failures, 0)
+
+    def test_system_exit_not_swallowed(self):
+        """SystemExit should propagate."""
+        e = self._make_embedder()
+
+        with patch("urllib.request.urlopen", side_effect=SystemExit(1)):
+            with self.assertRaises(SystemExit):
+                e._llama_embed("test")
+
+    def test_os_error_is_caught(self):
+        """OSError (connection refused etc) should be caught."""
+        e = self._make_embedder()
+
+        with patch("urllib.request.urlopen", side_effect=OSError("refused")):
+            result = e._llama_embed("test")
+
+        self.assertIsNone(result)
+        self.assertEqual(e._consecutive_rpc_failures, 1)
+
+    def test_json_decode_error_is_caught(self):
+        """Bad JSON response should be caught."""
+        e = self._make_embedder()
+
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_ctx = MagicMock()
+            mock_ctx.__enter__ = MagicMock(return_value=mock_ctx)
+            mock_ctx.__exit__ = MagicMock(return_value=False)
+            mock_ctx.read.return_value = b"not json"
+            mock_ctx.__enter__ = MagicMock(return_value=mock_ctx)
+            mock_ctx.__exit__ = MagicMock(return_value=False)
+            mock_urlopen.return_value = mock_ctx
+
+            result = e._llama_embed("test")
+
+        self.assertIsNone(result)
+        self.assertEqual(e._consecutive_rpc_failures, 1)
 
 
 if __name__ == "__main__":

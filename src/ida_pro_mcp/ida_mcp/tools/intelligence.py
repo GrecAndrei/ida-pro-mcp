@@ -850,6 +850,10 @@ def intelligence(
             failures = 0
             skipped = 0
             for fea in idautils.Functions():
+                if limit and count >= limit:
+                    break
+                try:
+                    func = idaapi.get_func(fea)
                     if not func:
                         failures += 1
                         continue

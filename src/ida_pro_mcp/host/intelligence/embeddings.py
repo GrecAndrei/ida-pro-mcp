@@ -451,9 +451,9 @@ class FunctionEmbeddingIndex:
             "model_hash": model_head,
             "embedding_dim": int(meta.get("embedding_dim") or getattr(self._embedder, "dim", 0) or 0),
             "index_metadata": index_metadata,
-            "anchor_metadata": anchor_metadata or {},
-            "last_indexed_functions": self.recent_functions(limit=recent_limit),
-            "thresholds": thresholds or {},
+             "anchor_metadata": {},
+             "last_indexed_functions": self.recent_functions(limit=64),
+             "thresholds": {},
             "created_at": str(meta.get("created_at") or _now_iso()),
             "updated_at": _now_iso(),
         }
@@ -643,7 +643,7 @@ class FunctionEmbeddingIndex:
         except Exception:
             pass
 
-    def index_async(self, func_ea: str, name: str, pseudocode: str) -> None:
+    def index_async(self, func_ea: str, name: str, pseudocode: str, metadata: dict | None = None) -> None:
         """Non-blocking index: fire-and-forget in background thread."""
         ph = self._phash(pseudocode)
         signature_text = _extract_signature_text(pseudocode)
@@ -662,7 +662,7 @@ class FunctionEmbeddingIndex:
                         return
             except Exception:
                 pass
-        t = threading.Thread(target=self.index, args=(func_ea, name, pseudocode), daemon=True)
+        t = threading.Thread(target=self.index, args=(func_ea, name, pseudocode, metadata), daemon=True)
         t.start()
 
     def similar_vec(

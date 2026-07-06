@@ -480,11 +480,29 @@ def _find_model() -> str:
 
 
 EMBED_DIM = 1536          # bge-code-v1 embedding dimension
-EMBED_CTX = int(os.environ.get("IDA_MCP_EMBED_CTX", "2048"))
-EMBED_THREADS = int(os.environ.get("IDA_MCP_EMBED_THREADS",
-                                    str(max(2, (os.cpu_count() or 4) // 2))))
-EMBED_REQUEST_TIMEOUT = float(os.environ.get("IDA_MCP_EMBED_REQUEST_TIMEOUT", "5.0"))
-EMBED_MAX_FAILURES = int(os.environ.get("IDA_MCP_EMBED_MAX_FAILURES", "2"))
+
+
+def _safe_int_env(key: str, default: str) -> int:
+    try:
+        return int(os.environ.get(key, default))
+    except (ValueError, TypeError):
+        return int(default)
+
+
+def _safe_float_env(key: str, default: str) -> float:
+    try:
+        return float(os.environ.get(key, default))
+    except (ValueError, TypeError):
+        return float(default)
+
+
+EMBED_CTX = _safe_int_env("IDA_MCP_EMBED_CTX", "2048")
+EMBED_THREADS = _safe_int_env(
+    "IDA_MCP_EMBED_THREADS",
+    str(max(2, (os.cpu_count() or 4) // 2))
+)
+EMBED_REQUEST_TIMEOUT = _safe_float_env("IDA_MCP_EMBED_REQUEST_TIMEOUT", "5.0")
+EMBED_MAX_FAILURES = _safe_int_env("IDA_MCP_EMBED_MAX_FAILURES", "2")
 EMBED_DISABLED = os.environ.get("IDA_MCP_EMBED_DISABLED", "") in ("1", "true", "yes")
 INTEL_PROFILE = os.environ.get("IDA_MCP_INTEL_PROFILE", "") in ("1", "true", "yes")
 
@@ -611,7 +629,7 @@ class BgeCodeEmbedder:
             elif self._port:
                 try:
                     req = urllib.request.urlopen(f"http://127.0.0.1:{self._port}/health", timeout=2)
-                    server_ready = b'"ok"' in req.read()
+                    _hr = req.read(); server_ready = b'"status":"ok"' in _hr or b'"ok"' in _hr
                     self._ready = server_ready
                 except Exception as exc:
                     server_ready = False
@@ -626,7 +644,7 @@ class BgeCodeEmbedder:
                             req = urllib.request.urlopen(
                                 f"http://127.0.0.1:{lease_port}/health", timeout=2
                             )
-                            if b'"ok"' in req.read():
+                            if b'"status":"ok"' in req.read():
                                 self._port = lease_port
                                 self._ready = True
                                 self._owns_proc = False
@@ -684,7 +702,7 @@ class BgeCodeEmbedder:
                             req = urllib.request.urlopen(
                                 f"http://127.0.0.1:{port}/health", timeout=2
                             )
-                            if b'"ok"' in req.read():
+                            if b'"status":"ok"' in req.read():
                                 self._port = port
                                 self._ready = True
                                 self._owns_proc = False
@@ -752,7 +770,7 @@ class BgeCodeEmbedder:
                     req = urllib.request.urlopen(
                         f"http://127.0.0.1:{self._port}/health", timeout=2
                     )
-                    if b'"ok"' in req.read():
+                    if b'"status":"ok"' in req.read():
                         self._ready = True
                         try:
                             with open(_EMBED_LEASE_FILE, "w", encoding="utf-8") as f:
@@ -823,10 +841,13 @@ class BgeCodeEmbedder:
             vec = self._extract_embedding(item) if item else None
             if vec is None:
                 raise RuntimeError("no embedding in response")
+            vec = [x for x in vec if math.isfinite(x)]
+            if not vec:
+                return []
             norm = math.sqrt(sum(x * x for x in vec)) or 1.0
             self._consecutive_rpc_failures = 0
             return [x / norm for x in vec]
-        except Exception:
+        except ( OSError, ValueError, KeyError, json.JSONDecodeError, RuntimeError ):
             self._consecutive_rpc_failures += 1
             if self._consecutive_rpc_failures >= self._max_rpc_failures:
                 # Transient failure — mark not-ready but allow retry.
@@ -865,11 +886,14 @@ class BgeCodeEmbedder:
                 vec = self._extract_embedding(row) if isinstance(row, dict) else None
                 if vec is None:
                     return None
+                vec = [x for x in vec if math.isfinite(x)]
+                if not vec:
+                    return None
                 norm = math.sqrt(sum(x * x for x in vec)) or 1.0
                 out.append([x / norm for x in vec])
             self._consecutive_rpc_failures = 0
             return out
-        except Exception:
+        except (OSError, ValueError, KeyError, json.JSONDecodeError, RuntimeError):
             self._consecutive_rpc_failures += 1
             if self._consecutive_rpc_failures >= self._max_rpc_failures:
                 self._ready = False
