@@ -1,6 +1,6 @@
 # IDA Pro MCP
 
-> **Work in Progress** — APIs, tools, configuration, and docs may change without notice. Breaking changes between commits are normal. Test coverage is strongest in host-side services and tool-surface layers; integration tests require IDA Pro and are run separately.
+> **Alpha (0.9.x)** — APIs, tools, configuration, and docs may change without notice. Breaking changes between commits are normal. Prefer the Tier A tool surface (`docs/ROADMAP.md`); full tool registry remains for exact-name calls.
 
 Reverse engineering for IDA Pro via the Model Context Protocol.
 
@@ -14,9 +14,11 @@ Two-layer architecture:
 - **Host MCP server** (`ida_pro_mcp.host.server`) — MCP JSON-RPC over stdio. Manages sessions, response compaction, blackboard, intelligence layer, and the TCP bridge to IDA.
 - **IDA runtime bridge** (`server_script.py`) — runs inside `idat`, exposes deterministic IDA SDK calls over a local TCP socket.
 
-Tool implementations live in `src/ida_pro_mcp/ida_mcp/tools/`. Tool count and action lists are generated from schema metadata in `src/ida_pro_mcp/host/schemas_data.py`.
+Tool implementations live in `src/ida_pro_mcp/ida_mcp/tools/`. Tool count and action lists are generated from schema metadata in `src/ida_pro_mcp/host/schemas_data.py`. Default `tools/list` advertises **Tier A** (~17 tools); see `docs/wiki/QuickStart.md`.
 
 This project does **not** run any backend LLM service. Tool execution is deterministic IDA SDK logic plus optional local ML components. Any LLM behavior comes from the MCP client, not from an embedded server-side LLM.
+
+**Contract note (0.9):** unknown tool arguments are rejected with `INVALID_ARGS` (not silently stripped). `blackboard` is the durable analysis notebook; `wiki` is documentation only.
 
 ## Requirements
 

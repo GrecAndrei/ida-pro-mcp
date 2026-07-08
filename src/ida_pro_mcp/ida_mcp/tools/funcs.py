@@ -29,6 +29,78 @@ def _iter_overlapping_functions(start_ea: int, end_ea: int):
         yield fn
 
 
+def _remove_overlapping_functions(start_ea: int, end_ea: int) -> list[dict]:
+    """Delete functions overlapping [start_ea, end_ea). Returns removed entries."""
+    removed = []
+    for overlap in _iter_overlapping_functions(start_ea, end_ea):
+        if overlap.start_ea == start_ea and overlap.end_ea == end_ea:
+            continue
+        ov_name = ida_funcs.get_func_name(overlap.start_ea)
+        if ida_funcs.del_func(overlap.start_ea):
+            removed.append({
+                "addr": hex(overlap.start_ea),
+                "end": hex(overlap.end_ea),
+                "name": ov_name,
+            })
+        else:
+            raise RuntimeError(f"Failed to delete overlapping function at {hex(overlap.start_ea)}")
+    return removed
+
+
+def _ensure_code_at(ea: int) -> bool:
+    """Try to convert bytes at ea to code. Returns True if code exists after attempt."""
+    if ida_bytes.is_code(ida_bytes.get_flags(ea)):
+        return True
+    try:
+        proc = (_inf_procname() or "").lower()
+    except Exception:
+        proc = ""
+    is_arm = "arm" in proc or "aarch" in proc or "thumb" in proc
+    if is_arm:
+        _set_thumb_mode(ea)
+    created = _try_create_insn(ea)
+    if created and ida_bytes.is_code(ida_bytes.get_flags(ea)):
+        return True
+    for carve_size in (16, 64, 256):
+        with contextlib.suppress(Exception):
+            ida_bytes.del_items(ea, ida_bytes.DELIT_SIMPLE, carve_size)
+        with contextlib.suppress(Exception):
+            import ida_auto
+            if hasattr(ida_auto, "auto_make_code"):
+                ida_auto.auto_make_code(ea)
+        if is_arm:
+            _set_thumb_mode(ea)
+        created = _try_create_insn(ea)
+        if created and ida_bytes.is_code(ida_bytes.get_flags(ea)):
+            return True
+    return False
+
+
+def _set_thumb_mode(ea: int) -> None:
+    """Set T=1 segment register for Thumb mode on ARM."""
+    try:
+        sr_auto = getattr(idc, "SR_auto", 2)
+        idc.split_sreg_range(ea, "T", 1, sr_auto)
+    except Exception:
+        try:
+            import ida_segregs
+            ida_segregs.split_sreg_range(ea, "T", 1, 2)
+        except Exception:
+            pass
+
+
+def _try_create_insn(ea: int) -> int:
+    """Try ida_ua.create_insn (IDA 9.x) then fall back to idc.create_insn."""
+    try:
+        import ida_ua
+        result = ida_ua.create_insn(ea)
+        if result:
+            return result
+    except Exception:
+        pass
+    return idc.create_insn(ea)
+
+
 def _collect_callers(func_start_ea: int) -> list[int]:
     callers = set()
     for xref_ea in idautils.CodeRefsTo(func_start_ea, 0):
@@ -122,7 +194,6 @@ def _try_map_raw_runtime_addr(ea: int) -> tuple[Optional[int], Optional[str]]:
     if size <= 0 or start != 0:
         return None, None
 
-    # Common image-base alignments seen in runtime VAs.
     for align in (0x100000, 0x10000, 0x1000):
         base = ea & ~(align - 1)
         off = ea - base
@@ -314,169 +385,73 @@ def _funcs_impl(
                     "note": "Function already exists at this address",
                 }
             if existing:
-                # Address is inside an existing function but not at its start
-                if force:
-                    if not ida_funcs.del_func(existing.start_ea):
-                        return make_error(
-                            MCPError.IDA_ERROR,
-                            f"Failed to delete containing function at {hex(existing.start_ea)}",
-                        )
-                else:
+                if not force:
                     return make_error(
                         MCPError.ADDRESS_INVALID,
                         f"Address {hex(ea)} is inside function {ida_funcs.get_func_name(existing.start_ea)} ({hex(existing.start_ea)}-{hex(existing.end_ea)})",
                         "Delete the existing function first with funcs(action='delete', addr='" + hex(ea) + "') which will delete the containing function, then create the new one",
                     )
-
-            removed_overlaps = []
-            if end_ea is not None and force:
-                # Delete overlapping functions before undefining data/code range.
-                for overlap in _iter_overlapping_functions(ea, end_ea):
-                    if overlap.start_ea == ea and overlap.end_ea == end_ea:
-                        continue
-                    ov_name = ida_funcs.get_func_name(overlap.start_ea)
-                    if ida_funcs.del_func(overlap.start_ea):
-                        removed_overlaps.append(
-                            {
-                                "addr": hex(overlap.start_ea),
-                                "end": hex(overlap.end_ea),
-                                "name": ov_name,
-                            }
-                        )
-                    else:
-                        return make_error(
-                            MCPError.IDA_ERROR,
-                            f"Failed to delete overlapping function at {hex(overlap.start_ea)}",
-                        )
-                ida_bytes.del_items(ea, ida_bytes.DELIT_SIMPLE, end_ea - ea)
-
-            # Ensure code exists at the start address - auto-convert if possible
-            byte_flags = ida_bytes.get_flags(ea)
-            if not ida_bytes.is_code(byte_flags):
-                # Cortex-M/raw blobs commonly need explicit Thumb state before
-                # IDA can decode instruction bytes at vector-handler addresses.
-                try:
-                    proc = (_inf_procname() or "").lower()
-                except Exception:
-                    proc = ""
-                is_arm = "arm" in proc and (idaapi.get_inf_structure().is_32bit() if hasattr(idaapi, "get_inf_structure") else True)
-                if is_arm:
-                    # Set T=1 segment register for Thumb mode (all Cortex-M is Thumb-2)
-                    try:
-                        sr_auto = getattr(idc, "SR_auto", 2)
-                        idc.split_sreg_range(ea, "T", 1, sr_auto)
-                    except Exception:
-                        try:
-                            import ida_segregs
-                            ida_segregs.split_sreg_range(ea, "T", 1, 2)
-                        except Exception:
-                            pass
-
-                # Try ida_ua.create_insn (IDA 9.x) first, fall back to idc.create_insn
-                created = 0
-                try:
-                    import ida_ua
-                    created = ida_ua.create_insn(ea)
-                except Exception:
-                    created = idc.create_insn(ea)
-                if created == 0:
-                    created = idc.create_insn(ea)
-
-                if created == 0 or not ida_bytes.is_code(ida_bytes.get_flags(ea)):
-                    # Raw/firmware regions often need wider undefine + auto-analysis nudges.
-                    converted = False
-                    for carve_size in (16, 64, 256):
-                        with contextlib.suppress(Exception):
-                            ida_bytes.del_items(ea, ida_bytes.DELIT_SIMPLE, carve_size)
-                        try:
-                            import ida_auto
-                            if hasattr(ida_auto, "auto_make_code"):
-                                ida_auto.auto_make_code(ea)
-                        except Exception:
-                            pass
-                        if is_arm:
-                            try:
-                                sr_auto = getattr(idc, "SR_auto", 2)
-                                idc.split_sreg_range(ea, "T", 1, sr_auto)
-                            except Exception:
-                                try:
-                                    import ida_segregs
-                                    ida_segregs.split_sreg_range(ea, "T", 1, 2)
-                                except Exception:
-                                    pass
-                        try:
-                            import ida_ua
-                            created = ida_ua.create_insn(ea)
-                        except Exception:
-                            created = idc.create_insn(ea)
-                        if created == 0:
-                            created = idc.create_insn(ea)
-                        if created != 0 and ida_bytes.is_code(ida_bytes.get_flags(ea)):
-                            converted = True
-                            break
-                    if not converted:
-                        return make_error(
-                            MCPError.ADDRESS_INVALID,
-                            f"Address {hex(ea)} cannot be converted to code",
-                            "Tried carve-and-convert retries (16/64/256 bytes). Bytes may be invalid for current processor; verify architecture or use firmware_view(action='auto_retype'). For ARM Cortex-M firmware, ensure Thumb mode (T=1) is set via seg_reg action.",
-                        )
-
-            if ida_funcs.add_func(ea, end_ea or idaapi.BADADDR):
-                fn = ida_funcs.get_func(ea)
-                if name and not idc.set_name(ea, name, ida_name.SN_FORCE):
+                if not ida_funcs.del_func(existing.start_ea):
                     return make_error(
                         MCPError.IDA_ERROR,
-                        f"Function created at {hex(ea)} but failed to set name '{name}'",
+                        f"Failed to delete containing function at {hex(existing.start_ea)}",
                     )
-                if fn and flags:
-                    fn.flags |= flags
-                    ida_funcs.update_func(fn)
-                # Do NOT call auto_wait() — it blocks IDA's main thread inside
-                # the socket server loop and can crash IDA. Let the idle loop
-                # handle follow-up analysis.
-                fn = ida_funcs.get_func(ea)
-                result = {
-                    "ok": True,
-                    "addr": hex(ea),
-                    "end": hex(fn.end_ea) if fn else (hex(end_ea) if end_ea else None),
-                    "name": ida_funcs.get_func_name(ea) if fn else name,
-                }
-                if remap_note:
-                    result["addr_remap"] = remap_note
-                if removed_overlaps:
-                    result["removed_overlaps"] = removed_overlaps
-                return result
-            if end_ea and hasattr(idaapi, "auto_mark_range"):
+
+            removed_overlaps = []
+            if force:
+                scan_end = end_ea if end_ea is not None else ea + 0x1000
+                try:
+                    removed_overlaps = _remove_overlapping_functions(ea, scan_end)
+                except RuntimeError as e:
+                    return make_error(MCPError.IDA_ERROR, str(e))
+                if end_ea is not None:
+                    ida_bytes.del_items(ea, ida_bytes.DELIT_SIMPLE, end_ea - ea)
+
+            if not _ensure_code_at(ea):
+                return make_error(
+                    MCPError.ADDRESS_INVALID,
+                    f"Address {hex(ea)} cannot be converted to code",
+                    "Tried carve-and-convert retries (16/64/256 bytes). Bytes may be invalid for current processor; verify architecture or use firmware_view(action='auto_retype'). For ARM Cortex-M firmware, ensure Thumb mode (T=1) is set via seg_reg action.",
+                )
+
+            fn = ida_funcs.add_func(ea, end_ea or idaapi.BADADDR)
+            if not fn and end_ea and hasattr(idaapi, "auto_mark_range"):
                 with contextlib.suppress(Exception):
                     idaapi.auto_mark_range(ea, end_ea, idaapi.AU_FINAL)
-                if ida_funcs.add_func(ea, end_ea):
-                    fn = ida_funcs.get_func(ea)
-                    if name and not idc.set_name(ea, name, ida_name.SN_FORCE):
-                        return make_error(
-                            MCPError.IDA_ERROR,
-                            f"Function created at {hex(ea)} but failed to set name '{name}'",
-                        )
-                    if fn and flags:
-                        fn.flags |= flags
-                        ida_funcs.update_func(fn)
-                    result = {
-                        "ok": True,
-                        "addr": hex(ea),
-                        "end": hex(fn.end_ea) if fn else hex(end_ea),
-                        "name": ida_funcs.get_func_name(ea) if fn else name,
-                        "note": "Function created after auto-analysis retry",
-                    }
-                    if remap_note:
-                        result["addr_remap"] = remap_note
-                    if removed_overlaps:
-                        result["removed_overlaps"] = removed_overlaps
-                    return result
-            return make_error(MCPError.IDA_ERROR, f"Failed to create function at {hex(ea)}", "Ensure code exists at the address and there are no overlapping functions. Try specifying an explicit end address.")
+                fn = ida_funcs.add_func(ea, end_ea)
+            if not fn:
+                return make_error(
+                    MCPError.IDA_ERROR,
+                    f"Failed to create function at {hex(ea)}",
+                    "Ensure code exists at the address and there are no overlapping functions. Try specifying an explicit end address.",
+                )
+            if name and not idc.set_name(ea, name, ida_name.SN_FORCE):
+                return make_error(
+                    MCPError.IDA_ERROR,
+                    f"Function created at {hex(ea)} but failed to set name '{name}'",
+                )
+            if flags:
+                fn.flags |= flags
+                ida_funcs.update_func(fn)
+            # Do NOT call auto_wait() — it blocks IDA's main thread inside
+            # the socket server loop and can crash IDA. Let the idle loop
+            # handle follow-up analysis.
+            fn = ida_funcs.get_func(ea)
+            result = {
+                "ok": True,
+                "addr": hex(ea),
+                "end": hex(fn.end_ea) if fn else (hex(end_ea) if end_ea else None),
+                "name": ida_funcs.get_func_name(ea) if fn else name,
+            }
+            if remap_note:
+                result["addr_remap"] = remap_note
+            if removed_overlaps:
+                result["removed_overlaps"] = removed_overlaps
+            return result
 
         elif action == "delete":
             ea, err = _resolve_func_addr(addr)
             if err: return err
-            # If the address is inside a function but not at its start, delete the containing function
             func = ida_funcs.get_func(ea)
             if not func:
                 return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function found at or containing {hex(ea)}")
@@ -496,7 +471,7 @@ def _funcs_impl(
             if not func:
                 return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
             old_flags = func.flags
-            func.flags = flags
+            func.flags |= flags
             if ida_funcs.update_func(func):
                 return {
                     "ok": True,
@@ -511,7 +486,6 @@ def _funcs_impl(
             if err: return err
             fn = ida_funcs.get_func(ea)
             if not fn:
-                # Try to find containing function
                 func = ida_funcs.get_func(ea)
                 if func:
                     fn = func
@@ -532,16 +506,16 @@ def _funcs_impl(
                 info["comment"] = cmt
             if rcmt:
                 info["repeatable_comment"] = rcmt
-            callers = _collect_callers(fn.start_ea)
-            callees = _collect_callees(fn.start_ea)
-            info["caller_count"] = len(callers)
-            info["callee_count"] = len(callees)
-            # These optional flags are part of the tool schema but the function
-            # signature uses **kwargs, so they must be extracted explicitly.
             include_xrefs = bool(kwargs.get("include_xrefs", False))
             include_prototype = bool(kwargs.get("include_prototype", False))
             include_stack = bool(kwargs.get("include_stack", False))
+            info["caller_count"] = 0
+            info["callee_count"] = 0
             if include_xrefs:
+                callers = _collect_callers(fn.start_ea)
+                callees = _collect_callees(fn.start_ea)
+                info["caller_count"] = len(callers)
+                info["callee_count"] = len(callees)
                 info["callers_sample"] = [hex_ea(x) for x in callers[:16]]
                 info["callees_sample"] = [hex_ea(x) for x in callees[:16]]
             if include_prototype:
@@ -560,17 +534,19 @@ def _funcs_impl(
                     fn = func
                 else:
                     return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at or containing {hex(ea)}")
-            # Compute metrics
             insn_count = 0
             bb_count = 0
+            edges = 0
             call_count = 0
             ret_count = 0
             jump_count = 0
             cond_jump_count = 0
             try:
                 fc = idaapi.FlowChart(fn)
-                bb_count = sum(1 for _ in fc)
                 for b in fc:
+                    bb_count += 1
+                    for _s in b.succs():
+                        edges += 1
                     head = b.start_ea
                     insn_iter = 0
                     while head < b.end_ea and head != idaapi.BADADDR:
@@ -590,18 +566,7 @@ def _funcs_impl(
                             break
             except Exception:
                 pass
-            # Cyclomatic complexity
-            cyclomatic = max(1, bb_count + 1)
-            try:
-                edges = 0
-                fc = idaapi.FlowChart(fn)
-                for b in fc:
-                    for _s in b.succs():
-                        edges += 1
-                cyclomatic = edges - bb_count + 2
-                cyclomatic = max(cyclomatic, 1)
-            except Exception:
-                pass
+            cyclomatic = max(1, edges - bb_count + 2) if edges else max(1, bb_count + 1)
             size = fn.end_ea - fn.start_ea
             return {
                 "ok": True,
@@ -632,30 +597,40 @@ def _funcs_impl(
             target_bytes = ida_bytes.get_bytes(target_fn.start_ea, target_fn.end_ea - target_fn.start_ea) or b""
             target_size = len(target_bytes)
             target_insn_count = sum(1 for _ in idautils.FuncItems(target_fn.start_ea))
+            import time as _time
+            _FIND_SIMILAR_MAX_FUNCS = 50000
+            _FIND_SIMILAR_MAX_SECS = 60
             results = []
             raw_scores = []
             staged = []
+            scanned = 0
+            timed_out = False
             max_candidates = (kwargs.get("limit") or 20) * 10
+            t0 = _time.monotonic()
             for func_ea in idautils.Functions():
                 if func_ea == target_fn.start_ea:
                     continue
                 fn = ida_funcs.get_func(func_ea)
                 if not fn:
                     continue
+                scanned += 1
+                if scanned >= _FIND_SIMILAR_MAX_FUNCS:
+                    break
+                if scanned % 500 == 0 and _time.monotonic() - t0 > _FIND_SIMILAR_MAX_SECS:
+                    timed_out = True
+                    break
                 size = fn.end_ea - fn.start_ea
                 if abs(size - target_size) > max(size, target_size) * 0.5:
                     continue
                 func_bytes = ida_bytes.get_bytes(fn.start_ea, size) or b""
                 if not func_bytes:
                     continue
-                # Simple similarity: instruction count ratio + byte similarity
                 insn_count = 0
                 for _ in idautils.FuncItems(func_ea):
                     insn_count += 1
                     if insn_count >= 500000:
                         break
                 insn_sim = 1.0 - abs(insn_count - target_insn_count) / max(insn_count, target_insn_count, 1)
-                # Byte-level similarity (ignoring addresses in operands)
                 min_len = min(len(target_bytes), len(func_bytes))
                 if min_len == 0:
                     continue
@@ -667,7 +642,7 @@ def _funcs_impl(
                     "addr": hex(func_ea),
                     "name": ida_funcs.get_func_name(func_ea),
                     "score": score,
-                    "size": hex(size),
+                    "size": size,
                     "instructions": insn_count,
                 })
                 if len(staged) >= max_candidates:
@@ -683,7 +658,10 @@ def _funcs_impl(
                 results = [r for r in staged if float(r.get("score") or 0.0) >= gate]
             results.sort(key=lambda x: -x["score"])
             limit = kwargs.get("limit") or 20
-            return {"ok": True, "target": hex(target_fn.start_ea), "similar_functions": results[:limit], "count": len(results)}
+            resp = {"ok": True, "target": hex(target_fn.start_ea), "similar_functions": results[:limit], "count": len(results), "scanned": scanned}
+            if timed_out:
+                resp["note"] = f"Scan timed out after {_FIND_SIMILAR_MAX_SECS}s — results may be incomplete"
+            return resp
 
         elif action == "suggest_names":
             return _embedding_rename_suggestions(
@@ -741,8 +719,6 @@ def funcs(
       Returns ranked list with similarity scores.
     """
     if action == "list":
-        # Delegate to data(action='functions', ...) so callers get the same
-        # payload — but classify as READ so no _risk_ack is required.
         from ida_pro_mcp.ida_mcp.tools.data import data  # noqa: PLC0415
 
         return data(
@@ -766,12 +742,6 @@ def funcs(
         "force": force,
         **kwargs,
     }
-    # The previous implementation routed read-only actions through
-    # `_funcs_read_dispatch` (decorated with @idaread) and everything
-    # else through `_funcs_write_dispatch` (@idawrite). Both
-    # functions were no-ops that simply called `_funcs_impl(**kwargs)`,
-    # so the read/write split added two layers of indirection with
-    # no observable effect. Inline the call.
     return _funcs_impl(**call_kwargs)
 
 

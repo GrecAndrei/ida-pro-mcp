@@ -12,6 +12,7 @@ from .schemas_data import (
     _EXTRA_TOOL_ALIASES,
     _TOOL_ACTION_EXTRA_ALIASES,
     _TOOL_SPECIFIC_ARG_ALIASES,
+    ADVERTISED_ACTIONS,
     ADVERTISED_TOOLS,
     BASE_TOOL_ALIASES,
     TOOL_ACTIONS as _TOOL_ACTIONS_DATA,
@@ -427,7 +428,15 @@ GLOBAL_WRAPPER_ACTION_CONTROLS = {
 }
 
 def _action_enum_with_grep(tool_name: str, *, compact_surface: bool = False) -> list[str]:
-    actions = list(TOOL_ACTIONS.get(tool_name, []) or [])
+    """Return action enum for schemas.
+
+    When compact_surface=True (tools/list lean/ultra), prefer ADVERTISED_ACTIONS
+    so agents see a small surface. Full TOOL_ACTIONS remain valid at call time.
+    """
+    if compact_surface and tool_name in ADVERTISED_ACTIONS:
+        actions = list(ADVERTISED_ACTIONS[tool_name])
+    else:
+        actions = list(TOOL_ACTIONS.get(tool_name, []) or [])
     for wrapper_action in WRAPPER_ACTIONS:
         if wrapper_action not in actions:
             actions.append(wrapper_action)

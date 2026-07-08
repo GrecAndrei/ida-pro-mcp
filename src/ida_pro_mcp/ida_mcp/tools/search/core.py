@@ -159,6 +159,14 @@ def get_cached_strings() -> list[dict]:
 # Configuration
 # ============================================================================
 
+_CANONICAL_TAGS = frozenset({
+    "crypto", "network", "file_io", "registry", "process",
+    "string_decode", "allocator", "exception_handler",
+    "obfuscation", "compression", "hashing", "encoding",
+    "parser", "main", "init", "cleanup", "loop",
+    "recursive", "thunk", "library", "data",
+})
+
 MAX_LIMIT = 500
 LINE_MAX = 240
 _FIND_INSTRUCTION_CAP = 2000
@@ -196,7 +204,7 @@ CALL_XREF_TYPES = frozenset([
 SEARCH_ACTIONS = {
     "bytes", "string", "immediate", "name", "insns", "mnemonic", "instruction",
     "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig",
-    "find", "semantic", "smart_bundle", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
+    "find", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
     "type", "export", "summary", "nl", "behavior",
     "bool", "hunt", "neighborhood", "outlier", "fingerprint", "path", "reach", "noreach",
     "symbol", "symbol_info", "demangle", "xrefs_to_string",
@@ -219,11 +227,8 @@ SEARCH_ALIASES = {
     "datarefs": "data_ref", "coderefs": "code_ref",
     "function_signature": "func_by_sig", "signature": "func_by_sig",
     "lookup": "find", "discover": "find",
-    "smart": "smart_bundle",
-    "bundle": "smart_bundle",
-    # nl/natural_language → real nl action (bge-code-v1 embeddings), NOT semantic
+    # nl/natural_language → real nl action (bge-code-v1 embeddings)
     "natural_language": "nl", "embedding_search": "nl", "vector_search": "nl",
-    "semantic_find": "semantic",
     "caller": "callers", "callee": "callees",
     "imports": "api", "import": "api", "apis": "api",
     "vuln": "vulnerable", "vulns": "vulnerable",

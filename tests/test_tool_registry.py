@@ -72,7 +72,10 @@ class TestToolModulesExist:
         """Every tool in TOOLS must have a module file or be in the known host-only set."""
         tools_dir = SRC / "ida_pro_mcp" / "ida_mcp" / "tools"
         # Host-side tools with no IDA module
-        host_only = {"session", "truncation", "bookmarks", "background", "workflow", "project", "multi_session", "threat_hunt"}
+        host_only = {
+            "session", "truncation", "bookmarks", "background", "workflow",
+            "multi_session", "threat_hunt",
+        }
         # Module map: tool name -> module file name (read directly from source)
         module_map = {}
         init_file = SRC / "ida_pro_mcp" / "ida_mcp" / "tools" / "__init__.py"

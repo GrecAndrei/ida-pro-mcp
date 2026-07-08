@@ -106,6 +106,7 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
 
     # 5. Instructions (bounded)
     instruction_hits = 0
+    pattern_lower = pattern.lower() if not case_sensitive else pattern
     for seg_start, seg_end in iter_segments(range_start, range_end, require_exec=True):
         if instruction_hits >= _FIND_INSTRUCTION_CAP or timed_out:
             break
@@ -117,12 +118,24 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
             except TimeoutError:
                 timed_out = True
                 break
+            # Fast pre-filter: check mnemonic + operands before expensive disassembly
+            mnem = idc.print_insn_mnem(ea)
+            if not mnem:
+                continue
+            quick_blob = mnem.lower()
+            op0 = idc.print_operand(ea, 0)
+            if op0:
+                quick_blob += " " + op0.lower()
+            op1 = idc.print_operand(ea, 1)
+            if op1:
+                quick_blob += " " + op1.lower()
+            if pattern_lower not in quick_blob:
+                continue
             line = safe_generate_disasm_line(ea)
             if not line:
                 continue
             line_clean = ida_lines.tag_remove(line) or ""
-            mnem = (idc.print_insn_mnem(ea) or "").lower()
-            semantic_blob = f"{mnem} {line_clean}"
+            semantic_blob = f"{mnem.lower()} {line_clean}"
             sem = min(semantic_score(pattern, semantic_blob, substring_bonus=SCORE_SUBSTRING), 160.0)
             if matcher(semantic_blob) or sem > 0.0:
                 add_find("instructions", ea, f"{hex(ea)}  {mnem}  {clip_text(line_clean, 180)}", sem)
@@ -636,7 +649,7 @@ def search_symbol(pattern, include_alternatives=True, offset=0, limit=20):
                 "demangled": demangled,
                 "is_function": func is not None,
                 "type": "function" if func else ("data" if idc.is_data(idc.get_full_flags(ea)) else "code" if idc.is_code(idc.get_full_flags(ea)) else "unknown"),
-                "segment": seg.getName() if seg else "",
+                "segment": ida_segment.get_segm_name(seg) if seg else "",
                 "xrefs_to": xref_count_limited(ea, 512),
                 "alternatives": [],
             }
@@ -657,7 +670,7 @@ def search_symbol(pattern, include_alternatives=True, offset=0, limit=20):
             "demangled": demangled,
             "is_function": func is not None,
             "type": "function" if func else ("data" if idc.is_data(idc.get_full_flags(ea)) else "code" if idc.is_code(idc.get_full_flags(ea)) else "unknown"),
-            "segment": seg.getName() if seg else "",
+            "segment": ida_segment.get_segm_name(seg) if seg else "",
             "xrefs_to": xref_count_limited(ea, 512),
             "alternatives": _alternatives_for_name(raw, exclude_ea=ea, limit=5) if include_alternatives else [],
         }
@@ -759,7 +772,7 @@ def search_symbol_info(pattern, include_xrefs=False):
         "addr": hex(ea),
         "name": name,
         "demangled": demangled or name,
-        "segment": seg.getName() if seg else "",
+        "segment": ida_segment.get_segm_name(seg) if seg else "",
         "segment_perms": _perm_str(seg) if seg else "",
         "is_function": containing_func is not None,
     }
@@ -833,11 +846,11 @@ def _count_xrefs_from_limited(ea, max_count):
 
 def _perm_str(seg):
     perms = []
-    if seg.perm & idaapi.SEGPERM_EXEC:
+    if seg.perm & idaapi.SEGPERM_READ:
         perms.append("R")
     if seg.perm & idaapi.SEGPERM_WRITE:
         perms.append("W")
-    if seg.perm & idaapi.SEGPERM_READ:
+    if seg.perm & idaapi.SEGPERM_EXEC:
         perms.append("X")
     return "".join(perms)
 
@@ -850,7 +863,8 @@ def _func_flags(func):
         out.append("library")
     if func.flags & idaapi.FUNC_THUNK:
         out.append("thunk")
-    if func.flags & idaapi.FUNC_STATIC:
+    _static_flag = getattr(idaapi, "FUNC_STATIC", getattr(idaapi, "FUNC_STATICDEF", 0))
+    if _static_flag and (func.flags & _static_flag):
         out.append("static")
     if func.flags & idaapi.FUNC_FRAME:
         out.append("frame")

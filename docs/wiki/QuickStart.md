@@ -1,66 +1,85 @@
 # IDA Pro MCP — Quick Start
 
+Agent-facing surface is **Tier A** (~17 tools). Full tool list exists but is hidden from `tools/list`. See `docs/ROADMAP.md`.
+
 ## 1. Create a session
+
 ```json
 {"name":"session","arguments":{"action":"create","binary_path":"/path/to/binary"}}
 ```
 
-## 2. Get the analysis state
+## 2. Analysis state (every turn)
+
 ```json
 {"name":"session","arguments":{"action":"state"}}
 ```
-Returns: binary metadata, coverage, blackboard summary, engine status, and suggested next actions.
 
-> `ida://state` and other `ida://` resources exist in the MCP protocol but are **not** auto-injected — the LLM cannot read them autonomously. Use `session(action='state')` instead.
+Returns binary metadata, coverage, blackboard summary, and suggested next actions.
 
-`tools/list` defaults to `ultra` mode — short routing hints plus action enums, ~9.5k tokens. Use `mode="lean"` or `mode="full"` only when you need exact argument shapes.
+> Prefer `session(action='state')` over `ida://state` resources (resources are not auto-injected for the model).
 
-## 3. Get ranked next targets
+## 3. Wait / kick analysis if needed
+
 ```json
-{"name":"blackboard","arguments":{"action":"frontier","limit":10}}
+{"name":"analysis","arguments":{"action":"wait"}}
+{"name":"analysis","arguments":{"action":"analyze","blocking":true}}
 ```
 
-## 4. Decompile a function
+## 4. Optional: embed index for NL search
+
+```json
+{"name":"intelligence","arguments":{"action":"index_fast"}}
+```
+
+## 5. Search
+
+```json
+{"name":"search","arguments":{"action":"find","pattern":"recv"}}
+{"name":"search","arguments":{"action":"nl","query":"function that decrypts strings","mode":"quick"}}
+{"name":"search","arguments":{"action":"string","pattern":"password"}}
+```
+
+Core search actions: `find`, `nl`, `string`, `bytes`, `api`, `callers`, `callees`, `xrefs_to_string`, `symbol`, `symbol_info`, `decompiled`, `behavior`.
+
+## 6. Decompile
+
 ```json
 {"name":"code","arguments":{"action":"smart_decompile","addrs":"0x401000"}}
 ```
-`smart_decompile` returns decompiled code + behavior tags + call graph in one call.
 
-## 5. Classify behavior
-```json
-{"name":"classify","arguments":{"action":"function","addr":"0x401000"}}
-```
-Uses BehaviorClassifier (zero-shot embedding similarity), not keyword matching.
+## 7. Annotate
 
-## 6. Find similar functions
 ```json
-{"name":"agent","arguments":{"action":"similar","addr":"0x401000"}}
+{"name":"modify","arguments":{"action":"rename","addr":"0x401000","name":"handle_recv","_risk_ack":true}}
+{"name":"modify","arguments":{"action":"comment","addr":"0x401000","comment":"entry for C2 recv","_risk_ack":true}}
 ```
 
-## 7. Natural language search
+## 8. Persist findings (blackboard = durable notebook)
+
 ```json
-{"name":"search","arguments":{"action":"nl","query":"function that decrypts strings"}}
+{"name":"blackboard","arguments":{"action":"write","addr":"0x401000","category":"finding","title":"recv handler","confidence":0.8}}
+{"name":"blackboard","arguments":{"action":"frontier","limit":10}}
 ```
 
-## 8. Persist findings
-```json
-{"name":"blackboard","arguments":{"action":"write","addr":"0x401000","category":"vuln","title":"heap overflow in recv handler","confidence":0.85}}
-```
+Do **not** use `wiki` for findings (docs only). Do **not** use `knowledge` for session notes (chip/symbol KB).
 
-## 9. Batch multiple calls
+## 9. Batch multi-call
+
 ```json
 {"name":"batch","arguments":{"calls":["idb:meta","data:imports",{"name":"data","action":"strings","count":50}]}}
 ```
 
-## 10. Full report
+## 10. Save and close
+
 ```json
-{"name":"summarize","arguments":{"action":"report"}}
+{"name":"idb","arguments":{"action":"save"}}
+{"name":"session","arguments":{"action":"close"}}
 ```
 
 ## Key rules
 
-- Write ops (`modify`, `funcs`, `data_ops`, etc.) require `_risk_ack=true`
-- `idb` is optional once a session is active — the active session is used automatically
-- `batch` reduces round-trips for deterministic multi-step flows
-- Use `calc` for address arithmetic
-- Blackboard auto-captures findings from `classify`, `gadgets`, `deobfuscate`, `memory`, `calc` — no manual write needed for those
+- Write ops (`modify`, `funcs`, …) may require `_risk_ack=true` under policy modes
+- Unknown tool kwargs are **rejected** with `INVALID_ARGS` (not silently dropped)
+- `search.nl` needs an embedding index (`intelligence.index_fast` / `index_batch`)
+- `misc(action='reload')` is **dev-only** (hot-reload IDA tool modules); not in compact enum
+- Prefer hex address strings verbatim from search results (`"0x356f8"`)

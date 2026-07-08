@@ -20,7 +20,6 @@ from .core import (  # noqa: E402
     _cache_get,
     _cache_key,
     _cache_set,
-    _get_db_fingerprint,
     build_response,
     clip_text,
     get_cached_constant_db,

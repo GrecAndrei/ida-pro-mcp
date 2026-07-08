@@ -1,15 +1,10 @@
-# vuln_scan
+# vuln_scan (removed)
 
-**Legacy alias** — routes to `threat_hunt(action="vuln")`.
+This tool no longer exists as a first-class MCP tool.
 
-## Actions
-- All actions are forwarded to `threat_hunt` with `action="vuln"`.
+Use instead:
+- `search(action='vulnerable')` for dangerous-API reachability style scans
+- `threat_hunt` (Tier B, unadvertised) for composite hunt pipelines
+- `yara_hunt` for YARA-based hunting
 
-## Examples
-```json
-{"name": "threat_hunt", "arguments": {"action": "vuln", "address": "0x401000"}}
-```
-
-## Notes
-- Do not use `vuln_scan` directly; use `threat_hunt(action="vuln")` instead.
-- Kept for backward compatibility with older client configurations.
+See `docs/ROADMAP.md`.

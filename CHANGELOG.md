@@ -2,6 +2,33 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 0.9.0 — contract honesty, tier surface, restore pins (2026-07-08)
+
+Honest alpha cut. Not a 1.0.
+
+### Breaking / contract
+- **Unknown RPC kwargs now hard-fail** with `MCPError.INVALID_ARGS` instead of being silently stripped before IDA RPC. Tuned calls that previously “worked” with defaults will now error until schemas admit the keys (or callers stop sending them).
+- **Version `1.0.0` → `0.9.0`**, classifier Alpha. Package was not product-mature at 1.0 numbering.
+- **`tools/list` Tier A only** (~17 tools). Full `TOOLS` remain callable by exact name. See `docs/ROADMAP.md`.
+- **Compact action enums** (`ADVERTISED_ACTIONS`) for session/search/intelligence/blackboard/code/funcs/misc in lean/ultra schema mode. Full `TOOL_ACTIONS` still accepted at call time.
+- Removed broken console entry `sideband-capsule` (module did not exist).
+
+### Search / funcs
+- Removed first-class `search.semantic` / `search.smart_bundle`; NL/behavior live in `search/semantic.py` via `nl` / `behavior`.
+- Registered `symbol`, `symbol_info`, `demangle`, `xrefs_to_string` on search actions.
+- Admitted previously stripped kwargs (search: `mode`, `recipe`, `intent`, `semantic_min_score`, `constraints`, …; funcs tuning knobs; misc `module`/`modules` for reload).
+- `funcs.create` overlap/code-carve helpers extracted; ARM Thumb path cleaned up.
+- `misc(action='reload')` for dev hot-reload of IDA tool modules (not in compact enum).
+
+### Tests / docs
+- Restored a **curated** host/integration pin set (policy, RPC retry, phase gates, session reuse, schema admission, embedder fail-open, …). Not a return of the ~84k-line deleted suite.
+- **Historical note:** older changelog lines that claim “1353 tests pass” / paths under `tests/host/…` refer to suites that were largely deleted in `968ae11`. Do not treat those numbers as current CI truth. Current gate is `pytest` on the files present on the tree.
+- QuickStart rewritten to Tier A core path; `docs/ROADMAP.md` added; ghost wiki pages (`static_trace`, `trace`, `vuln_scan`) retargeted; ARCHITECTURE phantoms removed.
+
+### Host
+- Extended `LONG_RUNNING_ACTIONS` for search full-binary ops and bindiff.
+- Blackboard remains the **canonical durable notebook**; wiki = docs; knowledge = chip/symbol KB.
+
 ## Hotfix — replace heuristic scanners with proper IDA analysis + harden embedding layer
 
 ### Changed

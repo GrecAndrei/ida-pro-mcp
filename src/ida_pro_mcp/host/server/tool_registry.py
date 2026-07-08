@@ -110,7 +110,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "lumina": ["pull", "push", "status", "history", "search", "get_metadata"],
     "memory": ["read", "write", "hexdump", "search", "compare", "pointers", "find_pointers", "entropy", "strings", "struct_walk", "histogram"],
     "microcode": ["get", "blocks", "instructions", "def_use_graph"],
-    "misc": ["python", "idc", "load_sig", "cache_stats", "plugin_list", "plugin_run", "read_file", "write_file", "health"],
+    "misc": ["python", "idc", "load_sig", "cache_stats", "plugin_list", "plugin_run", "read_file", "write_file", "health", "reload"],
     "modify": ["rename", "comment", "set_type", "patch_asm"],
     "nav": ["goto", "cursor", "interesting", "semantic_goto"],
     "patterns": ["generate", "match", "list_sigs", "apply_sig", "create_sig", "matched", "yara_from_func", "flirt_generate", "match_yara"],
@@ -120,13 +120,14 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "protocol": ["detect", "parsers", "serializers", "handlers", "endpoints", "tls_config", "socket_flow", "packet_struct", "magic_numbers", "state_machine", "reconstruct", "trace_handler", "export_spec"],
 
     "search": [
-        "nl", "behavior", "find", "semantic", "smart_bundle", "api",
+        "nl", "behavior", "find", "api",
         "decompiled", "structured", "vulnerable", "constants",
         "callers", "callees", "bytes", "string", "immediate", "name",
         "insns", "mnemonic", "instruction", "text", "operand", "comment",
         "data_ref", "code_ref", "regex", "func_by_sig", "type", "export",
         "summary", "query_lang", "bool", "hunt", "neighborhood", "outlier",
         "fingerprint", "path", "reach", "noreach",
+        "symbol", "symbol_info", "demangle", "xrefs_to_string",
     ],
     "segments": ["list", "add", "delete", "set_attr", "set_perms", "move", "info", "analyze", "find_code", "find_data", "compare", "merge"],
     "session": [
@@ -145,7 +146,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "advance_phase", "link_session", "cross_reference_sessions",
         "list_snapshots", "macro_set", "macro_get", "macro_list",
         "macro_delete", "macro_run", "recent_workset", "kill",
-        "state",
+        "state", "logs", "idle_purge",
     ],
     "stack_analysis": ["frame", "buffers", "canary", "alignment", "spills", "usage", "variables", "arrays", "uninitialized", "summary"],
     "string_ops": ["score_c2", "indicators", "ioc_extract", "persistence", "evasion", "find_urls", "find_ips", "find_paths", "find_registry", "find_emails", "find_commands", "find_c2", "find_configs", "find_api_keys", "find_databases", "find_crypto_addrs", "find_stack_strings", "find_base64", "find_xrefs", "entropy_rank", "suspicious", "encoding_stats", "multilingual", "decode_all"],

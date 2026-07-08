@@ -1,14 +1,10 @@
-"""SEARCH - Unified pattern, reference, and semantic search for LLM-centric RE.
+"""SEARCH — pattern, reference, and semantic search router.
 
-Architecture:
-- Neuro-Symbolic Governance: semantic target resolution with score thresholds
-- Structured Semantic Retrieval: schema-based pre-filtering via structured action
-- Context Density Optimization: compact text output with optional structured items
-- Bridge-Conditioned Multi-Hop: find action supports intermediate entity chaining
-- Task Skill Crystallization: search workflows are cacheable and reusable
-- L1 Insight Index: fast tag-based pre-filtering before any search
+Core agent surface: find, nl, string, bytes, api, callers/callees,
+xrefs_to_string, symbol/symbol_info, decompiled, behavior.
 
-This module is a thin router. All actions live in submodules to avoid monoliths.
+Advanced actions (hunt, path, outlier, …) remain callable but are not the
+default tools/list enum. Semantic NL/behavior live in search/semantic.py.
 """
 
 import json
@@ -40,6 +36,7 @@ from .combinators import (
     search_reach,
 )
 from .core import (
+    _CANONICAL_TAGS,
     MAX_LIMIT,
     SCORE_SUBSTRING,
     SEARCH_ACTIONS,
@@ -48,13 +45,13 @@ from .core import (
 )
 from .meta import search_export, search_summary, search_type
 from .refs import search_code_ref, search_data_ref, search_func_by_sig, search_regex
+from .semantic import search_behavior as _search_behavior_impl, search_nl as _search_nl_impl
 from .unified import (
     search_api,
     search_callees,
     search_callers,
     search_demangle,
     search_find,
-    search_semantic,
     search_symbol,
     search_symbol_info,
     search_xrefs_to_string,
@@ -63,16 +60,6 @@ from .unified import (
 # ============================================================================
 # L1 Insight Index Pre-filtering
 # ============================================================================
-
-# Canonical tags shared with host/insight_index.py
-_CANONICAL_TAGS = frozenset({
-    "crypto", "network", "file_io", "registry", "process",
-    "string_decode", "allocator", "exception_handler",
-    "obfuscation", "compression", "hashing", "encoding",
-    "parser", "main", "init", "cleanup", "loop",
-    "recursive", "thunk", "library", "data",
-})
-
 
 def _insight_index_path() -> str:
     """Return the default insight index JSON path on the host side."""
@@ -150,11 +137,11 @@ def search(
     action: Annotated[Literal[
         "bytes", "string", "immediate", "name", "insns", "mnemonic", "instruction",
         "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig",
-        "find", "semantic", "smart_bundle", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
+        "find", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
         "type", "export", "summary", "query_lang", "nl", "behavior",
         "bool", "hunt", "neighborhood", "outlier", "fingerprint", "path", "reach", "noreach",
         "symbol", "symbol_info", "demangle", "xrefs_to_string",
-    ], "Action: bytes|string|immediate|name|insns|mnemonic|instruction|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|semantic|smart_bundle|callers|callees|api|vulnerable|constants|decompiled|structured|type|export|summary|query_lang|nl|behavior|bool|hunt|neighborhood|outlier|fingerprint|path|reach|noreach|symbol|symbol_info|demangle|xrefs_to_string"],
+    ], "Action: bytes|string|immediate|name|insns|mnemonic|instruction|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|callers|callees|api|vulnerable|constants|decompiled|structured|type|export|summary|query_lang|nl|behavior|bool|hunt|neighborhood|outlier|fingerprint|path|reach|noreach|symbol|symbol_info|demangle|xrefs_to_string"],
     pattern: Annotated[Optional[str], "Pattern to search for"] = None,
     query: Annotated[Optional[str], "Alias for pattern"] = None,
     limit: Annotated[int, "Max results"] = 100,
@@ -170,7 +157,7 @@ def search(
     semantic_min_score: Annotated[float, "Minimum semantic score"] = 0.0,
     include_semantic_alternatives: Annotated[bool, "Include alternatives"] = False,
     constraints: Annotated[Optional[dict], "Schema constraints for structured search"] = None,
-    timeout_ms: Annotated[int, "Timeout in milliseconds for long searches (0 = 10s default)"] = 0,
+    timeout_ms: Annotated[int, "Timeout in milliseconds for long searches (0 = no limit)"] = 0,
     **kwargs
 ) -> dict:
     """
@@ -179,8 +166,9 @@ def search(
 
     QUICK ACTIONS:
     - find: Smart unified search (auto-detects names, strings, imports, instructions, xrefs)
-    - semantic: Natural-language semantic ranking across symbols/imports/strings/disasm
-    - smart_bundle: Fused find+semantic view with deduplicated structured items
+    - nl: Natural language search via FunctionEmbeddingIndex (bge-code-v1 embeddings)
+            Supports mode="quick" (hybrid search only) or mode="expand" (with behavior expansion)
+    - behavior: Find functions matching a behavior tag (crypto_symmetric, network_http, etc.)
     - callers: Functions calling a target
     - callees: Functions called by a target
     - api: Find usages of an imported API
@@ -200,7 +188,7 @@ def search(
     - bool: Composite boolean query language across name/api/string/mnem/caller/callee
             Example: "(api:Crypt* AND name:key) OR (string:password AND NOT obf:true)"
     - hunt: Named workflow recipes (backdoor, anti_debug, c2, crypto, parser, ...)
-            Pass recipe='list' to see all 14 available recipes.
+            Pass recipe='list' to see all available recipes.
     - neighborhood: 360-degree context card around a function (callers, callees, similar, tags)
     - outlier: Find structurally anomalous functions (size/complexity/orphan/leaf/hub/deep)
     - fingerprint: Structural (callgraph) similarity, NOT embedding-based
@@ -251,7 +239,7 @@ def search(
                         break
 
         # Validate pattern
-        pattern_not_required = {"vulnerable", "constants", "summary", "outlier", "noreach", "hunt", "demangle", "symbol_info"}
+        pattern_not_required = {"vulnerable", "constants", "summary", "outlier", "noreach", "hunt", "demangle", "symbol_info", "structured"}
         if not actual_pattern and action not in pattern_not_required:
             return make_error(MCPError.INVALID_ARGS, "pattern or query required")
         if action == "export" and not actual_pattern:
@@ -286,8 +274,7 @@ def search(
         except Exception:
             offset = 0
 
-        if not timeout_ms or timeout_ms <= 0:
-            timeout_ms = 10000
+        # timeout_ms=0 means no limit (SearchTimeout treats 0 as unlimited)
 
         # L1 Insight Index pre-filtering
         l1_pre_filtered_addrs = None
@@ -336,55 +323,6 @@ def search(
             response = search_func_by_sig(actual_pattern, offset, limit, timeout_ms)
         elif action == "find":
             response = search_find(actual_pattern, case_sensitive, range_start, range_end, include_context, include_items, include_breakdown, offset, limit, timeout_ms)
-        elif action == "semantic":
-            response = search_semantic(actual_pattern, include_context, range_start, range_end, offset, limit, include_items, timeout_ms)
-        elif action == "smart_bundle":
-            # smart_bundle: find (exact) + semantic (embedding-index) fused view
-            find_res = search_find(actual_pattern, case_sensitive, range_start, range_end, include_context, include_items, include_breakdown, offset, limit, timeout_ms)
-            sem_res = search_semantic(actual_pattern, include_context, range_start, range_end, offset, limit, include_items, timeout_ms)
-            if isinstance(find_res, dict) and find_res.get("error"):
-                return find_res
-            if isinstance(sem_res, dict) and sem_res.get("error"):
-                # If semantic failed due to no index, still return find results
-                if sem_res.get("code") == "NOT_FOUND" and not (isinstance(find_res, dict) and find_res.get("error")):
-                    return {**find_res, "warning": "Semantic search unavailable — run intelligence(action='index_fast') first."}
-                return sem_res
-
-            find_items = list((find_res or {}).get("items") or []) if isinstance(find_res, dict) else []
-            sem_items = list((sem_res or {}).get("items") or []) if isinstance(sem_res, dict) else []
-            merged_items = []
-            seen = set()
-            for item in find_items + sem_items:
-                if not isinstance(item, dict):
-                    continue
-                key = (
-                    str(item.get("addr") or item.get("ea") or "").lower(),
-                    str(item.get("name") or item.get("text") or "").lower(),
-                )
-                if key in seen:
-                    continue
-                seen.add(key)
-                merged_items.append(item)
-                if len(merged_items) >= limit:
-                    break
-
-            lines = []
-            for item in merged_items:
-                addr = item.get("addr") or item.get("ea") or "?"
-                name = item.get("name") or item.get("text") or item.get("match") or "match"
-                lines.append(f"{addr}  {name}")
-            response = {
-                "ok": True,
-                "query": actual_pattern,
-                "mode": "smart_bundle",
-                "results": "\n".join(lines),
-                "count": len(merged_items),
-                "items": merged_items,
-                "components": {
-                    "find_count": len(find_items),
-                    "semantic_count": len(sem_items),
-                },
-            }
         elif action == "callers":
             response = search_callers(actual_pattern, include_context, offset, limit, semantic_min_score, include_semantic_alternatives, include_items)
         elif action == "callees":
@@ -409,170 +347,23 @@ def search(
             # query_lang uses the 'query' parameter directly, not pattern
             response = run_query_lang(query or actual_pattern or "")
         elif action == "nl":
-            # Natural language search using bge-code-v1 embeddings (FunctionEmbeddingIndex)
-            # Much more accurate than heuristic semantic scoring for RE queries like
-            # "function that handles AES key schedule" or "packet parser with length check"
-            if not actual_pattern:
-                return make_error(MCPError.INVALID_ARGS, "pattern or query required for nl search")
-            try:
-                from ida_pro_mcp.services import get_assembler
-                asm = get_assembler()
-                idb_path = idc.get_idb_path() if hasattr(idc, "get_idb_path") else ""
-                if not idb_path:
-                    return make_error(MCPError.INVALID_ARGS,
-                                      "nl search requires an active IDB with indexed embeddings. "
-                                      "Run agent(action='analyze_function') on some functions first.")
-                idx = asm._get_index(idb_path)
-                if idx.size == 0:
-                    return make_error(MCPError.INVALID_ARGS,
-                                      "No embeddings indexed yet. Decompile some functions first "
-                                      "or run intelligence(action='index_fast').")
-                # Hybrid search over indexed functions, then behavior-driven expansion.
-                results_raw = idx.search(actual_pattern, top_k=max(6, limit * 3), threshold=0.0)
-                expansion_queries = []
-                try:
-                    classifier = asm._behavior_classifier()
-                    q_hits = classifier.classify(actual_pattern[:600], threshold=0.0, top_k=4, block=False)
-                    expansion_queries = [
-                        str(h.get("behavior") or "").strip().replace("_", " ")
-                        for h in q_hits
-                        if h.get("behavior")
-                    ]
-                    expansion_queries = [q for q in expansion_queries if q]
-                except Exception:
-                    expansion_queries = []
-
-                if expansion_queries:
-                    merged_by_ea = {}
-                    for r in results_raw:
-                        ea_key = str(r.get("ea") or "")
-                        if ea_key:
-                            merged_by_ea[ea_key] = dict(r)
-                    for extra_q in expansion_queries[:3]:
-                        try:
-                            extra_hits = idx.search(extra_q, top_k=max(3, limit), threshold=0.0)
-                        except Exception:
-                            continue
-                        for h in extra_hits:
-                            ea_key = str(h.get("ea") or "")
-                            if not ea_key:
-                                continue
-                            base = merged_by_ea.get(ea_key)
-                            extra_sim = float(h.get("similarity") or 0.0)
-                            if not base:
-                                merged_by_ea[ea_key] = dict(h)
-                                merged_by_ea[ea_key]["similarity"] = extra_sim * 0.92
-                                merged_by_ea[ea_key]["expansion_query"] = extra_q
-                            else:
-                                base_sim = float(base.get("similarity") or 0.0)
-                                if extra_sim > base_sim:
-                                    base["similarity"] = max(base_sim, extra_sim * 0.96)
-                                    base["expansion_query"] = extra_q
-                    results_raw = sorted(
-                        merged_by_ea.values(),
-                        key=lambda x: float(x.get("similarity") or 0.0),
-                        reverse=True,
-                    )
-                sims = [float(r.get("similarity") or 0.0) for r in results_raw]
-                if sims:
-                    ss = sorted(sims)
-                    q50 = ss[len(ss) // 2]
-                    q75 = ss[min(len(ss) - 1, int(round((len(ss) - 1) * 0.75)))]
-                    gate = q50 + max(0.0, q75 - q50)
-                    filtered = [r for r in results_raw if float(r.get("similarity") or 0.0) >= gate]
-                    results_raw = (filtered or results_raw)[:limit]
-                rows = []
-                for r in results_raw:
-                    ea_str = r.get("ea", "")
-                    name = r.get("name", ea_str)
-                    sim = r.get("similarity", 0)
-                    rows.append(f"{ea_str}  {name}  similarity={sim:.3f}")
-                response = {
-                    "ok": True,
-                    "query": actual_pattern,
-                    "expansion_queries": expansion_queries[:3],
-                    "results": "\n".join(rows),
-                    "count": len(rows),
-                    "items": [{"addr": r.get("ea"), "name": r.get("name"),
-                               "similarity": r.get("similarity"),
-                               "score": r.get("score"),
-                               "signature": r.get("signature")} for r in results_raw],
-                    "note": "Results ranked by hybrid function-index retrieval: embedding similarity plus indexed lexical signature overlap.",
-                }
-            except Exception as e:
-                response = make_error(MCPError.IDA_ERROR, f"nl search failed: {e}",
-                                      hint="Ensure bge-code-v1 model is available and functions have been decompiled.")
+            mode = str(kwargs.get("mode", "expand"))
+            response = _search_nl_impl(
+                actual_pattern,
+                limit=limit,
+                mode=mode,
+                min_score=semantic_min_score,
+                timeout_ms=timeout_ms,
+                include_items=include_items,
+            )
 
         elif action == "behavior":
-            # Find all functions matching a behavior tag using BehaviorClassifier
-            # Example: search(action="behavior", pattern="crypto_symmetric")
-            # Requires embedding index (run index_fast first)
-            if not actual_pattern:
-                return make_error(MCPError.INVALID_ARGS,
-                                  "pattern required: behavior tag to search for "
-                                  "(e.g. crypto_symmetric, network_http, memory_alloc)")
-            tag = actual_pattern.strip().lower().replace(" ", "_")
-            rows = []
-            # Try L1 insight index first (fast)
-            l1_addrs = _query_insight_by_tags([tag], mode="or")
-            if l1_addrs:
-                for addr_str in l1_addrs[:limit]:
-                    try:
-                        ea = int(addr_str, 16)
-                        name = idc.get_func_name(ea) or addr_str
-                        rows.append({"addr": addr_str, "name": name, "source": "insight_index"})
-                    except Exception:
-                        pass
-            # Try BehaviorClassifier on unnamed functions if not enough results
-            if len(rows) < limit // 2:
-                try:
-                    from ida_pro_mcp.services import get_assembler
-                    asm = get_assembler()
-                    classifier = asm._behavior_classifier()
-                    checked = 0
-                    for func_ea in idautils.Functions():
-                        if checked >= 200 or len(rows) >= limit:
-                            break
-                        fname = idc.get_func_name(func_ea) or ""
-                        if not (fname.startswith(("sub_", "j_"))):
-                            continue  # skip already-named functions
-                        try:
-                            cfunc = ida_hexrays.decompile(func_ea)
-                            if not cfunc:
-                                continue
-                            pseudo = str(cfunc)[:2000]
-                            hits = classifier.classify(pseudo, threshold=0.0, top_k=5, block=False)
-                            if hits:
-                                hs = sorted(float(h.get("confidence", h.get("score", 0.0)) or 0.0) for h in hits)
-                                q50 = hs[len(hs) // 2]
-                                q75 = hs[min(len(hs) - 1, int(round((len(hs) - 1) * 0.75)))]
-                                gate = q50 + max(0.0, q75 - q50)
-                                hits = [h for h in hits if float(h.get("confidence", h.get("score", 0.0)) or 0.0) >= gate]
-                            if any(h.get("behavior", "").lower() == tag for h in hits):
-                                rows.append({
-                                    "addr": hex(func_ea),
-                                    "name": fname,
-                                    "source": "classifier",
-                                    "confidence": max((float(h.get("confidence", h.get("score", 0)) or 0) for h in hits
-                                                       if h.get("behavior", "").lower() == tag), default=0),
-                                })
-                        except Exception:
-                            pass
-                        checked += 1
-                except Exception:
-                    pass
-            lines = [f"{r['addr']}  {r['name']}  [{r['source']}]" +
-                     (f"  conf={r.get('confidence', 0):.2f}" if r.get("confidence") else "")
-                     for r in rows]
-            response = {
-                "ok": True,
-                "behavior": tag,
-                "results": "\n".join(lines),
-                "count": len(rows),
-                "items": rows,
-                "note": f"Functions classified as '{tag}'. "
-                        "Use code(action='smart_decompile') on top results for full analysis.",
-            }
+            response = _search_behavior_impl(
+                actual_pattern,
+                limit=limit,
+                timeout_ms=timeout_ms,
+                include_items=include_items,
+            )
 
         elif action == "bool":
             response = search_bool(actual_pattern, case_sensitive, offset, limit)
@@ -634,8 +425,8 @@ def search(
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
 
-        # Inject blackboard context into find/semantic/nl results
-        if action in ("find", "semantic", "nl", "behavior") and isinstance(response, dict):
+        # Inject blackboard context into find/nl/behavior results
+        if action in ("find", "nl", "behavior") and isinstance(response, dict):
             try:
                 from blackboard import BlackboardStore  # type: ignore
                 store = BlackboardStore()

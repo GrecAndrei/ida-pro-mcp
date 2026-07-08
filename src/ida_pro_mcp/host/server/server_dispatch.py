@@ -54,9 +54,20 @@ LONG_RUNNING_ACTIONS: set[tuple[str, str]] = {
     ("intelligence", "index_function"),
     ("intelligence", "refresh_anchors"),
     ("intelligence", "semantic_search"),
-    # search — graph BFS / embedding
-    ("search", "semantic"),
+    # search — full-binary scans, graph BFS, embedding
+    ("search", "find"),
+    ("search", "bytes"),
+    ("search", "string"),
+    ("search", "regex"),
+    ("search", "nl"),
     ("search", "path"),
+    ("search", "hunt"),
+    # bindiff — full-binary fingerprint + compare passes
+    ("bindiff", "snapshot"),
+    ("bindiff", "diff"),
+    ("bindiff", "summary"),
+    ("bindiff", "function_match"),
+    ("bindiff", "patch_analysis"),
     # blackboard — large semantic rebuild / trace operations
     ("blackboard", "semantic_rebuild"),
     ("blackboard", "trace_ingest"),
@@ -204,13 +215,30 @@ class ServerDispatchMixin:
                     for k, v in kwargs.items()
                     if not (isinstance(k, str) and k.startswith("_"))
                 }
+                # Reject unknown keys instead of silently stripping them.
+                # Silent strip made tuned tool calls look successful while
+                # IDA always ran defaults (find_similar, semantic_min_score, …).
                 try:
                     allowed = set((TOOL_ARG_SCHEMAS.get(tool_name) or {}).keys())
                     if allowed:
-                        rpc_args = {k: v for k, v in rpc_args.items() if k in allowed}
+                        unknown = sorted(
+                            k for k in rpc_args if k not in allowed
+                        )
+                        if unknown:
+                            return make_error(
+                                MCPError.INVALID_ARGS,
+                                f"Unknown argument(s) for tool '{tool_name}': {', '.join(unknown)}",
+                                hint=(
+                                    "Remove unknown keys, or add them to "
+                                    f"TOOL_ARG_SCHEMAS['{tool_name}'] if they are valid. "
+                                    f"Allowed keys include: {', '.join(sorted(allowed)[:24])}"
+                                    + ("…" if len(allowed) > 24 else "")
+                                ),
+                                details={"unknown": unknown, "tool": tool_name},
+                            )
                 except Exception as _e:
                     import logging
-                    logging.getLogger(__name__).debug("arg schema filter failed: %s", _e)
+                    logging.getLogger(__name__).debug("arg schema validation failed: %s", _e)
                 _t0 = time.time()
                 # Long-running actions get an extended socket recv timeout
                 # so the host doesn't kill the connection before IDA

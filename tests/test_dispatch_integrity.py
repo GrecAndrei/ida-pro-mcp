@@ -29,17 +29,33 @@ def dispatch_source():
 
 class TestDispatchHandlers:
     def test_advertised_tools_have_dispatch(self, schemas_data, dispatch_source):
-        """Every advertised tool should have a dispatch handler or be routed."""
-        import re
+        """Every advertised tool is host-routed, has a module, or an explicit handler."""
+        from pathlib import Path
+
+        tools_dir = SRC / "ida_pro_mcp" / "ida_mcp" / "tools"
+        host_only = {
+            "session", "truncation", "bookmarks", "background", "workflow",
+            "multi_session", "threat_hunt", "batch", "wiki", "blackboard",
+        }
         for tool in schemas_data.ADVERTISED_TOOLS:
-            # Has _handle_<tool> method
             has_handler = f"def _handle_{tool}" in dispatch_source
-            # Has direct routing: tool_name == "X"
             has_route = f'tool_name == "{tool}"' in dispatch_source
-            # Is handled by __default__ dispatch (tool module exists)
-            has_module = True  # Will fall through to default if no explicit handler
-            assert has_handler or has_route or has_module, \
-                f"Tool '{tool}' has no dispatch handler in server_dispatch.py"
+            has_module = (tools_dir / f"{tool}.py").exists() or (
+                tools_dir / tool / "__init__.py"
+            ).exists()
+            if tool in host_only:
+                assert has_handler or has_route, (
+                    f"Host-only tool '{tool}' has no dispatch route/handler"
+                )
+            else:
+                assert has_handler or has_route or has_module, (
+                    f"Tool '{tool}' has no dispatch path or IDA module"
+                )
+
+    def test_rpc_arg_filter_rejects_unknown(self, dispatch_source):
+        """Contract: unknown kwargs must hard-fail, not silent-strip."""
+        assert "Unknown argument(s) for tool" in dispatch_source
+        assert "rpc_args = {k: v for k, v in rpc_args.items() if k in allowed}" not in dispatch_source
 
     def test_dispatch_references_match_tools(self, schemas_data, dispatch_source):
         """Dispatch handlers should only reference tools that exist."""

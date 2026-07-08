@@ -78,7 +78,7 @@ def write_file_impl(path: str, content: str, encoding: Optional[str] = None) -> 
 
 @tool
 def misc(
-    action: Literal["python", "idc", "load_sig", "cache_stats", "read_file", "write_file", "plugin_list", "plugin_run", "health"] = "python",
+    action: Literal["python", "idc", "load_sig", "cache_stats", "read_file", "write_file", "plugin_list", "plugin_run", "health", "reload"] = "python",
     expr: Optional[str] = None,
     code: Optional[str] = None,
     name: Optional[str] = None,
@@ -87,6 +87,8 @@ def misc(
     encoding: Annotated[Optional[str], "File encoding (default: utf-8). Use 'binary' for hex-encoded binary data."] = None,
     arg: Annotated[Optional[int], "Plugin argument for plugin_run"] = None,
     verbose: Annotated[Optional[bool], "Include per-runtime details for health action."] = None,
+    module: Annotated[Optional[str], "Module to reload (for reload action, e.g. 'funcs')"] = None,
+    modules: Annotated[Optional[str], "Comma-separated module list to reload (for reload action, e.g. 'funcs,search')"] = None,
 ) -> Any:
     """
     Miscellaneous utility tools for IDA.
@@ -103,6 +105,10 @@ def misc(
     - plugin_list: List discovered IDA plugins (filesystem-based)
     - plugin_run: Run an IDA plugin by name. Params: name, arg (optional)
     - health: Return host/IDA diagnostics. Params: verbose (optional)
+    - reload: Re-import IDA-side tool modules without restarting. Pick up source
+      changes instantly. Params: module (single name, e.g. 'funcs') or modules
+      (comma-separated, e.g. 'funcs,search'). Use 'all' to reload every module
+      in the tools package.
     """
     if action == "python":
         # Support both 'expr' and 'code' for backward compatibility
@@ -251,11 +257,46 @@ def misc(
             return info
         except Exception as e:
             return handle_error(e, context="health")
+    if action == "reload":
+        import importlib
+        import sys as _sys
+        target = module or modules
+        if not target:
+            return make_error(
+                MCPError.MISSING_REQUIRED_ARG,
+                "module or modules param required for reload",
+                hint="Use module='funcs' or modules='funcs,search'",
+            )
+        names = [n.strip() for n in target.split(",") if n.strip()]
+        if names == ["all"]:
+            from ida_mcp.tools import __all__ as _all_mods
+            names = list(_all_mods)
+        results = []
+        for mod_name in names:
+            if mod_name == "misc":
+                results.append({"module": "misc", "status": "skipped", "note": "misc reloads itself on next call (avoid self-reload deadlock)"})
+                continue
+            full_name = f"ida_mcp.tools.{mod_name}"
+            if full_name not in _sys.modules:
+                try:
+                    importlib.import_module(full_name)
+                    results.append({"module": mod_name, "status": "imported"})
+                    continue
+                except Exception as e:
+                    results.append({"module": mod_name, "status": "error", "error": str(e)})
+                    continue
+            try:
+                mod = _sys.modules[full_name]
+                importlib.reload(mod)
+                results.append({"module": mod_name, "status": "reloaded"})
+            except Exception as e:
+                results.append({"module": mod_name, "status": "error", "error": str(e)})
+        return {"ok": True, "reloaded": results}
     return make_error(
         MCPError.ACTION_NOT_FOUND,
         f"Unknown action: {action}",
         details={"provided": action},
-        hint="Valid actions: python, idc, load_sig, cache_stats, read_file, write_file, plugin_list, plugin_run, health",
+        hint="Valid actions: python, idc, load_sig, cache_stats, read_file, write_file, plugin_list, plugin_run, health, reload",
     )
 
 _MAX_SCRIPT_LENGTH = 50000

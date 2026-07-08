@@ -30,7 +30,6 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
   - `server_semantic.py` — semantic search integration
   - `server_threat_hunt.py` — threat hunt integration
   - `server_workflow.py` / `server_workflow_batch.py` — workflow orchestration
-  - `server_predictor.py` — predictive strategy suggestion
   - `server_wiki.py` — wiki tool integration
   - `resources.py` — `ida://` MCP resource definitions and `ResourceResolver`
   - `tool_registry.py` — canonical action lists and argument schemas
@@ -83,10 +82,18 @@ The most important resource (`ida://state`) is also accessible as `session(actio
 
 ## Complexity Hotspots
 
-- `src/ida_pro_mcp/ida_mcp/tools/firmware_view.py` — largest tool, full firmware analysis campaign
-- `src/ida_pro_mcp/ida_mcp/tools/llm_helpers.py` — analysis helpers
+- `src/ida_pro_mcp/ida_mcp/tools/firmware_view.py` — large firmware analysis campaign tool
+- `src/ida_pro_mcp/ida_mcp/tools/trace_analysis.py` — large tracing surface
 - `src/ida_pro_mcp/host/server/server_workflow.py` — workflow orchestration
+- `src/ida_pro_mcp/host/server/server_runtime.py` — idat process lifecycle
 - `src/ida_pro_mcp/ida_mcp/tools/code.py` — decompile, smart_decompile, ctree integration
+
+## Product surface policy
+
+See `docs/ROADMAP.md`. Default `tools/list` is Tier A (~17 tools). Full
+`TOOLS` remain registered for exact-name calls. Compact action enums
+(`ADVERTISED_ACTIONS`) further shrink high-cardinality tools in lean/ultra
+schema mode. RPC unknown kwargs are rejected (`INVALID_ARGS`), not stripped.
 
 ## Design Rules
 
