@@ -43,7 +43,7 @@ class TestDocsSync:
 
     def test_no_removed_tools_in_docs(self, schemas_data):
         """Removed tools must not appear in docs."""
-        removed = {"query", "agent", "llm_helpers", "colorize", "predictor"}
+        removed = {"query", "agent", "llm_helpers", "colorize", "predictor", "filter"}
         p = DOCS / "TOOLS_REFERENCE.md"
         if not p.exists():
             pytest.skip("TOOLS_REFERENCE.md missing")

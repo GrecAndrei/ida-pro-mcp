@@ -67,7 +67,6 @@ Total tools: **66** | Advertised: **64**
 | `cfg_analysis` | 10 | Analyzes control flow graph structure including loops, do... |
 | `binary_info` | 10 | Retrieves binary metadata including PE/ELF headers, secti... |
 | `blackboard` | 70 | Persistent RE knowledge base: findings, hypotheses, IOCs,... |
-| `filter` | 1 | JQ-like deterministic filtering for tool outputs — preven... |
 | `governance` | 4 | Pre-flight validation for edits: detect contradictions, P... |
 | `knowledge` | 5 | Cross-session firmware knowledge base: chip family identi... |
 | `packer` | 5 | Detect packers / protectors (UPX, MPRESS, VMProtect, Them... |
@@ -494,7 +493,6 @@ Import and analyze code coverage data to identify hit/missed paths. Actions: imp
 - `highlight`
 - `report`
 - `uncovered`
-- `filter`
 - `function_coverage`
 - `gaps`
 - `compare`
@@ -1175,13 +1173,6 @@ Persistent RE knowledge base: findings, hypotheses, IOCs, decisions, and knowled
 - `deref`
 - `chain`
 
-### filter
-
-JQ-like deterministic filtering for tool outputs — prevents context overflow. Supports field extraction (.key), slicing ([0:10]), predicate filter ([?size > 100]), sort, unique, pluck, group_by, count, and first(N). Run any large list result through filter before returning to the LLM. Actions: filter.
-
-**Actions:**
-
-- `filter`
 
 ### governance
 
@@ -1284,7 +1275,7 @@ Manage relocations/fixups (relocation table entries) in the IDB. Actions: list, 
 
 **Advertised** (64): Tools exposed to LLM clients.
 
-`session`, `truncation`, `bookmarks`, `batch`, `wiki`, `analysis`, `idb`, `code`, `data`, `search`, `imports_deep`, `symbols`, `patterns`, `types`, `memory`, `modify`, `funcs`, `segments`, `bulk`, `misc`, `calc`, `nav`, `project`, `debug`, `graph`, `ctree`, `export`, `history`, `annotation`, `binary_info`, `threat_hunt`, `workflow`, `compare`, `firmware_view`, `blackboard`, `knowledge`, `abi`, `cfg_analysis`, `classify`, `coverage`, `crypto_id`, `intelligence`, `data_ops`, `deobfuscate`, `entropy`, `filter`, `gadgets`, `governance`, `hooks`, `lumina`, `microcode`, `protocol`, `stack_analysis`, `string_ops`, `summarize`, `taint`, `trace_analysis`, `yara_hunt`, `packer`, `struct_recover`, `emulate`, `bindiff`, `multi_session`, `fixups`
+`session`, `truncation`, `bookmarks`, `batch`, `wiki`, `analysis`, `idb`, `code`, `data`, `search`, `imports_deep`, `symbols`, `patterns`, `types`, `memory`, `modify`, `funcs`, `segments`, `bulk`, `misc`, `calc`, `nav`, `project`, `debug`, `graph`, `ctree`, `export`, `history`, `annotation`, `binary_info`, `threat_hunt`, `workflow`, `compare`, `firmware_view`, `blackboard`, `knowledge`, `abi`, `cfg_analysis`, `classify`, `coverage`, `crypto_id`, `intelligence`, `data_ops`, `deobfuscate`, `entropy`, `gadgets`, `governance`, `hooks`, `lumina`, `microcode`, `protocol`, `stack_analysis`, `string_ops`, `summarize`, `taint`, `trace_analysis`, `yara_hunt`, `packer`, `struct_recover`, `emulate`, `bindiff`, `multi_session`, `fixups`
 
 **Hidden** (2): Internal tools, not in ADVERTISED_TOOLS.
 

@@ -13,6 +13,11 @@ Honest alpha cut. Not a 1.0.
 - **Compact action enums** (`ADVERTISED_ACTIONS`) for session/search/intelligence/blackboard/code/funcs/misc in lean/ultra schema mode. Full `TOOL_ACTIONS` still accepted at call time.
 - Removed broken console entry `sideband-capsule` (module did not exist).
 
+### Cuts
+- **Removed standalone `filter` tool** (Context Guillotine / JQ meta-tool). It duplicated host wrappers (`pick`/`grep`/`head`/`tail`/`stats`) and response compaction; was not on the Tier A core path. Use those instead.
+- Extracted pure `prepare_rpc_args()` for admission (tested without a live server).
+- Fixed pytest `testpaths` so root-level contract tests actually run in CI.
+
 ### Search / funcs
 - Removed first-class `search.semantic` / `search.smart_bundle`; NL/behavior live in `search/semantic.py` via `nl` / `behavior`.
 - Registered `symbol`, `symbol_info`, `demangle`, `xrefs_to_string` on search actions.

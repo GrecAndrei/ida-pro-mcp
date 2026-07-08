@@ -66,7 +66,6 @@ HOST_TOOL_ACTIONS = {
         "export_symbols", "import_symbols", "semantic_index", "semantic_rebuild",
         "related_by_behavior",
     ],
-    "filter": ["filter"],
     "modify": ["rename","comment","set_type","patch_asm"],
     "governance": ["check","redact","list_rules","stats"],
     "graph": [

@@ -101,7 +101,6 @@ TOOLS = [
     # Other components
     # --- New infrastructure tools ---
     "blackboard",
-    "filter",
     # --- Governance ---
     "governance",
     # --- Cross-session firmware KB ---
@@ -309,7 +308,6 @@ TOOL_DESCRIPTIONS = {
     "entropy": "Compute entropy over regions to detect packing, encryption, or compressed data. Actions: section, region, packed_detect, crypto_detect, compare, window, summary.",
     "packer": "Detect packers / protectors (UPX, MPRESS, VMProtect, Themida, ASPack, custom) and game anti-cheat references in the current IDB. Returns indicators, classification, recommendation, and a structured workflow with concrete tool calls (static_steps) and external user actions (external_steps). Actions: detect, profile, guide, status, script. script runs Python in the packer's namespace for custom heuristics.",
     "export": "Export IDB content in various formats for external tooling. Actions: listing, html, idc, json, sarif, binexport, headers, redact.",
-    "filter": "JQ-like deterministic filtering for tool outputs — prevents context overflow. Supports field extraction (.key), slicing ([0:10]), predicate filter ([?size > 100]), sort, unique, pluck, group_by, count, and first(N). Run any large list result through filter before returning to the LLM. Actions: filter.",
     "firmware_view": "Firmware triage: region scanning, pointer sweeps, table carving, deterministic detection logic, multi-region campaigns, and bootstrap orchestration. Actions: scan_region, auto_retype, pointer_sweep, recommend, table_candidates, smart_carve, rollback_last, review_contradictions, region_profile, pointer_clusters, carve_plan, campaign, segment_sweep, multi_region_campaign, detect_load_address, detect_vector_table, detect_mmio, rtos_scan, triage_snapshot, bootstrap.",
     "fixups": "Manage relocations/fixups (relocation table entries) in the IDB. Actions: list, get, add, delete.",
     "funcs": "Function boundary management (≈ IDA P/Delete keys). create: define a function at addr (≡ pressing P in IDA). delete: remove function definition. info: full function metadata — pass include_xrefs/include_prototype/include_stack for richer output. metrics: size/complexity/call counts. find_similar: structural similarity search. suggest_names: name candidates from heuristics. list: paginated function listing (like data(functions)) with structured output. Note: regex-based filters live in search, while renames and comments live on modify. Actions: create, delete, set_flags, info, metrics, find_similar, suggest_names, list.",
@@ -590,7 +588,12 @@ TOOL_ARG_SCHEMAS = {
             "description": "Python expression or IDC script to evaluate",
         },
         "code": {"type": "string", "description": "Multi-line Python code to execute"},
-        "name": {"type": "string", "description": "Signature name for load_sig"},
+        "name": {"type": "string", "description": "Signature name for load_sig / plugin_run"},
+        "path": {"type": "string", "description": "Filesystem path for read_file/write_file"},
+        "content": {"type": "string", "description": "File content for write_file"},
+        "encoding": {"type": "string", "description": "File encoding (default utf-8; binary for hex)"},
+        "arg": {"type": "integer", "description": "Plugin argument for plugin_run"},
+        "verbose": {"type": "boolean", "description": "Include per-runtime details for health"},
         "module": {"type": "string", "description": "Module name to reload (for reload action, e.g. 'funcs')"},
         "modules": {"type": "string", "description": "Comma-separated module names to reload (for reload action, e.g. 'funcs,search')"},
     },
@@ -1004,10 +1007,6 @@ TOOL_ARG_SCHEMAS = {
         "input_type": {"type": "string"},
         "call_stack": {"type": "array", "items": {"type": "string"}},
         "resolved": {"type": "boolean"},
-    },
-    "filter": {
-        "data": {"type": "object", "description": "Tool output dict to filter"},
-        "query": {"type": "string", "description": "JQ-like filter expression (e.g. '.functions[?size > 100] | first(10)')"},
     },
     "fixups": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["fixups"]},

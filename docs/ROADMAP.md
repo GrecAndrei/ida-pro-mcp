@@ -46,6 +46,9 @@ Compact action enums (`ADVERTISED_ACTIONS`) shrink tools/list for `session`,
 - [x] Tier A advertise list
 - [x] Compact action enums for tools/list
 - [x] Remove broken `sideband-capsule` entry point
+- [x] Remove standalone `filter` tool (duplicate of pick/grep/head wrappers)
+- [x] Extract `prepare_rpc_args` + pin with real helper tests
+- [x] Fix pytest testpaths so root contract tests run
 - [x] Restore curated host/integration pins
 - [ ] Further Tier C module deletion after cold-path proof
 - [ ] Full host test suite rebuild (selective, not 84k-line graveyard)

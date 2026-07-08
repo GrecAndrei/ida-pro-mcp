@@ -58,7 +58,6 @@ __all__ = [
     "cfg_analysis",
     "binary_info",
     "blackboard",
-    "filter",
     "governance",
     "knowledge",
     "packer",

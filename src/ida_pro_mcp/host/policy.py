@@ -61,7 +61,6 @@ READ_ONLY_TOOLS = {
     "data",
     "entropy",
     "export",
-    "filter",
     "firmware_view",
     "graph",
     "history",

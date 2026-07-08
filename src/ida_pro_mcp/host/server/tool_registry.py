@@ -87,7 +87,6 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "deobfuscate": ["detect", "detect_encoding", "stack_strings", "dead_code", "api_hashing", "dynamic_dispatch", "anti_disasm", "decode_attempt"],
     "entropy": ["section", "region", "packed_detect", "crypto_detect", "compare", "window", "summary"],
     "export": ["listing", "html", "idc", "json", "sarif", "binexport", "headers", "redact", "vtable"],
-    "filter": ["filter"],
     "firmware_view": ["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign", "detect_load_address", "detect_vector_table", "detect_mmio", "rtos_scan", "triage_snapshot", "bootstrap"],
     "fixups": ["list", "get", "add", "delete"],
     "funcs": ["create", "delete", "set_flags", "info", "metrics", "find_similar", "suggest_names", "list"],

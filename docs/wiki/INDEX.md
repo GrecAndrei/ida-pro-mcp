@@ -67,7 +67,6 @@ Auto-generated from wiki file structure.
 
 - [export](tools/export.md)
 
-- [filter](tools/filter.md)
 
 - [firmware_view](tools/firmware_view.md)
 

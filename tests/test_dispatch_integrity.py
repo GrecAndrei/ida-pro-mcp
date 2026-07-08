@@ -33,9 +33,10 @@ class TestDispatchHandlers:
         from pathlib import Path
 
         tools_dir = SRC / "ida_pro_mcp" / "ida_mcp" / "tools"
+        # Host-only tools that must have an explicit dispatch branch.
         host_only = {
             "session", "truncation", "bookmarks", "background", "workflow",
-            "multi_session", "threat_hunt", "batch", "wiki", "blackboard",
+            "multi_session", "threat_hunt", "wiki", "blackboard",
         }
         for tool in schemas_data.ADVERTISED_TOOLS:
             has_handler = f"def _handle_{tool}" in dispatch_source
@@ -53,9 +54,10 @@ class TestDispatchHandlers:
                 )
 
     def test_rpc_arg_filter_rejects_unknown(self, dispatch_source):
-        """Contract: unknown kwargs must hard-fail, not silent-strip."""
-        assert "Unknown argument(s) for tool" in dispatch_source
-        assert "rpc_args = {k: v for k, v in rpc_args.items() if k in allowed}" not in dispatch_source
+        """Contract: dispatch uses prepare_rpc_args (hard-fail), not silent strip."""
+        assert "from .rpc_args import prepare_rpc_args" in dispatch_source
+        assert "prepare_rpc_args(tool_name, kwargs, TOOL_ARG_SCHEMAS)" in dispatch_source
+        assert "if k in allowed}" not in dispatch_source
 
     def test_dispatch_references_match_tools(self, schemas_data, dispatch_source):
         """Dispatch handlers should only reference tools that exist."""

@@ -83,7 +83,6 @@ CURATED: dict[str, tuple[str, dict]] = {
     "deobfuscate":    ("detect",        {}),
     "entropy":        ("summary",       {}),
     "export":         ("listing",       {"limit": 5}),
-    "filter":         ("filter",        {"data": {"functions": ["a", "b"]}, "query": "."}),
     "firmware_view":  ("triage_snapshot", {}),
     "funcs":          ("info",          {"addr": "__ADDR__"}),
     "gadgets":        ("mitigations",   {}),

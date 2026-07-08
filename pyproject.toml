@@ -208,11 +208,5 @@ max-locals = 25
 pythonpath = ["."]
 timeout = 30
 timeout_method = "thread"
-testpaths = [
-    "tests/capsule",
-    "tests/host",
-    "tests/tools",
-    "tests/other",
-    "tests/integration",
-]
+testpaths = ["tests"]
 addopts = "--ignore=tests/probes --ignore=tests/benchmarks"
