@@ -1,3 +1,20 @@
+"""BINDIFF — cross-version binary comparison via fingerprints.
+
+Workflow:
+  1. Open binary A → bindiff(action='snapshot', path='/tmp/a.snap.json')
+  2. Open binary B (or patched build) → bindiff(action='diff', snapshot='/tmp/a.snap.json')
+  3. function_match / summary / patch_analysis for deeper views
+
+Does not require Google BinDiff. For protobuf BinExport files use export(action='binexport').
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import time
+from typing import Any, Optional
 
 try:
     from ._common import *
@@ -5,24 +22,28 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 
-# ============================================================================
-# BINDIFF - Binary Diffing via Snapshots (cross-IDB / cross-version comparison)
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Fingerprint helpers
+# ---------------------------------------------------------------------------
 
-import hashlib
-import json
+def _is_code_ea(ea: int) -> bool:
+    try:
+        return bool(ida_bytes.is_code(ida_bytes.get_flags(ea)))
+    except Exception:
+        try:
+            return bool(idc.is_code(idc.get_full_flags(ea)))
+        except Exception:
+            return False
 
-# -- helpers ------------------------------------------------------------------
 
 def _mnemonic_hash(ea, max_insns=10000):
-    """Hash the mnemonic sequence of a function for fingerprinting."""
     func = ida_funcs.get_func(ea)
     if not func:
         return None
     mnemonics = []
     for head in idautils.Heads(func.start_ea, func.end_ea):
-        if idc.is_code(idc.get_full_flags(head)):
-            mnemonics.append(idc.print_insn_mnem(head))
+        if _is_code_ea(head):
+            mnemonics.append(idc.print_insn_mnem(head) or "")
             if len(mnemonics) >= max_insns:
                 break
     if not mnemonics:
@@ -31,7 +52,6 @@ def _mnemonic_hash(ea, max_insns=10000):
 
 
 def _func_name(ea):
-    """Return the function name or hex address as a string key."""
     name = idc.get_func_name(ea)
     if name and not name.startswith("sub_"):
         return name
@@ -39,7 +59,6 @@ def _func_name(ea):
 
 
 def _get_callees(ea):
-    """Return sorted list of callee names for the function at ea."""
     func = ida_funcs.get_func(ea)
     if not func:
         return []
@@ -53,24 +72,22 @@ def _get_callees(ea):
 
 
 def _get_constants(ea):
-    """Return sorted list of immediate operand values inside the function."""
     func = ida_funcs.get_func(ea)
     if not func:
         return []
     constants = set()
     for head in idautils.Heads(func.start_ea, func.end_ea):
-        if not idc.is_code(idc.get_full_flags(head)):
+        if not _is_code_ea(head):
             continue
         for n in range(2):
             if idc.get_operand_type(head, n) == idc.o_imm:
                 val = idc.get_operand_value(head, n)
                 if val not in (0, 1, -1):
-                    constants.add(val)
+                    constants.add(int(val))
     return sorted(constants)
 
 
 def _get_string_refs(ea):
-    """Return sorted list of strings referenced inside the function."""
     func = ida_funcs.get_func(ea)
     if not func:
         return []
@@ -81,26 +98,29 @@ def _get_string_refs(ea):
             if stype is not None and stype >= 0:
                 s = idc.get_strlit_contents(dref, -1, stype)
                 if s:
-                    strings.add(s.decode("utf-8", errors="replace") if isinstance(s, bytes) else s)
+                    strings.add(
+                        s.decode("utf-8", errors="replace") if isinstance(s, bytes) else str(s)
+                    )
     return sorted(strings)
 
 
 def _flowchart_info(ea):
-    """Return (block_count, edge_count) for the function at ea."""
     func = ida_funcs.get_func(ea)
     if not func:
         return 0, 0
-    fc = idaapi.FlowChart(func)
-    blocks = list(fc)
-    block_count = len(blocks)
-    edge_count = 0
-    for block in blocks:
-        edge_count += len(list(block.succs()))
-    return block_count, edge_count
+    try:
+        fc = idaapi.FlowChart(func)
+        blocks = list(fc)
+        block_count = len(blocks)
+        edge_count = 0
+        for block in blocks:
+            edge_count += len(list(block.succs()))
+        return block_count, edge_count
+    except Exception:
+        return 0, 0
 
 
 def _fingerprint_function(ea):
-    """Build a fingerprint dict for a single function."""
     func = ida_funcs.get_func(ea)
     if not func:
         return None
@@ -108,7 +128,7 @@ def _fingerprint_function(ea):
     block_count, edge_count = _flowchart_info(ea)
     return {
         "addr": hex_ea(ea),
-        "size": size,
+        "size": int(size),
         "mnemonic_hash": _mnemonic_hash(ea),
         "block_count": block_count,
         "edge_count": edge_count,
@@ -118,24 +138,69 @@ def _fingerprint_function(ea):
     }
 
 
-def _resolve_snapshot(snapshot):
-    """Resolve a snapshot from a dict or JSON string/path. Returns (dict, error)."""
+def _binary_meta() -> dict:
+    md5 = None
+    try:
+        digest = idaapi.retrieve_input_file_md5()
+        if digest:
+            md5 = digest.hex() if hasattr(digest, "hex") else str(digest)
+    except Exception:
+        md5 = None
+    return {
+        "file": idaapi.get_input_file_path() or "",
+        "md5": md5,
+        "imagebase": hex(idaapi.get_imagebase()),
+        "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
+def resolve_snapshot(snapshot) -> tuple[Optional[dict], Optional[dict]]:
+    """Resolve snapshot from dict, JSON string, or filesystem path.
+
+    Pure enough for host unit tests (filesystem + json only when path given).
+    Returns (snapshot_dict, error_envelope_or_None).
+    """
     if isinstance(snapshot, dict):
         return snapshot, None
-    if isinstance(snapshot, str):
+    if not isinstance(snapshot, str) or not snapshot.strip():
+        return None, make_error(
+            MCPError.INVALID_ARGS,
+            "snapshot must be a dict, JSON string, or valid file path",
+        )
+    text = snapshot.strip()
+    # Prefer file path when it exists — agents often pass paths that look like JSON-ish names.
+    if os.path.isfile(text):
         try:
-            parsed = json.loads(snapshot)
-            if isinstance(parsed, dict):
-                return parsed, None
-        except (json.JSONDecodeError, ValueError):
-            pass
-        try:
-            with open(snapshot) as f:
-                return json.load(f), None
-        except (OSError, json.JSONDecodeError, ValueError):
-            pass
-    return None, make_error(MCPError.INVALID_ARGS,
-                            "snapshot must be a dict, JSON string, or valid file path")
+            with open(text, encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data, None
+            return None, make_error(MCPError.INVALID_ARGS, "snapshot file must contain a JSON object")
+        except (OSError, json.JSONDecodeError, ValueError) as e:
+            return None, make_error(MCPError.INVALID_ARGS, f"failed to load snapshot file: {e}")
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed, None
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return None, make_error(
+        MCPError.INVALID_ARGS,
+        "snapshot must be a dict, JSON string, or valid file path",
+    )
+
+
+def save_snapshot_file(path: str, payload: dict) -> tuple[Optional[str], Optional[dict]]:
+    """Write snapshot JSON to path. Returns (abspath, error)."""
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        return os.path.abspath(path), None
+    except OSError as e:
+        return None, make_error(MCPError.IDA_ERROR, f"failed to write snapshot: {e}")
 
 
 _SECURITY_APIS = {
@@ -147,70 +212,144 @@ _SECURITY_APIS = {
 }
 
 
-# -- main tool ----------------------------------------------------------------
+def _snap_funcs(snap: dict) -> dict:
+    funcs = snap.get("functions")
+    if isinstance(funcs, dict):
+        return funcs
+    # Accept raw name→fp map
+    if all(isinstance(v, dict) for v in snap.values() if v is not None):
+        return snap
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# Tool
+# ---------------------------------------------------------------------------
 
 @tool
 @idaread
 def bindiff(
-    action: Annotated[Literal["snapshot", "diff", "patch_analysis", "function_match", "summary"],
-                      "Action: snapshot|diff|patch_analysis|function_match|summary"],
+    action: Annotated[
+        Literal["snapshot", "diff", "patch_analysis", "function_match", "summary"],
+        "Action: snapshot|diff|patch_analysis|function_match|summary",
+    ],
     addr: Annotated[Optional[str], "Function address (for patch_analysis)"] = None,
-    snapshot: Annotated[Optional[Any], "Previous snapshot dict or JSON string/path"] = None,
+    snapshot: Annotated[
+        Optional[Any], "Previous snapshot dict, JSON string, or file path"
+    ] = None,
+    path: Annotated[
+        Optional[str],
+        "For snapshot: write fingerprints here. For other actions: alias for snapshot path",
+    ] = None,
     limit: Annotated[int, "Max results to return"] = 50,
-    threshold: Annotated[float, "Match confidence threshold (0.0-1.0)"] = 0.6,
-    **kwargs
+    threshold: Annotated[float, "Match confidence threshold 0.0-1.0"] = 0.6,
+    max_functions: Annotated[Optional[int], "Cap functions fingerprinted (default unlimited)"] = None,
+    include_full: Annotated[
+        bool,
+        "If true and path is set, also return full functions map in the response (default false — path only)",
+    ] = False,
+    **kwargs,
 ) -> dict:
     """
-    Binary diffing via snapshots - compare across IDB versions or saved baselines.
+    Binary diffing via function fingerprints (no Google BinDiff required).
 
-    ACTIONS:
-
-    snapshot - Fingerprint all functions → {functions: {name: {addr, size, mnemonic_hash, block_count, edge_count, callees, constants, string_refs}}}
-
-    diff - Compare current state against snapshot → {new/removed/modified functions with deltas}
-        Params: snapshot
-
-    patch_analysis - Focused single-function diff with block-level detail and security notes
-        Params: addr, snapshot
-
-    function_match - Match functions between snapshot and current binary via multiple heuristics
-        Params: snapshot, threshold
-
-    summary - High-level diff summary with security impact assessment and change categories
-        Params: snapshot
+    snapshot         — fingerprint current IDB; pass path= to persist JSON for later diffs
+    diff             — new/removed/modified vs snapshot
+    function_match   — multi-heuristic matching (name, mnemonic hash, callees, strings, CFG)
+    patch_analysis   — single-function deep delta
+    summary          — high-level stats + security-oriented categories
     """
     try:
+        try:
+            limit = max(1, min(int(limit), 5000))
+        except (TypeError, ValueError):
+            limit = 50
+        try:
+            threshold = max(0.0, min(1.0, float(threshold)))
+        except (TypeError, ValueError):
+            threshold = 0.6
+        max_fn = None
+        if max_functions is not None:
+            try:
+                max_fn = max(1, int(max_functions))
+            except (TypeError, ValueError):
+                max_fn = None
+
+        # path as snapshot alias for non-snapshot actions
+        if action != "snapshot" and snapshot is None and path:
+            snapshot = path
+
         if action == "snapshot":
+            if path:
+                path, err = validate_path_safe(path)
+                if err:
+                    return err
             functions = {}
             for func_ea in idautils.Functions():
                 fp = _fingerprint_function(func_ea)
                 if fp is None:
                     continue
                 key = _func_name(func_ea)
+                # Avoid overwriting if two funcs share a display name — keep first, suffix addr
+                if key in functions:
+                    key = f"{key}@{hex_ea(func_ea)}"
                 functions[key] = fp
-            return {
+                if max_fn is not None and len(functions) >= max_fn:
+                    break
+            payload = {
                 "ok": True,
+                "version": 1,
+                "meta": _binary_meta(),
                 "function_count": len(functions),
                 "functions": functions,
             }
+            if path:
+                abspath, err = save_snapshot_file(path, payload)
+                if err:
+                    return err
+                result = {
+                    "ok": True,
+                    "exported": True,
+                    "path": abspath,
+                    "function_count": len(functions),
+                    "meta": payload["meta"],
+                    "note": (
+                        "Snapshot written. Diff later with "
+                        f"bindiff(action='diff', snapshot='{abspath}')."
+                    ),
+                }
+                if include_full:
+                    result["functions"] = functions
+                return result
+            # No path: return in-band (can be large — agents should prefer path=)
+            return {
+                "ok": True,
+                "function_count": len(functions),
+                "meta": payload["meta"],
+                "functions": functions,
+                "hint": "Pass path='/tmp/snap.json' to avoid huge in-band responses.",
+            }
 
-        elif action == "diff":
+        if action == "diff":
             if not snapshot:
-                return make_error(MCPError.INVALID_ARGS, "snapshot required for diff action")
-            snap, err = _resolve_snapshot(snapshot)
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "snapshot required (dict, JSON, or path from a prior snapshot)",
+                )
+            snap, err = resolve_snapshot(snapshot)
             if err:
                 return err
-            snap_funcs = snap.get("functions", snap)
+            snap_funcs = _snap_funcs(snap)
 
-            # Build current state
             current = {}
             for func_ea in idautils.Functions():
                 key = _func_name(func_ea)
                 current[key] = _fingerprint_function(func_ea)
+                if max_fn is not None and len(current) >= max_fn:
+                    break
 
             snap_keys = set(snap_funcs.keys())
             curr_keys = set(current.keys())
-
             new_funcs = sorted(curr_keys - snap_keys)
             removed_funcs = sorted(snap_keys - curr_keys)
             common = snap_keys & curr_keys
@@ -219,10 +358,9 @@ def bindiff(
             for name in sorted(common):
                 old = snap_funcs[name]
                 cur = current[name]
-                if cur is None:
+                if not isinstance(old, dict) or cur is None:
                     continue
                 changes = {}
-                # Size delta
                 if old.get("size", 0) != cur.get("size", 0):
                     changes["size_delta"] = cur["size"] - old.get("size", 0)
                 if old.get("mnemonic_hash") != cur.get("mnemonic_hash"):
@@ -231,19 +369,35 @@ def bindiff(
                     changes["block_delta"] = cur["block_count"] - old.get("block_count", 0)
                 old_c, cur_c = set(old.get("callees", [])), set(cur.get("callees", []))
                 if old_c != cur_c:
-                    if cur_c - old_c: changes["new_callees"] = sorted(cur_c - old_c)
-                    if old_c - cur_c: changes["removed_callees"] = sorted(old_c - cur_c)
+                    if cur_c - old_c:
+                        changes["new_callees"] = sorted(cur_c - old_c)
+                    if old_c - cur_c:
+                        changes["removed_callees"] = sorted(old_c - cur_c)
                 old_k, cur_k = set(old.get("constants", [])), set(cur.get("constants", []))
                 if old_k != cur_k:
-                    if cur_k - old_k: changes["new_constants"] = [hex(v) if isinstance(v, int) else v for v in sorted(cur_k - old_k)]
-                    if old_k - cur_k: changes["removed_constants"] = [hex(v) if isinstance(v, int) else v for v in sorted(old_k - cur_k)]
-
+                    if cur_k - old_k:
+                        changes["new_constants"] = [
+                            hex(v) if isinstance(v, int) else v for v in sorted(cur_k - old_k)
+                        ]
+                    if old_k - cur_k:
+                        changes["removed_constants"] = [
+                            hex(v) if isinstance(v, int) else v for v in sorted(old_k - cur_k)
+                        ]
+                old_s, cur_s = set(old.get("string_refs", [])), set(cur.get("string_refs", []))
+                if old_s != cur_s:
+                    if cur_s - old_s:
+                        changes["new_strings"] = sorted(cur_s - old_s)[:20]
+                    if old_s - cur_s:
+                        changes["removed_strings"] = sorted(old_s - cur_s)[:20]
                 if changes:
                     changes["name"] = name
+                    changes["addr"] = cur.get("addr")
                     modified.append(changes)
 
             return {
                 "ok": True,
+                "meta_snapshot": snap.get("meta"),
+                "meta_current": _binary_meta(),
                 "new_functions": new_funcs[:limit],
                 "new_count": len(new_funcs),
                 "removed_functions": removed_funcs[:limit],
@@ -254,7 +408,7 @@ def bindiff(
                 "total_snapshot": len(snap_funcs),
             }
 
-        elif action == "patch_analysis":
+        if action == "patch_analysis":
             if not addr:
                 return make_error(MCPError.INVALID_ARGS, "addr required for patch_analysis")
             if not snapshot:
@@ -262,69 +416,85 @@ def bindiff(
             ea, err = validate_addr(addr, require_func=True)
             if err:
                 return err
-            snap, err = _resolve_snapshot(snapshot)
+            snap, err = resolve_snapshot(snapshot)
             if err:
                 return err
-            snap_funcs = snap.get("functions", snap)
-
+            snap_funcs = _snap_funcs(snap)
             func_key = _func_name(ea)
             old_fp = snap_funcs.get(func_key)
             if not old_fp:
-                return make_error(MCPError.INVALID_ARGS,
-                                  f"Function '{func_key}' not found in snapshot")
-
+                # try match by addr field
+                for k, v in snap_funcs.items():
+                    if isinstance(v, dict) and v.get("addr") == hex_ea(ea):
+                        old_fp = v
+                        func_key = k
+                        break
+            if not old_fp:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    f"Function '{func_key}' not found in snapshot",
+                    "Run function_match first if the function was renamed.",
+                )
             cur_fp = _fingerprint_function(ea)
             if not cur_fp:
                 return make_error(MCPError.INVALID_ARGS, "Cannot fingerprint current function")
 
-            # Block-level analysis
             func = ida_funcs.get_func(ea)
-            fc = idaapi.FlowChart(func)
             block_hashes = []
-            for block in fc:
-                mnemonics = []
-                for head in idautils.Heads(block.start_ea, block.end_ea):
-                    if idc.is_code(idc.get_full_flags(head)):
-                        mnemonics.append(idc.print_insn_mnem(head))
-                bh = hashlib.md5("|".join(mnemonics).encode()).hexdigest() if mnemonics else None
-                block_hashes.append({
-                    "addr": hex_ea(block.start_ea),
-                    "size": block.end_ea - block.start_ea,
-                    "insn_count": len(mnemonics),
-                    "hash": bh,
-                })
+            if func:
+                try:
+                    fc = idaapi.FlowChart(func)
+                    for block in fc:
+                        mnemonics = []
+                        for head in idautils.Heads(block.start_ea, block.end_ea):
+                            if _is_code_ea(head):
+                                mnemonics.append(idc.print_insn_mnem(head) or "")
+                        bh = (
+                            hashlib.md5("|".join(mnemonics).encode()).hexdigest()
+                            if mnemonics
+                            else None
+                        )
+                        block_hashes.append(
+                            {
+                                "addr": hex_ea(block.start_ea),
+                                "size": block.end_ea - block.start_ea,
+                                "insn_count": len(mnemonics),
+                                "hash": bh,
+                            }
+                        )
+                except Exception:
+                    pass
 
-            # Callee changes
             old_callees = set(old_fp.get("callees", []))
             cur_callees = set(cur_fp.get("callees", []))
             new_callees = sorted(cur_callees - old_callees)
             removed_callees = sorted(old_callees - cur_callees)
-
-            # Constant changes
             old_consts = set(old_fp.get("constants", []))
             cur_consts = set(cur_fp.get("constants", []))
             new_consts = sorted(cur_consts - old_consts)
             removed_consts = sorted(old_consts - cur_consts)
-
-            # String ref changes
             old_strings = set(old_fp.get("string_refs", []))
-            cur_strings = set(_get_string_refs(ea))
+            cur_strings = set(cur_fp.get("string_refs", []))
             new_strings = sorted(cur_strings - old_strings)
             removed_strings = sorted(old_strings - cur_strings)
 
-            # Security notes
             security_notes = []
             dangerous_new = set(new_callees) & _SECURITY_APIS
             dangerous_removed = set(removed_callees) & _SECURITY_APIS
             if dangerous_new:
                 security_notes.append(f"New security-relevant APIs: {sorted(dangerous_new)}")
             if dangerous_removed:
-                security_notes.append(f"Removed security-relevant APIs: {sorted(dangerous_removed)}")
-            old_blocks, cur_blocks = old_fp.get("block_count", 0), cur_fp.get("block_count", 0)
+                security_notes.append(
+                    f"Removed security-relevant APIs: {sorted(dangerous_removed)}"
+                )
+            old_blocks = old_fp.get("block_count", 0)
+            cur_blocks = cur_fp.get("block_count", 0)
             if cur_blocks > old_blocks:
-                security_notes.append(f"+{cur_blocks - old_blocks} block(s) - possible new checks")
+                security_notes.append(f"+{cur_blocks - old_blocks} block(s) — possible new checks")
             elif cur_blocks < old_blocks:
-                security_notes.append(f"-{old_blocks - cur_blocks} block(s) - possible removed handling")
+                security_notes.append(
+                    f"-{old_blocks - cur_blocks} block(s) — possible removed handling"
+                )
 
             return {
                 "ok": True,
@@ -337,22 +507,28 @@ def bindiff(
                 "new_callees": new_callees,
                 "removed_callees": removed_callees,
                 "new_constants": [hex(v) if isinstance(v, int) else v for v in new_consts],
-                "removed_constants": [hex(v) if isinstance(v, int) else v for v in removed_consts],
+                "removed_constants": [
+                    hex(v) if isinstance(v, int) else v for v in removed_consts
+                ],
                 "new_strings": new_strings,
                 "removed_strings": removed_strings,
                 "security_notes": security_notes,
             }
 
-        elif action == "function_match":
+        if action == "function_match":
             if not snapshot:
                 return make_error(MCPError.INVALID_ARGS, "snapshot required for function_match")
-            snap, err = _resolve_snapshot(snapshot)
+            snap, err = resolve_snapshot(snapshot)
             if err:
                 return err
-            snap_funcs = snap.get("functions", snap)
+            snap_funcs = _snap_funcs(snap)
 
-            # Build current indices
-            current_by_name, current_by_hash, current_by_callees = {}, {}, {}
+            current_by_name, current_by_hash, current_by_callees, current_by_strings = (
+                {},
+                {},
+                {},
+                {},
+            )
             for func_ea in idautils.Functions():
                 key = _func_name(func_ea)
                 fp = _fingerprint_function(func_ea)
@@ -362,23 +538,32 @@ def bindiff(
                 mh = fp.get("mnemonic_hash")
                 if mh:
                     current_by_hash.setdefault(mh, []).append(key)
-                ck = "|".join(sorted(fp.get("callees", [])))
+                ck = "|".join(fp.get("callees", []))
                 if ck:
                     current_by_callees.setdefault(ck, []).append(key)
+                sk = "|".join(fp.get("string_refs", [])[:16])
+                if sk:
+                    current_by_strings.setdefault(sk, []).append(key)
+                if max_fn is not None and len(current_by_name) >= max_fn:
+                    break
 
             matches, matched_snap, matched_curr = [], set(), set()
 
-            # Pass 1: Exact name match
             for snap_name in snap_funcs:
                 if snap_name in current_by_name:
-                    matches.append({"snapshot_name": snap_name, "current_name": snap_name,
-                                    "confidence": 1.0, "method": "exact_name"})
+                    matches.append(
+                        {
+                            "snapshot_name": snap_name,
+                            "current_name": snap_name,
+                            "confidence": 1.0,
+                            "method": "exact_name",
+                        }
+                    )
                     matched_snap.add(snap_name)
                     matched_curr.add(snap_name)
 
-            # Pass 2: Mnemonic hash match (renamed but same code)
             for snap_name, snap_fp in snap_funcs.items():
-                if snap_name in matched_snap:
+                if snap_name in matched_snap or not isinstance(snap_fp, dict):
                     continue
                 mh = snap_fp.get("mnemonic_hash")
                 if not mh:
@@ -386,15 +571,41 @@ def bindiff(
                 for cand in current_by_hash.get(mh, []):
                     if cand in matched_curr:
                         continue
-                    matches.append({"snapshot_name": snap_name, "current_name": cand,
-                                    "confidence": 0.95, "method": "mnemonic_hash"})
+                    matches.append(
+                        {
+                            "snapshot_name": snap_name,
+                            "current_name": cand,
+                            "confidence": 0.95,
+                            "method": "mnemonic_hash",
+                        }
+                    )
                     matched_snap.add(snap_name)
                     matched_curr.add(cand)
                     break
 
-            # Pass 3: Callee signature match
             for snap_name, snap_fp in snap_funcs.items():
-                if snap_name in matched_snap:
+                if snap_name in matched_snap or not isinstance(snap_fp, dict):
+                    continue
+                sk = "|".join(snap_fp.get("string_refs", [])[:16])
+                if not sk:
+                    continue
+                for cand in current_by_strings.get(sk, []):
+                    if cand in matched_curr:
+                        continue
+                    matches.append(
+                        {
+                            "snapshot_name": snap_name,
+                            "current_name": cand,
+                            "confidence": 0.88,
+                            "method": "string_refs",
+                        }
+                    )
+                    matched_snap.add(snap_name)
+                    matched_curr.add(cand)
+                    break
+
+            for snap_name, snap_fp in snap_funcs.items():
+                if snap_name in matched_snap or not isinstance(snap_fp, dict):
                     continue
                 callees_key = "|".join(sorted(snap_fp.get("callees", [])))
                 if not callees_key:
@@ -404,18 +615,30 @@ def bindiff(
                         continue
                     cur_fp = current_by_name.get(cand)
                     if cur_fp and snap_fp.get("size", 0) > 0 and cur_fp.get("size", 0) > 0:
-                        if min(snap_fp["size"], cur_fp["size"]) / max(snap_fp["size"], cur_fp["size"]) < 0.3:
+                        if (
+                            min(snap_fp["size"], cur_fp["size"])
+                            / max(snap_fp["size"], cur_fp["size"])
+                            < 0.3
+                        ):
                             continue
-                    matches.append({"snapshot_name": snap_name, "current_name": cand,
-                                    "confidence": 0.8, "method": "callee_signature"})
+                    matches.append(
+                        {
+                            "snapshot_name": snap_name,
+                            "current_name": cand,
+                            "confidence": 0.8,
+                            "method": "callee_signature",
+                        }
+                    )
                     matched_snap.add(snap_name)
                     matched_curr.add(cand)
                     break
 
-            # Pass 4: Fuzzy structural match (similar CFG shape + size)
-            unmatched_snaps = [(n, f) for n, f in snap_funcs.items()
-                               if n not in matched_snap and f.get("size", 0) > 0]
-            for snap_name, snap_fp in unmatched_snaps[:200]:
+            unmatched_snaps = [
+                (n, f)
+                for n, f in snap_funcs.items()
+                if n not in matched_snap and isinstance(f, dict) and f.get("size", 0) > 0
+            ]
+            for snap_name, snap_fp in unmatched_snaps[:500]:
                 snap_blocks = snap_fp.get("block_count", 0)
                 snap_edges = snap_fp.get("edge_count", 0)
                 snap_size = snap_fp["size"]
@@ -427,21 +650,28 @@ def bindiff(
                     if cur_size == 0:
                         continue
                     size_sim = min(snap_size, cur_size) / max(snap_size, cur_size)
-                    block_sim = 1.0 - abs(snap_blocks - cur_fp.get("block_count", 0)) / max(snap_blocks, cur_fp.get("block_count", 0), 1)
-                    edge_sim = 1.0 - abs(snap_edges - cur_fp.get("edge_count", 0)) / max(snap_edges, cur_fp.get("edge_count", 0), 1)
+                    block_sim = 1.0 - abs(snap_blocks - cur_fp.get("block_count", 0)) / max(
+                        snap_blocks, cur_fp.get("block_count", 0), 1
+                    )
+                    edge_sim = 1.0 - abs(snap_edges - cur_fp.get("edge_count", 0)) / max(
+                        snap_edges, cur_fp.get("edge_count", 0), 1
+                    )
                     score = size_sim * 0.4 + block_sim * 0.3 + edge_sim * 0.3
                     if score > best_score:
                         best_score = score
                         best_match = cur_name
                 if best_match and best_score >= threshold:
-                    matches.append({
-                        "snapshot_name": snap_name, "current_name": best_match,
-                        "confidence": round(best_score, 3), "method": "structural_fuzzy",
-                    })
+                    matches.append(
+                        {
+                            "snapshot_name": snap_name,
+                            "current_name": best_match,
+                            "confidence": round(best_score, 3),
+                            "method": "structural_fuzzy",
+                        }
+                    )
                     matched_snap.add(snap_name)
                     matched_curr.add(best_match)
 
-            # Sort by confidence descending
             matches.sort(key=lambda m: m["confidence"], reverse=True)
             return {
                 "ok": True,
@@ -451,19 +681,20 @@ def bindiff(
                 "unmatched_current": len(current_by_name) - len(matched_curr),
             }
 
-        elif action == "summary":
+        if action == "summary":
             if not snapshot:
                 return make_error(MCPError.INVALID_ARGS, "snapshot required for summary")
-            snap, err = _resolve_snapshot(snapshot)
+            snap, err = resolve_snapshot(snapshot)
             if err:
                 return err
-            snap_funcs = snap.get("functions", snap)
+            snap_funcs = _snap_funcs(snap)
 
-            # Build current state
             current = {}
             for func_ea in idautils.Functions():
                 key = _func_name(func_ea)
                 current[key] = _fingerprint_function(func_ea)
+                if max_fn is not None and len(current) >= max_fn:
+                    break
 
             snap_keys = set(snap_funcs.keys())
             curr_keys = set(current.keys())
@@ -476,7 +707,9 @@ def bindiff(
             cats = {"bugfix": [], "feature": [], "refactor": [], "security": []}
             for name in common:
                 old, cur = snap_funcs[name], current[name]
-                if cur is None or old.get("mnemonic_hash") == cur.get("mnemonic_hash"):
+                if not isinstance(old, dict) or cur is None:
+                    continue
+                if old.get("mnemonic_hash") == cur.get("mnemonic_hash"):
                     continue
                 modified_names.append(name)
                 size_d = cur.get("size", 0) - old.get("size", 0)
@@ -494,15 +727,23 @@ def bindiff(
                 else:
                     cats["refactor"].append(name)
 
-            security_new_funcs = [n for n in list(new_funcs)[:200]
-                                  if current.get(n) and set(current[n].get("callees", [])) & _SECURITY_APIS]
+            security_new_funcs = [
+                n
+                for n in list(new_funcs)[:200]
+                if current.get(n) and set(current[n].get("callees", [])) & _SECURITY_APIS
+            ]
 
             return {
                 "ok": True,
+                "meta_snapshot": snap.get("meta"),
+                "meta_current": _binary_meta(),
                 "stats": {
-                    "functions_added": len(new_funcs), "functions_removed": len(removed_funcs),
-                    "functions_modified": len(modified_names), "total_size_delta": total_size_delta,
-                    "total_current": len(current), "total_snapshot": len(snap_funcs),
+                    "functions_added": len(new_funcs),
+                    "functions_removed": len(removed_funcs),
+                    "functions_modified": len(modified_names),
+                    "total_size_delta": total_size_delta,
+                    "total_current": len(current),
+                    "total_snapshot": len(snap_funcs),
                 },
                 "security_impact": {
                     "modified_security_functions": security_modified[:limit],
@@ -514,8 +755,7 @@ def bindiff(
                 "removed_functions_sample": sorted(removed_funcs)[:20],
             }
 
-        else:
-            return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
+        return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
 
     except Exception as e:
         return handle_error(e)

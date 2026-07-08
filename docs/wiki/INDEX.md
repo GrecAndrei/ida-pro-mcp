@@ -66,6 +66,7 @@ Auto-generated from wiki file structure.
 - [entropy](tools/entropy.md)
 
 - [export](tools/export.md)
+- [bindiff](tools/bindiff.md)
 
 
 - [firmware_view](tools/firmware_view.md)

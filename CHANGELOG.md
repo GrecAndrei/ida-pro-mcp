@@ -2,6 +2,13 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## Unreleased — bindiff + export that actually work
+
+### Fixed / improved
+- **export**: real file writes; `binexport` uses `BinExportBinary(path)` and verifies artifact; headers emit C decls; SARIF is blackboard findings only (no invented per-function noise); redact takes `text=`; full TOOL_ARG_SCHEMAS admitted.
+- **bindiff**: `path=` on snapshot for durable fingerprints; load snapshot from path/JSON/dict; metadata (md5/imagebase); string-ref matching pass; IDA9-safe is_code; `include_full` for in-band dumps.
+- Host tests for redact helper, resolve_snapshot, and arg admission.
+
 ## 0.9.0 — contract honesty, tier surface, restore pins (2026-07-08)
 
 Honest alpha cut. Not a 1.0.
