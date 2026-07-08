@@ -210,3 +210,19 @@ Execute a structured query language expression.
 - `find`, `semantic`, `nl`, `behavior` inject `blackboard_context` into results — addresses with existing findings show their entries inline.
 - `decompiled` auto-writes `hypothesis` entries to the blackboard for matching functions.
 - `resolve_target` (used by `callers`, `callees`, `api`) checks the blackboard for custom names before fuzzy matching.
+
+## Response shape (all actions)
+
+Every successful search returns:
+- `results` / `matches`: compact text lines
+- `items`: structured hits with **`addr`** (hex), optional `name`, `type`, `score`, `snippet`
+- `count`, `total`, `offset`, `truncated`
+
+Prefer reading `items[].addr` — never parse hex out of free text.
+
+## find notes
+
+- Matches demangled C++ names as well as raw symbols
+- Scans comments
+- Skips full instruction scan for identifier-like queries when enough name/string/import hits exist (use `instruction`/`text` to force)
+

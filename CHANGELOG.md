@@ -2,6 +2,15 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## Unreleased — search quality + bindiff/export
+
+### Search
+- Unified response envelope: `results`+`matches`, always `items[].addr` via `normalize_search_result`.
+- `find`: demangled names, comments, smart skip of insn scan for identifier queries.
+- Stronger `resolve_target` (unique substring, demangle, broader blackboard).
+- `symbol` demangle matching + structured items; `api` always returns items with addr.
+- Removed dead post-return heuristic in unified semantic path; `query_lang` in SEARCH_ACTIONS.
+
 ## Unreleased — bindiff + export that actually work
 
 ### Fixed / improved

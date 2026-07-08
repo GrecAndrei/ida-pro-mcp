@@ -1,10 +1,4 @@
-"""SEARCH.CORE - Shared utilities, constants, and base helpers for search actions.
-
-Architecture:
-- Context Density Optimization: compact output, line clipping
-- Neuro-Symbolic Governance: embedding-first semantic target resolution
-- Structured Semantic Retrieval: schema helpers
-"""
+"""SEARCH.CORE — shared utilities, constants, and response normalization."""
 
 import re as _re  # import first so wildcard can't shadow it
 import time as _time
@@ -205,7 +199,7 @@ SEARCH_ACTIONS = {
     "bytes", "string", "immediate", "name", "insns", "mnemonic", "instruction",
     "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig",
     "find", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
-    "type", "export", "summary", "nl", "behavior",
+    "type", "export", "summary", "query_lang", "nl", "behavior",
     "bool", "hunt", "neighborhood", "outlier", "fingerprint", "path", "reach", "noreach",
     "symbol", "symbol_info", "demangle", "xrefs_to_string",
 }
@@ -338,10 +332,16 @@ def iter_code(seg_start, seg_end):
 
 
 def build_response(matches, offset: int, limit: int, total_matches: int, truncated: bool, **extra):
-    """Unified response builder for all search actions."""
+    """Unified response builder for all search actions.
+
+    Always provides both ``matches`` (legacy) and ``results`` (agent-preferred)
+    as the same compact text block.
+    """
+    text = "\n".join(str(m) for m in matches)
     response = {
         "ok": True,
-        "matches": "\n".join(str(m) for m in matches),
+        "matches": text,
+        "results": text,
         "count": len(matches),
         "total": total_matches,
         "offset": offset,
@@ -349,6 +349,109 @@ def build_response(matches, offset: int, limit: int, total_matches: int, truncat
     }
     response.update(extra)
     return response
+
+
+def make_item(
+    *,
+    addr: str | int | None = None,
+    name: str = "",
+    type: str = "",
+    score: float | None = None,
+    snippet: str = "",
+    **extra,
+) -> dict:
+    """Canonical structured hit for agents (always has ``addr`` as hex string when possible)."""
+    if isinstance(addr, int):
+        addr_s = hex(addr)
+    else:
+        addr_s = str(addr or "")
+    item = {"addr": addr_s}
+    if name:
+        item["name"] = name
+    if type:
+        item["type"] = type
+    if score is not None:
+        try:
+            item["score"] = round(float(score), 4)
+        except (TypeError, ValueError):
+            item["score"] = score
+    if snippet:
+        item["snippet"] = clip_text(snippet, LINE_MAX)
+    item.update({k: v for k, v in extra.items() if v is not None})
+    return item
+
+
+def normalize_search_result(response: dict, *, action: str = "", query: str = "") -> dict:
+    """Normalize any search action payload for agent consumption.
+
+    - Ensures ``ok``, ``action``, ``query``
+    - Aliases ``matches`` ↔ ``results``
+    - Ensures each item has ``addr`` (from address/ea)
+    - Sets ``count`` from items when missing
+    """
+    if not isinstance(response, dict) or response.get("error"):
+        return response
+    out = dict(response)
+    if action and not out.get("action"):
+        out["action"] = action
+    if query and not out.get("query") and not out.get("pattern"):
+        out["query"] = query
+
+    text = out.get("results")
+    if text is None:
+        text = out.get("matches")
+    if text is not None:
+        out["results"] = text
+        out["matches"] = text
+
+    items = out.get("items")
+    if isinstance(items, list):
+        fixed = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            row = dict(it)
+            addr = row.get("addr") or row.get("address") or row.get("ea")
+            if addr is not None and "addr" not in row:
+                row["addr"] = hex(addr) if isinstance(addr, int) else str(addr)
+            # drop redundant aliases once addr is set
+            if row.get("addr"):
+                row.setdefault("address", row["addr"])
+            fixed.append(row)
+        out["items"] = fixed
+        if "count" not in out:
+            out["count"] = len(fixed)
+    return out
+
+
+def looks_like_identifier(pattern: str) -> bool:
+    """True if pattern is name/import-like (not free-form NL or long text)."""
+    p = (pattern or "").strip()
+    if not p or len(p) > 96:
+        return False
+    if looks_like_address(p):
+        return True
+    # hex bytes pattern "48 89 e5" etc.
+    if re.fullmatch(r"(?:[0-9A-Fa-f]{2}|\?\?|\?)(?:\s+(?:[0-9A-Fa-f]{2}|\?\?|\?)){1,}", p):
+        return False
+    if " " in p and not any(c in p for c in ("::", "(", "<")):
+        # multi-word NL → not identifier
+        return False
+    return bool(re.match(r"^[\w@?$*.:<>~]+$", p))
+
+
+def demangle_safe(name: str) -> str:
+    if not name:
+        return ""
+    try:
+        flags = idc.get_inf_attr(idc.INF_SHORT_DN)
+    except Exception:
+        flags = 0
+    try:
+        d = idc.demangle_name(name, flags)
+        return d or name
+    except Exception:
+        return name
 
 
 # ============================================================================
@@ -387,18 +490,53 @@ def resolve_target(
             return idaapi.BADADDR, f"No function at {hex(exact_ea)}", {}
         return exact_ea, None, {"match": "exact_name"}
 
-    # Fast path: blackboard custom name lookup
-    # If the LLM has written a blackboard entry with a custom name for an address,
-    # resolve it here so callers/callees/api work with those names.
+    # Fast path: substring unique name (case-insensitive)
+    target_l = target.lower()
+    substr_hits = []
+    for sym_ea, sym_name in idautils.Names():
+        if not sym_name:
+            continue
+        if target_l == sym_name.lower():
+            if require_function and not idaapi.get_func(sym_ea):
+                continue
+            return sym_ea, None, {"match": "exact_name_ci", "resolved_name": sym_name}
+        if target_l in sym_name.lower():
+            if require_function and not idaapi.get_func(sym_ea):
+                continue
+            substr_hits.append((sym_ea, sym_name))
+            if len(substr_hits) > 8:
+                break
+    if len(substr_hits) == 1:
+        ea, nm = substr_hits[0]
+        return ea, None, {"match": "unique_substring", "resolved_name": nm}
+
+    # Fast path: demangled name exact / unique substring
+    demangle_hits = []
+    for sym_ea, sym_name in idautils.Names():
+        if not sym_name or not (sym_name.startswith("_Z") or sym_name.startswith("?")):
+            continue
+        dem = demangle_safe(sym_name)
+        if not dem or dem == sym_name:
+            continue
+        if dem.lower() == target_l or target_l in dem.lower():
+            if require_function and not idaapi.get_func(sym_ea):
+                continue
+            demangle_hits.append((sym_ea, sym_name, dem))
+            if len(demangle_hits) > 8:
+                break
+    if len(demangle_hits) == 1:
+        ea, nm, dem = demangle_hits[0]
+        return ea, None, {"match": "demangled", "resolved_name": nm, "demangled": dem}
+
+    # Fast path: blackboard custom name lookup (broader limit)
     try:
         from blackboard import BlackboardStore  # type: ignore
         store = BlackboardStore()
-        bb_entries = store.list(limit=5, include_resolved=False)
-        # Search titles for the target name
+        bb_entries = store.list(limit=50, include_resolved=False) or []
         for entry in bb_entries:
-            title = entry.get("title", "")
+            title = entry.get("title", "") or ""
             addr = entry.get("addr") or entry.get("address", "")
-            if title and addr and target.lower() in title.lower():
+            if title and addr and target_l in title.lower():
                 try:
                     bb_ea = int(addr, 16) if isinstance(addr, str) else int(addr)
                     if bb_ea != idaapi.BADADDR:
@@ -410,7 +548,7 @@ def resolve_target(
     except Exception:
         pass
 
-    # Slow path: semantic matching
+    # Slow path: semantic matching (names + demangled + imports)
     matcher = compile_smart_pattern(target, case_sensitive=False)
     prelim = []
     max_candidates = 512
@@ -423,12 +561,16 @@ def resolve_target(
             prelim.append((quick_score, ea, raw_name, display_name, kind, module_name))
 
     for sym_ea, sym_name in idautils.Names():
-        if not sym_name or not matcher(sym_name):
+        if not sym_name:
+            continue
+        dem = demangle_safe(sym_name)
+        if not matcher(sym_name) and not (dem and matcher(dem)):
             continue
         is_func = bool(idaapi.get_func(sym_ea))
         if require_function and not is_func:
             continue
-        record_candidate(sym_ea, sym_name, sym_name, "function" if is_func else "symbol", exact_bonus=40.0)
+        display = dem if dem and dem != sym_name else sym_name
+        record_candidate(sym_ea, sym_name, display, "function" if is_func else "symbol", exact_bonus=40.0)
 
     if include_imports:
         for mod_idx in range(ida_nalt.get_import_module_qty()):

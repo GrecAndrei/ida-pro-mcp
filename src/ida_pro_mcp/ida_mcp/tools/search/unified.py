@@ -21,10 +21,13 @@ from .core import (
     SearchTimeout,
     build_response,
     clip_text,
+    demangle_safe,
     get_cached_imports,
     get_cached_strings,
     iter_code,
     iter_segments,
+    looks_like_identifier,
+    make_item,
     paginate_records,
     resolve_target,
     safe_generate_disasm_line,
@@ -33,16 +36,31 @@ from .core import (
 
 
 def search_find(pattern, case_sensitive, range_start, range_end, include_context, include_items, include_breakdown, offset, limit, timeout_ms=0):
-    """Smart unified search with bounded memory."""
+    """Smart unified search: names (incl. demangled), strings, imports, comments, xrefs, instructions.
+
+    Identifier-like queries skip the expensive instruction scan when enough
+    high-quality symbol/string/import hits already fill the page.
+    """
     matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
     ranked_heap = []
     heap_cap = max(_FIND_INSTRUCTION_CAP, limit * _FIND_INSTRUCTION_LIMIT_MULTIPLIER)
     timer = SearchTimeout(timeout_ms)
     timed_out = False
+    name_hits = 0
 
-    def add_find(kind, ea, line, score):
+    def add_find(kind, ea, line, score, name=""):
+        nonlocal name_hits
         key = (float(score), int(ea))
-        record = {"type": kind, "address": hex(ea), "address_ea": ea, "score": score, "line": line}
+        record = {
+            "type": kind,
+            "address": hex(ea),
+            "address_ea": ea,
+            "score": float(score),
+            "line": line,
+            "name": name or "",
+        }
+        if kind in ("names", "imports", "strings"):
+            name_hits += 1
         if len(ranked_heap) < heap_cap:
             heapq.heappush(ranked_heap, (key, record))
         elif key > ranked_heap[0][0]:
@@ -60,24 +78,35 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
             for xref in idautils.XrefsTo(ea, 0):
                 func = idaapi.get_func(xref.frm)
                 fn_name = ida_funcs.get_func_name(func.start_ea) if func else ""
+                dem = demangle_safe(fn_name) if fn_name else ""
+                display = dem if dem and dem != fn_name else fn_name
                 sem_name = semantic_score(pattern, fn_name, substring_bonus=SCORE_SUBSTRING) if fn_name else 0.0
-                if xref.iscode:
-                    add_find("code_ref", xref.frm, f"{hex(xref.frm)}  {fn_name}", max(1.0, sem_name))
-                else:
-                    add_find("data_ref", xref.frm, f"{hex(xref.frm)}  {fn_name}", max(1.0, sem_name))
+                kind = "code_ref" if xref.iscode else "data_ref"
+                add_find(kind, xref.frm, f"{hex(xref.frm)}  {display}", max(1.0, sem_name), display)
 
     seen_eas = set()
 
-    # 2. Names
+    # 2. Names (+ demangled)
     for ea, name in idautils.Names():
-        if ea in seen_eas:
+        if ea in seen_eas or not name:
             continue
-        if matcher(name):
-            kind = "func" if idaapi.get_func(ea) else "data"
-            xref_count = xref_count_limited(ea)
-            score = semantic_score(pattern, name, substring_bonus=SCORE_SUBSTRING)
-            add_find("names", ea, f"{hex(ea)}  {kind}  {name}  xrefs={xref_count}", score)
-            seen_eas.add(ea)
+        dem = demangle_safe(name)
+        hit = matcher(name) or (dem and dem != name and matcher(dem))
+        if not hit:
+            continue
+        kind = "func" if idaapi.get_func(ea) else "data"
+        xref_count = xref_count_limited(ea)
+        display = dem if dem and dem != name else name
+        score = max(
+            semantic_score(pattern, name, substring_bonus=SCORE_SUBSTRING),
+            semantic_score(pattern, dem, substring_bonus=SCORE_SUBSTRING) if dem else 0.0,
+        )
+        if dem and dem != name:
+            line = f"{hex(ea)}  {kind}  {name}  ({clip_text(dem, 80)})  xrefs={xref_count}"
+        else:
+            line = f"{hex(ea)}  {kind}  {name}  xrefs={xref_count}"
+        add_find("names", ea, line, score, display)
+        seen_eas.add(ea)
 
     # 3. Strings (cached)
     for srec in get_cached_strings():
@@ -88,7 +117,7 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
         if matcher(s):
             xref_count = xref_count_limited(ea)
             score = semantic_score(pattern, s, substring_bonus=SCORE_SUBSTRING)
-            add_find("strings", ea, f"{hex(ea)}  xrefs={xref_count}  {clip_text(s, 180)}", score)
+            add_find("strings", ea, f"{hex(ea)}  xrefs={xref_count}  {clip_text(s, 180)}", score, clip_text(s, 80))
             seen_eas.add(ea)
 
     # 4. Imports (cached)
@@ -100,263 +129,143 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
         mod_name = irec["module"]
         if name and matcher(name):
             xref_count = xref_count_limited(ea)
-            score = semantic_score(pattern, name, substring_bonus=SCORE_SUBSTRING)
-            add_find("imports", ea, f"{hex(ea)}  {mod_name}  {name}  xrefs={xref_count}", score)
+            score = semantic_score(pattern, name, substring_bonus=SCORE_SUBSTRING) + 15.0
+            add_find("imports", ea, f"{hex(ea)}  {mod_name}!{name}  xrefs={xref_count}", score, name)
             seen_eas.add(ea)
 
-    # 5. Instructions (bounded)
-    instruction_hits = 0
-    pattern_lower = pattern.lower() if not case_sensitive else pattern
-    for seg_start, seg_end in iter_segments(range_start, range_end, require_exec=True):
-        if instruction_hits >= _FIND_INSTRUCTION_CAP or timed_out:
+    # 5. Comments (high signal for agents; bounded)
+    comment_hits = 0
+    comment_cap = max(200, limit * 4)
+    for seg_ea in idautils.Segments():
+        if comment_hits >= comment_cap or timed_out:
             break
-        for ea in iter_code(seg_start, seg_end):
-            if instruction_hits >= _FIND_INSTRUCTION_CAP:
+        seg_end = idc.get_segm_end(seg_ea)
+        for head in idautils.Heads(seg_ea, seg_end):
+            if comment_hits >= comment_cap:
                 break
             try:
                 timer.check()
             except TimeoutError:
                 timed_out = True
                 break
-            # Fast pre-filter: check mnemonic + operands before expensive disassembly
-            mnem = idc.print_insn_mnem(ea)
-            if not mnem:
+            c0 = idc.get_cmt(head, 0) or ""
+            c1 = idc.get_cmt(head, 1) or ""
+            blob = f"{c0} {c1}".strip()
+            if not blob or not matcher(blob):
                 continue
-            quick_blob = mnem.lower()
-            op0 = idc.print_operand(ea, 0)
-            if op0:
-                quick_blob += " " + op0.lower()
-            op1 = idc.print_operand(ea, 1)
-            if op1:
-                quick_blob += " " + op1.lower()
-            if pattern_lower not in quick_blob:
-                continue
-            line = safe_generate_disasm_line(ea)
-            if not line:
-                continue
-            line_clean = ida_lines.tag_remove(line) or ""
-            semantic_blob = f"{mnem.lower()} {line_clean}"
-            sem = min(semantic_score(pattern, semantic_blob, substring_bonus=SCORE_SUBSTRING), 160.0)
-            if matcher(semantic_blob) or sem > 0.0:
-                add_find("instructions", ea, f"{hex(ea)}  {mnem}  {clip_text(line_clean, 180)}", sem)
-                instruction_hits += 1
+            score = semantic_score(pattern, blob, substring_bonus=SCORE_SUBSTRING)
+            fn = idaapi.get_func(head)
+            fn_name = ida_funcs.get_func_name(fn.start_ea) if fn else ""
+            line = f"{hex(head)}  comment  {fn_name}  {clip_text(blob, 160)}"
+            add_find("comments", head, line, score, fn_name)
+            comment_hits += 1
+
+    # 6. Instructions (bounded) — skip for identifier-like queries with enough symbol hits
+    skip_insns = looks_like_identifier(pattern) and name_hits >= max(limit, 8)
+    instruction_hits = 0
+    pattern_lower = pattern.lower() if not case_sensitive else pattern
+    if not skip_insns:
+        for seg_start, seg_end in iter_segments(range_start, range_end, require_exec=True):
+            if instruction_hits >= _FIND_INSTRUCTION_CAP or timed_out:
+                break
+            for ea in iter_code(seg_start, seg_end):
+                if instruction_hits >= _FIND_INSTRUCTION_CAP:
+                    break
+                try:
+                    timer.check()
+                except TimeoutError:
+                    timed_out = True
+                    break
+                mnem = idc.print_insn_mnem(ea)
+                if not mnem:
+                    continue
+                quick_blob = mnem.lower()
+                op0 = idc.print_operand(ea, 0)
+                if op0:
+                    quick_blob += " " + op0.lower()
+                op1 = idc.print_operand(ea, 1)
+                if op1:
+                    quick_blob += " " + op1.lower()
+                if not case_sensitive:
+                    needle = pattern_lower
+                    hay = quick_blob
+                else:
+                    needle = pattern
+                    hay = f"{mnem} {op0 or ''} {op1 or ''}"
+                if needle not in hay and not matcher(hay):
+                    continue
+                line = safe_generate_disasm_line(ea)
+                if not line:
+                    continue
+                line_clean = ida_lines.tag_remove(line) or ""
+                semantic_blob = f"{mnem.lower()} {line_clean}"
+                sem = min(semantic_score(pattern, semantic_blob, substring_bonus=SCORE_SUBSTRING), 160.0)
+                if matcher(semantic_blob) or sem > 0.0:
+                    add_find(
+                        "instructions",
+                        ea,
+                        f"{hex(ea)}  {mnem}  {clip_text(line_clean, 180)}",
+                        sem,
+                    )
+                    instruction_hits += 1
 
     ranked = [item[1] for item in ranked_heap]
     page, total, is_truncated = paginate_records(
         ranked, offset, limit, sort_key=lambda r: (r["score"], r["address_ea"])
     )
 
-    by_type = {"names": [], "strings": [], "imports": [], "instructions": [], "code_refs": [], "data_refs": []}
+    by_type = {
+        "names": [], "strings": [], "imports": [], "instructions": [],
+        "code_refs": [], "data_refs": [], "comments": [],
+    }
     type_to_key = {
         "names": "names", "strings": "strings", "imports": "imports",
         "instructions": "instructions", "code_ref": "code_refs", "data_ref": "data_refs",
+        "comments": "comments",
     }
     for row in page:
         key = type_to_key.get(row["type"])
         if key:
             by_type[key].append(row["line"])
 
-    result = build_response([r["line"] for r in page], offset, limit, total, is_truncated, query=pattern)
+    result = build_response(
+        [r["line"] for r in page], offset, limit, total, is_truncated, query=pattern, action="find",
+    )
     if timed_out:
         result["timed_out"] = True
         result["hint"] = "Search timed out. Narrow with range or increase timeout_ms."
-    if include_items:
-        result["items"] = [{"type": r["type"], "address": r["address"], "score": r["score"], "text": r["line"]} for r in page]
+    if skip_insns:
+        result["insn_scan"] = "skipped"
+        result["note"] = (
+            "Instruction scan skipped (identifier-like query with enough symbol hits). "
+            "Use action='instruction' or action='text' to force disassembly search."
+        )
+    # Always attach structured items — agents need addr/name without parsing text
+    result["items"] = [
+        make_item(
+            addr=r["address_ea"],
+            name=r.get("name") or "",
+            type=r["type"],
+            score=r["score"],
+            snippet=r["line"],
+        )
+        for r in page
+    ]
+    if not include_items:
+        # keep items; flag that compact text is primary
+        result["items_always"] = True
     if include_breakdown:
         result["type_totals"] = {
             "names": sum(1 for r in ranked if r["type"] == "names"),
             "strings": sum(1 for r in ranked if r["type"] == "strings"),
             "imports": sum(1 for r in ranked if r["type"] == "imports"),
             "instructions": sum(1 for r in ranked if r["type"] == "instructions"),
+            "comments": sum(1 for r in ranked if r["type"] == "comments"),
             "code_refs": sum(1 for r in ranked if r["type"] == "code_ref"),
             "data_refs": sum(1 for r in ranked if r["type"] == "data_ref"),
         }
         for key in by_type:
             result[key] = "\n".join(by_type[key])
-    return result
-
-
-def search_semantic(pattern, include_context, range_start, range_end, offset, limit, include_items, timeout_ms=0):
-    """Natural-language semantic search using the embedding index.
-
-    Requires a prior intelligence(action='index_fast') or index_batch call.
-    Falls back to heuristic search only if the index is unavailable.
-    """
-    query = (pattern or "").strip()
-    if not query:
-        return make_error(MCPError.INVALID_ARGS, "pattern or query required")
-
-    # Try embedding-index search first (proper semantic search)
-    try:
-        from ida_pro_mcp.services import get_assembler
-        asm = get_assembler()
-        idb_path = idc.get_idb_path() if hasattr(idc, "get_idb_path") else ""
-        if idb_path:
-            idx = asm._get_index(idb_path)
-            if idx and idx.size > 0:
-                hits = idx.search(query, top_k=max(limit * 3, 48), threshold=0.0)
-                rows = []
-                seen_eas = set()
-                for hit in hits:
-                    ea_str = hit.get("ea", "")
-                    if not ea_str or ea_str in seen_eas:
-                        continue
-                    try:
-                        ea_int = int(ea_str, 16)
-                    except Exception:
-                        continue
-                    # range filter
-                    if range_start is not None and range_end is not None:
-                        if not (range_start <= ea_int < range_end):
-                            continue
-                    seen_eas.add(ea_str)
-                    name = hit.get("name", ea_str)
-                    sim = float(hit.get("similarity") or 0.0)
-                    func = idaapi.get_func(ea_int)
-                    kind = "func" if func else "symbol"
-                    xr = xref_count_limited(ea_int, 64)
-                    line = f"{hex(ea_int)}  {kind}  {name}  sim={sim:.2f}  xrefs={xr}"
-                    rows.append({"type": kind, "address": hex(ea_int), "address_ea": ea_int,
-                                 "score": sim, "feature": "embedding", "line": line})
-                page, total, is_truncated = paginate_records(
-                    rows, offset, limit, sort_key=lambda r: (r["score"], r["address_ea"]),
-                )
-                result = build_response(
-                    [r["line"] for r in page],
-                    offset, limit, total, is_truncated,
-                    pattern=query, search_mode="semantic_embedding",
-                )
-                result["backend"] = asm._embedder.backend if hasattr(asm, "_embedder") else "bge"
-                if include_items:
-                    result["items"] = [{"address": r["address"], "name": r.get("name", ""),
-                                        "similarity": r["score"]} for r in page]
-                return result
-    except Exception:
-        pass
-
-    # Index not available — tell the user to index first
-    return make_error(
-        MCPError.NOT_FOUND,
-        "No functions indexed yet. Index your functions to enable semantic search.",
-        hint="Index your functions first:\n  index_fast:  seconds, disassembly-based (good for quick triage)\n  index_batch: minutes, decompile-based (best quality embeddings)"
-             "Then search(action='semantic') uses proper embedding-based similarity.",
-    )
-
-    # --- fallback heuristic (only if explicitly requested via _fallback=true) ---
-    ranked_heap = []
-    heap_cap = max(_FIND_INSTRUCTION_CAP, limit * _FIND_INSTRUCTION_LIMIT_MULTIPLIER)
-    timer = SearchTimeout(timeout_ms)
-    timed_out = False
-
-    def add_hit(kind, ea, line, score, feature):
-        if score <= 0:
-            return
-        key = (float(score), int(ea))
-        record = {
-            "type": kind,
-            "address": hex(ea),
-            "address_ea": ea,
-            "score": round(float(score), 2),
-            "feature": feature,
-            "line": line,
-        }
-        if len(ranked_heap) < heap_cap:
-            heapq.heappush(ranked_heap, (key, record))
-        elif key > ranked_heap[0][0]:
-            heapq.heapreplace(ranked_heap, (key, record))
-
-    # Symbols/functions
-    for ea, name in idautils.Names():
-        if not name:
-            continue
-        score = semantic_score(query, name, substring_bonus=SCORE_SUBSTRING)
-        if score > 0.0:
-            kind = "func" if idaapi.get_func(ea) else "symbol"
-            xr = xref_count_limited(ea, 64)
-            line = f"{hex(ea)}  {kind}  {name}  xrefs={xr}"
-            add_hit("name", ea, line, score, "symbol_name")
-
-    # Imports/API names
-    for irec in get_cached_imports():
-        name = irec.get("name") or ""
-        if not name:
-            continue
-        score = semantic_score(query, name, substring_bonus=SCORE_SUBSTRING)
-        if score > 0.0:
-            ea = irec["ea"]
-            module = irec.get("module") or "unknown"
-            xr = xref_count_limited(ea, 64)
-            line = f"{hex(ea)}  import  {module}!{name}  xrefs={xr}"
-            add_hit("import", ea, line, score, "import_name")
-
-    # String literals
-    for srec in get_cached_strings():
-        s = srec.get("string") or ""
-        if not s:
-            continue
-        score = semantic_score(query, s, substring_bonus=SCORE_SUBSTRING)
-        if score > 0.0:
-            ea = srec["ea"]
-            xr = xref_count_limited(ea, 64)
-            line = f"{hex(ea)}  string  xrefs={xr}  {clip_text(s, 180)}"
-            add_hit("string", ea, line, score, "string_literal")
-
-    # Disassembly semantics
-    insn_hits = 0
-    for seg_start, seg_end in iter_segments(range_start, range_end, require_exec=True):
-        if insn_hits >= _FIND_INSTRUCTION_CAP or timed_out:
-            break
-        for ea in iter_code(seg_start, seg_end):
-            if insn_hits >= _FIND_INSTRUCTION_CAP:
-                break
-            try:
-                timer.check()
-            except TimeoutError:
-                timed_out = True
-                break
-            line = safe_generate_disasm_line(ea)
-            if not line:
-                continue
-            line_clean = ida_lines.tag_remove(line) or ""
-            mnem = (idc.print_insn_mnem(ea) or "").lower()
-            semantic_blob = f"{mnem} {line_clean}"
-            score = semantic_score(query, semantic_blob, substring_bonus=SCORE_SUBSTRING)
-            if score > 0.0:
-                out_line = f"{hex(ea)}  insn  {mnem}  {clip_text(line_clean, 180)}"
-                add_hit("instruction", ea, out_line, 60.0 + min(score, 120.0), "instruction_text")
-                insn_hits += 1
-
-    ranked = [item[1] for item in ranked_heap]
-    page, total, is_truncated = paginate_records(
-        ranked,
-        offset,
-        limit,
-        sort_key=lambda r: (r["score"], r["address_ea"]),
-    )
-
-    result = build_response(
-        [r["line"] for r in page],
-    offset,
-        limit,
-        total,
-        is_truncated,
-        query=query,
-        search_mode="semantic",
-    )
-    if timed_out:
-        result["timed_out"] = True
-        result["hint"] = "Semantic scan timed out. Narrow with range or increase timeout_ms."
-    if include_items:
-        result["items"] = [
-            {
-                "type": r["type"],
-                "address": r["address"],
-                "score": r["score"],
-                "feature": r["feature"],
-                "text": r["line"],
-            }
-            for r in page
-        ]
     return result
 
 
@@ -563,15 +472,29 @@ def search_api(pattern, include_context, offset, limit, include_items, include_b
         key=lambda x: x["xref_count"], reverse=True,
     )
 
+    if not api_summary:
+        return make_error(
+            MCPError.NO_RESULTS,
+            f"No imported API matching pattern",
+            "Check imports with data(action='imports') or search(action='find').",
+        )
     result = build_response(
         [r["line"] for r in page], offset, limit, total, is_truncated,
-        api=api_summary[0]["api"], api_addr=api_summary[0]["address"]
+        api=api_summary[0]["api"], api_addr=api_summary[0]["address"], action="api",
     )
-    if include_items:
-        result["items"] = [
-            {"address": r["address"], "function": r["function"], "api": r["api"], "module": r["module"], "api_addr": hex(r["api_ea"]), "api_xref_count": r["score"]}
-            for r in page
-        ]
+    result["items"] = [
+        make_item(
+            addr=r["address_ea"],
+            name=r["function"],
+            type="call_site",
+            score=r["score"],
+            api=r["api"],
+            module=r["module"],
+            api_addr=hex(r["api_ea"]),
+            snippet=r["line"],
+        )
+        for r in page
+    ]
     if include_breakdown:
         result["matched_apis"] = api_summary
         result["total_calls"] = total
@@ -675,30 +598,44 @@ def search_symbol(pattern, include_alternatives=True, offset=0, limit=20):
             "alternatives": _alternatives_for_name(raw, exclude_ea=ea, limit=5) if include_alternatives else [],
         }
 
-    # --- Slow path: substring + semantic ---
+    # --- Slow path: substring + demangled + pattern ---
     matcher = compile_smart_pattern(raw, case_sensitive=False)
     candidates = []
+    raw_l = raw.lower()
     for cand_ea, cand_name in idautils.Names():
-        if not cand_name or not matcher(cand_name):
+        if not cand_name:
+            continue
+        dem = demangle_safe(cand_name)
+        if not matcher(cand_name) and not (dem and dem != cand_name and matcher(dem)):
             continue
         is_func = bool(idaapi.get_func(cand_ea))
-        score = SCORE_SUBSTRING if raw.lower() in cand_name.lower() else 0.0
+        score = 0.0
+        if cand_name.lower() == raw_l or (dem and dem.lower() == raw_l):
+            score = 200.0
+        elif raw_l in cand_name.lower() or (dem and raw_l in dem.lower()):
+            score = SCORE_SUBSTRING + 20.0
+        else:
+            score = SCORE_SUBSTRING
         candidates.append({
             "addr": hex(cand_ea),
             "name": cand_name,
+            "demangled": dem if dem != cand_name else "",
             "type": "function" if is_func else "symbol",
             "xrefs_to": xref_count_limited(cand_ea, 256),
-            "exact": cand_name.lower() == raw.lower(),
+            "exact": cand_name.lower() == raw_l or (dem and dem.lower() == raw_l),
             "_score": score,
         })
 
     if not candidates:
-        return make_error(MCPError.NO_RESULTS, f"No symbol matching '{raw}' found")
+        return make_error(
+            MCPError.NO_RESULTS,
+            f"No symbol matching '{raw}' found",
+            "Try search(action='find', pattern=...) or demangle first.",
+        )
 
     candidates.sort(key=lambda c: (c["_score"], c["xrefs_to"]), reverse=True)
     best = candidates[0]
-    typeinf = idc.get_inf_attr(idc.INF_SHORT_DN)
-    best_demangled = idc.demangle_name(best["name"], typeinf) or best["name"]
+    best_demangled = best.get("demangled") or demangle_safe(best["name"]) or best["name"]
     page, total, truncated = paginate_records(candidates, offset, limit, sort_key=None)
     for p in page:
         p.pop("_score", None)
@@ -714,6 +651,16 @@ def search_symbol(pattern, include_alternatives=True, offset=0, limit=20):
         "xrefs_to": best["xrefs_to"],
         "total_candidates": total,
         "truncated": truncated,
+        "items": [
+            make_item(
+                addr=c["addr"],
+                name=c["name"],
+                type=c["type"],
+                demangled=c.get("demangled") or None,
+                xrefs_to=c.get("xrefs_to"),
+            )
+            for c in page
+        ],
         "alternatives": page[1:] if include_alternatives else [],
     }
 

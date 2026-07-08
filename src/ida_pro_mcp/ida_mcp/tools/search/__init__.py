@@ -42,6 +42,7 @@ from .core import (
     SEARCH_ACTIONS,
     SEARCH_ALIASES,
     SEARCH_INTENT_PATTERNS,
+    normalize_search_result,
 )
 from .meta import search_export, search_summary, search_type
 from .refs import search_code_ref, search_data_ref, search_func_by_sig, search_regex
@@ -478,6 +479,13 @@ def search(
             response["interpreted_action"] = interpreted_action
         if interpreted_pattern and isinstance(response, dict):
             response["interpreted_query"] = interpreted_pattern
+
+        if isinstance(response, dict) and not response.get("error"):
+            response = normalize_search_result(
+                response,
+                action=str(action),
+                query=str(actual_pattern or ""),
+            )
         return response
 
     except Exception as e:
