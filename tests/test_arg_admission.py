@@ -25,7 +25,7 @@ def schemas_data():
 # Must stay admitted — handlers / agents depend on them.
 CRITICAL = {
     "search": {
-        "pattern", "query", "action", "limit", "mode", "recipe", "intent",
+        "pattern", "query", "action", "limit", "mode", "intent",
         "semantic_min_score", "constraints", "include_items", "timeout_ms",
         "target", "ea", "addr",
     },

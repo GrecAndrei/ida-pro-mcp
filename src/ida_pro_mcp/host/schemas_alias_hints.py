@@ -101,65 +101,6 @@ _TOOL_SPECIFIC_ARG_ALIASES = {
 }
 
 _TOOL_ACTION_EXTRA_ALIASES = {
-    "threat_hunt": {
-        "run": {
-            "default",
-            "all",
-            "full",
-            "hunt",
-            "triage",
-            "investigate",
-            "orchestrate",
-            "pipeline",
-            "execute_all",
-            "end_to_end",
-            "go",
-        },
-        "legacy": {
-            "compat",
-            "compatibility",
-            "legacy_route",
-            "legacy_mode",
-            "bridge",
-            "fallback",
-            "inherit",
-        },
-        "vuln": {
-            "vulnerability",
-            "vulnerabilities",
-            "security",
-            "security_scan",
-            "vulnscan",
-            "cve",
-        },
-        "malware": {
-            "mal",
-            "mal_scan",
-            "malware_scan",
-            "malware_hunt",
-            "ioc",
-            "iocs",
-            "threats",
-        },
-        "tracing": {
-            "trace",
-            "trace_analysis",
-            "runtime",
-            "coverage",
-            "flow",
-            "behavior",
-        },
-        "findings": {
-            "finds",
-            "results",
-            "report",
-            "summary",
-            "alerts",
-        },
-        "quick": {"fast", "lite", "quick_scan", "quickly"},
-        "deep": {"thorough", "intensive", "deep_scan", "full_depth"},
-    },
-
     "trace_analysis": {
         "analyze_coverage": {"coverage", "coverage_report", "analyze_trace"},
         "extract_api_calls": {"api_calls", "apis", "extract_apis"},

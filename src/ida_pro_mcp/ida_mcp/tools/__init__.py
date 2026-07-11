@@ -40,7 +40,6 @@ __all__ = [
     "coverage",
     "intelligence",
     "wiki",
-    "yara_hunt",
     "analysis",
     "batch",
     "deobfuscate",

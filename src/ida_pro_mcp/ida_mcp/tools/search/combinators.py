@@ -1,19 +1,19 @@
-"""SEARCH.COMBINATORS - Creative composition actions: bool, hunt, neighborhood, etc.
+"""SEARCH.COMBINATORS - Compositional search actions: bool, neighborhood, etc.
 
 These are *compositional* search actions: they combine primitive search results
 into higher-level queries and analyses that the basic/advanced/unified modules
 don't cover.
 
 Actions provided:
-  - search_bool:     composite boolean query language
-                     e.g. "(api:Crypt* AND name:key) OR (string:password AND NOT obf:true)"
-  - search_hunt:     named workflow recipes (backdoor, anti_debug, c2, ...)
-  - search_neighborhood: 360 degree context around a function addr
-  - search_outlier:  find structurally anomalous functions
-  - search_fingerprint: embedding-similar functions via bge-code-v1 cosine similarity
-  - search_path:     shortest call-graph path between two symbols
-  - search_reach:    functions reachable from a root within N hops
-  - search_noreach:  functions NOT reachable from any known entrypoint
+  - search_bool:        composite boolean query language
+                        e.g. "(api:Crypt* AND name:key) OR (string:password AND NOT obf:true)"
+  - search_analyze:     unified structural analysis (neighborhood/outlier/similar/vulnerable/semantic)
+  - search_neighborhood: 360 degree context around a function addr (delegates to analyze)
+  - search_outlier:     find structurally anomalous functions (delegates to analyze)
+  - search_fingerprint: embedding-similar functions via bge-code-v1 cosine similarity (delegates to analyze)
+  - search_path:        shortest call-graph path between two symbols
+  - search_reach:       functions reachable from a root within N hops
+  - search_noreach:     functions NOT reachable from any known entrypoint
 """
 
 import re
@@ -424,7 +424,7 @@ class _BoolParser:
             return handler(val)
         if tok.startswith("LITERAL:"):
             self.consume()
-            return _prim_funcs_by_name(tok[len("LITERAL:"):], case_sensitive=False)
+            return _prim_funcs_by_name(tok[len("LITERAL:"):])
         raise ValueError(f"Unexpected token: {tok!r}")
 
 
@@ -474,75 +474,6 @@ def search_bool(expr: str, case_sensitive: bool, offset: int, limit: int) -> dic
         "items": items,
         "note": f"Matched {total} functions across {len(_BOOL_PRIMITIVES)} primitives via boolean composition.",
     }
-
-
-# ============================================================================
-# search_hunt - named workflow recipes
-# ============================================================================
-
-_HUNT_RECIPES: dict[str, dict] = {
-    "anti_debug": {
-        "description": "Anti-debugging checks",
-        "expression": "api:IsDebuggerPresent OR api:CheckRemoteDebuggerPresent OR api:NtQueryInformationProcess OR api:OutputDebugString*",
-        "rationale": "Classic anti-debug API set.",
-    },
-    "crypto": {
-        "description": "Cryptographic routines",
-        "expression": "api:Crypt* OR api:BCrypt* OR api:NCrypt* OR api:EVP_* OR api:AES_* OR api:SHA* OR mnem:aesenc OR mnem:aesenclast OR mnem:sha256rnds",
-        "rationale": "Crypto routines call crypto APIs or use crypto-specific SIMD instructions.",
-    },
-    "network_io": {
-        "description": "Network I/O functions",
-        "expression": "api:socket OR api:connect OR api:send OR api:recv OR api:InternetOpen* OR api:WinHttp* OR api:URLDownload*",
-        "rationale": "Network I/O uses Winsock or WinINet APIs.",
-    },
-    "file_io": {
-        "description": "File I/O functions",
-        "expression": "api:CreateFile* OR api:ReadFile OR api:WriteFile OR api:DeleteFile* OR api:fopen OR api:fread OR api:fwrite",
-        "rationale": "File I/O uses Win32 file APIs or stdio.",
-    },
-    "process_injection": {
-        "description": "Process injection / hollowing primitives",
-        "expression": "(api:CreateProcess* AND api:WriteProcessMemory) OR api:NtUnmapViewOfSection OR api:VirtualAllocEx OR api:SetThreadContext",
-        "rationale": "Process injection requires remote allocation + write + thread context hijack.",
-    },
-}
-
-
-def search_hunt(recipe: str, case_sensitive: bool, offset: int, limit: int) -> dict:
-    """Run a named workflow recipe.
-
-    Recipes are curated multi-primitive boolean queries for common RE scenarios.
-    Use recipe="list" to see all available recipes.
-    """
-    if recipe == "list" or not recipe:
-        rec_names = sorted(_HUNT_RECIPES)
-        return {
-            "ok": True,
-            "action": "hunt",
-            "recipe": "list",
-            "available": rec_names,
-            "count": len(rec_names),
-            "results": "\n".join(f"{n}: {_HUNT_RECIPES[n]['description']}" for n in rec_names),
-            "note": "Pass recipe=<name> to run a specific recipe.",
-        }
-    if recipe not in _HUNT_RECIPES:
-        return make_error(
-            MCPError.INVALID_ARGS,
-            f"unknown recipe: {recipe!r}",
-            hint=f"Pass recipe='list' to see available recipes. Known: {sorted(_HUNT_RECIPES)}",
-        )
-
-    spec = _HUNT_RECIPES[recipe]
-    bool_result = search_bool(spec["expression"], case_sensitive, offset, limit)
-    if isinstance(bool_result, dict) and bool_result.get("error"):
-        return bool_result
-    bool_result["action"] = "hunt"
-    bool_result["recipe"] = recipe
-    bool_result["description"] = spec["description"]
-    bool_result["rationale"] = spec["rationale"]
-    bool_result["expression"] = spec["expression"]
-    return bool_result
 
 
 # ============================================================================
@@ -1069,6 +1000,21 @@ def search_analyze(
         except Exception:
             pass
 
+        # Build text summary
+        text_lines = [f"=== {name} @ {hex(fea)} ==="]
+        if metrics:
+            text_lines.append(f"size={metrics.get('func_size', '?')} bb={metrics.get('bb_count', '?')} cyc={metrics.get('cyclomatic', '?')}")
+        if caller_eas:
+            text_lines.append(f"callers ({len(caller_eas)}): " + ", ".join(f"{_func_name(a)}({hex(a)})" for a in caller_eas))
+        if callee_eas:
+            text_lines.append(f"callees ({len(callee_eas)}): " + ", ".join(f"{_func_name(a)}({hex(a)})" for a in callee_eas))
+        if tags:
+            text_lines.append(f"tags: {', '.join(tags)}")
+        if similar:
+            text_lines.append(f"similar ({len(similar)}): " + ", ".join(f"{s['name']}({s['score']})" for s in similar[:5]))
+        if blackboard:
+            text_lines.append(f"blackboard ({len(blackboard)}): " + ", ".join(b["title"] for b in blackboard))
+
         items_out = []
         if include_items:
             items_out = [
@@ -1084,6 +1030,7 @@ def search_analyze(
             "addr": hex(fea),
             "name": name,
             "metrics": metrics,
+            "results": "\n".join(text_lines),
             "callers": [{"addr": hex(a), "name": _func_name(a)} for a in caller_eas],
             "callees": [{"addr": hex(a), "name": _func_name(a)} for a in callee_eas],
             "similar": similar,

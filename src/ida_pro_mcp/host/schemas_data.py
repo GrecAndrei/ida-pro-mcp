@@ -64,14 +64,11 @@ TOOLS = [
     "firmware_view",
     # Instrumentation
     "hooks",
-    # Documentation and YARA
+    # Documentation
     "wiki",
-    "yara_hunt",
     # Intelligence subsystem (extracted from agent)
     "intelligence",
     # --- New LLM-optimized tools ---
-    # Security & vulnerability analysis
-    "threat_hunt",
     "workflow",
     "gadgets",
     "taint",
@@ -207,25 +204,7 @@ _EXTRA_TOOL_ALIASES = {
     "plugins_tool": "misc",
     "python": "misc",
 
-    "vuln": "threat_hunt",
-    "vulnerability": "threat_hunt",
-    "vulnerabilities": "threat_hunt",
-    "threat": "threat_hunt",
-    "threat_hunt_tool": "threat_hunt",
-    "malware": "threat_hunt",
-    "security": "threat_hunt",
-    "trace": "threat_hunt",
-    "tracing": "threat_hunt",
-    # NOTE: do NOT alias "coverage" here — it collides with the canonical
-    # `coverage` tool. The collision is silently dropped by _build_tool_aliases
-    # but the entry confuses readers. See Phase 1.5 of dedupe plan.
-    "c2": "threat_hunt",
     "c2_detect": "string_ops",
-    "deobfuscation": "threat_hunt",
-    "crypto": "threat_hunt",
-    "yara": "threat_hunt",
-    "hunt": "threat_hunt",
-    "automated_findings": "threat_hunt",
     # Legacy/compat aliases kept for older clients and scripts.
     "comments_ai": "annotation",
     "annotations_ai": "annotation",
@@ -264,7 +243,6 @@ THREAT_LEGACY_VULN_TOOLS = {
 THREAT_LEGACY_MALWARE_PASSTHROUGH_TOOLS = {
     "deobfuscate",
     "crypto_id",
-    "yara_hunt",
     "string_ops",
 }
 
@@ -345,13 +323,13 @@ TOOL_DESCRIPTIONS = {
     "emulate": "Unicorn-backed emulation sandbox — execute functions/slices from the IDB without a debugger (x86/x64, ARM/AArch64, MIPS). Maps IDB segments, sets up stack and calling convention. Actions: run, slice, call, decrypt, trace. NOTE: requires `pip install unicorn`.",
     "bindiff": "Cross-version binary diffing via function fingerprints (no Google BinDiff required). snapshot with path= persists JSON; open the other build and diff/function_match/summary against that path. Matching: exact name, mnemonic hash, string refs, callee signature, structural fuzzy. patch_analysis for one function. For protobuf BinExport use export(action='binexport'). Actions: snapshot, diff, patch_analysis, function_match, summary.",
     "multi_session": "Multi-binary session groups — link IDA sessions for cross-binary import/export resolution, cross-session decompilation, and cross-binary xref queries. Actions: group_create, group_list, group_link, group_remove, cross_resolve, cross_decompile, cross_xrefs, status.",
-    "threat_hunt": "Runs automated threat-hunting passes to detect malware patterns, vulnerabilities, and suspicious behaviors. Actions: run, malware, vuln, tracing, findings, quick, deep, legacy.",
+
     "trace_analysis": "Analyzes imported execution traces for coverage, loops, API sequences, and anti-analysis detection. Also provides runtime execution-trace access (get/clear/set_options), static control-flow tracing (static_trace, decrypt_strings, eval_expr, prefetch_context), and emulation-driven deobfuscation (deobfuscate_emulate). Actions: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit, execution_timeline_graph, cross_run_diff, coverage_debug_plan, anti_analysis_detect, trace_entropy, api_sequence, loop_analysis, get, clear, set_options, static_trace, decrypt_strings, eval_expr, deobfuscate_emulate, prefetch_context.",
     "truncation": "Continues a previously truncated tool response to retrieve remaining output. Actions: continue.",
     "types": "Manages IDA type system: structs, enums, prototypes, type propagation, and header imports. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header, diff, visualize, propagate, enum_values, type_graph, vtable.",
     "wiki": "Built-in tool/workflow documentation lookup (not the analysis notebook). For findings use blackboard. Actions: search, get, list, sections, tools, tool, workflows, workflow.",
     "workflow": "Executes predefined multi-step analysis workflows for common RE tasks. audit_plan validates and scores a plan before execution. execute_plan runs a planned call list (or generated plan) through batch execution with execution metadata. prioritize reorders a dry-run plan by strategy (original/coverage/risk_first). compose merges multiple workflow plans into one deduplicated dry-run execution plan. estimate returns dry-run complexity/risk/category projections. explain returns a dry-run plan plus per-step rationale. plan previews another workflow action without executing it. catalog returns available workflows and required inputs. triage_fast auto-checks idb overview and, for firmware-like binaries, injects firmware_view(action='triage_snapshot') plus guided analysis. recon_sweep runs broader orientation + structured retrieval + protocol + security posture in one pass. Supports dry_run plan preview and include/exclude tool filtering for controlled orchestration. Actions: audit_plan, execute_plan, prioritize, compose, estimate, explain, plan, catalog, triage_fast, malware_deep, vuln_audit, recon_sweep, patch_review.",
-    "yara_hunt": "Scans the binary with YARA rules and provides match context and xref correlation. Actions: scan, compile, list_rules, match_context, extract_strings, xref_matches.",
+
 }
 
 TOOL_ACTIONS = _tool_actions_from_registry()  # derived from tool_registry.py
@@ -662,7 +640,7 @@ TOOL_ARG_SCHEMAS = {
         "constraints": {"type": "object", "description": "Schema constraints for structured search"},
         # Combinator / NL kwargs (must be admitted — host rejects unknown keys)
         "mode": {"type": "string", "description": "nl mode: quick|expand (default expand)"},
-        "recipe": {"type": "string", "description": "hunt recipe name, or 'list'"},
+
         "target": {"type": "string", "description": "Alias for pattern/addr for ref searches"},
         "ea": {"type": "string", "description": "Address alias for pattern/addr"},
         "metric": {"type": "string", "description": "outlier metric: size|complexity|bb_count|orphan|leaf|hub|deep|tiny|huge"},
@@ -674,69 +652,6 @@ TOOL_ARG_SCHEMAS = {
         "max_depth": {"type": "integer", "description": "path/reach max BFS depth"},
         "depth": {"type": "integer", "description": "reach/noreach BFS depth"},
     },
-    "threat_hunt": {
-        "action": {"type": "string", "enum": TOOL_ACTIONS["threat_hunt"]},
-        "legacy_tool": {
-            "type": "string",
-            "description": "Legacy tool name to emulate (for action='legacy').",
-        },
-        "legacy_action": {
-            "type": "string",
-            "description": "Legacy action to inherit/route (for action='legacy').",
-        },
-        "profile": {
-            "type": "string",
-            "enum": ["quick", "balanced", "deep"],
-            "description": "Pipeline depth profile.",
-        },
-        "query": {
-            "type": "string",
-            "description": "Optional focus query for post-filtering and relevance scoring.",
-        },
-        "addr": {
-            "type": "string",
-            "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion.",
-        },
-        "include_tracing": {
-            "type": "boolean",
-            "description": "Include trace/coverage analysis steps.",
-        },
-        "include_malware": {
-            "type": "boolean",
-            "description": "Include malware-behavior analysis steps.",
-        },
-        "include_vuln": {
-            "type": "boolean",
-            "description": "Include vulnerability analysis steps.",
-        },
-        "include_evidence": {
-            "type": "boolean",
-            "description": "Include compact raw per-step payloads for auditability.",
-        },
-        "limit": {
-            "type": "integer",
-            "description": "Global max findings to return after dedupe/ranking.",
-        },
-        "max_steps": {
-            "type": "integer",
-            "description": "Safety cap for total orchestrated tool calls.",
-        },
-        "scan_profile": {
-            "type": "string",
-            "enum": ["quick", "balanced", "deep"],
-            "description": "Forwarded depth profile to threat_hunt.",
-        },
-        "severity": {
-            "type": "string",
-            "enum": ["critical", "high", "medium", "low"],
-            "description": "Optional severity filter for vulnerability findings.",
-        },
-        "legacy_passthrough": {
-            "type": "boolean",
-            "description": "For action='legacy', execute exact mapped legacy action in consolidated flow and include mapping metadata.",
-        },
-    },
-
     "workflow": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["workflow"]},
         "planned_calls": {

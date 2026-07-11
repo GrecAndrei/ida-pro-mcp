@@ -167,22 +167,6 @@ TOOL_ALIASES = _build_tool_aliases(TOOLS, {**BASE_TOOL_ALIASES, **_EXTRA_TOOL_AL
 # Broad malformed/variant aliases accepted for high-noise LLM tool calls.
 
 _TOOL_ARG_EXTRA_ALIASES = {
-    "threat_hunt": {
-        "legacy_tool": {"source_tool", "tool_name", "legacyTool", "tool"},
-        "legacy_action": {"source_action", "action_name", "legacyAction", "on"},
-        "profile": {"mode", "depth", "scan_mode"},
-        "query": {"q", "needle", "search"},
-        "addr": {"address", "ea", "va"},
-        "include_tracing": {"tracing", "with_tracing", "trace"},
-        "include_malware": {"malware", "with_malware"},
-        "include_vuln": {"vuln", "with_vuln", "security"},
-        "include_evidence": {"evidence", "with_evidence", "proof"},
-        "limit": {"max", "max_items", "count", "n"},
-        "max_steps": {"steps", "max_calls", "pipeline_steps"},
-        "scan_profile": {"vuln_profile", "scanner_profile"},
-        "severity": {"risk", "level"},
-        "legacy_passthrough": {"passthrough", "exact_legacy", "strict_legacy"},
-    },
     "search": {
         "pattern": {"needle", "text", "query_text"},
         "query": {"q", "search", "find"},
@@ -634,7 +618,6 @@ _TOOL_CATEGORY_ADVANCED = {
     "hooks",
 }
 _TOOL_CATEGORY_SECURITY = {
-    "threat_hunt",
     "deobfuscate",
     "crypto_id",
     "protocol",

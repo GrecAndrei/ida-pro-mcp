@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import time
 import uuid
 from typing import Any
@@ -23,7 +22,7 @@ from ..schemas import (
     TOOLS,
     _resolve_tool_alias,
 )
-from .postprocess import PP_KEYS, apply_post_processing, extract_post_process_params, has_post_process
+from .postprocess import apply_post_processing, extract_post_process_params, has_post_process
 from .rpc_args import prepare_rpc_args
 from .server_response import truncate_response
 
@@ -63,7 +62,6 @@ LONG_RUNNING_ACTIONS: set[tuple[str, str]] = {
     ("search", "regex"),
     ("search", "nl"),
     ("search", "path"),
-    ("search", "hunt"),
     # bindiff — full-binary fingerprint + compare passes
     ("bindiff", "snapshot"),
     ("bindiff", "diff"),
@@ -91,12 +89,7 @@ LONG_RUNNING_ACTIONS: set[tuple[str, str]] = {
     ("session", "cleanup_stale"),
     ("session", "macro_run"),
     ("session", "rate_skill"),
-    # threat_hunt / workflow — composite passes
-    ("threat_hunt", "run"),
-    ("threat_hunt", "malware"),
-    ("threat_hunt", "vuln"),
-    ("threat_hunt", "deep"),
-    ("threat_hunt", "legacy"),
+
     ("workflow", "execute_plan"),
     ("workflow", "plan"),
 }
@@ -1155,9 +1148,6 @@ class ServerDispatchMixin:
 
             if tool_name == "analysis" and str(args.get("action") or "").strip() == "plugin_run":
                 return self._handle_analysis_plugin_run(args)
-
-            if tool_name == "threat_hunt":
-                return self._handle_threat_hunt(args)
 
             if tool_name == "workflow":
                 return self._handle_workflow(args)

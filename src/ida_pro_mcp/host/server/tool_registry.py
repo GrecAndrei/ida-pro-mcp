@@ -124,7 +124,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "callers", "callees", "bytes", "string", "immediate", "name",
         "insns", "mnemonic", "instruction", "text", "operand", "comment",
         "data_ref", "code_ref", "regex", "func_by_sig", "type", "export",
-        "summary", "query_lang", "bool", "hunt", "analyze",
+        "summary", "query_lang", "bool", "analyze",
         "neighborhood", "outlier", "fingerprint", "path", "reach", "noreach",
         "symbol", "symbol_info", "demangle", "xrefs_to_string",
     ],
@@ -156,7 +156,6 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "emulate": ["run", "slice", "call", "decrypt", "trace"],
     "bindiff": ["snapshot", "diff", "patch_analysis", "function_match", "summary"],
     "multi_session": ["group_create", "group_list", "group_link", "group_remove", "cross_resolve", "cross_decompile", "cross_xrefs", "status"],
-    "threat_hunt": ["run", "malware", "vuln", "tracing", "findings", "quick", "deep", "legacy"],
     "trace_analysis": [
         "import_trace", "analyze_coverage", "find_loops",
         "extract_api_calls", "basic_blocks_hit",
@@ -175,7 +174,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "estimate", "explain", "plan", "catalog", "triage_fast",
         "malware_deep", "vuln_audit", "recon_sweep", "patch_review",
     ],
-    "yara_hunt": ["scan", "compile", "list_rules", "match_context", "extract_strings", "xref_matches"],
+
 }
 
 

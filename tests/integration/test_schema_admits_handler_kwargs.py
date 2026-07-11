@@ -27,7 +27,7 @@ REQUIRED = {
     "segments": ["name2", "address", "addr", "ea", "segment",
                  "address2", "addr2", "ea2", "segment2",
                  "segment_name", "segment_name2"],
-    "search": ["mode", "recipe", "intent", "semantic_min_score", "constraints",
+    "search": ["mode", "intent", "semantic_min_score", "constraints",
                "target", "ea", "radius", "src", "dst"],
     "intelligence": ["include_resolved", "similar_top_k"],
     "blackboard": ["members", "entry_points", "exit_points", "size_bytes",

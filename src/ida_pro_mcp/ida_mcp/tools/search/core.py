@@ -200,7 +200,7 @@ SEARCH_ACTIONS = {
     "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig",
     "find", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
     "type", "export", "summary", "query_lang", "nl", "behavior",
-    "bool", "hunt", "neighborhood", "outlier", "fingerprint", "path", "reach", "noreach",
+    "bool", "neighborhood", "outlier", "fingerprint", "path", "reach", "noreach",
     "symbol", "symbol_info", "demangle", "xrefs_to_string",
 }
 
@@ -234,7 +234,7 @@ SEARCH_ALIASES = {
     "tag": "behavior", "tags": "behavior", "classify": "behavior",
     # Combinator aliases
     "boolean": "bool", "query": "bool", "and_or": "bool",
-    "recipe": "hunt", "recipes": "hunt", "workflow": "hunt",
+
     "context": "neighborhood", "neighbors": "neighborhood", "around": "neighborhood",
     "anomaly": "outlier", "anomalies": "outlier", "unusual": "outlier",
     "struct_sim": "fingerprint", "structural": "fingerprint", "similar_struct": "fingerprint",
@@ -381,6 +381,21 @@ def make_item(
     return item
 
 
+_ADDR_RE = re.compile(r"^(0x[0-9A-Fa-f]+)")
+
+
+def _item_from_text_line(line: str) -> dict:
+    """Create a synthetic item dict from a text result line.
+
+    Extracts the leading hex address (if present) as ``addr`` and
+    keeps the full line as ``line``.
+    """
+    m = _ADDR_RE.match(line.strip())
+    if m:
+        return {"addr": m.group(1), "line": line.strip()}
+    return {"line": line.strip()}
+
+
 def normalize_search_result(response: dict, *, action: str = "", query: str = "") -> dict:
     """Normalize any search action payload for agent consumption.
 
@@ -421,6 +436,18 @@ def normalize_search_result(response: dict, *, action: str = "", query: str = ""
         out["items"] = fixed
         if "count" not in out:
             out["count"] = len(fixed)
+    elif isinstance(out.get("results"), str) and out["results"].strip():
+        # Wrap text-only results into items[] so every action returns structured data.
+        lines = [ln for ln in out["results"].splitlines() if ln.strip()]
+        synthetic = []
+        for ln in lines:
+            item = _item_from_text_line(ln)
+            if item:
+                synthetic.append(item)
+        if synthetic:
+            out["items"] = synthetic
+            if "count" not in out:
+                out["count"] = len(synthetic)
     return out
 
 

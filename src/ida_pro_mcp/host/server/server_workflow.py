@@ -185,7 +185,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                     duplicate_keys[key_str] = int(duplicate_keys.get(key_str, 1)) + 1
                 else:
                     seen_keys.add(key)
-                if n in {"threat_hunt", "deobfuscate", "search"} and a in {"malware", "vuln", "api_hashing", "vulnerable"}:
+                if n in {"deobfuscate", "search"} and a in {"malware", "vuln", "api_hashing", "vulnerable"}:
                     risk_hints.append(f"high-risk step present: {key_str}")
 
             warnings: list[str] = []
@@ -453,8 +453,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                     return (0, 0, call)
                 if mode == "risk_first":
                     risk_order = {
-                        "threat_hunt.malware": 0,
-                        "threat_hunt.vuln": 0,
                         "search.vulnerable": 1,
                         "deobfuscate.api_hashing": 1,
                         "crypto_id.identify": 2,
@@ -625,10 +623,10 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 "idb": "orientation",
                 "data": "discovery",
                 "string_ops": "ioc_hunt",
-                "threat_hunt": "threat_hunt",
+
                 "deobfuscate": "deobfuscation",
                 "crypto_id": "crypto",
-                "yara_hunt": "signature_hunt",
+
                 "gadgets": "exploit_surface",
                 "search": "search",
                 "protocol": "protocol",
@@ -742,17 +740,13 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 "data.functions": "Builds a function inventory for navigation and prioritization.",
                 "data.imports": "Highlights external capability surface and potential behavior anchors.",
                 "string_ops.find_urls": "Extracts direct network indicators for quick IOC triage.",
-                "threat_hunt.quick": "Runs a fast heuristic pass to surface high-priority suspicious regions.",
                 "string_ops.find_c2": "Targets command-and-control indicators in strings and references.",
                 "deobfuscate.stack_strings": "Recovers runtime-built strings hidden from static string tables.",
                 "deobfuscate.api_hashing": "Flags and resolves hashed API dispatch patterns common in malware.",
                 "crypto_id.identify": "Identifies cryptographic primitives and likely key-handling hotspots.",
-                "yara_hunt.list_rules": "Enumerates available rules to align hunts with known families.",
-                "threat_hunt.malware": "Performs malware-focused threat hunting profile.",
                 "gadgets.rop": "Maps exploit-relevant gadget surface for memory corruption risk analysis.",
                 "search.vulnerable": "Finds dangerous API/use patterns tied to common vulnerability classes.",
                 "protocol.detect": "Locates protocol parsers/handlers and potential attack boundaries.",
-                "threat_hunt.vuln": "Performs vulnerability-focused threat hunting profile.",
                 "search.structured": "Uses schema-guided retrieval to find semantically constrained candidates.",
                 "summarize.security_posture": "Produces consolidated risk and mitigation posture snapshot.",
                 "firmware_view.triage_snapshot": "Aggregates load/vector/MMIO hints for firmware-first orientation.",
@@ -891,17 +885,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 {"name": "data", "arguments": {"action": "imports", "count": limit}},
                 {"name": "search", "arguments": {"action": "nl" if has_functions else "find", "query": "entrypoint parser auth decode crypto", "limit": limit}},
                 {"name": "string_ops", "arguments": {"action": "find_urls", "limit": limit}},
-                {
-                    "name": "threat_hunt",
-                    "arguments": {
-                        "action": "run",
-                        "limit": limit,
-                        "profile": profile,
-                        "include_vuln": True,
-                        "include_malware": True,
-                        "include_tracing": True,
-                    },
-                },
                 {"name": "blackboard", "arguments": {"action": "frontier", "limit": min(limit, 10)}},
             ]
             if firmware_detected or raw_binary_mode:
@@ -918,8 +901,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 {"name": "deobfuscate", "arguments": {"action": "stack_strings", "limit": limit}},
                 {"name": "deobfuscate", "arguments": {"action": "api_hashing", "limit": limit}},
                 {"name": "crypto_id", "arguments": {"action": "identify", "limit": limit}},
-                {"name": "yara_hunt", "arguments": {"action": "list_rules"}},
-                {"name": "threat_hunt", "arguments": {"action": "malware", "limit": limit, "profile": profile}},
             ]
         elif action == "vuln_audit":
             step_plan = [
@@ -927,7 +908,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 {"name": "search", "arguments": {"action": "nl", "query": "input validation memcpy strcpy length check auth bypass", "limit": limit}},
                 {"name": "search", "arguments": {"action": "vulnerable", "limit": limit}},
                 {"name": "protocol", "arguments": {"action": "detect", "limit": limit}},
-                {"name": "threat_hunt", "arguments": {"action": "vuln", "limit": limit, "profile": profile}},
             ]
         elif action == "recon_sweep":
             firmware_detected, firmware_detected_trigger, raw_binary_mode = _detect_firmware_mode()
@@ -943,17 +923,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 {"name": "blackboard", "arguments": {"action": "frontier", "limit": min(limit, 10)}},
                 {"name": "protocol", "arguments": {"action": "detect", "limit": limit}},
                 {"name": "summarize", "arguments": {"action": "security_posture", "max_items": limit}},
-                {
-                    "name": "threat_hunt",
-                    "arguments": {
-                        "action": "run",
-                        "limit": limit,
-                        "profile": profile,
-                        "include_vuln": True,
-                        "include_malware": True,
-                        "include_tracing": True,
-                    },
-                },
             ]
             if firmware_detected or raw_binary_mode:
                 step_plan.insert(2, {"name": "firmware_view", "arguments": {"action": "triage_snapshot"}})

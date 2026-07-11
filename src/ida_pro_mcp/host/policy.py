@@ -79,13 +79,11 @@ READ_ONLY_TOOLS = {
     "string_ops",
     "summarize",
     "symbols",
-    "threat_hunt",
     "trace_analysis",
     "truncation",
     "types",
     "wiki",
     "workflow",
-    "yara_hunt",
 }
 
 WRITE_IDB_TOOLS = {

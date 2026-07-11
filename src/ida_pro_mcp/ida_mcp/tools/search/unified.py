@@ -349,14 +349,10 @@ def search_callers(pattern, include_context, offset, limit, semantic_min_score, 
         semantic_min_score=semantic_min_score, include_alternatives=include_alternatives
     )
     if error:
-        return build_response(
-            [],
-            offset,
-            limit,
-            0,
-            False,
-            target=str(pattern),
-            note="Target is not a function address/name. Returning empty callers list.",
+        return make_error(
+            MCPError.NOT_FOUND,
+            str(error),
+            hint="Pass a hex address or exact function name. Try search(action='find') first.",
         )
 
     func = idaapi.get_func(target_ea)
@@ -385,14 +381,10 @@ def search_callees(pattern, include_context, offset, limit, semantic_min_score, 
         semantic_min_score=semantic_min_score, include_alternatives=include_alternatives
     )
     if error:
-        return build_response(
-            [],
-            offset,
-            limit,
-            0,
-            False,
-            target=str(pattern),
-            note="Target is not a function address/name. Returning empty callees list.",
+        return make_error(
+            MCPError.NOT_FOUND,
+            str(error),
+            hint="Pass a hex address or exact function name. Try search(action='find') first.",
         )
 
     func = idaapi.get_func(target_ea)
@@ -475,7 +467,7 @@ def search_api(pattern, include_context, offset, limit, include_items, include_b
     if not api_summary:
         return make_error(
             MCPError.NO_RESULTS,
-            f"No imported API matching pattern",
+            "No imported API matching pattern",
             "Check imports with data(action='imports') or search(action='find').",
         )
     result = build_response(

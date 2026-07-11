@@ -3,7 +3,7 @@
 Core agent surface: find, nl, string, bytes, api, callers/callees,
 xrefs_to_string, symbol/symbol_info, decompiled, behavior.
 
-Advanced actions (hunt, path, outlier, …) remain callable but are not the
+Advanced actions (path, outlier, …) remain callable but are not the
 default tools/list enum. Semantic NL/behavior live in search/semantic.py.
 """
 
@@ -29,7 +29,6 @@ from .combinators import (
     search_analyze,
     search_bool,
     search_fingerprint,
-    search_hunt,
     search_neighborhood,
     search_noreach,
     search_outlier,
@@ -141,9 +140,9 @@ def search(
         "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig",
         "find", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
         "type", "export", "summary", "query_lang", "nl", "behavior",
-        "bool", "hunt", "analyze", "neighborhood", "outlier", "fingerprint", "path", "reach", "noreach",
+        "bool", "analyze", "neighborhood", "outlier", "fingerprint", "path", "reach", "noreach",
         "symbol", "symbol_info", "demangle", "xrefs_to_string",
-    ], "Action: bytes|string|immediate|name|insns|mnemonic|instruction|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|callers|callees|api|vulnerable|constants|decompiled|structured|type|export|summary|query_lang|nl|behavior|bool|hunt|analyze|neighborhood|outlier|fingerprint|path|reach|noreach|symbol|symbol_info|demangle|xrefs_to_string"],
+    ], "Action: bytes|string|immediate|name|insns|mnemonic|instruction|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|callers|callees|api|vulnerable|constants|decompiled|structured|type|export|summary|query_lang|nl|behavior|bool|analyze|neighborhood|outlier|fingerprint|path|reach|noreach|symbol|symbol_info|demangle|xrefs_to_string"],
     pattern: Annotated[Optional[str], "Pattern to search for"] = None,
     query: Annotated[Optional[str], "Alias for pattern"] = None,
     limit: Annotated[int, "Max results"] = 100,
@@ -189,11 +188,10 @@ def search(
     COMPOSITION ACTIONS (combinators):
     - bool: Composite boolean query language across name/api/string/mnem/caller/callee
             Example: "(api:Crypt* AND name:key) OR (string:password AND NOT obf:true)"
-    - hunt: Named workflow recipes (backdoor, anti_debug, c2, crypto, parser, ...)
-            Pass recipe='list' to see all available recipes.
+    - analyze: Unified structural analysis (neighborhood/outlier/similar/vulnerable/semantic scopes)
     - neighborhood: 360-degree context card around a function (callers, callees, similar, tags)
     - outlier: Find structurally anomalous functions (size/complexity/orphan/leaf/hub/deep)
-    - fingerprint: Structural (callgraph) similarity, NOT embedding-based
+    - fingerprint: Embedding-similar functions via bge-code-v1 cosine similarity
     - path: Shortest call-graph path between two symbols
     - reach: Functions reachable from a root within N hops
     - noreach: Functions NOT reachable from any known entrypoint
@@ -241,7 +239,7 @@ def search(
                         break
 
         # Validate pattern
-        pattern_not_required = {"vulnerable", "constants", "summary", "outlier", "noreach", "hunt", "demangle", "symbol_info", "structured"}
+        pattern_not_required = {"vulnerable", "constants", "summary", "outlier", "noreach", "demangle", "symbol_info", "structured"}
         if not actual_pattern and action not in pattern_not_required:
             return make_error(MCPError.INVALID_ARGS, "pattern or query required")
         if action == "export" and not actual_pattern:
@@ -372,9 +370,6 @@ def search(
 
         elif action == "bool":
             response = search_bool(actual_pattern, case_sensitive, offset, limit)
-        elif action == "hunt":
-            recipe = str(kwargs.get("recipe") or actual_pattern or "")
-            response = search_hunt(recipe, case_sensitive, offset, limit)
         elif action == "analyze":
             response = search_analyze(
                 addr=actual_pattern or kwargs.get("addr"),

@@ -60,7 +60,7 @@ from .server_response import ServerResponseMixin  # noqa: E402
 from .server_runtime import ServerRuntimeMixin  # noqa: E402
 from .server_semantic import ServerSemanticMixin  # noqa: E402
 from .server_session import ServerSessionMixin  # noqa: E402
-from .server_threat_hunt import ServerThreatHuntMixin  # noqa: E402
+
 from .server_wiki import ServerWikiMixin  # noqa: E402
 from .server_workflow import ServerWorkflowMixin  # noqa: E402
 
@@ -74,7 +74,6 @@ class IDAMCPServer(
     ServerResponseMixin,
     ServerSemanticMixin,
     ServerWikiMixin,
-    ServerThreatHuntMixin,
     ServerBlackboardMixin,
     ServerWorkflowMixin,
     ServerMultiSessionMixin,

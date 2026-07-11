@@ -552,33 +552,6 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
     if include_items:
         result["items"] = [{"address": r["address"], "function": r["function"], "line_num": r["line_num"]} for r in page]
 
-    # Auto-write blackboard entries for unique matching functions
-    if rows and not scope_func:
-        try:
-            from blackboard import BlackboardStore  # type: ignore
-            store = BlackboardStore()
-            seen_funcs = set()
-            for r in rows[:10]:  # cap at 10 auto-writes
-                fea = r["address"]
-                if fea in seen_funcs:
-                    continue
-                seen_funcs.add(fea)
-                existing = store.list(addr=fea, limit=1, include_resolved=False)
-                if not existing:
-                    store.write(
-                        title=f"decompiled match: '{pattern[:40]}' in {r['function']}",
-                        category="hypothesis",
-                        addr=fea,
-                        content=r["line"],
-                        tags=["decompiled_search", "auto"],
-                        confidence=0.6,
-                        source="search_decompiled",
-                        source_type="human",
-                        embed=False,
-                    )
-        except Exception:
-            pass
-
     return result
 
 
@@ -662,7 +635,7 @@ def search_structured(constraints, pattern, range_start, range_end, include_cont
     rows = rows[offset:offset + limit]
 
     results = []
-    schema_hits = {}
+    items = []
     for r in rows:
         line = f"{r['ea']}  {r['name']}  size={r['func_size']}  bb={r['bb_count']}  apis={r['api_count']}"
         if r.get("has_loops"):
@@ -670,7 +643,8 @@ def search_structured(constraints, pattern, range_start, range_end, include_cont
         if r.get("segment"):
             line += f"  seg={r['segment']}"
         results.append(line)
-        schema_hits[r["ea"]] = {
+        items.append({
+            "addr": str(r["ea"]),
             "name": r["name"],
             "func_size": r["func_size"],
             "bb_count": r["bb_count"],
@@ -680,12 +654,12 @@ def search_structured(constraints, pattern, range_start, range_end, include_cont
             "segment": r["segment"],
             "is_thunk": r["is_thunk"],
             "cyclomatic": r["cyclomatic"],
-        }
+        })
 
     return {
         "ok": True, "action": "structured", "constraints": constraints,
         "matches": "\n".join(results), "count": len(results),
-        "schema_hits": schema_hits,
+        "items": items,
         "note": f"Structured search via embedding index ({'semantic ranking' if query else 'structural only'}).",
         "index_used": True,
     }
