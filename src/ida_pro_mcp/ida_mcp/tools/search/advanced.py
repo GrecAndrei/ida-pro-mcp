@@ -73,10 +73,17 @@ def _decompiled_query_tokens(pattern: str) -> list[str]:
 
 
 def _blob_matches_tokens(blob: str, tokens: list[str]) -> bool:
+    """Check if blob contains enough query tokens.
+
+    Requires at least 2 tokens to match (or all tokens if fewer than 2).
+    This prevents single common words like "key" or "data" from matching.
+    """
     if not blob or not tokens:
         return False
     lowered = blob.lower()
-    return any(tok in lowered for tok in tokens)
+    matches = sum(1 for t in tokens if t in lowered)
+    required = min(2, len(tokens))
+    return matches >= required
 
 
 def _coerce_ea(value) -> int:
@@ -360,15 +367,9 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
             hint=ERROR_HINTS.get(MCPError.DECOMPILER_UNAVAILABLE),
         )
 
-    # Check embedding index — required for efficient search
+    # Check embedding index — optional accelerator, not required
     asm, idx, _idb_path = _get_intelligence_index()
-    if idx is None or idx.size == 0:
-        return make_error(
-            MCPError.NOT_FOUND,
-            "No functions indexed yet. Index your functions to enable semantic search.",
-            hint="Index your functions first:\n  index_fast:  seconds, disassembly-based (good for quick triage)\n  index_batch: minutes, decompile-based (best quality embeddings)"
-                 "search_decompiled uses it to find relevant functions before decompiling.",
-        )
+    index_available = idx is not None and idx.size > 0
 
     scope_addr = kwargs.get("addr") or kwargs.get("func") or kwargs.get("function") or kwargs.get("scope")
     try:
@@ -379,7 +380,11 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
         max_functions = max(1, min(int(kwargs.get("max_functions", kwargs.get("sample_max_funcs", 512))), 5000))
     except (ValueError, TypeError):
         max_functions = 512
+    if not index_available:
+        max_functions = min(max_functions, 128)
     sample = bool(kwargs.get("sample", False))
+
+    preview_lines = max(0, min(int(kwargs.get("preview_lines", 0)), 10))
 
     target_funcs = []
     scope_func = None
@@ -388,7 +393,7 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
         "seeded_candidates": 0,
         "seed_reasons": {"cached": 0, "names": 0, "strings": 0, "imports": 0, "intelligence": 0, "behavior": 0},
         "planning_timed_out": False,
-        "intelligence_index_size": idx.size,
+        "intelligence_index_size": idx.size if idx else 0,
         "expansion_queries": [],
     }
     total_available = 0
@@ -404,9 +409,13 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
     else:
         all_funcs = list(_iter_function_starts(range_start, range_end))
         total_available = len(all_funcs)
-        seeded_funcs, planning_meta = _seed_decompiled_candidates(
-            pattern, matcher, range_start, range_end, max_functions, timeout_ms
-        )
+        if index_available:
+            seeded_funcs, planning_meta = _seed_decompiled_candidates(
+                pattern, matcher, range_start, range_end, max_functions, timeout_ms
+            )
+        else:
+            seeded_funcs = []
+            planning_meta["tokens"] = _decompiled_query_tokens(pattern)
         seen = set()
         for func_ea in seeded_funcs:
             if func_ea in seen:
@@ -435,6 +444,7 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
     scan_truncated = (not scope_func) and (total_available > len(target_funcs))
 
     rows = []
+    func_stats = {}
     scanned = 0
     timed_out = False
     decompiled = 0
@@ -447,7 +457,7 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
         intelligence_backfill_limit = max(0, min(int(kwargs.get("intelligence_backfill", 12)), 64))
     except (TypeError, ValueError):
         intelligence_backfill_limit = 12
-    asm, intelligence_idx, _idb_path = _get_intelligence_index() if not scope_func else (None, None, "")
+    asm, intelligence_idx, _idb_path = (asm, idx, _idb_path) if index_available else (None, None, "")
 
     for func_ea in target_funcs:
         if (_time.time() - started_at) >= (timeout_ms / 1000.0):
@@ -491,15 +501,48 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
                 intelligence_backfilled += 1
             except Exception:
                 pass
-        for line_num, line in enumerate(pseudocode.splitlines(), 1):
+        pseudocode_lines = pseudocode.splitlines()
+        func_total_lines = len(pseudocode_lines)
+        func_matched_lines = 0
+        for line_num, line in enumerate(pseudocode_lines, 1):
             if matcher(line):
+                func_matched_lines += 1
                 text = clip_text(line.strip(), 220)
-                rows.append({
+                row = {
                     "address_ea": func_ea, "address": hex(func_ea),
                     "function": func_name, "line_num": line_num,
                     "target_rank": target_rank.get(func_ea, scanned),
+                    "raw_line": line.strip(),
                     "line": f"{hex(func_ea)}  {func_name}  L{line_num}: {text}",
-                })
+                }
+                # Add preview context lines if requested
+                if preview_lines > 0:
+                    ctx_start = max(0, line_num - 1 - preview_lines)
+                    ctx_end = min(len(pseudocode_lines), line_num + preview_lines)
+                    context = pseudocode_lines[ctx_start:ctx_end]
+                    row["context"] = "\n".join(
+                        f"{'>>>' if ctx_start + i == line_num - 1 else '   '} {ln}"
+                        for i, ln in enumerate(context)
+                    )
+                rows.append(row)
+        # Track per-function stats for re-ranking
+        if func_matched_lines > 0:
+            func_stats[func_ea] = {
+                "name": func_name, "matched": func_matched_lines,
+                "total": func_total_lines, "seeding_rank": target_rank.get(func_ea, scanned),
+            }
+
+    # Re-rank by match density: functions with more matches relative to their
+    # size rank higher. Seeding rank breaks ties.
+    if func_stats:
+        max_seeding = max(s["seeding_rank"] for s in func_stats.values()) or 1
+        for _ea, info in func_stats.items():
+            density = info["matched"] / max(1, info["total"])
+            seeding_norm = 1.0 - (info["seeding_rank"] / (max_seeding + 1))
+            info["rerank_score"] = (density * 0.6) + (seeding_norm * 0.4) + (info["matched"] * 0.01)
+        # Sort rows by new function score, then by line_num within function
+        func_order = {ea: i for i, ea in enumerate(sorted(func_stats, key=lambda e: -func_stats[e]["rerank_score"]))}
+        rows.sort(key=lambda r: (func_order.get(r["address_ea"], 999), r["line_num"]))
 
     if scanned > 0 and decompiled == 0 and failures > 0:
         return make_error(
@@ -520,8 +563,9 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
             },
         )
 
+    # Rows are already re-ranked; paginate directly
     page, total, is_truncated = paginate_records(
-        rows, offset, limit, sort_key=lambda r: (r.get("target_rank", 0), r["address_ea"], r["line_num"]), reverse=False
+        rows, offset, limit, sort_key=None, reverse=False
     )
     result = build_response(
         [r["line"] for r in page], offset, limit, total, is_truncated,
@@ -550,7 +594,28 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
             else "Increase max_functions, narrow with range/addr, or use search.find/search.nl to seed a tighter area first."
         )
     if include_items:
-        result["items"] = [{"address": r["address"], "function": r["function"], "line_num": r["line_num"]} for r in page]
+        items = []
+        seen_funcs = set()
+        for r in page:
+            item = {
+                "addr": r["address"],
+                "name": r["function"],
+                "line_num": r["line_num"],
+                "text": clip_text(r.get("raw_line", ""), 200),
+            }
+            if r.get("context"):
+                item["context"] = r["context"]
+            # Add function-level stats if available
+            ea = r["address_ea"]
+            if ea in func_stats and ea not in seen_funcs:
+                seen_funcs.add(ea)
+                item["matched_lines"] = func_stats[ea]["matched"]
+                item["total_lines"] = func_stats[ea]["total"]
+            items.append(item)
+        result["items"] = items
+
+    if not index_available:
+        result["note"] = "No embedding index — used brute-force scan. Run intelligence(action='index_fast') for better ranking."
 
     return result
 

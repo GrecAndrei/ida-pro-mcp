@@ -628,6 +628,7 @@ TOOL_ARG_SCHEMAS = {
         "include_breakdown": {"type": "boolean"},
         "timeout_ms": {"type": "integer"},
         "max_functions": {"type": "integer"},
+        "preview_lines": {"type": "integer", "description": "Lines of pseudocode context around each decompiled match (0-10)"},
         "sample": {"type": "boolean"},
         "sample_max_funcs": {"type": "integer"},
         # Semantic search params — previously stripped by arg filter, making
