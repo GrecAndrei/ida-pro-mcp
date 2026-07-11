@@ -443,7 +443,7 @@ class BlackboardStore:
                 age_days = (now - (updated_at or now)) / 86400
                 if age_days < 1:
                     continue
-                rate = decay_rate * (0.5 if calibrated or ev_json else 1.0)
+                rate = decay_rate * (0.5 if calibrated or (ev_json and ev_json != '[]') else 1.0)
                 new_conf = round(max(min_confidence, conf * math.exp(-age_days * rate)), 3)
                 if new_conf < conf - 0.01:
                     conn.execute(

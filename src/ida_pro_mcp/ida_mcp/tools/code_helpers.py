@@ -923,6 +923,289 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
     except Exception:
         pass
 
+    # --- CFG path reachability: find all paths from entry to dangerous calls ---
+    try:
+        danger_eas = set()
+        for f in findings:
+            # Extract EA from evidence string
+            import re as _re
+            ea_match = _re.search(r'at (0x[0-9a-fA-F]+)', f.get("evidence", ""))
+            if ea_match:
+                try:
+                    danger_eas.add(int(ea_match.group(1), 16))
+                except ValueError:
+                    pass
+        if danger_eas and func_ea:
+            # Build basic block map
+            func = ida_funcs.get_func(func_ea)
+            if func:
+                fc = idaapi.FlowChart(func)
+                bb_map = {}
+                for _bb in fc:
+                    bb_map[int(bb.start_ea)] = bb
+                # Find which BBs contain dangerous calls
+                danger_bbs = []
+                for bb in fc:
+                    for danger_ea in danger_eas:
+                        if bb.start_ea <= danger_ea < bb.end_ea:
+                            danger_bbs.append(bb)
+                            break
+                # Check if dangerous BBs are in loops (back-edge targets)
+                for bb in danger_bbs:
+                    for succ_bb in bb.succs():
+                        if int(succ_bb.start_ea) <= int(bb.start_ea):
+                            # Back edge → this BB is in a loop
+                            findings.append({"severity": "high", "pattern": "danger_in_loop",
+                                             "evidence": f"dangerous call at {hex_ea(int(bb.start_ea))} is in a loop body",
+                                             "detail": "Vulnerable call is inside a loop — repeated exploitation possible, amplifies impact"})
+                            break
+                # Check if function has many BBs (complex → harder to audit)
+                bb_count = len(list(fc))
+                if bb_count > 20:
+                    has_critical = any(f.get("severity") == "critical" for f in findings)
+                    if has_critical:
+                        findings.append({"severity": "medium", "pattern": "complex_func_with_vuln",
+                                         "evidence": f"function has {bb_count} basic blocks with critical vulns",
+                                         "detail": "Complex function with many branches — difficult to audit all paths, manual review recommended"})
+    except Exception:
+        pass
+
+    # --- Stack frame analysis: large buffers, canary, frame pointer ---
+    try:
+        func_obj = ida_funcs.get_func(func_ea)
+        if func_obj:
+            frame = ida_funcs.get_frame(func_obj)
+            if frame:
+                frame_size = int(getattr(frame, "memqty", 0) or 0)
+                # Check for large stack allocations
+                for i in range(frame_size):
+                    member = frame.get_member(i)
+                    if member:
+                        mname = ida_struct.get_member_name(member.id) or ""
+                        msize = ida_struct.get_member_size(member)
+                        # Large stack buffer
+                        if msize > 256 and any(kw in mname.lower() for kw in ("buf", "buffer", "data", "tmp", "temp", "stack", "local")):
+                            findings.append({"severity": "high", "pattern": "large_stack_buffer",
+                                             "evidence": f"'{mname}' ({msize} bytes) in stack frame at {hex_ea(func_ea)}",
+                                             "detail": f"Large stack buffer ({msize} bytes) — high risk of stack overflow if used with unbounded input"})
+                        # Stack canary detection
+                        if "canary" in mname.lower() or "cookie" in mname.lower() or "__stack_chk" in mname.lower():
+                            findings.append({"severity": "low", "pattern": "stack_canary_present",
+                                             "evidence": f"canary '{mname}' in stack frame at {hex_ea(func_ea)}",
+                                             "detail": "Stack canary detected — overflow will be caught before return (if not bypassed)"})
+                        # Sensitive field names in stack vars
+                        if any(kw in mname.lower() for kw in ("password", "passwd", "secret", "key", "token", "credential")):
+                            findings.append({"severity": "medium", "pattern": "sensitive_stack_var",
+                                             "evidence": f"'{mname}' in stack frame at {hex_ea(func_ea)}",
+                                             "detail": "Sensitive data in stack variable — may leak on stack overflow or memory dump"})
+    except Exception:
+        pass
+
+    # --- Instruction-level analysis: check operand types at dangerous call sites ---
+    try:
+        import ida_ua
+        danger_eas_for_insn = set()
+        for f in findings:
+            import re as _re
+            ea_match = _re.search(r'at (0x[0-9a-fA-F]+)', f.get("evidence", ""))
+            if ea_match:
+                try:
+                    danger_eas_for_insn.add(int(ea_match.group(1), 16))
+                except ValueError:
+                    pass
+        for dea in list(danger_eas_for_insn)[:10]:
+            insn = ida_ua.insn_t()
+            if ida_ua.decode_insn(insn, dea):
+                # Check if any operand references a stack variable directly
+                for i in range(6):  # IDA supports up to 6 operands
+                    op_type = idc.get_operand_type(dea, i)
+                    if op_type is None or op_type == 0:
+                        break
+                    # o_displ = stack variable reference (e.g., [ebp-0x10])
+                    if op_type == ida_ua.o_displ:
+                        op_text = idc.print_operand(dea, i)
+                        if op_text and ("ebp" in op_text or "rbp" in op_text or "sp" in op_text):
+                            # This is a stack variable used in a dangerous call
+                            pass  # Already caught by frame analysis
+                    # o_mem = direct memory reference (global variable)
+                    elif op_type == ida_ua.o_mem:
+                        mem_ea = idc.get_operand_value(dea, i)
+                        if mem_ea and mem_ea != idaapi.BADADDR:
+                            # Check if global is writable
+                            seg = ida_segment.getseg(mem_ea)
+                            if seg and int(getattr(seg, "perm", 0) or 0) & idaapi.SEGPERM_WRITE:
+                                seg_name = ida_segment.get_segm_name(seg) or ""
+                                findings.append({"severity": "medium", "pattern": "global_writable_ref",
+                                                 "evidence": f"operand references writable global at {hex_ea(mem_ea)} (seg '{seg_name}') from {hex_ea(dea)}",
+                                                 "detail": "Dangerous call references writable global — TOCTOU or race condition risk"})
+    except Exception:
+        pass
+
+    # --- ida_bytes: check actual bytes at function entry for known shellcode patterns ---
+    try:
+        func_bytes = ida_bytes.get_bytes(func_ea, 16)
+        if func_bytes:
+            # NOP sled detection
+            if func_bytes[:4] == b'\x90\x90\x90\x90':
+                findings.append({"severity": "critical", "pattern": "nop_sled",
+                                 "evidence": f"function at {hex_ea(func_ea)} starts with NOP sled",
+                                 "detail": "NOP sled at function entry — shellcode injection indicator"})
+            # INT3 padding (debug trap / shellcode marker)
+            if func_bytes[:4] == b'\xcc\xcc\xcc\xcc':
+                findings.append({"severity": "medium", "pattern": "int3_padding",
+                                 "evidence": f"function at {hex_ea(func_ea)} starts with INT3 padding",
+                                 "detail": "INT3 padding at function entry — debug trap or shellcode marker"})
+            # Common shellcode prologues
+            shellcode_prologues = [
+                (b"\x31\xc0", "xor eax, eax"),  # x86
+                (b"\x48\x31\xc0", "xor rax, rax"),  # x64
+                (b"\xfc", "cld"),  # x86 shellcode cld
+                (b"\x6a\x00", "push 0"),  # x86 push null
+            ]
+            for pattern_bytes, desc in shellcode_prologues:
+                if func_bytes[:len(pattern_bytes)] == pattern_bytes:
+                    # Check if this is in a non-code section
+                    seg = ida_segment.getseg(func_ea)
+                    seg_name = ida_segment.get_segm_name(seg) if seg else ""
+                    if seg_name and seg_name.lower() not in (".text", ".code", "CODE", "text"):
+                        findings.append({"severity": "high", "pattern": "shellcode_in_data_seg",
+                                         "evidence": f"function at {hex_ea(func_ea)} in segment '{seg_name}' starts with {desc}",
+                                         "detail": "Shellcode-like prologue in non-code segment — likely injected code"})
+    except Exception:
+        pass
+
+    # --- ida_xref: string xref analysis — find functions that reference suspicious strings ---
+    try:
+        # Collect all string EAs referenced by this function
+        str_ref_eas = set()
+        class StrRefCollector(ida_hexrays.ctree_visitor_t):
+            def __init__(self):
+                ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+            def visit_expr(self, expr):
+                try:
+                    if expr.op == ida_hexrays.cot_ref and expr.x and expr.x.op == ida_hexrays.cot_obj:
+                        ea = expr.x.obj_ea
+                        if idc.get_str_type(ea) is not None:
+                            str_ref_eas.add(ea)
+                except Exception:
+                    pass
+                return 0
+        collector = StrRefCollector()
+        collector.apply_to(cfunc.body, None)
+        # Check if suspicious strings are also referenced by other functions
+        # (shared C2 infrastructure, shared exploit strings)
+        for str_ea in list(str_ref_eas)[:5]:
+            ref_count = 0
+            ref_funcs = set()
+            for xref_ea in idautils.XrefsTo(str_ea):
+                xref_func = ida_funcs.get_func(xref_ea.frm)
+                if xref_func and int(xref_func.start_ea) != func_ea:
+                    ref_count += 1
+                    ref_name = ida_funcs.get_func_name(xref_func.start_ea) or hex_ea(xref_func.start_ea)
+                    ref_funcs.add(ref_name)
+                    if ref_count >= 5:
+                        break
+            if ref_count > 0:
+                s = idc.get_strlit_contents(str_ea, -1, 0)
+                if s:
+                    s_text = s.decode("utf-8", errors="replace")[:40]
+                    # Check if it's a suspicious string
+                    if any(kw in s_text.lower() for kw in ("http", "cmd", "shell", "exec", "admin", "root", "password", "key")):
+                        findings.append({"severity": "medium", "pattern": "shared_suspicious_string",
+                                         "evidence": f"string '{s_text}' at {hex_ea(str_ea)} referenced by {ref_count} other funcs: {list(ref_funcs)[:3]}",
+                                         "detail": "Suspicious string shared across multiple functions — coordinated attack infrastructure"})
+    except Exception:
+        pass
+
+    # --- Processor-specific checks ---
+    try:
+        proc_name = idaapi.get_inf_attr(idaapi.INF_PROCNAME) if hasattr(idaapi, 'get_inf_attr') else ""
+        if not proc_name:
+            proc_name = str(getattr(idaapi.inf, 'procname', '') or '')
+        proc_lower = proc_name.lower()
+
+        if "arm" in proc_lower or "thumb" in proc_lower:
+            # ARM: check for interworking calls (BLX to data)
+            # Check if function has BX LR (standard return) vs BX R14 (interworking)
+            func_obj = ida_funcs.get_func(func_ea)
+            if func_obj:
+                fc = idaapi.FlowChart(func_obj)
+                for bb in fc:
+                    # Check last instruction of each BB
+                    last_ea = int(bb.end_ea) - 4  # ARM instructions are 4 bytes (or 2 for Thumb)
+                    if last_ea > int(bb.start_ea):
+                        mnem = idc.print_insn_mnem(last_ea) or ""
+                        if mnem in ("BLX", "BX"):
+                            target = idc.get_operand_value(last_ea, 0)
+                            if target and target != idaapi.BADADDR:
+                                # Check if target is in a writable segment
+                                seg = ida_segment.getseg(target)
+                                if seg and int(getattr(seg, "perm", 0) or 0) & idaapi.SEGPERM_WRITE:
+                                    findings.append({"severity": "high", "pattern": "arm_branch_to_writable",
+                                                     "evidence": f"{mnem} to {hex_ea(target)} (writable) at {hex_ea(last_ea)}",
+                                                     "detail": "ARM branch to writable memory — code execution hijack via buffer overflow"})
+
+        elif "mips" in proc_lower:
+            # MIPS: check for delay slot hazards
+            func_obj = ida_funcs.get_func(func_ea)
+            if func_obj:
+                fc = idaapi.FlowChart(func_obj)
+                for _bb in fc:
+                    # Check if branch delay slot contains a dangerous instruction
+                    for item_ea in idautils.FuncItems(func_ea):
+                        mnem = idc.print_insn_mnem(item_ea) or ""
+                        if mnem in ("JAL", "JALR", "JR"):
+                            # Check next instruction (delay slot)
+                            next_ea = idc.next_head(item_ea, idaapi.BADADDR)
+                            if next_ea and next_ea != idaapi.BADADDR:
+                                delay_mnem = idc.print_insn_mnem(next_ea) or ""
+                                if delay_mnem in ("LW", "SW", "LB", "SB"):
+                                    # Load/store in delay slot — can be exploited
+                                    pass  # Too noisy to flag all of these
+                                    break
+
+        elif "x86" in proc_lower or "metapc" in proc_lower:
+            # x86: check for segment override in dangerous calls
+            func_obj = ida_funcs.get_func(func_ea)
+            if func_obj:
+                # Check if function uses FS/GS segment (SEH, TEB access)
+                uses_seh = False
+                for item_ea in idautils.FuncItems(func_ea):
+                    mnem = idc.print_insn_mnem(item_ea) or ""
+                    op0 = idc.print_operand(item_ea, 0) or ""
+                    if "fs:" in op0 or "gs:" in op0:
+                        uses_seh = True
+                        break
+                if uses_seh and any(f.get("severity") == "critical" for f in findings):
+                    findings.append({"severity": "high", "pattern": "seh_with_vuln",
+                                     "evidence": f"function uses FS/GS segment access at {hex_ea(func_ea)}",
+                                     "detail": "Function uses SEH/TEB access and has critical vulns — SEH overwrite exploitation likely"})
+    except Exception:
+        pass
+
+    # --- ida_name: demangle and check for known vulnerable patterns in names ---
+    try:
+        func_name = idc.get_func_name(func_ea) or ""
+        demangled = ida_name.demangle_name(func_name, 0) if func_name else ""
+        name_to_check = (demangled or func_name).lower()
+        # Known vulnerable function families
+        vuln_families = {
+            "strcpy": "Use strncpy/strlcpy instead",
+            "sprintf": "Use snprintf instead",
+            "gets": "Never use gets() — always exploitable",
+            "scanf": "Use fgets + sscanf with width limits",
+            "vsprintf": "Use vsnprintf instead",
+            "strcat": "Use strncat instead",
+        }
+        for vuln_name, advice in vuln_families.items():
+            if vuln_name in name_to_check:
+                # This function IS the vulnerable function (not calling it)
+                findings.append({"severity": "high", "pattern": "vulnerable_function_name",
+                                 "evidence": f"function name '{func_name}' contains '{vuln_name}' at {hex_ea(func_ea)}",
+                                 "detail": f"Function is a known-vulnerable variant — {advice}"})
+    except Exception:
+        pass
+
     # Deduplicate
     seen = set()
     unique = []

@@ -104,7 +104,7 @@ def _resolve_field(
             f"Field not found in response: {field}",
         ), None
 
-    return field, info, value
+    return field, None, value
 
 
 def continue_truncated(
