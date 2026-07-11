@@ -685,17 +685,20 @@ def _disasm_window(
     while steps_fwd < radius:
         next_ea = idc.next_head(curr, idaapi.BADADDR)
         if next_ea == idaapi.BADADDR or next_ea <= curr:
-            # Non-head aligned; fall through one byte at a time until
-            # we find a valid head or hit the budget.
+            # Non-head aligned or end of address space — try advancing
+            # by item size, but only format if we land on a valid head.
             item_size = int(idc.get_item_size(curr) or 1)
             item_size = max(item_size, 1)
             curr = curr + item_size
             if curr <= center_ea:
                 continue
+            # Verify we're on a valid instruction head before formatting
+            check = idc.next_head(curr - 1, idaapi.BADADDR)
+            if check != curr:
+                break
             steps_fwd += 1
             after.append(_format_disasm_line(curr, style=style, include_bytes=include_bytes))
             continue
-        # Even when next_ea == center_ea exactly we still want to move.
         curr = next_ea
         if curr <= center_ea:
             continue

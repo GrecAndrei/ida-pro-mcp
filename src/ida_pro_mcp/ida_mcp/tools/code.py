@@ -418,8 +418,13 @@ def code(
                         include_bytes=include_bytes,
                     )
                     fname = ida_funcs.get_func_name(func.start_ea) if func else ""
-                    first_addr = lines[0].split(":", 1)[0] if lines else hex_ea(ea)
-                    last_addr = lines[-1].split(":", 1)[0] if lines else hex_ea(ea)
+                    # Extract first/last addresses from formatted lines
+                    # Lines are "*addr:instr" (csmini), "*addr: instr" (annotated), or "addr  instr" (classic)
+                    def _extract_addr(line: str, fallback_ea: int) -> str:
+                        clean = line.lstrip("*").split(":", 1)[0].split("  ", 1)[0].strip()
+                        return clean if clean.startswith("0x") else hex_ea(fallback_ea)
+                    first_addr = _extract_addr(lines[0], ea) if lines else hex_ea(ea)
+                    last_addr = _extract_addr(lines[-1], ea) if lines else hex_ea(ea)
                     entry = {
                         "ok": True,
                         "addr": hex_ea(ea),
@@ -443,13 +448,15 @@ def code(
                         style=disasm_style,
                         include_bytes=include_bytes,
                     )
+                    raw_end = end_ea if end_ea is not None else (ea + 0x1000)
                     results.append({
-                        "addr": addr,
+                        "ok": True,
+                        "addr": hex_ea(ea),
                         "warning": "Address is not within a defined function. Showing raw disassembly.",
                         "disasm": "\n".join(lines),
                         "count": len(lines),
                         "style": disasm_style,
-                        "range": f"{hex_ea(ea)}-{hex_ea(end_ea if end_ea is not None else (ea + 0x1000))}",
+                        "range": f"{hex_ea(ea)}-{hex_ea(raw_end)}",
                     })
                     continue
                 disasm_start = ea if end_ea is not None else func.start_ea
