@@ -687,7 +687,6 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 ident = f.read(16)
                 is_64 = ident[4] == 2  # ELFCLASS64
                 is_be = ident[5] == 2  # ELFDATA2MSB
-                endian = ">" if is_be else "<"
                 if is_64:
                     f.seek(40)  # e_shoff offset for 64-bit
                     shoff = int.from_bytes(f.read(8), "big" if is_be else "little")
@@ -727,10 +726,10 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 for i in range(shnum):
                     f.seek(shoff + i * shentsize)
                     if is_64:
-                        sh_name = int.from_bytes(f.read(4), "big" if is_be else "little")
+                        int.from_bytes(f.read(4), "big" if is_be else "little")
                         sh_type = int.from_bytes(f.read(4), "big" if is_be else "little")
                     else:
-                        sh_name = int.from_bytes(f.read(4), "big" if is_be else "little")
+                        int.from_bytes(f.read(4), "big" if is_be else "little")
                         sh_type = int.from_bytes(f.read(4), "big" if is_be else "little")
                     if sh_type == 11:  # SHT_DYNAMIC (6) or SHT_DYNSYM — check for 6
                         pass

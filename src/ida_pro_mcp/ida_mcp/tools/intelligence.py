@@ -18,7 +18,6 @@ CLI shortcut `ida-pro-mcp-cli intelligence status` continues to call
 
 import hashlib
 import json
-import os
 
 try:
     from ._common import *
@@ -665,7 +664,7 @@ def intelligence(
                 pass
             try:
                 if idx_count > 0:
-                    persisted_state = _persist_embedder_state(idx, "intelligence_status")
+                    _persist_embedder_state(idx, "intelligence_status")
             except Exception:
                 pass
             return {
@@ -759,7 +758,7 @@ def intelligence(
             idx, db_path = _index_for_current_idb()
             name = ida_funcs.get_func_name(ea) or hex(ea)
             idx.index(hex(ea), name, pseudo)
-            persisted_state = _persist_embedder_state(idx, "index_function")
+            _persist_embedder_state(idx, "index_function")
             return {
                 "ok": True,
                 "addr": hex(ea),
@@ -923,7 +922,7 @@ def intelligence(
                     count += 1
                 except Exception:
                     failures += 1
-            persisted_state = _persist_embedder_state(idx, action_label)
+            _persist_embedder_state(idx, action_label)
             return {
                 "ok": True,
                 "indexed": count,
@@ -959,7 +958,7 @@ def intelligence(
             qname = ida_funcs.get_func_name(ea) or hex(ea)
             idx.index_async(hex(ea), qname, pseudo)
             similar = idx.similar(pseudo, top_k=top_k, exclude_ea=hex(ea), threshold=threshold)
-            persisted_state = _persist_embedder_state(
+            _persist_embedder_state(
                 idx,
                 "similar_functions",
                 thresholds={"similarity_threshold": float(threshold)},
@@ -985,7 +984,7 @@ def intelligence(
                     hint="Index your functions first:\n  index_fast:  seconds, disassembly-based (good for quick triage)\n  index_batch: minutes, decompile-based (best quality embeddings)",
                 )
             rows = idx.search(str(query), top_k=top_k, threshold=threshold)
-            persisted_state = _persist_embedder_state(
+            _persist_embedder_state(
                 idx,
                 "semantic_search",
                 thresholds={"semantic_threshold": float(threshold)},
@@ -1032,7 +1031,7 @@ def intelligence(
                 meta = idx.metadata()
             except Exception:
                 meta = {}
-            persisted_state = _persist_embedder_state(idx, "export_index_summary")
+            _persist_embedder_state(idx, "export_index_summary")
             return {
                 "ok": True,
                 "index": {

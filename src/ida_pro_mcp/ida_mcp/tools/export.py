@@ -202,7 +202,7 @@ def _try_binexport_binary(path: str) -> tuple[bool, str]:
             if os.path.isfile(abs_path) and os.path.getsize(abs_path) > 0:
                 return True, f"idc:{cmd.split('(')[0]}"
         except Exception as e:
-            last = str(e)
+            str(e)
             continue
 
     # 2) load_and_run_plugin with common plugin basenames (path not controllable).
@@ -307,7 +307,7 @@ def _write_binexport_fallback(path: str, max_funcs: int = 5000) -> dict:
 @idaread
 def export(
     action: Annotated[
-        Literal["listing", "html", "idc", "json", "sarif", "binexport", "headers", "redact", "vtable"],
+        Literal[listing, html, idc, json, sarif, binexport, headers, redact, vtable],
         "Action: listing|html|idc|json|sarif|binexport|headers|redact|vtable",
     ],
     path: Annotated[Optional[str], "Output file path (or text for redact if text= omitted)"] = None,

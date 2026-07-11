@@ -629,7 +629,8 @@ class BgeCodeEmbedder:
             elif self._port:
                 try:
                     req = urllib.request.urlopen(f"http://127.0.0.1:{self._port}/health", timeout=2)
-                    _hr = req.read(); server_ready = b'"status":"ok"' in _hr or b'"ok"' in _hr
+                    _hr = req.read()
+                    server_ready = b'"status":"ok"' in _hr or b'"ok"' in _hr
                     self._ready = server_ready
                 except Exception as exc:
                     server_ready = False

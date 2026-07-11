@@ -480,7 +480,7 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
     parser.add_argument("--skills-mode", choices=["router", "full", "none"], default="router", help="Codex skill installation mode")
     parser.add_argument("--install-skills", action="store_true", default=True, help="install auto-generated skills for Claude Code / OpenCode (default: on)")
     parser.add_argument("--no-install-skills", action="store_true", help="skip Claude Code / OpenCode skill installation")
-    
+
     parser.add_argument("--only", action="append", choices=["runtime", "clients", "skills", "shell"], default=[], help="run only selected install phases")
     parser.add_argument("--install-root", default="", help="override install root directory")
     parser.add_argument(
@@ -515,7 +515,7 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         install_llama_server=args.install_llama_server,
         embedder_doctor=args.embedder_doctor,
         setup_embedder=args.setup_embedder,
-        
+
         only=set(args.only),
     )
     if opts.setup_embedder:

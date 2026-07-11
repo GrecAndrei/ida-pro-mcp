@@ -128,14 +128,17 @@ def apply_grep(items: list, pp: dict) -> list:
         try:
             rx = re.compile(pattern, flags)
         except re.error as e:
-            raise ValueError(f"Invalid grep regex: {e}")
-        match_fn = lambda texts: any(rx.search(t) for t in texts)
+            raise ValueError(f"Invalid grep regex: {e}") from e
+        def match_fn(texts):
+            return any(rx.search(t) for t in texts)
     else:
         needle = pattern if case_sensitive else pattern.lower()
         if case_sensitive:
-            match_fn = lambda texts: any(needle in t for t in texts)
+            def match_fn(texts):
+                return any(needle in t for t in texts)
         else:
-            match_fn = lambda texts: any(needle in t for t in texts)
+            def match_fn(texts):
+                return any(needle in t for t in texts)
 
     result = []
     for item in items:

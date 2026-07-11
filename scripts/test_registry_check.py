@@ -152,7 +152,7 @@ def discover_code_entities() -> list[CodeEntity]:
                     continue
 
                 if target_name == "_TOOL_ACTIONS" and isinstance(value, ast.Dict):
-                    for key, val in zip(value.keys, value.values):
+                    for key, val in zip(value.keys, value.values, strict=False):
                         if isinstance(key, ast.Constant) and isinstance(val, ast.List):
                             tool_name = key.value
                             actions = [
@@ -531,14 +531,14 @@ def check_violations(
                     ))
 
     # Check for tests with headers but not in registry
-    for test_id, header in test_headers.items():
+    for test_id, _header in test_headers.items():
         if test_id not in registry.get("tests", {}):
             violations.append(Violation(
                 test_id=test_id,
                 entity_id="",
                 violation_type="missing_binding",
                 message=f"Test '{test_id}' has @@TEST_REGISTRY@@ header but is not in registry",
-                fix_hint=f"Run --discover to add to registry, or run --update-hashes",
+                fix_hint="Run --discover to add to registry, or run --update-hashes",
             ))
 
     return violations
@@ -701,7 +701,7 @@ def cmd_mark_fp(args: argparse.Namespace) -> int:
 
     if test_id not in registry.get("tests", {}):
         print(f"✗ Test '{test_id}' not found in registry.")
-        print(f"  Run --discover first.")
+        print("  Run --discover first.")
         return 1
 
     entry = registry["tests"][test_id]

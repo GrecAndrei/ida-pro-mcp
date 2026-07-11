@@ -153,7 +153,7 @@ def test_resolve_snapshot_from_file(tmp_path):
     mod.ida_bytes = sys.modules["ida_bytes"]
     try:
         spec.loader.exec_module(mod)
-    except Exception as e:
+    except Exception:
         # Fallback: exec resolve_snapshot only
         src_text = (SRC / "ida_pro_mcp" / "ida_mcp" / "tools" / "bindiff.py").read_text()
         start = src_text.index("def resolve_snapshot")
@@ -194,7 +194,7 @@ def test_resolve_snapshot_from_file(tmp_path):
 
 
 def test_export_and_bindiff_schemas_admit_critical_keys():
-    from ida_pro_mcp.host.schemas_data import TOOL_ARG_SCHEMAS, TOOL_ACTIONS
+    from ida_pro_mcp.host.schemas_data import TOOL_ACTIONS, TOOL_ARG_SCHEMAS
 
     assert "export" in TOOL_ACTIONS
     exp = TOOL_ARG_SCHEMAS["export"]

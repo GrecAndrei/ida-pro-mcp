@@ -230,7 +230,7 @@ def _snap_funcs(snap: dict) -> dict:
 @idaread
 def bindiff(
     action: Annotated[
-        Literal["snapshot", "diff", "patch_analysis", "function_match", "summary"],
+        Literal[snapshot, diff, patch_analysis, function_match, summary],
         "Action: snapshot|diff|patch_analysis|function_match|summary",
     ],
     addr: Annotated[Optional[str], "Function address (for patch_analysis)"] = None,

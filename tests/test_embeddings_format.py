@@ -5,11 +5,10 @@ Created: 2026-07-06
 
 import json
 import math
-import unittest
-from unittest.mock import patch, MagicMock
-
-import sys
 import os
+import sys
+import unittest
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -313,9 +312,8 @@ class TestNarrowExceptions(unittest.TestCase):
         """KeyboardInterrupt should propagate, not be counted as RPC failure."""
         e = self._make_embedder()
 
-        with patch("urllib.request.urlopen", side_effect=KeyboardInterrupt):
-            with self.assertRaises(KeyboardInterrupt):
-                e._llama_embed("test")
+        with patch("urllib.request.urlopen", side_effect=KeyboardInterrupt), self.assertRaises(KeyboardInterrupt):
+            e._llama_embed("test")
 
         self.assertEqual(e._consecutive_rpc_failures, 0)
 
@@ -323,9 +321,8 @@ class TestNarrowExceptions(unittest.TestCase):
         """SystemExit should propagate."""
         e = self._make_embedder()
 
-        with patch("urllib.request.urlopen", side_effect=SystemExit(1)):
-            with self.assertRaises(SystemExit):
-                e._llama_embed("test")
+        with patch("urllib.request.urlopen", side_effect=SystemExit(1)), self.assertRaises(SystemExit):
+            e._llama_embed("test")
 
     def test_os_error_is_caught(self):
         """OSError (connection refused etc) should be caught."""

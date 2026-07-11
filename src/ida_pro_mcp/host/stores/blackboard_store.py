@@ -795,13 +795,12 @@ class BlackboardStore:
         if ok:
             entry = self.read(entry_id)
             if entry:
-                vec_blob = None
                 try:
                     with closing(self._conn()) as conn:
                         row = conn.execute("SELECT vector FROM blackboard WHERE id=?", (entry_id,)).fetchone()
-                        vec_blob = row[0] if row and row[0] else None
+                        row[0] if row and row[0] else None
                 except Exception:
-                    vec_blob = None
+                    pass
         return ok
 
     def semantic_index(self, category: str | None = None) -> dict[str, Any]:

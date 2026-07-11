@@ -521,9 +521,8 @@ class ServerResponseMixin(ServerResponseCompactMixin):
 
         imagebase = self._get_session_imagebase(session_id)
 
-        idb_path = None
         if self.current_session:
-            idb_path = self.current_session.idb_path
+            pass
 
         hex_addrs = sorted(set(matches))
         valid_addrs = []
@@ -569,73 +568,6 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             if is_rva:
                 addr_info["is_rva"] = True
                 addr_info["original_rva_hex"] = ha
-
-            if ppaa:
-                meta = ppaa.query_function_metadata(target_val)
-                if meta:
-                    inferred = {
-                        "name": meta["name"],
-                        "segment": meta["segment"],
-                        "size": meta["size"],
-                        "is_library": meta["is_library"],
-                    }
-                    inferred["behavior_tags"] = []
-
-                    if meta.get("reconstructed_structs"):
-                        inferred["reconstructed_structs"] = meta["reconstructed_structs"]
-                        c_structs = []
-                        for struct_desc in meta["reconstructed_structs"]:
-                            base_reg = struct_desc.get("base_register", "struct")
-                            fields_lines = []
-                            for f in struct_desc.get("fields", []):
-                                fields_lines.append(f"    {f['type']} field_{f['offset']:x}; // offset {f['offset_hex']}")
-                            struct_decl = f"struct struct_{base_reg} {{\n" + "\n".join(fields_lines) + "\n};"
-                            c_structs.append(struct_decl)
-                        inferred["synthesized_c_structures"] = c_structs
-
-                    analogy = ppaa.query_symbol_analogy(meta["name"])
-                    if analogy:
-                        inferred["global_analogy"] = analogy
-
-                    addr_info["inferred_semantics"] = inferred
-
-                    if meta.get("cfg_hash"):
-                        analogies = ppaa.query_functions_by_cfg_hash(meta["cfg_hash"], exclude_ea=target_val)
-                        if analogies:
-                            addr_info["cfg_structural_analogies"] = {
-                                "cfg_hash": meta["cfg_hash"],
-                                "matches": analogies
-                            }
-
-                    if meta.get("entropy", 0.0) > 6.5 and meta.get("string_count", 0) < 2:
-                        addr_info["suggested_deobfuscation"] = {
-                            "tool": "trace_analysis",
-                            "action": "deobfuscate_emulate",
-                            "addr": hex(target_val),
-                            "reason": f"Function has high entropy ({meta['entropy']:.2f}) and low string references ({meta['string_count']}), suggesting encryption/obfuscation. Auto-emulation can extract hidden constants/strings."
-                        }
-
-                    bridges = ppaa.query_related_bridges(target_val)
-                    if bridges:
-                        addr_info["structural_bridges"] = {
-                            "referenced_apis": meta["referenced_apis"][:10],
-                            "referenced_strings": [s["text"] for s in meta["referenced_strings"][:10]],
-                            "related_nodes": bridges
-                        }
-                else:
-                    # If not a function address, check if it's a string literal address
-                    str_meta = ppaa.query_string_metadata(target_val)
-                    if str_meta:
-                        addr_info["inferred_string"] = {
-                            "text": str_meta["string_text"],
-                            "referenced_by": str_meta["referencing_function"],
-                            "referenced_by_ea": str_meta["referencing_function_ea"],
-                        }
-
-                    # Check if it matches a known cryptographic/structural constant
-                    const_usages = ppaa.query_constant_usage(target_val)
-                    if const_usages:
-                        addr_info["inferred_constant_usages"] = const_usages
 
             calc_dict[ha] = addr_info
 

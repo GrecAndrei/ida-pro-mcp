@@ -540,7 +540,7 @@ def resolve_target(
     # Fast path: demangled name exact / unique substring
     demangle_hits = []
     for sym_ea, sym_name in idautils.Names():
-        if not sym_name or not (sym_name.startswith("_Z") or sym_name.startswith("?")):
+        if not sym_name or not (sym_name.startswith(("_Z", "?"))):
             continue
         dem = demangle_safe(sym_name)
         if not dem or dem == sym_name:

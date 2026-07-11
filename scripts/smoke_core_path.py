@@ -67,7 +67,6 @@ def main() -> int:
             return 2
 
     print(f"core-path smoke binary={binary}")
-    sid = None
     try:
         created = _call(
             client,
@@ -75,7 +74,7 @@ def main() -> int:
             {"action": "create", "binary_path": str(binary)},
             "session.create",
         )
-        sid = created.get("session_id") or created.get("sid")
+        created.get("session_id") or created.get("sid")
 
         _call(client, "session", {"action": "state"}, "session.state")
         _call(client, "analysis", {"action": "wait"}, "analysis.wait")
@@ -139,7 +138,7 @@ def main() -> int:
         print("core-path smoke PASSED")
         return 0
     finally:
-        if sid is not None or True:
+        if True:
             try:
                 _call(client, "session", {"action": "close"}, "session.close")
             except SystemExit:

@@ -11,8 +11,6 @@ import atexit
 import contextlib
 import hashlib
 import json
-import os
-import sqlite3
 import threading
 import time
 from collections import defaultdict
@@ -872,13 +870,20 @@ class ContextAssembler:
                     f"FROM func_embeddings WHERE ea IN ({ph})", eas
                 ):
                     entry = {"ea": hex(int(row[0], 16)) if row[0] else "", "name": row[1] or ""}
-                    if row[2]: entry["size"] = row[2]
-                    if row[3]: entry["bb_count"] = row[3]
-                    if row[4]: entry["has_loops"] = True
-                    if row[5]: entry["api_count"] = row[5]
-                    if row[6]: entry["string_count"] = row[6]
-                    if row[7]: entry["segment"] = row[7]
-                    if row[8]: entry["cyclomatic"] = row[8]
+                    if row[2]:
+                        entry["size"] = row[2]
+                    if row[3]:
+                        entry["bb_count"] = row[3]
+                    if row[4]:
+                        entry["has_loops"] = True
+                    if row[5]:
+                        entry["api_count"] = row[5]
+                    if row[6]:
+                        entry["string_count"] = row[6]
+                    if row[7]:
+                        entry["segment"] = row[7]
+                    if row[8]:
+                        entry["cyclomatic"] = row[8]
                     enriched.append(entry)
             return enriched
         except Exception:
@@ -909,12 +914,6 @@ class ContextAssembler:
             analyzed = idx.cache_keys()
             results = []
             seen = set()
-            dangerous_apis = {
-                'virtualallocex', 'writeprocessmemory', 'createremotethread',
-                'isdebuggerpresent', 'adjusttokenprivileges',
-                'regsetvalueex', 'createservice',
-                'wsasocket', 'internetopen', 'winhttpopen'
-            }
             for r in rows:
                 ea = r["ea"]
                 if ea in analyzed or ea in seen:

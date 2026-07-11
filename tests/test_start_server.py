@@ -5,16 +5,17 @@ Created: 2026-07-06
 
 import json
 import os
+import sys
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock
-
-import sys
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+import contextlib
+
 from ida_pro_mcp.host.intelligence import core as _core
-from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, CACHE_DIR
+from ida_pro_mcp.host.intelligence.core import CACHE_DIR, BgeCodeEmbedder
 
 
 def _make_minimal_embedder():
@@ -47,10 +48,8 @@ class TestStartServerLeaseFilePriority(unittest.TestCase):
 
     def tearDown(self):
         _core._EMBED_LEASE_FILE = self._orig_lease
-        try:
+        with contextlib.suppress(FileNotFoundError):
             os.remove(self._lease_file)
-        except FileNotFoundError:
-            pass
         os.rmdir(self._tmpdir)
 
     def test_lease_file_recovery_when_use_llama_false(self):
@@ -82,9 +81,8 @@ class TestStartServerLeaseFilePriority(unittest.TestCase):
         e._use_llama = False
         e._server_bin = ""
 
-        with patch.object(_core, "_find_llama_server", return_value=""):
-            with patch.object(_core, "_find_model", return_value=""):
-                result = e._start_server()
+        with patch.object(_core, "_find_llama_server", return_value=""), patch.object(_core, "_find_model", return_value=""):
+            result = e._start_server()
         self.assertFalse(result)
         self.assertFalse(e._ready)
 
@@ -97,10 +95,8 @@ class TestStartServerLeaseFilePriority(unittest.TestCase):
         with open(self._lease_file, "w") as f:
             json.dump({"pid": 0, "port": 9999, "updated_at": 0}, f)
 
-        with patch("urllib.request.urlopen", side_effect=Exception("refused")):
-            with patch.object(_core, "_find_llama_server", return_value=""):
-                with patch.object(_core, "_find_model", return_value=""):
-                    result = e._start_server()
+        with patch("urllib.request.urlopen", side_effect=Exception("refused")), patch.object(_core, "_find_llama_server", return_value=""), patch.object(_core, "_find_model", return_value=""):
+            result = e._start_server()
 
         self.assertFalse(result)
 
@@ -116,10 +112,8 @@ class TestStartServerPathRecheck(unittest.TestCase):
 
     def tearDown(self):
         _core._EMBED_LEASE_FILE = self._orig_lease
-        try:
+        with contextlib.suppress(FileNotFoundError):
             os.remove(self._lease_file)
-        except FileNotFoundError:
-            pass
         os.rmdir(self._tmpdir)
 
     def test_paths_found_after_init(self):
@@ -130,22 +124,24 @@ class TestStartServerPathRecheck(unittest.TestCase):
         e._model_path = ""
 
         # Don't create lease file — force path re-check
-        with patch.object(_core, "_find_llama_server", return_value="/usr/bin/llama-server"):
-            with patch.object(_core, "_find_model", return_value="/tmp/model.gguf"):
-                with patch.object(_core, "EMBED_DISABLED", False):
-                    with patch("subprocess.Popen") as mock_popen:
-                        mock_proc = MagicMock()
-                        mock_proc.poll.return_value = None
-                        mock_popen.return_value = mock_proc
+        with (
+            patch.object(_core, "_find_llama_server", return_value="/usr/bin/llama-server"),
+            patch.object(_core, "_find_model", return_value="/tmp/model.gguf"),
+            patch.object(_core, "EMBED_DISABLED", False),
+            patch("subprocess.Popen") as mock_popen,
+        ):
+                    mock_proc = MagicMock()
+                    mock_proc.poll.return_value = None
+                    mock_popen.return_value = mock_proc
 
-                        with patch("urllib.request.urlopen") as mock_urlopen:
-                            mock_ctx = MagicMock()
-                            mock_ctx.__enter__ = MagicMock(return_value=mock_ctx)
-                            mock_ctx.__exit__ = MagicMock(return_value=False)
-                            mock_ctx.read.return_value = b'{"status":"ok"}'
-                            mock_urlopen.return_value = mock_ctx
+                    with patch("urllib.request.urlopen") as mock_urlopen:
+                        mock_ctx = MagicMock()
+                        mock_ctx.__enter__ = MagicMock(return_value=mock_ctx)
+                        mock_ctx.__exit__ = MagicMock(return_value=False)
+                        mock_ctx.read.return_value = b'{"status":"ok"}'
+                        mock_urlopen.return_value = mock_ctx
 
-                            result = e._start_server()
+                        result = e._start_server()
 
         self.assertTrue(result)
         self.assertTrue(e._use_llama)
@@ -164,10 +160,8 @@ class TestStartServerLDPath(unittest.TestCase):
 
     def tearDown(self):
         _core._EMBED_LEASE_FILE = self._orig_lease
-        try:
+        with contextlib.suppress(FileNotFoundError):
             os.remove(self._lease_file)
-        except FileNotFoundError:
-            pass
         os.rmdir(self._tmpdir)
 
     def test_ld_library_path_in_env(self):
@@ -185,15 +179,14 @@ class TestStartServerLDPath(unittest.TestCase):
             return mock_proc
 
         # Don't create lease file — force new server start path
-        with patch("subprocess.Popen", side_effect=fake_popen):
-            with patch("urllib.request.urlopen") as mock_urlopen:
-                mock_ctx = MagicMock()
-                mock_ctx.__enter__ = MagicMock(return_value=mock_ctx)
-                mock_ctx.__exit__ = MagicMock(return_value=False)
-                mock_ctx.read.return_value = b'{"status":"ok"}'
-                mock_urlopen.return_value = mock_ctx
+        with patch("subprocess.Popen", side_effect=fake_popen), patch("urllib.request.urlopen") as mock_urlopen:
+            mock_ctx = MagicMock()
+            mock_ctx.__enter__ = MagicMock(return_value=mock_ctx)
+            mock_ctx.__exit__ = MagicMock(return_value=False)
+            mock_ctx.read.return_value = b'{"status":"ok"}'
+            mock_urlopen.return_value = mock_ctx
 
-                e._start_server()
+            e._start_server()
 
         ld_path = captured_env.get("LD_LIBRARY_PATH", "")
         bin_dir = os.path.dirname(e._server_bin)
