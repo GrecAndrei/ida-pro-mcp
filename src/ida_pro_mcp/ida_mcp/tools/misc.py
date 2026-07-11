@@ -144,8 +144,21 @@ def misc(
             return err
         try:
             import ida_libfuncs
+            # Plan and apply signature
             ida_libfuncs.plan_to_apply_ldes(name)
-            return {"ok": True, "name": name, "note": "Signature application planned"}
+            # Try to trigger immediate application
+            applied = False
+            try:
+                if hasattr(ida_libfuncs, "apply_ldes"):
+                    ida_libfuncs.apply_ldes(name)
+                    applied = True
+                elif hasattr(ida_libfuncs, "apply_idasgn"):
+                    ida_libfuncs.apply_idasgn(name)
+                    applied = True
+            except Exception:
+                pass
+            return {"ok": True, "name": name, "applied": applied,
+                    "note": "Signature applied immediately" if applied else "Signature queued for auto-analysis. Run analysis(reanalyze) to apply."}
         except Exception as e:
             return handle_error(e, context="load_sig")
     if action == "cache_stats":

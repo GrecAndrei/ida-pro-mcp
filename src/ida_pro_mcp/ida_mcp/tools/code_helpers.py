@@ -474,6 +474,7 @@ def _build_decompile_enrichment(
     crypto_hints, xor_count = _detect_crypto_hints(pseudo)
     dangerous = _detect_dangerous_patterns(found_apis, pseudo, detailed=detailed_dangerous)
     var_hints = _extract_var_rename_hints(cfunc)
+    ctx = gather_function_context(func_start_ea, max_refs=8)
     return {
         "api_calls": found_apis,
         "crypto_hints": crypto_hints,
@@ -485,7 +486,69 @@ def _build_decompile_enrichment(
             include_switch_cases=include_switch_cases,
             xor_count=xor_count,
         ),
+        **ctx,
     }
+
+
+def annotate_pseudocode(pseudo: str, func_ea: int, bb_context: list, dangerous: list, cfunc=None) -> str:
+    """Inject inline annotations into pseudocode from BB findings, dangerous patterns, and IDA comments.
+
+    Adds annotations as C comments above relevant lines:
+    // [BB:category] title (confidence)
+    // [DANGER] pattern description
+    // [IDA:comment] original comment text
+    """
+    if not pseudo:
+        return pseudo
+    lines = pseudo.splitlines()
+    annotated = []
+    # Header annotations from BB context
+    header_annos = []
+    for entry in bb_context[:5]:
+        cat = entry.get("category", "note")
+        title = entry.get("title", "")
+        conf = entry.get("confidence", 0.5)
+        header_annos.append(f"  // [BB:{cat}] {title} (confidence: {conf})")
+    for d in dangerous[:3]:
+        if isinstance(d, dict):
+            header_annos.append(f"  // [DANGER] {d.get('pattern', '')} — {d.get('detail', '')}")
+        elif isinstance(d, str):
+            header_annos.append(f"  // [DANGER] {d}")
+    if header_annos:
+        annotated.extend(header_annos)
+        annotated.append("")
+    # Try to get IDA comments for addresses in the function
+    ida_comments = {}
+    if cfunc:
+        try:
+            class CommentVisitor(ida_hexrays.ctree_visitor_t):
+                def __init__(self):
+                    ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+                def visit_insn(self, insn):
+                    ea = int(getattr(insn, "ea", idaapi.BADADDR))
+                    if ea and ea != idaapi.BADADDR:
+                        cmt = idc.get_cmt(ea, 0) or idc.get_cmt(ea, 1) or ""
+                        if cmt:
+                            ida_comments[ea] = cmt
+                    return 0
+            v = CommentVisitor()
+            v.apply_to(cfunc.body)
+        except Exception:
+            pass
+    # Merge annotated lines
+    for line in lines:
+        annotated.append(line)
+        # Try to find address references in the line to attach IDA comments
+        addr_match = re.search(r'0x[0-9a-fA-F]+', line)
+        if addr_match:
+            addr_str = addr_match.group(0)
+            try:
+                addr_val = int(addr_str, 16)
+                if addr_val in ida_comments:
+                    annotated.append(f"    // [IDA] {ida_comments[addr_val]}")
+            except ValueError:
+                pass
+    return "\n".join(annotated)
 
 
 def _get_blackboard_context_for_addr(addr_hex: str) -> list:
@@ -599,6 +662,8 @@ def _format_disasm_line(
     *,
     style: str = "csmini",
     include_bytes: bool = False,
+    include_comments: bool = False,
+    annotate_branches: bool = False,
     mark_all: bool = True,
 ) -> str:
     raw = idc.generate_disasm_line(ea, 0) or ""
@@ -610,12 +675,117 @@ def _format_disasm_line(
         line = f"{prefix}{hex_ea(ea)}: {text}"
     else:
         line = f"{prefix}{hex_ea(ea)}:{text}"
+    # Branch/call annotation: resolve target name for flow instructions
+    if annotate_branches:
+        branch_anno = _annotate_branch_target(ea, text)
+        if branch_anno:
+            line = f"{line} ; -> {branch_anno}"
+    # IDA comment overlay
+    if include_comments:
+        cmt = idc.get_cmt(ea, 0) or ""  # regular comment
+        rcmt = idc.get_cmt(ea, 1) or ""  # repeatable comment
+        comment_text = cmt or rcmt
+        if comment_text:
+            line = f"{line} ; // {comment_text}"
     if include_bytes:
         size = int(idc.get_item_size(ea) or 0)
         if size > 0:
             insn_bytes = " ".join(f"{ida_bytes.get_byte(ea + i):02x}" for i in range(min(size, 16)))
             line = f"{line} ; bytes={insn_bytes}"
     return line
+
+
+def _annotate_branch_target(ea: int, text: str) -> str | None:
+    """Resolve the target name for branch/call instructions."""
+    try:
+        mnem = idc.print_insn_mnem(ea) or ""
+        if not mnem:
+            return None
+        # Only annotate flow-control instructions
+        if not any(kw in mnem for kw in ("call", "jmp", "je", "jne", "jz", "jnz",
+                                          "jg", "jl", "jge", "jle", "ja", "jb",
+                                          "jae", "jbe", "jo", "jno", "js", "jns",
+                                          "jp", "jnp", "jcxz", "jecxz", "jrcxz",
+                                          "loop", "loope", "loopne", "b.", "bl", "bx",
+                                          "ret", "br")):
+            return None
+        # Get operand value — IDA resolves the target for us
+        target = idc.get_operand_value(ea, 0)
+        if target in (0, idaapi.BADADDR):
+            return None
+        name = idc.get_name(target) or ""
+        if name:
+            return f"{name} ({hex_ea(target)})"
+        return hex_ea(target)
+    except Exception:
+        return None
+
+
+def _format_disasm_structured(ea: int) -> dict:
+    """Return a single instruction as a structured dict."""
+    raw = idc.generate_disasm_line(ea, 0) or ""
+    text = ida_lines.tag_remove(raw) if raw else "<data>"
+    mnem = idc.print_insn_mnem(ea) or ""
+    operands = []
+    for i in range(3):
+        op = idc.print_operand(ea, i)
+        if not op:
+            break
+        operands.append(op)
+    result: dict[str, Any] = {
+        "addr": hex_ea(ea),
+        "mnem": mnem,
+        "operands": operands,
+        "text": text,
+    }
+    # Branch target
+    if mnem and any(kw in mnem for kw in ("call", "jmp", "je", "jne", "jz", "jnz",
+                                            "jg", "jl", "jge", "jle", "ja", "jb",
+                                            "jae", "jbe", "jo", "jno", "js", "jns",
+                                            "jp", "jnp", "loop", "b.", "bl", "bx", "br")):
+        target = idc.get_operand_value(ea, 0)
+        if target and target != idaapi.BADADDR:
+            result["branch_target"] = hex_ea(target)
+            name = idc.get_name(target) or ""
+            if name:
+                result["branch_name"] = name
+    # IDA comments
+    cmt = idc.get_cmt(ea, 0) or ""
+    rcmt = idc.get_cmt(ea, 1) or ""
+    if cmt or rcmt:
+        result["comment"] = cmt or rcmt
+    # Instruction bytes
+    size = int(idc.get_item_size(ea) or 0)
+    if size > 0:
+        result["bytes"] = " ".join(f"{ida_bytes.get_byte(ea + i):02x}" for i in range(min(size, 16)))
+    # Data references
+    refs = []
+    for i in range(idaapi.get_dref_cnt(ea)):
+        dr = idaapi.get_dref(ea, i)
+        if dr and dr != idaapi.BADADDR:
+            name = idc.get_name(dr) or ""
+            refs.append({"addr": hex_ea(dr), "name": name} if name else {"addr": hex_ea(dr)})
+    if refs:
+        result["data_refs"] = refs[:8]
+    return result
+
+
+def _disasm_range_structured(start_ea: int, stop_ea: int, max_items: int) -> list[dict]:
+    """Return structured disassembly for a range."""
+    items = []
+    curr = start_ea
+    count = 0
+    hard_end = max(stop_ea, start_ea + 1)
+    while curr < hard_end and count < max_items:
+        items.append(_format_disasm_structured(curr))
+        next_ea = idc.next_head(curr, hard_end)
+        if next_ea == idaapi.BADADDR or next_ea <= curr:
+            item_size = int(idc.get_item_size(curr) or 1)
+            curr = curr + max(item_size, 1)
+        else:
+            curr = next_ea
+        count += 1
+    return items
 
 
 def _disasm_range(
@@ -625,13 +795,17 @@ def _disasm_range(
     max_items: int,
     style: str,
     include_bytes: bool,
+    include_comments: bool = False,
+    annotate_branches: bool = False,
 ) -> list[str]:
     lines = []
     curr = start_ea
     count = 0
     hard_end = max(stop_ea, start_ea + 1)
     while curr < hard_end and count < max_items:
-        lines.append(_format_disasm_line(curr, style=style, include_bytes=include_bytes))
+        lines.append(_format_disasm_line(curr, style=style, include_bytes=include_bytes,
+                                         include_comments=include_comments,
+                                         annotate_branches=annotate_branches))
         next_ea = idc.next_head(curr, hard_end)
         if next_ea == idaapi.BADADDR or next_ea <= curr:
             item_size = int(idc.get_item_size(curr) or 1)
@@ -650,6 +824,8 @@ def _disasm_window(
     max_items: int,
     style: str,
     include_bytes: bool,
+    include_comments: bool = False,
+    annotate_branches: bool = False,
 ) -> list[str]:
     """Disassemble up to ``radius`` instructions on each side of
     ``center_ea``. Output order is: [oldest ... center-1, center, center+1 ... newest]
@@ -674,7 +850,9 @@ def _disasm_window(
         prev = idc.prev_head(curr, 0)
         if prev == idaapi.BADADDR or prev >= curr:
             break
-        before.append(_format_disasm_line(prev, style=style, include_bytes=include_bytes))
+        before.append(_format_disasm_line(prev, style=style, include_bytes=include_bytes,
+                                         include_comments=include_comments,
+                                         annotate_branches=annotate_branches))
         curr = prev
         steps_back += 1
     before.reverse()
@@ -697,17 +875,23 @@ def _disasm_window(
             if check != curr:
                 break
             steps_fwd += 1
-            after.append(_format_disasm_line(curr, style=style, include_bytes=include_bytes))
+            after.append(_format_disasm_line(curr, style=style, include_bytes=include_bytes,
+                                             include_comments=include_comments,
+                                             annotate_branches=annotate_branches))
             continue
         curr = next_ea
         if curr <= center_ea:
             continue
         steps_fwd += 1
-        after.append(_format_disasm_line(curr, style=style, include_bytes=include_bytes))
+        after.append(_format_disasm_line(curr, style=style, include_bytes=include_bytes,
+                                         include_comments=include_comments,
+                                         annotate_branches=annotate_branches))
 
     # center line itself (if it points at a head).
     center_line = _format_disasm_line(
-        center_ea, style=style, include_bytes=include_bytes
+        center_ea, style=style, include_bytes=include_bytes,
+        include_comments=include_comments,
+        annotate_branches=annotate_branches,
     )
     lines = before + [center_line] + after
     if len(lines) > max_items:
@@ -881,3 +1065,65 @@ def _trace_argument_origin(func, arg_index, max_depth, max_callers_per_level):
         "trace_tree": trace_tree,
         "note": f"Backward trace of argument {arg_index} ({arg_name}) up to {max_depth} levels deep. arg_type: string_literal, constant, function_call, address_of, variable, or parse_failed.",
     }
+
+
+def gather_function_context(func_ea: int, max_refs: int = 10) -> dict:
+    """Gather compact inline context for a function: callers, callees, strings, xrefs."""
+    ctx: dict[str, Any] = {}
+    try:
+        func = ida_funcs.get_func(func_ea)
+        if not func:
+            return ctx
+        # Callers
+        callers = []
+        ref = idaapi.get_first_cref_to(func.start_ea)
+        while ref and ref != idaapi.BADADDR and len(callers) < max_refs:
+            caller_func = ida_funcs.get_func(ref)
+            if caller_func:
+                cname = ida_funcs.get_func_name(caller_func.start_ea) or hex_ea(caller_func.start_ea)
+                if cname not in callers:
+                    callers.append(cname)
+            ref = idaapi.get_next_cref_to(func.start_ea, ref)
+        if callers:
+            ctx["callers"] = callers
+        # Callees
+        callees = []
+        fii = idaapi.func_item_iterator_t(func)
+        ea = fii.current()
+        while ea != idaapi.BADADDR and len(callees) < max_refs:
+            cref = idaapi.get_first_cref_from(ea)
+            while cref and cref != idaapi.BADADDR and len(callees) < max_refs:
+                callee_func = ida_funcs.get_func(cref)
+                if callee_func and callee_func.start_ea != func.start_ea:
+                    cname = ida_funcs.get_func_name(callee_func.start_ea) or hex_ea(callee_func.start_ea)
+                    if cname not in callees:
+                        callees.append(cname)
+                cref = idaapi.get_next_cref_from(ea, cref)
+            if not fii.next_code():
+                break
+            ea = fii.current()
+        if callees:
+            ctx["callees"] = callees
+        # String references in function
+        strings = []
+        fii2 = idaapi.func_item_iterator_t(func)
+        ea2 = fii2.current()
+        while ea2 != idaapi.BADADDR and len(strings) < max_refs:
+            dref = idaapi.get_first_dref_from(ea2)
+            while dref and dref != idaapi.BADADDR and len(strings) < max_refs:
+                s = idc.get_strlit_contents(dref, -1, 0)
+                if s:
+                    text = s.decode("utf-8", errors="replace")[:80]
+                    if text not in strings:
+                        strings.append(text)
+                dref = idaapi.get_next_dref_from(ea2, dref)
+            if not fii2.next_code():
+                break
+            ea2 = fii2.current()
+        if strings:
+            ctx["strings"] = strings
+        # Complexity
+        ctx["complexity"] = _compute_cfg_semantics(func)
+    except Exception:
+        pass
+    return ctx

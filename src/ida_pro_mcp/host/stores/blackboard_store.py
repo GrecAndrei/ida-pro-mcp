@@ -418,6 +418,42 @@ class BlackboardStore:
         self.update(entry_id, confidence=new_conf, calibrated=1)
         return new_conf
 
+    def decay_stale_confidence(self, half_life_days: float = 14.0, min_confidence: float = 0.1) -> int:
+        """Reduce confidence on entries that haven't been updated recently.
+
+        Uses exponential decay: conf *= exp(-age_days * ln(2) / half_life_days).
+        Entries with evidence or calibration are decayed more slowly (0.5x rate).
+        Returns the number of entries updated.
+        """
+        import math
+        now = time.time()
+        decay_rate = math.log(2) / max(half_life_days, 1.0)
+        updated = 0
+        with closing(self._conn()) as conn:
+            rows = conn.execute(
+                "SELECT id, confidence, updated_at, calibrated, "
+                "json_extract(COALESCE(evidence, '[]'), '$') as ev "
+                "FROM blackboard WHERE confidence > ?",
+                (min_confidence,),
+            ).fetchall()
+            for row in rows:
+                eid, conf, updated_at, calibrated, ev_json = row
+                if conf is None or conf <= min_confidence:
+                    continue
+                age_days = (now - (updated_at or now)) / 86400
+                if age_days < 1:
+                    continue
+                rate = decay_rate * (0.5 if calibrated or ev_json else 1.0)
+                new_conf = round(max(min_confidence, conf * math.exp(-age_days * rate)), 3)
+                if new_conf < conf - 0.01:
+                    conn.execute(
+                        "UPDATE blackboard SET confidence=?, updated_at=? WHERE id=?",
+                        (new_conf, now, eid),
+                    )
+                    updated += 1
+            conn.commit()
+        return updated
+
     def campaign_summary(self) -> dict:
         """
         High-level summary of the RE campaign state.

@@ -1490,6 +1490,11 @@ class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMix
             if new_conf is None:
                 return make_error(MCPError.NOT_FOUND, f"Entry '{entry_id}' not found")
             return {"ok": True, "entry_id": entry_id, "confidence": new_conf}
+        if action == "decay":
+            half_life = float(args.get("half_life_days", 14.0) or 14.0)
+            min_conf = float(args.get("min_confidence", 0.1) or 0.1)
+            updated = store.decay_stale_confidence(half_life_days=half_life, min_confidence=min_conf)
+            return {"ok": True, "decayed": updated, "half_life_days": half_life, "min_confidence": min_conf}
         if action == "campaign_summary":
             return {"ok": True, "summary": store.campaign_summary()}
         if action == "auto_tag_propagate":

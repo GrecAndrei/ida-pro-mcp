@@ -55,6 +55,8 @@ class MCPError:
     YARA_SCAN_ERROR = "YARA_SCAN_ERROR"
     YARA_DISABLED = "YARA_DISABLED"
     NO_RESULTS = "NO_RESULTS"
+    ADDRESS_INVALID = "ADDRESS_INVALID"
+    SIZE_LIMIT_EXCEEDED = "SIZE_LIMIT_EXCEEDED"
 
 
 # Code → category. Codes absent from this map fall back to "internal".
@@ -87,6 +89,8 @@ _ERROR_CATEGORIES: dict[str, str] = {
     MCPError.YARA_SCAN_ERROR: ErrorCategory.RUNTIME,
     MCPError.YARA_DISABLED: ErrorCategory.RUNTIME,
     MCPError.NO_RESULTS: ErrorCategory.USER,
+    MCPError.ADDRESS_INVALID: ErrorCategory.USER,
+    MCPError.SIZE_LIMIT_EXCEEDED: ErrorCategory.USER,
 }
 
 
@@ -118,6 +122,28 @@ _HOST_ERROR_HINTS = {
     MCPError.YARA_SCAN_ERROR: "YARA scan failed. Check rule and target.",
     MCPError.YARA_DISABLED: "yara-python is not installed. Run `pip install yara-python` in the MCP host venv.",
     MCPError.NO_RESULTS: "No results found for this query.",
+    MCPError.ADDRESS_INVALID: "The address format is invalid. Use hex (0x401000) or a symbol name.",
+    MCPError.SIZE_LIMIT_EXCEEDED: "The requested size exceeds the limit. Use a smaller range or pagination.",
+}
+
+# Recovery actions: suggested tool calls the LLM can auto-execute when this error occurs.
+_RECOVERY_ACTIONS: dict[str, list[dict]] = {
+    MCPError.DECOMPILER_FAILED: [
+        {"tool": "code", "args": {"action": "disasm", "addrs": "$addr"}, "note": "Fall back to disassembly"},
+        {"tool": "analysis", "args": {"action": "reanalyze", "addr": "$addr"}, "note": "Re-analyze and retry"},
+    ],
+    MCPError.SESSION_REQUIRED: [
+        {"tool": "session", "args": {"action": "create"}, "note": "Create a session first"},
+    ],
+    MCPError.ADDRESS_INVALID: [
+        {"tool": "calc", "args": {"action": "hex", "expr": "$addr"}, "note": "Verify address is valid hex"},
+    ],
+    MCPError.TRUNCATION_TOKEN_EXPIRED: [
+        {"tool": "truncation", "args": {"action": "peek", "token": "$token"}, "note": "Check if token still exists"},
+    ],
+    MCPError.IDA_TIMEOUT: [
+        {"tool": "session", "args": {"action": "health"}, "note": "Check IDA health"},
+    ],
 }
 
 
@@ -140,6 +166,9 @@ def make_error(
         res["hint"] = resolved_hint
     if details:
         res["details"] = details
+    recovery = _RECOVERY_ACTIONS.get(code)
+    if recovery:
+        res["recovery"] = recovery
     return res
 
 

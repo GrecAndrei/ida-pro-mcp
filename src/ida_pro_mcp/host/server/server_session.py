@@ -144,6 +144,25 @@ def _sess_coerce_hyp_status(args):
     return {"status": str(args.get("status") or "").strip() or None}, None
 
 
+def _substitute_params(obj, params: dict):
+    """Recursively substitute $param placeholders in a value.
+
+    For strings: replaces "$name" with params["name"] or params["$name"].
+    For dicts: recursively substitutes values.
+    For lists: recursively substitutes items.
+    """
+    if isinstance(obj, str):
+        for k, v in params.items():
+            key = k.lstrip("$")
+            obj = obj.replace(f"${key}", str(v))
+        return obj
+    if isinstance(obj, dict):
+        return {k: _substitute_params(v, params) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_substitute_params(item, params) for item in obj]
+    return obj
+
+
 class ServerSessionMixin(ServerSessionBootstrapMixin):
     @staticmethod
     def _trigger_session_diff(old_idb: str, new_idb: str) -> None:
@@ -197,6 +216,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         "cleanup_stale": "_session_action_cleanup_stale",
         "idle_purge": "_session_action_idle_purge",
         "stats": "_session_action_stats",
+        "narrative": "_session_action_narrative",
         "validate": "_session_action_validate",
         "bulk_delete": "_session_action_bulk_delete",
         "bulk_tag": "_session_action_bulk_tag",
@@ -1577,6 +1597,48 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
     def _session_action_stats(self, args: dict) -> dict:
         return {"ok": True, "stats": self.session_mgr.get_stats()}
 
+    def _session_action_narrative(self, args: dict) -> dict:
+        """Return a structured analysis narrative — chronological log of tool calls and key findings."""
+        limit = int(args.get("limit", 50) or 50)
+        limit = max(1, min(limit, 200))
+        log = list(self._activity_log)[-limit:] if hasattr(self, "_activity_log") else []
+        turns = []
+        for i, entry in enumerate(log):
+            tool = entry.get("tool", "")
+            action = entry.get("action", "")
+            addrs = entry.get("addresses", [])
+            topic = entry.get("topic")
+            target = entry.get("target")
+            ts = entry.get("ts", "")
+            turn = {
+                "turn": i + 1,
+                "ts": ts,
+                "tool": tool,
+                "action": action,
+            }
+            if addrs:
+                turn["addresses"] = addrs
+            if topic:
+                turn["topic"] = topic
+            if target:
+                turn["target"] = target
+            turns.append(turn)
+        # Session summary
+        session_info = {}
+        if self.current_session:
+            session_info = {
+                "session_id": self.current_session.session_id,
+                "binary": getattr(self.current_session, "binary_path", ""),
+                "created": getattr(self.current_session, "created_at", ""),
+            }
+        return {
+            "ok": True,
+            "session": session_info,
+            "turn_count": len(turns),
+            "turns": turns,
+            "hint": "This is the chronological analysis narrative. Use it to maintain context across turns.",
+        }
+
     def _session_action_validate(self, args: dict) -> dict:
         sid, sid_err = self._require_session_sid(args)
         if sid_err:
@@ -2013,6 +2075,11 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 MCPError.FILE_NOT_FOUND, f"Macro '{macro_name}' not found"
             )
         base_args = dict(entry.get("data") or {})
+        # Check if this is a workflow (sequence of calls)
+        calls = base_args.get("calls")
+        if isinstance(calls, list) and calls:
+            return self._run_workflow_sequence(macro_name, calls, args)
+        # Single-call macro with $param substitution
         run_action = (
             args.get("run_action") or base_args.get("action") or "create"
         )
@@ -2026,24 +2093,82 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 MCPError.INVALID_ARGS,
                 "macro_run cannot execute macro_* actions",
             )
-        if run_action not in TOOL_ACTIONS["session"]:
-            return make_error(
-                MCPError.ACTION_NOT_FOUND,
-                f"Unsupported run_action '{run_action}' for macro_run",
-                hint=f"Valid session actions: {', '.join(TOOL_ACTIONS['session'])}",
-            )
+        # Build run_args: start from macro data, overlay caller args
         run_args = dict(base_args)
+        # Collect $param substitutions from caller
+        params = {}
         for k, v in args.items():
             if k in ("action", "name", "macro", "run_action"):
                 continue
             run_args[k] = v
+            if k.startswith("$") or isinstance(v, (str, int, float, bool)):
+                params[k] = v
         run_args["action"] = run_action
-        run_result = self._execute_tool("session", run_args)
+        # Apply $param substitution to string values
+        if params:
+            run_args = _substitute_params(run_args, params)
+        # Dispatch to any tool (not just session)
+        tool_name = base_args.get("_tool") or "session"
+        run_result = self._execute_tool(tool_name, run_args)
         if isinstance(run_result, dict) and not is_error_result(run_result):
             run_result = dict(run_result)
             run_result["macro"] = macro_name
             run_result["run_action"] = run_action
         return run_result
+
+    def _run_workflow_sequence(self, name: str, calls: list, args: dict) -> dict:
+        """Execute a workflow — a sequence of tool calls with $param substitution."""
+        # Collect params from caller
+        params = {}
+        for k, v in args.items():
+            if k in ("action", "name", "macro"):
+                continue
+            params[k] = v
+        results = []
+        for i, call in enumerate(calls):
+            if not isinstance(call, dict):
+                results.append({"step": i, "error": True, "message": "step must be a dict"})
+                continue
+            # Check conditional
+            condition = call.get("if")
+            if condition is not None:
+                # Evaluate: truthy if param is set and not false/0/empty
+                cond_key = str(condition).lstrip("$")
+                cond_val = params.get(cond_key) or params.get(f"${cond_key}")
+                if not cond_val or str(cond_val).lower() in ("false", "0", ""):
+                    # Run else branch if present
+                    else_call = call.get("else")
+                    if isinstance(else_call, dict):
+                        call = else_call
+                    else:
+                        results.append({"step": i, "skipped": True, "reason": f"condition ${cond_key} is falsy"})
+                        continue
+                else:
+                    # Run then branch
+                    then_call = call.get("then")
+                    if isinstance(then_call, dict):
+                        call = then_call
+                    else:
+                        results.append({"step": i, "skipped": True, "reason": "then branch not a dict"})
+                        continue
+            tool = str(_substitute_params(call.get("tool", "session"), params))
+            action = str(_substitute_params(call.get("action", ""), params))
+            if not action:
+                results.append({"step": i, "error": True, "message": "action required"})
+                continue
+            call_args = {"action": action}
+            for k, v in call.items():
+                if k in ("tool", "action", "if", "then", "else"):
+                    continue
+                call_args[k] = _substitute_params(v, params)
+            result = self._execute_tool(tool, call_args)
+            results.append({"step": i, "tool": tool, "action": action, "result": result})
+            # Store result fields as params for next steps (prefix with step number)
+            if isinstance(result, dict) and not is_error_result(result):
+                for rk, rv in result.items():
+                    if isinstance(rv, (str, int, float, bool)):
+                        params[f"step{i}_{rk}"] = rv
+        return {"ok": True, "workflow": name, "step_count": len(results), "steps": results}
 
     def _session_action_recent_workset(self, args: dict) -> dict:
         sid, sid_err = self._resolve_session_id(args)

@@ -435,6 +435,28 @@ def analysis(
                     applied["endian_requested"] = str(endian)
                     applied["endian_applied"] = False
                     applied["endian_note"] = "inf_set_be unavailable in this IDA build"
+            # Auto-configure arch-aware tool defaults
+            arch_hints = {}
+            proc_lower = str(applied.get("processor", {}).get("value", "") if isinstance(applied.get("processor"), dict) else applied.get("processor", "")).lower()
+            if "arm" in proc_lower or "thumb" in proc_lower:
+                arch_hints["disasm_note"] = "ARM/Thumb: use annotate_branches=true for branch target resolution. Thumb mode detected by IDA automatically."
+                arch_hints["default_int_width"] = 4
+                arch_hints["ptr_size"] = 4
+            elif "mips" in proc_lower:
+                arch_hints["disasm_note"] = "MIPS: branch delay slots are normal. Use annotate_branches=true for jump targets."
+                arch_hints["default_int_width"] = 4
+                arch_hints["ptr_size"] = 4
+            elif "x86" in proc_lower and "64" in str(bitness or _get_app_bitness()):
+                arch_hints["ptr_size"] = 8
+                arch_hints["default_int_width"] = 4
+            elif "x86" in proc_lower:
+                arch_hints["ptr_size"] = 4
+                arch_hints["default_int_width"] = 4
+            elif "ppc" in proc_lower or "power" in proc_lower:
+                arch_hints["disasm_note"] = "PowerPC: use annotate_branches=true. Conditional branches use CR fields."
+                arch_hints["ptr_size"] = 4
+            if arch_hints:
+                applied["arch_hints"] = arch_hints
             return {"ok": True, "applied": applied}
 
         if action in ("reanalyze", "run", "analyze"):

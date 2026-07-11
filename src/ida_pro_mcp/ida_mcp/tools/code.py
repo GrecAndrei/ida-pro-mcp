@@ -27,6 +27,9 @@ def code(
     format: Annotated[Literal["json", "c_header", "prototypes"], "Export format"] = "json",
     disasm_style: Annotated[Literal["csmini", "classic", "annotated"], "Disassembly line style"] = "csmini",
     include_bytes: Annotated[bool, "Include instruction bytes in disassembly output"] = False,
+    include_comments: Annotated[bool, "Include IDA comments inline in disassembly"] = False,
+    annotate_branches: Annotated[bool, "Annotate branch/call targets with resolved names"] = False,
+    structured: Annotated[bool, "Return structured per-instruction JSON instead of text"] = False,
     end: Annotated[Optional[str], "Optional end address for disasm range"] = None,
     limit: Annotated[Optional[int], "Alias for max_items (especially useful with disasm)"] = None,
     window: Annotated[Optional[int], "Disasm: number of instructions BEFORE and AFTER the start address (centered view). Overrides function-bounded default."] = None,
@@ -48,10 +51,13 @@ def code(
 
     disasm - Get assembly listing (LLM-compact text, one line per instruction)
         Params: addrs (REQUIRED), optional end, window (±N instructions around addrs),
-                disasm_style (csmini|classic|annotated), include_bytes, limit
-        Returns: [{addr, name, disasm: "*addr:instr\\n*addr:instr\\n...", count, style, range}]
+                disasm_style (csmini|classic|annotated), include_bytes, include_comments,
+                annotate_branches, structured (returns per-instruction JSON), limit
+        Returns: [{addr, name, disasm, count, style, range}] or [{addr, name, instructions: [{addr, mnem, operands, ...}]}] if structured
         Example: code(action="disasm", addrs="0x401000")
-        Example: code(action="disasm", addrs="0x125b0", end="0x12640", limit=160, disasm_style="csmini")
+        Example: code(action="disasm", addrs="0x125b0", end="0x12640", limit=160)
+        Example: code(action="disasm", addrs="0x401000", include_comments=true, annotate_branches=true)
+        Example: code(action="disasm", addrs="0x401000", structured=true)
         Example: code(action="disasm", addrs="0x4010a0", window=20)   # ±20 instructions around 0x4010a0
 
     xrefs_to - Get cross-references TO an address (compact text, includes function names)
@@ -254,6 +260,18 @@ def code(
                             for key, value in enrichment.items():
                                 if value:
                                     result_entry[key] = value
+                            # Pseudocode annotation overlay
+                            try:
+                                annotated = annotate_pseudocode(
+                                    pseudo, func.start_ea,
+                                    enrichment.get("blackboard_context", []),
+                                    enrichment.get("dangerous_patterns", []),
+                                    cfunc=cfunc,
+                                )
+                                if annotated != pseudo:
+                                    result_entry["annotated_code"] = annotated
+                            except Exception:
+                                pass
                         except Exception:
                             pass
                         results.append(result_entry)
@@ -416,6 +434,8 @@ def code(
                         max_items=max_items,
                         style=disasm_style,
                         include_bytes=include_bytes,
+                        include_comments=include_comments,
+                        annotate_branches=annotate_branches,
                     )
                     fname = ida_funcs.get_func_name(func.start_ea) if func else ""
                     # Extract first/last addresses from formatted lines
@@ -441,14 +461,20 @@ def code(
                     continue
                 if not func:
                     # Disassemble raw bytes even without function
+                    raw_end = end_ea if end_ea is not None else (ea + 0x1000)
+                    if structured:
+                        items = _disasm_range_structured(ea, raw_end, max_items)
+                        results.append({"ok": True, "addr": hex_ea(ea), "instructions": items, "count": len(items)})
+                        continue
                     lines = _disasm_range(
                         ea,
-                        end_ea if end_ea is not None else (ea + 0x1000),
+                        raw_end,
                         max_items=max_items,
                         style=disasm_style,
                         include_bytes=include_bytes,
+                        include_comments=include_comments,
+                        annotate_branches=annotate_branches,
                     )
-                    raw_end = end_ea if end_ea is not None else (ea + 0x1000)
                     results.append({
                         "ok": True,
                         "addr": hex_ea(ea),
@@ -461,15 +487,23 @@ def code(
                     continue
                 disasm_start = ea if end_ea is not None else func.start_ea
                 disasm_end = end_ea if end_ea is not None else func.end_ea
+                if structured:
+                    items = _disasm_range_structured(disasm_start, disasm_end, max_items)
+                    fname = ida_funcs.get_func_name(func.start_ea)
+                    results.append({"ok": True, "addr": hex_ea(func.start_ea), "name": fname,
+                                    "instructions": items, "count": len(items)})
+                    continue
                 lines = _disasm_range(
                     disasm_start,
                     disasm_end,
                     max_items=max_items,
                     style=disasm_style,
                     include_bytes=include_bytes,
+                    include_comments=include_comments,
+                    annotate_branches=annotate_branches,
                 )
                 fname = ida_funcs.get_func_name(func.start_ea)
-                results.append({
+                entry = {
                     "ok": True,
                     "addr": hex_ea(func.start_ea),
                     "name": fname,
@@ -477,7 +511,14 @@ def code(
                     "count": len(lines),
                     "style": disasm_style,
                     "range": f"{hex_ea(disasm_start)}-{hex_ea(disasm_end)}",
-                })
+                }
+                try:
+                    ctx = gather_function_context(func.start_ea, max_refs=6)
+                    if ctx:
+                        entry["context"] = ctx
+                except Exception:
+                    pass
+                results.append(entry)
 
             elif action == "xrefs_to":
                 xref_lines = []
