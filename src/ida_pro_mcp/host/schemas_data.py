@@ -516,6 +516,11 @@ TOOL_ARG_SCHEMAS = {
         # `op` is an alias for `bit_op` in bitops.
         "query": {"type": "string"},
         "op": {"type": "string"},
+        "to_va": {"type": "boolean", "description": "For resolve: convert file_offset→VA instead of VA→file_offset"},
+        "from_file": {"type": "boolean", "description": "Alias for to_va (file_offset→VA direction)"},
+        "deref_depth": {"type": "integer", "description": "Multi-hop pointer dereference depth (default 1)"},
+        "persist": {"type": "boolean", "description": "Save result to blackboard for external memory"},
+        "intent": {"type": "string", "description": "Natural language intent (alias for query)"},
     },
     "memory": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["memory"]},

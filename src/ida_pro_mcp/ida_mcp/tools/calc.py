@@ -6,6 +6,8 @@ except ImportError:
 
 import json
 import re
+import struct
+
 
 from ida_pro_mcp.services import parse_str_list
 
@@ -248,9 +250,10 @@ def calc(
                 _calc_persist_capture(input_summary, resp, action)
             return resp
 
-        def resolve_int(val):
+        def resolve_ea(val, label="value"):
+            """Resolve a value/address from int, hex string, symbol name, or NL query."""
             if val is None:
-                raise ValueError("value required")
+                raise ValueError(f"{label} required")
             if isinstance(val, int):
                 return val
             if isinstance(val, str):
@@ -276,35 +279,13 @@ def calc(
                     sem_ea = _semantic_symbol_match(val)
                     if sem_ea != idaapi.BADADDR:
                         return sem_ea
-            raise ValueError(f"Invalid value: {val}")
+            raise ValueError(f"Invalid {label}: {val}")
+
+        def resolve_int(val):
+            return resolve_ea(val, "value")
 
         def resolve_addr(val):
-            if isinstance(val, int):
-                return val
-            if isinstance(val, str):
-                m = _INT_SUFFIX_RE.match(val)
-                if m:
-                    base_txt = m.group(1).replace("_", "")
-                    suffix = (m.group(2) or "").lower()
-                    n = int(base_txt, 0)
-                    scale = {
-                        "": 1,
-                        "k": 1024,
-                        "m": 1024 ** 2,
-                        "g": 1024 ** 3,
-                        "t": 1024 ** 4,
-                    }[suffix]
-                    return n * scale
-                try:
-                    return int(val, 0)
-                except ValueError:
-                    ea = idc.get_name_ea_simple(val)
-                    if ea != idaapi.BADADDR:
-                        return ea
-                    sem_ea = _semantic_symbol_match(val)
-                    if sem_ea != idaapi.BADADDR:
-                        return sem_ea
-            raise ValueError(f"Invalid address: {val}")
+            return resolve_ea(val, "address")
 
         def ptr_size():
             return 8 if _inf_bitness() == 64 else 4
@@ -316,7 +297,7 @@ def calc(
             data = ida_bytes.get_bytes(ea, width)
             if not data or len(data) != width:
                 raise ValueError(f"Could not read {width} bytes from {hex(ea)}")
-            import struct
+
             endian = ">" if _is_be() else "<"
             fmts = {
                 (1, False): f"{endian}B", (1, True): f"{endian}b",
@@ -330,7 +311,7 @@ def calc(
             data = ida_bytes.get_bytes(ea, width)
             if not data or len(data) != width:
                 raise ValueError(f"Could not read {width} bytes from {hex(ea)}")
-            import struct
+
             endian = ">" if _is_be() else "<"
             return struct.unpack(f"{endian}f" if width == 4 else f"{endian}d", data)[0]
 
@@ -382,7 +363,6 @@ def calc(
 
         def eval_expr(expression):
             import ast
-            import re
             # Safety: limit expression length
             if len(expression) > 1024:
                 raise ValueError("Expression too long (max 1024 chars)")
@@ -547,7 +527,7 @@ def calc(
                 return make_error(MCPError.INVALID_ARGS, str(e))
 
             # ASCII representation (4/8 bytes)
-            import struct
+
             try:
                 ascii_val = ""
                 for b in struct.pack("<Q", v & 0xFFFFFFFFFFFFFFFF):
@@ -761,7 +741,8 @@ def calc(
                 return make_error(MCPError.INVALID_ARGS, str(e))
             except Exception as e:
                 return make_error(MCPError.INVALID_ARGS, f"Evaluation error: {expr} ({e})")
-            aligned_down = align_val & ~(alignment - 1) if alignment & alignment - 1 == 0 else align_val // alignment * alignment
+            is_power_of_2 = (alignment & (alignment - 1)) == 0
+            aligned_down = (align_val & ~(alignment - 1)) if is_power_of_2 else (align_val // alignment) * alignment
             aligned_up = aligned_down if align_val == aligned_down else aligned_down + alignment
             nearest = aligned_down if abs(align_val - aligned_down) <= abs(aligned_up - align_val) else aligned_up
             return _finalize({
