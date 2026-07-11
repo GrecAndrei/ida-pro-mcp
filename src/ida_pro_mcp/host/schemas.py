@@ -31,7 +31,6 @@ TOOL_ACTIONS = _TOOL_ACTIONS_DATA
 # "def_use_graph"
 # "anchor_coverage"
 
-WRAPPER_ACTIONS = ("grep", "pick", "head", "tail", "next", "stats")
 ACTION_PREFIX_RE = re.compile(r"^action[\s\"']*[:=][\s\"']*", re.IGNORECASE)
 ACTION_STRIP_CHARS = "\"'"
 _WRAPPER_PAIRS = (("[", "]"), ("(", ")"), ("{", "}"), ("<", ">"))
@@ -378,69 +377,53 @@ GLOBAL_RESPONSE_CONTROLS = {
     },
 }
 
-GLOBAL_WRAPPER_ACTION_CONTROLS = {
-    "source_action": {
-        "type": "string",
-        "description": "For wrapper actions (grep/pick/head/tail/stats): underlying action to execute first (aliases: on, target_action, subaction).",
-    },
-    "target_action": {"type": "string"},
-    "on": {"type": "string"},
-    "subaction": {"type": "string"},
+GLOBAL_POST_PROCESS_CONTROLS = {
     "grep": {
         "type": "string",
-        "description": "Grep pattern (substring by default; regex if grep_regex=true).",
+        "description": "Filter result items by substring (default) or regex (if grep_regex=true). Searches all string values within each item.",
     },
-    "grep_pattern": {"type": "string"},
-    "grep_regex": {"type": "boolean"},
-    "grep_case_sensitive": {"type": "boolean"},
-    "grep_invert": {"type": "boolean"},
-    "grep_field": {
-        "type": "string",
-        "description": "Optional top-level source field to grep (e.g. matches, functions, content).",
+    "grep_regex": {
+        "type": "boolean",
+        "description": "Treat grep value as a regular expression.",
     },
-    "grep_limit": {"type": "integer"},
-    "grep_offset": {"type": "integer"},
-    "pick_fields": {
+    "grep_invert": {
+        "type": "boolean",
+        "description": "Invert match: keep items that do NOT match.",
+    },
+    "grep_case": {
+        "type": "boolean",
+        "description": "Case-sensitive grep (default: case-insensitive).",
+    },
+    "head": {
+        "type": "integer",
+        "description": "Keep first N items from result.",
+    },
+    "tail": {
+        "type": "integer",
+        "description": "Keep last N items from result.",
+    },
+    "offset": {
+        "type": "integer",
+        "description": "Skip first N items before applying head/tail/limit.",
+    },
+    "limit": {
+        "type": "integer",
+        "description": "Max items to return. Enables next_token continuation.",
+    },
+    "pick": {
         "type": ["array", "string"],
         "items": {"type": "string"},
-        "description": "For action='pick': top-level fields to include.",
+        "description": "Project only these top-level fields from result.",
     },
-    "pick_omit": {
-        "type": ["array", "string"],
-        "items": {"type": "string"},
-        "description": "For action='pick': top-level fields to omit after pick_fields.",
-    },
-    "head_n": {"type": "integer"},
-    "tail_n": {"type": "integer"},
-    "next_token": {"type": "string"},
-    "token": {"type": "string"},
-    "cursor": {"type": "string"},
-    "stats_include_payload": {"type": "boolean"},
-    "_qol_mode": {
+    "field": {
         "type": "string",
-        "enum": ["tiny", "balanced", "debug"],
-        "description": "QoL response profile preset.",
+        "description": "Target field for grep/head/tail (e.g. 'matches', 'functions'). Auto-detected if omitted.",
     },
-    "qol_mode": {
+    "next_token": {
         "type": "string",
-        "enum": ["tiny", "balanced", "debug"],
+        "description": "Continue pagination from a previous truncated result. Action recovered from cache automatically.",
     },
 }
-
-def _action_enum_with_grep(tool_name: str, *, compact_surface: bool = False) -> list[str]:
-    """Return action enum for schemas.
-
-    When compact_surface=True (tools/list lean/ultra), prefer ADVERTISED_ACTIONS
-    so agents see a small surface. Full TOOL_ACTIONS remain valid at call time.
-    """
-    if compact_surface and tool_name in ADVERTISED_ACTIONS:
-        actions = list(ADVERTISED_ACTIONS[tool_name])
-    else:
-        actions = list(TOOL_ACTIONS.get(tool_name, []) or [])
-    for wrapper_action in WRAPPER_ACTIONS:
-        if wrapper_action not in actions:
-            actions.append(wrapper_action)
-    return actions
 
 def build_input_schema(tool_name: str) -> dict:
     props = {}
@@ -465,9 +448,9 @@ def build_input_schema(tool_name: str) -> dict:
         action_schema = props.get("action")
         if isinstance(action_schema, dict):
             action_schema = dict(action_schema)
-            action_schema["enum"] = _action_enum_with_grep(tool_name)
+            action_schema["enum"] = list(TOOL_ACTIONS.get(tool_name, []) or [])
             props["action"] = action_schema
-        for key, schema in GLOBAL_WRAPPER_ACTION_CONTROLS.items():
+        for key, schema in GLOBAL_POST_PROCESS_CONTROLS.items():
             props.setdefault(key, schema)
         required.append("action")
     return {"type": "object", "properties": props, "required": required}
@@ -521,9 +504,12 @@ def build_input_schema_lean(tool_name: str) -> dict:
         action_schema = props.get("action")
         if isinstance(action_schema, dict):
             action_schema = dict(action_schema)
-            action_schema["enum"] = _action_enum_with_grep(tool_name, compact_surface=True)
+            if tool_name in ADVERTISED_ACTIONS:
+                action_schema["enum"] = list(ADVERTISED_ACTIONS[tool_name])
+            else:
+                action_schema["enum"] = list(TOOL_ACTIONS.get(tool_name, []) or [])
             props["action"] = action_schema
-        for key, schema in GLOBAL_WRAPPER_ACTION_CONTROLS.items():
+        for key, schema in GLOBAL_POST_PROCESS_CONTROLS.items():
             props.setdefault(key, _lean_prop_schema(key, schema))
         required.append("action")
     return {"type": "object", "properties": props, "required": required}
@@ -553,10 +539,11 @@ def build_input_schema_ultra(tool_name: str) -> dict:
         }
 
     if tool_name == "session":
+        session_enum = list(ADVERTISED_ACTIONS.get("session", TOOL_ACTIONS.get("session", [])))
         return {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": _action_enum_with_grep("session", compact_surface=True)},
+                "action": {"type": "string", "enum": session_enum},
                 "binary_path": {"type": "string", "description": "Absolute path to target binary (required for action='create')."},
                 "idb": {"type": "string", "description": "Optional. session_id, SID_* id, or IDB path."},
             },
@@ -565,9 +552,12 @@ def build_input_schema_ultra(tool_name: str) -> dict:
 
     props: Dict[str, Any] = {}
     required: List[str] = []
-    action_enum = TOOL_ACTIONS.get(tool_name)
+    if tool_name in ADVERTISED_ACTIONS:
+        action_enum = ADVERTISED_ACTIONS[tool_name]
+    else:
+        action_enum = TOOL_ACTIONS.get(tool_name)
     if action_enum:
-        props["action"] = {"type": "string", "enum": _action_enum_with_grep(tool_name, compact_surface=True)}
+        props["action"] = {"type": "string", "enum": list(action_enum)}
         required.append("action")
     if tool_name not in ("session", "bookmarks", "wiki", "batch", "truncation"):
         props["idb"] = {

@@ -1,5 +1,5 @@
 """
-Server argument normalization and wrapper parsing helpers.
+Server argument normalization helpers.
 
 Extracted from host/server.py so the main JSON-RPC server file is less monolithic.
 """
@@ -15,7 +15,7 @@ import uuid
 from typing import Any
 
 from ..config import _coerce_bool
-from ..errors import MCPError, is_error_result, make_error
+from ..errors import is_error_result
 from ..schemas import (
     ACTION_ALIASES_BY_TOOL,
     ACTION_PREFIX_RE,
@@ -23,14 +23,13 @@ from ..schemas import (
     ARG_ALIASES_BY_TOOL,
     TOOL_ACTIONS,
     TOOL_ARG_SCHEMAS,
-    WRAPPER_ACTIONS,
     _normalize_alias_lookup_key,
     _strip_balanced_wrappers,
 )
 
 
 class ServerArgsMixin:
-    """Mixin for noisy-client argument normalization and wrapper helpers."""
+    """Mixin for noisy-client argument normalization."""
 
     def _prune_next_cache(self):
         if not self._next_cache:
@@ -261,158 +260,7 @@ class ServerArgsMixin:
                         out["action"] = mapped
                         break
 
-        # Compatibility cleanup: many clients send wrapper/meta keys to direct
-        # tool actions. Keep them for wrapper actions, otherwise drop unknown
-        # wrapper noise so strict tool signatures don't fail with INVALID_ARGS.
-        action_name = out.get("action")
-        if not (isinstance(action_name, str) and action_name in WRAPPER_ACTIONS):
-            # Always strip wrapper-only helper keys for direct actions, even if
-            # a broad schema includes them. This keeps noisy client payloads
-            # (empty grep/pick/head/next fields) from polluting tool calls.
-            wrapper_noise = {
-                "source_action", "target_action", "on", "subaction",
-                "grep", "grep_pattern", "grep_regex", "grep_case_sensitive",
-                "grep_invert", "grep_field", "grep_limit", "grep_offset",
-                "pick_fields", "pick_omit", "head_n", "tail_n",
-                "next_token", "token", "cursor", "stats_include_payload",
-            }
-            for k in tuple(wrapper_noise):
-                if tool_name == "truncation" and k in {"token", "next_token", "cursor"}:
-                    continue
-                out.pop(k, None)
         return self._normalize_field_variants(tool_name, out)
-
-    def _wrapper_source_action(
-        self, tool_name: str, args: dict, wrapper_action: str
-    ) -> tuple[str | None, dict | None]:
-        native_actions = set(TOOL_ACTIONS.get(tool_name, []) or [])
-        source_action = (
-            args.get("source_action")
-            or args.get("target_action")
-            or args.get("on")
-            or args.get("subaction")
-        )
-        if not source_action or not isinstance(source_action, str):
-            # Prefer list-style source if available, so head/grep/pick can be used tersely.
-            if "list" in native_actions:
-                return "list", None
-            return None, make_error(
-                MCPError.INVALID_ARGS,
-                f"action='{wrapper_action}' requires source_action",
-                hint=(
-                    f"Example: {tool_name}(action='{wrapper_action}', source_action='list'). "
-                    "Aliases: on, target_action, subaction."
-                ),
-            )
-        source_action = source_action.strip()
-        if not source_action:
-            return None, make_error(
-                MCPError.INVALID_ARGS, "source_action cannot be empty"
-            )
-        if source_action in WRAPPER_ACTIONS and source_action not in native_actions:
-            return None, make_error(
-                MCPError.INVALID_ARGS,
-                f"source_action cannot be '{source_action}'",
-                hint=f"Use a concrete tool action first, then action='{wrapper_action}'.",
-            )
-        return source_action, None
-
-    def _strip_wrapper_args(self, args: dict) -> dict:
-        child_args = dict(args or {})
-        for key in (
-            "source_action",
-            "target_action",
-            "on",
-            "subaction",
-            "grep",
-            "grep_pattern",
-            "grep_regex",
-            "grep_case_sensitive",
-            "grep_invert",
-            "grep_field",
-            "grep_limit",
-            "grep_offset",
-            "pick_fields",
-            "pick_omit",
-            "head_n",
-            "tail_n",
-            "next_token",
-            "token",
-            "cursor",
-            "stats_include_payload",
-        ):
-            child_args.pop(key, None)
-        return child_args
-
-    def _lineify_item(self, item: Any) -> str:
-        if isinstance(item, str):
-            return item.strip()
-        if isinstance(item, dict):
-            return json.dumps(item, ensure_ascii=False, separators=(",", ":"))
-        if item is None:
-            return ""
-        return str(item).strip()
-
-    def _collect_wrapper_items(
-        self, payload: Any, field: str | None = None
-    ) -> tuple[list[Any], str, str]:
-        if isinstance(payload, dict):
-            if field:
-                value = payload.get(field)
-                if isinstance(value, str):
-                    return (
-                        [line for line in value.splitlines() if line.strip()],
-                        field,
-                        "string",
-                    )
-                if isinstance(value, list):
-                    return list(value), field, "list"
-                if value is None:
-                    return [], field, "list"
-                return [value], field, "list"
-            for key in (
-                "sessions",
-                "bookmarks",
-                "macros",
-                "items",
-                "results",
-                "matches",
-                "functions",
-                "findings",
-                "usages",
-                "callers",
-                "callees",
-                "content",
-                "sections",
-                "names",
-                "strings",
-                "imports",
-                "code_refs",
-                "data_refs",
-            ):
-                if key not in payload:
-                    continue
-                value = payload.get(key)
-                if isinstance(value, str):
-                    return (
-                        [line for line in value.splitlines() if line.strip()],
-                        key,
-                        "string",
-                    )
-                if isinstance(value, list):
-                    return list(value), key, "list"
-            return [payload], "payload", "list"
-        if isinstance(payload, list):
-            return list(payload), "payload", "list"
-        if isinstance(payload, str):
-            return (
-                [line for line in payload.splitlines() if line.strip()],
-                "payload",
-                "string",
-            )
-        if payload is None:
-            return [], "payload", "list"
-        return [payload], "payload", "list"
 
     def _cache_next_page(self, tool_name: str, args: dict, payload: Any) -> Any:
         if not isinstance(payload, dict) or is_error_result(payload):

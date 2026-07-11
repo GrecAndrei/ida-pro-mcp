@@ -22,10 +22,11 @@ except ImportError:
     from support.semantic_matching import normalize_action  # type: ignore[import-not-found]
 
 from ...support.query_lang import run_query_lang
-from .advanced import search_constants, search_decompiled, search_structured, search_vulnerable
+from .advanced import search_constants, search_decompiled, search_structured
 from .basic import search_bytes, search_immediate, search_name, search_string
-from .code import search_comment, search_insns, search_instruction, search_mnemonic, search_operand, search_text
+from .code import search_comment, search_insns, search_operand, search_text
 from .combinators import (
+    search_analyze,
     search_bool,
     search_fingerprint,
     search_hunt,
@@ -140,9 +141,9 @@ def search(
         "text", "operand", "comment", "data_ref", "code_ref", "regex", "func_by_sig",
         "find", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
         "type", "export", "summary", "query_lang", "nl", "behavior",
-        "bool", "hunt", "neighborhood", "outlier", "fingerprint", "path", "reach", "noreach",
+        "bool", "hunt", "analyze", "neighborhood", "outlier", "fingerprint", "path", "reach", "noreach",
         "symbol", "symbol_info", "demangle", "xrefs_to_string",
-    ], "Action: bytes|string|immediate|name|insns|mnemonic|instruction|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|callers|callees|api|vulnerable|constants|decompiled|structured|type|export|summary|query_lang|nl|behavior|bool|hunt|neighborhood|outlier|fingerprint|path|reach|noreach|symbol|symbol_info|demangle|xrefs_to_string"],
+    ], "Action: bytes|string|immediate|name|insns|mnemonic|instruction|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|callers|callees|api|vulnerable|constants|decompiled|structured|type|export|summary|query_lang|nl|behavior|bool|hunt|analyze|neighborhood|outlier|fingerprint|path|reach|noreach|symbol|symbol_info|demangle|xrefs_to_string"],
     pattern: Annotated[Optional[str], "Pattern to search for"] = None,
     query: Annotated[Optional[str], "Alias for pattern"] = None,
     limit: Annotated[int, "Max results"] = 100,
@@ -304,10 +305,8 @@ def search(
             response = search_name(actual_pattern, case_sensitive, offset, limit)
         elif action == "insns":
             response = search_insns(actual_pattern, range_start, range_end, include_context, offset, limit)
-        elif action == "mnemonic":
-            response = search_mnemonic(actual_pattern, case_sensitive, range_start, range_end, include_context, offset, limit, include_items, include_breakdown, timeout_ms)
-        elif action == "instruction":
-            response = search_instruction(actual_pattern, case_sensitive, range_start, range_end, include_context, offset, limit, include_items, timeout_ms)
+        elif action in ("mnemonic", "instruction"):
+            response = search_analyze(scope="semantic", pattern=actual_pattern, offset=offset, limit=limit, include_items=include_items)
         elif action == "text":
             response = search_text(actual_pattern, case_sensitive, range_start, range_end, include_context, offset, limit, timeout_ms)
         elif action == "operand":
@@ -331,7 +330,12 @@ def search(
         elif action == "api":
             response = search_api(actual_pattern, include_context, offset, limit, include_items, include_breakdown)
         elif action == "vulnerable":
-            response = search_vulnerable(actual_pattern, include_context, offset, limit, include_items, include_breakdown)
+            response = search_analyze(
+                scope="vulnerable", pattern=actual_pattern,
+                depth=int(kwargs.get("depth", 5)),
+                offset=offset, limit=limit,
+                include_items=include_items,
+            )
         elif action == "constants":
             response = search_constants(actual_pattern, range_start, range_end, include_context, offset, limit, include_items)
         elif action == "decompiled":
@@ -371,6 +375,21 @@ def search(
         elif action == "hunt":
             recipe = str(kwargs.get("recipe") or actual_pattern or "")
             response = search_hunt(recipe, case_sensitive, offset, limit)
+        elif action == "analyze":
+            response = search_analyze(
+                addr=actual_pattern or kwargs.get("addr"),
+                scope=str(kwargs.get("scope", "auto")),
+                metric=str(kwargs.get("metric", "size")),
+                top=int(kwargs.get("top", 50)),
+                top_k=int(kwargs.get("top_k", 10)),
+                radius=int(kwargs.get("radius", 5)),
+                depth=int(kwargs.get("depth", 5)),
+                pattern=actual_pattern,
+                offset=offset,
+                limit=limit,
+                include_context=include_context,
+                include_items=include_items,
+            )
         elif action == "neighborhood":
             radius = int(kwargs.get("radius", 10))
             response = search_neighborhood(actual_pattern, radius, offset, limit)

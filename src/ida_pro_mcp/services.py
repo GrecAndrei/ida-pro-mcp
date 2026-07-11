@@ -75,7 +75,6 @@ from ida_pro_mcp.host.schemas import (
     TOOL_ARG_SCHEMAS,
     TOOL_DESCRIPTIONS,
     TOOLS,
-    WRAPPER_ACTIONS,
 )
 from ida_pro_mcp.host.server.resources import ResourceResolver, list_resources
 from ida_pro_mcp.host.server.server import IDAMCPServer
@@ -158,5 +157,4 @@ __all__ = [
     "TOOL_ACTIONS",
     "TOOL_ARG_SCHEMAS",
     "TOOL_DESCRIPTIONS",
-    "WRAPPER_ACTIONS",
 ]

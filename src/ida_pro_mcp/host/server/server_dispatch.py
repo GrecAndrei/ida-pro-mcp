@@ -7,11 +7,12 @@ import json
 import os
 import re
 import time
+import uuid
 from typing import Any
 
 from ida_pro_mcp import __version__
 
-from ..config import _bounded_int, _coerce_bool, _is_writable_dir, _parse_str_list, log_rpc
+from ..config import _bounded_int, _coerce_bool, _is_writable_dir, log_rpc
 from ..errors import MCPError, is_error_result, make_error
 from ..policy import PolicyDecision, build_audit_record, evaluate_policy
 from ..schemas import (
@@ -20,9 +21,9 @@ from ..schemas import (
     TOOL_ACTIONS,
     TOOL_ARG_SCHEMAS,
     TOOLS,
-    WRAPPER_ACTIONS,
     _resolve_tool_alias,
 )
+from .postprocess import PP_KEYS, apply_post_processing, extract_post_process_params, has_post_process
 from .rpc_args import prepare_rpc_args
 from .server_response import truncate_response
 
@@ -414,7 +415,6 @@ class ServerDispatchMixin:
                     "registered": len(TOOLS),
                     "advertised": len(ADVERTISED_TOOLS),
                     "hidden_from_tools_list": len(HIDDEN_TOOLS_IN_LIST),
-                    "wrappers": list(WRAPPER_ACTIONS),
                     "action_surface": {
                         "tool_count_with_actions": len(action_counts),
                         "total_actions": sum(action_counts.values()),
@@ -699,346 +699,94 @@ class ServerDispatchMixin:
                 )
             return result
 
-    def _grep_value_lines(self, value: Any) -> list[str]:
-            if value is None:
-                return []
-            if isinstance(value, str):
-                return [line for line in value.splitlines() if line.strip()]
-            if isinstance(value, list):
-                out: list[str] = []
-                for item in value:
-                    if isinstance(item, str):
-                        out.extend([line for line in item.splitlines() if line.strip()])
-                    elif isinstance(item, dict):
-                        out.append(
-                            json.dumps(item, ensure_ascii=False, separators=(",", ":"))
-                        )
-                    else:
-                        s = str(item).strip()
-                        if s:
-                            out.append(s)
-                return out
-            if isinstance(value, dict):
-                out: list[str] = []
-                for _k, v in value.items():
-                    if isinstance(v, str):
-                        for line in v.splitlines():
-                            line = line.strip()
-                            if line:
-                                out.append(line)
-                    elif isinstance(v, list):
-                        for item in v:
-                            if isinstance(item, str) and item.strip():
-                                out.append(item.strip())
-                if out:
-                    return out
-                return [json.dumps(value, ensure_ascii=False, separators=(",", ":"))]
-            s = str(value).strip()
-            return [s] if s else []
+    def _handle_next_continuation(
+        self, tool_name: str, token: str, pp_params: dict
+    ) -> dict:
+        """Continue pagination from a previous post-processed result.
 
-    def _grep_collect_lines(
-            self, payload: Any, field: str | None = None
-        ) -> tuple[list[str], str]:
-            if field and isinstance(payload, dict):
-                return self._grep_value_lines(payload.get(field)), field
-            if isinstance(payload, dict):
-                preferred_fields = (
-                    "sessions",
-                    "bookmarks",
-                    "macros",
-                    "items",
-                    "results",
-                    "matches",
-                    "functions",
-                    "findings",
-                    "usages",
-                    "callers",
-                    "callees",
-                    "content",
-                    "sections",
-                    "names",
-                    "strings",
-                    "imports",
-                    "code_refs",
-                    "data_refs",
-                )
-                for key in preferred_fields:
-                    if key in payload:
-                        lines = self._grep_value_lines(payload.get(key))
-                        if lines:
-                            return lines, key
-                return self._grep_value_lines(payload), "payload"
-            return self._grep_value_lines(payload), "payload"
-
-    def _handle_tool_grep_action(self, tool_name: str, args: dict) -> dict:
-            source_action, source_err = self._wrapper_source_action(tool_name, args, "grep")
-            if source_err:
-                return source_err
-
-            explicit_pattern = args.get("grep") or args.get("grep_pattern")
-            grep_pattern = explicit_pattern or args.get("pattern") or args.get("query")
-            if not isinstance(grep_pattern, str) or not grep_pattern.strip():
-                return make_error(
-                    MCPError.INVALID_ARGS,
-                    "grep pattern required",
-                    hint="Set grep='...' (or grep_pattern/pattern/query) with action='grep'.",
-                )
-            grep_pattern = grep_pattern.strip()
-
-            grep_regex = _coerce_bool(args.get("grep_regex"), False)
-            grep_case_sensitive = _coerce_bool(args.get("grep_case_sensitive"), False)
-            grep_invert = _coerce_bool(args.get("grep_invert"), False)
-            grep_field = args.get("grep_field")
-            if grep_field is not None and not isinstance(grep_field, str):
-                return make_error(MCPError.INVALID_ARGS, "grep_field must be a string")
-            grep_limit = _bounded_int(
-                args.get("grep_limit", 200), 200, min_value=1, max_value=5000
+        Auto-recovers action and args from the cache — the caller only
+        needs to pass ``next_token``.
+        """
+        self._prune_next_cache()
+        entry = self._next_cache.get(token)
+        if not entry:
+            return make_error(
+                MCPError.TRUNCATION_TOKEN_INVALID,
+                f"next_token '{token}' not found or expired",
+                hint="Re-run the original call to get a fresh next_token.",
             )
-            grep_offset = _bounded_int(
-                args.get("grep_offset", 0), 0, min_value=0, max_value=500000
+        cached_tool = str(entry.get("tool") or "")
+        if cached_tool and cached_tool != tool_name:
+            return make_error(
+                MCPError.INVALID_ARGS,
+                f"next_token belongs to tool '{cached_tool}', not '{tool_name}'",
             )
 
-            child_args = self._strip_wrapper_args(args)
-            if explicit_pattern is None:
-                child_args.pop("pattern", None)
-                child_args.pop("query", None)
-            child_args["action"] = source_action
+        # Recover base args and action from cache.
+        base_args = dict(entry.get("args") or {})
+        base_args["action"] = entry.get("action")
 
-            source_payload = self._execute_tool(tool_name, child_args)
-            if is_error_result(source_payload):
-                return source_payload
+        # Merge cached PP params with caller overrides (except next_token).
+        cached_pp = dict(entry.get("post_process") or {})
+        cached_pp["offset"] = entry.get("next_offset", 0)
+        for k, v in pp_params.items():
+            if k != "next_token" and v is not None:
+                cached_pp[k] = v
 
-            lines, used_field = self._grep_collect_lines(source_payload, grep_field)
-            if grep_regex:
-                flags = 0 if grep_case_sensitive else re.IGNORECASE
-                try:
-                    rx = re.compile(grep_pattern, flags)
-                except re.error as e:
-                    return make_error(MCPError.INVALID_ARGS, f"Invalid grep regex: {e}")
-                matched = [line for line in lines if bool(rx.search(line)) != grep_invert]
-            else:
-                needle = grep_pattern if grep_case_sensitive else grep_pattern.lower()
-                matched = []
-                for line in lines:
-                    hay = line if grep_case_sensitive else line.lower()
-                    found = needle in hay
-                    if found != grep_invert:
-                        matched.append(line)
-
-            total = len(matched)
-            page = matched[grep_offset : grep_offset + grep_limit]
-            is_truncated = (grep_offset + len(page)) < total
-
-            return {
-                "ok": True,
-                "action": "grep",
-                "tool": tool_name,
-                "source_action": source_action,
-                "field": used_field,
-                "pattern": grep_pattern,
-                "matches": "\n".join(page),
-                "source_count": len(lines),
-                "count": len(page),
-                "total": total,
-                "offset": grep_offset,
-                "truncated": is_truncated,
-                "next_offset": (grep_offset + len(page)) if is_truncated else None,
-            }
-
-    def _handle_tool_pick_action(self, tool_name: str, args: dict) -> dict:
-            source_action, source_err = self._wrapper_source_action(tool_name, args, "pick")
-            if source_err:
-                return source_err
-            fields = _parse_str_list(args.get("pick_fields"))
-            if not fields:
-                fields = _parse_str_list(args.get("_response_fields"))
-            if not fields:
-                return make_error(
-                    MCPError.INVALID_ARGS,
-                    "action='pick' requires pick_fields",
-                    hint=f"Example: {tool_name}(action='pick', source_action='list', pick_fields='functions,count').",
-                )
-            omit = set(_parse_str_list(args.get("pick_omit")))
-
-            child_args = self._strip_wrapper_args(args)
-            child_args["action"] = source_action
-            source_payload = self._execute_tool(tool_name, child_args)
-            if is_error_result(source_payload):
-                return source_payload
-            if not isinstance(source_payload, dict):
-                return make_error(
-                    MCPError.INVALID_ARGS,
-                    "pick wrapper requires source payload object",
-                    hint="Pick is top-level field projection; use grep/head/tail for line-oriented payloads.",
-                )
-
-            selected = {}
-            missing: list[str] = []
-            for key in fields:
-                if key in source_payload:
-                    selected[key] = source_payload.get(key)
-                else:
-                    missing.append(key)
-            for key in omit:
-                selected.pop(key, None)
-
-            out = {
-                "ok": True,
-                "action": "pick",
-                "tool": tool_name,
-                "source_action": source_action,
-                "picked": list(selected.keys()),
-                **selected,
-            }
-            if missing:
-                out["missing_fields"] = missing
-            return out
-
-    def _handle_tool_head_tail_action(
-            self, tool_name: str, args: dict, *, tail: bool = False
-        ) -> dict:
-            wrapper_name = "tail" if tail else "head"
-            source_action, source_err = self._wrapper_source_action(
-                tool_name, args, wrapper_name
+        # Execute the original tool action.
+        ip = base_args.pop(
+            "idb", self.current_session.idb_path if self.current_session else None
+        )
+        if not ip:
+            return make_error(
+                MCPError.SESSION_REQUIRED,
+                "No active session. Create one first.",
             )
-            if source_err:
-                return source_err
+        result = self.call_tool(tool_name, ip, **base_args)
 
-            default_n = 20
-            n_key = "tail_n" if tail else "head_n"
-            n = _bounded_int(
-                args.get(n_key, default_n), default_n, min_value=1, max_value=5000
-            )
-            field = args.get("grep_field") or args.get("field")
-            if field is not None and not isinstance(field, str):
-                return make_error(MCPError.INVALID_ARGS, "field must be a string")
-
-            child_args = self._strip_wrapper_args(args)
-            child_args["action"] = source_action
-            source_payload = self._execute_tool(tool_name, child_args)
-            if is_error_result(source_payload):
-                return source_payload
-
-            items, used_field, item_kind = self._collect_wrapper_items(
-                source_payload, field
-            )
-            total = len(items)
-            if tail:
-                page = items[max(0, total - n) :]
-                offset = max(0, total - len(page))
-            else:
-                page = items[:n]
-                offset = 0
-
-            lines = [self._lineify_item(item) for item in page]
-            lines = [line for line in lines if line]
-            is_truncated = len(page) < total
-            out = {
-                "ok": True,
-                "action": wrapper_name,
-                "tool": tool_name,
-                "source_action": source_action,
-                "field": used_field,
-                "matches": "\n".join(lines),
-                "count": len(page),
-                "total": total,
-                "offset": offset,
-                "truncated": is_truncated,
-                "next_offset": (offset + len(page))
-                if (not tail and is_truncated)
-                else None,
-            }
-            if _coerce_bool(args.get("include_items"), False):
-                out["items"] = page if item_kind == "list" else lines
-            return out
-
-    def _handle_tool_next_action(self, tool_name: str, args: dict) -> dict:
-            token = args.get("next_token") or args.get("token") or args.get("cursor")
-            if not isinstance(token, str) or not token.strip():
-                return make_error(
-                    MCPError.INVALID_ARGS,
-                    "action='next' requires next_token (or token/cursor)",
-                    hint=f"Use the next_token returned by {tool_name} or wrapper actions with truncated=true.",
-                )
-            token = token.strip()
-            self._prune_next_cache()
-            entry = self._next_cache.get(token)
-            if not entry:
-                return make_error(
-                    MCPError.TRUNCATION_TOKEN_INVALID,
-                    f"next token '{token}' not found or expired",
-                    hint="Re-run the original paginated call to get a fresh next_token.",
-                )
-            cached_tool = str(entry.get("tool") or "")
-            if cached_tool and cached_tool != tool_name:
-                return make_error(
-                    MCPError.INVALID_ARGS,
-                    f"next token belongs to tool '{cached_tool}', not '{tool_name}'",
-                )
-
-            child_args = dict(entry.get("args") or {})
-            child_args["action"] = entry.get("action")
-            child_args["offset"] = entry.get("next_offset", child_args.get("offset", 0))
-
-            overrides = dict(args or {})
-            for key in ("action", "next_token", "token", "cursor"):
-                overrides.pop(key, None)
-            child_args.update(overrides)
-            result = self._execute_tool(tool_name, child_args)
-            if isinstance(result, dict):
-                result = dict(result)
-                result["continued_from"] = token
+        if is_error_result(result):
             return result
 
-    def _handle_tool_stats_action(self, tool_name: str, args: dict) -> dict:
-            source_action, source_err = self._wrapper_source_action(
-                tool_name, args, "stats"
-            )
-            if source_err:
-                return source_err
-            include_payload = _coerce_bool(args.get("stats_include_payload"), False)
+        result = apply_post_processing(result, cached_pp)
+        result = self._cache_post_process_next(tool_name, base_args, cached_pp, result)
+        if isinstance(result, dict):
+            result["continued_from"] = token
+        return result
 
-            child_args = self._strip_wrapper_args(args)
-            child_args["action"] = source_action
-            source_payload = self._execute_tool(tool_name, child_args)
-            if is_error_result(source_payload):
-                return source_payload
+    def _cache_post_process_next(
+        self, tool_name: str, base_args: dict, pp_params: dict, result: Any
+    ) -> Any:
+        """Cache a continuation token if the result has more pages."""
+        if not isinstance(result, dict) or is_error_result(result):
+            return result
 
-            try:
-                serialized = json.dumps(
-                    source_payload, ensure_ascii=False, separators=(",", ":")
-                )
-            except Exception:
-                serialized = str(source_payload)
-            items, used_field, item_kind = self._collect_wrapper_items(source_payload)
-            top_keys: list[str] = []
-            if isinstance(source_payload, dict):
-                top_keys = list(source_payload.keys())[:64]
-            stats = {
-                "type": type(source_payload).__name__,
-                "top_level_keys": top_keys,
-                "line_count": len(
-                    [line for line in serialized.splitlines() if line.strip()]
-                ),
-                "char_count": len(serialized),
-                "item_count": len(items),
-                "item_field": used_field,
-                "item_kind": item_kind,
-                "has_error": is_error_result(source_payload),
-                "truncated": bool(
-                    isinstance(source_payload, dict) and source_payload.get("truncated")
-                ),
-            }
-            out = {
-                "ok": True,
-                "action": "stats",
-                "tool": tool_name,
-                "source_action": source_action,
-                "stats": stats,
-            }
-            if include_payload:
-                out["payload"] = source_payload
-            return out
+        count = result.get("_count", 0)
+        source_truncated = _coerce_bool(result.get("truncated"), False)
+        page_size = pp_params.get("head") or pp_params.get("limit")
+        has_more = source_truncated or (
+            page_size is not None and count >= int(page_size)
+        )
+
+        if not has_more:
+            return result
+
+        self._prune_next_cache()
+        token = uuid.uuid4().hex[:12].upper()
+        current_offset = _bounded_int(
+            pp_params.get("offset"), 0, min_value=0, max_value=500_000
+        )
+        effective_page = int(page_size) if page_size else count
+
+        self._next_cache[token] = {
+            "tool": tool_name,
+            "action": base_args.get("action"),
+            "args": {k: v for k, v in base_args.items() if k != "action"},
+            "post_process": {k: v for k, v in pp_params.items() if k != "next_token"},
+            "next_offset": current_offset + effective_page,
+            "created_at": time.time(),
+        }
+        result["next_token"] = token
+        return result
 
     def _execute_tool(self, tool_name, args):
             start_ts = time.perf_counter()
@@ -1064,6 +812,19 @@ class ServerDispatchMixin:
                 )
 
             result = self._execute_tool_inner(resolved_tool, original_tool_name, args)
+
+            # ---- Post-processing pipeline ----
+            pp_params = getattr(self, "_pending_pp", None)
+            if pp_params and has_post_process(pp_params) and not is_error_result(result):
+                try:
+                    result = apply_post_processing(result, pp_params)
+                    result = self._cache_post_process_next(
+                        resolved_tool, args, pp_params, result
+                    )
+                except Exception as _pp_err:
+                    import logging
+                    logging.getLogger(__name__).debug("post-process pipeline failed: %s", _pp_err)
+            self._pending_pp = {}
 
             sid = getattr(self.current_session, "session_id", None) if self.current_session else None
             latency_ms = (time.perf_counter() - start_ts) * 1000.0
@@ -1129,6 +890,18 @@ class ServerDispatchMixin:
             if not isinstance(args, dict):
                 return make_error(MCPError.INVALID_ARGS, "arguments must be an object")
             args = self._normalize_tool_call_args(tool_name, args)
+
+            # ---- Post-processing filter extraction ----
+            # Extract PP params before they reach IDA or policy checks.
+            args, self._pending_pp = extract_post_process_params(args)
+
+            # ---- next_token continuation (auto-recovers action from cache) ----
+            next_token = self._pending_pp.get("next_token")
+            if next_token and isinstance(next_token, str) and next_token.strip():
+                return self._handle_next_continuation(
+                    tool_name, next_token.strip(), self._pending_pp
+                )
+
             sid = getattr(self.current_session, "session_id", None) if self.current_session else None
             # Capture ack before the policy block pops _risk_ack below. The
             # phase gate at the bottom of this function wants to skip when
@@ -1311,36 +1084,6 @@ class ServerDispatchMixin:
             if isinstance(action, str):
                 action = action.strip()
                 args["action"] = action
-                native_actions = set(TOOL_ACTIONS.get(tool_name, []) or [])
-                has_wrapper_source = any(
-                    key in args
-                    for key in ("source_action", "target_action", "on", "subaction")
-                )
-                if action in WRAPPER_ACTIONS:
-                    use_wrapper = action not in native_actions
-                    if action in ("grep", "pick", "head", "tail", "stats"):
-                        use_wrapper = use_wrapper or has_wrapper_source
-                    elif action == "next":
-                        use_wrapper = use_wrapper or any(
-                            key in args for key in ("next_token", "token", "cursor")
-                        )
-                    if use_wrapper:
-                        if action == "grep":
-                            return self._handle_tool_grep_action(tool_name, args)
-                        if action == "pick":
-                            return self._handle_tool_pick_action(tool_name, args)
-                        if action == "head":
-                            return self._handle_tool_head_tail_action(
-                                tool_name, args, tail=False
-                            )
-                        if action == "tail":
-                            return self._handle_tool_head_tail_action(
-                                tool_name, args, tail=True
-                            )
-                        if action == "next":
-                            return self._handle_tool_next_action(tool_name, args)
-                        if action == "stats":
-                            return self._handle_tool_stats_action(tool_name, args)
 
             guardrail_mode = self._guardrail_mode_from_args(args)
             strict_guardrails = self._guardrail_strict_writes or guardrail_mode == "enforce"

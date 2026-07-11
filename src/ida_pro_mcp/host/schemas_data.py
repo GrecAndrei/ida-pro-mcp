@@ -148,7 +148,7 @@ ADVERTISED_ACTIONS: dict[str, list[str]] = {
     ],
     "search": [
         "find", "nl", "string", "bytes", "api", "callers", "callees",
-        "xrefs_to_string", "symbol", "symbol_info", "decompiled", "behavior",
+        "xrefs_to_string", "symbol", "symbol_info", "decompiled", "behavior", "analyze",
     ],
     "intelligence": [
         "index_fast", "index_batch", "semantic_search", "similar_functions",
@@ -333,7 +333,7 @@ TOOL_DESCRIPTIONS = {
     "project": "Project I/O and evidence management. Actions: save, close, open, load_binary, list_recent, get_cwd, set_cwd, list_dir, exists, evidence_graph, knowledge_merge, confidence_model, replay_pipeline, hypothesis_tracker, temporal_reasoning, semantic_artifact_diff, ai_governance, knowledge_debt, casefile_export.",
     "protocol": "Detect and analyze network protocol structures, parsers, endpoints, state machines, and reconstruct full protocol specs from dispatch tables. Actions: detect, parsers, serializers, handlers, endpoints, tls_config, socket_flow, packet_struct, magic_numbers, state_machine, reconstruct, trace_handler, export_spec.",
 
-    "search": "Primary discovery tool. find: unified names (incl. demangled)+strings+imports+comments+xrefs (+insns unless identifier-like). Always returns items[].addr. nl: embedding search (index_fast first; mode=quick|expand). symbol/symbol_info: resolve names/addresses. api/callers/callees/xrefs_to_string: refs. string/bytes for raw patterns. Results always include results text + items with addr/name/type/score. Actions (core): find, nl, string, bytes, api, callers, callees, xrefs_to_string, symbol, symbol_info, decompiled, behavior.",
+    "search": "Primary discovery tool. find: unified names (incl. demangled)+strings+imports+comments+xrefs (+insns unless identifier-like). Always returns items[].addr. nl: embedding search (index_fast first; mode=quick|expand). analyze: unified structural analysis (neighborhood/outlier/similar/vulnerable/semantic scopes, uses embedding index + cached call graph). symbol/symbol_info: resolve names/addresses. api/callers/callees/xrefs_to_string: refs. string/bytes for raw patterns. Results always include results text + items with addr/name/type/score. Actions (core): find, nl, string, bytes, api, callers, callees, xrefs_to_string, symbol, symbol_info, decompiled, behavior, analyze.",
     "segments": "List, create, modify, and analyze binary segments and their permissions/attributes. Actions: list, add, delete, set_attr, set_perms, move, info, analyze, find_code, find_data, compare, merge. For relocations/fixups use the dedicated `fixups` tool.",
      "session": "Full session lifecycle. Prefer: create/switch/close/list/status/state/logs/health. state: analysis snapshot (binary, coverage, blackboard summary) — call at turn start. logs: tail IDA stdout/stderr without RPC when IDA is busy. idle_purge/cleanup_stale: runtime housekeeping. Advanced session notebook/hypothesis/macro actions remain callable by name. Actions (core): create, switch, close, list, status, state, logs, health, idle_purge, cleanup_stale, kill.",
     "stack_analysis": "Analyze stack frames: buffer sizes, canaries, alignment, spills, variables, and uninitialized regions. Actions: frame, buffers, canary, alignment, spills, usage, variables, arrays, uninitialized, summary.",

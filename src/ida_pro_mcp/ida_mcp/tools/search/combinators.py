@@ -10,7 +10,7 @@ Actions provided:
   - search_hunt:     named workflow recipes (backdoor, anti_debug, c2, ...)
   - search_neighborhood: 360 degree context around a function addr
   - search_outlier:  find structurally anomalous functions
-  - search_fingerprint: structural (callgraph) similarity, not embedding-based
+  - search_fingerprint: embedding-similar functions via bge-code-v1 cosine similarity
   - search_path:     shortest call-graph path between two symbols
   - search_reach:    functions reachable from a root within N hops
   - search_noreach:  functions NOT reachable from any known entrypoint
@@ -584,339 +584,26 @@ def _func_metrics(ea: int) -> dict:
 
 
 def search_neighborhood(addr: str, radius: int, offset: int, limit: int) -> dict:
-    """360-degree context around a function: callers, callees, similar, outliers, tags.
-
-    Returns a compact summary card so the LLM can orient quickly without
-    having to issue five separate searches.
-    """
-    ea, err, _ = resolve_target(addr)
-    if err or ea == idaapi.BADADDR:
-        return make_error(MCPError.INVALID_ARGS,
-                          f"could not resolve addr {addr!r}",
-                          hint="Pass a hex address (0x401000) or a symbol name (main, sub_401000).")
-    func = idaapi.get_func(ea)
-    if not func:
-        return make_error(MCPError.INVALID_ARGS, f"{hex(ea)} is not a function start")
-
-    metrics = _func_metrics(ea)
-    name = _func_name(ea)
-
-    # Callers
-    callers = []
-    for xref in idautils.XrefsTo(func.start_ea, 0):
-        if not xref.iscode:
-            continue
-        f = idaapi.get_func(xref.frm)
-        if f:
-            callers.append(int(f.start_ea))
-    callers = sorted(set(callers))[:max(1, radius)]
-
-    # Callees
-    callees = []
-    for xref in idautils.XrefsFrom(func.start_ea, 0):
-        if not xref.iscode:
-            continue
-        f = idaapi.get_func(xref.to)
-        if f:
-            callees.append(int(f.start_ea))
-    callees = sorted(set(callees))[:max(1, radius)]
-
-    # Fingerprint-similar
-    try:
-        fp_result = search_fingerprint(hex(ea), top_k=5)
-        similar = [it["addr"] for it in fp_result.get("items", [])] if isinstance(fp_result, dict) else []
-    except Exception:
-        similar = []
-
-    # Behavior tags from L1 insight index
-    tags = []
-    try:
-        from . import _load_insight_index
-        idx = _load_insight_index()
-        if idx:
-            tag_map = idx.get("tag_map", {})
-            for tag, addrs in tag_map.items():
-                if hex(ea) in addrs:
-                    tags.append(tag)
-    except Exception:
-        pass
-
-    # Blackboard notes
-    blackboard = []
-    try:
-        from blackboard import BlackboardStore
-        store = BlackboardStore()
-        entries = store.list(addr=hex(ea), limit=5, include_resolved=False)
-        for e in entries:
-            blackboard.append({"title": e["title"], "category": e["category"],
-                               "confidence": e.get("confidence")})
-    except Exception:
-        pass
-
-    return {
-        "ok": True,
-        "action": "neighborhood",
-        "addr": hex(ea),
-        "name": name,
-        "metrics": metrics,
-        "callers": [{"addr": hex(a), "name": _func_name(a)} for a in callers],
-        "callees": [{"addr": hex(a), "name": _func_name(a)} for a in callees],
-        "similar": similar,
-        "tags": tags,
-        "blackboard": blackboard,
-        "note": "Compact context card. Use search_fingerprint/outlier/etc. for deeper dives.",
-    }
+    """360-degree context around a function. Delegates to search_analyze."""
+    return search_analyze(addr=addr, scope="neighborhood", radius=radius, offset=offset, limit=limit)
 
 
 # ============================================================================
 # search_outlier - structurally anomalous functions
 # ============================================================================
 
-def _all_func_metrics() -> list[tuple[int, dict]]:
-    """Compute metrics for every function. Cached per IDB fingerprint."""
-    out = []
-    for ea in idautils.Functions():
-        try:
-            out.append((int(ea), _func_metrics(ea)))
-        except Exception:
-            continue
-    return out
-
-
 def search_outlier(metric: str, top: int, offset: int, limit: int) -> dict:
-    """Find structurally anomalous functions.
-
-    Metrics:
-      size        - largest or smallest functions
-      complexity  - highest cyclomatic complexity
-      bb_count    - most basic blocks
-      orphan      - functions with zero callers
-      leaf        - functions with zero callees
-      deep        - functions with the most callees (high fan-out)
-      hub         - functions with the most callers (high fan-in)
-      tiny        - functions smaller than 16 bytes (often thunks)
-      huge        - functions larger than 4KB
-    """
-    metric = (metric or "size").lower()
-    direction = "max"  # default
-
-    all_metrics = _all_func_metrics()
-    if not all_metrics:
-        return {"ok": True, "action": "outlier", "metric": metric, "results": "", "count": 0, "items": []}
-
-    items: list[dict] = []
-
-    if metric in ("size", "huge", "complexity", "bb_count", "deep", "hub"):
-        direction = "max"
-    elif metric in ("tiny", "orphan", "leaf"):
-        direction = "min"
-    else:
-        return make_error(MCPError.INVALID_ARGS,
-                          f"unknown metric {metric!r}",
-                          hint="Known: size, complexity, bb_count, orphan, leaf, deep, hub, tiny, huge")
-
-    if metric in ("orphan", "hub"):
-        caller_counts = defaultdict(int)
-        callee_counts = defaultdict(int)
-        for ea in idautils.Functions():
-            for xref in idautils.XrefsTo(ea, 0):
-                if xref.iscode:
-                    f = idaapi.get_func(xref.frm)
-                    if f:
-                        caller_counts[int(f.start_ea)] += 1
-            for xref in idautils.XrefsFrom(ea, 0):
-                if xref.iscode:
-                    f = idaapi.get_func(xref.to)
-                    if f:
-                        callee_counts[ea] += 1
-        for ea, _ in all_metrics:
-            count = caller_counts.get(ea, 0) if metric == "hub" else 0
-            if metric == "orphan":
-                count = 1 if caller_counts.get(ea, 0) == 0 else 0
-                items.append({"addr": hex(ea), "name": _func_name(ea), "callers": 0, "outlier_score": 1})
-            else:
-                items.append({"addr": hex(ea), "name": _func_name(ea),
-                              "callers": count, "outlier_score": count})
-    elif metric == "leaf":
-        callee_counts = defaultdict(int)
-        for ea in idautils.Functions():
-            for xref in idautils.XrefsFrom(ea, 0):
-                if xref.iscode:
-                    f = idaapi.get_func(xref.to)
-                    if f:
-                        callee_counts[ea] += 1
-        for ea, _ in all_metrics:
-            count = callee_counts.get(ea, 0)
-            if count == 0:
-                items.append({"addr": hex(ea), "name": _func_name(ea),
-                              "callees": 0, "outlier_score": 1})
-    elif metric == "deep":
-        callee_counts = defaultdict(int)
-        for ea in idautils.Functions():
-            for xref in idautils.XrefsFrom(ea, 0):
-                if xref.iscode:
-                    f = idaapi.get_func(xref.to)
-                    if f:
-                        callee_counts[ea] += 1
-        for ea, _ in all_metrics:
-            items.append({"addr": hex(ea), "name": _func_name(ea),
-                          "callees": callee_counts.get(ea, 0),
-                          "outlier_score": callee_counts.get(ea, 0)})
-    elif metric == "tiny":
-        for ea, m in all_metrics:
-            if m["size"] < 16:
-                items.append({"addr": hex(ea), "name": _func_name(ea),
-                              "size": m["size"], "outlier_score": 16 - m["size"]})
-    elif metric == "huge":
-        for ea, m in all_metrics:
-            if m["size"] > 4096:
-                items.append({"addr": hex(ea), "name": _func_name(ea),
-                              "size": m["size"], "outlier_score": m["size"]})
-    else:
-        key_map = {"size": "size", "complexity": "complexity", "bb_count": "bb_count"}
-        k = key_map[metric]
-        for ea, m in all_metrics:
-            items.append({"addr": hex(ea), "name": _func_name(ea),
-                          k: m[k], "outlier_score": m[k]})
-
-    items.sort(key=lambda x: x.get("outlier_score", 0), reverse=(direction == "max"))
-    total = len(items)
-    items = items[offset:offset + limit]
-    text = "\n".join(
-        f"{it['addr']}  {it['name']}  " + " ".join(f"{k}={v}" for k, v in it.items() if k not in ("addr", "name", "outlier_score"))
-        for it in items
-    )
-    return {
-        "ok": True,
-        "action": "outlier",
-        "metric": metric,
-        "results": text,
-        "count": len(items),
-        "total": total,
-        "truncated": total > offset + limit,
-        "items": items,
-        "note": f"Outliers by metric={metric} (direction={direction}). Top {limit} of {total}.",
-    }
+    """Find structurally anomalous functions. Delegates to search_analyze."""
+    return search_analyze(scope="outlier", metric=metric, top=top, offset=offset, limit=limit)
 
 
 # ============================================================================
 # search_fingerprint - structural (callgraph) similarity
 # ============================================================================
 
-def _function_fingerprint(ea: int) -> tuple:
-    """Return a hashable structural fingerprint of a function.
-
-    Captures:
-      - sorted tuple of import names called
-      - number of basic blocks
-      - number of instructions
-      - whether the function uses crypto/network/alloc APIs
-    """
-    try:
-        f = idaapi.get_func(ea)
-        if not f:
-            return ()
-        imports = set()
-        instr_count = 0
-        for xref in idautils.XrefsFrom(f.start_ea, 0):
-            if not xref.iscode:
-                continue
-            name = idc.get_name(xref.to, idaapi.GN_VISIBLE) or ""
-            if name:
-                imports.add(name)
-        cur = f.start_ea
-        while cur < f.end_ea:
-            instr_count += 1
-            cur = idc.next_head(cur, f.end_ea)
-        bb_count = 0
-        try:
-            import ida_gdl
-            bb_count = sum(1 for _ in ida_gdl.FlowChart(f))
-        except Exception:
-            pass
-        # Bucket the function's behavior into coarse categories
-        cats = []
-        if any(re.search(r"Crypt|Hash|Sha|Aes", n) for n in imports):
-            cats.append("crypto")
-        if any(re.search(r"socket|connect|send|recv|Internet|WinHttp", n) for n in imports):
-            cats.append("network")
-        if any(re.search(r"malloc|alloc|new", n) for n in imports):
-            cats.append("alloc")
-        if any(re.search(r"file|File", n) for n in imports):
-            cats.append("file")
-        if any(re.search(r"Reg|registry", n) for n in imports):
-            cats.append("registry")
-        # Bucket size into bands (log scale)
-        size = f.end_ea - f.start_ea
-        size_band = 0 if size < 64 else 1 if size < 256 else 2 if size < 1024 else 3
-        bb_band = 0 if bb_count < 5 else 1 if bb_count < 20 else 2 if bb_count < 100 else 3
-        return (frozenset(imports), bb_band, size_band, frozenset(cats))
-    except Exception:
-        return ()
-
-
-def _fingerprint_similarity(fp1, fp2) -> float:
-    """Jaccard-like similarity between two structural fingerprints.
-
-    70% weight to import overlap, 15% to behavior categories, 15% to size+bb bucket proximity.
-    """
-    if not fp1 or not fp2:
-        return 0.0
-    imports1, bb1, size1, cats1 = fp1
-    imports2, bb2, size2, cats2 = fp2
-    j = len(imports1 & imports2) / len(imports1 | imports2) if imports1 and imports2 else 0.0
-    c = len(cats1 & cats2) / len(cats1 | cats2) if cats1 and cats2 else 0.0
-    bb_dist = abs(bb1 - bb2) / 3.0
-    size_dist = abs(size1 - size2) / 3.0
-    bb_sim = max(0.0, 1.0 - bb_dist)
-    size_sim = max(0.0, 1.0 - size_dist)
-    return 0.55 * j + 0.15 * c + 0.15 * bb_sim + 0.15 * size_sim
-
-
 def search_fingerprint(addr: str, top_k: int, offset: int, limit: int) -> dict:
-    """Find functions structurally similar to a reference.
-
-    Structural similarity captures: import set, basic-block bucket, size bucket,
-    and behavior category. This is a DIFFERENT signal from embedding-based
-    'nl' search: two functions can have the same structure but completely
-    different names or comments, and vice versa.
-    """
-    ea, err, _ = resolve_target(addr)
-    if err or ea == idaapi.BADADDR:
-        return make_error(MCPError.INVALID_ARGS,
-                          f"could not resolve addr {addr!r}",
-                          hint="Pass a hex address or symbol name.")
-    ref_fp = _function_fingerprint(ea)
-    if not ref_fp:
-        return make_error(MCPError.INVALID_ARGS,
-                          f"could not compute fingerprint for {hex(ea)}",
-                          hint="Make sure the address points to a function start.")
-    ref_name = _func_name(ea)
-
-    scored = []
-    for other_ea in idautils.Functions():
-        if int(other_ea) == int(ea):
-            continue
-        other_fp = _function_fingerprint(other_ea)
-        sim = _fingerprint_similarity(ref_fp, other_fp)
-        if sim > 0.0:
-            scored.append((sim, int(other_ea), _func_name(other_ea)))
-    scored.sort(key=lambda x: (-x[0], x[1]))
-    top = scored[:max(1, top_k)]
-    items = [{"addr": hex(a), "name": n, "similarity": round(s, 3)} for s, a, n in top]
-    items = items[offset:offset + limit]
-    text = "\n".join(f"{it['addr']}  {it['name']}  sim={it['similarity']}" for it in items)
-    return {
-        "ok": True,
-        "action": "fingerprint",
-        "reference": {"addr": hex(ea), "name": ref_name},
-        "results": text,
-        "count": len(items),
-        "total": len(scored),
-        "truncated": len(scored) > top_k,
-        "items": items,
-        "note": "Structural similarity (imports + bb + size + behavior). Use nl/behaviour for semantic similarity.",
-    }
+    """Find embedding-similar functions. Delegates to search_analyze."""
+    return search_analyze(addr=addr, scope="similar", top_k=top_k, offset=offset, limit=limit)
 
 
 # ============================================================================
@@ -1120,3 +807,547 @@ def search_noreach(depth: int, offset: int, limit: int) -> dict:
         "note": (f"Functions NOT reachable from any of {len(entries)} entry point(s) "
                  f"within {depth} hop(s). Likely dead code or dispatcher-only paths."),
     }
+
+
+# ============================================================================
+# Cached call graph
+# ============================================================================
+
+_CALL_GRAPH_CACHE: dict[str, dict] = {}
+
+
+def _idb_fingerprint() -> str:
+    """Return a fingerprint for the current IDB to key the call graph cache."""
+    try:
+        path = idc.get_idb_path() if hasattr(idc, "get_idb_path") else ""
+        func_count = sum(1 for _ in idautils.Functions())
+        return f"{path}:{func_count}"
+    except Exception:
+        return "unknown"
+
+
+def _get_call_graph() -> dict:
+    """Build and cache the full call graph for the current IDB.
+
+    Returns {"callers": {ea: set[ea]}, "callees": {ea: set[ea]}}.
+    """
+    fp = _idb_fingerprint()
+    if fp in _CALL_GRAPH_CACHE:
+        return _CALL_GRAPH_CACHE[fp]
+
+    callers: dict[int, set[int]] = defaultdict(set)
+    callees: dict[int, set[int]] = defaultdict(set)
+
+    for ea in idautils.Functions():
+        func = idaapi.get_func(ea)
+        if not func:
+            continue
+        fea = int(ea)
+        for xref in idautils.XrefsFrom(func.start_ea, 0):
+            if not xref.iscode:
+                continue
+            f = idaapi.get_func(xref.to)
+            if f:
+                callee_ea = int(f.start_ea)
+                callees[fea].add(callee_ea)
+                callers[callee_ea].add(fea)
+
+    graph = {"callers": dict(callers), "callees": dict(callees)}
+    # Keep only the latest graph to avoid memory bloat
+    _CALL_GRAPH_CACHE.clear()
+    _CALL_GRAPH_CACHE[fp] = graph
+    return graph
+
+
+# ============================================================================
+# search_analyze - unified structural analysis
+# ============================================================================
+
+# Taint source API names (functions that receive external input).
+_TAINT_SOURCE_NAMES = frozenset({
+    "recv", "recvfrom", "recvmsg", "read", "fread", "fgets", "gets",
+    "ioctl", "DeviceIoControl", "NtDeviceIoControlFile",
+    "GetEnvironmentVariable", "getenv", "NtQueryInformationFile",
+    "URLDownloadToFile", "URLDownloadToCacheFile", "WinHttpReceiveResponse",
+    "InternetReadFile", "WinHttpReadData", "sic_recv", "uart_read",
+    "spi_receive", "i2c_read", "DMA_Callback", "vfs_read",
+})
+
+# Dangerous API → vulnerability category.
+_DANGEROUS_APIS = {
+    "strcpy": "buffer_overflow", "strcat": "buffer_overflow",
+    "gets": "buffer_overflow", "sprintf": "format_string",
+    "vsprintf": "format_string", "scanf": "buffer_overflow",
+    "sscanf": "buffer_overflow", "fscanf": "buffer_overflow",
+    "wsprintf": "format_string", "wvsprintf": "format_string",
+    "lstrcpy": "buffer_overflow", "lstrcat": "buffer_overflow",
+    "RtlCopyMemory": "buffer_overflow",
+    "system": "command_injection", "popen": "command_injection",
+    "exec": "command_injection", "execve": "command_injection",
+    "ShellExecute": "command_injection", "WinExec": "command_injection",
+    "CreateProcess": "command_injection",
+    "memcpy": "memory_issue", "memmove": "memory_issue",
+    "HeapAlloc": "memory_issue", "VirtualAlloc": "memory_issue",
+    "malloc": "memory_issue", "realloc": "memory_issue",
+    "LoadLibrary": "dll_injection", "LoadLibraryA": "dll_injection",
+    "LoadLibraryW": "dll_injection", "LoadLibraryEx": "dll_injection",
+    "GetProcAddress": "dynamic_resolution",
+}
+
+# Behavior classifier anchors for vulnerability patterns.
+_VULN_ANCHORS = [
+    "buffer overflow vulnerable memcpy strcpy unchecked length",
+    "command injection system exec shell unsanitized input",
+    "format string vulnerability sprintf printf user controlled",
+    "use after free dangling pointer freed memory access",
+    "integer overflow arithmetic truncation before allocation",
+    "hardcoded credential password key embedded secret",
+    "heap spray shellcode allocation pattern",
+    "race condition unsynchronized shared state",
+]
+
+
+def _get_index_metadata(ea: int) -> dict | None:
+    """Get structural metadata for a function from the embedding index."""
+    try:
+        from ida_pro_mcp.services import get_assembler
+        asm = get_assembler()
+        idb_path = idc.get_idb_path() if hasattr(idc, "get_idb_path") else ""
+        if not idb_path:
+            return None
+        idx = asm._get_index(idb_path)
+        if idx is None or idx.size == 0:
+            return None
+        # Query the index for this specific function
+        with idx._conn() as conn:
+            row = conn.execute(
+                "SELECT func_size, bb_count, has_loops, api_count, string_count, segment, is_thunk, cyclomatic "
+                "FROM func_embeddings WHERE ea = ?",
+                (hex(ea),)
+            ).fetchone()
+            if row:
+                return {
+                    "func_size": int(row[0] or 0),
+                    "bb_count": int(row[1] or 0),
+                    "has_loops": bool(row[2]),
+                    "api_count": int(row[3] or 0),
+                    "string_count": int(row[4] or 0),
+                    "segment": str(row[5] or ""),
+                    "is_thunk": bool(row[6]),
+                    "cyclomatic": int(row[7] or 0),
+                }
+    except Exception:
+        pass
+    return None
+
+
+def _get_behavior_tags(ea: int) -> list[str]:
+    """Get behavior tags for a function from the insight index or classifier."""
+    tags = []
+    # Try L1 insight index first (instant)
+    try:
+        from . import _load_insight_index
+        idx = _load_insight_index()
+        if idx:
+            tag_map = idx.get("tag_map", {})
+            for tag, addrs in tag_map.items():
+                if hex(ea) in addrs:
+                    tags.append(tag)
+    except Exception:
+        pass
+    return tags
+
+
+def _get_embedding_similar(ea: int, top_k: int = 10) -> list[dict]:
+    """Find embedding-similar functions using the intelligence index."""
+    try:
+        from ida_pro_mcp.services import get_assembler
+        asm = get_assembler()
+        idb_path = idc.get_idb_path() if hasattr(idc, "get_idb_path") else ""
+        if not idb_path:
+            return []
+        idx = asm._get_index(idb_path)
+        if idx is None or idx.size == 0:
+            return []
+        # Get the target function's vector
+        with idx._conn() as conn:
+            row = conn.execute(
+                "SELECT vec_blob FROM func_embeddings WHERE ea = ?",
+                (hex(ea),)
+            ).fetchone()
+            if not row or not row[0]:
+                return []
+            import numpy as np
+            vec = np.frombuffer(row[0], dtype=np.float32).copy()
+        results = idx.similar_vec(vec, top_k=top_k + 1, threshold=0.0)
+        return [r for r in results if _coerce_ea(r.get("ea")) != ea][:top_k]
+    except Exception:
+        return []
+
+
+def search_analyze(
+    addr: str | None = None,
+    scope: str = "auto",
+    metric: str = "size",
+    top: int = 50,
+    top_k: int = 10,
+    radius: int = 5,
+    depth: int = 5,
+    pattern: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+    include_context: bool = False,
+    include_items: bool = True,
+    **kwargs,
+) -> dict:
+    """Unified structural analysis action.
+
+    Scopes (auto-detected from parameters):
+      neighborhood — 360° context card around a function (addr required)
+      outlier      — structurally anomalous functions (metric required)
+      similar      — embedding-similar functions (addr required)
+      vulnerable   — taint-aware vulnerability candidates (pattern optional)
+      semantic     — semantic function search via embeddings (pattern required)
+    """
+    # Auto-detect scope
+    if scope == "auto":
+        if addr and metric and metric != "size":
+            scope = "outlier"
+        elif addr and pattern:
+            scope = "semantic"
+        elif addr:
+            scope = "neighborhood"
+        elif pattern:
+            scope = "semantic"
+        elif metric:
+            scope = "outlier"
+        else:
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "analyze requires addr, pattern, or metric",
+                hint="Examples: analyze(addr='0x401000'), analyze(pattern='crypto'), analyze(metric='size')",
+            )
+
+    # --- NEIGHBORHOOD ---
+    if scope == "neighborhood":
+        if not addr:
+            return make_error(MCPError.INVALID_ARGS, "neighborhood requires addr")
+        ea, err, _ = resolve_target(addr)
+        if err or ea == idaapi.BADADDR:
+            return make_error(MCPError.INVALID_ARGS, f"could not resolve addr {addr!r}")
+        func = idaapi.get_func(ea)
+        if not func:
+            return make_error(MCPError.INVALID_ARGS, f"{hex(ea)} is not inside a function")
+        fea = int(func.start_ea)
+        name = _func_name(fea)
+
+        # Structural metadata from embedding index (cached in SQLite)
+        meta = _get_index_metadata(fea)
+        metrics = meta or {"func_size": func.end_ea - func.start_ea}
+
+        # Callers/callees from cached call graph
+        graph = _get_call_graph()
+        caller_eas = sorted(graph["callers"].get(fea, set()))[:radius]
+        callee_eas = sorted(graph["callees"].get(fea, set()))[:radius]
+
+        # Behavior tags
+        tags = _get_behavior_tags(fea)
+
+        # Embedding-similar functions
+        similar_hits = _get_embedding_similar(fea, top_k=top_k)
+        similar = [{"addr": h.get("addr"), "name": h.get("name", ""), "score": round(float(h.get("similarity", 0)), 3)} for h in similar_hits]
+
+        # Blackboard notes
+        blackboard = []
+        try:
+            from blackboard import BlackboardStore  # type: ignore
+            store = BlackboardStore()
+            entries = store.list(addr=hex(fea), limit=5, include_resolved=False)
+            for e in entries:
+                blackboard.append({"title": e["title"], "category": e["category"],
+                                   "confidence": e.get("confidence")})
+        except Exception:
+            pass
+
+        items_out = []
+        if include_items:
+            items_out = [
+                {"type": "caller", "addr": hex(a), "name": _func_name(a)} for a in caller_eas
+            ] + [
+                {"type": "callee", "addr": hex(a), "name": _func_name(a)} for a in callee_eas
+            ]
+
+        return {
+            "ok": True,
+            "action": "analyze",
+            "scope": "neighborhood",
+            "addr": hex(fea),
+            "name": name,
+            "metrics": metrics,
+            "callers": [{"addr": hex(a), "name": _func_name(a)} for a in caller_eas],
+            "callees": [{"addr": hex(a), "name": _func_name(a)} for a in callee_eas],
+            "similar": similar,
+            "tags": tags,
+            "blackboard": blackboard,
+            "items": items_out,
+            "note": "Context card from embedding index + cached call graph.",
+        }
+
+    # --- OUTLIER ---
+    if scope == "outlier":
+        metric = (metric or "size").lower()
+        valid_metrics = {"size", "complexity", "bb_count", "orphan", "leaf", "deep", "hub", "tiny", "huge"}
+        if metric not in valid_metrics:
+            return make_error(MCPError.INVALID_ARGS, f"unknown metric {metric!r}",
+                              hint=f"Known: {', '.join(sorted(valid_metrics))}")
+
+        graph = _get_call_graph()
+
+        # For metrics available in the index, query SQL directly
+        index_metrics = {"size": "func_size", "complexity": "cyclomatic", "bb_count": "bb_count"}
+        if metric in index_metrics:
+            col = index_metrics[metric]
+            try:
+                from ida_pro_mcp.services import get_assembler
+                asm = get_assembler()
+                idb_path = idc.get_idb_path() if hasattr(idc, "get_idb_path") else ""
+                idx = asm._get_index(idb_path) if idb_path else None
+                if idx and idx.size > 0:
+                    with idx._conn() as conn:
+                        if metric == "tiny":
+                            rows = conn.execute(
+                                f"SELECT ea, name, {col} FROM func_embeddings WHERE {col} < 16 ORDER BY {col} ASC LIMIT ?",
+                                (offset + limit,)
+                            ).fetchall()
+                        elif metric == "huge":
+                            rows = conn.execute(
+                                f"SELECT ea, name, {col} FROM func_embeddings WHERE {col} > 4096 ORDER BY {col} DESC LIMIT ?",
+                                (offset + limit,)
+                            ).fetchall()
+                        else:
+                            rows = conn.execute(
+                                f"SELECT ea, name, {col} FROM func_embeddings ORDER BY {col} DESC LIMIT ?",
+                                (offset + limit,)
+                            ).fetchall()
+                    items = [{"addr": str(r[0]), "name": str(r[1] or r[0]), metric: int(r[2] or 0), "outlier_score": int(r[2] or 0)} for r in rows[offset:]]
+                    return {
+                        "ok": True, "action": "analyze", "scope": "outlier",
+                        "metric": metric, "results": "\n".join(f"{it['addr']}  {it['name']}  {metric}={it[metric]}" for it in items),
+                        "count": len(items), "total": len(rows), "items": items,
+                        "note": f"Outliers by {metric} from embedding index.",
+                    }
+            except Exception:
+                pass
+
+        # Call-graph-based metrics: use cached graph
+        caller_counts = defaultdict(int)
+        callee_counts = defaultdict(int)
+        for fea, callees_set in graph["callees"].items():
+            callee_counts[fea] = len(callees_set)
+        for fea, callers_set in graph["callers"].items():
+            caller_counts[fea] = len(callers_set)
+
+        items = []
+        if metric == "orphan":
+            for ea in idautils.Functions():
+                if caller_counts.get(int(ea), 0) == 0:
+                    items.append({"addr": hex(ea), "name": _func_name(int(ea)), "callers": 0, "outlier_score": 1})
+        elif metric == "leaf":
+            for ea in idautils.Functions():
+                if callee_counts.get(int(ea), 0) == 0:
+                    items.append({"addr": hex(ea), "name": _func_name(int(ea)), "callees": 0, "outlier_score": 1})
+        elif metric == "hub":
+            for ea in idautils.Functions():
+                count = caller_counts.get(int(ea), 0)
+                if count > 0:
+                    items.append({"addr": hex(ea), "name": _func_name(int(ea)), "callers": count, "outlier_score": count})
+        elif metric == "deep":
+            for ea in idautils.Functions():
+                count = callee_counts.get(int(ea), 0)
+                if count > 0:
+                    items.append({"addr": hex(ea), "name": _func_name(int(ea)), "callees": count, "outlier_score": count})
+
+        items.sort(key=lambda x: x.get("outlier_score", 0), reverse=True)
+        total = len(items)
+        page = items[offset:offset + limit]
+        text = "\n".join(f"{it['addr']}  {it['name']}  " + " ".join(f"{k}={v}" for k, v in it.items() if k not in ("addr", "name", "outlier_score")) for it in page)
+        return {
+            "ok": True, "action": "analyze", "scope": "outlier",
+            "metric": metric, "results": text, "count": len(page), "total": total,
+            "truncated": total > offset + limit, "items": page,
+            "note": f"Outliers by {metric} from cached call graph.",
+        }
+
+    # --- SIMILAR (embedding-based) ---
+    if scope == "similar":
+        if not addr:
+            return make_error(MCPError.INVALID_ARGS, "similar requires addr")
+        ea, err, _ = resolve_target(addr)
+        if err or ea == idaapi.BADADDR:
+            return make_error(MCPError.INVALID_ARGS, f"could not resolve addr {addr!r}")
+        func = idaapi.get_func(ea)
+        if not func:
+            return make_error(MCPError.INVALID_ARGS, f"{hex(ea)} is not inside a function")
+        fea = int(func.start_ea)
+
+        similar_hits = _get_embedding_similar(fea, top_k=top_k)
+        items = []
+        for h in similar_hits:
+            meta = _get_index_metadata(_coerce_ea(h.get("ea")))
+            item = {"addr": h.get("addr"), "name": h.get("name", ""), "score": round(float(h.get("similarity", 0)), 3)}
+            if meta:
+                item["size"] = meta["func_size"]
+                item["bb_count"] = meta["bb_count"]
+                item["cyclomatic"] = meta["cyclomatic"]
+            items.append(item)
+
+        page = items[offset:offset + limit]
+        text = "\n".join(f"{it['addr']}  {it['name']}  score={it['score']}" for it in page)
+        return {
+            "ok": True, "action": "analyze", "scope": "similar",
+            "reference": {"addr": hex(fea), "name": _func_name(fea)},
+            "results": text, "count": len(page), "total": len(items),
+            "items": page,
+            "note": "Semantic similarity via bge-code-v1 embeddings. Different from structural fingerprint.",
+        }
+
+    # --- VULNERABLE ---
+    if scope == "vulnerable":
+        graph = _get_call_graph()
+        taint_depth = max(2, min(int(depth), 12))
+
+        # Phase 1: Find taint sources and their reachable callers
+        sources = set()
+        for ea, name in idautils.Names():
+            base = name.split("@")[0].split("$")[0]
+            if base in _TAINT_SOURCE_NAMES:
+                func = idaapi.get_func(ea)
+                if func:
+                    sources.add(int(func.start_ea))
+
+        reachable_from_source: set[int] = set()
+        for src in sources:
+            # BFS using cached graph
+            visited = {src}
+            frontier = {src}
+            for _ in range(taint_depth):
+                if not frontier:
+                    break
+                next_frontier = set()
+                for s in frontier:
+                    for caller in graph["callers"].get(s, set()):
+                        if caller not in visited:
+                            visited.add(caller)
+                            next_frontier.add(caller)
+                frontier = next_frontier
+            reachable_from_source.update(visited)
+
+        # Phase 2: Find dangerous API calls
+        vuln_hits = []
+        for func_ea in idautils.Functions():
+            fea = int(func_ea)
+            if fea not in reachable_from_source:
+                continue
+            func = idaapi.get_func(func_ea)
+            if not func:
+                continue
+            for callee_ea in graph["callees"].get(fea, set()):
+                callee_name = idc.get_name(callee_ea) or ""
+                if callee_name in _DANGEROUS_APIS:
+                    fn_name = _func_name(fea)
+                    vuln_hits.append({
+                        "addr": hex(fea), "function": fn_name,
+                        "api": callee_name, "vuln_type": _DANGEROUS_APIS[callee_name],
+                        "severity": "reachable_from_taint",
+                        "outlier_score": 1,
+                    })
+
+        # Phase 3: Behavior-based vulnerability candidates via embeddings
+        try:
+            from ida_pro_mcp.services import get_assembler
+            asm = get_assembler()
+            idb_path = idc.get_idb_path() if hasattr(idc, "get_idb_path") else ""
+            idx = asm._get_index(idb_path) if idb_path else None
+            classifier = asm._behavior_classifier() if asm else None
+            if idx and idx.size > 0 and classifier:
+                queries = _VULN_ANCHORS[:4]
+                if pattern:
+                    queries.insert(0, pattern)
+                seen_addrs = {h["addr"] for h in vuln_hits}
+                for q in queries:
+                    try:
+                        hits = idx.search(q, top_k=20, threshold=0.0)
+                        for hit in hits:
+                            hit_ea = hit.get("addr") or hit.get("ea")
+                            if not hit_ea or hit_ea in seen_addrs:
+                                continue
+                            hit_func = idaapi.get_func(_coerce_ea(hit_ea))
+                            if not hit_func:
+                                continue
+                            hit_fea = int(hit_func.start_ea)
+                            if hit_fea not in reachable_from_source:
+                                continue
+                            seen_addrs.add(hit_ea)
+                            vuln_hits.append({
+                                "addr": hex(hit_fea), "function": _func_name(hit_fea),
+                                "api": "", "vuln_type": "behavior_candidate",
+                                "severity": "reachable_from_taint",
+                                "outlier_score": float(hit.get("similarity", 0)),
+                            })
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+        if pattern:
+            matcher = compile_smart_pattern(pattern, case_sensitive=False)
+            vuln_hits = [h for h in vuln_hits if matcher(h.get("api", "")) or matcher(h.get("function", "")) or matcher(h.get("vuln_type", ""))]
+
+        vuln_hits.sort(key=lambda x: x.get("outlier_score", 0), reverse=True)
+        total = len(vuln_hits)
+        page = vuln_hits[offset:offset + limit]
+        text = "\n".join(f"{h['addr']}  {h['api'] or h['vuln_type']}  in:{h['function']}" for h in page)
+        return {
+            "ok": True, "action": "analyze", "scope": "vulnerable",
+            "results": text, "count": len(page), "total": total,
+            "truncated": total > offset + limit, "items": page,
+            "taint_sources": len(sources), "taint_depth": taint_depth,
+            "note": "Vuln candidates reachable from taint sources via cached call graph + embedding behavior classification.",
+        }
+
+    # --- SEMANTIC ---
+    if scope == "semantic":
+        if not pattern:
+            return make_error(MCPError.INVALID_ARGS, "semantic scope requires pattern")
+        try:
+            from ida_pro_mcp.services import get_assembler
+            asm = get_assembler()
+            idb_path = idc.get_idb_path() if hasattr(idc, "get_idb_path") else ""
+            idx = asm._get_index(idb_path) if idb_path else None
+            if not idx or idx.size == 0:
+                return make_error(MCPError.NOT_FOUND, "No functions indexed. Run intelligence(action='index_fast') first.")
+            hits = idx.hybrid_search(pattern, top_k=offset + limit, threshold=0.0)
+            page = hits[offset:offset + limit]
+            items = []
+            for h in page:
+                meta = _get_index_metadata(_coerce_ea(h.get("ea")))
+                item = {"addr": h.get("addr") or h.get("ea"), "name": h.get("name", ""),
+                        "score": round(float(h.get("score", 0)), 3),
+                        "similarity": round(float(h.get("similarity", 0)), 3)}
+                if meta:
+                    item["size"] = meta["func_size"]
+                    item["bb_count"] = meta["bb_count"]
+                    item["cyclomatic"] = meta["cyclomatic"]
+                items.append(item)
+            text = "\n".join(f"{it['addr']}  {it['name']}  score={it['score']}" for it in items)
+            return {
+                "ok": True, "action": "analyze", "scope": "semantic",
+                "results": text, "count": len(items), "total": len(hits),
+                "truncated": len(hits) > offset + limit, "items": items,
+                "note": "Hybrid semantic+lexical search via bge-code-v1 embeddings.",
+            }
+        except Exception as e:
+            return make_error(MCPError.NOT_FOUND, f"Semantic search failed: {e}")
+
+    return make_error(MCPError.INVALID_ARGS, f"unknown scope: {scope!r}",
+                      hint="Scopes: neighborhood, outlier, similar, vulnerable, semantic")

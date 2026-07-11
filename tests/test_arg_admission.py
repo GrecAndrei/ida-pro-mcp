@@ -64,7 +64,7 @@ def test_advertised_actions_subset_of_full(schemas_data):
 
 def test_compact_enum_uses_advertised():
     schemas = importlib.import_module("ida_pro_mcp.host.schemas")
-    compact = schemas._action_enum_with_grep("search", compact_surface=True)
-    full = schemas._action_enum_with_grep("search", compact_surface=False)
+    compact = schemas.ADVERTISED_ACTIONS.get("search", [])
+    full = schemas.TOOL_ACTIONS.get("search", [])
     assert "find" in compact and "nl" in compact
     assert len(compact) < len(full)
