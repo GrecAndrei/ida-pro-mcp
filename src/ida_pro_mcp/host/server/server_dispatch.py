@@ -285,7 +285,15 @@ class ServerDispatchMixin:
                 _elapsed = time.time() - _t0
                 if isinstance(res, dict) and "error" not in res and "ok" not in res:
                     res = {"ok": True, **res}
-                res = truncate_response(res, max_tokens=self.default_truncate_tokens)
+                # Apply truncation with per-call overrides
+                _tc = getattr(self, "_pending_truncation", None) or {}
+                if _tc.get("no_truncate"):
+                    pass  # skip truncation entirely
+                else:
+                    _budget = _tc.get("max_tokens") or self.default_truncate_tokens
+                    res = truncate_response(res, max_tokens=_budget,
+                                           trunc_offset=_tc.get("trunc_offset"),
+                                           trunc_limit=_tc.get("trunc_limit"))
                 try:
                     _slow_threshold = float(
                         os.environ.get("IDA_MCP_SLOW_CALL_SEC", "5.0")
@@ -886,7 +894,24 @@ class ServerDispatchMixin:
 
             # ---- Post-processing filter extraction ----
             # Extract PP params before they reach IDA or policy checks.
-            args, self._pending_pp = extract_post_process_params(args)
+            # Skip PP extraction for the truncation tool — it has its own
+            # offset/count params that conflict with PP's offset/limit.
+            if tool_name == "truncation":
+                self._pending_pp = {}
+            else:
+                args, self._pending_pp = extract_post_process_params(args)
+
+            # ---- Truncation control params (captured before IDA strips them) ----
+            _trunc_no_truncate = _coerce_bool(args.pop("no_truncate", None), False)
+            _trunc_max_tokens = args.pop("max_tokens", None)
+            _trunc_offset = args.pop("trunc_offset", None)
+            _trunc_limit = args.pop("trunc_limit", None)
+            self._pending_truncation = {
+                "no_truncate": _trunc_no_truncate,
+                "max_tokens": _bounded_int(_trunc_max_tokens, 0, min_value=500, max_value=500000) if _trunc_max_tokens is not None else None,
+                "trunc_offset": _bounded_int(_trunc_offset, 0, min_value=0, max_value=500000) if _trunc_offset is not None else None,
+                "trunc_limit": _bounded_int(_trunc_limit, 0, min_value=1, max_value=50000) if _trunc_limit is not None else None,
+            }
 
             # ---- next_token continuation (auto-recovers action from cache) ----
             next_token = self._pending_pp.get("next_token")

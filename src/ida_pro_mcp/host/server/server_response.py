@@ -615,7 +615,15 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             compacted = self._compact_batch_result(compacted, opts)
             budget = int(opts.get("char_budget", 0) or 0)
             if budget > 0 and isinstance(compacted, dict):
-                compacted = truncate_response(compacted, max_tokens=budget)
+                # Check per-call truncation overrides
+                _tc = getattr(self, "_pending_truncation", None) or {}
+                if _tc.get("no_truncate"):
+                    pass  # skip truncation
+                else:
+                    _budget = _tc.get("max_tokens") or budget
+                    compacted = truncate_response(compacted, max_tokens=_budget,
+                                                  trunc_offset=_tc.get("trunc_offset"),
+                                                  trunc_limit=_tc.get("trunc_limit"))
 
         # ---- Context Density Auto-Compaction Middleware ----
         # Skip if the caller explicitly requests raw output.

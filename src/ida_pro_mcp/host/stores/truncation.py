@@ -68,7 +68,8 @@ def continue_truncated(
         )
 
     if info.get("type") == "list" and isinstance(value, list):
-        start = info.get("next_offset", 0) if offset is None else max(0, int(offset))
+        raw_next = info.get("next_offset", 0)
+        start = max(0, int(raw_next)) if raw_next is not None and offset is None else max(0, int(offset or 0))
         chunk = count if count is not None else info.get("chunk_size", 0)
         if chunk <= 0:
             return make_error(
@@ -91,7 +92,8 @@ def continue_truncated(
         }
 
     if info.get("type") == "string" and isinstance(value, str):
-        start = info.get("next_offset", 0) if offset is None else max(0, int(offset))
+        raw_next = info.get("next_offset", 0)
+        start = max(0, int(raw_next)) if raw_next is not None and offset is None else max(0, int(offset or 0))
         chunk = count if count is not None else info.get("chunk_size", 0)
         if chunk <= 0:
             return make_error(
@@ -118,7 +120,12 @@ def continue_truncated(
         f"Field {field} is not a supported truncated type",
     )
 
-def truncate_response(response: dict[str, Any], max_tokens: int = 4000) -> dict[str, Any]:
+def truncate_response(
+    response: dict[str, Any],
+    max_tokens: int = 4000,
+    trunc_offset: int | None = None,
+    trunc_limit: int | None = None,
+) -> dict[str, Any]:
     """
     Intelligently truncate large MCP responses to fit within LLM context windows.
 
@@ -126,6 +133,10 @@ def truncate_response(response: dict[str, Any], max_tokens: int = 4000) -> dict[
         response: The original tool response dictionary.
         max_tokens: Approximate character limit (roughly 1 char = 1 token for simplicity).
             Must be >= 500.
+        trunc_offset: Start offset for paginating through truncated content.
+            Applied to lists and strings that would be truncated.
+        trunc_limit: Max items/chars to return when paginating. Overrides the
+            default keep_count for lists and chunk_size for strings.
 
     Returns:
         A pruned response with truncation markers. Original dict is never modified.
@@ -134,7 +145,7 @@ def truncate_response(response: dict[str, Any], max_tokens: int = 4000) -> dict[
 
     # 1. Check if the total size is already within limits
     resp_str = json.dumps(response)
-    if len(resp_str) < max_tokens:
+    if len(resp_str) < max_tokens and trunc_offset is None and trunc_limit is None:
         return response
 
     pruned = copy.deepcopy(response)
@@ -152,35 +163,57 @@ def truncate_response(response: dict[str, Any], max_tokens: int = 4000) -> dict[
     for key in list(pruned.keys()):
         value = pruned[key]
         if isinstance(value, list) and len(value) > 10:
-            # We found a large list. Prune it.
             original_len = len(value)
 
             # Keep the first N items until we hit the limit
             # We estimate 200 chars per item for safety
             keep_count = max(5, (max_tokens // 200))
 
-            if original_len > keep_count:
-                pruned[key] = value[:keep_count]
-                pruned[f"{key}_total_count"] = original_len
-                pruned[f"{key}_note"] = f"Showing first {keep_count} of {original_len} items. Use truncation(action='continue', token='...', field='{key}') to read more, or use offset/count parameters on the original tool call."
+            # Apply trunc_limit override
+            if trunc_limit is not None and trunc_limit > 0:
+                keep_count = min(keep_count, trunc_limit)
+
+            if original_len > keep_count or trunc_offset is not None:
+                start = max(0, trunc_offset or 0)
+                end = start + keep_count
+                # Clamp to actual bounds
+                if start >= original_len:
+                    pruned[key] = []
+                    pruned[f"{key}_note"] = f"Offset {start} exceeds list length {original_len}. Use trunc_offset=0 to start from the beginning."
+                else:
+                    pruned[key] = value[start:end]
+                    shown = len(pruned[key])
+                    pruned[f"{key}_total_count"] = original_len
+                    pruned[f"{key}_note"] = (
+                        f"Showing {shown} of {original_len} items (offset {start}). "
+                        f"Use truncation(action='continue', token='...', field='{key}') to read more, "
+                        f"or use trunc_offset/trunc_limit parameters on the original tool call."
+                    )
                 truncated_fields[key] = {
                     "type": "list",
                     "total": original_len,
                     "chunk_size": keep_count,
-                    "next_offset": keep_count,
+                    "next_offset": min(end, original_len) if end < original_len else None,
                 }
 
     # 4. Handle massive single strings (e.g. decompilation, logs)
     for key in list(pruned.keys()):
         value = pruned[key]
         if isinstance(value, str) and len(value) > max_tokens:
-            pruned[key] = value[:max_tokens] + "... [TRUNCATED]"
-            pruned[f"{key}_original_size"] = len(value)
+            chunk_size = trunc_limit if trunc_limit is not None and trunc_limit > 0 else max_tokens
+            start = max(0, trunc_offset or 0)
+            end = start + chunk_size
+            if start >= len(value):
+                pruned[key] = ""
+                pruned[f"{key}_note"] = f"Offset {start} exceeds string length {len(value)}."
+            else:
+                pruned[key] = value[start:end]
+                pruned[f"{key}_original_size"] = len(value)
             truncated_fields[key] = {
                 "type": "string",
                 "total": len(value),
-                "chunk_size": max_tokens,
-                "next_offset": max_tokens,
+                "chunk_size": chunk_size,
+                "next_offset": min(end, len(value)) if end < len(value) else None,
             }
 
     if truncated_fields:
@@ -188,7 +221,7 @@ def truncate_response(response: dict[str, Any], max_tokens: int = 4000) -> dict[
         pruned["_continue"] = {
             "token": token,
             "fields": truncated_fields,
-            "hint": f"Use truncation(action='continue', token='{token}', field='...') to read more. Or re-run with offset/count params.",
+            "hint": f"Use truncation(action='continue', token='{token}', field='...') to read more. Or re-run with trunc_offset/trunc_limit params.",
         }
 
     return pruned
