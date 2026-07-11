@@ -518,6 +518,25 @@ def taint(
                         "sanitized_by": sorted(set(sanitized_by)),
                         "interprocedural_findings": interproc[:8],
                     })
+                    # Segment permission analysis: check if taint crosses trust boundaries
+                    try:
+                        import ida_segment
+                        src_seg = ida_segment.getseg(source_ea)
+                        sink_seg = ida_segment.getseg(sink_ea)
+                        if src_seg and sink_seg:
+                            sink_perms = int(getattr(sink_seg, "perm", 0) or 0)
+                            src_name = ida_segment.get_segm_name(src_seg) or ""
+                            sink_name_seg = ida_segment.get_segm_name(sink_seg) or ""
+                            # Flag: tainted data written to executable segment
+                            if sink_perms & idaapi.SEGPERM_EXEC:
+                                found_sinks[-1]["segment_risk"] = "tainted_write_to_executable"
+                                found_sinks[-1]["segment_detail"] = f"Sink in executable segment '{sink_name_seg}' — code injection risk"
+                            # Flag: cross-segment trust boundary
+                            if src_name != sink_name_seg:
+                                found_sinks[-1]["cross_segment"] = True
+                                found_sinks[-1]["segment_flow"] = f"{src_name} → {sink_name_seg}"
+                    except Exception:
+                        pass
 
             # Sort by depth (closest sinks first)
             found_sinks.sort(key=lambda x: x["depth"] if x["depth"] >= 0 else 999)

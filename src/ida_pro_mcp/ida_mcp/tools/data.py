@@ -170,6 +170,19 @@ def data(
                         try:
                             if ida_nalt.get_tinfo(tif, ea):
                                 parts.append(str(tif))
+                                # If it's a struct, enumerate fields
+                                if tif.is_struct():
+                                    udt = ida_typeinf.udt_type_data_t()
+                                    if tif.get_udt_details(udt):
+                                        fields = []
+                                        for i in range(min(udt.size(), 16)):
+                                            member = udt[i]
+                                            fname = str(getattr(member, "name", "") or "")
+                                            ftype = str(getattr(member, "type", "") or "")
+                                            foff = int(getattr(member, "offset", 0) or 0)
+                                            fields.append(f"{fname}:{ftype}@{hex(foff)}")
+                                        if fields:
+                                            parts.append(f"fields=[{', '.join(fields)}]")
                         except (TypeError, AttributeError, RuntimeError):
                             pass
 

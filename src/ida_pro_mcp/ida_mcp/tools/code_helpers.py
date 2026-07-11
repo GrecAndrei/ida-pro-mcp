@@ -2037,3 +2037,341 @@ def gather_function_context(func_ea: int, max_refs: int = 10) -> dict:
     except Exception:
         pass
     return ctx
+
+
+# ============================================================================
+# CUSTOM DETECTOR ENGINE — LLM-defined per-session detection rules
+# ============================================================================
+
+# Session-scoped detector registry
+_CUSTOM_DETECTORS: dict[str, dict] = {}
+
+
+def register_detector(name: str, rule: dict) -> dict:
+    """Register a custom detection rule. Returns the registered rule."""
+    _CUSTOM_DETECTORS[name.lower()] = rule
+    return {"ok": True, "name": name, "rule": rule}
+
+
+def list_detectors() -> list[dict]:
+    """List all registered custom detectors."""
+    return [{"name": k, **v} for k, v in _CUSTOM_DETECTORS.items()]
+
+
+def delete_detector(name: str) -> bool:
+    """Delete a custom detector. Returns True if existed."""
+    return _CUSTOM_DETECTORS.pop(name.lower(), None) is not None
+
+
+def _run_custom_detector(kwargs: dict, max_items: int) -> dict:
+    """Execute a custom detection rule defined by the LLM at runtime.
+
+    Supported rule types:
+    - api_chain: find functions calling APIs in sequence (e.g., recv then memcpy)
+    - string_ref: find functions referencing a specific string
+    - type_match: find functions with a parameter matching a type pattern
+    - xor_threshold: find functions with XOR operations above a threshold
+    - caller_of: find functions called by a specific function
+    - callee_of: find functions that call a specific function
+    - custom_ctree: run a ctree visitor with user-defined conditions
+    """
+    rule_type = str(kwargs.get("rule_type") or kwargs.get("detect") or "").strip().lower()
+    rule_name = str(kwargs.get("rule_name") or kwargs.get("name") or "").strip()
+
+    # Handle registration
+    if kwargs.get("register"):
+        rule = kwargs.get("rule") or kwargs
+        if isinstance(rule, dict):
+            return register_detector(rule_name or rule_type, rule)
+        return make_error(MCPError.INVALID_ARGS, "rule must be a dict")
+
+    # Handle list/delete
+    if kwargs.get("list_detectors") or rule_type == "list":
+        return {"ok": True, "detectors": list_detectors()}
+    if kwargs.get("delete_detector") or rule_type == "delete":
+        if not rule_name:
+            return make_error(MCPError.INVALID_ARGS, "name required to delete detector")
+        deleted = delete_detector(rule_name)
+        return {"ok": True, "deleted": deleted, "name": rule_name}
+
+    # Look up registered detector or use inline rule
+    detector = _CUSTOM_DETECTORS.get(rule_name) if rule_name else None
+    if detector and not rule_type:
+        rule_type = detector.get("type", "")
+        kwargs = {**detector, **kwargs}  # merge: registered defaults + call overrides
+
+    if not rule_type:
+        return make_error(MCPError.INVALID_ARGS,
+                          "rule_type or detect required",
+                          hint="Types: api_chain, string_ref, type_match, xor_threshold, caller_of, callee_of, custom_ctree")
+
+    # --- api_chain: find functions calling APIs in order ---
+    if rule_type == "api_chain":
+        apis = kwargs.get("apis") or kwargs.get("chain") or []
+        if isinstance(apis, str):
+            apis = [a.strip() for a in apis.split(",")]
+        if not apis:
+            return make_error(MCPError.INVALID_ARGS, "apis list required (e.g., ['recv', 'memcpy'])")
+        strict_order = bool(kwargs.get("strict_order", True))
+        results = _detect_api_chains(apis, strict_order=strict_order, max_items=max_items)
+        return {"ok": True, "rule_type": "api_chain", "apis": apis, "strict_order": strict_order,
+                "matches": results, "count": len(results)}
+
+    # --- string_ref: find functions referencing a specific string ---
+    elif rule_type == "string_ref":
+        pattern = str(kwargs.get("pattern") or kwargs.get("string") or "").strip()
+        if not pattern:
+            return make_error(MCPError.INVALID_ARGS, "pattern required")
+        results = _detect_string_refs(pattern, max_items=max_items)
+        return {"ok": True, "rule_type": "string_ref", "pattern": pattern,
+                "matches": results, "count": len(results)}
+
+    # --- type_match: find functions with parameter matching type ---
+    elif rule_type == "type_match":
+        type_pattern = str(kwargs.get("type_pattern") or kwargs.get("type") or "").strip()
+        if not type_pattern:
+            return make_error(MCPError.INVALID_ARGS, "type_pattern required (e.g., 'SOCKET', 'char *')")
+        results = _detect_type_matches(type_pattern, max_items=max_items)
+        return {"ok": True, "rule_type": "type_match", "type_pattern": type_pattern,
+                "matches": results, "count": len(results)}
+
+    # --- xor_threshold: find functions with XOR above threshold ---
+    elif rule_type == "xor_threshold":
+        threshold = int(kwargs.get("threshold", 4) or 4)
+        results = _detect_xor_heavy(threshold=threshold, max_items=max_items)
+        return {"ok": True, "rule_type": "xor_threshold", "threshold": threshold,
+                "matches": results, "count": len(results)}
+
+    # --- caller_of: find functions called by target ---
+    elif rule_type == "caller_of":
+        target = str(kwargs.get("target") or kwargs.get("function") or "").strip()
+        if not target:
+            return make_error(MCPError.INVALID_ARGS, "target function required")
+        results = _detect_callers_of(target, max_items=max_items)
+        return {"ok": True, "rule_type": "caller_of", "target": target,
+                "matches": results, "count": len(results)}
+
+    # --- callee_of: find functions that call target ---
+    elif rule_type == "callee_of":
+        target = str(kwargs.get("target") or kwargs.get("function") or "").strip()
+        if not target:
+            return make_error(MCPError.INVALID_ARGS, "target function required")
+        results = _detect_callees_of(target, max_items=max_items)
+        return {"ok": True, "rule_type": "callee_of", "target": target,
+                "matches": results, "count": len(results)}
+
+    return make_error(MCPError.INVALID_ARGS,
+                      f"Unknown rule_type: {rule_type}",
+                      hint="Types: api_chain, string_ref, type_match, xor_threshold, caller_of, callee_of")
+
+
+def _detect_api_chains(apis: list[str], *, strict_order: bool = True, max_items: int = 100) -> list[dict]:
+    """Find functions that call APIs in the given sequence using ctree traversal."""
+    matches = []
+    seen = set()
+
+    class ChainCollector(ida_hexrays.ctree_visitor_t):
+        def __init__(self, chain_list):
+            ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+            self._chain = chain_list
+        def visit_expr(self, expr):
+            if expr.op == ida_hexrays.cot_call:
+                callee = expr.x
+                if callee and callee.op == ida_hexrays.cot_obj:
+                    name = idc.get_name(callee.obj_ea) or ""
+                    if name:
+                        self._chain.append(name)
+            return 0
+
+    for func_ea in _iter_all_functions():
+        if len(matches) >= max_items:
+            break
+        try:
+            cfunc = ida_hexrays.decompile(func_ea)
+            if not cfunc:
+                continue
+            call_chain = []
+            collector = ChainCollector(call_chain)
+            collector.apply_to(cfunc.body, None)
+
+            # Check if APIs appear in order
+            if strict_order:
+                idx = 0
+                for api in apis:
+                    found = False
+                    while idx < len(call_chain):
+                        if api in call_chain[idx]:
+                            found = True
+                            idx += 1
+                            break
+                        idx += 1
+                    if not found:
+                        break
+                else:
+                    # All APIs found in order
+                    fname = idc.get_func_name(func_ea) or hex_ea(func_ea)
+                    if fname not in seen:
+                        seen.add(fname)
+                        matches.append({"addr": hex_ea(func_ea), "name": fname, "call_chain": call_chain[:20]})
+            else:
+                # Any order
+                chain_set = set(call_chain)
+                if all(any(api in c for c in chain_set) for api in apis):
+                    fname = idc.get_func_name(func_ea) or hex_ea(func_ea)
+                    if fname not in seen:
+                        seen.add(fname)
+                        matches.append({"addr": hex_ea(func_ea), "name": fname, "call_chain": call_chain[:20]})
+        except Exception:
+            continue
+    return matches
+
+
+def _detect_string_refs(pattern: str, *, max_items: int = 100) -> list[dict]:
+    """Find functions that reference strings matching a pattern."""
+    import re as _re
+    matches = []
+    try:
+        rx = _re.compile(pattern, _re.IGNORECASE)
+    except _re.error:
+        rx = _re.compile(_re.escape(pattern), _re.IGNORECASE)
+
+    # Search all string literals in the binary
+    for i in range(idautils.Strings().count):
+        s_obj = idautils.Strings()[i]
+        s = str(s_obj) if s_obj else ""
+        if not rx.search(s):
+            continue
+        s_ea = int(s_obj.ea) if s_obj else 0
+        if not s_ea:
+            continue
+        # Find functions referencing this string
+        for xref_ea in idautils.XrefsTo(s_ea):
+            func = ida_funcs.get_func(xref_ea.frm)
+            if func:
+                fname = ida_funcs.get_func_name(func.start_ea) or hex_ea(func.start_ea)
+                matches.append({"addr": hex_ea(func.start_ea), "name": fname,
+                                "string": s[:80], "string_addr": hex_ea(s_ea)})
+                if len(matches) >= max_items:
+                    return matches
+    return matches
+
+
+def _detect_type_matches(type_pattern: str, *, max_items: int = 100) -> list[dict]:
+    """Find functions with parameters matching a type pattern."""
+    import re as _re
+    matches = []
+    try:
+        rx = _re.compile(type_pattern, _re.IGNORECASE)
+    except _re.error:
+        rx = _re.compile(_re.escape(type_pattern), _re.IGNORECASE)
+
+    for func_ea in _iter_all_functions():
+        if len(matches) >= max_items:
+            break
+        try:
+            tinfo = ida_typeinf.tinfo_t()
+            if not tinfo.get_numbered_type(idaapi.get_idb(), func_ea):
+                continue
+            func_data = ida_typeinf.func_type_data_t()
+            if not tinfo.get_func_details(func_data):
+                continue
+            for i in range(func_data.size()):
+                pi = func_data[i]
+                param_type = str(getattr(pi, "type", "") or "")
+                if rx.search(param_type):
+                    fname = idc.get_func_name(func_ea) or hex_ea(func_ea)
+                    matches.append({"addr": hex_ea(func_ea), "name": fname,
+                                    "param_idx": i, "param_name": str(getattr(pi, "name", "") or ""),
+                                    "param_type": param_type, "matched": type_pattern})
+                    break
+        except Exception:
+            continue
+    return matches
+
+
+def _detect_xor_heavy(*, threshold: int = 4, max_items: int = 100) -> list[dict]:
+    """Find functions with XOR operations above a threshold (crypto indicator)."""
+    matches = []
+    for func_ea in _iter_all_functions():
+        if len(matches) >= max_items:
+            break
+        try:
+            func = ida_funcs.get_func(func_ea)
+            if not func:
+                continue
+            xor_count = 0
+            for item_ea in idautils.FuncItems(func.start_ea):
+                mnem = idc.print_insn_mnem(item_ea) or ""
+                if mnem.upper() in ("XOR", "EOR", "XORI"):
+                    xor_count += 1
+            if xor_count >= threshold:
+                fname = idc.get_func_name(func_ea) or hex_ea(func_ea)
+                matches.append({"addr": hex_ea(func_ea), "name": fname, "xor_count": xor_count})
+        except Exception:
+            continue
+    return matches
+
+
+def _detect_callers_of(target: str, *, max_items: int = 100) -> list[dict]:
+    """Find functions called BY the target function (callees)."""
+    # Resolve target to EA
+    target_ea = idc.get_name_ea_simple(target)
+    if target_ea == idaapi.BADADDR:
+        # Try with common prefixes
+        for prefix in ("_", "__", ""):
+            target_ea = idc.get_name_ea_simple(prefix + target)
+            if target_ea != idaapi.BADADDR:
+                break
+    if target_ea == idaapi.BADADDR:
+        return []
+
+    func = ida_funcs.get_func(target_ea)
+    if not func:
+        return []
+
+    matches = []
+    seen = set()
+    for item_ea in idautils.FuncItems(func.start_ea):
+        for ref_ea in idautils.CodeRefsFrom(item_ea, 0):
+            callee_func = ida_funcs.get_func(ref_ea)
+            if callee_func and callee_func.start_ea != func.start_ea:
+                cname = idc.get_func_name(callee_func.start_ea) or hex_ea(callee_func.start_ea)
+                if cname not in seen:
+                    seen.add(cname)
+                    matches.append({"addr": hex_ea(callee_func.start_ea), "name": cname})
+                    if len(matches) >= max_items:
+                        return matches
+    return matches
+
+
+def _detect_callees_of(target: str, *, max_items: int = 100) -> list[dict]:
+    """Find functions that CALL the target function (callers)."""
+    target_ea = idc.get_name_ea_simple(target)
+    if target_ea == idaapi.BADADDR:
+        for prefix in ("_", "__", ""):
+            target_ea = idc.get_name_ea_simple(prefix + target)
+            if target_ea != idaapi.BADADDR:
+                break
+    if target_ea == idaapi.BADADDR:
+        return []
+
+    matches = []
+    seen = set()
+    for ref_ea in idautils.CodeRefsTo(target_ea, 0):
+        caller_func = ida_funcs.get_func(ref_ea)
+        if caller_func:
+            fname = idc.get_func_name(caller_func.start_ea) or hex_ea(caller_func.start_ea)
+            if fname not in seen:
+                seen.add(fname)
+                matches.append({"addr": hex_ea(caller_func.start_ea), "name": fname})
+                if len(matches) >= max_items:
+                    return matches
+    return matches
+
+
+def _iter_all_functions():
+    """Iterate over all function EAs in the binary."""
+    func_ea = idaapi.get_next_func(0)
+    while func_ea and func_ea != idaapi.BADADDR:
+        yield int(func_ea)
+        func_ea = idaapi.get_next_func(func_ea)

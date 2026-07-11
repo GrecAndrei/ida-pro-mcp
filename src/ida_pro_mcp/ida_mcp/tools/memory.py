@@ -292,17 +292,64 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
                 except Exception:
                     return make_error(MCPError.INVALID_ARGS, "invalid regex pattern")
             elif wildcard_mask is not None:
-                plen = len(pattern_bytes)
-                for i in range(max(0, len(raw) - plen + 1)):
-                    ok = True
-                    for j in range(plen):
-                        if wildcard_mask[j] and raw[i + j] != pattern_bytes[j]:
-                            ok = False
-                            break
-                    if ok:
-                        hits.append(hex(ea + i))
-                        if len(hits) >= 256:
-                            break
+                # Use IDA's native bin_search for hex patterns with wildcards
+                if hasattr(ida_bytes, "compiled_binpat_vec_t"):
+                    try:
+                        pt = ida_bytes.compiled_binpat_vec_t()
+                        # Convert pattern to IDA format: "4D 5A ?? 00"
+                        ida_pat = " ".join(
+                            "??" if not wildcard_mask[i] else f"{pattern_bytes[i]:02x}"
+                            for i in range(len(pattern_bytes))
+                        )
+                        err = ida_bytes.parse_binpat_str(pt, ea, ida_pat, 16)
+                        if not err:
+                            search_ea = ea
+                            while search_ea < ea + region_size:
+                                found_ea, _ = ida_bytes.bin_search(search_ea, ea + region_size, pt, ida_bytes.BIN_SEARCH_FORWARD)
+                                if found_ea == idaapi.BADADDR:
+                                    break
+                                hits.append(hex(found_ea))
+                                if len(hits) >= 256:
+                                    break
+                                search_ea = found_ea + 1
+                        else:
+                            # Fallback to Python loop
+                            plen = len(pattern_bytes)
+                            for i in range(max(0, len(raw) - plen + 1)):
+                                ok = True
+                                for j in range(plen):
+                                    if wildcard_mask[j] and raw[i + j] != pattern_bytes[j]:
+                                        ok = False
+                                        break
+                                if ok:
+                                    hits.append(hex(ea + i))
+                                    if len(hits) >= 256:
+                                        break
+                    except Exception:
+                        # Fallback to Python loop
+                        plen = len(pattern_bytes)
+                        for i in range(max(0, len(raw) - plen + 1)):
+                            ok = True
+                            for j in range(plen):
+                                if wildcard_mask[j] and raw[i + j] != pattern_bytes[j]:
+                                    ok = False
+                                    break
+                            if ok:
+                                hits.append(hex(ea + i))
+                                if len(hits) >= 256:
+                                    break
+                else:
+                    plen = len(pattern_bytes)
+                    for i in range(max(0, len(raw) - plen + 1)):
+                        ok = True
+                        for j in range(plen):
+                            if wildcard_mask[j] and raw[i + j] != pattern_bytes[j]:
+                                ok = False
+                                break
+                        if ok:
+                            hits.append(hex(ea + i))
+                            if len(hits) >= 256:
+                                break
             else:
                 idx = raw.find(pattern_bytes)
                 while idx != -1:
@@ -407,7 +454,22 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
                     continue
                 val = struct.unpack(fmt, raw)[0]
                 name = idc.get_name(val) or ""
-                nodes.append({"level": level, "addr": hex(cur_ea), "points_to": hex(val), "name": name})
+                node = {"level": level, "addr": hex(cur_ea), "points_to": hex(val), "name": name}
+                # Add type info from ida_typeinf
+                try:
+                    tif = ida_typeinf.tinfo_t()
+                    if ida_nalt.get_tinfo(tif, val) or ida_nalt.get_tinfo(tif, cur_ea):
+                        node["type"] = str(tif)
+                except Exception:
+                    pass
+                # Check if pointer target is a relocation
+                try:
+                    fdata = ida_fixup.fixup_data_t()
+                    if ida_fixup.get_fixup(fdata, cur_ea):
+                        node["relocation"] = True
+                except Exception:
+                    pass
+                nodes.append(node)
                 if val != 0 and ida_bytes.is_loaded(val) and level < depth:
                     queue.append((val, level + 1))
             return {"ok": True, "nodes": nodes, "depth": depth}

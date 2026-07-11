@@ -520,6 +520,36 @@ def _funcs_impl(
                 info["callees_sample"] = [hex_ea(x) for x in callees[:16]]
             if include_prototype:
                 info["prototype"] = get_prototype(fn)
+                # Add structured parameter list using ida_typeinf
+                try:
+                    tinfo = ida_typeinf.tinfo_t()
+                    if tinfo.get_numbered_type(idaapi.get_idb(), fn.start_ea):
+                        func_data = ida_typeinf.func_type_data_t()
+                        if tinfo.get_func_details(func_data):
+                            params = []
+                            for i in range(func_data.size()):
+                                pi = func_data[i]
+                                param = {
+                                    "idx": i,
+                                    "name": str(getattr(pi, "name", "") or f"arg{i}"),
+                                    "type": str(getattr(pi, "type", "") or ""),
+                                }
+                                # Location: register or stack offset
+                                loc = getattr(pi, "loc", None)
+                                if loc:
+                                    reg = getattr(loc, "reg", None)
+                                    if reg is not None:
+                                        param["location"] = f"reg:{reg}"
+                                    else:
+                                        offset = getattr(loc, "offset", None)
+                                        if offset is not None:
+                                            param["location"] = f"stack:{hex(offset)}"
+                                params.append(param)
+                            info["parameters"] = params
+                            info["return_type"] = str(func_data.rettype) if hasattr(func_data, "rettype") else ""
+                            info["calling_convention"] = str(func_data.cc) if hasattr(func_data, "cc") else ""
+                except Exception:
+                    pass
             if include_stack:
                 info["stack_frame"] = get_stack_frame_variables_internal(fn.start_ea, raise_error=False)
             return {"ok": True, "function": info}

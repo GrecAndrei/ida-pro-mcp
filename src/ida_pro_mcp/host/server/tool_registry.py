@@ -75,7 +75,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "calc": ["eval", "offset", "convert", "resolve", "deref", "chain", "align", "bitops"],
     "cfg_analysis": ["complexity", "loops", "branches", "paths", "dominators", "post_dominators", "back_edges", "natural_loops", "irreducible", "flatten_detect"],
     "classify": ["function", "binary", "all_functions", "library_code", "wrappers", "callbacks", "initializers", "error_handlers", "hot_functions", "orphans", "induce_schema", "anchor_coverage"],
-    "code": ["smart_decompile", "decompile", "decompile_all", "disasm", "decompile_chain", "semantic_decompile", "diff_functions", "xrefs_to", "xrefs_from", "xrefs_to_field", "callees", "callers", "blocks", "callgraph", "find_paths", "strings_in_func", "decomp_dataflow", "export", "explain"],
+    "code": ["smart_decompile", "decompile", "decompile_all", "disasm", "detect", "decompile_chain", "semantic_decompile", "diff_functions", "xrefs_to", "xrefs_from", "xrefs_to_field", "callees", "callers", "blocks", "callgraph", "find_paths", "strings_in_func", "decomp_dataflow", "export", "explain"],
 
     "compare": ["functions", "blocks", "apis", "strings", "constants", "structure", "semantics", "batch_compare", "find_clones", "changelog"],
     "coverage": ["import_drcov", "import_lighthouse", "highlight", "report", "uncovered", "filter", "function_coverage", "gaps", "compare", "merge"],

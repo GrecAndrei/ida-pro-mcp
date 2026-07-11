@@ -18,7 +18,7 @@ def code(
         "callees", "callers", "blocks", "callgraph", "export",
         "find_paths", "strings_in_func", "diff_functions", "semantic_decompile",
         "decomp_dataflow", "decompile_chain", "smart_decompile", "explain",
-        "trace_argument_origin", "decompile_all"
+        "trace_argument_origin", "decompile_all", "detect"
     ], "Action"],
     addrs: Annotated[Optional[list[str] | str], "Address(es) - hex string or name"] = None,
     addr: Annotated[Optional[str], "Single address (alias for addrs)"] = None,
@@ -134,6 +134,17 @@ def code(
         Each trace entry: {depth, caller_addr, caller_name, call_site, call_line, arg_source, arg_type}
         Example: code(action="trace_argument_origin", addrs="0x401000", arg_index=2)
         Best for: Finding where a specific value (e.g., a key, buffer size, or flag) originates.
+
+    detect - Custom per-session vulnerability/pattern detector (LLM-defined rules)
+        rule_type: api_chain | string_ref | type_match | xor_threshold | caller_of | callee_of
+        For api_chain: apis=['recv','memcpy'], strict_order=true — finds functions calling APIs in sequence
+        For string_ref: pattern='password' — finds functions referencing matching strings
+        For type_match: type_pattern='SOCKET' — finds functions with matching parameter types
+        For xor_threshold: threshold=4 — finds functions with N+ XOR ops (crypto indicator)
+        For caller_of/callee_of: target='recv' — finds callers/callees of a function
+        Register persistent: register=true, name='my_rule', rule={...}
+        List/delete: rule_type='list' or rule_type='delete', name='my_rule'
+        Example: code(action="detect", rule_type="api_chain", apis=["recv","memcpy"], strict_order=true)
     """
     try:
         # decompile_all doesn't need addrs — it uses a name filter
@@ -1206,6 +1217,9 @@ def code(
                 max_depth = int(kwargs.get("max_depth", 4))
                 max_callers = int(kwargs.get("max_callers_per_level", 10))
                 results.append(_trace_argument_origin(func, arg_index, max_depth, max_callers))
+
+            elif action == "detect":
+                results.append(_run_custom_detector(kwargs, max_items))
 
             else:
                 return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
