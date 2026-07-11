@@ -291,9 +291,11 @@ class ServerDispatchMixin:
                     pass  # skip truncation entirely
                 else:
                     _budget = _tc.get("max_tokens") or self.default_truncate_tokens
+                    _sid = getattr(self.current_session, "session_id", "") if self.current_session else ""
                     res = truncate_response(res, max_tokens=_budget,
                                            trunc_offset=_tc.get("trunc_offset"),
-                                           trunc_limit=_tc.get("trunc_limit"))
+                                           trunc_limit=_tc.get("trunc_limit"),
+                                           session_id=_sid)
                 try:
                     _slow_threshold = float(
                         os.environ.get("IDA_MCP_SLOW_CALL_SEC", "5.0")
@@ -661,12 +663,6 @@ class ServerDispatchMixin:
 
     def _handle_truncation(self, args: dict) -> dict:
             action = str(args.get("action") or "").strip().lower()
-            if action != "continue":
-                return make_error(
-                    MCPError.ACTION_NOT_FOUND,
-                    f"Unsupported truncation action: '{action}'",
-                    hint="Use truncation(action='continue', token='...').",
-                )
             token = args.get("token") or args.get("next_token")
             if not isinstance(token, str) or not token.strip():
                 return make_error(
@@ -674,21 +670,52 @@ class ServerDispatchMixin:
                     "Invalid continuation token. Check the token value.",
                 )
             token = token.strip()
-            field = args.get("field")
-            offset = args.get("offset")
-            count = args.get("count")
+            sid = getattr(self.current_session, "session_id", "") if self.current_session else ""
             from . import server as _server_mod
 
-            result = _server_mod.continue_truncated(
-                token,
-                field=field if isinstance(field, str) else None,
-                offset=_bounded_int(offset, 0, min_value=0, max_value=500000)
-                if offset is not None
-                else None,
-                count=_bounded_int(count, 0, min_value=1, max_value=5000)
-                if count is not None
-                else None,
-            )
+            if action == "continue":
+                field = args.get("field")
+                offset = args.get("offset")
+                count = args.get("count")
+                result = _server_mod.continue_truncated(
+                    token,
+                    field=field if isinstance(field, str) else None,
+                    offset=_bounded_int(offset, 0, min_value=0, max_value=500000)
+                    if offset is not None
+                    else None,
+                    count=_bounded_int(count, 0, min_value=1, max_value=5000)
+                    if count is not None
+                    else None,
+                    session_id=sid,
+                )
+            elif action == "peek":
+                result = _server_mod.peek_truncated(token, session_id=sid)
+            elif action == "search":
+                pattern = str(args.get("pattern") or args.get("query") or "").strip()
+                field = args.get("field")
+                result = _server_mod.search_truncated(
+                    token,
+                    pattern=pattern,
+                    field=field if isinstance(field, str) else None,
+                    is_regex=_coerce_bool(args.get("is_regex"), False),
+                    case_sensitive=_coerce_bool(args.get("case_sensitive"), False),
+                    limit=_bounded_int(args.get("limit", 50), 50, min_value=1, max_value=500),
+                    session_id=sid,
+                )
+            elif action == "summary":
+                field = args.get("field")
+                result = _server_mod.summary_truncated(
+                    token,
+                    field=field if isinstance(field, str) else None,
+                    limit=_bounded_int(args.get("limit", 20), 20, min_value=1, max_value=100),
+                    session_id=sid,
+                )
+            else:
+                return make_error(
+                    MCPError.ACTION_NOT_FOUND,
+                    f"Unsupported truncation action: '{action}'",
+                    hint="Use truncation(action='continue'|'peek'|'search'|'summary', token='...').",
+                )
             if (
                 isinstance(result, dict)
                 and result.get("error")

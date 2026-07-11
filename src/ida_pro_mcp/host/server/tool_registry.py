@@ -166,7 +166,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "decrypt_strings", "eval_expr", "deobfuscate_emulate",
         "prefetch_context",
     ],
-    "truncation": ["continue"],
+    "truncation": ["continue", "peek", "search", "summary"],
     "types": ["list", "get", "set_prototype", "parse_decl", "declare", "apply", "search_structs", "infer", "read_struct", "import_header", "diff", "visualize", "propagate", "enum_values", "type_graph", "vtable"],
     "wiki": ["list_topics", "read", "search", "semantic_search", "index", "sections", "suggest"],
     "workflow": [

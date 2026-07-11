@@ -47,7 +47,7 @@ from ..stores.insight_index import InsightIndex  # noqa: E402
 # Compatibility anchor for source-based regression tests.
 # if addr and tool_name in ("code", "data", "search"):
 # Import truncation middleware
-from ..stores.truncation import continue_truncated, truncate_response  # noqa: F401,E402
+from ..stores.truncation import continue_truncated, peek_truncated, search_truncated, summary_truncated, truncate_response  # noqa: F401,E402
 from .audit import AuditLogger  # noqa: E402
 from .rate_limit import RateLimiter  # noqa: E402
 from .resources import ResourceResolver, list_resources  # noqa: E402
