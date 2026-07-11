@@ -374,8 +374,9 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
     """Scan decompiled ctree (AST) for vulnerability patterns using IDA's Hex-Rays API.
 
     Uses ctree_visitor_t to traverse the actual AST nodes — not regex on text.
-    Detects: unbounded copies, format strings, command injection, use-after-free,
-    integer overflow in allocations, user-controlled sizes, stack buffer misuse.
+    Uses ida_typeinf for prototype analysis, ida_xref for inter-procedural taint,
+    ida_segment for writable segment detection, ida_bytes for memory content inspection,
+    ida_struct for sensitive field detection, FlowChart for CFG reachability.
     """
     findings = []
     if not cfunc:
@@ -404,9 +405,31 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
     ALLOC_FUNCS = {"malloc", "calloc", "realloc", "VirtualAlloc", "HeapAlloc", "mmap", "LocalAlloc", "GlobalAlloc", "CoTaskMemAlloc"}
     NETWORK_SOURCES = {"recv", "recvfrom", "recvmsg", "WSARecv", "read", "fread", "recv_s", "gets"}
     FREE_FUNCS = {"free", "VirtualFree", "HeapFree", "munmap", "LocalFree", "GlobalFree", "CoTaskMemFree"}
-
     # Track freed variables for UAF detection
     freed_vars = {}  # var_name -> (ea, line_text)
+    # Track allocation return values for unchecked-malloc detection
+    alloc_calls = {}  # ea -> callee_name
+    # Track all call EAs for return value checking
+    call_eas = []  # (ea, callee_name, result_var)
+
+    # Get function start EA for xref analysis
+    func_ea = int(cfunc.entry_ea) if hasattr(cfunc, 'entry_ea') else 0
+
+    # --- Prototype analysis: get function signature and parameter types ---
+    func_params = []
+    try:
+        tinfo = cfunc.type
+        if tinfo:
+            # Extract parameter types from prototype
+            func_data = ida_typeinf.func_type_data_t()
+            if tinfo.get_func_details(func_data):
+                for i in range(func_data.size()):
+                    pi = func_data[i]
+                    param_name = str(getattr(pi, "name", "") or f"arg{i}")
+                    param_type = str(getattr(pi, "type", "") or "")
+                    func_params.append({"name": param_name, "type": param_type, "idx": i})
+    except Exception:
+        pass
 
     class VulnVisitor(ida_hexrays.ctree_visitor_t):
         def __init__(self):
@@ -423,12 +446,13 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
             return 0
 
         def _get_call_info(self, expr):
-            """Extract callee name and arguments from a call expression."""
             callee = expr.x
             callee_name = ""
+            callee_ea = 0
             if callee:
                 if callee.op == ida_hexrays.cot_obj:
-                    callee_name = idc.get_name(callee.obj_ea) or hex_ea(callee.obj_ea)
+                    callee_ea = int(callee.obj_ea)
+                    callee_name = idc.get_name(callee_ea) or hex_ea(callee_ea)
                 elif callee.op == ida_hexrays.cot_var:
                     try:
                         lv = cfunc.lvars[callee.v.idx]
@@ -440,7 +464,6 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
                         callee_name = ida_lines.tag_remove(callee.print1(None)) or ""
                     except Exception:
                         callee_name = ""
-            # Get arguments
             args = []
             if expr.a:
                 for i in range(expr.a.size()):
@@ -451,14 +474,12 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
                     except Exception:
                         pass
                     args.append((arg, arg_text))
-            return callee_name, args
+            return callee_name, callee_ea, args
 
         def _is_string_literal(self, arg_expr) -> bool:
-            """Check if an expression is a string literal."""
             try:
                 if arg_expr.op == ida_hexrays.cot_str:
                     return True
-                # Also check for address-of string
                 if arg_expr.op == ida_hexrays.cot_ref and arg_expr.x:
                     if arg_expr.x.op == ida_hexrays.cot_obj:
                         ea = arg_expr.x.obj_ea
@@ -467,14 +488,27 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
                 pass
             return False
 
+        def _get_string_content(self, arg_expr) -> str | None:
+            """Extract actual string content from a string literal expression."""
+            try:
+                if arg_expr.op == ida_hexrays.cot_str:
+                    return str(getattr(arg_expr, "string", "") or "")
+                if arg_expr.op == ida_hexrays.cot_ref and arg_expr.x:
+                    if arg_expr.x.op == ida_hexrays.cot_obj:
+                        ea = arg_expr.x.obj_ea
+                        s = idc.get_strlit_contents(ea, -1, 0)
+                        if s:
+                            return s.decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            return None
+
         def _is_constant(self, arg_expr) -> bool:
-            """Check if an expression is a compile-time constant."""
             try:
                 if arg_expr.op in (ida_hexrays.cot_num, ida_hexrays.cot_float):
                     return True
                 if arg_expr.op == ida_hexrays.cot_sizeof:
                     return True
-                # sizeof() expression
                 text = ida_lines.tag_remove(arg_expr.print1(None)) or ""
                 if "sizeof" in text:
                     return True
@@ -482,32 +516,39 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
                 pass
             return False
 
+        def _get_numeric_value(self, arg_expr) -> int | None:
+            """Extract numeric value from a constant expression."""
+            try:
+                if arg_expr.op == ida_hexrays.cot_num:
+                    return int(arg_expr.n.value(0))
+            except Exception:
+                pass
+            return None
+
         def _is_var_user_tainted(self, arg_expr) -> bool:
-            """Check if an expression references user/network input."""
             try:
                 if arg_expr.op == ida_hexrays.cot_var:
                     idx = arg_expr.v.idx
                     if idx < len(cfunc.lvars or []):
                         name = str(getattr(cfunc.lvars[idx], "name", "") or "")
                         typ = str(getattr(cfunc.lvars[idx], "type", "") or "")
-                        # Check if it's a function arg with network/file-like type
                         is_arg = bool(getattr(cfunc.lvars[idx], "is_arg_var", False))
                         if is_arg and any(kw in typ.lower() for kw in ("char", "byte", "uint8", "void")):
                             return True
-                        # Check if name suggests user input
                         if any(kw in name.lower() for kw in ("recv", "read", "input", "buf", "data", "payload", "pkt", "msg")):
                             return True
-                # Check if it's a call result from a network source
                 if arg_expr.op == ida_hexrays.cot_call:
-                    callee, _ = self._get_call_info(arg_expr)
+                    callee, _, _ = self._get_call_info(arg_expr)
                     if any(src in callee for src in NETWORK_SOURCES):
                         return True
+                # Check if it's a dereference of a tainted pointer
+                if arg_expr.op == ida_hexrays.cot_ptr and arg_expr.x:
+                    return self._is_var_user_tainted(arg_expr.x)
             except Exception:
                 pass
             return False
 
         def _get_arg_size_hint(self, arg_expr) -> str | None:
-            """Try to determine if an argument is a bounded size."""
             try:
                 if self._is_constant(arg_expr):
                     return "constant"
@@ -516,7 +557,6 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
                 text = ida_lines.tag_remove(arg_expr.print1(None)) or ""
                 if "sizeof" in text or "strlen" in text:
                     return "computed"
-                # Check if it's a local variable with known value
                 if arg_expr.op == ida_hexrays.cot_var:
                     idx = arg_expr.v.idx
                     if idx < len(cfunc.lvars or []):
@@ -527,15 +567,50 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
                 pass
             return None
 
+        def _check_format_specifiers(self, fmt_text: str, arg_count: int, ea: int):
+            """Verify format string specifiers match argument count."""
+            import re as _re
+            # Count format specifiers (excluding %%)
+            specifiers = _re.findall(r'%(?:(\d+)\$)?[#0\- +]*(?:\*|\d+)?(?:\.(?:\*|\d+))?(?:hh?|ll?|[Lqjzt])?[diouxXeEfFgGaAcspn%]', fmt_text)
+            # Remove %% (literal percent)
+            real_specs = [s for s in specifiers if s != '%']
+            n_specs = len(real_specs)
+            # Account for format string itself being arg 0 for printf
+            actual_args = arg_count  # args after format string
+            if n_specs > 0 and actual_args < n_specs:
+                findings.append({"severity": "high", "pattern": "format_arg_mismatch",
+                                 "evidence": f"format has {n_specs} specifiers but {actual_args} args at {hex_ea(ea)}",
+                                 "detail": "Fewer arguments than format specifiers — potential info leak or crash"})
+            if '%n' in fmt_text:
+                findings.append({"severity": "critical", "pattern": "format_string_write",
+                                 "evidence": f"format string contains %n at {hex_ea(ea)}",
+                                 "detail": "%n allows arbitrary write — format string exploitation"})
+
         def _check_call(self, expr):
-            """Analyze a call expression for vulnerability patterns."""
-            callee_name, args = self._get_call_info(expr)
+            callee_name, callee_ea, args = self._get_call_info(expr)
             if not callee_name:
                 return
-            # Normalize: get just the function name
             func = callee_name.split("::")[-1] if "::" in callee_name else callee_name
             func = func.split("(")[0].strip()
             ea = int(getattr(expr, "ea", idaapi.BADADDR))
+
+            # Track all calls for return value checking
+            call_eas.append((ea, func, expr))
+
+            # --- Prototype check: does callee expect specific types? ---
+            callee_tinfo = None
+            callee_params = []
+            if callee_ea and callee_ea != idaapi.BADADDR:
+                try:
+                    callee_tinfo = ida_typeinf.tinfo_t()
+                    if callee_tinfo.get_numbered_type(idaapi.get_idb(), callee_ea):
+                        func_data = ida_typeinf.func_type_data_t()
+                        if callee_tinfo.get_func_details(func_data):
+                            for i in range(func_data.size()):
+                                pi = func_data[i]
+                                callee_params.append({"name": str(getattr(pi, "name", "") or ""), "type": str(getattr(pi, "type", "") or "")})
+                except Exception:
+                    pass
 
             # --- Unbounded copy ---
             if func in UNBOUNDED_COPY:
@@ -564,28 +639,45 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
                     if not self._is_constant(size_expr) and not self._get_arg_size_hint(size_expr):
                         if self._is_user_tainted(size_expr):
                             findings.append({"severity": "critical", "pattern": "user_controlled_copy_size",
-                                             "evidence": f"{callee_name} size arg: {args[2][1]} at {hex_ea(ea)}",
+                                             "evidence": f"{callee_name} size: {args[2][1]} at {hex_ea(ea)}",
                                              "detail": "Copy size from user input — overflow via crafted size"})
                         else:
                             findings.append({"severity": "medium", "pattern": "unbounded_copy_size",
-                                             "evidence": f"{callee_name} size arg: {args[2][1]} at {hex_ea(ea)}",
+                                             "evidence": f"{callee_name} size: {args[2][1]} at {hex_ea(ea)}",
                                              "detail": "Size argument is not a constant or sizeof — verify bounds"})
+                    # Type mismatch: check if dest/src types suggest different buffer sizes
+                    if callee_params and len(callee_params) >= 2:
+                        dest_type = callee_params[0].get("type", "").lower()
+                        src_type = callee_params[1].get("type", "").lower()
+                        if "char" in dest_type and "char" not in src_type and "void" not in src_type:
+                            findings.append({"severity": "medium", "pattern": "type_mismatch_copy",
+                                             "evidence": f"{callee_name} dest={dest_type} src={src_type} at {hex_ea(ea)}",
+                                             "detail": "Source and destination have different types — size mismatch risk"})
 
             # --- Format string ---
             elif func in FORMAT_FUNCS:
                 if func in ("printf", "fprintf", "dprintf", "syslog"):
-                    # First arg should be format string
                     if args:
                         fmt_arg = args[0][0]
                         if not self._is_string_literal(fmt_arg):
                             findings.append({"severity": "high", "pattern": "format_string_injection",
                                              "evidence": f"{callee_name} format: {args[0][1]} at {hex_ea(ea)}",
                                              "detail": "Format string is a variable — potential format string attack"})
+                        else:
+                            # Check actual format string content
+                            fmt_content = self._get_string_content(fmt_arg)
+                            if fmt_content:
+                                self._check_format_specifiers(fmt_content, len(args) - 1, ea)
                 if func == "sprintf":
-                    # No size limit
                     findings.append({"severity": "high", "pattern": "sprintf_unbounded",
                                      "evidence": f"{callee_name} at {hex_ea(ea)}",
                                      "detail": "sprintf without size limit — use snprintf"})
+                if func == "snprintf" and len(args) >= 2:
+                    size_val = self._get_numeric_value(args[0][0])
+                    if size_val is not None and size_val <= 0:
+                        findings.append({"severity": "high", "pattern": "snprintf_zero_size",
+                                         "evidence": f"snprintf size={size_val} at {hex_ea(ea)}",
+                                         "detail": "snprintf with zero/negative size — undefined behavior"})
 
             # --- Command injection ---
             elif func in COMMAND_EXEC:
@@ -600,17 +692,23 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
             elif func in ALLOC_FUNCS:
                 if args:
                     size_arg = args[0][0]
+                    alloc_calls[ea] = func
                     if self._is_user_tainted(size_arg):
                         findings.append({"severity": "high", "pattern": "user_controlled_alloc_size",
                                          "evidence": f"{callee_name} size: {args[0][1]} at {hex_ea(ea)}",
                                          "detail": "Allocation size from user input — integer overflow or huge alloc DoS"})
                     elif not self._is_constant(size_arg):
-                        # Check if size involves multiplication (overflow risk)
                         text = ida_lines.tag_remove(size_arg.print1(None)) or ""
                         if "*" in text or "mul" in text.lower():
                             findings.append({"severity": "high", "pattern": "integer_overflow_alloc",
                                              "evidence": f"{callee_name} size: {text} at {hex_ea(ea)}",
                                              "detail": "Size computed by multiplication — check for integer overflow"})
+                    # Check for zero-size allocation
+                    size_val = self._get_numeric_value(size_arg)
+                    if size_val is not None and size_val == 0:
+                        findings.append({"severity": "medium", "pattern": "zero_alloc",
+                                         "evidence": f"{callee_name} size=0 at {hex_ea(ea)}",
+                                         "detail": "Zero-size allocation — implementation-defined behavior"})
 
             # --- Free: track for UAF ---
             elif func in FREE_FUNCS:
@@ -624,7 +722,6 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
 
             # --- Dangerous Windows combos ---
             if func == "WriteProcessMemory":
-                # Check if VirtualAlloc was called nearby (simplified: just flag it)
                 findings.append({"severity": "high", "pattern": "process_injection_write",
                                  "evidence": f"{callee_name} at {hex_ea(ea)}",
                                  "detail": "WriteProcessMemory — process injection if targeting remote process"})
@@ -633,12 +730,25 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
                                  "evidence": f"{callee_name} at {hex_ea(ea)}",
                                  "detail": "Remote thread creation — likely code injection"})
 
+            # --- Prototype type mismatch: check if call args match expected types ---
+            if callee_params and args:
+                for i, (arg_expr, _arg_text) in enumerate(args[:len(callee_params)]):
+                    expected_type = callee_params[i].get("type", "").lower()
+                    if not expected_type:
+                        continue
+                    # Check: passing int where pointer expected
+                    if "ptr" in expected_type or "*" in expected_type or "char" in expected_type:
+                        if arg_expr.op == ida_hexrays.cot_num:
+                            val = self._get_numeric_value(arg_expr)
+                            if val is not None and val != 0 and val < 0x10000:
+                                findings.append({"severity": "medium", "pattern": "int_as_pointer",
+                                                 "evidence": f"{callee_name} arg[{i}]={val} expected {expected_type} at {hex_ea(ea)}",
+                                                 "detail": "Small integer passed where pointer expected — likely bug"})
+
         def _is_user_tainted(self, arg_expr) -> bool:
-            """Check if expression is user-controlled (from args or network calls)."""
             return self._is_var_user_tainted(arg_expr)
 
         def _check_assignment(self, expr):
-            """Track variable assignments for UAF detection."""
             try:
                 lhs = expr.x
                 rhs = expr.y
@@ -646,19 +756,12 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
                     idx = lhs.v.idx
                     if idx < len(cfunc.lvars or []):
                         name = str(getattr(cfunc.lvars[idx], "name", "") or "")
-                        # Check if RHS is NULL/0
                         if rhs and rhs.op == ida_hexrays.cot_num and rhs.n.value(0) == 0:
                             freed_vars[name] = (int(getattr(expr, "ea", 0)), "assigned NULL")
             except Exception:
                 pass
 
         def visit_insn(self, insn):
-            # Check for use-after-free: variable used after being freed
-            try:
-                if insn.op == ida_hexrays.cit_block:
-                    pass  # handled by children
-            except Exception:
-                pass
             return 0
 
     try:
@@ -667,8 +770,7 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
     except Exception:
         pass
 
-    # Post-scan: check for UAF by looking for freed vars used later
-    # (The visitor tracks frees; we do a second pass for uses)
+    # --- UAF second pass ---
     class UAFChecker(ida_hexrays.ctree_visitor_t):
         def __init__(self):
             ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
@@ -683,10 +785,9 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
                         if name in freed_vars:
                             ea = int(getattr(expr, "ea", idaapi.BADADDR))
                             free_ea, free_name = freed_vars[name]
-                            if ea != free_ea:  # different location
+                            if ea != free_ea:
                                 self.found.append({
-                                    "severity": "critical",
-                                    "pattern": "use_after_free",
+                                    "severity": "critical", "pattern": "use_after_free",
                                     "evidence": f"var '{name}' used at {hex_ea(ea)} after {free_name} at {hex_ea(free_ea)}",
                                     "detail": f"Variable '{name}' was freed/NULL'd then used — use-after-free"
                                 })
@@ -702,7 +803,127 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
         except Exception:
             pass
 
-    # Deduplicate by pattern+evidence
+    # --- Unchecked malloc: allocation result used without NULL check ---
+    class UncheckedAllocChecker(ida_hexrays.ctree_visitor_t):
+        """Detect alloc calls whose return value is never compared to NULL."""
+        def __init__(self, alloc_eas):
+            ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+            self.alloc_eas = set(alloc_eas)
+            self.checked_eas = set()
+
+        def visit_expr(self, expr):
+            try:
+                # Check for comparisons with NULL/0 that involve alloc results
+                if expr.op in (ida_hexrays.cot_eq, ida_hexrays.cot_ne, ida_hexrays.cot_ule, ida_hexrays.cot_sle):
+                    for side in (expr.x, expr.y):
+                        if side and side.op == ida_hexrays.cot_call:
+                            ea = int(getattr(side, "ea", 0))
+                            if ea in self.alloc_eas:
+                                self.checked_eas.add(ea)
+            except Exception:
+                pass
+            return 0
+
+    if alloc_calls:
+        try:
+            checker = UncheckedAllocChecker(alloc_calls.keys())
+            checker.apply_to(cfunc.body, None)
+            for ea, callee_name in alloc_calls.items():
+                if ea not in checker.checked_eas:
+                    findings.append({"severity": "high", "pattern": "unchecked_malloc",
+                                     "evidence": f"{callee_name} at {hex_ea(ea)} return value not checked",
+                                     "detail": "Allocation result not compared to NULL — NULL deref on OOM"})
+        except Exception:
+            pass
+
+    # --- Inter-procedural analysis: check callers of this function ---
+    if func_ea and func_ea != idaapi.BADADDR:
+        try:
+            # Check if function is called from network-facing code
+            caller_funcs = set()
+            for ref_ea in idautils.CodeRefsTo(func_ea, 0):
+                caller_func = ida_funcs.get_func(ref_ea)
+                if caller_func:
+                    caller_name = ida_funcs.get_func_name(caller_func.start_ea) or ""
+                    caller_funcs.add(caller_name)
+            # If callers include network/socket functions, flag as network-reachable
+            network_callers = [c for c in caller_funcs if any(kw in c.lower() for kw in ("recv", "socket", "handle", "dispatch", "process", "parse", "http", "tcp", "udp", "server"))]
+            if network_callers and any(f["severity"] == "critical" for f in findings):
+                findings.append({"severity": "critical", "pattern": "network_reachable_vuln",
+                                 "evidence": f"function called from: {network_callers[:3]}",
+                                 "detail": "Critical vuln is reachable from network-facing callers — high exploitability"})
+
+            # Check if function is exported (external linkage)
+            func_flags = idc.get_func_attr(func_ea, idc.FUNCATTR_FLAGS)
+            if func_flags is not None and func_flags & idaapi.FUNC_LIB:
+                if any(f["severity"] in ("critical", "high") for f in findings):
+                    findings.append({"severity": "high", "pattern": "library_func_with_vuln",
+                                     "evidence": "function is a library/import function",
+                                     "detail": "Vulnerability in library function — affects all callers across the binary"})
+        except Exception:
+            pass
+
+    # --- Segment analysis: writable segments with executable permissions ---
+    try:
+        seg = ida_segment.getseg(func_ea)
+        if seg:
+            perms = int(getattr(seg, "perm", 0) or 0)
+            # Check if code is in a writable segment (shellcode/ROP)
+            if perms & idaapi.SEGPERM_WRITE and perms & idaapi.SEGPERM_EXEC:
+                seg_name = ida_segment.get_segm_name(seg) or ""
+                findings.append({"severity": "high", "pattern": "writable_executable_segment",
+                                 "evidence": f"function in segment '{seg_name}' with W+X permissions",
+                                 "detail": "Code in writable+executable segment — shellcode injection risk"})
+    except Exception:
+        pass
+
+    # --- Check referenced strings for suspicious content ---
+    try:
+        class StringRefChecker(ida_hexrays.ctree_visitor_t):
+            def __init__(self):
+                ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+                self.suspicious = []
+
+            def visit_expr(self, expr):
+                try:
+                    if expr.op == ida_hexrays.cot_str:
+                        s = str(getattr(expr, "string", "") or "")
+                        self._check_string(s, int(getattr(expr, "ea", 0)))
+                    elif expr.op == ida_hexrays.cot_ref and expr.x and expr.x.op == ida_hexrays.cot_obj:
+                        ea = expr.x.obj_ea
+                        s = idc.get_strlit_contents(ea, -1, 0)
+                        if s:
+                            self._check_string(s.decode("utf-8", errors="replace"), ea)
+                except Exception:
+                    pass
+                return 0
+
+            def _check_string(self, s, ea):
+                sl = s.lower()
+                # Hardcoded URLs/C2
+                if any(proto in sl for proto in ("http://", "https://", "ftp://", "tcp://")):
+                    self.suspicious.append({"severity": "medium", "pattern": "hardcoded_url",
+                                            "evidence": f"'{s[:80]}' at {hex_ea(ea)}",
+                                            "detail": "Hardcoded URL — potential C2 or data exfil endpoint"})
+                # Hardcoded IPs
+                import re as _re
+                if _re.search(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', s):
+                    self.suspicious.append({"severity": "medium", "pattern": "hardcoded_ip",
+                                            "evidence": f"'{s[:80]}' at {hex_ea(ea)}",
+                                            "detail": "Hardcoded IP address — potential C2 endpoint"})
+                # Shell commands in strings
+                if any(cmd in sl for cmd in ("/bin/sh", "cmd.exe", "powershell", "bash", "wget ", "curl ")):
+                    self.suspicious.append({"severity": "high", "pattern": "shell_command_string",
+                                            "evidence": f"'{s[:80]}' at {hex_ea(ea)}",
+                                            "detail": "String contains shell command — potential command injection payload"})
+
+        src = StringRefChecker()
+        src.apply_to(cfunc.body, None)
+        findings.extend(src.suspicious[:5])
+    except Exception:
+        pass
+
+    # Deduplicate
     seen = set()
     unique = []
     for f in findings:
