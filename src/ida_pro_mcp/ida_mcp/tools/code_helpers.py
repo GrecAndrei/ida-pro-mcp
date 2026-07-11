@@ -370,29 +370,240 @@ def _detect_crypto_hints(pseudo: str, *, xor_threshold: int = 4) -> tuple[list[s
     return crypto_hints, xor_count
 
 
-def _detect_dangerous_patterns(found_apis: list[str], pseudo: str, *, detailed: bool = False) -> list[str]:
+def _detect_dangerous_patterns(found_apis: list[str], pseudo: str, *, detailed: bool = False) -> list[dict]:
+    """Detect actual vulnerability patterns in decompiled pseudocode.
+
+    Returns structured findings with severity, pattern, evidence, and context.
+    Each finding has: severity (critical/high/medium/low), pattern, evidence, detail.
+    """
     import re as _re
 
-    dangerous = []
-    if any(api in found_apis for api in ["strcpy", "sprintf", "gets", "scanf", "vsprintf"]):
-        dangerous.append(
-            "unsafe_string_ops — potential buffer overflow" if detailed else "unsafe_string_ops"
-        )
-    memcpy_bounded = _re.search(r"memcpy\s*\([^,]+,[^,]+,\s*sizeof", pseudo)
-    if "memcpy" in found_apis and not memcpy_bounded:
-        dangerous.append(
-            "memcpy — verify size is bounded" if detailed else "memcpy_no_size_check"
-        )
-    if any(api in found_apis for api in ["system", "exec", "execve", "popen"]):
-        dangerous.append(
-            "command_execution — check for injection" if detailed else "command_execution"
-        )
-    if detailed:
-        if "VirtualAlloc" in found_apis and "WriteProcessMemory" in found_apis:
-            dangerous.append("process_injection pattern")
-        if "recv" in found_apis or "recvfrom" in found_apis:
-            dangerous.append("network_input — trace data flow to sinks")
-    return dangerous
+    findings = []
+
+    def _add(sev, pat, evidence, detail=""):
+        findings.append({"severity": sev, "pattern": pat, "evidence": evidence[:120], "detail": detail})
+
+    # --- Extract call sites with arguments ---
+    # Match func(arg1, arg2, ...) capturing the argument text
+    call_pat = _re.compile(r'(\w+)\s*\(([^)]*)\)', _re.MULTILINE)
+    calls = [(m.group(1), m.group(2), m.start()) for m in call_pat.finditer(pseudo)]
+
+    # --- Helper: is an argument bounded? ---
+    def _is_bounded(arg: str) -> bool:
+        a = arg.strip()
+        if not a:
+            return False
+        # Literal size, sizeof, constant, or sizeof-based expression
+        if _re.match(r'^(0x[0-9a-fA-F]+|\d+|sizeof\s*\()', a):
+            return True
+        # Explicit length variable from strlen/sizeof
+        return 'strlen' in a or 'sizeof' in a or 'len' in a.lower()
+
+    def _is_user_input(arg: str) -> bool:
+        a = arg.strip().lower()
+        # Variables that look like they come from network/file/user input
+        return any(kw in a for kw in ['recv', 'read', 'input', 'buf', 'data', 'payload', 'pkt', 'msg', 'user'])
+
+    # --- 1. Unbounded copy chains: recv/read → memcpy/strcpy without size check ---
+    for name, args, _pos in calls:
+        if name in ('memcpy', 'memmove', 'CopyMemory'):
+            parts = [a.strip() for a in args.split(',')]
+            if len(parts) >= 3:
+                size_arg = parts[2]
+                if not _is_bounded(size_arg):
+                    _add("critical", "unbounded_memcpy",
+                          f"{name}({args})",
+                          f"Size argument '{size_arg}' is not a constant or sizeof — potential heap/stack overflow")
+                if _is_user_input(size_arg):
+                    _add("critical", "user_controlled_copy_size",
+                          f"{name}({args})",
+                          "Copy size comes from user/network input — overflow via crafted size")
+
+        elif name in ('strcpy', 'lstrcpy', 'StrCpy'):
+            parts = [a.strip() for a in args.split(',')]
+            if len(parts) >= 2 and not _is_bounded(parts[1]):
+                # Check if source is user-controlled
+                if _is_user_input(parts[1]):
+                    _add("critical", "strcpy_user_input",
+                          f"{name}({args})",
+                          "strcpy from user-controlled source — classic buffer overflow")
+                else:
+                    _add("high", "strcpy_unbounded",
+                          f"{name}({args})",
+                          "strcpy without length check — use strncpy or strlcpy")
+
+        elif name in ('strcat', 'lstrcat', 'StrCat'):
+            _add("high", "strcat_unbounded",
+                  f"{name}({args})",
+                  "strcat appends without bounds check — use strncat")
+
+        elif name in ('gets',):
+            _add("critical", "gets_always_overflow",
+                  f"{name}({args})",
+                  "gets() has no length limit — always exploitable. Use fgets().")
+
+        elif name == 'sprintf' and 'snprintf' not in name:
+            # Check for %n (format string write)
+            if '%n' in args:
+                _add("critical", "format_string_write",
+                      f"sprintf({args})",
+                      "sprintf with %n — arbitrary write via format string")
+            else:
+                _add("high", "sprintf_unbounded",
+                      f"sprintf({args})",
+                      "sprintf without size limit — use snprintf")
+
+        elif name == 'vsprintf':
+            _add("high", "vsprintf_unbounded",
+                  f"{name}({args})",
+                  "vsprintf without size limit — use vsnprintf")
+
+        elif name == 'sscanf':
+            if '%s' in args:
+                _add("medium", "sscanf_string_overflow",
+                      f"sscanf({args})",
+                      "sscanf with %s — unbounded string write if input is long")
+
+    # --- 2. Format string attacks: printf-family with non-literal format ---
+    for name, args, _pos in calls:
+        if name in ('printf', 'fprintf', 'dprintf', 'snprintf', 'syslog'):
+            first_arg = args.split(',')[0].strip() if args else ''
+            # If format string is a variable (not a string literal), it's injectable
+            if first_arg and not first_arg.startswith('"') and not first_arg.startswith("'"):
+                # It's a variable — could be user-controlled format string
+                if name == 'printf' or (name in ('fprintf', 'dprintf') and len(args.split(',')) >= 3):
+                    _add("high", "format_string_injection",
+                          f"{name}({args})",
+                          f"Format string is a variable '{first_arg}' — potential format string attack")
+
+    # --- 3. Command injection: system/exec/popen with variable args ---
+    for name, args, _pos in calls:
+        if name in ('system', 'popen', 'exec', 'execve', 'execl', 'execlp', 'execvp'):
+            if args and not args.strip().startswith('"'):
+                _add("critical", "command_injection",
+                      f"{name}({args})",
+                      "Command string is a variable — potential command injection")
+            elif args and ('"' in args):
+                # Has string literal but also concatenation
+                if '+' in args or '|' in args:
+                    _add("high", "command_concatenation",
+                          f"{name}({args})",
+                          "Command built by concatenation — possible injection")
+
+    # --- 4. Memory safety: use-after-free, double-free, null deref ---
+    free_vars = set()
+    use_after_free_lines = []
+    for i, line in enumerate(pseudo.splitlines()):
+        line_stripped = line.strip()
+        # Track freed pointers
+        free_match = _re.search(r'free\s*\(\s*(\w+)\s*\)', line_stripped)
+        if free_match:
+            free_vars.add(free_match.group(1))
+        # Track null assignments
+        null_match = _re.search(r'(\w+)\s*=\s*(?:0|NULL|null)\s*;', line_stripped)
+        if null_match:
+            free_vars.add(null_match.group(1))
+        # Check for use after free
+        for fv in free_vars:
+            if fv in line_stripped and 'free' not in line_stripped:
+                use_after_free_lines.append((i + 1, fv, line_stripped[:80]))
+    for lineno, var, line_text in use_after_free_lines[:3]:
+        _add("critical", "use_after_free",
+              f"line {lineno}: {line_text}",
+              f"Variable '{var}' used after free/null assignment")
+
+    # --- 5. Integer overflow in size calculations ---
+    for name, args, _pos in calls:
+        if name in ('malloc', 'calloc', 'realloc', 'VirtualAlloc', 'mmap', 'HeapAlloc'):
+            if args:
+                # Check for multiplication in size arg (integer overflow risk)
+                if '*' in args:
+                    _add("high", "integer_overflow_alloc",
+                          f"{name}({args})",
+                          "Size computed by multiplication — check for integer overflow before allocation")
+                # Check for user-controlled size
+                size_arg = args.split(',')[0].strip()
+                if _is_user_input(size_arg):
+                    _add("high", "user_controlled_alloc_size",
+                          f"{name}({args})",
+                          "Allocation size from user input — integer overflow or huge allocation DoS")
+
+    # --- 6. Network→sink data flow chains ---
+    network_sources = {'recv', 'recvfrom', 'recvmsg', 'read', 'fread', 'recv_s', 'gets'}
+    dangerous_sinks = {'memcpy', 'memmove', 'strcpy', 'strcat', 'sprintf', 'system',
+                       'exec', 'execve', 'popen', 'printf', 'vsprintf'}
+    present_sources = network_sources & set(found_apis)
+    present_sinks = dangerous_sinks & set(found_apis)
+    if present_sources and present_sinks:
+        # Check if there's a flow from source to sink in the pseudocode
+        # Simple heuristic: if both appear and there's a shared variable
+        source_vars = set()
+        sink_vars = set()
+        for name, args, _pos in calls:
+            if name in present_sources:
+                for a in args.split(','):
+                    a = a.strip()
+                    if a and not a.startswith('"') and not a.startswith('0x'):
+                        source_vars.add(a)
+            if name in present_sinks:
+                for a in args.split(','):
+                    a = a.strip()
+                    if a and not a.startswith('"') and not a.startswith('0x'):
+                        sink_vars.add(a)
+        shared = source_vars & sink_vars
+        if shared:
+            _add("critical", "source_to_sink_flow",
+                  f"sources={present_sources} sinks={present_sinks}",
+                  f"Variables flow from network/file input to dangerous sinks: {shared}")
+
+    # --- 7. Stack buffer with unchecked input ---
+    # char buf[N]; ... read/recv into buf without checking N
+    stack_bufs = _re.findall(r'(?:char|uint8_t|byte|int8_t)\s+(\w+)\s*\[\s*(\w+)\s*\]', pseudo)
+    for buf_name, buf_size in stack_bufs:
+        # Check if the buffer is used with an unbounded source
+        for name, args, _pos in calls:
+            if buf_name in args:
+                if name in ('recv', 'read', 'recvfrom') and buf_size not in args:
+                    _add("high", "stack_buffer_recv",
+                          f"{name}(..., {buf_name}, ...)",
+                          f"Stack buffer '{buf_name}[{buf_size}]' used with recv/read — verify size arg matches buffer")
+                elif name in ('strcpy', 'gets', 'scanf'):
+                    _add("critical", "stack_buffer_unbounded",
+                          f"{name}(..., {buf_name}, ...)",
+                          f"Stack buffer '{buf_name}[{buf_size}]' with unbounded input function")
+
+    # --- 8. TOCTOU (time-of-check-time-of-use) ---
+    if 'access' in found_apis or 'stat' in found_apis:
+        if any(name in found_apis for name in ('open', 'fopen', 'CreateFile')):
+            _add("medium", "toctou_race",
+                  "access/stat then open/fopen",
+                  "File checked then opened — TOCTOU race condition if file is swapped between check and use")
+
+    # --- 9. Hardcoded credentials / secrets ---
+    cred_patterns = _re.findall(r'(?:password|passwd|secret|api_key|apikey|token|auth)\s*=\s*"([^"]+)"', pseudo, _re.IGNORECASE)
+    if cred_patterns:
+        _add("high", "hardcoded_secret",
+              f"Found {len(cred_patterns)} hardcoded credential(s)",
+              "Hardcoded passwords/secrets in source — extract and report")
+
+    # --- 10. Dangerous Windows API combos ---
+    if 'VirtualAlloc' in found_apis and 'WriteProcessMemory' in found_apis:
+        _add("high", "process_injection",
+              "VirtualAlloc + WriteProcessMemory",
+              "Classic process injection pattern — allocate in remote process then write shellcode")
+    if 'CreateRemoteThread' in found_apis:
+        _add("critical", "remote_thread_injection",
+              "CreateRemoteThread",
+              "Remote thread creation — likely code injection into another process")
+
+    # --- Sort by severity ---
+    severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    findings.sort(key=lambda f: severity_order.get(f.get("severity", "low"), 99))
+
+    # For backward compat: if caller wants simple strings (not detailed), flatten
+    if not detailed:
+        return [f"{f['pattern']} — {f['detail'][:60]}" for f in findings]
+    return findings
 
 
 def _build_pseudocode_complexity(pseudo: str, *, include_switch_cases: bool = False, xor_count: int | None = None) -> dict:
@@ -472,7 +683,7 @@ def _build_decompile_enrichment(
 ) -> dict:
     found_apis = _detect_api_calls(pseudo, limit=api_limit)
     crypto_hints, xor_count = _detect_crypto_hints(pseudo)
-    dangerous = _detect_dangerous_patterns(found_apis, pseudo, detailed=detailed_dangerous)
+    dangerous = _detect_dangerous_patterns(found_apis, pseudo, detailed=True)
     var_hints = _extract_var_rename_hints(cfunc)
     ctx = gather_function_context(func_start_ea, max_refs=8)
     return {
@@ -509,9 +720,10 @@ def annotate_pseudocode(pseudo: str, func_ea: int, bb_context: list, dangerous: 
         title = entry.get("title", "")
         conf = entry.get("confidence", 0.5)
         header_annos.append(f"  // [BB:{cat}] {title} (confidence: {conf})")
-    for d in dangerous[:3]:
+    for d in dangerous[:5]:
         if isinstance(d, dict):
-            header_annos.append(f"  // [DANGER] {d.get('pattern', '')} — {d.get('detail', '')}")
+            sev = d.get('severity', 'medium').upper()
+            header_annos.append(f"  // [{sev}] {d.get('pattern', '')} — {d.get('detail', '')}")
         elif isinstance(d, str):
             header_annos.append(f"  // [DANGER] {d}")
     if header_annos:
