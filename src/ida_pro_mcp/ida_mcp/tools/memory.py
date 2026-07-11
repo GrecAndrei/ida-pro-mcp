@@ -45,15 +45,11 @@ def _extract_strings(data, min_len=4):
     return strings
 
 
-def _is_be():
-    return _inf_is_be()
-
-
 def _find_pointers(data, start_ea):
     """Find all valid pointers in a byte sequence."""
     is_64 = _inf_bitness() == 64
     ptr_size = 8 if is_64 else 4
-    endian = ">" if _is_be() else "<"
+    endian = ">" if _inf_inf_is_be() else "<"
     fmt = f"{endian}Q" if is_64 else f"{endian}I"
     import struct
     pointers = []
@@ -68,9 +64,9 @@ def _find_pointers(data, start_ea):
 @idawrite
 def memory(
     action: Annotated[Literal[
-        "read", "write", "hexdump", "search", "compare", "pointers", "find_pointers",
+        "read", "write", "hexdump", "search", "compare", "pointers",
         "entropy", "strings", "struct_walk", "histogram"
-    ], "Action: read|write|hexdump|search|compare|pointers|find_pointers|entropy|strings|struct_walk|histogram"],
+    ], "Action: read|write|hexdump|search|compare|pointers|entropy|strings|struct_walk|histogram"],
     addr: Annotated[Optional[str], "Address (required for most actions; optional for search with start/end)"] = None,
     type: Annotated[Literal["bytes", "u8", "u16", "u32", "u64", "s8", "s16", "s32", "s64", "f32", "f64", "ptr", "string"],
                     "Data type (for read). Default 'bytes' — returns hex dump of size bytes"] = "bytes",
@@ -96,12 +92,13 @@ def memory(
     - histogram: Byte frequency histogram for a region.
 
     Arguments:
-    - addr: Address to read/write/search.
-    - type: Data type for read (u8/u16/u32/u64, s8/s16/s32/s64, f32/f64, ptr, bytes, string). Default 'u32'.
+    - addr: Address to read/write/search. For search with no addr, auto-fills from IDB minimum address with a 64KB window.
+    - type: Data type for read (u8/u16/u32/u64, s8/s16/s32/s64, f32/f64, ptr, bytes, string). Default 'bytes'.
     - size: Number of bytes to read (only for type='bytes' or action='hexdump'). Default 16.
     - data: Hex string to write (e.g. "90 90 90") REQUIRED for write; search pattern for search.
     - end_addr: End address for region-based actions (search, compare, pointers, entropy, strings, histogram).
     - depth: Max recursion depth for struct_walk.
+    - **kwargs: search supports regex (bool), literal (bool — bypass integer detection), int_width (int, default 4).
     """
     result = _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs)
     return result
@@ -164,14 +161,14 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
                 if not raw:
                     return make_error(MCPError.ADDRESS_INVALID, f"Could not read 4 bytes from {hex(ea)}")
                 import struct
-                endian = ">" if _is_be() else "<"
+                endian = ">" if _inf_is_be() else "<"
                 value = struct.unpack(f"{endian}f", raw)[0]
             elif type == "f64":
                 raw = ida_bytes.get_bytes(ea, 8)
                 if not raw:
                     return make_error(MCPError.ADDRESS_INVALID, f"Could not read 8 bytes from {hex(ea)}")
                 import struct
-                endian = ">" if _is_be() else "<"
+                endian = ">" if _inf_is_be() else "<"
                 value = struct.unpack(f"{endian}d", raw)[0]
             elif type == "ptr":
                 is_64 = _inf_bitness() == 64
@@ -186,7 +183,7 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
                     else:
                         value = s[:65536] if len(s) > 65536 else s
                 else:
-                    value = None
+                    return make_error(MCPError.ADDRESS_INVALID, f"No string found at {hex(ea)}")
             else:
                 return make_error(MCPError.INVALID_ARGS, f"Unknown type: {type}")
             resp = {"ok": True, "addr": addr, "type": type, "value": value}
@@ -250,6 +247,7 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
             if end_ea <= ea:
                 end_ea = ea + 0x10000
             region_size = min(end_ea - ea, 1024 * 1024)
+            region_capped = (end_ea - ea) > 1024 * 1024
             raw = ida_bytes.get_bytes(ea, region_size)
             if not raw:
                 return make_error(MCPError.IDA_ERROR, f"Could not read region starting at {hex(ea)}")
@@ -257,13 +255,14 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
             pattern_bytes = None
             wildcard_mask = None
             regex_mode = bool(kwargs.get("regex", False))
+            literal_mode = bool(kwargs.get("literal", False))
             int_mode = False
             try:
-                if re.fullmatch(r"0x[0-9a-fA-F]+|\d+", pattern):
+                if not literal_mode and re.fullmatch(r"0x[0-9a-fA-F]+|\d+", pattern):
                     int_mode = True
                     v = int(pattern, 0)
                     width = int(kwargs.get("int_width", 4) or 4)
-                    endian = "big" if _is_be() else "little"
+                    endian = "big" if _inf_is_be() else "little"
                     pattern_bytes = int(v).to_bytes(width, endian, signed=False)
                 elif re.search(r"\?\?|[0-9a-fA-F]{2}(?:\s+[0-9a-fA-F?]{2})+", pattern):
                     toks = pattern.split()
@@ -311,7 +310,7 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
                     if len(hits) >= 256:
                         break
                     idx = raw.find(pattern_bytes, idx + 1)
-            return {"ok": True, "pattern": pattern, "hits": hits, "count": len(hits), "region": f"{hex(ea)}-{hex(ea + region_size)}", "mode": ("regex" if regex_mode else ("integer" if int_mode else ("hex_wildcard" if wildcard_mask is not None else "bytes")))}
+            return {"ok": True, "pattern": pattern, "hits": hits, "count": len(hits), "region": f"{hex(ea)}-{hex(ea + region_size)}", "region_capped": region_capped, "hits_capped": len(hits) >= 256, "mode": ("regex" if regex_mode else ("integer" if int_mode else ("hex_wildcard" if wildcard_mask is not None else "bytes")))}
 
         elif action == "compare":
             addr1 = str(kwargs.get("addr1") or addr or "").strip()
@@ -340,10 +339,11 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
                     diffs.append({"offset": i, "byte1": f"{raw_a[i]:02x}", "byte2": f"{raw_b[i]:02x}", "addr1": hex(ea1 + i), "addr2": hex(ea2 + i)})
             if len(raw_a) != len(raw_b):
                 diffs.append({"offset": min_len, "size_diff": f"A={len(raw_a)} B={len(raw_b)}"})
-            # Bounded Levenshtein-like edit distance for bytes.
+            # Hamming distance fallback for large compares (true Levenshtein is O(n*m)).
             if len(raw_a) * len(raw_b) > 4_000_000:
-                # Fallback for large compares: approximate with positional hamming + size delta.
-                edit_distance = sum(1 for i in range(min_len) if raw_a[i] != raw_b[i]) + abs(len(raw_a) - len(raw_b))
+                hamming = sum(1 for i in range(min_len) if raw_a[i] != raw_b[i]) + abs(len(raw_a) - len(raw_b))
+                similarity = round(100.0 * (1.0 - (hamming / max(1, len(raw_a), len(raw_b)))), 2)
+                return {"ok": True, "addr1": hex(ea1), "addr2": hex(ea2), "size": cmp_size, "diff_count": len(diffs), "diffs": diffs[:256], "hamming_distance": int(hamming), "similarity_pct": similarity, "size_capped": cmp_size == max_cmp, "note": "Large compare: hamming distance used (exact Levenshtein is O(n*m))."}
             else:
                 dp = list(range(len(raw_b) + 1))
                 for i in range(1, len(raw_a) + 1):
@@ -355,10 +355,10 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
                         dp[j] = min(dp[j] + 1, dp[j - 1] + 1, prev + cost)
                         prev = cur
                 edit_distance = dp[-1]
-            similarity = round(100.0 * (1.0 - (edit_distance / max(1, len(raw_a), len(raw_b)))), 2)
-            return {"ok": True, "addr1": hex(ea1), "addr2": hex(ea2), "size": cmp_size, "diff_count": len(diffs), "diffs": diffs[:256], "edit_distance": int(edit_distance), "similarity_pct": similarity, "size_capped": cmp_size == max_cmp}
+                similarity = round(100.0 * (1.0 - (edit_distance / max(1, len(raw_a), len(raw_b)))), 2)
+                return {"ok": True, "addr1": hex(ea1), "addr2": hex(ea2), "size": cmp_size, "diff_count": len(diffs), "diffs": diffs[:256], "edit_distance": int(edit_distance), "similarity_pct": similarity, "size_capped": cmp_size == max_cmp}
 
-        elif action in ("pointers", "find_pointers"):
+        elif action == "pointers":
             end_ea = parse_address(end_addr) if end_addr else ea + 0x10000
             region_size = min(end_ea - ea, 1024 * 1024)
             raw = ida_bytes.get_bytes(ea, region_size)
@@ -391,7 +391,7 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
         elif action == "struct_walk":
             is_64 = _inf_bitness() == 64
             ptr_size = 8 if is_64 else 4
-            endian = ">" if _is_be() else "<"
+            endian = ">" if _inf_is_be() else "<"
             fmt = f"{endian}Q" if is_64 else f"{endian}I"
             import struct
             visited = set()

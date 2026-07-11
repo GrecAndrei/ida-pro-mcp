@@ -162,7 +162,6 @@ ACTION_ARGS: dict[tuple[str, str], dict] = {
     ("memory", "strings"):       {"addr": "__ADDR__", "size": 64},
     ("memory", "search"):        {"pattern": "deadbeef", "addr": "__ADDR__", "size": 64},
     ("memory", "pointers"):      {"addr": "__ADDR__", "size": 64},
-    ("memory", "find_pointers"):  {"addr": "__ADDR__"},
     ("memory", "entropy"):        {"addr": "__ADDR__", "size": 64},
     ("memory", "histogram"):      {"addr": "__ADDR__", "size": 64},
     ("memory", "struct_walk"):    {"addr": "__ADDR__"},

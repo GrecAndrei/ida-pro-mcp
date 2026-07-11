@@ -70,12 +70,23 @@ class InsightIndex:
         self._access_log: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._lock = threading.RLock()
         self._persistence_path = persistence_path
+        self._dirty = False
+        self._last_save = 0.0
         if persistence_path:
             self._load()
 
     # ------------------------------------------------------------------
     # Indexing
     # ------------------------------------------------------------------
+
+    def _mark_dirty(self) -> None:
+        """Mark index as modified and autosave if enough time has passed."""
+        self._dirty = True
+        now = time.time()
+        if self._persistence_path and now - self._last_save > 60:
+            self._last_save = now
+            self._dirty = False
+            self.save()
 
     def index_function(self, func_addr: str, attributes: dict[str, Any]) -> None:
         """
@@ -124,6 +135,7 @@ class InsightIndex:
                 tag = tag.lower()
                 if addr not in self._tag_map[tag]:
                     self._tag_map[tag].append(addr)
+        self._mark_dirty()
 
     def rebuild(self, functions: list[tuple[str, dict[str, Any]]]) -> None:
         """
@@ -174,6 +186,8 @@ class InsightIndex:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)
             os.replace(tmp, target)
+            self._dirty = False
+            self._last_save = time.time()
         except Exception:
             with contextlib.suppress(OSError):
                 os.remove(tmp)

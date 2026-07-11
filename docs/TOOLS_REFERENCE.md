@@ -328,7 +328,7 @@ Manages IDA type system: structs, enums, prototypes, type propagation, and heade
 
 ### memory
 
-Read, write, and inspect raw memory/bytes in the binary or debuggee, plus host filesystem read/write helpers. Actions: read, write, hexdump, search, compare, pointers, find_pointers, entropy, strings, struct_walk, histogram, read_file, write_file.
+Read, write, and inspect raw memory/bytes in the binary or debuggee, plus host filesystem read/write helpers. search: set literal=true to bypass integer detection for digit-only patterns. compare: returns hamming_distance for large inputs, edit_distance for small. Actions: read, write, hexdump, search, compare, pointers, entropy, strings, struct_walk, histogram, read_file, write_file.
 
 **Actions:**
 
@@ -338,7 +338,6 @@ Read, write, and inspect raw memory/bytes in the binary or debuggee, plus host f
 - `search`
 - `compare`
 - `pointers`
-- `find_pointers`
 - `entropy`
 - `strings`
 - `struct_walk`

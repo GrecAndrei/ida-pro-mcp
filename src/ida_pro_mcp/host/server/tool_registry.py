@@ -107,7 +107,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "knowledge": ["chip_identify", "symbol_lookup", "import_symbols", "export_session", "chip_families"],
 
     "lumina": ["pull", "push", "status", "history", "search", "get_metadata"],
-    "memory": ["read", "write", "hexdump", "search", "compare", "pointers", "find_pointers", "entropy", "strings", "struct_walk", "histogram", "read_file", "write_file"],
+    "memory": ["read", "write", "hexdump", "search", "compare", "pointers", "entropy", "strings", "struct_walk", "histogram", "read_file", "write_file"],
     "microcode": ["get", "blocks", "instructions", "def_use_graph"],
     "misc": ["python", "idc", "load_sig", "cache_stats", "plugin_list", "plugin_run", "read_file", "write_file", "health", "reload"],
     "modify": ["rename", "comment", "set_type", "patch_asm"],
