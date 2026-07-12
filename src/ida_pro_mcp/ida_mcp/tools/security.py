@@ -1,10 +1,22 @@
 """security — Unified security analysis tool.
 
-Merges: packer, hooks, deobfuscate, crypto_id, entropy, protocol, taint
-into a single tool with a flat action namespace.
+11 actions covering all security concerns.  Merges 7 former tools (49 actions)
+into a flat namespace with real orchestration, not wrapper delegation.
 
-All sub-tool implementations remain in their original files as plain functions.
-This file is the single MCP entry point.
+Actions:
+  detect         — orchestrator: packer + entropy + crypto + anti-analysis + obfuscation
+  decode         — decode bytes at addr (XOR brute force, Base64)
+  analyze        — scan functions for patterns (what=stack_strings|dead_code|api_hashing|
+                   dynamic_dispatch|anti_disasm|crypto_constants|encoding|checksums|aes_ni)
+  hook           — generate instrumentation script (method=frida|detours|inline)
+  hook_targets   — find interesting functions to hook (by category)
+  protocol       — detect protocol usage, find parsers/serializers/handlers/endpoints
+  protocol_spec  — recover protocol structure (packet_struct, magic_numbers, state_machine,
+                   reconstruct, trace_handler, export_spec)
+  taint          — trace data flow from source to sinks
+  taint_sources  — list all taint sources (imports + blackboard IOCs)
+  taint_report   — full report: all sources → all reachable sinks
+  eval           — run custom Python in security namespace
 """
 
 try:
@@ -13,72 +25,286 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 from typing import Annotated, Optional
+import sys
+import time
 
-# Import sub-tool implementations (now plain functions, no @tool registration)
+# ── Import sub-tool implementations (plain functions, no @tool) ──────────────
+from . import packer as _packer_mod
 from . import deobfuscate as _deobf_mod
 from . import crypto_id as _crypto_mod
 from . import entropy as _entropy_mod
 from . import hooks as _hooks_mod
-from . import packer as _packer_mod
 from . import taint as _taint_mod
 
-# protocol is optional (heavy dependency on BehaviorClassifier)
 try:
     from . import protocol as _protocol_mod
 except Exception:
-    _protocol_mod = None  # type: ignore
+    _protocol_mod = None
 
-# ── Action routing table ────────────────────────────────────────────────────
-# Maps action name → (module, function_name)
-_ACTION_MAP: dict[str, tuple] = {}
 
-def _register(source_module, actions: list[str]):
-    """Register actions from a source module."""
-    func = None
-    # Find the main tool function in the module
-    for name in dir(source_module):
-        obj = getattr(source_module, name)
-        if callable(obj) and not name.startswith("_"):
-            # Check if it was a @tool function by looking for the action param
-            import inspect
-            try:
-                sig = inspect.signature(obj)
-                if "action" in sig.parameters:
-                    func = obj
-                    break
-            except Exception:
-                pass
-    if func is None:
-        return
-    for action_name in actions:
-        _ACTION_MAP[action_name] = func
+# ── detect: orchestrator ─────────────────────────────────────────────────────
 
-# Register all actions from each sub-tool
-_register(_packer_mod, ["detect", "profile", "guide", "status", "script"])
-_register(_hooks_mod, ["suggest", "generate_frida", "generate_detours", "find_targets", "inline_hooks"])
-_register(_deobf_mod, ["detect_encoding", "stack_strings", "dead_code", "api_hashing",
-                        "dynamic_dispatch", "anti_disasm", "decode_attempt"])
-# deobfuscate's "detect" conflicts with packer's "detect" — prefix it
-_register(_deobf_mod, ["deobf_detect"])
-_register(_crypto_mod, ["identify", "constants", "encoding", "checksums", "entropy_analysis", "aes_ni"])
-_register(_entropy_mod, ["section", "region", "packed_detect", "crypto_detect",
-                          "compare", "window", "summary"])
-_register(_taint_mod, ["sources", "sinks", "trace", "paths", "report"])
-if _protocol_mod is not None:
-    _register(_protocol_mod, [
-        "detect_protocol", "parsers", "serializers", "handlers", "endpoints",
-        "tls_config", "socket_flow", "packet_struct", "magic_numbers",
-        "state_machine", "reconstruct", "trace_handler", "export_spec",
-    ])
+def _run_detect(addr, limit, include_anti_debug, include_drm, max_string_scan):
+    """Run packer + entropy + crypto + deobfuscation in one pass."""
+    results = {}
+    ts = time.time()
 
-# Alias mapping for disambiguation
-_ACTION_ALIASES = {
-    # deobfuscate's "detect" → "deobf_detect"
-    "deobf_detect": ("deobfuscate", "detect"),
-    # protocol's "detect" → "detect_protocol"
-    "detect_protocol": ("protocol", "detect"),
+    # 1. Packer detection (the core)
+    try:
+        packer_result = _packer_mod.packer(
+            action="detect",
+            include_anti_debug=include_anti_debug,
+            include_drm=include_drm,
+            max_string_scan=max_string_scan,
+        )
+        results["packer"] = packer_result
+    except Exception as e:
+        results["packer"] = {"error": str(e)}
+
+    # 2. Per-section entropy summary
+    try:
+        ent_result = _entropy_mod.entropy(action="section", limit=limit)
+        results["entropy"] = ent_result
+    except Exception as e:
+        results["entropy"] = {"error": str(e)}
+
+    # 3. Crypto constant scanning
+    try:
+        crypto_result = _crypto_mod.crypto_id(action="identify", limit=limit)
+        results["crypto"] = {
+            "algorithms": crypto_result.get("algorithms_found", []),
+            "count": crypto_result.get("count", 0),
+        }
+    except Exception as e:
+        results["crypto"] = {"error": str(e)}
+
+    # 4. Obfuscation signal scan (deterministic, fast)
+    try:
+        deobf_result = _deobf_mod.deobfuscate(action="detect", addr=addr, limit=limit)
+        results["obfuscation"] = {
+            "classifier": deobf_result.get("classifier"),
+            "count": deobf_result.get("count", 0),
+            "findings": deobf_result.get("findings", ""),
+        }
+    except Exception as e:
+        results["obfuscation"] = {"error": str(e)}
+
+    # Build unified summary
+    packer_data = results.get("packer", {})
+    classification = packer_data.get("classification", {})
+    recommendation = packer_data.get("recommendation", "unknown")
+
+    summary_parts = []
+    packer_name = classification.get("packer", "none")
+    if packer_name != "none":
+        summary_parts.append(f"packer={packer_name}({classification.get('confidence', 0)})")
+
+    crypto_algos = results.get("crypto", {}).get("algorithms", [])
+    if crypto_algos:
+        summary_parts.append(f"crypto={','.join(crypto_algos)}")
+
+    obf_count = results.get("obfuscation", {}).get("count", 0)
+    if obf_count:
+        summary_parts.append(f"obfuscation_signals={obf_count}")
+
+    return {
+        "ok": True,
+        "action": "detect",
+        "ts": round(ts, 3),
+        "summary": "  ".join(summary_parts) if summary_parts else "clean",
+        "recommendation": recommendation,
+        "warning": packer_data.get("warning"),
+        **results,
+    }
+
+
+# ── analyze: scan functions for patterns ─────────────────────────────────────
+
+_ANALYZE_DISPATCH = {
+    "stack_strings": lambda addr, limit, **kw: _deobf_mod.deobfuscate(action="stack_strings", addr=addr, limit=limit),
+    "dead_code":     lambda addr, limit, **kw: _deobf_mod.deobfuscate(action="dead_code", addr=addr, limit=limit),
+    "api_hashing":   lambda addr, limit, **kw: _deobf_mod.deobfuscate(action="api_hashing", addr=addr, limit=limit),
+    "dynamic_dispatch": lambda addr, limit, **kw: _deobf_mod.deobfuscate(action="dynamic_dispatch", addr=addr, limit=limit),
+    "anti_disasm":   lambda addr, limit, **kw: _deobf_mod.deobfuscate(action="anti_disasm", addr=addr, limit=limit),
+    "crypto_constants": lambda addr, limit, **kw: _crypto_mod.crypto_id(action="constants", limit=limit),
+    "encoding":      lambda addr, limit, **kw: _crypto_mod.crypto_id(action="encoding", limit=limit),
+    "checksums":     lambda addr, limit, **kw: _crypto_mod.crypto_id(action="checksums", limit=limit),
+    "aes_ni":        lambda addr, limit, **kw: _crypto_mod.crypto_id(action="aes_ni", limit=limit),
+    "entropy_high":  lambda addr, limit, **kw: _crypto_mod.crypto_id(action="entropy_analysis", limit=limit),
 }
 
+
+def _run_analyze(what, addr, limit, **kwargs):
+    handler = _ANALYZE_DISPATCH.get(what)
+    if not handler:
+        return make_error(
+            MCPError.INVALID_ARGS,
+            f"Unknown analyze target: '{what}'",
+            hint=f"Available: {', '.join(sorted(_ANALYZE_DISPATCH.keys()))}",
+        )
+    return handler(addr, limit, **kwargs)
+
+
+# ── hook: generate instrumentation ───────────────────────────────────────────
+
+def _run_hook(method, addr, func_name, category):
+    if method == "frida":
+        return _hooks_mod.hooks(action="generate_frida", addr=addr, func_name=func_name)
+    elif method == "detours":
+        return _hooks_mod.hooks(action="generate_detours", addr=addr, func_name=func_name)
+    elif method == "inline":
+        return _hooks_mod.hooks(action="inline_hooks", addr=addr)
+    else:
+        return make_error(
+            MCPError.INVALID_ARGS,
+            f"Unknown hook method: '{method}'",
+            hint="Available: frida, detours, inline",
+        )
+
+
+# ── hook_targets: find interesting functions ─────────────────────────────────
+
+def _run_hook_targets(category, addr, limit):
+    if category:
+        return _hooks_mod.hooks(action="suggest", category=category)
+    return _hooks_mod.hooks(action="find_targets")
+
+
+# ── protocol: orchestrator for protocol detection ────────────────────────────
+
+def _run_protocol(addr, limit):
+    if _protocol_mod is None:
+        return make_error(MCPError.INVALID_ARGS, "Protocol module not available")
+    return _protocol_mod.protocol(action="detect", addr=addr, limit=limit)
+
+
+# ── protocol_spec: recover protocol structure ────────────────────────────────
+
+_PROTOCOL_SPEC_ACTIONS = {
+    "packet_struct", "magic_numbers", "state_machine", "reconstruct",
+    "trace_handler", "export_spec", "parsers", "serializers", "handlers",
+    "endpoints", "tls_config", "socket_flow",
+}
+
+
+def _run_protocol_spec(what, addr, limit):
+    if _protocol_mod is None:
+        return make_error(MCPError.INVALID_ARGS, "Protocol module not available")
+    if what not in _PROTOCOL_SPEC_ACTIONS:
+        return make_error(
+            MCPError.INVALID_ARGS,
+            f"Unknown protocol_spec target: '{what}'",
+            hint=f"Available: {', '.join(sorted(_PROTOCOL_SPEC_ACTIONS))}",
+        )
+    return _protocol_mod.protocol(action=what, addr=addr, limit=limit)
+
+
+# ── taint: trace from source to sink ─────────────────────────────────────────
+
+def _run_taint(source, addr, max_depth, max_paths):
+    return _taint_mod.taint(
+        action="trace", addr=addr, source=source,
+        max_depth=max_depth, max_paths=max_paths,
+    )
+
+
+def _run_taint_sources(limit):
+    return _taint_mod.taint(action="sources")
+
+
+def _run_taint_report(max_depth, max_paths):
+    return _taint_mod.taint(action="report", max_depth=max_depth, max_paths=max_paths)
+
+
+# ── eval: run custom Python ──────────────────────────────────────────────────
+
+_SCRIPT_SAFE_BUILTINS = {
+    "abs", "all", "any", "bin", "bool", "bytes", "callable", "chr",
+    "dict", "divmod", "enumerate", "filter", "float", "format", "frozenset",
+    "hash", "hex", "id", "int", "isinstance", "issubclass", "iter", "len",
+    "list", "map", "max", "min", "next", "object", "oct", "ord", "pow",
+    "print", "range", "repr", "reversed", "round", "set", "slice", "sorted",
+    "str", "sum", "tuple", "type", "vars", "zip",
+}
+
+_MAX_SCRIPT_CHARS = 16384
+_MAX_SCRIPT_OUTPUT = 200000
+
+
+def _run_eval(code, extra_globals):
+    import builtins as _b
+    import json as _json
+
+    if not code or not isinstance(code, str):
+        return make_error(MCPError.INVALID_ARGS, "eval requires non-empty 'code' (Python expression)")
+    if len(code) > _MAX_SCRIPT_CHARS:
+        return make_error(MCPError.INVALID_ARGS, f"script code exceeds {_MAX_SCRIPT_CHARS} characters")
+
+    forbidden = {"open", "exec", "eval", "__import__", "compile", "input"}
+    for tok in forbidden:
+        if tok + "(" in code or tok + " " in code or code.startswith(tok):
+            return make_error(MCPError.INVALID_ARGS, f"script may not use '{tok}'")
+
+    safe_b = {k: getattr(_b, k) for k in _SCRIPT_SAFE_BUILTINS if hasattr(_b, k)}
+    ns = {
+        # All sub-tool functions available for custom composition
+        "packer": _packer_mod.packer,
+        "deobfuscate": _deobf_mod.deobfuscate,
+        "crypto_id": _crypto_mod.crypto_id,
+        "entropy": _entropy_mod.entropy,
+        "hooks": _hooks_mod.hooks,
+        "taint": _taint_mod.taint,
+        "protocol": _protocol_mod.protocol if _protocol_mod else None,
+        # IDA SDK
+        "idaapi": sys.modules.get("idaapi"),
+        "idautils": sys.modules.get("idautils"),
+        "idc": sys.modules.get("idc"),
+        "ida_bytes": sys.modules.get("ida_bytes"),
+        "ida_nalt": sys.modules.get("ida_nalt"),
+        "ida_segment": sys.modules.get("ida_segment"),
+        "ida_funcs": sys.modules.get("ida_funcs"),
+        "ida_ida": sys.modules.get("ida_ida"),
+        # stdlib
+        "json": __import__("json"),
+        "os": __import__("os"),
+        "re": __import__("re"),
+        "time": __import__("time"),
+        "math": __import__("math"),
+        "struct": __import__("struct"),
+        "collections": __import__("collections"),
+        "hashlib": __import__("hashlib"),
+        "__builtins__": safe_b,
+    }
+    if extra_globals:
+        for k, v in extra_globals.items():
+            if isinstance(k, str) and k.isidentifier():
+                ns[k] = v
+
+    try:
+        try:
+            value = eval(compile(code, "<security-eval>", "eval"), ns)
+        except SyntaxError:
+            exec(compile(code, "<security-eval>", "exec"), ns)
+            value = ns.get("result")
+    except Exception as e:
+        return make_error(MCPError.IDA_ERROR, f"script raised: {type(e).__name__}: {e}")
+
+    serialized = value
+    try:
+        if isinstance(serialized, (dict, list, str, int, float, bool, type(None))):
+            raw = _json.dumps(serialized, default=str, ensure_ascii=False)
+            if len(raw) > _MAX_SCRIPT_OUTPUT:
+                raw = raw[:_MAX_SCRIPT_OUTPUT] + "...[truncated]"
+                try:
+                    serialized = _json.loads(raw)
+                except Exception:
+                    serialized = {"_truncated": True, "preview": raw}
+    except Exception:
+        pass
+    return {"ok": True, "result": serialized}
+
+
+# ── Main entry point ─────────────────────────────────────────────────────────
 
 @tool
 @idaread
@@ -86,86 +312,131 @@ def security(
     action: Annotated[str, "Security analysis action"],
     addr: Annotated[Optional[str], "Address or function to analyze"] = None,
     limit: Annotated[int, "Max results"] = 50,
+    what: Annotated[Optional[str], "Sub-target for analyze/protocol_spec"] = None,
+    source: Annotated[Optional[str], "Taint source name or address"] = None,
+    method: Annotated[Optional[str], "Hook method: frida|detours|inline"] = None,
+    category: Annotated[Optional[str], "Hook category: network|file|crypto|registry|process"] = None,
+    func_name: Annotated[Optional[str], "Function name for hook generation"] = None,
+    max_depth: Annotated[int, "Max call-graph depth for taint"] = 5,
+    max_paths: Annotated[int, "Max paths to return"] = 20,
+    key: Annotated[Optional[str], "Decryption key for decode (hex)"] = None,
+    code: Annotated[Optional[str], "Python code for eval action"] = None,
+    include_anti_debug: Annotated[bool, "Include anti-debug detection in detect"] = True,
+    include_drm: Annotated[bool, "Include anti-cheat detection in detect"] = True,
     **kwargs,
 ) -> dict:
-    """Unified security analysis tool.
+    """Unified security analysis.
 
-    Combines packer detection, deobfuscation, crypto identification,
-    entropy analysis, hook generation, protocol analysis, and taint
-    analysis into a single tool.
+    ACTIONS:
 
-    ACTIONS BY CATEGORY:
+    detect — Full security sweep. Runs packer detection, per-section entropy,
+        crypto constant scanning, and obfuscation signal analysis in one pass.
+        Returns classification, recommendation, entropy map, crypto algorithms
+        found, and obfuscation signals.
 
-    Packer (5): detect, profile, guide, status, script
-    Deobfuscation (8): deobf_detect, detect_encoding, stack_strings, dead_code,
-                        api_hashing, dynamic_dispatch, anti_disasm, decode_attempt
-    Crypto (6): identify, constants, encoding, checksums, entropy_analysis, aes_ni
-    Entropy (7): section, region, packed_detect, crypto_detect, compare, window, summary
-    Hooks (5): suggest, generate_frida, generate_detours, find_targets, inline_hooks
-    Protocol (13): detect_protocol, parsers, serializers, handlers, endpoints,
-                   tls_config, socket_flow, packet_struct, magic_numbers,
-                   state_machine, reconstruct, trace_handler, export_spec
-    Taint (5): sources, sinks, trace, paths, report
+    decode — Decode bytes at addr. Brute-forces single-byte XOR keys and
+        checks for Base64. Params: addr (required), key (optional hex).
 
-    Examples:
-      security(action="identify") — find crypto algorithms
-      security(action="trace", source="recv") — taint from recv to sinks
-      security(action="detect") — quick packer detection
-      security(action="deobf_detect") — deobfuscation analysis
-      security(action="packed_detect") — find high-entropy windows
-      security(action="suggest", category="network") — hook suggestions
-      security(action="report") — full taint report
+    analyze — Scan functions for specific security patterns. Requires `what`:
+        stack_strings, dead_code, api_hashing, dynamic_dispatch, anti_disasm,
+        crypto_constants, encoding, checksums, aes_ni, entropy_high.
+        Params: what (required), addr (optional, scopes to function).
+
+    hook — Generate instrumentation code. Requires `method`:
+        frida — Frida JavaScript hook script
+        detours — Microsoft Detours C++ template
+        inline — inline hook / trampoline points
+        Params: method (required), addr or func_name.
+
+    hook_targets — Find interesting functions to hook.
+        Params: category (optional: network|file|crypto|registry|process).
+
+    protocol — Detect protocol usage in the binary.
+        Params: addr (optional).
+
+    protocol_spec — Recover protocol structure. Requires `what`:
+        parsers, serializers, handlers, endpoints, tls_config, socket_flow,
+        packet_struct, magic_numbers, state_machine, reconstruct,
+        trace_handler, export_spec.
+
+    taint — Trace data flow from a source to dangerous sinks.
+        Params: source (required: import name or address).
+
+    taint_sources — List all taint sources (imports + blackboard IOCs).
+
+    taint_report — Full taint report: all sources → all reachable sinks.
+
+    eval — Run custom Python with access to all sub-tool functions, IDA SDK,
+        and stdlib. Params: code (required).
     """
-    # Resolve aliases
-    resolved = _ACTION_ALIASES.get(action)
-    if resolved:
-        module_name, real_action = resolved
-        kwargs["action"] = real_action
-    else:
-        kwargs["action"] = action
-
-    # Find the handler
-    handler = _ACTION_MAP.get(action)
-    if handler is None:
-        # Try the resolved action
-        if resolved:
-            handler = _ACTION_MAP.get(resolved[1])
-    if handler is None:
-        return make_error(
-            MCPError.INVALID_ARGS,
-            f"Unknown security action: '{action}'",
-            hint=f"Available: {', '.join(sorted(_ACTION_MAP.keys()))}",
-        )
-
-    # Route to the handler
     try:
-        import inspect
-        sig = inspect.signature(handler)
-        # Build kwargs for the handler, only passing what it accepts
-        call_kwargs = {}
-        handler_params = set(sig.parameters.keys())
-        # Always pass action
-        call_kwargs["action"] = kwargs.get("action", action)
-        # Pass common params if accepted
-        for param in ("addr", "limit", "rules", "size", "context_bytes",
-                       "include_func", "include_anti_debug", "include_drm",
-                       "code", "max_string_scan", "category", "func_name",
-                       "source", "max_depth", "max_paths", "key", "depth",
-                       "threshold", "end_addr", "window", "step",
-                       "min_entropy", "decode", "query", "probe",
-                       "deep_hash", "include_context", "top_k",
-                       "max_items", "max_strings"):
-            if param in handler_params and param in kwargs:
-                call_kwargs[param] = kwargs[param]
-            elif param in handler_params and param == "addr" and addr is not None:
-                call_kwargs["addr"] = addr
-            elif param in handler_params and param == "limit":
-                call_kwargs["limit"] = limit
-        # Pass any remaining kwargs that the handler accepts
-        for k, v in kwargs.items():
-            if k not in call_kwargs and k in handler_params:
-                call_kwargs[k] = v
+        if action == "detect":
+            return _run_detect(addr, limit, include_anti_debug, include_drm, kwargs.get("max_string_scan", 5000))
 
-        return handler(**call_kwargs)
+        elif action == "decode":
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required for decode")
+            ea, err = validate_addr(addr)
+            if err:
+                return err
+            return _deobf_mod.deobfuscate(action="decode_attempt", addr=addr, limit=limit, key=key)
+
+        elif action == "analyze":
+            if not what:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "what required for analyze",
+                    hint=f"Available: {', '.join(sorted(_ANALYZE_DISPATCH.keys()))}",
+                )
+            return _run_analyze(what, addr, limit, **kwargs)
+
+        elif action == "hook":
+            if not method:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "method required for hook",
+                    hint="Available: frida, detours, inline",
+                )
+            if not addr and not func_name:
+                return make_error(MCPError.INVALID_ARGS, "addr or func_name required for hook")
+            return _run_hook(method, addr, func_name, category)
+
+        elif action == "hook_targets":
+            return _run_hook_targets(category, addr, limit)
+
+        elif action == "protocol":
+            return _run_protocol(addr, limit)
+
+        elif action == "protocol_spec":
+            if not what:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "what required for protocol_spec",
+                    hint=f"Available: {', '.join(sorted(_PROTOCOL_SPEC_ACTIONS))}",
+                )
+            return _run_protocol_spec(what, addr, limit)
+
+        elif action == "taint":
+            if not source and not addr:
+                return make_error(MCPError.INVALID_ARGS, "source or addr required for taint")
+            return _run_taint(source, addr, max_depth, max_paths)
+
+        elif action == "taint_sources":
+            return _run_taint_sources(limit)
+
+        elif action == "taint_report":
+            return _run_taint_report(max_depth, max_paths)
+
+        elif action == "eval":
+            return _run_eval(code, kwargs.get("globals"))
+
+        else:
+            return make_error(
+                MCPError.INVALID_ARGS,
+                f"Unknown security action: '{action}'",
+                hint="Available: detect, decode, analyze, hook, hook_targets, protocol, "
+                     "protocol_spec, taint, taint_sources, taint_report, eval",
+            )
+
     except Exception as e:
         return handle_error(e)

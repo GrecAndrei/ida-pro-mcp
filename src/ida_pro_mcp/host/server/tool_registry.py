@@ -80,23 +80,10 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "compare": ["functions", "blocks", "apis", "strings", "constants", "structure", "semantics", "batch_compare", "find_clones", "changelog"],
     "coverage": ["import_drcov", "import_lighthouse", "highlight", "report", "uncovered", "filter", "function_coverage", "gaps", "compare", "merge"],
     "security": [
-        # Packer (5)
-        "detect", "profile", "guide", "status", "script",
-        # Deobfuscation (8)
-        "deobf_detect", "detect_encoding", "stack_strings", "dead_code",
-        "api_hashing", "dynamic_dispatch", "anti_disasm", "decode_attempt",
-        # Crypto (6)
-        "identify", "constants", "encoding", "checksums", "entropy_analysis", "aes_ni",
-        # Entropy (7)
-        "section", "region", "packed_detect", "crypto_detect", "compare", "window", "summary",
-        # Hooks (5)
-        "suggest", "generate_frida", "generate_detours", "find_targets", "inline_hooks",
-        # Protocol (13)
-        "detect_protocol", "parsers", "serializers", "handlers", "endpoints",
-        "tls_config", "socket_flow", "packet_struct", "magic_numbers",
-        "state_machine", "reconstruct", "trace_handler", "export_spec",
-        # Taint (5)
-        "sources", "sinks", "trace", "paths", "report",
+        "detect", "decode", "analyze", "hook", "hook_targets",
+        "protocol", "protocol_spec",
+        "taint", "taint_sources", "taint_report",
+        "eval",
     ],
     "ctree": ["get", "traverse", "find_calls", "find_vars", "find_strings", "find_conditions", "get_logic_flow", "dominance_map", "var_dependency_graph"],
     "data": ["functions", "globals", "strings", "imports", "exports", "lookup", "bulk_query", "capability_matrix", "string_xrefs"],
