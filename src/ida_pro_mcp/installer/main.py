@@ -620,6 +620,33 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
         else:
             report.add_step("runtime", "skipped", "filtered by --only")
 
+        if _phase_enabled(opts, "runtime") and not opts.dry_run:
+            ui.info("Downloading threat corpus and crypto signatures")
+            try:
+                from .bron_corpus import download_bron_corpus
+                corpus_status = download_bron_corpus(force=False)
+                built = corpus_status.get("built", False)
+                counts = corpus_status.get("counts", {})
+                total = sum(counts.values()) if counts else 0
+                sources_downloaded = len([
+                    k for k, v in corpus_status.get("downloads", {}).items()
+                    if "error" not in v
+                ])
+                if built:
+                    ui.ok(f"Threat corpus ready ({total} entries from {sources_downloaded} sources)")
+                else:
+                    reason = corpus_status.get("reason", "unknown")
+                    ui.warn(f"Corpus download incomplete: {reason}")
+                report.add_step(
+                    "corpus", "ok" if built else "warn",
+                    f"{total} entries, {sources_downloaded} sources",
+                )
+            except Exception as exc:
+                ui.warn(f"Corpus download failed (non-fatal): {exc}")
+                report.add_step("corpus", "warn", str(exc))
+        elif _phase_enabled(opts, "runtime"):
+            report.add_step("corpus", "skipped", "dry-run")
+
         if _phase_enabled(opts, "clients"):
             ui.info("Configuring MCP clients")
             embed_model = opts.embed_model_path

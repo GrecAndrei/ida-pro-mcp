@@ -10,6 +10,7 @@ from __future__ import annotations
 from .attack_source import AttackSource
 from .base import SourceParser
 from .cwe_source import CweSource
+from .findcrypt_source import FindCryptSource
 from .lolbas import LolbasSource
 from .sigma_rules import SigmaRulesSource
 from .urlhaus import UrlhausSource
@@ -27,6 +28,7 @@ SOURCES: list[SourceParser] = [
     LolbasSource(),
     SigmaRulesSource(),
     UrlhausSource(),
+    FindCryptSource(),
 ]
 
 

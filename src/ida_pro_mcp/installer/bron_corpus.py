@@ -88,6 +88,11 @@ BRON_SOURCES: dict[str, dict[str, Any]] = {
         "filename": "signature-base.tar.gz",
         "kind": "signature_base_tar",
     },
+    "findcrypt": {
+        "url": "https://github.com/polymorf/findcrypt-yara/archive/refs/heads/master.zip",
+        "filename": "findcrypt-yara-master.zip",
+        "kind": "findcrypt_zip",
+    },
 }
 
 
@@ -250,6 +255,21 @@ def _materialize_signature_base(sources_dir: str) -> str:
     return _unpack_signature_base_tar(tar_path, unpack_dir)
 
 
+def _unpack_findcrypt_zip(zip_path: str, dst_dir: str) -> str:
+    os.makedirs(dst_dir, exist_ok=True)
+    with zipfile.ZipFile(zip_path) as zf:
+        zf.extractall(dst_dir)
+    return dst_dir
+
+
+def _materialize_findcrypt(sources_dir: str) -> str:
+    zip_path = os.path.join(sources_dir, BRON_SOURCES["findcrypt"]["filename"])
+    if not os.path.isfile(zip_path):
+        raise FileNotFoundError(f"missing findcrypt archive: {zip_path}")
+    unpack_dir = os.path.join(sources_dir, "findcrypt")
+    return _unpack_findcrypt_zip(zip_path, unpack_dir)
+
+
 def _record_sha_manifest(sources_dir: str, results: dict[str, dict[str, Any]]) -> str:
     manifest_path = os.path.join(sources_dir, ".sha256.json")
     manifest = {
@@ -317,6 +337,12 @@ def download_bron_corpus(
             yara_dir = _materialize_signature_base(sources_dir)
         except Exception as e:
             results["signature_base"]["unpack_error"] = str(e)
+    findcrypt_dir: str | None = None
+    if "findcrypt" in results and "error" not in results["findcrypt"]:
+        try:
+            findcrypt_dir = _materialize_findcrypt(sources_dir)
+        except Exception as e:
+            results["findcrypt"]["unpack_error"] = str(e)
     if not (cwe_path or attack_paths or yara_dir):
         return {
             "built": False,

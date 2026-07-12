@@ -128,20 +128,32 @@ def _iter_rule_files(rules_dir: str) -> list[tuple[str, str]]:
     if not rules_dir or not os.path.isdir(rules_dir):
         return []
     out: list[tuple[str, str]] = []
-    for root_dir, _dirs, files in os.walk(rules_dir):
-        for fname in sorted(files):
-            if not (fname.endswith((".yar", ".yara"))):
-                continue
-            full = os.path.join(root_dir, fname)
-            try:
-                if os.path.getsize(full) > 2_000_000:
+    # Collect from primary rules_dir and any extra registered dirs
+    dirs_to_scan = [rules_dir]
+    try:
+        from ida_pro_mcp.ida_mcp.support.crypto_registry import findcrypt_rules_dir
+        fc_dir = findcrypt_rules_dir()
+        if fc_dir and fc_dir != rules_dir:
+            dirs_to_scan.append(fc_dir)
+    except ImportError:
+        pass
+    for scan_dir in dirs_to_scan:
+        if not os.path.isdir(scan_dir):
+            continue
+        for root_dir, _dirs, files in os.walk(scan_dir):
+            for fname in sorted(files):
+                if not (fname.endswith((".yar", ".yara", ".rules"))):
                     continue
-            except OSError:
-                continue
-            namespace = os.path.splitext(fname)[0]
-            out.append((namespace, full))
-            if len(out) >= _MAX_RULE_FILES:
-                return out
+                full = os.path.join(root_dir, fname)
+                try:
+                    if os.path.getsize(full) > 2_000_000:
+                        continue
+                except OSError:
+                    continue
+                namespace = os.path.splitext(fname)[0]
+                out.append((namespace, full))
+                if len(out) >= _MAX_RULE_FILES:
+                    return out
     return out
 
 
