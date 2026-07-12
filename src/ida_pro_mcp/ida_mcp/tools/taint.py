@@ -389,8 +389,6 @@ def _dataflow_signal(source_ea: int, sink_ea: int) -> Dict[str, Any]:
     return {"desc": None, "confidence": "low", "method": "callgraph", "reachability_only": True}
 
 
-@tool
-@idaread
 def taint(
     action: str = "trace",
     addr: Optional[str] = None,

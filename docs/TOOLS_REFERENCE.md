@@ -37,6 +37,7 @@ Total tools: **66** | Advertised: **64**
 | `graph` | 4 | Generate call graphs, CFGs, dominator trees, and xref gra... |
 | `xref_analysis` | 10 | Cross-reference and callgraph analysis: call chains, comm... |
 | `ctree` | 9 | Query and traverse the Hex-Rays decompiler ctree AST for ... |
+| `security` | 49 | Unified security analysis: packer, deobfuscation, crypto, entropy, hooks, protocol, taint |
 | `entropy` | 7 | Compute entropy over regions to detect packing, encryptio... |
 | `imports_deep` | 6 | Deep import analysis: thunks, delay-loads, forwarded, ord... |
 | `patterns` | 9 | Generate, match, and manage FLIRT/byte pattern signatures... |

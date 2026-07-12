@@ -9,8 +9,6 @@ except ImportError:
 # 31. ENTROPY - Entropy Analysis
 # ============================================================================
 
-@tool
-@idaread
 def entropy(
     action: Annotated[Literal["section", "region", "packed_detect", "crypto_detect", "compare", "window", "summary"],
                       "Action: section|region|packed_detect|crypto_detect|compare|window|summary"],

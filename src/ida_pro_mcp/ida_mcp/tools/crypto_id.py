@@ -198,8 +198,6 @@ def _detect_aes_ni(limit):
     return results
 
 
-@tool
-@idaread
 def crypto_id(
     action: Annotated[Literal[
         "identify", "constants", "encoding", "checksums", "entropy_analysis", "aes_ni"

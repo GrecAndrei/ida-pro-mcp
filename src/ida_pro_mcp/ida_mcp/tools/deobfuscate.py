@@ -541,8 +541,6 @@ def _detect_with_classifier(addr, limit):
     return findings[:limit], behavior_tags
 
 
-@tool
-@idaread
 def deobfuscate(
     action: Annotated[Literal["detect", "detect_encoding", "stack_strings",
                                "dead_code", "api_hashing", "dynamic_dispatch",

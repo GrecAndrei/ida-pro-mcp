@@ -641,8 +641,6 @@ def _export_json_schema(protocol_data):
     return schema
 
 
-@tool
-@idaread
 def protocol(
     action: Annotated[Literal["detect", "parsers", "serializers", "handlers",
                                "endpoints", "tls_config", "socket_flow",

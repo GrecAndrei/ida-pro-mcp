@@ -9,8 +9,6 @@ except ImportError:
 # 37. HOOKS - API Hook Suggestions and Script Generation
 # ============================================================================
 
-@tool
-@idaread
 def hooks(
     action: Annotated[Literal["suggest", "generate_frida", "generate_detours", "find_targets", "inline_hooks"],
                       "Action: suggest|generate_frida|generate_detours|find_targets|inline_hooks"],

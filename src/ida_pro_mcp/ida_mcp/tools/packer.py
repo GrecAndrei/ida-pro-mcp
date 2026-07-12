@@ -703,7 +703,6 @@ def _build_script_namespace(extra: dict | None = None) -> dict:
 # Top-level handler
 # ---------------------------------------------------------------------------
 
-@tool
 def packer(
     action: Annotated[Literal[detect, profile, guide, status, script],
                       "Action: detect|profile|guide|status|script"] = "detect",

@@ -49,7 +49,6 @@ TOOLS = [
     "graph",
     "xref_analysis",
     "ctree",
-    "entropy",
     # Structure and type recovery
     "imports_deep",
     "patterns",
@@ -62,8 +61,6 @@ TOOLS = [
 
     "data_ops",
     "firmware_view",
-    # Instrumentation
-    "hooks",
     # Documentation
     "wiki",
     # Intelligence subsystem (extracted from agent)
@@ -71,10 +68,8 @@ TOOLS = [
     # --- New LLM-optimized tools ---
     "workflow",
     "gadgets",
-    "taint",
-    # Deobfuscation & crypto
-    "deobfuscate",
-    "crypto_id",
+    # Unified security analysis (merged: packer, hooks, deobfuscate, crypto_id, entropy, protocol, taint)
+    "security",
     # ABI & calling conventions
     "abi",
     # Summarization & classification
@@ -84,8 +79,6 @@ TOOLS = [
     "compare",
     # Stack analysis
     "stack_analysis",
-    # Protocol analysis
-    "protocol",
     # Intelligent annotation
     "annotation",
     # String operations
@@ -103,8 +96,6 @@ TOOLS = [
     # --- Cross-session firmware KB ---
     "knowledge",
     # --- Relocation/fixup management (specialized; not advertised) ---
-    # --- Packer / protector / anti-cheat detection ---
-    "packer",
     # --- New: struct recovery, emulation, binary diffing, multi-session ---
     "struct_recover",
     "emulate",
@@ -233,17 +224,20 @@ THREAT_LEGACY_TRACING_TOOLS = {
     "trace_analysis",
     "coverage",
     "taint",
+    "security",
 }
 
 THREAT_LEGACY_VULN_TOOLS = {
     "gadgets",
     "search",
+    "security",
 }
 
 THREAT_LEGACY_MALWARE_PASSTHROUGH_TOOLS = {
     "deobfuscate",
     "crypto_id",
     "string_ops",
+    "security",
 }
 
 # Tool->optional action allowlist for legacy passthrough flows.
@@ -251,6 +245,7 @@ THREAT_LEGACY_MALWARE_PASSTHROUGH_TOOLS = {
 THREAT_LEGACY_CONDITIONAL_PASSTHROUGH = {
     "classify": None,
     "protocol": None,
+    "security": None,
     "summarize": {
         "security_posture",
         "statistics",
@@ -277,14 +272,11 @@ TOOL_DESCRIPTIONS = {
 
     "compare": "Diff two IDB databases or functions across binaries. Actions: functions, blocks, apis, strings, constants, structure, semantics, batch_compare, find_clones, changelog.",
     "coverage": "Import and analyze code coverage data to identify hit/missed paths. Actions: import_drcov, import_lighthouse, highlight, report, uncovered, filter, function_coverage, gaps, compare, merge.",
-    "crypto_id": "Detect cryptographic algorithms, constants, and encoding routines in the binary. Actions: identify, constants, encoding, checksums, entropy_analysis, aes_ni.",
+    "security": "Unified security analysis. Packer/protector detection (UPX, VMProtect, Themida, anti-cheat). Deobfuscation (stack strings, API hashing, dead code, anti-disasm). Crypto identification (AES, SHA, CRC, encoding). Entropy analysis (packing, encryption detection). Hook generation (Frida, Detours). Protocol analysis (parsers, state machines, TLS). Taint analysis (source→sink dataflow with microcode SSA/ctree/regex). 49 actions total: detect, profile, guide, status, script, deobf_detect, detect_encoding, stack_strings, dead_code, api_hashing, dynamic_dispatch, anti_disasm, decode_attempt, identify, constants, encoding, checksums, entropy_analysis, aes_ni, section, region, packed_detect, crypto_detect, compare, window, summary, suggest, generate_frida, generate_detours, find_targets, inline_hooks, detect_protocol, parsers, serializers, handlers, endpoints, tls_config, socket_flow, packet_struct, magic_numbers, state_machine, reconstruct, trace_handler, export_spec, sources, sinks, trace, paths, report.",
     "ctree": "Query and traverse the Hex-Rays decompiler ctree AST for a function. Actions: get, traverse, find_calls, find_vars, find_strings, find_conditions, get_logic_flow, dominance_map, var_dependency_graph.",
     "data": "Retrieve core IDB data. functions: list all functions — always includes xref count (capped 999). globals: global variables. strings: string literals — always includes xref count. imports: imported modules and functions. exports: exported entry points. lookup: resolve name↔address. bulk_query: multiple queries in one call. capability_matrix: binary capability matrix from imports + function classifications. string_xrefs: ranked string-to-function xref map with module clustering.",
     "data_ops": "Change data representation at addresses (≈ IDA Edit menu / D/A/O/U keys). cycle_data: step byte→word→dword→qword at addr (≡ pressing D in IDA). make_data: force a specific size. make_array: define an array. make_string: define a string literal (≡ A in IDA). undefine: undefine bytes (≡ U in IDA). make_code: convert to code (≡ C in IDA). set_repr: change display radix (hex/dec/bin/char/offset). make_ptr: mark as pointer. Actions: make_data, make_array, make_string, undefine, make_code, cycle_data, set_repr, make_ptr.",
     "debug": "Control the debugger: run, step, breakpoints, registers, memory, threads. Actions: status, start, stop, continue, step_into, step_over, run_to, run_until, breakpoints, add_bp, del_bp, enable_bp, add_hw_bp, add_watch, regs, set_reg, reg_diff, snapshot_regs, threads, modules, callstack, read_mem, write_mem, search_mem, stack_dump, mem_map, bp_context, trace_start, trace_stop, trace_read, mem_diff.",
-    "deobfuscate": "Detect and decode obfuscation: stack strings, API hashing, dead code, anti-disasm. Actions: detect, detect_encoding, stack_strings, dead_code, api_hashing, dynamic_dispatch, anti_disasm, decode_attempt.",
-    "entropy": "Compute entropy over regions to detect packing, encryption, or compressed data. Actions: section, region, packed_detect, crypto_detect, compare, window, summary.",
-    "packer": "Detect packers / protectors (UPX, MPRESS, VMProtect, Themida, ASPack, custom) and game anti-cheat references in the current IDB. Returns indicators, classification, recommendation, and a structured workflow with concrete tool calls (static_steps) and external user actions (external_steps). Actions: detect, profile, guide, status, script. script runs Python in the packer's namespace for custom heuristics.",
     "export": "Write real on-disk artifacts from the IDB. listing/html/idc/json/headers always write files. binexport uses Google BinExport when installed (explicit path via BinExportBinary); otherwise writes a labeled JSON fallback — use bindiff(action='snapshot') for cross-version diffs without the plugin. sarif exports blackboard findings only (no invented noise). redact redacts IPs/emails/hashes from text=. Actions: listing, html, idc, json, sarif, binexport, headers, redact, vtable.",
     "firmware_view": "Firmware triage: region scanning, pointer sweeps, table carving, deterministic detection logic, multi-region campaigns, and bootstrap orchestration. Actions: scan_region, auto_retype, pointer_sweep, recommend, table_candidates, smart_carve, rollback_last, review_contradictions, region_profile, pointer_clusters, carve_plan, campaign, segment_sweep, multi_region_campaign, detect_load_address, detect_vector_table, detect_mmio, rtos_scan, triage_snapshot, bootstrap.",
     "fixups": "Manage relocations/fixups (relocation table entries) in the IDB. Actions: list, get, add, delete.",
@@ -294,7 +286,6 @@ TOOL_DESCRIPTIONS = {
     "graph": "Generate call graphs, CFGs, dominator trees, and xref graphs for visualization. Actions: callgraph, cfg, dominators, xref_graph.",
     "xref_analysis": "Cross-reference and callgraph analysis: call chains, common callers/callees, hub/leaf functions, recursion detection, dominator analysis, influence reachability, dependency graphs, dead function detection. Actions: call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, dependency_graph, dead_functions.",
     "history": "Undo/redo IDB changes, create snapshots, restore, and diff states. Actions: undo, redo, list, snapshot, restore, diff.",
-    "hooks": "Generate dynamic instrumentation hooks (Frida, Detours) for target functions. Actions: suggest, generate_frida, generate_detours, find_targets, inline_hooks.",
     "idb": "Query top-level IDB metadata: binary info, segments, entrypoints, bookmarks, and architecture profile guidance for raw binaries. Actions: meta, summary, segments, entrypoints, bookmarks, overview, architecture_profile, state.",
     "imports_deep": "Deep import analysis: thunks, delay-loads, forwarded, ordinal, and API set resolution. Actions: thunks, delay, forwarded, ordinal, api_sets, resolve.",
      "intelligence": "Local embeddings index + behavior classification backend for search.nl. Prefer index_fast (quick) or index_batch (decompile-quality), then search(action=nl). Actions (core): index_fast, index_batch, semantic_search, similar_functions, embedder_status, intelligence_status.",
@@ -309,7 +300,6 @@ TOOL_DESCRIPTIONS = {
     "patterns": "Generate, match, and manage FLIRT/byte pattern signatures for function identification. Actions: generate, match, list_sigs, apply_sig, create_sig, matched, yara_from_func, flirt_generate, match_yara.",
 
     "project": "Project I/O and evidence management. Actions: save, close, open, load_binary, list_recent, get_cwd, set_cwd, list_dir, exists, evidence_graph, knowledge_merge, confidence_model, replay_pipeline, hypothesis_tracker, temporal_reasoning, semantic_artifact_diff, ai_governance, knowledge_debt, casefile_export.",
-    "protocol": "Detect and analyze network protocol structures, parsers, endpoints, state machines, and reconstruct full protocol specs from dispatch tables. Actions: detect, parsers, serializers, handlers, endpoints, tls_config, socket_flow, packet_struct, magic_numbers, state_machine, reconstruct, trace_handler, export_spec.",
 
     "search": "Primary discovery tool. find: unified names (incl. demangled)+strings+imports+comments+xrefs (+insns unless identifier-like). Always returns items[].addr. nl: embedding search (index_fast first; mode=quick|expand). analyze: unified structural analysis (neighborhood/outlier/similar/vulnerable/semantic scopes, uses embedding index + cached call graph). symbol/symbol_info: resolve names/addresses. api/callers/callees/xrefs_to_string: refs. string/bytes for raw patterns. Results always include results text + items with addr/name/type/score. Actions (core): find, nl, string, bytes, api, callers, callees, xrefs_to_string, symbol, symbol_info, decompiled, behavior, analyze.",
     "segments": "List, create, modify, and analyze binary segments and their permissions/attributes. Actions: list, add, delete, set_attr, set_perms, move, info, analyze, find_code, find_data, compare, merge. For relocations/fixups use the dedicated `fixups` tool.",
@@ -318,7 +308,6 @@ TOOL_DESCRIPTIONS = {
     "string_ops": "Advanced string analysis and IOC extraction. score_c2/indicators: C2 risk report — BehaviorClassifier on strings + API triads + family guess. ioc_extract: extract all IOCs (URLs, IPs, registry keys, C2 endpoints). persistence/evasion: persistence mechanisms and evasion techniques. find_urls/find_ips/find_paths/find_registry/find_emails/find_commands: pattern extraction. find_c2/find_configs/find_api_keys/find_databases/find_crypto_addrs: semantic extraction. find_stack_strings/find_base64: obfuscated string recovery. entropy_rank: rank strings by Shannon entropy. suspicious/encoding_stats/multilingual/decode_all: analysis utilities.",
     "summarize": "Structured summaries of binary components. binary: overall binary summary. function: single function summary. segment: segment summary. imports_by_category: imports grouped by API category. strings_by_category: strings grouped by type. complexity: function complexity metrics. call_hierarchy: call tree from entry point. data_flow: data flow summary. security_posture: dangerous APIs + mitigations + risk level. statistics: binary-wide stats. report: FULL REPORT — binary + security_posture + live taint scan + blackboard findings + statistics. NOTE: the binary and function actions share names with classify.binary / classify.function but produce DIFFERENT output — summarize returns counts/structure, classify returns categories/behavior tags. Pick the one that matches the question.",
     "symbols": "Loads and manages debug symbols (PDB/DWARF) for the current binary. Actions: load_pdb, load_dwarf, status, apply, export.",
-    "taint": "Canonical data flow taint analysis. Traces user-controlled sources (recv/read/UART/DMA/SPI/I2C/USB) to dangerous sinks (memcpy/strcpy/system/firmware flash). Uses 3-tier dataflow verification: microcode SSA (high confidence) → ctree def-use (medium) → regex (low) → call-graph reachability. Writes high-confidence vuln findings to blackboard with CWE cross-references. All source/sink definitions are in taint_registry.py (single source of truth). Actions: sources, sinks, trace, paths, report. Example: taint(action='trace', source='recv').",
     "struct_recover": "Automatic struct/type recovery from field access patterns — walks instructions for [base+offset] accesses, clusters by register, infers field types, generates C structs. Actions: recover, recover_all, propagate, preview, apply.",
     "emulate": "Unicorn-backed emulation sandbox — execute functions/slices from the IDB without a debugger (x86/x64, ARM/AArch64, MIPS). Maps IDB segments, sets up stack and calling convention. Actions: run, slice, call, decrypt, trace. NOTE: requires `pip install unicorn`.",
     "bindiff": "Cross-version binary diffing via function fingerprints (no Google BinDiff required). snapshot with path= persists JSON; open the other build and diff/function_match/summary against that path. Matching: exact name, mnemonic hash, string refs, callee signature, structural fuzzy. patch_analysis for one function. For protobuf BinExport use export(action='binexport'). Actions: snapshot, diff, patch_analysis, function_match, summary.",
@@ -799,15 +788,24 @@ TOOL_ARG_SCHEMAS = {
         "query": {"type": "string"},
         "depth": {"type": "integer"},
     },
-    "entropy": {
-        "action": {"type": "string", "enum": TOOL_ACTIONS["entropy"]},
+    "security": {
+        "action": {"type": "string", "description": "Security analysis action"},
         "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
+        "limit": {"type": "integer"},
         "size": {"type": "integer"},
         "threshold": {"type": "number"},
         "end_addr": {"type": "string"},
         "window": {"type": "integer"},
         "step": {"type": "integer"},
-        "limit": {"type": "integer"},
+        "rules": {"type": "string"},
+        "category": {"type": "string"},
+        "source": {"type": "string"},
+        "max_depth": {"type": "integer"},
+        "max_paths": {"type": "integer"},
+        "key": {"type": "string"},
+        "depth": {"type": "integer"},
+        "query": {"type": "string"},
+        "code": {"type": "string"},
     },
     "gadgets": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["gadgets"]},
