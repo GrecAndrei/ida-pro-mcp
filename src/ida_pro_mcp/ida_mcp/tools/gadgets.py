@@ -870,6 +870,33 @@ def gadgets(
 
         if action == "mitigations":
             mits = _detect_mitigations(addr, limit, max_insns, query)
+            # Auto-write missing mitigations to blackboard
+            if isinstance(mits, dict):
+                missing = [k for k, v in mits.items() if v is False]
+                if missing:
+                    try:
+                        from blackboard import BlackboardStore  # type: ignore
+                        import time as _time
+                        store = BlackboardStore()
+                        existing = store.list(category="mitigation_gap", limit=50)
+                        if not any("mitigation" in (e.get("title", "").lower()) for e in existing):
+                            store.write(
+                                title=f"Missing mitigations: {', '.join(missing[:5])}",
+                                content=f"Binary lacks: {', '.join(missing)}",
+                                category="mitigation_gap",
+                                tags=["mitigation"] + missing[:5],
+                                confidence=0.9,
+                                source="gadgets",
+                                source_type="engine_gadgets",
+                                evidence=[{
+                                    "type": "mitigation_scan",
+                                    "value": f"missing: {','.join(missing)}",
+                                    "weight": 0.9,
+                                    "ts": _time.time(),
+                                }],
+                            )
+                    except Exception:
+                        pass
             return {
                 "ok": True,
                 "action": "mitigations",
@@ -1067,6 +1094,34 @@ def _classify_gadget_chain(addr, limit, max_insns, query) -> dict:
         assessment = "LOW: ROP gadgets present but no stack pivot found"
     else:
         assessment = "MINIMAL: Limited gadget surface"
+
+    # Auto-write exploit findings to blackboard
+    if has_rop or has_pivot or has_www:
+        try:
+            from blackboard import BlackboardStore  # type: ignore
+            import time as _time
+            store = BlackboardStore()
+            prim_names = sorted(all_gadgets.keys())
+            confidence = 0.9 if "HIGH" in assessment else (0.7 if "MEDIUM" in assessment else 0.5)
+            existing = store.list(category="exploit", limit=50)
+            if not any("gadget" in (e.get("title", "").lower()) for e in existing):
+                store.write(
+                    title=f"Exploit primitives: {', '.join(prim_names)}",
+                    content=assessment,
+                    category="exploit",
+                    tags=["exploit", "gadgets", _get_arch()] + prim_names,
+                    confidence=confidence,
+                    source="gadgets",
+                    source_type="engine_gadgets",
+                    evidence=[{
+                        "type": "gadget_scan",
+                        "value": f"{len(all_gadgets)} primitive types found",
+                        "weight": confidence,
+                        "ts": _time.time(),
+                    }],
+                )
+        except Exception:
+            pass
 
     return {
         "ok": True,

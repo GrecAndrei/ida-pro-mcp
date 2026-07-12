@@ -1009,8 +1009,7 @@ def code(
                 suggested = []
                 if dangerous:
                     # Actual taint trace when network input is present
-                    _TAINT_SOURCES = {"recv","recvfrom","read","fread","fgets","gets","getenv","scanf"}
-                    active_sources = [a for a in found_apis if a in _TAINT_SOURCES]
+                    active_sources = [a for a in found_apis if a in TAINT_SOURCES]
                     if active_sources:
                         try:
                             from taint import taint as _taint  # type: ignore

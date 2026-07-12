@@ -125,6 +125,26 @@ except ImportError:
         TAG_CATEGORIES,
     )
 
+# Canonical taint source/sink registry (deduplication)
+try:
+    from ..support.taint_registry import (
+        TAINT_SOURCES,
+        DANGEROUS_SINKS,
+        DANGEROUS_SINK_NAMES,
+        VULN_TYPE_TO_CWE,
+        DANGEROUS_APIS_CATEGORIZED,
+        MITIGATION_CHECKS,
+    )
+except ImportError:
+    from support.taint_registry import (  # type: ignore[import-not-found]
+        TAINT_SOURCES,
+        DANGEROUS_SINKS,
+        DANGEROUS_SINK_NAMES,
+        VULN_TYPE_TO_CWE,
+        DANGEROUS_APIS_CATEGORIZED,
+        MITIGATION_CHECKS,
+    )
+
 # Multi-architecture helpers
 try:
     from ..support.arch_utils import (  # type: ignore[import-not-found]
@@ -417,6 +437,9 @@ __all__ = [
     # Centralized API categories
     "API_CATEGORIES", "API_TO_CATEGORY", "DANGEROUS_APIS",
     "TAG_CATEGORIES", "API_TO_TAG", "MAGIC_CONSTANTS",
+    # Canonical taint registry
+    "TAINT_SOURCES", "DANGEROUS_SINKS", "DANGEROUS_SINK_NAMES",
+    "VULN_TYPE_TO_CWE", "DANGEROUS_APIS_CATEGORIZED", "MITIGATION_CHECKS",
     # Multi-architecture helpers
     "get_arch", "is_x86_family", "is_arm_family", "is_mips_family",
     "is_ppc_family", "is_riscv_family", "is_sparc_family",

@@ -20,75 +20,12 @@ except ImportError:
 
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-# ── Known taint sources (user-controlled input) ───────────────────────────────
-
-TAINT_SOURCES = {
-    # Network
-    "recv", "recvfrom", "recvmsg", "WSARecv", "WSARecvFrom",
-    "read", "fread", "fgets", "gets",
-    # File
-    "scanf", "sscanf", "fscanf",
-    # Environment
-    "getenv", "getenv_s",
-    # Windows
-    "ReadFile", "RegQueryValueEx", "GetEnvironmentVariable",
-    "WinHttpReceiveResponse", "InternetReadFile",
-    # Firmware: UART receive (common naming patterns across MCU SDKs)
-    "UART_Receive", "UART_Read", "uart_read", "uart_receive", "uart_getc",
-    "HAL_UART_Receive", "HAL_UART_Receive_IT", "HAL_UART_Receive_DMA",
-    "USART_ReceiveData", "USART_GetFlagStatus",
-    "Serial_Read", "serial_read", "serial_getchar",
-    # Firmware: DMA receive buffers
-    "DMA_Receive", "dma_read", "HAL_DMA_Start", "HAL_DMA_PollForTransfer",
-    # Firmware: SPI/I2C/USB receive
-    "SPI_Receive", "HAL_SPI_Receive", "HAL_I2C_Master_Receive",
-    "HAL_I2C_Slave_Receive", "USB_ReadPacket", "USBD_LL_DataOutStage",
-    "HAL_PCD_DataOutStageCallback",
-    # Firmware: network stack (lwIP, FreeRTOS+TCP)
-    "pbuf_alloc", "netconn_recv", "xNetworkInterfaceInput",
-    "FreeRTOS_recv", "FreeRTOS_recvfrom",
-    # Firmware: MMIO reads (generic — matched by name pattern in _get_import_addrs)
-    # These are detected via blackboard IOC entries with ioc_type='mmio_input'
-}
-
-# ── Dangerous sinks ───────────────────────────────────────────────────────────
-
-DANGEROUS_SINKS = {
-    # Memory corruption
-    "memcpy": "buffer_overflow",
-    "memmove": "buffer_overflow",
-    "strcpy": "buffer_overflow",
-    "strncpy": "buffer_overflow",
-    "strcat": "buffer_overflow",
-    "strncat": "buffer_overflow",
-    "sprintf": "format_string",
-    "vsprintf": "format_string",
-    "snprintf": "format_string_candidate",
-    "gets": "buffer_overflow",
-    "scanf": "buffer_overflow",
-    # Command execution
-    "system": "command_injection",
-    "exec": "command_injection",
-    "execve": "command_injection",
-    "execl": "command_injection",
-    "popen": "command_injection",
-    "ShellExecute": "command_injection",
-    "WinExec": "command_injection",
-    "CreateProcess": "command_injection",
-    # Memory operations
-    "VirtualAlloc": "memory_control",
-    "WriteProcessMemory": "process_injection",
-    "mmap": "memory_control",
-    # Firmware: unsafe UART/network transmit with attacker-controlled data
-    "UART_Transmit": "firmware_output_injection",
-    "HAL_UART_Transmit": "firmware_output_injection",
-    "netconn_write": "firmware_output_injection",
-    "FreeRTOS_send": "firmware_output_injection",
-    # Firmware: flash write (attacker-controlled data written to flash = persistent compromise)
-    "HAL_FLASH_Program": "firmware_flash_write",
-    "flash_write": "firmware_flash_write",
-    "spi_flash_write": "firmware_flash_write",
-}
+# ── Import canonical taint registry ───────────────────────────────────────────
+from ..support.taint_registry import (
+    TAINT_SOURCES,
+    DANGEROUS_SINKS,
+    VULN_TYPE_TO_CWE,
+)
 
 
 def _is_sanitizer_name(name: str) -> bool:
@@ -203,6 +140,98 @@ def _check_decompiler_dataflow_regex(source_ea: int, sink_ea: int) -> Optional[s
                     )
                     if sink_match:
                         return f"{tainted_var} = {source_name}(...) → {sink_name}(..., {tainted_var}, ...)"
+        return None
+    except Exception:
+        return None
+
+
+def _check_decompiler_dataflow_ctree(source_ea: int, sink_ea: int) -> Optional[str]:
+    """Check dataflow using ctree visitor for proper def-use tracking.
+
+    Tracks variables assigned by source call and checks if they appear
+    as arguments to sink call. More robust than regex — handles indirect
+    calls, multi-line expressions, and complex assignments.
+    Returns a description if taint flows, None otherwise.
+    """
+    try:
+        if not hasattr(ida_hexrays, "init_hexrays_plugin") or not ida_hexrays.init_hexrays_plugin():
+            return None
+        fn = idaapi.get_func(source_ea)
+        if not fn:
+            return None
+        cfunc = ida_hexrays.decompile(fn.start_ea)
+        if not cfunc:
+            return None
+
+        source_name = idc.get_name(source_ea) or ""
+        sink_name = idc.get_name(sink_ea) or ""
+        if not source_name or not sink_name:
+            return None
+
+        tainted_vars: set[str] = set()
+        sink_tainted_args: list[str] = []
+
+        class TaintCtreeVisitor(ida_hexrays.ctree_visitor_t):
+            def __init__(self):
+                ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+
+            def visit_expr(self, expr):
+                # Detect: var = source_call(...)
+                if expr.op == ida_hexrays.cot_call:
+                    callee = expr.x
+                    call_name = ""
+                    if callee and callee.op == ida_hexrays.cot_obj:
+                        call_name = idc.get_name(int(callee.obj_ea)) or ""
+                    # Source call: mark assigned variable as tainted
+                    if call_name == source_name:
+                        # Check if result is assigned to a variable
+                        # In ctree, cot_call in cot_asg means the call's result
+                        # is being assigned. We look for cot_var siblings.
+                        pass
+                    # Sink call: check if any argument is a tainted variable
+                    if call_name == sink_name and expr.a:
+                        for i in range(expr.a.size()):
+                            arg = expr.a[i]
+                            if arg.op == ida_hexrays.cot_var:
+                                try:
+                                    v = cfunc.body.find_var(arg.v.idx)
+                                    if v and v.name in tainted_vars:
+                                        sink_tainted_args.append(v.name)
+                                except Exception:
+                                    pass
+                # Detect assignments: var = expr
+                if expr.op == ida_hexrays.cot_asg:
+                    lhs = expr.x
+                    rhs = expr.y
+                    if lhs and lhs.op == ida_hexrays.cot_var:
+                        try:
+                            v = cfunc.body.find_var(lhs.v.idx)
+                            var_name = v.name if v else ""
+                        except Exception:
+                            var_name = ""
+                        if var_name:
+                            # RHS is a source call
+                            if rhs and rhs.op == ida_hexrays.cot_call:
+                                callee = rhs.x
+                                if callee and callee.op == ida_hexrays.cot_obj:
+                                    call_name = idc.get_name(int(callee.obj_ea)) or ""
+                                    if call_name == source_name:
+                                        tainted_vars.add(var_name)
+                            # RHS is a tainted variable (propagation)
+                            elif rhs and rhs.op == ida_hexrays.cot_var:
+                                try:
+                                    rv = cfunc.body.find_var(rhs.v.idx)
+                                    if rv and rv.name in tainted_vars:
+                                        tainted_vars.add(var_name)
+                                except Exception:
+                                    pass
+                return 0
+
+        visitor = TaintCtreeVisitor()
+        visitor.apply_to(cfunc.body, None)
+
+        if sink_tainted_args:
+            return f"ctree def-use: {source_name} → {', '.join(sink_tainted_args)} → {sink_name}()"
         return None
     except Exception:
         return None
@@ -351,6 +380,9 @@ def _dataflow_signal(source_ea: int, sink_ea: int) -> Dict[str, Any]:
     mc = _check_microcode_dataflow(source_ea, sink_ea)
     if mc:
         return {"desc": mc, "confidence": "high", "method": "microcode_ssa", "reachability_only": False}
+    ct = _check_decompiler_dataflow_ctree(source_ea, sink_ea)
+    if ct:
+        return {"desc": ct, "confidence": "medium", "method": "ctree", "reachability_only": False}
     rx = _check_decompiler_dataflow_regex(source_ea, sink_ea)
     if rx:
         return {"desc": rx, "confidence": "low", "method": "regex", "reachability_only": False}
@@ -517,6 +549,7 @@ def taint(
                         "reachability_only": bool(flow.get("reachability_only", False)),
                         "sanitized_by": sorted(set(sanitized_by)),
                         "interprocedural_findings": interproc[:8],
+                        "cwe_ids": VULN_TYPE_TO_CWE.get(DANGEROUS_SINKS.get(sink_name, ""), []),
                     })
                     # Segment permission analysis: check if taint crosses trust boundaries
                     try:

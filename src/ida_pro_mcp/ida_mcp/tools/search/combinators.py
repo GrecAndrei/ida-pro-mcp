@@ -794,36 +794,14 @@ def _get_call_graph() -> dict:
 # search_analyze - unified structural analysis
 # ============================================================================
 
-# Taint source API names (functions that receive external input).
-_TAINT_SOURCE_NAMES = frozenset({
-    "recv", "recvfrom", "recvmsg", "read", "fread", "fgets", "gets",
-    "ioctl", "DeviceIoControl", "NtDeviceIoControlFile",
-    "GetEnvironmentVariable", "getenv", "NtQueryInformationFile",
-    "URLDownloadToFile", "URLDownloadToCacheFile", "WinHttpReceiveResponse",
-    "InternetReadFile", "WinHttpReadData", "sic_recv", "uart_read",
-    "spi_receive", "i2c_read", "DMA_Callback", "vfs_read",
-})
+# Import canonical taint registry (single source of truth)
+try:
+    from ...support.taint_registry import TAINT_SOURCES, DANGEROUS_SINKS
+except ImportError:
+    from support.taint_registry import TAINT_SOURCES, DANGEROUS_SINKS  # type: ignore[import-not-found]
 
-# Dangerous API → vulnerability category.
-_DANGEROUS_APIS = {
-    "strcpy": "buffer_overflow", "strcat": "buffer_overflow",
-    "gets": "buffer_overflow", "sprintf": "format_string",
-    "vsprintf": "format_string", "scanf": "buffer_overflow",
-    "sscanf": "buffer_overflow", "fscanf": "buffer_overflow",
-    "wsprintf": "format_string", "wvsprintf": "format_string",
-    "lstrcpy": "buffer_overflow", "lstrcat": "buffer_overflow",
-    "RtlCopyMemory": "buffer_overflow",
-    "system": "command_injection", "popen": "command_injection",
-    "exec": "command_injection", "execve": "command_injection",
-    "ShellExecute": "command_injection", "WinExec": "command_injection",
-    "CreateProcess": "command_injection",
-    "memcpy": "memory_issue", "memmove": "memory_issue",
-    "HeapAlloc": "memory_issue", "VirtualAlloc": "memory_issue",
-    "malloc": "memory_issue", "realloc": "memory_issue",
-    "LoadLibrary": "dll_injection", "LoadLibraryA": "dll_injection",
-    "LoadLibraryW": "dll_injection", "LoadLibraryEx": "dll_injection",
-    "GetProcAddress": "dynamic_resolution",
-}
+_TAINT_SOURCE_NAMES = TAINT_SOURCES
+_DANGEROUS_APIS = DANGEROUS_SINKS
 
 # Behavior classifier anchors for vulnerability patterns.
 _VULN_ANCHORS = [

@@ -21,15 +21,47 @@ The corpus is consumed by:
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import re
+import urllib.request
 import xml.etree.ElementTree as ET
-from collections.abc import Iterable
+import zipfile
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from typing import Any
 
 from ..config import CACHE_DIR
+
+# ── Auto-download configuration ──────────────────────────────────────────────
+
+_CWE_URL = os.environ.get(
+    "IDA_MCP_CWE_URL",
+    "https://cwe.mitre.org/data/xml/cwec_latest.xml.zip",
+)
+_ATTACK_URLS = [
+    os.environ.get(
+        "IDA_MCP_ATTACK_ENTERPRISE_URL",
+        "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json",
+    ),
+    os.environ.get(
+        "IDA_MCP_ATTACK_ICS_URL",
+        "https://raw.githubusercontent.com/mitre/cti/master/ics-attack/ics-attack.json",
+    ),
+    os.environ.get(
+        "IDA_MCP_ATTACK_MOBILE_URL",
+        "https://raw.githubusercontent.com/mitre/cti/master/mobile-attack/mobile-attack.json",
+    ),
+]
+_YARA_URL = os.environ.get(
+    "IDA_MCP_YARA_URL",
+    "https://github.com/Neo23x0/signature-base/archive/refs/heads/master.zip",
+)
+_YARA_SUBPATH = "signature-base-master/yara"
+
+_DOWNLOAD_TIMEOUT = int(os.environ.get("IDA_MCP_DOWNLOAD_TIMEOUT", "120"))
+_MAX_DOWNLOAD_BYTES = 256 * 1024 * 1024  # 256 MB
 
 __all__ = [
     "ThreatCorpus",
@@ -740,11 +772,124 @@ def build_corpus_from_sources(
     )
 
 
+def _download_url(url: str) -> bytes:
+    """Download a URL with size limit and timeout."""
+    req = urllib.request.Request(url, headers={"User-Agent": "ida-pro-mcp/1.0"})
+    with urllib.request.urlopen(req, timeout=_DOWNLOAD_TIMEOUT) as resp:
+        data = resp.read(_MAX_DOWNLOAD_BYTES + 1)
+        if len(data) > _MAX_DOWNLOAD_BYTES:
+            raise ValueError(f"Download exceeds {_MAX_DOWNLOAD_BYTES} bytes")
+        return data
+
+
+def _extract_zip(data: bytes, dest: str, pattern: str | None = None) -> None:
+    """Extract a zip archive to dest, optionally filtering by pattern."""
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        members = zf.namelist()
+        if pattern:
+            members = [m for m in members if pattern in m]
+        zf.extractall(dest, members=members)
+
+
+def download_corpus_sources(
+    dest_dir: str | None = None,
+    *,
+    force: bool = False,
+    progress_cb: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Download CWE, ATT&CK, and YARA sources to dest_dir.
+
+    Returns dict with paths: {cwe_path, attack_paths, yara_dir, downloaded, errors}.
+    Skips downloads if files already exist and force=False.
+    """
+    if dest_dir is None:
+        dest_dir = os.path.join(CACHE_DIR, "corpus_sources")
+    os.makedirs(dest_dir, exist_ok=True)
+
+    result: dict[str, Any] = {
+        "cwe_path": None,
+        "attack_paths": [],
+        "yara_dir": None,
+        "downloaded": [],
+        "errors": [],
+        "dest_dir": dest_dir,
+    }
+
+    # 1. Download CWE XML
+    cwe_dir = os.path.join(dest_dir, "cwe")
+    cwe_xml_found = False
+    if os.path.isdir(cwe_dir):
+        for f in os.listdir(cwe_dir):
+            if f.endswith(".xml") and "cwe" in f.lower():
+                result["cwe_path"] = os.path.join(cwe_dir, f)
+                cwe_xml_found = True
+                break
+    if force or not cwe_xml_found:
+        try:
+            if progress_cb:
+                progress_cb("Downloading CWE catalog...")
+            os.makedirs(cwe_dir, exist_ok=True)
+            data = _download_url(_CWE_URL)
+            if _CWE_URL.endswith(".zip"):
+                _extract_zip(data, cwe_dir, pattern=".xml")
+            else:
+                cwe_xml = os.path.join(cwe_dir, "cwec_latest.xml")
+                with open(cwe_xml, "wb") as f:
+                    f.write(data)
+            result["downloaded"].append("cwe")
+            # Find the extracted XML
+            if os.path.isdir(cwe_dir):
+                for f in os.listdir(cwe_dir):
+                    if f.endswith(".xml") and "cwe" in f.lower():
+                        result["cwe_path"] = os.path.join(cwe_dir, f)
+                        break
+        except Exception as e:
+            result["errors"].append(f"CWE download failed: {e}")
+
+    # 2. Download ATT&CK STIX bundles
+    attack_dir = os.path.join(dest_dir, "attack")
+    os.makedirs(attack_dir, exist_ok=True)
+    for url in _ATTACK_URLS:
+        fname = url.rsplit("/", 1)[-1]
+        fpath = os.path.join(attack_dir, fname)
+        if force or not os.path.isfile(fpath):
+            try:
+                if progress_cb:
+                    progress_cb(f"Downloading {fname}...")
+                data = _download_url(url)
+                with open(fpath, "wb") as f:
+                    f.write(data)
+                result["downloaded"].append(fname)
+            except Exception as e:
+                result["errors"].append(f"ATT&CK {fname}: {e}")
+        if os.path.isfile(fpath):
+            result["attack_paths"].append(fpath)
+
+    # 3. Download YARA rules (Florian Roth signature-base)
+    yara_dir = os.path.join(dest_dir, "yara")
+    yara_rules_dir = os.path.join(yara_dir, _YARA_SUBPATH)
+    if force or not os.path.isdir(yara_rules_dir):
+        try:
+            if progress_cb:
+                progress_cb("Downloading YARA rules (signature-base)...")
+            os.makedirs(yara_dir, exist_ok=True)
+            data = _download_url(_YARA_URL)
+            _extract_zip(data, yara_dir)
+            result["downloaded"].append("yara")
+        except Exception as e:
+            result["errors"].append(f"YARA download failed: {e}")
+    if os.path.isdir(yara_rules_dir):
+        result["yara_dir"] = yara_rules_dir
+
+    return result
+
+
 def ensure_corpus_loaded(
     rebuild: bool = False,
     cwe_path: str | None = None,
     attack_paths: Iterable[str] | None = None,
     yara_dir: str | None = None,
+    auto_download: bool = False,
 ) -> tuple[ThreatCorpus | None, dict[str, Any]]:
     """Lazy-load the corpus, optionally rebuilding from sources.
 
@@ -753,8 +898,17 @@ def ensure_corpus_loaded(
     False, the cache is consulted first; on cache miss, the corpus is built
     from sources (if provided) and cached. Returns (None, status) when no
     cache exists and no sources are provided.
+
+    When ``auto_download`` is True and no sources are on disk, the function
+    downloads CWE, ATT&CK, and YARA sources from the internet before building.
     """
     cache_p = corpus_cache_path()
+    # If no sources provided and auto_download requested, download them
+    if auto_download and not (cwe_path or attack_paths or yara_dir):
+        dl_result = download_corpus_sources(force=rebuild)
+        cwe_path = dl_result.get("cwe_path")
+        attack_paths = dl_result.get("attack_paths", [])
+        yara_dir = dl_result.get("yara_dir")
     fingerprint = compute_source_fingerprint(cwe_path or "", attack_paths or [], yara_dir or "")
     if not rebuild and not (cwe_path or attack_paths or yara_dir):
         corpus = load_corpus()
@@ -777,7 +931,7 @@ def ensure_corpus_loaded(
         }
     corpus = build_corpus_from_sources(
         cwe_path=cwe_path,
-        attack_paths=attack_paths,
+        attack_paths=list(attack_paths) if attack_paths else None,
         yara_dir=yara_dir,
     )
     if corpus.is_empty():

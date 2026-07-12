@@ -12,95 +12,13 @@ import re
 # ============================================================================
 
 # Import category mappings for known APIs
-_IMPORT_CATEGORIES = {
-    "file_io": [
-        "CreateFile", "ReadFile", "WriteFile", "CloseHandle", "DeleteFile",
-        "CopyFile", "MoveFile", "GetFileSize", "SetFilePointer",
-        "FindFirstFile", "FindNextFile", "FindClose",
-        "fopen", "fclose", "fread", "fwrite", "fseek", "ftell",
-        "open", "close", "read", "write", "lseek", "stat", "fstat",
-        "unlink", "rename", "mkdir", "rmdir", "opendir", "readdir",
-    ],
-    "network": [
-        "socket", "connect", "bind", "listen", "accept", "send", "recv",
-        "sendto", "recvfrom", "select", "poll", "shutdown", "closesocket",
-        "WSAStartup", "WSACleanup", "WSAGetLastError",
-        "getaddrinfo", "gethostbyname", "inet_addr", "inet_ntoa",
-        "htons", "htonl", "ntohs", "ntohl",
-        "InternetOpen", "InternetConnect", "HttpOpenRequest",
-        "HttpSendRequest", "InternetReadFile", "URLDownloadToFile",
-        "WinHttpOpen", "WinHttpConnect", "WinHttpOpenRequest",
-    ],
-    "crypto": [
-        "CryptAcquireContext", "CryptCreateHash", "CryptHashData",
-        "CryptDeriveKey", "CryptEncrypt", "CryptDecrypt",
-        "CryptGenRandom", "CryptReleaseContext",
-        "BCryptOpenAlgorithmProvider", "BCryptGenerateSymmetricKey",
-        "BCryptEncrypt", "BCryptDecrypt",
-        "MD5Init", "MD5Update", "MD5Final",
-        "SHA1Init", "SHA1Update", "SHA1Final",
-        "EVP_EncryptInit", "EVP_DecryptInit", "EVP_DigestInit",
-        "AES_encrypt", "AES_decrypt", "RSA_public_encrypt",
-    ],
-    "memory": [
-        "malloc", "calloc", "realloc", "free",
-        "VirtualAlloc", "VirtualFree", "VirtualProtect", "VirtualQuery",
-        "HeapAlloc", "HeapFree", "HeapCreate", "HeapDestroy",
-        "GlobalAlloc", "GlobalFree", "LocalAlloc", "LocalFree",
-        "mmap", "munmap", "mprotect", "brk", "sbrk",
-        "memcpy", "memmove", "memset", "memcmp",
-    ],
-    "registry": [
-        "RegOpenKey", "RegOpenKeyEx", "RegCloseKey",
-        "RegQueryValue", "RegQueryValueEx", "RegSetValue", "RegSetValueEx",
-        "RegCreateKey", "RegCreateKeyEx", "RegDeleteKey", "RegDeleteValue",
-        "RegEnumKey", "RegEnumKeyEx", "RegEnumValue",
-    ],
-    "process": [
-        "CreateProcess", "OpenProcess", "TerminateProcess", "ExitProcess",
-        "GetCurrentProcess", "GetCurrentProcessId", "GetProcessId",
-        "CreateThread", "CreateRemoteThread", "ExitThread",
-        "GetCurrentThread", "GetCurrentThreadId",
-        "WaitForSingleObject", "WaitForMultipleObjects",
-        "fork", "exec", "execl", "execv", "execve", "execvp",
-        "system", "popen", "kill", "waitpid", "wait",
-    ],
-    "sync": [
-        "InitializeCriticalSection", "EnterCriticalSection",
-        "LeaveCriticalSection", "DeleteCriticalSection",
-        "CreateMutex", "ReleaseMutex", "CreateEvent", "SetEvent",
-        "CreateSemaphore", "ReleaseSemaphore",
-        "pthread_mutex_init", "pthread_mutex_lock", "pthread_mutex_unlock",
-        "pthread_create", "pthread_join",
-    ],
-    "string": [
-        "strcpy", "strncpy", "strcat", "strncat", "strlen", "strcmp",
-        "strncmp", "strstr", "strchr", "strrchr", "strtok",
-        "sprintf", "snprintf", "sscanf", "printf", "fprintf",
-        "wcslen", "wcscpy", "wcscat", "wcscmp",
-        "lstrcpy", "lstrcat", "lstrlen", "lstrcmp",
-        "MultiByteToWideChar", "WideCharToMultiByte",
-    ],
-    "gui": [
-        "CreateWindow", "CreateWindowEx", "ShowWindow", "UpdateWindow",
-        "GetMessage", "TranslateMessage", "DispatchMessage",
-        "PostMessage", "SendMessage", "DefWindowProc",
-        "MessageBox", "DialogBox", "GetDlgItem",
-        "RegisterClass", "RegisterClassEx",
-    ],
-    "service": [
-        "OpenSCManager", "CreateService", "OpenService",
-        "StartService", "ControlService", "DeleteService",
-        "RegisterServiceCtrlHandler", "SetServiceStatus",
-        "StartServiceCtrlDispatcher",
-    ],
-    "debug": [
-        "IsDebuggerPresent", "CheckRemoteDebuggerPresent",
-        "OutputDebugString", "DebugBreak",
-        "NtQueryInformationProcess", "NtSetInformationThread",
-        "ptrace",
-    ],
-}
+# Import canonical API categories and dangerous APIs from shared registry
+try:
+    from ._common import API_CATEGORIES as _IMPORT_CATEGORIES, DANGEROUS_APIS_CATEGORIZED, MITIGATION_CHECKS as _MITIGATION_CHECKS
+except ImportError:
+    from _common import API_CATEGORIES as _IMPORT_CATEGORIES, DANGEROUS_APIS_CATEGORIZED, MITIGATION_CHECKS as _MITIGATION_CHECKS  # type: ignore[import-not-found]
+
+_DANGEROUS_APIS = DANGEROUS_APIS_CATEGORIZED
 
 # String classification patterns
 _STRING_PATTERNS = {
@@ -115,20 +33,10 @@ _STRING_PATTERNS = {
 }
 
 # Dangerous APIs for security posture assessment
-_DANGEROUS_APIS = {
-    "buffer_overflow": ["strcpy", "strcat", "sprintf", "gets", "scanf", "vsprintf"],
-    "format_string": ["printf", "fprintf", "sprintf", "syslog"],
-    "command_injection": ["system", "popen", "exec", "ShellExecute", "WinExec", "CreateProcess"],
-    "memory_unsafe": ["memcpy", "memmove", "realloc"],
-    "deprecated_crypto": ["MD5Init", "MD5Update", "SHA1Init", "DES_ecb_encrypt", "RC4"],
-}
+# (imported from taint_registry via _common as DANGEROUS_APIS_CATEGORIZED)
 
-_MITIGATION_CHECKS = {
-    "stack_canary": ["__stack_chk_fail", "__stack_chk_guard", "__security_check_cookie"],
-    "aslr_related": ["__security_init_cookie", "IsProcessorFeaturePresent"],
-    "safe_functions": ["strcpy_s", "strcat_s", "sprintf_s", "snprintf", "strncat", "strncpy"],
-    "cfi": ["__cfi_check", "__cfi_slowpath"],
-}
+# Mitigation checks
+# (imported from taint_registry via _common as MITIGATION_CHECKS)
 
 
 def _get_all_strings(max_items):

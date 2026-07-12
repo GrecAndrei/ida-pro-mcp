@@ -299,6 +299,32 @@ def crypto_id(
                     except Exception:
                         pass
 
+            # Auto-write crypto findings to blackboard
+            if algos_found:
+                try:
+                    from blackboard import BlackboardStore  # type: ignore
+                    store = BlackboardStore()
+                    for algo in sorted(algos_found):
+                        existing = store.list(category="crypto", limit=50)
+                        if not any(algo.lower() in (e.get("title", "").lower()) for e in existing):
+                            store.write(
+                                title=f"Crypto: {algo} detected",
+                                content=f"Algorithm identified: {algo}. Matched via constant/signature scanning.",
+                                category="crypto",
+                                tags=["crypto", algo.lower().replace(" ", "_")],
+                                confidence=0.85,
+                                source="crypto_id",
+                                source_type="engine_crypto",
+                                evidence=[{
+                                    "type": "crypto_constant",
+                                    "value": algo,
+                                    "weight": 0.85,
+                                    "ts": __import__("time").time(),
+                                }],
+                            )
+                except Exception:
+                    pass
+
             return {
                 "ok": True,
                 "findings": "\n".join(findings),
