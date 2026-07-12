@@ -243,6 +243,195 @@ class ServerThreatHuntMixin:
                     })
         return paths[:100]
 
+    # ── Corpus integration ────────────────────────────────────────────
+
+    @staticmethod
+    def _threat_hunt_load_taxonomy(args: dict) -> dict:
+        """Load the threat corpus and return available sources + counts."""
+        from ..intelligence.threat_corpus import ensure_corpus_loaded
+
+        rebuild = _coerce_bool(args.get("rebuild"), False)
+        auto_download = _coerce_bool(args.get("auto_download"), True)
+        corpus, status = ensure_corpus_loaded(
+            rebuild=rebuild, auto_download=auto_download,
+        )
+        if corpus is None:
+            return {
+                "ok": False,
+                "error": status.get("reason", "corpus unavailable"),
+                "status": status,
+            }
+        return {
+            "ok": True,
+            "action": "load_threat_taxonomy",
+            "sources": corpus.available_sources(),
+            "counts": corpus.count_by_type(),
+            "total": sum(corpus.count_by_type().values()),
+            "from_cache": status.get("from_cache", False),
+            "rebuilt": status.get("rebuilt", False),
+        }
+
+    @staticmethod
+    def _threat_hunt_classify(args: dict) -> dict:
+        """Match free text against the threat corpus.
+
+        Returns matching CWE entries, ATT&CK techniques, LOLBAS binaries,
+        Sigma rules, and YARA rules for the given query.
+        """
+        from ..intelligence.threat_corpus import ensure_corpus_loaded
+
+        text = str(args.get("text") or args.get("query") or "").strip()
+        if not text:
+            return {
+                "ok": False,
+                "error": "Provide text= or query= to classify against the threat corpus.",
+            }
+        limit = _bounded_int(args.get("limit", 10), 10, min_value=1, max_value=50)
+        corpus, _ = ensure_corpus_loaded(auto_download=True)
+        if corpus is None:
+            return {"ok": False, "error": "Threat corpus unavailable."}
+
+        q = text.lower()
+        matches: dict[str, list[dict]] = {}
+
+        # Search CWE entries
+        cwe_hits = []
+        for e in corpus.cwe:
+            desc = (e.get("description") or "").lower()
+            name = (e.get("name") or "").lower()
+            if q in desc or q in name:
+                cwe_hits.append({"id": e["id"], "name": e.get("name", ""), "source": "cwe"})
+                if len(cwe_hits) >= limit:
+                    break
+        if cwe_hits:
+            matches["cwe"] = cwe_hits
+
+        # Search ATT&CK techniques
+        att_hits = []
+        for e in corpus.attack_patterns:
+            desc = (e.get("description") or "").lower()
+            name = (e.get("name") or "").lower()
+            tactics = " ".join(e.get("tactics") or []).lower()
+            if q in desc or q in name or q in tactics:
+                att_hits.append({"id": e["id"], "name": e.get("name", ""), "tactics": e.get("tactics", []), "source": "mitre_attack"})
+                if len(att_hits) >= limit:
+                    break
+        if att_hits:
+            matches["attack_patterns"] = att_hits
+
+        # Search LOLBAS
+        lolbas_hits = []
+        for e in corpus.get_source_entries("lolbas"):
+            name = (e.get("name") or "").lower()
+            desc = (e.get("description") or "").lower()
+            techniques = " ".join(e.get("techniques") or []).lower()
+            if q in name or q in desc or q in techniques:
+                lolbas_hits.append({"id": e["id"], "name": e.get("name", ""), "techniques": e.get("techniques", []), "source": "lolbas"})
+                if len(lolbas_hits) >= limit:
+                    break
+        if lolbas_hits:
+            matches["lolbas"] = lolbas_hits
+
+        # Search Sigma rules
+        sigma_hits = []
+        for e in corpus.get_source_entries("sigma_rules"):
+            title = (e.get("name") or "").lower()
+            desc = (e.get("description") or "").lower()
+            tags = " ".join(e.get("tags") or []).lower()
+            if q in title or q in desc or q in tags:
+                sigma_hits.append({"id": e["id"], "name": e.get("name", ""), "level": e.get("level", ""), "source": "sigma_rules"})
+                if len(sigma_hits) >= limit:
+                    break
+        if sigma_hits:
+            matches["sigma_rules"] = sigma_hits
+
+        # Search YARA rules (both sources)
+        yara_hits = []
+        yara_str_hits = corpus.search_yara_strings(text, limit=limit)
+        for r in yara_str_hits:
+            yara_hits.append({"name": r.get("name", ""), "description": r.get("description", "")[:200], "source": r.get("source", "yara_rules")})
+            if len(yara_hits) >= limit:
+                break
+        if yara_hits:
+            matches["yara_rules"] = yara_hits
+
+        total_matches = sum(len(v) for v in matches.values())
+        return {
+            "ok": True,
+            "action": "classify_threat",
+            "query": text,
+            "matches": matches,
+            "total_matches": total_matches,
+        }
+
+    @staticmethod
+    def _enrich_findings_with_corpus(findings: list[dict]) -> list[dict]:
+        """Cross-reference findings with threat corpus data.
+
+        For each finding, searches the corpus for matching CWE entries,
+        ATT&CK techniques, LOLBAS references, and Sigma rules.
+        Adds corpus_metadata field to each finding.
+        """
+        from ..intelligence.threat_corpus import ensure_corpus_loaded
+
+        corpus, _ = ensure_corpus_loaded()
+        if corpus is None:
+            return findings
+
+        for f in findings:
+            text = " ".join(
+                str(f.get(k) or "")
+                for k in ("summary", "name", "title", "value", "kind", "type",
+                          "indicator", "description", "pattern_name")
+            ).lower()
+            if not text:
+                continue
+
+            meta: dict[str, list] = {}
+
+            # Match CWE
+            for cwe in corpus.cwe[:500]:
+                cwe_name = (cwe.get("name") or "").lower()
+                if any(word in text for word in cwe_name.split()[:3] if len(word) > 4):
+                    meta.setdefault("cwe", []).append({
+                        "id": cwe["id"], "name": cwe.get("name", ""),
+                    })
+                    if len(meta["cwe"]) >= 3:
+                        break
+
+            # Match ATT&CK techniques
+            for att in corpus.attack_patterns:
+                att_name = (att.get("name") or "").lower()
+                if att_name and att_name in text:
+                    meta.setdefault("attack_techniques", []).append({
+                        "id": att["id"], "name": att.get("name", ""),
+                        "tactics": att.get("tactics", []),
+                    })
+                    if len(meta.get("attack_techniques", [])) >= 3:
+                        break
+
+            # Match LOLBAS binaries
+            for lb in corpus.get_source_entries("lolbas"):
+                lb_name = (lb.get("name") or "").lower()
+                if lb_name and lb_name in text:
+                    meta.setdefault("lolbas", []).append({
+                        "id": lb["id"], "name": lb.get("name", ""),
+                    })
+                    if len(meta.get("lolbas", [])) >= 3:
+                        break
+
+            # Existing CWE from vuln_db patterns
+            existing_cwe = f.get("cwe_id")
+            if existing_cwe and "cwe" not in meta:
+                cwe_entry = corpus.find_cwe(existing_cwe)
+                if cwe_entry:
+                    meta["cwe"] = [{"id": existing_cwe, "name": cwe_entry.get("name", "")}]
+
+            if meta:
+                f["corpus_metadata"] = meta
+
+        return findings
+
     def _threat_hunt_score_finding(self, finding: dict, freq: int = 1) -> float:
         """Embedding-first threat ranking with deterministic non-heuristic fallback."""
         if not isinstance(finding, dict):
@@ -447,6 +636,14 @@ class ServerThreatHuntMixin:
 
     def _handle_threat_hunt(self, args: dict) -> dict:
         action = str(args.get("action") or "run").strip().lower()
+
+        # ── Corpus actions ────────────────────────────────────────────
+        if action == "load_threat_taxonomy":
+            return self._threat_hunt_load_taxonomy(args)
+
+        if action == "classify_threat":
+            return self._threat_hunt_classify(args)
+
         profile = (
             str(args.get("profile") or args.get("scan_profile") or "balanced")
             .strip()
@@ -590,6 +787,7 @@ class ServerThreatHuntMixin:
         ranked_findings.sort(key=lambda x: (x.get("ml_score", 0.0), x.get("support_count", 1)), reverse=True)
         findings = ranked_findings[:limit]
         findings, hotspots = self._correlate_findings(findings)
+        findings = self._enrich_findings_with_corpus(findings)
         attack_paths = self._synthesize_attack_paths(findings)
         ok_steps = sum(1 for s in steps if s.get("ok"))
         failed_steps = len(steps) - ok_steps

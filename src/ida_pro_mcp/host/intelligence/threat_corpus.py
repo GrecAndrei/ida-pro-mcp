@@ -1,21 +1,29 @@
 """
-Threat corpus assembly — BRON-style normalization of CWE, MITRE ATT&CK, and
-signature-base YARA data into a single JSON for the intelligence layer.
+Threat corpus assembly — normalization of CWE, MITRE ATT&CK, signature-base
+YARA, LOLBAS, Sigma, URLhaus, and Yara-Rules data into a modular cache for
+the intelligence layer.
+
+Source plugin system: each source is a SourceParser subclass registered in
+intelligence/sources/__init__.py. Adding a new source = 1 file + 1 line.
 
 Sources:
-  - CWE catalog (cwec_v4.x.xml, MITRE)
-  - MITRE ATT&CK STIX bundles (enterprise / ics / mobile, JSON)
-  - Florian Roth signature-base YARA rules (signature-base/yara/*.yar)
+  - CWE catalog (MITRE)
+  - MITRE ATT&CK STIX bundles (enterprise / ics / mobile)
+  - Florian Roth signature-base YARA rules
+  - Yara-Rules/rules repository
+  - LOLBAS project (Living Off The Land Binaries and Scripts)
+  - SigmaHQ detection rules
+  - URLhaus malicious URL feed (abuse.ch)
 
-The parsed corpus is cached as a single JSON file under
-CACHE_DIR/threat_corpus_v1.json. Lazy-loaded on first use; can be rebuilt
-on demand via the ``intelligence(action="load_threat_taxonomy", rebuild=True)``
-action or the ``download-bron-corpus`` installer subcommand.
+The parsed corpus is cached as per-source JSON files under
+CACHE_DIR/corpus/. Lazy-loaded singleton on first use; can be rebuilt
+on demand via ``threat_hunt(action="load_threat_taxonomy", rebuild=True)``.
 
 The corpus is consumed by:
+  - ``threat_hunt(action="classify_threat")`` — match text against corpus
+  - ``threat_hunt(action="run")`` — auto-enriches findings with CWE/ATT&CK/LOLBAS
   - ``taint`` module signature patterns
-  - ``intelligence(classify_threat)`` action
-  - ``SecBertStaticEmbedder`` corpus selection (Phase 3)
+  - ``SecBertStaticEmbedder`` corpus selection
 """
 
 from __future__ import annotations
