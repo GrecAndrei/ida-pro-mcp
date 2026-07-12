@@ -11,32 +11,9 @@ anti-debug APIs, game anti-cheat, API hashing).
 
 from __future__ import annotations
 
-import os
-from typing import Any
+from ...findcrypt import findcrypt_rules_dir
 
 # ── FINDCRYPT YARA RULES PATH ──────────────────────────────────────────────
-
-def findcrypt_rules_dir() -> str | None:
-    """Return the directory containing downloaded FindCrypt YARA rules, or None."""
-    try:
-        from ..host.config import CACHE_DIR
-    except ImportError:
-        from host.config import CACHE_DIR  # type: ignore[no-redef]
-    # Check SourceParser download cache
-    source_dir = os.path.join(CACHE_DIR, "corpus_sources", "findcrypt")
-    if os.path.isdir(source_dir):
-        # Walk to find .yar/.yara/.rules files
-        for root, _dirs, files in os.walk(source_dir):
-            if any(f.endswith((".yar", ".yara", ".rules")) for f in files):
-                return root
-    # Check bron_corpus download cache
-    bron_dir = os.path.join(CACHE_DIR, "threat_corpus_sources", "findcrypt")
-    if os.path.isdir(bron_dir):
-        for root, _dirs, files in os.walk(bron_dir):
-            if any(f.endswith((".yar", ".yara", ".rules")) for f in files):
-                return root
-    return None
-
 
 def findcrypt_available() -> bool:
     """Check if FindCrypt YARA rules are available locally."""

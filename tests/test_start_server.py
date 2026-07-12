@@ -37,6 +37,14 @@ def _make_minimal_embedder():
     return e
 
 
+def _mock_socket_boundary():
+    """Mock ephemeral-port allocation at the network boundary."""
+    sock = MagicMock()
+    sock.__enter__.return_value = sock
+    sock.getsockname.return_value = ("127.0.0.1", 43123)
+    return patch("socket.socket", return_value=sock)
+
+
 class TestStartServerLeaseFilePriority(unittest.TestCase):
     """Test that _start_server checks lease file BEFORE _use_llama gate."""
 
@@ -129,6 +137,7 @@ class TestStartServerPathRecheck(unittest.TestCase):
             patch.object(_core, "_find_model", return_value="/tmp/model.gguf"),
             patch.object(_core, "EMBED_DISABLED", False),
             patch("subprocess.Popen") as mock_popen,
+            _mock_socket_boundary(),
         ):
                     mock_proc = MagicMock()
                     mock_proc.poll.return_value = None
@@ -179,7 +188,7 @@ class TestStartServerLDPath(unittest.TestCase):
             return mock_proc
 
         # Don't create lease file — force new server start path
-        with patch("subprocess.Popen", side_effect=fake_popen), patch("urllib.request.urlopen") as mock_urlopen:
+        with patch("subprocess.Popen", side_effect=fake_popen), patch("urllib.request.urlopen") as mock_urlopen, _mock_socket_boundary():
             mock_ctx = MagicMock()
             mock_ctx.__enter__ = MagicMock(return_value=mock_ctx)
             mock_ctx.__exit__ = MagicMock(return_value=False)

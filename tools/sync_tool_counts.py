@@ -70,8 +70,12 @@ def sync(check_only: bool = False) -> int:
          f"`HIDDEN_TOOLS_IN_LIST` — {hidden} tools callable via alias/name but hidden from listings"),
     ]
     toolsref_patterns = [
-        (r"Current canonical tool surface: \*\*\d+ tools\*\*",
-         f"Current canonical tool surface: **{total} tools**"),
+        (
+            r"Total tools: \*\*\d+\*\* \| Advertised: \*\*\d+\*\*",
+            f"Total tools: **{total}** | Advertised: **{advertised}**",
+        ),
+        (r"\*\*Advertised\*\* \(\d+\):", f"**Advertised** ({advertised}):"),
+        (r"\*\*Hidden\*\* \(\d+\):", f"**Hidden** ({hidden}):"),
     ]
 
     dirty: list[Path] = []

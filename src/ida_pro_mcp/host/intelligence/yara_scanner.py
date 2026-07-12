@@ -29,6 +29,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from ...findcrypt import findcrypt_rules_dir
 from ..config import CACHE_DIR
 from ..errors import MCPError, make_error
 
@@ -130,13 +131,9 @@ def _iter_rule_files(rules_dir: str) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     # Collect from primary rules_dir and any extra registered dirs
     dirs_to_scan = [rules_dir]
-    try:
-        from ida_pro_mcp.ida_mcp.support.crypto_registry import findcrypt_rules_dir
-        fc_dir = findcrypt_rules_dir()
-        if fc_dir and fc_dir != rules_dir:
-            dirs_to_scan.append(fc_dir)
-    except ImportError:
-        pass
+    fc_dir = findcrypt_rules_dir()
+    if fc_dir and os.path.realpath(fc_dir) != os.path.realpath(rules_dir):
+        dirs_to_scan.append(fc_dir)
     for scan_dir in dirs_to_scan:
         if not os.path.isdir(scan_dir):
             continue

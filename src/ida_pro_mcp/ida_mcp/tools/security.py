@@ -1385,7 +1385,7 @@ def _detect_protocol_impl(addr, limit):
 
     clf = _get_protocol_classifier_fn()
     network_hits = {}
-    for api_group, api_names in _NETWORK_APIS.items():
+    for api_names in _NETWORK_APIS.values():
         for name in api_names:
             ea = ida_name.get_name_ea(idaapi.BADADDR, name)
             if ea == idaapi.BADADDR:

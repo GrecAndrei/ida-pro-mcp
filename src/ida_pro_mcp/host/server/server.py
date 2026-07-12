@@ -10,13 +10,9 @@ import sys
 import tempfile
 import threading
 import time
-import warnings
 from typing import Any
 
 from ida_pro_mcp import __version__
-
-# Suppress ALL warnings
-warnings.filterwarnings("ignore")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 

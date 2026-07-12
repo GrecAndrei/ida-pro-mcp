@@ -46,10 +46,10 @@ Extracts, decodes, classifies, and scores strings for IOC discovery, C2 detectio
 ```
 
 ## Notes
-- `score_c2` uses a local ML model to score C2 likelihood — useful for quick malware triage before full `threat_hunt`.
+- `score_c2` uses a local ML model to score C2 likelihood before running `workflow(action="malware_deep")`.
 - `ioc_extract` returns a structured list of IOCs suitable for feeding into SIEM/SOAR platforms.
 - `find_stack_strings` detects char-by-char string construction that evades static string extraction.
 - `indicators`, `persistence`, and `evasion` are malware-focused aggregators that combine multiple embedding/detection signals.
 - All `find_*` actions support optional `pattern` for regex filtering of results.
-- Pair with `crypto_id(action="encoding")` for deeper obfuscation analysis.
+- Pair with `security(action="analyze", what="encoding")` for deeper obfuscation analysis.
 - Use `entropy_rank` to quickly surface encrypted/packed content for further investigation.

@@ -4,7 +4,7 @@ Architecture and design decisions for the IDA Pro MCP server.
 
 ## Overview
 
-IDA Pro MCP is a JSON-RCP stdio server that exposes IDA Pro's reverse
+IDA Pro MCP is a JSON-RPC stdio server that exposes IDA Pro's reverse
 engineering capabilities to LLM clients. It uses a tool-action model where
 each tool (e.g., `code`, `search`, `intelligence`) exposes multiple actions
 (e.g., `decompile`, `find`, `index_fast`).
@@ -34,16 +34,15 @@ src/ida_pro_mcp/
 │   │   ├── code.py         ← @tool decorated functions
 │   │   ├── search/         ← Package (basic + advanced)
 │   │   └── __init__.py     ← Lazy loader + _TOOL_MODULE_MAP
-│   ├── host/
-│   │   ├── schemas_data.py ← TOOLS, TOOL_DESCRIPTIONS, TOOL_ACTIONS
-│   │   ├── server/
-│   │   │   ├── tool_registry.py ← _TOOL_ACTIONS dict (action lists)
-│   │   │   ├── server_dispatch.py ← Routes tool→handler
-│   │   │   └── server.py ← Main MCP server class
-│   │   └── config.py       ← Runtime configuration
-│   └── utils.py            ← Shared utilities
-└── scripts/
-    └── test_registry_check.py ← Test binding enforcement
+│   └── support/            ← Shared IDA-side helpers
+├── host/
+│   ├── schemas_data.py     ← TOOLS, ADVERTISED_TOOLS, descriptions
+│   ├── server/
+│   │   ├── tool_registry.py    ← _TOOL_ACTIONS dict
+│   │   ├── server_dispatch.py  ← Routes tool→handler
+│   │   └── server.py           ← Main MCP server class
+│   └── config.py           ← Runtime configuration
+└── installer/              ← Installation and corpus setup
 ```
 
 ## Key Design Decisions
@@ -64,20 +63,21 @@ The `intelligence` tool manages a SQLite-backed embedding index:
 - `semantic_search` — cosine similarity over stored embeddings
 - `similar_functions` — nearest neighbors by embedding distance
 
-### 3. Test Binding Registry
+### 3. Contract Tests
 
-Tests declare what code entities they interact with via `@@TEST_REGISTRY@@`
-headers. The `test_registry_check.py` script enforces that when code changes,
-corresponding tests are updated or marked as false positives.
+Tests exercise stable inputs and outputs. Contract tests verify that schema,
+dispatch, tool registries, and documentation remain synchronized without
+binding tests to private implementation details or file hashes.
 
 ## Adding a New Tool
 
-1. Create `ida_mcp/tools/newtool.py` with `@tool` decorated function
+1. Create `ida_mcp/tools/<name>.py` with an `@tool` decorated function
 2. Add to `_TOOL_ACTIONS` in `host/server/tool_registry.py`
-3. Add to `TOOLS` in `host/schemas_data.py`
+3. Add to `TOOLS` and, when appropriate, `ADVERTISED_TOOLS` in `host/schemas_data.py`
 4. Add description to `TOOL_DESCRIPTIONS`
-5. Add a test file with `@@TEST_REGISTRY@@` header
-6. Run `python scripts/test_registry_check.py --discover`
+5. Add the module to `ida_mcp/tools/__init__.py::__all__`
+6. For a host-only tool, add its dispatch branch in `server_dispatch.py`
+7. Add behavior tests for host-side logic and run the schema integrity check
 
 ## Removed Tools
 

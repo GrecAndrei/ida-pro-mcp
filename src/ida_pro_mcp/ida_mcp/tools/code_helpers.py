@@ -1,5 +1,7 @@
 import re
 
+from ida_pro_mcp.ida_mcp.support.crypto_registry import DECOMP_CRYPTO_SIGS as _DECOMP_CRYPTO_SIGS
+
 try:
     from ._common import *
 except ImportError:
@@ -342,9 +344,6 @@ _DECOMP_KNOWN_APIS = [
     "memcmp", "strcmp", "strstr", "sscanf", "gets", "scanf", "vsprintf",
     "mmap", "munmap", "ioctl", "open", "read", "write", "close",
 ]
-
-from ida_pro_mcp.ida_mcp.support.crypto_registry import DECOMP_CRYPTO_SIGS as _DECOMP_CRYPTO_SIGS
-
 
 def _detect_api_calls(pseudo: str, *, limit: int = 15) -> list[str]:
     return [api for api in _DECOMP_KNOWN_APIS if api in pseudo][:limit]

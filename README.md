@@ -197,39 +197,31 @@ The same tool-doc skills for Codex agents live in `.agents/skills/` (auto-genera
 
 ## Tool Surface
 
-72 tools, hundreds of actions. Default `tools/list` mode is `ultra` — short routing hints plus action enums, ~9.5k tokens total. Skills carry the reference docs; the tools carry live data.
+57 tools, hundreds of actions. Default `tools/list` advertises the 17-tool Tier A surface in `ultra` mode — short routing hints plus action enums, ~9.5k tokens total. The remaining tools stay callable by exact name. Skills carry the reference docs; the tools carry live data.
 
  `IDA_MCP_TOOLS_LIST_MODE` controls verbosity:
 - `ultra` (default): action enums + short description (~9.5k tokens)
 - `lean`: full action descriptions, stripped footnotes (~21k tokens)
-- `full`: complete descriptions + full JSON Schema (~58k tokens)
 
 ### Tool categories
 
-- Core/session: `session`, `multi_session`, `batch`, `bookmarks`, `wiki`, `truncation`
-- Data access: `idb`, `data`, `data_ops`, `code`, `search`, `bridge_search`, `types`, `memory`, `query`
-- Editing: `modify`, `funcs`, `segments`, `bulk`, `annotation`
-- Analysis: `cfg_analysis`, `stack_analysis`, `abi`, `protocol`, `classify`, `bindiff`, `compare`, `summarize`, `agent`, `entropy`, `packer`, `fixups`
-- Security RE: `threat_hunt`, `taint`, `gadgets`, `deobfuscate`, `crypto_id`, `yara_hunt`
-- Debug/trace: `debug`, `trace_analysis`, `coverage`, `emulate`
-- Structural: `ctree`, `microcode`, `graph`, `xref_analysis`, `imports_deep`, `symbols`, `patterns`, `struct_recover`, `hooks`
-- AI/intelligence: `intelligence`, `knowledge`, `lumina`, `predictor`, `llm_helpers`, `workflow`
-- Firmware: `firmware_view`, `nav`
-- Utilities: `analysis`, `project`, `export`, `history`, `misc`, `calc`, `binary_info`, `string_ops`
-- Infrastructure: `blackboard`, `governance`, `filter`
+- Core/session: `session`, `truncation`, `bookmarks`, `background`, `batch`, `wiki`, `multi_session`
+- Primary analysis: `analysis`, `idb`, `code`, `data`, `search`, `types`, `memory`, `modify`, `funcs`, `segments`, `bulk`, `misc`, `calc`, `nav`, `project`
+- Advanced analysis: `debug`, `coverage`, `trace_analysis`, `microcode`, `graph`, `xref_analysis`, `ctree`, `imports_deep`, `patterns`, `symbols`, `lumina`, `export`, `history`, `data_ops`, `firmware_view`
+- Intelligence/workflow: `intelligence`, `workflow`, `blackboard`, `governance`, `knowledge`
+- Security and specialized analysis: `security`, `gadgets`, `abi`, `summarize`, `classify`, `compare`, `stack_analysis`, `annotation`, `string_ops`, `cfg_analysis`, `binary_info`, `struct_recover`, `emulate`, `bindiff`, `fixups`
 
 ### Tool aliases
 
 - `plugins` → `misc`
 
-### Global action wrappers
+### Global result controls
 
-Available on all action-based tools:
-- `action="grep"` — run source action then grep output
-- `action="pick"` — run source action then keep specified fields
-- `action="head"` / `action="tail"` — first/last N rows
-- `action="stats"` — payload statistics
-- `action="next"` — continue paginated output via `next_token`
+Available as optional arguments on action-based tools while keeping the original action:
+- `grep` / `grep_regex` — filter result items
+- `pick` — keep selected fields
+- `head` / `tail` / `offset` / `limit` — slice result rows
+- `next_token` — continue paginated output
 
 ## Local ML Components
 
@@ -245,7 +237,7 @@ Used by: `search(action='nl')`, `funcs(action='suggest_names')`, `funcs(action='
 
 Zero-shot behavior detection via embedding similarity to labeled examples. Tags: `crypto_symmetric`, `network_http`, `process_injection`, `anti_analysis`, `persistence`, `credential_access`, etc.
 
-Used by: `classify`, `search(action='behavior')`, `llm_helpers(action='behavioral_signature_search')`, `string_ops(action='score_c2')`, `smart_decompile` response tags.
+Used by: `classify`, `search(action='behavior')`, `string_ops(action='score_c2')`, and `smart_decompile` response tags.
 
 ### FrontierEngine
 
@@ -391,7 +383,7 @@ Client config locations handled for all supported clients using XDG-aware paths.
 
 **"No active session"**: Call `session(action='create', binary_path='...')` first.
 
-**Large context usage**: Verify `IDA_MCP_TOOLS_LIST_MODE=ultra`. Each `tools/list` call is ~9.5k tokens in ultra mode; `full` mode is ~58k tokens.
+**Large context usage**: Verify `IDA_MCP_TOOLS_LIST_MODE=ultra`. The alternative `lean` mode includes more argument detail and consumes more context.
 
 **MCP resources not working**: MCP resources (`ida://state` etc.) require user action in the client UI — the LLM cannot read them autonomously. Use `session(action='state')` instead.
 

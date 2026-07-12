@@ -52,6 +52,7 @@ Compact action enums (`ADVERTISED_ACTIONS`) shrink tools/list for `session`,
 - [x] Restore curated host/integration pins
 - [ ] Further Tier C module deletion after cold-path proof
 - [ ] Full host test suite rebuild (selective, not 84k-line graveyard)
+- [ ] Decompose runtime/session/trace hotspots behind their existing contract tests
 
 ## Core agent path
 

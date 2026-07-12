@@ -15,12 +15,12 @@ IDA Pro MCP uses a real embedding model (bge-code-v1, 1536 dims) for semantic an
 | Tool | How |
 |------|-----|
 | `classify(action="function")` | BehaviorClassifier on decompiled pseudocode |
-| `agent(action="similar")` | FunctionEmbeddingIndex cosine search |
-| `agent(action="cluster")` | Batch embed all functions → k-means → label clusters |
-| `agent(action="fingerprint")` | Compare embedding index against other binaries |
+| `intelligence(action="similar_functions")` | FunctionEmbeddingIndex cosine search |
+| `intelligence(action="index_batch")` | Batch decompile and embed functions for semantic analysis |
+| `search(action="fingerprint")` | Generate structural fingerprints for comparison |
 | `funcs(action="suggest_names")` | Find nearest named function by cosine similarity |
-| `query(action="nl")` | Embed query → search FunctionEmbeddingIndex |
-| `deobfuscate(action="detect")` | BehaviorClassifier with obfuscation-specific anchors |
+| `search(action="nl")` | Embed query → search FunctionEmbeddingIndex |
+| `security(action="detect")` | Combined packer, entropy, crypto, and obfuscation sweep |
 | `gadgets(action="classify_chain")` | BehaviorClassifier with exploit-primitive anchors |
 | `blackboard(action="search")` | Cosine search over stored entry vectors |
 | Every `code(action="decompile")` | Auto-indexes the function, injects relevant blackboard context |

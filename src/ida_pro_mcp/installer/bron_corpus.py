@@ -32,6 +32,11 @@ import urllib.request
 import zipfile
 from typing import Any
 
+from ..findcrypt import (
+    FINDCRYPT_ARCHIVE_FILENAME,
+    FINDCRYPT_ARCHIVE_URL,
+    extract_findcrypt_rules,
+)
 from ..host.config import CACHE_DIR
 from ..host.intelligence.threat_corpus import (
     build_corpus_from_sources,
@@ -89,8 +94,8 @@ BRON_SOURCES: dict[str, dict[str, Any]] = {
         "kind": "signature_base_tar",
     },
     "findcrypt": {
-        "url": "https://github.com/polymorf/findcrypt-yara/archive/refs/heads/master.zip",
-        "filename": "findcrypt-yara-master.zip",
+        "url": FINDCRYPT_ARCHIVE_URL,
+        "filename": FINDCRYPT_ARCHIVE_FILENAME,
         "kind": "findcrypt_zip",
     },
 }
@@ -256,10 +261,7 @@ def _materialize_signature_base(sources_dir: str) -> str:
 
 
 def _unpack_findcrypt_zip(zip_path: str, dst_dir: str) -> str:
-    os.makedirs(dst_dir, exist_ok=True)
-    with zipfile.ZipFile(zip_path) as zf:
-        zf.extractall(dst_dir)
-    return dst_dir
+    return extract_findcrypt_rules(zip_path, dst_dir)
 
 
 def _materialize_findcrypt(sources_dir: str) -> str:
@@ -337,10 +339,9 @@ def download_bron_corpus(
             yara_dir = _materialize_signature_base(sources_dir)
         except Exception as e:
             results["signature_base"]["unpack_error"] = str(e)
-    findcrypt_dir: str | None = None
     if "findcrypt" in results and "error" not in results["findcrypt"]:
         try:
-            findcrypt_dir = _materialize_findcrypt(sources_dir)
+            _materialize_findcrypt(sources_dir)
         except Exception as e:
             results["findcrypt"]["unpack_error"] = str(e)
     if not (cwe_path or attack_paths or yara_dir):

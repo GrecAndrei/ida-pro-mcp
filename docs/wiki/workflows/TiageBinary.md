@@ -22,13 +22,13 @@ Go from unknown binary to actionable understanding in a single pass.
 ]}}
 ```
 
-### 3. Behavioral clustering
+### 3. Build the semantic index
 
 ```json
-{"name": "agent", "arguments": {"action": "cluster"}}
+{"name": "intelligence", "arguments": {"action": "index_fast"}}
 ```
 
-Uses BehaviorClassifier (bge-code-v1 embeddings) to group functions by behavior. Look for clusters labeled networking, crypto, file I/O, anti-debug, etc.
+Indexes functions for semantic search and behavior classification.
 
 ### 4. Classify the binary
 
@@ -36,10 +36,10 @@ Uses BehaviorClassifier (bge-code-v1 embeddings) to group functions by behavior.
 {"name": "classify", "arguments": {"action": "binary"}}
 ```
 
-### 5. Quick threat hunt
+### 5. Run fast triage
 
 ```json
-{"name": "threat_hunt", "arguments": {"action": "quick"}}
+{"name": "workflow", "arguments": {"action": "triage_fast"}}
 ```
 
 ### 6. Generate summary report

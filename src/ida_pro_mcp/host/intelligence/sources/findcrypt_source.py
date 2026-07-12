@@ -10,11 +10,12 @@ import os
 import re
 from typing import Any
 
+from ....findcrypt import FINDCRYPT_ARCHIVE_URL, extract_findcrypt_rules
 from .base import SourceParser
 
 _FINDCRYPT_REPO_ZIP = os.environ.get(
     "IDA_MCP_FINDCRYPT_URL",
-    "https://github.com/polymorf/findcrypt-yara/archive/refs/heads/master.zip",
+    FINDCRYPT_ARCHIVE_URL,
 )
 
 _RULE_NAME_RE = re.compile(r"^\s*rule\s+(\w+)", re.MULTILINE)
@@ -68,7 +69,4 @@ class FindCryptSource(SourceParser):
 
     def _post_download(self, fpath: str, dest_dir: str) -> None:
         if fpath.endswith(".zip"):
-            import zipfile
-
-            with zipfile.ZipFile(fpath) as zf:
-                zf.extractall(dest_dir)
+            extract_findcrypt_rules(fpath, dest_dir)

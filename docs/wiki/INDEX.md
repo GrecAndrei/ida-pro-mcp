@@ -51,8 +51,6 @@ Auto-generated from wiki file structure.
 
 - [coverage](tools/coverage.md)
 
-- [crypto_id](tools/crypto_id.md)
-
 - [ctree](tools/ctree.md)
 
 - [data](tools/data.md)
@@ -60,10 +58,6 @@ Auto-generated from wiki file structure.
 - [data_ops](tools/data_ops.md)
 
 - [debug](tools/debug.md)
-
-- [deobfuscate](tools/deobfuscate.md)
-
-- [entropy](tools/entropy.md)
 
 - [export](tools/export.md)
 - [bindiff](tools/bindiff.md)
@@ -81,8 +75,6 @@ Auto-generated from wiki file structure.
 - [graph](tools/graph.md)
 
 - [history](tools/history.md)
-
-- [hooks](tools/hooks.md)
 
 - [idb](tools/idb.md)
 
@@ -104,9 +96,9 @@ Auto-generated from wiki file structure.
 
 - [project](tools/project.md)
 
-- [protocol](tools/protocol.md)
-
 - [search](tools/search.md)
+
+- [security](tools/security.md)
 
 - [segments](tools/segments.md)
 
@@ -114,19 +106,11 @@ Auto-generated from wiki file structure.
 
 - [stack_analysis](tools/stack_analysis.md)
 
-- [static_trace](tools/static_trace.md)
-
 - [string_ops](tools/string_ops.md)
 
 - [summarize](tools/summarize.md)
 
 - [symbols](tools/symbols.md)
-
-- [taint](tools/taint.md)
-
-- [threat_hunt](tools/threat_hunt.md)
-
-- [trace](tools/trace.md)
 
 - [trace_analysis](tools/trace_analysis.md)
 
@@ -139,5 +123,3 @@ Auto-generated from wiki file structure.
 - [workflow](tools/workflow.md)
 
 - [xref_analysis](tools/xref_analysis.md)
-
-- [yara_hunt](tools/yara_hunt.md)

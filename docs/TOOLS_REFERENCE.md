@@ -1,6 +1,6 @@
 # IDA Pro MCP - Tools Reference
 
-Total tools: **66** | Advertised: **64**
+Total tools: **57** | Advertised: **17**
 
 > Single source of truth: `src/ida_pro_mcp/host/schemas_data.py`
 >
@@ -47,9 +47,7 @@ Total tools: **66** | Advertised: **64**
 | `data_ops` | 8 | Change data representation at addresses (≈ IDA Edit menu ... |
 | `firmware_view` | 20 | Firmware triage: region scanning, pointer sweeps, table c... |
 | `wiki` | 7 | Accesses built-in documentation and tool usage guides wit... |
-| `yara_hunt` | 6 | Scans the binary with YARA rules and provides match conte... |
 | `intelligence` | 14 | Intelligence subsystem: embedding-based classification, b... |
-| `threat_hunt` | 8 | Runs automated threat-hunting passes to detect malware pa... |
 | `workflow` | 13 | Executes predefined multi-step analysis workflows for com... |
 | `gadgets` | 11 | Find ROP/JOP/COP gadgets, stack pivots, and classify expl... |
 | `abi` | 10 | Analyzes calling conventions and ABI details of functions |
@@ -738,19 +736,6 @@ Accesses built-in documentation and tool usage guides within MCP context. Action
 - `sections`
 - `suggest`
 
-### yara_hunt
-
-Scans the binary with YARA rules and provides match context and xref correlation. Actions: scan, compile, list_rules, match_context, extract_strings, xref_matches.
-
-**Actions:**
-
-- `scan`
-- `compile`
-- `list_rules`
-- `match_context`
-- `extract_strings`
-- `xref_matches`
-
 ### intelligence
 
 Intelligence subsystem: embedding-based classification, blackboard-driven indexing, and similarity search. Actions: intelligence_status, embedder_status, anchor_status, refresh_anchors, classify_text, classify_function, index_function, index_batch, index_fast, index_range, similar_functions, semantic_search, blackboard_search, export_index_summary. Supports multi-region indexing and structural pre-filtering (size, bb_count, loops, api_count, segment).
@@ -771,21 +756,6 @@ Intelligence subsystem: embedding-based classification, blackboard-driven indexi
 - `semantic_search`
 - `blackboard_search`
 - `export_index_summary`
-
-### threat_hunt
-
-Runs automated threat-hunting passes to detect malware patterns, vulnerabilities, and suspicious behaviors. Actions: run, malware, vuln, tracing, findings, quick, deep, legacy.
-
-**Actions:**
-
-- `run`
-- `malware`
-- `vuln`
-- `tracing`
-- `findings`
-- `quick`
-- `deep`
-- `legacy`
 
 ### workflow
 
@@ -1186,10 +1156,10 @@ Manage relocations/fixups (relocation table entries) in the IDB. Actions: list, 
 
 ## Advertised vs Hidden
 
-**Advertised** (64): Tools exposed to LLM clients.
+**Advertised** (17): Tier A tools exposed to LLM clients by default.
 
-`session`, `truncation`, `bookmarks`, `batch`, `wiki`, `analysis`, `idb`, `code`, `data`, `search`, `imports_deep`, `symbols`, `patterns`, `types`, `memory`, `modify`, `funcs`, `segments`, `bulk`, `misc`, `calc`, `nav`, `project`, `debug`, `graph`, `ctree`, `export`, `history`, `annotation`, `binary_info`, `threat_hunt`, `workflow`, `compare`, `firmware_view`, `blackboard`, `knowledge`, `abi`, `cfg_analysis`, `classify`, `coverage`, `security`, `intelligence`, `data_ops`, `gadgets`, `governance`, `lumina`, `microcode`, `stack_analysis`, `string_ops`, `summarize`, `trace_analysis`, `yara_hunt`, `struct_recover`, `emulate`, `bindiff`, `multi_session`, `fixups`
+`session`, `analysis`, `code`, `funcs`, `search`, `data`, `modify`, `types`, `memory`, `segments`, `idb`, `misc`, `intelligence`, `blackboard`, `graph`, `batch`, `truncation`
 
-**Hidden** (2): Internal tools, not in ADVERTISED_TOOLS.
+**Hidden** (40): Tools omitted from the default listing but callable by exact name.
 
-`background`, `xref_analysis`
+`bookmarks`, `background`, `bulk`, `calc`, `nav`, `debug`, `coverage`, `trace_analysis`, `project`, `microcode`, `xref_analysis`, `ctree`, `imports_deep`, `patterns`, `symbols`, `lumina`, `export`, `history`, `data_ops`, `firmware_view`, `wiki`, `workflow`, `gadgets`, `security`, `abi`, `summarize`, `classify`, `compare`, `stack_analysis`, `annotation`, `string_ops`, `cfg_analysis`, `binary_info`, `governance`, `knowledge`, `struct_recover`, `emulate`, `bindiff`, `multi_session`, `fixups`

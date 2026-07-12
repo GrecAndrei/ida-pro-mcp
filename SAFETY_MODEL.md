@@ -104,7 +104,7 @@ Outcome: catches safety regressions before release.
 
 - Local-only artifacts and private path leaks are removed/ignored.
 - Release metadata and license policy are explicitly maintained.
-- Classifier downgraded from `Production/Stable` to `Beta`.
+- Classifier downgraded from `Production/Stable` to `Alpha`.
 
 Outcome: lowers accidental disclosure risk; honest about maturity.
 

@@ -5,8 +5,8 @@
 ## Key Sequence
 
 ```
-agent(action="cluster")
-  → threat_hunt(action="quick")
+intelligence(action="index_fast")
+  → workflow(action="triage_fast")
   → summarize(action="report")
   → blackboard(action="search", query="...")
 ```
@@ -30,8 +30,8 @@ agent(action="cluster")
 ```json
 {"name": "batch", "arguments": {"calls": [
   "session:create binary_path=/path/to/bin",
-  "agent:cluster",
-  "threat_hunt:quick",
+  "intelligence:index_fast",
+  "workflow:triage_fast",
   "summarize:report"
 ]}}
 ```
