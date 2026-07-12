@@ -20,6 +20,7 @@ The corpus is consumed by:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import io
 import json
@@ -67,16 +68,21 @@ __all__ = [
     "ThreatCorpus",
     "CORPUS_VERSION",
     "CORPUS_CACHE_FILENAME",
+    "CORPUS_CACHE_DIR",
+    "MANIFEST_PATH",
     "corpus_cache_path",
     "load_corpus",
     "save_corpus",
     "delete_corpus_cache",
     "ensure_corpus_loaded",
     "build_corpus_from_sources",
+    "download_corpus_sources",
+    "invalidate_corpus_cache",
     "parse_cwe_xml",
     "parse_attack_stix",
     "parse_yara_dir",
     "compute_source_fingerprint",
+    "_download_url",
 ]
 
 CORPUS_VERSION = 1
@@ -512,119 +518,91 @@ def compute_source_fingerprint(
 
 
 class ThreatCorpus:
-    """In-memory holder for the parsed threat corpus."""
+    """In-memory holder for the parsed threat corpus — modular edition.
+
+    Storage:
+        entries: dict[str, list[dict]] — keyed by source name
+        _indexes: dict[str, dict[str, Any]] — per-source id→entry indexes
+
+    Backward compatibility:
+        Properties like .cwe, .yara_rules, .attack_patterns resolve to
+        entries[<source_name>] transparently.
+    """
+
+    CORPUS_VERSION = 2
 
     def __init__(
         self,
-        cwe: list[dict[str, Any]],
-        attack_patterns: list[dict[str, Any]],
-        malware: list[dict[str, Any]],
-        intrusion_sets: list[dict[str, Any]],
-        tools: list[dict[str, Any]],
-        mitigations: list[dict[str, Any]],
-        yara_rules: list[dict[str, Any]],
-        source_fingerprint: str = "",
+        entries: dict[str, list[dict[str, Any]]] | None = None,
+        source_fingerprints: dict[str, str] | None = None,
         built_at: str = "",
     ) -> None:
-        self.cwe = cwe
-        self.attack_patterns = attack_patterns
-        self.malware = malware
-        self.intrusion_sets = intrusion_sets
-        self.tools = tools
-        self.mitigations = mitigations
-        self.yara_rules = yara_rules
-        self.source_fingerprint = source_fingerprint
-        self.built_at = built_at or datetime.now(UTC).isoformat()
-        self._cwe_index: dict[str, dict[str, Any]] = {}
-        self._attack_index: dict[str, dict[str, Any]] = {}
-        self._malware_index: dict[str, dict[str, Any]] = {}
-        self._intrusion_index: dict[str, dict[str, Any]] = {}
-        self._tool_index: dict[str, dict[str, Any]] = {}
-        self._yara_index: dict[str, dict[str, Any]] = {}
+        self.entries: dict[str, list[dict[str, Any]]] = entries or {}
+        self.source_fingerprints: dict[str, str] = source_fingerprints or {}
+        self.built_at: str = built_at or datetime.now(UTC).isoformat()
+        self._indexes: dict[str, dict[str, Any]] = {}
         self._yara_string_to_rules: dict[str, list[str]] = {}
-        for e in cwe:
-            if e.get("id"):
-                self._cwe_index[e["id"]] = e
-        for e in attack_patterns:
-            if e.get("id"):
-                self._attack_index[e["id"]] = e
-        for e in malware:
-            if e.get("id"):
-                self._malware_index[e["id"]] = e
-            for alias in e.get("aliases") or []:
-                key = alias.lower()
-                if key and key not in self._malware_index:
-                    self._malware_index[key] = e
-        for e in intrusion_sets:
-            if e.get("id"):
-                self._intrusion_index[e["id"]] = e
-            for alias in e.get("aliases") or []:
-                key = alias.lower()
-                if key and key not in self._intrusion_index:
-                    self._intrusion_index[key] = e
-        for e in tools:
-            if e.get("id"):
-                self._tool_index[e["id"]] = e
-        for r in yara_rules:
-            if r.get("name"):
-                self._yara_index[r["name"]] = r
-            for s in r.get("strings") or []:
-                key = s.lower()
-                if not key:
-                    continue
-                self._yara_string_to_rules.setdefault(key, []).append(r["name"])
+        self._rebuild_indexes()
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "version": CORPUS_VERSION,
-            "built_at": self.built_at,
-            "source_fingerprint": self.source_fingerprint,
-            "cwe": self.cwe,
-            "attack_patterns": self.attack_patterns,
-            "malware": self.malware,
-            "intrusion_sets": self.intrusion_sets,
-            "tools": self.tools,
-            "mitigations": self.mitigations,
-            "yara_rules": self.yara_rules,
-        }
+    def _rebuild_indexes(self) -> None:
+        self._indexes.clear()
+        self._yara_string_to_rules.clear()
+        for source_name, entries in self.entries.items():
+            idx: dict[str, Any] = {}
+            for e in entries:
+                eid = e.get("id")
+                if eid:
+                    idx[eid] = e
+                for alias in e.get("aliases") or []:
+                    key = str(alias).lower()
+                    if key and key not in idx:
+                        idx[key] = e
+            self._indexes[source_name] = idx
+            if source_name in ("yara_rules", "yara_rules_extra"):
+                for r in entries:
+                    if r.get("name"):
+                        self._indexes[source_name][r["name"]] = r
+                    for s in r.get("strings") or []:
+                        key = s.lower()
+                        if key:
+                            self._yara_string_to_rules.setdefault(key, []).append(r.get("name", ""))
 
-    @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> ThreatCorpus:
-        if not isinstance(d, dict):
-            return cls([], [], [], [], [], [], [], "", "")
-        return cls(
-            cwe=list(d.get("cwe") or []),
-            attack_patterns=list(d.get("attack_patterns") or []),
-            malware=list(d.get("malware") or []),
-            intrusion_sets=list(d.get("intrusion_sets") or []),
-            tools=list(d.get("tools") or []),
-            mitigations=list(d.get("mitigations") or []),
-            yara_rules=list(d.get("yara_rules") or []),
-            source_fingerprint=str(d.get("source_fingerprint") or ""),
-            built_at=str(d.get("built_at") or ""),
-        )
+    # ── Backward-compatible properties ────────────────────────────────
 
-    def count_by_type(self) -> dict[str, int]:
-        return {
-            "cwe": len(self.cwe),
-            "attack_patterns": len(self.attack_patterns),
-            "malware": len(self.malware),
-            "intrusion_sets": len(self.intrusion_sets),
-            "tools": len(self.tools),
-            "mitigations": len(self.mitigations),
-            "yara_rules": len(self.yara_rules),
-        }
+    @property
+    def cwe(self) -> list[dict[str, Any]]:
+        return self.entries.get("cwe", [])
 
-    def is_empty(self) -> bool:
-        return not any([
-            self.cwe,
-            self.attack_patterns,
-            self.malware,
-            self.intrusion_sets,
-            self.tools,
-            self.mitigations,
-            self.yara_rules,
-        ])
+    @property
+    def attack_patterns(self) -> list[dict[str, Any]]:
+        return self.entries.get("attack_patterns", [])
+
+    @property
+    def malware(self) -> list[dict[str, Any]]:
+        return self.entries.get("malware", [])
+
+    @property
+    def intrusion_sets(self) -> list[dict[str, Any]]:
+        return self.entries.get("intrusion_sets", [])
+
+    @property
+    def tools(self) -> list[dict[str, Any]]:
+        return self.entries.get("tools", [])
+
+    @property
+    def mitigations(self) -> list[dict[str, Any]]:
+        return self.entries.get("mitigations", [])
+
+    @property
+    def yara_rules(self) -> list[dict[str, Any]]:
+        return self.entries.get("yara_rules", [])
+
+    @property
+    def source_fingerprint(self) -> str:
+        parts = [f"{k}:{v}" for k, v in sorted(self.source_fingerprints.items())]
+        return hashlib.sha256("|".join(parts).encode()).hexdigest()[:32]
+
+    # ── Backward-compatible search methods ────────────────────────────
 
     def find_cwe(self, cwe_id: str) -> dict[str, Any] | None:
         if not cwe_id:
@@ -632,17 +610,17 @@ class ThreatCorpus:
         key = cwe_id.strip().upper()
         if not key.startswith("CWE-"):
             key = f"CWE-{key}"
-        return self._cwe_index.get(key)
+        return self._indexes.get("cwe", {}).get(key)
 
     def find_technique(self, attack_id: str) -> dict[str, Any] | None:
         if not attack_id:
             return None
-        return self._attack_index.get(attack_id.strip().upper())
+        return self._indexes.get("attack_patterns", {}).get(attack_id.strip().upper())
 
     def find_malware(self, name_or_id: str) -> dict[str, Any] | None:
         if not name_or_id:
             return None
-        return self._malware_index.get(name_or_id.strip().lower())
+        return self._indexes.get("malware", {}).get(name_or_id.strip().lower())
 
     def search_yara_strings(self, needle: str, limit: int = 25) -> list[dict[str, Any]]:
         if not needle:
@@ -650,13 +628,16 @@ class ThreatCorpus:
         key = needle.lower()
         matches: list[dict[str, Any]] = []
         rule_names = self._yara_string_to_rules.get(key) or []
+        yara_idx: dict[str, Any] = {}
+        yara_idx.update(self._indexes.get("yara_rules", {}))
+        yara_idx.update(self._indexes.get("yara_rules_extra", {}))
         for rname in rule_names[:limit]:
-            rule = self._yara_index.get(rname)
+            rule = yara_idx.get(rname)
             if rule is not None:
                 matches.append(rule)
         if not matches:
             sub = key[: max(3, len(key) // 2)]
-            seen = set()
+            seen: set[str] = set()
             for skey, rules in self._yara_string_to_rules.items():
                 if sub not in skey:
                     continue
@@ -664,7 +645,7 @@ class ThreatCorpus:
                     if rname in seen:
                         continue
                     seen.add(rname)
-                    rule = self._yara_index.get(rname)
+                    rule = yara_idx.get(rname)
                     if rule is not None:
                         matches.append(rule)
                         if len(matches) >= limit:
@@ -672,71 +653,331 @@ class ThreatCorpus:
         return matches
 
     def all_yara_strings(self, min_len: int = 4, max_count: int = 200_000) -> list[str]:
-        """Return a deduplicated flat list of all YARA rule strings, useful for
-        seeding the taint signature-pattern tables."""
         out: list[str] = []
-        seen = set()
-        for rule in self.yara_rules:
-            for s in rule.get("strings") or []:
-                if not s or len(s) < min_len:
-                    continue
-                key = s.lower()
-                if key in seen:
-                    continue
-                seen.add(key)
-                out.append(s)
-                if len(out) >= max_count:
-                    return out
+        seen: set[str] = set()
+        for source in ("yara_rules", "yara_rules_extra"):
+            for rule in self.entries.get(source, []):
+                for s in rule.get("strings") or []:
+                    if not s or len(s) < min_len:
+                        continue
+                    key = s.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    out.append(s)
+                    if len(out) >= max_count:
+                        return out
         return out
+
+    # ── Generic access ────────────────────────────────────────────────
+
+    def get_source_entries(self, source_name: str) -> list[dict[str, Any]]:
+        return self.entries.get(source_name, [])
+
+    def search(self, source: str, query: str, limit: int = 25) -> list[dict[str, Any]]:
+        q = query.lower()
+        if not q:
+            return []
+        results: list[dict[str, Any]] = []
+        for e in self.entries.get(source, []):
+            text = " ".join(str(v) for v in e.values() if isinstance(v, str)).lower()
+            if q in text:
+                results.append(e)
+                if len(results) >= limit:
+                    break
+        return results
+
+    def get_by_id(self, source: str, entry_id: str) -> dict[str, Any] | None:
+        return self._indexes.get(source, {}).get(entry_id)
+
+    # ── Serialization ─────────────────────────────────────────────────
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "version": self.CORPUS_VERSION,
+            "built_at": self.built_at,
+            "source_fingerprints": self.source_fingerprints,
+            "entries": self.entries,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> ThreatCorpus:
+        if not isinstance(d, dict):
+            return cls()
+        version = int(d.get("version") or 0)
+        if version >= 2:
+            return cls(
+                entries=dict(d.get("entries") or {}),
+                source_fingerprints=dict(d.get("source_fingerprints") or {}),
+                built_at=str(d.get("built_at") or ""),
+            )
+        return cls._from_v1_dict(d)
+
+    @classmethod
+    def _from_v1_dict(cls, d: dict[str, Any]) -> ThreatCorpus:
+        """Migrate a V1 monolithic dict to the modular format."""
+        entries: dict[str, list[dict[str, Any]]] = {
+            "cwe": list(d.get("cwe") or []),
+            "attack_patterns": list(d.get("attack_patterns") or []),
+            "malware": list(d.get("malware") or []),
+            "intrusion_sets": list(d.get("intrusion_sets") or []),
+            "tools": list(d.get("tools") or []),
+            "mitigations": list(d.get("mitigations") or []),
+            "yara_rules": list(d.get("yara_rules") or []),
+        }
+        return cls(
+            entries=entries,
+            source_fingerprints={"combined": str(d.get("source_fingerprint") or "")},
+            built_at=str(d.get("built_at") or ""),
+        )
+
+    # ── Utility ───────────────────────────────────────────────────────
+
+    def count_by_type(self) -> dict[str, int]:
+        return {name: len(entries) for name, entries in self.entries.items() if entries}
+
+    def is_empty(self) -> bool:
+        return not any(self.entries.values())
+
+    def available_sources(self) -> list[str]:
+        return sorted(self.entries.keys())
+
+
+# ── Cache: per-source files + manifest ─────────────────────────────────────
+
+CORPUS_CACHE_DIR = os.path.join(CACHE_DIR, "corpus")
+MANIFEST_PATH = os.path.join(CORPUS_CACHE_DIR, "manifest.json")
+
+
+def _source_cache_path(source_name: str) -> str:
+    return os.path.join(CORPUS_CACHE_DIR, f"{source_name}.json")
 
 
 def corpus_cache_path() -> str:
-    """Return the per-user cache path for the threat corpus JSON."""
+    """Return the legacy per-user cache path. Kept for backward compat."""
     return os.path.join(CACHE_DIR, CORPUS_CACHE_FILENAME)
 
 
-def load_corpus(path: str | None = None) -> ThreatCorpus | None:
-    """Load the threat corpus from a JSON cache file. Returns None if missing
-    or unparseable. Does not raise."""
-    p = path or corpus_cache_path()
-    if not p or not os.path.isfile(p):
+def _atomic_write_json(path: str, data: dict[str, Any]) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(payload)
+    os.replace(tmp, path)
+
+
+def _load_manifest() -> dict[str, Any] | None:
+    if not os.path.isfile(MANIFEST_PATH):
         return None
     try:
-        with open(p, encoding="utf-8") as f:
+        with open(MANIFEST_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _load_modular_corpus(manifest: dict[str, Any]) -> ThreatCorpus | None:
+    entries: dict[str, list[dict[str, Any]]] = {}
+    fingerprints: dict[str, str] = {}
+    built_at = ""
+    for source_name, _meta in manifest.get("sources", {}).items():
+        cache_path = _source_cache_path(source_name)
+        if not os.path.isfile(cache_path):
+            continue
+        try:
+            with open(cache_path, encoding="utf-8") as f:
+                data = json.load(f)
+            entries[source_name] = data.get("entries", [])
+            fingerprints[source_name] = data.get("fingerprint", "")
+            if not built_at:
+                built_at = data.get("built_at", "")
+        except (OSError, json.JSONDecodeError):
+            continue
+    if not entries:
+        return None
+    return ThreatCorpus(entries=entries, source_fingerprints=fingerprints, built_at=built_at)
+
+
+def _load_v1_corpus() -> ThreatCorpus | None:
+    path = os.path.join(CACHE_DIR, CORPUS_CACHE_FILENAME)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(data, dict):
         return None
-    if int(data.get("version") or 0) != CORPUS_VERSION:
+    ver = int(data.get("version") or 0)
+    if ver < 1:
         return None
     return ThreatCorpus.from_dict(data)
 
 
-def save_corpus(corpus: ThreatCorpus, path: str | None = None) -> str:
-    """Persist the corpus to the per-user cache directory. Returns the path."""
-    p = path or corpus_cache_path()
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    tmp = p + ".tmp"
-    payload = json.dumps(corpus.to_dict(), ensure_ascii=False, separators=(",", ":"))
-    if len(payload.encode("utf-8")) > _CORPUS_CACHE_SAVE_MAX_BYTES:
-        raise ValueError(
-            f"corpus payload {len(payload)} bytes exceeds max {_CORPUS_CACHE_SAVE_MAX_BYTES}"
-        )
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(payload)
-    os.replace(tmp, p)
-    return p
+def load_corpus() -> ThreatCorpus | None:
+    """Load from modular cache. Falls back to V1 monolithic file."""
+    manifest = _load_manifest()
+    if manifest and manifest.get("version", 0) >= 2:
+        corpus = _load_modular_corpus(manifest)
+        if corpus is not None:
+            return corpus
+    return _load_v1_corpus()
 
 
-def delete_corpus_cache(path: str | None = None) -> bool:
-    """Remove the corpus cache file. Returns True if a file was removed."""
-    p = path or corpus_cache_path()
+def save_corpus(corpus: ThreatCorpus) -> str:
+    """Save to per-source cache files + manifest. Returns manifest path."""
+    os.makedirs(CORPUS_CACHE_DIR, exist_ok=True)
+    manifest_sources: dict[str, dict[str, Any]] = {}
+    for source_name, entries in corpus.entries.items():
+        if not entries:
+            continue
+        fingerprint = corpus.source_fingerprints.get(source_name, "")
+        cache_path = _source_cache_path(source_name)
+        _atomic_write_json(cache_path, {
+            "version": ThreatCorpus.CORPUS_VERSION,
+            "source": source_name,
+            "fingerprint": fingerprint,
+            "count": len(entries),
+            "built_at": corpus.built_at,
+            "entries": entries,
+        })
+        manifest_sources[source_name] = {
+            "fingerprint": fingerprint,
+            "count": len(entries),
+        }
+    _atomic_write_json(MANIFEST_PATH, {
+        "version": ThreatCorpus.CORPUS_VERSION,
+        "built_at": corpus.built_at,
+        "sources": manifest_sources,
+    })
+    # Clean up legacy monolithic cache
+    legacy = corpus_cache_path()
+    if os.path.isfile(legacy):
+        with contextlib.suppress(OSError):
+            os.rename(legacy, legacy + ".v1_backup")
+    return MANIFEST_PATH
+
+
+def delete_corpus_cache() -> bool:
+    """Remove all corpus cache files. Returns True if files were removed."""
+    removed = False
+    if os.path.isdir(CORPUS_CACHE_DIR):
+        for f in os.listdir(CORPUS_CACHE_DIR):
+            try:
+                os.remove(os.path.join(CORPUS_CACHE_DIR, f))
+                removed = True
+            except OSError:
+                pass
+    legacy = corpus_cache_path()
     try:
-        os.remove(p)
-        return True
+        os.remove(legacy)
+        removed = True
     except OSError:
-        return False
+        pass
+    return removed
+
+
+# ── Download pipeline (registry-based) ─────────────────────────────────────
+
+def _download_url(url: str) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": "ida-pro-mcp/1.0"})
+    with urllib.request.urlopen(req, timeout=_DOWNLOAD_TIMEOUT) as resp:
+        data = resp.read(_MAX_DOWNLOAD_BYTES + 1)
+        if len(data) > _MAX_DOWNLOAD_BYTES:
+            raise ValueError(f"Download exceeds {_MAX_DOWNLOAD_BYTES} bytes")
+        return data
+
+
+def _extract_zip(data: bytes, dest: str, pattern: str | None = None) -> None:
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        members = zf.namelist()
+        if pattern:
+            members = [m for m in members if pattern in m]
+        zf.extractall(dest, members=members)
+
+
+def download_corpus_sources(
+    dest_dir: str | None = None,
+    *,
+    force: bool = False,
+    progress_cb: Callable[[str], None] | None = None,
+    sources: list[str] | None = None,
+) -> dict[str, Any]:
+    """Download all (or selected) corpus sources using the SOURCES registry.
+
+    Returns dict with source_dirs mapping source_name → data_dir,
+    plus downloaded/errors lists.
+    """
+    from .sources import SOURCES as _SOURCES
+
+    if dest_dir is None:
+        dest_dir = os.path.join(CACHE_DIR, "corpus_sources")
+    os.makedirs(dest_dir, exist_ok=True)
+
+    result: dict[str, Any] = {
+        "source_dirs": {},
+        "downloaded": [],
+        "errors": [],
+        "dest_dir": dest_dir,
+    }
+
+    target_sources = _SOURCES
+    if sources:
+        target_sources = [s for s in _SOURCES if s.name in sources]
+
+    for source in target_sources:
+        if not source.urls:
+            continue
+        try:
+            dl = source.download(dest_dir, force=force, progress_cb=progress_cb)
+            result["source_dirs"][source.name] = dl.get("data_dir", "")
+            result["downloaded"].extend(dl.get("downloaded", []))
+            result["errors"].extend(dl.get("errors", []))
+        except Exception as e:
+            result["errors"].append(f"{source.name}: {e}")
+
+    return result
+
+
+def _build_from_sources(download_result: dict[str, Any]) -> ThreatCorpus | None:
+    """Build corpus from downloaded sources using the SOURCES registry."""
+    from .sources import SOURCES as _SOURCES
+
+    entries: dict[str, list[dict[str, Any]]] = {}
+    fingerprints: dict[str, str] = {}
+    source_dirs = download_result.get("source_dirs", {})
+
+    for source in _SOURCES:
+        data_dir = source_dirs.get(source.name, "")
+        if not data_dir or not os.path.isdir(data_dir):
+            continue
+        try:
+            parsed = source.parse(data_dir)
+        except Exception:
+            parsed = []
+        if not parsed:
+            continue
+
+        if source.is_multi_type:
+            buckets: dict[str, list[dict[str, Any]]] = {}
+            for e in parsed:
+                bucket = e.pop("_attack_type", source.name)
+                buckets.setdefault(bucket, []).append(e)
+            for bucket, bucket_entries in buckets.items():
+                if bucket in entries:
+                    entries[bucket].extend(bucket_entries)
+                else:
+                    entries[bucket] = bucket_entries
+        else:
+            entries[source.name] = parsed
+
+        fingerprints[source.name] = source.fingerprint(data_dir)
+
+    if not entries:
+        return None
+    return ThreatCorpus(entries=entries, source_fingerprints=fingerprints)
 
 
 def build_corpus_from_sources(
@@ -744,7 +985,10 @@ def build_corpus_from_sources(
     attack_paths: Iterable[str] | None = None,
     yara_dir: str | None = None,
 ) -> ThreatCorpus:
-    """Parse the raw source files and return a populated ThreatCorpus."""
+    """Parse raw source files and return a populated ThreatCorpus.
+
+    Kept for backward compat — new code should use _build_from_sources.
+    """
     cwe = parse_cwe_xml(cwe_path) if cwe_path else []
     attack_paths_list = [p for p in (attack_paths or []) if p]
     attack_merged: dict[str, list[dict[str, Any]]] = {
@@ -759,129 +1003,23 @@ def build_corpus_from_sources(
         for key in attack_merged:
             attack_merged[key].extend(parsed.get(key) or [])
     yara_rules = parse_yara_dir(yara_dir) if yara_dir else []
-    fingerprint = compute_source_fingerprint(cwe_path, attack_paths_list, yara_dir)
-    return ThreatCorpus(
-        cwe=cwe,
-        attack_patterns=attack_merged["attack_pattern"],
-        malware=attack_merged["malware"],
-        intrusion_sets=attack_merged["intrusion_set"],
-        tools=attack_merged["tool"],
-        mitigations=attack_merged["course_of_action"],
-        yara_rules=yara_rules,
-        source_fingerprint=fingerprint,
-    )
-
-
-def _download_url(url: str) -> bytes:
-    """Download a URL with size limit and timeout."""
-    req = urllib.request.Request(url, headers={"User-Agent": "ida-pro-mcp/1.0"})
-    with urllib.request.urlopen(req, timeout=_DOWNLOAD_TIMEOUT) as resp:
-        data = resp.read(_MAX_DOWNLOAD_BYTES + 1)
-        if len(data) > _MAX_DOWNLOAD_BYTES:
-            raise ValueError(f"Download exceeds {_MAX_DOWNLOAD_BYTES} bytes")
-        return data
-
-
-def _extract_zip(data: bytes, dest: str, pattern: str | None = None) -> None:
-    """Extract a zip archive to dest, optionally filtering by pattern."""
-    with zipfile.ZipFile(io.BytesIO(data)) as zf:
-        members = zf.namelist()
-        if pattern:
-            members = [m for m in members if pattern in m]
-        zf.extractall(dest, members=members)
-
-
-def download_corpus_sources(
-    dest_dir: str | None = None,
-    *,
-    force: bool = False,
-    progress_cb: Callable[[str], None] | None = None,
-) -> dict[str, Any]:
-    """Download CWE, ATT&CK, and YARA sources to dest_dir.
-
-    Returns dict with paths: {cwe_path, attack_paths, yara_dir, downloaded, errors}.
-    Skips downloads if files already exist and force=False.
-    """
-    if dest_dir is None:
-        dest_dir = os.path.join(CACHE_DIR, "corpus_sources")
-    os.makedirs(dest_dir, exist_ok=True)
-
-    result: dict[str, Any] = {
-        "cwe_path": None,
-        "attack_paths": [],
-        "yara_dir": None,
-        "downloaded": [],
-        "errors": [],
-        "dest_dir": dest_dir,
+    entries: dict[str, list[dict[str, Any]]] = {
+        "cwe": cwe,
+        "attack_patterns": attack_merged["attack_pattern"],
+        "malware": attack_merged["malware"],
+        "intrusion_sets": attack_merged["intrusion_set"],
+        "tools": attack_merged["tool"],
+        "mitigations": attack_merged["course_of_action"],
+        "yara_rules": yara_rules,
     }
+    fp = compute_source_fingerprint(cwe_path, attack_paths_list, yara_dir)
+    return ThreatCorpus(entries=entries, source_fingerprints={"combined": fp})
 
-    # 1. Download CWE XML
-    cwe_dir = os.path.join(dest_dir, "cwe")
-    cwe_xml_found = False
-    if os.path.isdir(cwe_dir):
-        for f in os.listdir(cwe_dir):
-            if f.endswith(".xml") and "cwe" in f.lower():
-                result["cwe_path"] = os.path.join(cwe_dir, f)
-                cwe_xml_found = True
-                break
-    if force or not cwe_xml_found:
-        try:
-            if progress_cb:
-                progress_cb("Downloading CWE catalog...")
-            os.makedirs(cwe_dir, exist_ok=True)
-            data = _download_url(_CWE_URL)
-            if _CWE_URL.endswith(".zip"):
-                _extract_zip(data, cwe_dir, pattern=".xml")
-            else:
-                cwe_xml = os.path.join(cwe_dir, "cwec_latest.xml")
-                with open(cwe_xml, "wb") as f:
-                    f.write(data)
-            result["downloaded"].append("cwe")
-            # Find the extracted XML
-            if os.path.isdir(cwe_dir):
-                for f in os.listdir(cwe_dir):
-                    if f.endswith(".xml") and "cwe" in f.lower():
-                        result["cwe_path"] = os.path.join(cwe_dir, f)
-                        break
-        except Exception as e:
-            result["errors"].append(f"CWE download failed: {e}")
 
-    # 2. Download ATT&CK STIX bundles
-    attack_dir = os.path.join(dest_dir, "attack")
-    os.makedirs(attack_dir, exist_ok=True)
-    for url in _ATTACK_URLS:
-        fname = url.rsplit("/", 1)[-1]
-        fpath = os.path.join(attack_dir, fname)
-        if force or not os.path.isfile(fpath):
-            try:
-                if progress_cb:
-                    progress_cb(f"Downloading {fname}...")
-                data = _download_url(url)
-                with open(fpath, "wb") as f:
-                    f.write(data)
-                result["downloaded"].append(fname)
-            except Exception as e:
-                result["errors"].append(f"ATT&CK {fname}: {e}")
-        if os.path.isfile(fpath):
-            result["attack_paths"].append(fpath)
+# ── Singleton ──────────────────────────────────────────────────────────────
 
-    # 3. Download YARA rules (Florian Roth signature-base)
-    yara_dir = os.path.join(dest_dir, "yara")
-    yara_rules_dir = os.path.join(yara_dir, _YARA_SUBPATH)
-    if force or not os.path.isdir(yara_rules_dir):
-        try:
-            if progress_cb:
-                progress_cb("Downloading YARA rules (signature-base)...")
-            os.makedirs(yara_dir, exist_ok=True)
-            data = _download_url(_YARA_URL)
-            _extract_zip(data, yara_dir)
-            result["downloaded"].append("yara")
-        except Exception as e:
-            result["errors"].append(f"YARA download failed: {e}")
-    if os.path.isdir(yara_rules_dir):
-        result["yara_dir"] = yara_rules_dir
-
-    return result
+_corpus_singleton: ThreatCorpus | None = None
+_corpus_lock = __import__("threading").Lock()
 
 
 def ensure_corpus_loaded(
@@ -891,66 +1029,89 @@ def ensure_corpus_loaded(
     yara_dir: str | None = None,
     auto_download: bool = False,
 ) -> tuple[ThreatCorpus | None, dict[str, Any]]:
-    """Lazy-load the corpus, optionally rebuilding from sources.
+    """Lazy-load the corpus singleton. Thread-safe.
 
-    Returns (corpus, status). When ``rebuild`` is True, sources are required
-    and the freshly-built corpus is persisted to the cache. When ``rebuild`` is
-    False, the cache is consulted first; on cache miss, the corpus is built
-    from sources (if provided) and cached. Returns (None, status) when no
-    cache exists and no sources are provided.
-
-    When ``auto_download`` is True and no sources are on disk, the function
-    downloads CWE, ATT&CK, and YARA sources from the internet before building.
+    On first call: loads from cache or builds from sources.
+    On subsequent calls: returns cached singleton (unless rebuild=True).
     """
-    cache_p = corpus_cache_path()
-    # Check cache first (unless rebuild requested)
-    if not rebuild:
-        corpus = load_corpus()
-        if corpus is not None:
-            return corpus, {
+    global _corpus_singleton
+
+    if _corpus_singleton is not None and not rebuild:
+        return _corpus_singleton, {
+            "loaded": True,
+            "from_cache": True,
+            "rebuilt": False,
+            "singleton": True,
+            "counts": _corpus_singleton.count_by_type(),
+            "source_fingerprint": _corpus_singleton.source_fingerprint,
+        }
+
+    with _corpus_lock:
+        if _corpus_singleton is not None and not rebuild:
+            return _corpus_singleton, {
                 "loaded": True,
                 "from_cache": True,
                 "rebuilt": False,
-                "cache_path": cache_p,
+                "singleton": True,
+                "counts": _corpus_singleton.count_by_type(),
+                "source_fingerprint": _corpus_singleton.source_fingerprint,
+            }
+
+        # Try cache
+        if not rebuild:
+            corpus = load_corpus()
+            if corpus is not None:
+                _corpus_singleton = corpus
+                return corpus, {
+                    "loaded": True,
+                    "from_cache": True,
+                    "rebuilt": False,
+                    "singleton": True,
+                    "counts": corpus.count_by_type(),
+                    "source_fingerprint": corpus.source_fingerprint,
+                }
+
+        # Build from sources (legacy path if explicit paths provided)
+        if cwe_path or attack_paths or yara_dir:
+            corpus = build_corpus_from_sources(cwe_path, attack_paths, yara_dir)
+            saved = save_corpus(corpus)
+            _corpus_singleton = corpus
+            return corpus, {
+                "loaded": True,
+                "from_cache": False,
+                "rebuilt": True,
+                "cache_path": saved,
                 "counts": corpus.count_by_type(),
                 "source_fingerprint": corpus.source_fingerprint,
             }
-    # If no sources provided and auto_download requested, download them
-    if auto_download and not (cwe_path or attack_paths or yara_dir):
-        dl_result = download_corpus_sources(force=rebuild)
-        cwe_path = dl_result.get("cwe_path")
-        attack_paths = dl_result.get("attack_paths", [])
-        yara_dir = dl_result.get("yara_dir")
-    fingerprint = compute_source_fingerprint(cwe_path or "", attack_paths or [], yara_dir or "")
-    if not (cwe_path or attack_paths or yara_dir):
+
+        # Auto-download and build using registry
+        if auto_download:
+            dl = download_corpus_sources(force=rebuild)
+            corpus = _build_from_sources(dl)
+            if corpus is not None and not corpus.is_empty():
+                saved = save_corpus(corpus)
+                _corpus_singleton = corpus
+                return corpus, {
+                    "loaded": True,
+                    "from_cache": False,
+                    "rebuilt": True,
+                    "cache_path": saved,
+                    "counts": corpus.count_by_type(),
+                    "source_fingerprint": corpus.source_fingerprint,
+                }
+
         return None, {
             "loaded": False,
             "from_cache": False,
             "rebuilt": False,
-            "cache_path": cache_p,
             "reason": "no sources provided and no cache available",
         }
-    corpus = build_corpus_from_sources(
-        cwe_path=cwe_path,
-        attack_paths=list(attack_paths) if attack_paths else None,
-        yara_dir=yara_dir,
-    )
-    if corpus.is_empty():
-        return corpus, {
-            "loaded": True,
-            "from_cache": False,
-            "rebuilt": True,
-            "cache_path": cache_p,
-            "counts": corpus.count_by_type(),
-            "source_fingerprint": corpus.source_fingerprint,
-            "warning": "built corpus is empty — sources may be missing or malformed",
-        }
-    saved = save_corpus(corpus)
-    return corpus, {
-        "loaded": True,
-        "from_cache": False,
-        "rebuilt": True,
-        "cache_path": saved,
-        "counts": corpus.count_by_type(),
-        "source_fingerprint": fingerprint,
-    }
+
+
+def invalidate_corpus_cache() -> None:
+    """Clear the singleton and delete all cache files."""
+    global _corpus_singleton
+    with _corpus_lock:
+        _corpus_singleton = None
+    delete_corpus_cache()
