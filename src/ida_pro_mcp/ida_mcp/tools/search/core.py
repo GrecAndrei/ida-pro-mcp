@@ -770,35 +770,7 @@ def build_constant_db() -> dict[int, str]:
         db.update(MAGIC_CONSTANTS)
 
     # Crypto init constants
-    crypto_inits = {
-        0x67452301: "MD5_INIT_A",
-        0xEFCDAB89: "MD5_INIT_B",
-        0x98BADCFE: "MD5_INIT_C",
-        0x10325476: "MD5_INIT_D",
-        0x6A09E667: "SHA256_H0",
-        0xBB67AE85: "SHA256_H1",
-        0x3C6EF372: "SHA256_H2",
-        0xA54FF53A: "SHA256_H3",
-        0x510E527F: "SHA256_H4",
-        0x9B05688C: "SHA256_H5",
-        0x1F83D9AB: "SHA256_H6",
-        0x5BE0CD19: "SHA256_H7",
-        0xC3D2E1F0: "SHA1_H4",
-        0x01000000: "AES_RCON_1",
-        0x02000000: "AES_RCON_2",
-        0x61707865: "CHACHA_CONST_0",
-        0x3320646E: "CHACHA_CONST_1",
-        0x79622D32: "CHACHA_CONST_2",
-        0x6B206574: "CHACHA_CONST_3",
-        0x6a09e667f3bcc908: "BLAKE2B_IV0",
-        0xbb67ae8584caa73b: "BLAKE2B_IV1",
-        0xEDB88320: "CRC32_POLY",
-        0x04C11DB7: "CRC32_POLY_REV",
-        0x243F6A88: "BLOWFISH_P0",
-        0x85A308D3: "BLOWFISH_P1",
-        0x9E3779B9: "TEA_DELTA",
-        0x10001: "RSA_E_65537",
-        0x3: "RSA_E_3",
-    }
+    from ida_pro_mcp.ida_mcp.support.crypto_registry import CRYPTO_CONSTANT_NAMES
+    crypto_inits = CRYPTO_CONSTANT_NAMES
     db.update(crypto_inits)
     return db

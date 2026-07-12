@@ -37,15 +37,8 @@ import re
 from collections import Counter
 from typing import Any
 
-# Known crypto constant values (subset)
-_CRYPTO_CONSTS: dict[int, str] = {
-    0x67452301: "MD5_A", 0xEFCDAB89: "MD5_B", 0x98BADCFE: "MD5_C", 0x10325476: "MD5_D",
-    0x6A09E667: "SHA256_H0", 0xBB67AE85: "SHA256_H1", 0x3C6EF372: "SHA256_H2",
-    0xA54FF53A: "SHA256_H3", 0x510E527F: "SHA256_H4", 0x9B05688C: "SHA256_H5",
-    0x1F83D9AB: "SHA256_H6", 0x5BE0CD19: "SHA256_H7",
-    0x36E8E8E9: "CRC32", 0x04C11DB7: "CRC32_POLY",
-    0xCBF29CE484222325: "FNV_OFFSET", 0x100000001B3: "FNV_PRIME",
-}
+# Known crypto constant values — imported from central registry
+from ida_pro_mcp.ida_mcp.support.crypto_registry import CRYPTO_CONSTANT_NAMES as _CRYPTO_CONSTS
 
 
 def _parse_register_offset(op_str: str) -> Optional[tuple[str, int]]:

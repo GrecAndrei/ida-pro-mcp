@@ -343,15 +343,7 @@ _DECOMP_KNOWN_APIS = [
     "mmap", "munmap", "ioctl", "open", "read", "write", "close",
 ]
 
-_DECOMP_CRYPTO_SIGS = {
-    "AES": ["0x63636363", "0x7c777c77", "aes_key", "aes_encrypt", "aes_decrypt", "aes_"],
-    "SHA256": ["0x6a09e667", "0xbb67ae85", "sha256", "sha_256"],
-    "SHA1": ["0x67452301", "sha1", "sha_1"],
-    "MD5": ["0xefcdab89", "0x67452301", "md5_", "md5update"],
-    "RC4": ["rc4_", "ksa", "prga"],
-    "ChaCha20": ["chacha", "0x61707865"],
-    "PBKDF2": ["pbkdf2", "hmac", "iterations"],
-}
+from ida_pro_mcp.ida_mcp.support.crypto_registry import DECOMP_CRYPTO_SIGS as _DECOMP_CRYPTO_SIGS
 
 
 def _detect_api_calls(pseudo: str, *, limit: int = 15) -> list[str]:

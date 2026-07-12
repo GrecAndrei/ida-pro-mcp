@@ -450,32 +450,66 @@ def _scan_crypto_constants(scope_ea=None, limit=50) -> dict:
     if fc_dir:
         try:
             from ida_pro_mcp.host.intelligence.yara_scanner import compile_rules
+            from ida_pro_mcp.ida_mcp.support.crypto_registry import CRYPTO_CONSTANT_NAMES
             rules, _fe, _ce = compile_rules(fc_dir)
             if rules:
                 def _read_idb_bytes(start, size):
                     return ida_bytes.get_bytes(start, size) or b""
+
+                def _identify_constant_at(ea):
+                    """Try to identify a known crypto constant at the given address."""
+                    try:
+                        data4 = ida_bytes.get_bytes(ea, 4)
+                        if data4 and len(data4) == 4:
+                            val_le = int.from_bytes(data4, "little")
+                            val_be = int.from_bytes(data4, "big")
+                            name = CRYPTO_CONSTANT_NAMES.get(val_le) or CRYPTO_CONSTANT_NAMES.get(val_be)
+                            if name:
+                                return name
+                        data8 = ida_bytes.get_bytes(ea, 8)
+                        if data8 and len(data8) == 8:
+                            val_le = int.from_bytes(data8, "little")
+                            val_be = int.from_bytes(data8, "big")
+                            name = CRYPTO_CONSTANT_NAMES.get(val_le) or CRYPTO_CONSTANT_NAMES.get(val_be)
+                            if name:
+                                return name
+                    except Exception:
+                        pass
+                    return None
+
                 matches = rules.match(data=_read_idb_bytes, callback_data=None)
                 for m in matches[:limit]:
                     meta = getattr(m, "meta", {})
                     rule_name = getattr(m, "rule", "unknown")
                     desc = meta.get("description", rule_name)
-                    algo_guess = rule_name.split("_")[0] if "_" in rule_name else rule_name
-                    # Get the first string match offset as the address
+                    # Better algorithm guessing from rule name
+                    algo_guess = "Unknown"
+                    rule_upper = rule_name.upper()
+                    for algo_key in ("AES", "SHA256", "SHA512", "SHA1", "MD5",
+                                     "CRC32", "BLOWFISH", "DES", "BASE64",
+                                     "WHIRLPOOL", "RIPEMD", "TEA", "CHACHA",
+                                     "SALSA", "RSA", "DSA", "RC6"):
+                        if algo_key in rule_upper:
+                            algo_guess = algo_key
+                            break
+                    # Extract address from matched strings
                     addr_str = ""
-                    if hasattr(m, "strings") and m.strings:
+                    if hasattr(m, "strings"):
                         for s in m.strings:
                             try:
-                                addr_str = hex(s[0]) if isinstance(s[0], int) else ""
+                                # yara-python: (offset, identifier, data) or (offset, identifier)
+                                offset = s[0] if isinstance(s[0], int) else None
+                                if offset is not None:
+                                    addr_str = hex(offset)
+                                    break
                             except (IndexError, TypeError):
                                 pass
-                            if addr_str:
-                                break
-                    if not addr_str and hasattr(m, "matched_data"):
-                        try:
-                            addr_str = hex(m.matched_data[0][0])
-                        except Exception:
-                            pass
-                    entry = f"{addr_str}  {desc}  algo={algo_guess}" if addr_str else f"{desc}  algo={algo_guess}"
+                    # Enrich with registry constant name
+                    const_name = ""
+                    if addr_str:
+                        const_name = _identify_constant_at(int(addr_str, 16))
+                    label = f"{const_name} ({desc})" if const_name else desc
+                    entry = f"{addr_str}  {label}  algo={algo_guess}" if addr_str else f"{label}  algo={algo_guess}"
                     findings.append(entry)
                     algos.add(algo_guess)
                     if len(findings) >= limit:
