@@ -903,14 +903,8 @@ def ensure_corpus_loaded(
     downloads CWE, ATT&CK, and YARA sources from the internet before building.
     """
     cache_p = corpus_cache_path()
-    # If no sources provided and auto_download requested, download them
-    if auto_download and not (cwe_path or attack_paths or yara_dir):
-        dl_result = download_corpus_sources(force=rebuild)
-        cwe_path = dl_result.get("cwe_path")
-        attack_paths = dl_result.get("attack_paths", [])
-        yara_dir = dl_result.get("yara_dir")
-    fingerprint = compute_source_fingerprint(cwe_path or "", attack_paths or [], yara_dir or "")
-    if not rebuild and not (cwe_path or attack_paths or yara_dir):
+    # Check cache first (unless rebuild requested)
+    if not rebuild:
         corpus = load_corpus()
         if corpus is not None:
             return corpus, {
@@ -921,6 +915,13 @@ def ensure_corpus_loaded(
                 "counts": corpus.count_by_type(),
                 "source_fingerprint": corpus.source_fingerprint,
             }
+    # If no sources provided and auto_download requested, download them
+    if auto_download and not (cwe_path or attack_paths or yara_dir):
+        dl_result = download_corpus_sources(force=rebuild)
+        cwe_path = dl_result.get("cwe_path")
+        attack_paths = dl_result.get("attack_paths", [])
+        yara_dir = dl_result.get("yara_dir")
+    fingerprint = compute_source_fingerprint(cwe_path or "", attack_paths or [], yara_dir or "")
     if not (cwe_path or attack_paths or yara_dir):
         return None, {
             "loaded": False,
