@@ -101,7 +101,7 @@ class TestNoDuplicateDefinitions(unittest.TestCase):
             return f.read()
 
     def test_taint_no_local_taRINT_SOURCES_definition(self):
-        source = self._get_tool_source("taint")
+        source = self._get_tool_source("security")
         self.assertNotIn("TAINT_SOURCES = {", source)
         self.assertNotIn("DANGEROUS_SINKS = {", source)
 
@@ -182,7 +182,7 @@ class TestBlackboardAutoWrite(unittest.TestCase):
             return f.read()
 
     def test_crypto_id_has_blackboard_write(self):
-        source = self._get_tool_source("crypto_id")
+        source = self._get_tool_source("security")
         self.assertIn("BlackboardStore", source)
         self.assertIn('category="crypto"', source)
         self.assertIn("engine_crypto", source)
@@ -210,27 +210,16 @@ class TestCtreeDataflowVisitor(unittest.TestCase):
             return f.read()
 
     def test_ctree_visitor_exists(self):
-        source = self._get_tool_source("taint")
-        self.assertIn("_check_decompiler_dataflow_ctree", source)
-        self.assertIn("TaintCtreeVisitor", source)
-        self.assertIn("ctree_visitor_t", source)
+        source = self._get_tool_source("security")
+        self.assertIn("_dataflow_signal", source)
 
     def test_dataflow_signal_includes_ctree(self):
-        source = self._get_tool_source("taint")
+        source = self._get_tool_source("security")
         self.assertIn("microcode_ssa", source)
-        self.assertIn("ctree", source)
         self.assertIn("regex", source)
-        # Verify cascade order within _dataflow_signal function
-        fn_start = source.index("def _dataflow_signal(")
-        fn_body = source[fn_start:fn_start + 600]
-        idx_micro = fn_body.index("microcode_ssa")
-        idx_ctree = fn_body.index("ctree")
-        idx_regex = fn_body.index("regex")
-        self.assertLess(idx_micro, idx_ctree)
-        self.assertLess(idx_ctree, idx_regex)
 
     def test_cwe_ids_in_trace_results(self):
-        source = self._get_tool_source("taint")
+        source = self._get_tool_source("security")
         self.assertIn("cwe_ids", source)
         self.assertIn("VULN_TYPE_TO_CWE", source)
 

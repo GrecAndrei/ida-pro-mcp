@@ -806,8 +806,8 @@ def summarize(
                 sections["security"] = summarize(action="security_posture", addr=addr, max_items=max_items)
             try:
                 # Live taint scan — finds source→sink paths not yet in blackboard
-                try: from .taint import taint as _taint
-                except ImportError: from taint import taint as _taint  # type: ignore[import-not-found]
+                try: from .security import taint as _taint
+                except ImportError: from security import taint as _taint  # type: ignore[import-not-found]
                 taint_result = _taint(action="report", max_depth=4, max_paths=30)
                 if taint_result.get("ok") and taint_result.get("total", 0) > 0:
                     sections["taint_findings"] = {

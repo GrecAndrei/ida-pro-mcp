@@ -1012,7 +1012,7 @@ def code(
                     active_sources = [a for a in found_apis if a in TAINT_SOURCES]
                     if active_sources:
                         try:
-                            from taint import taint as _taint  # type: ignore
+                            from security import taint as _taint  # type: ignore
                             taint_result = _taint(
                                 action="trace",
                                 addr=hex_ea(func.start_ea),

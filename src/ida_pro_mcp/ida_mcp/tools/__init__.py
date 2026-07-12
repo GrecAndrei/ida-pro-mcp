@@ -58,14 +58,6 @@ __all__ = [
     "emulate",
     "bindiff",
     "security",
-    # Legacy module names (no longer registered as MCP tools, but still importable)
-    "entropy",
-    "hooks",
-    "deobfuscate",
-    "crypto_id",
-    "protocol",
-    "packer",
-    "taint",
 ]
 
 # Mapping from tool name to module name (when they differ)

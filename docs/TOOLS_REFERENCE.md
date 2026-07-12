@@ -38,7 +38,6 @@ Total tools: **66** | Advertised: **64**
 | `xref_analysis` | 10 | Cross-reference and callgraph analysis: call chains, comm... |
 | `ctree` | 9 | Query and traverse the Hex-Rays decompiler ctree AST for ... |
 | `security` | 11 | Unified security analysis: detect, decode, analyze, hook, hook_targets, protocol, protocol_spec, taint, taint_sources, taint_report, eval |
-| `entropy` | 7 | Compute entropy over regions to detect packing, encryptio... |
 | `imports_deep` | 6 | Deep import analysis: thunks, delay-loads, forwarded, ord... |
 | `patterns` | 9 | Generate, match, and manage FLIRT/byte pattern signatures... |
 | `symbols` | 5 | Loads and manages debug symbols (PDB/DWARF) for the curre... |
@@ -47,22 +46,17 @@ Total tools: **66** | Advertised: **64**
 | `history` | 6 | Undo/redo IDB changes, create snapshots, restore, and dif... |
 | `data_ops` | 8 | Change data representation at addresses (≈ IDA Edit menu ... |
 | `firmware_view` | 20 | Firmware triage: region scanning, pointer sweeps, table c... |
-| `hooks` | 5 | Generate dynamic instrumentation hooks (Frida, Detours) f... |
 | `wiki` | 7 | Accesses built-in documentation and tool usage guides wit... |
 | `yara_hunt` | 6 | Scans the binary with YARA rules and provides match conte... |
 | `intelligence` | 14 | Intelligence subsystem: embedding-based classification, b... |
 | `threat_hunt` | 8 | Runs automated threat-hunting passes to detect malware pa... |
 | `workflow` | 13 | Executes predefined multi-step analysis workflows for com... |
 | `gadgets` | 11 | Find ROP/JOP/COP gadgets, stack pivots, and classify expl... |
-| `taint` | 5 | Data flow taint analysis from user-controlled sources to ... |
-| `deobfuscate` | 8 | Detect and decode obfuscation: stack strings, API hashing... |
-| `crypto_id` | 6 | Detect cryptographic algorithms, constants, and encoding ... |
 | `abi` | 10 | Analyzes calling conventions and ABI details of functions |
 | `summarize` | 11 | Structured summaries of binary components |
 | `classify` | 12 | Classify functions and binaries by purpose |
 | `compare` | 10 | Diff two IDB databases or functions across binaries |
 | `stack_analysis` | 10 | Analyze stack frames: buffer sizes, canaries, alignment, ... |
-| `protocol` | 13 | Detect and analyze network protocol structures, parsers, ... |
 | `annotation` | 18 | Automatically generates and manages comments, labels, and... |
 | `string_ops` | 24 | Advanced string analysis and IOC extraction |
 | `cfg_analysis` | 10 | Analyzes control flow graph structure including loops, do... |
@@ -70,7 +64,6 @@ Total tools: **66** | Advertised: **64**
 | `blackboard` | 70 | Persistent RE knowledge base: findings, hypotheses, IOCs,... |
 | `governance` | 4 | Pre-flight validation for edits: detect contradictions, P... |
 | `knowledge` | 5 | Cross-session firmware knowledge base: chip family identi... |
-| `packer` | 5 | Detect packers / protectors (UPX, MPRESS, VMProtect, Them... |
 | `struct_recover` | 5 | Automatic struct/type recovery from field access patterns... |
 | `emulate` | 5 | Unicorn-backed emulation sandbox — execute functions/slic... |
 | `bindiff` | 5 | Cross-version binary diffing via serialized snapshots — f... |
@@ -606,20 +599,6 @@ Query and traverse the Hex-Rays decompiler ctree AST for a function. Actions: ge
 - `dominance_map`
 - `var_dependency_graph`
 
-### entropy
-
-Compute entropy over regions to detect packing, encryption, or compressed data. Actions: section, region, packed_detect, crypto_detect, compare, window, summary.
-
-**Actions:**
-
-- `section`
-- `region`
-- `packed_detect`
-- `crypto_detect`
-- `compare`
-- `window`
-- `summary`
-
 ### imports_deep
 
 Deep import analysis: thunks, delay-loads, forwarded, ordinal, and API set resolution. Actions: thunks, delay, forwarded, ordinal, api_sets, resolve.
@@ -745,18 +724,6 @@ Firmware triage: region scanning, pointer sweeps, table carving, deterministic d
 - `triage_snapshot`
 - `bootstrap`
 
-### hooks
-
-Generate dynamic instrumentation hooks (Frida, Detours) for target functions. Actions: suggest, generate_frida, generate_detours, find_targets, inline_hooks.
-
-**Actions:**
-
-- `suggest`
-- `generate_frida`
-- `generate_detours`
-- `find_targets`
-- `inline_hooks`
-
 ### wiki
 
 Accesses built-in documentation and tool usage guides within MCP context. Actions: list_topics, read, search, semantic_search, index, sections, suggest.
@@ -858,46 +825,6 @@ Find ROP/JOP/COP gadgets, stack pivots, and classify exploit chains. Actions: ro
 - `pivot_chains`
 - `classify_chain`
 
-### taint
-
-Data flow taint analysis from user-controlled sources to dangerous sinks. Actions: sources (list all taint sources: recv/read/fgets/getenv imports + blackboard IOCs), sinks (dangerous sinks reachable from a source), trace (trace forward from addr/source, write vuln entries to blackboard), paths (full call-graph paths source→sink with dataflow description), report (all sources → all reachable sinks). Example: taint(action='trace', source='recv') finds all paths from recv to memcpy/strcpy/system.
-
-**Actions:**
-
-- `sources`
-- `sinks`
-- `trace`
-- `paths`
-- `report`
-
-### deobfuscate
-
-Detect and decode obfuscation: stack strings, API hashing, dead code, anti-disasm. Actions: detect, detect_encoding, stack_strings, dead_code, api_hashing, dynamic_dispatch, anti_disasm, decode_attempt.
-
-**Actions:**
-
-- `detect`
-- `detect_encoding`
-- `stack_strings`
-- `dead_code`
-- `api_hashing`
-- `dynamic_dispatch`
-- `anti_disasm`
-- `decode_attempt`
-
-### crypto_id
-
-Detect cryptographic algorithms, constants, and encoding routines in the binary. Actions: identify, constants, encoding, checksums, entropy_analysis, aes_ni.
-
-**Actions:**
-
-- `identify`
-- `constants`
-- `encoding`
-- `checksums`
-- `entropy_analysis`
-- `aes_ni`
-
 ### abi
 
 Analyzes calling conventions and ABI details of functions. Actions: detect, stack_args, reg_args, return_type, varargs, struct_return, tail_calls, prologue, epilogue, abi_violations.
@@ -985,26 +912,6 @@ Analyze stack frames: buffer sizes, canaries, alignment, spills, variables, and 
 - `arrays`
 - `uninitialized`
 - `summary`
-
-### protocol
-
-Detect and analyze network protocol structures, parsers, endpoints, state machines, and reconstruct full protocol specs from dispatch tables. Actions: detect, parsers, serializers, handlers, endpoints, tls_config, socket_flow, packet_struct, magic_numbers, state_machine, reconstruct, trace_handler, export_spec.
-
-**Actions:**
-
-- `detect`
-- `parsers`
-- `serializers`
-- `handlers`
-- `endpoints`
-- `tls_config`
-- `socket_flow`
-- `packet_struct`
-- `magic_numbers`
-- `state_machine`
-- `reconstruct`
-- `trace_handler`
-- `export_spec`
 
 ### annotation
 
@@ -1197,17 +1104,23 @@ Cross-session firmware knowledge base: chip family identification, persistent sy
 - `export_session`
 - `chip_families`
 
-### packer
+### security
 
-Detect packers / protectors (UPX, MPRESS, VMProtect, Themida, ASPack, custom) and game anti-cheat references in the current IDB. Returns indicators, classification, recommendation, and a structured workflow with concrete tool calls (static_steps) and external user actions (external_steps). Actions: detect, profile, guide, status, script. script runs Python in the packer's namespace for custom heuristics.
+Unified security analysis combining packer detection, deobfuscation, crypto identification, entropy analysis, hook generation, protocol analysis, and taint analysis into a single tool with 11 actions.
 
 **Actions:**
 
-- `detect`
-- `profile`
-- `guide`
-- `status`
-- `script`
+- `detect` — Full security sweep: packer + entropy + crypto + obfuscation in one pass
+- `decode` — Decode bytes at addr (XOR brute force, Base64)
+- `analyze` — Scan for patterns (what=stack_strings|dead_code|api_hashing|dynamic_dispatch|anti_disasm|encoding|crypto_constants|checksums|entropy_high|aes_ni)
+- `hook` — Generate instrumentation code (method=frida|detours|inline)
+- `hook_targets` — Find hookable functions (by category or importance)
+- `protocol` — Detect protocol usage in the binary
+- `protocol_spec` — Recover protocol structure (what=parsers|serializers|handlers|endpoints|tls_config|socket_flow|packet_struct|magic_numbers|state_machine|reconstruct|trace_handler|export_spec)
+- `taint` — Trace data flow from source to dangerous sinks
+- `taint_sources` — List all taint sources (imports + blackboard IOCs)
+- `taint_report` — Full report: all sources → all reachable sinks
+- `eval` — Run custom Python with access to all analysis helpers + IDA SDK
 
 ### struct_recover
 
@@ -1275,7 +1188,7 @@ Manage relocations/fixups (relocation table entries) in the IDB. Actions: list, 
 
 **Advertised** (64): Tools exposed to LLM clients.
 
-`session`, `truncation`, `bookmarks`, `batch`, `wiki`, `analysis`, `idb`, `code`, `data`, `search`, `imports_deep`, `symbols`, `patterns`, `types`, `memory`, `modify`, `funcs`, `segments`, `bulk`, `misc`, `calc`, `nav`, `project`, `debug`, `graph`, `ctree`, `export`, `history`, `annotation`, `binary_info`, `threat_hunt`, `workflow`, `compare`, `firmware_view`, `blackboard`, `knowledge`, `abi`, `cfg_analysis`, `classify`, `coverage`, `crypto_id`, `intelligence`, `data_ops`, `deobfuscate`, `entropy`, `gadgets`, `governance`, `hooks`, `lumina`, `microcode`, `protocol`, `stack_analysis`, `string_ops`, `summarize`, `taint`, `trace_analysis`, `yara_hunt`, `packer`, `struct_recover`, `emulate`, `bindiff`, `multi_session`, `fixups`
+`session`, `truncation`, `bookmarks`, `batch`, `wiki`, `analysis`, `idb`, `code`, `data`, `search`, `imports_deep`, `symbols`, `patterns`, `types`, `memory`, `modify`, `funcs`, `segments`, `bulk`, `misc`, `calc`, `nav`, `project`, `debug`, `graph`, `ctree`, `export`, `history`, `annotation`, `binary_info`, `threat_hunt`, `workflow`, `compare`, `firmware_view`, `blackboard`, `knowledge`, `abi`, `cfg_analysis`, `classify`, `coverage`, `security`, `intelligence`, `data_ops`, `gadgets`, `governance`, `lumina`, `microcode`, `stack_analysis`, `string_ops`, `summarize`, `trace_analysis`, `yara_hunt`, `struct_recover`, `emulate`, `bindiff`, `multi_session`, `fixups`
 
 **Hidden** (2): Internal tools, not in ADVERTISED_TOOLS.
 
