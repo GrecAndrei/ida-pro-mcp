@@ -32,6 +32,17 @@ class _BatchEmbedder:
         return [_BatchResult([0.0, 0.6, 0.8]) for _ in texts]
 
 
+class _PrefixFailureEmbedder:
+    backend = "test"
+    dim = 3
+
+    def embed_batch(self, texts: list[str]):
+        return [
+            _BatchResult([0.0, 0.6, 0.8]) if index < 2 else _BatchResult(None)
+            for index, _text in enumerate(texts)
+        ]
+
+
 def test_index_does_not_claim_success_when_embedding_is_unavailable(tmp_path):
     index = FunctionEmbeddingIndex(str(tmp_path / "sample.embeddings.db"), _UnavailableEmbedder())
 
@@ -70,6 +81,19 @@ def test_index_many_persists_batch_results_for_a_fresh_reader(tmp_path):
     reader = FunctionEmbeddingIndex(db_path, _BatchEmbedder())
     assert reader.size == 2
     assert reader.quality_counts() == {"full": 1, "unknown": 1}
+
+
+def test_index_many_returns_retry_boundary_after_partial_failure(tmp_path):
+    index = FunctionEmbeddingIndex(str(tmp_path / "sample.embeddings.db"), _PrefixFailureEmbedder())
+
+    result = index.index_many([
+        ("0x401000", "first", "first", None),
+        ("0x401100", "second", "second", None),
+        ("0x401200", "third", "third", None),
+    ])
+
+    assert result == {"indexed": 2, "failed": 1, "resume_after_ea": "0x401100"}
+    assert index.size == 2
 
 
 def test_fast_refresh_does_not_downgrade_an_existing_full_decomp_vector(tmp_path):

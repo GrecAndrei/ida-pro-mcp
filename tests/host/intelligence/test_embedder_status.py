@@ -183,19 +183,24 @@ def test_server_uses_batch_threads_without_raising_query_threads(monkeypatch, tm
     monkeypatch.setattr("ida_pro_mcp.host.intelligence.core._EMBED_LEASE_FILE", str(tmp_path / "lease.json"))
     monkeypatch.setattr("ida_pro_mcp.host.intelligence.core.EMBED_THREADS", 4)
     monkeypatch.setattr("ida_pro_mcp.host.intelligence.core.EMBED_BATCH_THREADS", 8)
+    monkeypatch.setattr("ida_pro_mcp.host.intelligence.core.EMBED_PARALLEL", 3)
     try:
         emb = BgeCodeEmbedder()
+        emb._max_batch_size = 3
         proc = mock.MagicMock()
         proc.pid = 1234
         proc.poll.return_value = None
         health = mock.MagicMock()
         health.read.return_value = b'{"status":"ok"}'
-        with mock.patch("ida_pro_mcp.host.intelligence.core.subprocess.Popen", return_value=proc) as popen, mock.patch(
+        with mock.patch.object(emb, "_pick_port", return_value=43123), mock.patch(
+            "ida_pro_mcp.host.intelligence.core.subprocess.Popen", return_value=proc
+        ) as popen, mock.patch(
             "ida_pro_mcp.host.intelligence.core.urllib.request.urlopen", return_value=health
         ), mock.patch("ida_pro_mcp.host.intelligence.core.time.sleep"):
             assert emb._start_server() is True
         command = popen.call_args.args[0]
         assert command[command.index("--threads") + 1] == "4"
         assert command[command.index("--threads-batch") + 1] == "8"
+        assert command[command.index("--parallel") + 1] == "3"
     finally:
         _restore_singleton(old)

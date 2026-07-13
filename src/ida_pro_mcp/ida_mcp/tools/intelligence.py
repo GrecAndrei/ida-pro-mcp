@@ -1101,11 +1101,18 @@ def intelligence(
                     # decompilation index complete while silently losing
                     # functions.
                     retry_required = True
-                    retry_cursor = (
+                    resume_after = batch_result.get("resume_after_ea")
+                    retry_cursor = str(resume_after) if resume_after else (
                         hex(selected[offset - 1][0]) if offset else
                         (hex(start_after) if start_after is not None else None)
                     )
-                    retry_remaining = len(selected) - offset
+                    resume_index = offset
+                    if resume_after:
+                        for local_index, row in enumerate(selected[offset : offset + len(pending)]):
+                            if hex(row[0]) == str(resume_after):
+                                resume_index = offset + local_index + 1
+                                break
+                    retry_remaining = len(selected) - resume_index
                     break
             if count == 0:
                 return make_error(

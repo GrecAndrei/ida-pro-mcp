@@ -777,7 +777,7 @@ class FunctionEmbeddingIndex:
         result = self.index_many([(func_ea, name, pseudocode, metadata)])
         return result["indexed"] == 1
 
-    def index_many(self, functions: list[tuple[str, str, str, dict | None]]) -> dict[str, int]:
+    def index_many(self, functions: list[tuple[str, str, str, dict | None]]) -> dict[str, int | str | None]:
         """Embed and persist functions in batches.
 
         Existing, unchanged rows are refreshed without an embedding request. New
@@ -846,7 +846,7 @@ class FunctionEmbeddingIndex:
                     self._meta_set(conn, "updated_at", _now_iso())
                 conn.commit()
         except Exception:
-            return {"indexed": 0, "failed": len(functions)}
+            return {"indexed": 0, "failed": len(functions), "resume_after_ea": None}
 
         if not prepared:
             return {"indexed": indexed, "failed": failed}
@@ -862,15 +862,17 @@ class FunctionEmbeddingIndex:
             embedded = [getattr(self._embedder, "embed_vector", lambda _text: None)(entry["pseudocode"]) for entry in prepared]
 
         ready: list[tuple[dict[str, Any], list[float]]] = []
+        failed_eas: set[str] = set()
         for entry, result in zip(prepared, embedded, strict=True):
             vec = getattr(result, "vector", result)
             if vec is None:
                 failed += 1
+                failed_eas.add(str(entry["ea"]))
                 continue
             ready.append((entry, vec))
 
         if not ready:
-            return {"indexed": indexed, "failed": failed}
+            return {"indexed": indexed, "failed": failed, "resume_after_ea": None}
 
         try:
             with self._conn() as conn:
@@ -919,12 +921,25 @@ class FunctionEmbeddingIndex:
                     self._meta_set(conn, k, v)
                 conn.commit()
         except Exception:
-            return {"indexed": indexed, "failed": failed + len(ready)}
+            return {"indexed": indexed, "failed": failed + len(ready), "resume_after_ea": None}
 
         with self._cache_lock:
             for entry, vec in ready:
                 self._cache[entry["ea"]] = vec
-        return {"indexed": indexed + len(ready), "failed": failed}
+        result: dict[str, int | str | None] = {
+            "indexed": indexed + len(ready), "failed": failed,
+        }
+        if failed:
+            # A timed-out request can still have written a valid prefix.
+            # Return its exact boundary so callers resume after that prefix,
+            # rather than retrying the same commit forever.
+            resume_after_ea = None
+            for func_ea, _name, _pseudocode, _metadata in functions:
+                if func_ea in failed_eas:
+                    break
+                resume_after_ea = func_ea
+            result["resume_after_ea"] = resume_after_ea
+        return result
 
     def index_async(self, func_ea: str, name: str, pseudocode: str, metadata: dict | None = None) -> None:
         """Non-blocking index: fire-and-forget in background thread."""

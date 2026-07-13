@@ -15,6 +15,7 @@ Environment variables:
   IDA_MCP_EMBED_PORT         port (default: random 18100-19000)
   IDA_MCP_EMBED_THREADS      CPU threads (default: cpu_count // 2)
   IDA_MCP_EMBED_BATCH_THREADS CPU threads for batched indexing (default: up to 16)
+  IDA_MCP_EMBED_PARALLEL     llama.cpp embedding slots (default: CPU-adaptive, up to 4)
   IDA_MCP_EMBED_CTX          context tokens (default: 2048)
   IDA_MCP_EMBED_IDLE_TIMEOUT seconds to retain an idle embedding server (default: 15)
   IDA_MCP_DECOMP_DOCUMENT_FRACTION fraction of context used by full-decomp documents (default: 0.20)
@@ -557,6 +558,13 @@ EMBED_BATCH_THREADS = _safe_int_env(
     "IDA_MCP_EMBED_BATCH_THREADS",
     str(min(16, _EMBED_CPU_COUNT)),
 )
+# An array sent to llama.cpp's /embeddings endpoint only runs concurrently
+# when it has multiple sequence slots.  ``--parallel 1`` made our client-side
+# batches effectively serial and could turn a small fast-index commit into a
+# minute-long request.  Slots consume KV cache, so remain conservative.
+EMBED_PARALLEL = max(1, min(4, _safe_int_env(
+    "IDA_MCP_EMBED_PARALLEL", str(max(1, _EMBED_CPU_COUNT // 4))
+)))
 EMBED_REQUEST_TIMEOUT = _safe_float_env("IDA_MCP_EMBED_REQUEST_TIMEOUT", "5.0")
 # A batch contains full decompilations, so it can legitimately take longer
 # than the interactive single-query deadline.  Keep the two independently
@@ -801,10 +809,9 @@ class BgeCodeEmbedder:
                               and not EMBED_DISABLED)
         # Cached anchor embeddings for BehaviorClassifier
         self._anchor_cache: dict[str, list[float]] = {}
-        # Full decompilations are much longer than search snippets.  Start
-        # with one document so a new CPU/model combination proves its actual
-        # latency before increasing work.  The cap follows available CPUs;
-        # users who benchmark a faster machine can still override it.
+        # Full decompilations are much longer than search snippets, so keep
+        # the cap CPU-adaptive.  Start at the server's slot count, though: a
+        # 1/2/3/4 ramp wastes RPCs without making a batch safer.
         adaptive_max_batch = max(1, min(4, _EMBED_CPU_COUNT // 4))
         self._max_batch_size = max(
             1,
@@ -814,7 +821,9 @@ class BgeCodeEmbedder:
             1,
             min(
                 self._max_batch_size,
-                _safe_int_env("IDA_MCP_EMBED_BATCH", "1"),
+                _safe_int_env(
+                    "IDA_MCP_EMBED_BATCH", str(min(self._max_batch_size, EMBED_PARALLEL))
+                ),
             ),
         )
         self._batch_lock = threading.Lock()
@@ -1176,7 +1185,7 @@ class BgeCodeEmbedder:
                 "--batch-size", str(max(EMBED_CTX, 2048)),
                 "--ubatch-size", str(min(max(256, EMBED_CTX // 4), 512)),
                 "--pooling", "mean",
-                "--parallel", "1",
+                "--parallel", str(min(EMBED_PARALLEL, self._max_batch_size)),
                 "--threads",  str(EMBED_THREADS),
                 "--threads-batch", str(EMBED_BATCH_THREADS),
                 "--n-predict", "0",
