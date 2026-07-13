@@ -390,7 +390,7 @@ def _clip_signature(text: str, max_len: int = 160) -> str:
 
 class FunctionEmbeddingIndex:
     """
-    Stores 1536-dim float32 embeddings of decompiled functions,
+    Stores model-native float32 embeddings of decompiled functions,
     one SQLite database per binary (<idb_path>.embeddings.db).
 
     Replaces the spectral-CFG encoder (MbaGCN — untrained random SSM)
@@ -398,7 +398,7 @@ class FunctionEmbeddingIndex:
     designed for).
     """
 
-    INDEX_SCHEMA_VERSION = 3
+    INDEX_SCHEMA_VERSION = 4
 
     def __init__(self, db_path: str, embedder: Any):
         self._embedder = embedder
@@ -565,6 +565,7 @@ class FunctionEmbeddingIndex:
         return {
             "embedding_backend": backend,
             "embedding_dim": dim,
+            "embedding_format": str(getattr(self._embedder, "embedding_format", backend)),
             "model_path": model_path,
             "model_size": str(model_size),
             "model_sha256_head": _safe_file_head_sha256(model_path),
@@ -685,6 +686,7 @@ class FunctionEmbeddingIndex:
             "embedding_backend": current_backend,
             "embedding_dim": current_dim,
         }
+        current_snapshot = self._embedder_meta_snapshot()
         mismatches: dict[str, dict[str, Any]] = {}
         try:
             stored_schema = int(stored.get("index_schema_version", 0) or 0)
@@ -706,6 +708,11 @@ class FunctionEmbeddingIndex:
             stored_dim = 0
         if stored_dim != current_dim:
             mismatches["embedding_dim"] = {"stored": stored_dim, "current": current_dim}
+        for key in ("embedding_format", "model_sha256_head"):
+            stored_value = str(stored.get(key) or "")
+            current_value = str(current_snapshot.get(key) or "")
+            if stored_value != current_value:
+                mismatches[key] = {"stored": stored_value, "current": current_value}
         return {
             "ok": not mismatches,
             "mismatches": mismatches,
@@ -844,7 +851,9 @@ class FunctionEmbeddingIndex:
         if not prepared:
             return {"indexed": indexed, "failed": failed}
 
-        embed_batch = getattr(self._embedder, "embed_batch", None)
+        embed_batch = getattr(self._embedder, "embed_documents", None)
+        if not callable(embed_batch):
+            embed_batch = getattr(self._embedder, "embed_batch", None)
         try:
             embedded = embed_batch([entry["pseudocode"] for entry in prepared]) if callable(embed_batch) else None
         except Exception:
@@ -985,7 +994,14 @@ class FunctionEmbeddingIndex:
             if not self._cache:
                 return []
             cache_items = list(self._cache.items())
-        q = self._embedder.embed_vector(pseudocode)
+        embed_document = getattr(
+            self._embedder, "embed_document", None
+        )
+        if callable(embed_document):
+            embedded = embed_document(pseudocode)
+            q = getattr(embedded, "vector", embedded)
+        else:
+            q = self._embedder.embed_vector(pseudocode)
         if q is None:
             return []
         scored: list[tuple[float, str]] = []
@@ -1101,7 +1117,12 @@ class FunctionEmbeddingIndex:
         )
         try:
             query_text = _extract_signature_text(query, max_tokens=64) or str(query)
-            query_vec = self._embedder.embed_vector(query_text)
+            embed_query = getattr(self._embedder, "embed_query_vector", None)
+            query_vec = (
+                embed_query(query_text)
+                if callable(embed_query)
+                else self._embedder.embed_vector(query_text)
+            )
             if query_vec is None:
                 raise RuntimeError("embedding unavailable")
             semantic_hits = self.similar_vec(

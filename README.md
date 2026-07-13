@@ -105,6 +105,65 @@ Mutations require an explicit acknowledgement:
 | `IDA_MCP_RESPONSE_MODE` | `compact` | Use `full` for fuller result payloads. |
 | `IDA_MCP_POLICY_MODE` | `assist` | Controls mutation policy and acknowledgements. |
 
+## Local semantic embeddings
+
+Semantic search and full function indexing are optional. They use a local
+GGUF model through `llama-server`; no embedding text is sent to a remote
+service. If the server or model is unavailable, semantic operations report an
+explicit unavailable result rather than substituting a different vector space.
+
+The default profile is BGE Code v1. Zembed 1 is available as an explicit
+opt-in profile and uses its model-specific query/document prompts.
+
+| Profile | Dimensions | License | Notes |
+| --- | ---: | --- | --- |
+| `bge-code-v1` | 1536 | Apache-2.0 | Default profile; provide a local GGUF model. |
+| `zembed-1` | 2560 | CC-BY-NC-4.0 | Opt-in, non-commercial license; the Q4_K_M model is about 2.5 GB and can be slower on CPU. |
+
+To let the installer download the managed Zembed file, explicitly select the
+profile and accept its license:
+
+```bash
+python install.py --embed-profile zembed-1 --download-embed-model \
+  --accept-model-license --install-llama-server
+```
+
+You can instead download a GGUF yourself and provide its path:
+
+```bash
+python install.py --embed-profile zembed-1 \
+  --embed-model /path/to/zembed-1-Q4_K_M.gguf
+```
+
+Useful runtime variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `IDA_MCP_EMBED_PROFILE` | `bge-code-v1` | Selects prompts and expected model profile. |
+| `IDA_MCP_EMBED_MODEL` | auto-detect | Path to the selected GGUF model. |
+| `IDA_MCP_EMBED_SERVER_BIN` | auto-detect | Path to `llama-server`. |
+| `IDA_MCP_EMBED_THREADS` | adaptive | CPU threads, based on the available CPU affinity. |
+| `IDA_MCP_EMBED_BATCH` | `1` | Initial indexing batch size; grows after successful requests. |
+| `IDA_MCP_EMBED_MAX_BATCH` | CPU-adaptive | Maximum automatic indexing batch size. |
+| `IDA_MCP_EMBED_MAX_REQUESTS` | `512` | Recycle a server after this many successful requests. |
+| `IDA_MCP_EMBED_MAX_RSS_MB` | adaptive | Optional absolute RSS recycle limit; `0` derives one from model size. |
+| `IDA_MCP_EMBED_IDLE_TIMEOUT` | `15` | Seconds to keep llama-server after its last request; set `0` to disable idle retirement. |
+
+The model starts only for explicit indexing, semantic search, or anchor
+refresh requests. Normal tool calls and response enrichment do not start it.
+
+The runtime permits one request per embedding server. A timed-out request
+recycles that server instead of queuing retry work behind it. Indexing then
+returns a resumable cursor; call `ida_index_functions` again with that cursor.
+Indexes record the model, dimension, and prompt format, and rebuild safely
+when any of those change.
+
+Check a local configuration without opening IDA:
+
+```bash
+python install.py --embedder-doctor --embed-profile zembed-1
+```
+
 ## Skills and docs
 
 The checked-in agent skill is generated from the operation registry:

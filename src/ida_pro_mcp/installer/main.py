@@ -23,6 +23,7 @@ from .runtime import (
     build_stdio_config,
     choose_runtime_source,
     download_and_install_llama_server,
+    download_embed_model,
     find_embed_model,
     find_llama_server_bin,
     get_install_root,
@@ -66,7 +67,10 @@ def _sha256_file(path: str) -> str:
 
 def run_embedder_doctor(opts: InstallerOptions, ui: UI) -> int:
     install_root = opts.install_root or get_install_root()
-    embed_model = opts.embed_model_path or (find_embed_model(install_root) if opts.embed_auto else "")
+    profile = opts.embed_profile
+    embed_model = opts.embed_model_path or (
+        find_embed_model(install_root, profile) if opts.embed_auto else ""
+    )
     embed_server = opts.embed_server_bin or (find_llama_server_bin(install_root) if opts.embed_auto else "")
 
     ui.info("Embedder doctor")
@@ -80,12 +84,15 @@ def run_embedder_doctor(opts: InstallerOptions, ui: UI) -> int:
     # Recreate singleton under doctor-selected env so status/probe reflect this setup.
     prev_server = os.environ.get("IDA_MCP_EMBED_SERVER_BIN", "")
     prev_model = os.environ.get("IDA_MCP_EMBED_MODEL", "")
+    prev_profile = os.environ.get("IDA_MCP_EMBED_PROFILE", "")
     prev_instance = intel_core.BgeCodeEmbedder._instance
     try:
         if embed_server:
             os.environ["IDA_MCP_EMBED_SERVER_BIN"] = embed_server
         if embed_model:
             os.environ["IDA_MCP_EMBED_MODEL"] = embed_model
+        if profile:
+            os.environ["IDA_MCP_EMBED_PROFILE"] = profile
         intel_core.BgeCodeEmbedder._instance = None
         emb = intel_core.BgeCodeEmbedder()
         status = emb.status(probe=True, deep_hash=False)
@@ -108,7 +115,7 @@ def run_embedder_doctor(opts: InstallerOptions, ui: UI) -> int:
             ui.warn("health endpoint: not ready")
         ui.info(f"backend: {status.get('backend')}")
         ui.info(f"embed test: {'ok' if status.get('embed_test_ok') else 'failed'}")
-        ui.info(f"fallback available: {'yes' if status.get('backend') == 'tfidf-fallback' or not status.get('use_llama') else 'yes'}")
+        ui.info("fallback: unavailable (semantic features fail explicitly)")
         print(json.dumps(status, indent=2))
         return 0
     finally:
@@ -121,6 +128,10 @@ def run_embedder_doctor(opts: InstallerOptions, ui: UI) -> int:
             os.environ["IDA_MCP_EMBED_MODEL"] = prev_model
         elif "IDA_MCP_EMBED_MODEL" in os.environ:
             del os.environ["IDA_MCP_EMBED_MODEL"]
+        if prev_profile:
+            os.environ["IDA_MCP_EMBED_PROFILE"] = prev_profile
+        elif "IDA_MCP_EMBED_PROFILE" in os.environ:
+            del os.environ["IDA_MCP_EMBED_PROFILE"]
 
 
 def _is_interactive_terminal() -> bool:
@@ -164,10 +175,10 @@ def _format_install_table(installs: list[IdaInstall]) -> str:
     return "\n".join(lines)
 
 
-def _prompt_model_path() -> str:
+def _prompt_model_path(profile: str) -> str:
     """Ask the user to provide a model file path interactively."""
-    print("Enter the full path to your bge-code-v1*.gguf model file, or leave empty to skip.")
-    print("Example: /home/user/Downloads/bge-code-v1-q8_0.gguf")
+    print(f"Enter the full path to your {profile} GGUF model file, or leave empty to skip.")
+    print("Example: /home/user/Downloads/model.gguf")
     while True:
         ans = input("Model path (or press Enter to skip): ").strip().strip("\"'")
         if not ans:
@@ -300,7 +311,14 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
         default=opts.install_claude_skills,
     )
 
-    auto_embed_model = find_embed_model(opts.install_root or get_install_root())
+    opts.embed_profile = _prompt_choice(
+        "Embedding profile",
+        ["bge-code-v1", "zembed-1"],
+        opts.embed_profile,
+    )
+    if opts.embed_profile == "zembed-1":
+        ui.info("Zembed 1 is opt-in and licensed CC-BY-NC-4.0 (non-commercial).")
+    auto_embed_model = find_embed_model(opts.install_root or get_install_root(), opts.embed_profile)
     auto_embed_server = find_llama_server_bin(opts.install_root or get_install_root())
     if auto_embed_model:
         ui.ok(f"Detected embedding model: {auto_embed_model}")
@@ -317,14 +335,26 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
                     default=True,
                 )
     else:
-        ui.warn("No bge-code-v1 model auto-detected.")
+        ui.warn(f"No {opts.embed_profile} model auto-detected.")
         if opts.interactive:
-            manual = _prompt_model_path()
+            if opts.embed_profile == "zembed-1" and _prompt_yes_no(
+                "Download the managed Zembed 1 Q4_K_M model?", default=False
+            ):
+                if _prompt_yes_no("I accept the CC-BY-NC-4.0 model license", default=False):
+                    opts.download_embed_model = True
+                    opts.accept_model_license = True
+                    opts.embed_auto = True
+                    manual = ""
+                else:
+                    ui.warn("Zembed download skipped because its license was not accepted.")
+                    manual = _prompt_model_path(opts.embed_profile)
+            else:
+                manual = _prompt_model_path(opts.embed_profile)
             if manual:
                 ui.ok(f"Using model: {manual}")
                 opts.embed_model_path = manual
                 opts.embed_auto = True
-            else:
+            elif not opts.download_embed_model:
                 opts.embed_auto = False
                 ui.warn("Semantic embedding features stay disabled by default.")
         else:
@@ -469,7 +499,19 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
     parser.add_argument("--install-cli-shim", action="store_true", help="opt-in bashrc PATH shim installation")
     parser.add_argument("--rollback-on-fail", action="store_true", help="restore backed up config files if install fails")
     parser.add_argument("--runtime-source", choices=["auto", "local", "pypi"], default="auto", help="choose runtime package source")
-    parser.add_argument("--embed-model", default="", help="explicit path to bge-code-v1 GGUF model")
+    parser.add_argument("--embed-model", default="", help="explicit path to an embedding GGUF model")
+    parser.add_argument(
+        "--embed-profile", choices=["bge-code-v1", "zembed-1"], default="bge-code-v1",
+        help="embedding prompt/model profile (default: bge-code-v1)",
+    )
+    parser.add_argument(
+        "--download-embed-model", action="store_true",
+        help="download the selected managed embedding model",
+    )
+    parser.add_argument(
+        "--accept-model-license", action="store_true",
+        help="confirm acceptance of the selected model's license when required",
+    )
     parser.add_argument("--embed-server-bin", default="", help="explicit path to llama-server binary")
     parser.add_argument("--embedder-doctor", action="store_true", help="diagnose local embedder/model/server setup")
     parser.add_argument("--setup-embedder", action="store_true", help="convenience mode to configure embedder with client setup")
@@ -512,9 +554,12 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         install_claude_skills=not args.no_install_skills,
         interactive=True if args.interactive else (False if args.no_interactive else None),
         embed_auto=not args.no_embed_auto,
+        embed_profile=args.embed_profile,
         embed_model_path=args.embed_model,
         embed_server_bin=args.embed_server_bin,
         install_llama_server=args.install_llama_server,
+        download_embed_model=args.download_embed_model,
+        accept_model_license=args.accept_model_license,
         embedder_doctor=args.embedder_doctor,
         setup_embedder=args.setup_embedder,
 
@@ -653,8 +698,25 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
             ui.info("Configuring MCP clients")
             embed_model = opts.embed_model_path
             embed_server = opts.embed_server_bin
+            if opts.download_embed_model and not embed_model:
+                from ida_pro_mcp.host.intelligence.model_profiles import get_model_profile
+
+                selected_profile = get_model_profile(opts.embed_profile)
+                if selected_profile is None:
+                    raise RuntimeError(f"Unknown embedding profile: {opts.embed_profile}")
+                if selected_profile.opt_in and not opts.accept_model_license:
+                    raise RuntimeError(
+                        f"{selected_profile.display_name} is {selected_profile.license}; "
+                        "rerun with --accept-model-license to download it"
+                    )
+                if opts.dry_run:
+                    ui.info(f"Would download {selected_profile.display_name} embedding model")
+                    report.add_step("embed_model", "dry-run", selected_profile.key)
+                else:
+                    ui.info(f"Downloading {selected_profile.display_name} embedding model")
+                    embed_model = download_embed_model(install_root, selected_profile.key)
             if opts.embed_auto and not embed_model:
-                embed_model = find_embed_model(install_root)
+                embed_model = find_embed_model(install_root, opts.embed_profile)
             if opts.embed_auto and not embed_server:
                 embed_server = find_llama_server_bin(install_root)
             if (
@@ -683,6 +745,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                         install_root,
                         model_path=embed_model,
                         server_bin=embed_server,
+                        profile=opts.embed_profile,
                     )
                     report.metadata["embedder_state"] = str(state_path)
                 except Exception as exc:
@@ -692,6 +755,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                 install_root,
                 embed_model=embed_model,
                 embed_server_bin=embed_server,
+                embed_profile=opts.embed_profile,
                 ida_install=getattr(opts, "_ida_install", None),
                 disable_policy=opts.disable_policy,
             )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -232,14 +233,14 @@ def choose_runtime_source(runtime_source: str, source_root: Path) -> str:
     return "pypi"
 
 
-def find_embed_model(install_root: Path) -> str:
-    """Locate a ``bge-code-v1*.gguf`` model file on disk.
+def find_embed_model(install_root: Path, profile: str = "") -> str:
+    """Locate a supported GGUF embedding model on disk.
 
     Returns the first match found from this search order:
 
     1. ``IDA_MCP_EMBED_MODEL`` env var (direct file path).
     2. ``embedder.json`` config file (mirrors host discovery).
-    3. Globbing for ``bge-code-v1*.gguf`` across a prioritized list of
+    3. Globbing for the selected profile across a prioritized list of
        base directories (install root, user home, cwd).
     4. HuggingFace hub cache (``~/.cache/huggingface/hub/``).
     5. Recursive scan under *install_root* only (broad last-ditch walk).
@@ -250,16 +251,44 @@ def find_embed_model(install_root: Path) -> str:
         return env_val
 
     # 2. embedder.json (persistent state from a previous install/doctor run).
+    state: dict = {}
     try:
         from ida_pro_mcp.host.intelligence.core import (
             _read_embedder_state,
             _select_state_path,
         )
-        manual = _select_state_path(_read_embedder_state().get("model_path"))
-        if manual:
+        state = _read_embedder_state()
+        manual = _select_state_path(state.get("model_path"))
+        state_profile = str(state.get("profile") or "").strip().lower()
+        requested_from_env = str(profile or os.environ.get("IDA_MCP_EMBED_PROFILE") or "").strip().lower()
+        from ida_pro_mcp.host.intelligence.model_profiles import (
+            get_model_profile,
+            profile_from_model,
+        )
+
+        if requested_from_env:
+            requested_from_env = (
+                get_model_profile(requested_from_env) or get_model_profile("bge-code-v1")
+            ).key
+        if state_profile:
+            state_profile = (get_model_profile(state_profile) or get_model_profile("bge-code-v1")).key
+
+        if manual and (
+            not requested_from_env
+            or state_profile == requested_from_env
+            or (not state_profile and profile_from_model(manual).key == requested_from_env)
+        ):
             return manual
     except Exception:
         pass
+
+    from ida_pro_mcp.host.intelligence.model_profiles import BGE_CODE_V1, get_model_profile
+
+    requested = str(
+        profile or os.environ.get("IDA_MCP_EMBED_PROFILE") or state.get("profile") or BGE_CODE_V1.key
+    )
+    selected_profile = get_model_profile(requested) or BGE_CODE_V1
+    patterns = selected_profile.filename_patterns
 
     home = Path.home()
     cwd = Path.cwd()
@@ -304,28 +333,78 @@ def find_embed_model(install_root: Path) -> str:
         if not base_resolved.is_dir():
             continue
         searched.append(str(base_resolved))
-        for f in sorted(base_resolved.glob("bge-code-v1*.gguf")):
-            if f.is_file():
-                return str(f)
+        for pattern in patterns:
+            for f in sorted(base_resolved.glob(pattern)):
+                if f.is_file():
+                    return str(f)
 
     # 4. Hugging Face cache snapshots.
     hf_root = home / ".cache" / "huggingface" / "hub"
     if hf_root.is_dir():
-        for f in hf_root.glob("models--*/snapshots/*/bge-code-v1*.gguf"):
+        for pattern in patterns:
+            for f in hf_root.glob(f"models--*/snapshots/*/{pattern}"):
+                if f.is_file():
+                    return str(f)
+
+    # 5. Last-ditch recursive scan under the install root only.
+    for pattern in patterns:
+        for f in install_root.rglob(pattern):
             if f.is_file():
                 return str(f)
 
-    # 5. Last-ditch recursive scan under the install root only.
-    for f in install_root.rglob("bge-code-v1*.gguf"):
-        if f.is_file():
-            return str(f)
-
     _log.debug(
-        "bge-code-v1*.gguf not found after searching %d directories: %s",
+        "%s model not found after searching %d directories: %s",
+        selected_profile.key,
         len(searched),
         "; ".join(searched),
     )
     return ""
+
+
+def download_embed_model(install_root: Path, profile: str) -> str:
+    """Download a user-selected profile model into the install model directory."""
+    from ida_pro_mcp.host.intelligence.model_profiles import get_model_profile
+
+    selected = get_model_profile(profile)
+    if selected is None:
+        raise RuntimeError(f"Unknown embedding profile: {profile}")
+    if not selected.download_url or not selected.download_filename:
+        raise RuntimeError(
+            f"Profile {selected.key} has no managed download; provide --embed-model"
+        )
+    model_dir = install_root / "models"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    destination = model_dir / selected.download_filename
+    if destination.is_file() and destination.stat().st_size > 0:
+        return str(destination)
+    partial = destination.with_suffix(destination.suffix + ".part")
+    request = urllib.request.Request(
+        selected.download_url,
+        headers={"User-Agent": "ida-pro-mcp-installer"},
+    )
+    max_bytes = 8 * 1024**3
+    written = 0
+    try:
+        with urllib.request.urlopen(request, timeout=300) as response, open(partial, "wb") as output:
+            content_length = int(response.headers.get("Content-Length") or 0)
+            if content_length > max_bytes:
+                raise RuntimeError("Embedding model download exceeds the 8 GiB safety limit")
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > max_bytes:
+                    raise RuntimeError("Embedding model download exceeds the 8 GiB safety limit")
+                output.write(chunk)
+        if written <= 0:
+            raise RuntimeError("Embedding model download was empty")
+        os.replace(partial, destination)
+    except Exception:
+        with contextlib.suppress(OSError):
+            partial.unlink()
+        raise
+    return str(destination)
 
 
 def find_llama_server_bin(install_root: Path) -> str:
@@ -695,6 +774,25 @@ def _write_dev_pth(venv_dir: Path, source_root: Path, dry_run: bool, report: Ins
     return pth_path
 
 
+def _remove_dev_pth(venv_dir: Path, report: InstallReport) -> None:
+    """Remove an old live-source pointer before installing a frozen runtime.
+
+    ``--runtime-source local`` is intentionally a development mode.  A later
+    normal install must not inherit its ``.pth`` file, otherwise edits in a
+    checkout can still override the package that pip just installed.
+    """
+    python_exe = _venv_python_exe(venv_dir)
+    result = run_checked(
+        [str(python_exe), "-c", "import site; print(site.getsitepackages()[0])"],
+        timeout=15,
+    )
+    pth_path = Path(result.stdout.strip()) / "ida_pro_mcp_dev.pth"
+    if pth_path.is_file():
+        pth_path.unlink()
+        report.add_modified(pth_path)
+        report.add_step("dev_pth", "removed", f"removed live source pointer {pth_path}")
+
+
 def setup_runtime_environment(
     install_root: Path,
     source_root: Path,
@@ -741,6 +839,7 @@ def setup_runtime_environment(
         report.metadata["runtime_source"] = "local-dev"
         report.metadata["runtime_package"] = f"pth:{source_root / 'src'}"
     else:
+        _remove_dev_pth(venv_dir, report)
         package_spec = str(source_root) if resolved_source == "local" else "ida-pro-mcp"
         run_checked([str(python_exe), "-m", "pip", "install", package_spec])
         report.metadata["runtime_source"] = resolved_source
@@ -760,6 +859,7 @@ def build_stdio_config(
     install_root: Path,
     embed_model: str = "",
     embed_server_bin: str = "",
+    embed_profile: str = "",
     ida_install: object | None = None,
     disable_policy: bool = False,
 ) -> dict:
@@ -801,6 +901,8 @@ def build_stdio_config(
         env["IDA_MCP_EMBED_MODEL"] = embed_model
     if embed_server_bin:
         env["IDA_MCP_EMBED_SERVER_BIN"] = embed_server_bin
+    if embed_profile:
+        env["IDA_MCP_EMBED_PROFILE"] = embed_profile
 
     return {
         "command": str(python_exe),

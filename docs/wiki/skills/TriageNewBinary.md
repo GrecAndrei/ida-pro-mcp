@@ -21,7 +21,7 @@ intelligence(action="index_fast")
 
 | Feature | Role |
 |---------|------|
-| BehaviorClassifier | Groups functions by behavior (zero-shot, bge-code-v1) |
+| BehaviorClassifier | Groups functions by behavior (zero-shot, local embedding profile) |
 | FunctionEmbeddingIndex | Powers similarity search for naming |
 | Blackboard | Auto-captures all findings, enables cross-session correlation |
 

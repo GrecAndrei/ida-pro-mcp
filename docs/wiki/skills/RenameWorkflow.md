@@ -27,7 +27,7 @@ funcs(action="suggest_names")
 
 ## How It Works
 
-1. **suggest_names** uses bge-code-v1 embeddings to compare unnamed functions against a corpus of known patterns
+1. **suggest_names** uses the configured local embedding profile to compare unnamed functions against a corpus of known patterns
 2. Returns ranked suggestions with confidence scores
 3. After you accept a rename via `set_name`, the system propagates context to callees
 4. Propagated suggestions appear on the blackboard for batch review

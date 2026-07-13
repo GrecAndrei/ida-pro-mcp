@@ -29,9 +29,21 @@ The suite verifies the complete public operation set:
 - rename/comment mutations and durable findings;
 - strict invalid-argument handling and a real continuation token round trip.
 
-Semantic coverage starts the configured local `bge-code-v1` model. The suite
-also starts a separate real-IDA session with embeddings disabled and verifies
-that indexing fails clearly instead of reporting a nonexistent index.
+Semantic coverage uses the configured local embedding profile. By default this
+is `bge-code-v1`; an explicit Zembed run can be selected without changing the
+installed client configuration:
+
+```bash
+python scripts/run_live_agent_surface.py --ida-dir /path/to/ida \
+  --embed-profile zembed-1 --embed-model /path/to/zembed-1-Q4_K_M.gguf
+```
+
+The suite also starts a separate real-IDA session with embeddings disabled and
+verifies that indexing fails clearly instead of reporting a nonexistent index.
+For a CPU model comparison, run the suite once per profile in a clean runtime
+directory and record total indexing time, peak `llama-server` RSS, and the
+top semantic hits for the same queries. Zembed 1 is CC-BY-NC-4.0 and must only
+be used where that non-commercial license is acceptable.
 
 It is intentionally opt-in. A missing or unusable IDA install fails an
 explicit live run, while ordinary unit/contract test runs skip it.

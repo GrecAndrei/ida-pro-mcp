@@ -60,6 +60,15 @@ def get_backend():
             ),
         )
 
+    # This is the explicit semantic-search path.  It is the right place to
+    # activate the local model; routine tool/context paths intentionally do
+    # not cold-start llama.cpp.
+    if not asm.ensure_embedding_server():
+        return _err(
+            "Semantic search backend is unavailable.",
+            hint="Configure an embedding model and llama-server, then retry.",
+        )
+
     classifier = asm._behavior_classifier()
     return idx, classifier, idb_path
 

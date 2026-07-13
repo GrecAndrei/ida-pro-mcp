@@ -1,12 +1,23 @@
 # Intelligence Layer
 
-IDA Pro MCP uses a real embedding model (bge-code-v1, 1536 dims) for semantic analysis. No keyword lists. No hardcoded rules for classification.
+IDA Pro MCP can use a local GGUF embedding model for semantic analysis. The
+default profile is `bge-code-v1` (1536 dimensions); `zembed-1` is an opt-in
+2560-dimension profile. Lexical retrieval remains available, while a missing
+embedding model is reported explicitly rather than silently replaced with a
+different vector representation.
 
 ## How it works
 
-**BgeCodeEmbedder** — manages a `llama-server` subprocess running `bge-code-v1-q8_0.gguf`. Auto-detected from common local model locations or `IDA_MCP_EMBED_MODEL`. Falls back to TF-IDF if the model isn't found.
+**BgeCodeEmbedder** — compatibility class name for the profile-aware local
+embedder. It manages one `llama-server` process, detects the selected GGUF
+dimension, and applies profile-specific prompts. Zembed uses separate
+`query` and `document` prompts; indexed functions are documents and search
+text is a query.
 
-**FunctionEmbeddingIndex** — per-binary SQLite store of 1536-dim embeddings. Written to `<idb_path>.embeddings.db`. Populated automatically when you decompile functions via `code(action="decompile")`.
+**FunctionEmbeddingIndex** — per-binary SQLite store of model-native
+embeddings. Written to `<idb_path>.embeddings.db`. Its metadata records model
+identity, dimension, and prompt format so a profile/model change rebuilds the
+index rather than mixing incompatible vectors.
 
 **BehaviorClassifier** — zero-shot classification via cosine similarity to anchor descriptions. Anchors cover: `crypto_symmetric`, `crypto_hash`, `network_http`, `network_raw`, `process_injection`, `file_operations`, `anti_debug`, `anti_vm`, `persistence`, `evasion`, `string_decrypt`, `c2_communication`, `privilege_escalation`, `memory_manipulation`.
 
@@ -41,10 +52,20 @@ After `modify(action="rename")`, a background thread re-embeds the renamed funct
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `IDA_MCP_EMBED_MODEL` | auto-detect | Path to bge-code-v1 GGUF |
+| `IDA_MCP_EMBED_PROFILE` | `bge-code-v1` | Model profile and prompt contract |
+| `IDA_MCP_EMBED_MODEL` | auto-detect | Path to the selected GGUF |
 | `IDA_MCP_EMBED_SERVER_BIN` | auto-detect | Path to llama-server binary |
-| `IDA_MCP_EMBED_DISABLED` | `0` | Set to `1` to force TF-IDF fallback |
-| `IDA_MCP_EMBED_THREADS` | `cpu_count/2` | CPU threads for llama-server |
+| `IDA_MCP_EMBED_DISABLED` | `0` | Set to `1` to disable semantic embeddings |
+| `IDA_MCP_EMBED_THREADS` | adaptive | CPU threads for llama-server |
+| `IDA_MCP_EMBED_MAX_REQUESTS` | `512` | Recycle the server after successful requests |
+| `IDA_MCP_EMBED_MAX_RSS_MB` | adaptive | Optional server RSS recycle limit |
+| `IDA_MCP_EMBED_IDLE_TIMEOUT` | `15` | Retire llama-server after this many idle seconds (`0` disables it) |
+
+The server starts only for an explicit indexing, semantic-search, or anchor
+refresh operation; routine tool/context work does not cold-start it. It
+accepts one embedding request at a time. A timeout recycles it so abandoned
+work cannot block future requests. Full decompilation indexing stops at the
+failed batch and returns a cursor for a clean retry.
 
 ## Embedder status / doctor
 

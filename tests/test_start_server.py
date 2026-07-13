@@ -5,6 +5,7 @@ Created: 2026-07-06
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -57,12 +58,10 @@ class TestStartServerLeaseFilePriority(unittest.TestCase):
 
     def tearDown(self):
         _core._EMBED_LEASE_FILE = self._orig_lease
-        with contextlib.suppress(FileNotFoundError):
-            os.remove(self._lease_file)
-        os.rmdir(self._tmpdir)
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
 
-    def test_lease_file_recovery_when_use_llama_false(self):
-        """If _use_llama is False but a valid lease file exists, recover."""
+    def test_legacy_lease_is_not_reused_when_use_llama_false(self):
+        """A lease without owner/model identity is unsafe to attach to."""
         e = _make_minimal_embedder()
         e._use_llama = False
         e._server_bin = ""
@@ -70,19 +69,13 @@ class TestStartServerLeaseFilePriority(unittest.TestCase):
         with open(self._lease_file, "w") as f:
             json.dump({"pid": 999, "port": 5555, "updated_at": 0}, f)
 
-        with patch("urllib.request.urlopen") as mock_urlopen:
-            mock_ctx = MagicMock()
-            mock_ctx.__enter__ = MagicMock(return_value=mock_ctx)
-            mock_ctx.__exit__ = MagicMock(return_value=False)
-            mock_ctx.read.return_value = b'{"status":"ok"}'
-            mock_urlopen.return_value = mock_ctx
-
+        with patch.object(_core, "_find_llama_server", return_value=""), patch.object(
+            _core, "_find_model", return_value=""
+        ):
             result = e._start_server()
 
-        self.assertTrue(result)
-        self.assertTrue(e._use_llama)
-        self.assertTrue(e._ready)
-        self.assertEqual(e._port, 5555)
+        self.assertFalse(result)
+        self.assertFalse(e._ready)
 
     def test_no_lease_file_and_no_paths_returns_false(self):
         """Without lease file and without server binary, return False."""
@@ -152,9 +145,7 @@ class TestStartServerPathRecheck(unittest.TestCase):
 
     def tearDown(self):
         _core._EMBED_LEASE_FILE = self._orig_lease
-        with contextlib.suppress(FileNotFoundError):
-            os.remove(self._lease_file)
-        os.rmdir(self._tmpdir)
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
 
     def test_paths_found_after_init(self):
         """If paths weren't available at init but are now, set _use_llama."""
@@ -201,9 +192,7 @@ class TestStartServerLDPath(unittest.TestCase):
 
     def tearDown(self):
         _core._EMBED_LEASE_FILE = self._orig_lease
-        with contextlib.suppress(FileNotFoundError):
-            os.remove(self._lease_file)
-        os.rmdir(self._tmpdir)
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
 
     def test_ld_library_path_in_env(self):
         """Subprocess must get LD_LIBRARY_PATH with binary directory."""

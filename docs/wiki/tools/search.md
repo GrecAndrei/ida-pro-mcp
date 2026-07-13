@@ -6,7 +6,7 @@ Search the binary for bytes, strings, patterns, names, instructions, xrefs, and 
 
 | Action | What it does | When to use |
 |--------|-------------|-------------|
-| `nl` | Natural language search via bge-code-v1 embeddings | "function that parses HTTP headers" |
+| `nl` | Natural language search via the configured local embedding profile | "function that parses HTTP headers" |
 | `behavior` | Find functions by behavior tag (BehaviorClassifier) | "find all crypto functions" |
 | `find` | Smart unified search (names/strings/imports/instructions) | General purpose |
 | `semantic` | NL search with embedding-aware ranking | Faster than nl, less accurate |
@@ -23,7 +23,9 @@ Search the binary for bytes, strings, patterns, names, instructions, xrefs, and 
 ## Semantic Search Actions
 
 ### nl
-Natural language search using bge-code-v1 cosine similarity on indexed function embeddings. Most accurate for RE queries.
+Natural language search using cosine similarity on indexed function embeddings
+from the configured local profile. Most accurate for RE queries when a
+full-decompilation index is available.
 
 ```json
 {"name": "search", "arguments": {"action": "nl", "query": "function that handles AES key schedule", "limit": 10}}
@@ -225,4 +227,3 @@ Prefer reading `items[].addr` — never parse hex out of free text.
 - Matches demangled C++ names as well as raw symbols
 - Scans comments
 - Skips full instruction scan for identifier-like queries when enough name/string/import hits exist (use `instruction`/`text` to force)
-

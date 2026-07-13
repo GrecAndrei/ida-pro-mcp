@@ -58,8 +58,14 @@ class TestLlamaEmbedResponseHandling(unittest.TestCase):
         e._port = 12345
         e._ready = True
         e._use_llama = True
+        e._dimension = 0
+        e._model_path = ""
+        e._server_bin = ""
+        e._identity_cache = None
         e._consecutive_rpc_failures = 0
         e._max_rpc_failures = 2
+        e._last_batch_timeout = False
+        e._last_recycle_reason = ""
         return e
 
     def test_new_format_single_embedding(self):
@@ -154,10 +160,16 @@ class TestLlamaEmbedBatchResponseHandling(unittest.TestCase):
         e._port = 12345
         e._ready = True
         e._use_llama = True
+        e._dimension = 0
+        e._model_path = ""
+        e._server_bin = ""
+        e._identity_cache = None
         e._consecutive_rpc_failures = 0
         e._max_rpc_failures = 2
         e._batch_size = 16
         e._batch_lock = __import__("threading").Lock()
+        e._last_batch_timeout = False
+        e._last_recycle_reason = ""
         return e
 
     def test_new_format_batch(self):
@@ -243,21 +255,25 @@ class TestLlamaEmbedBatchResponseHandling(unittest.TestCase):
         self.assertEqual(len(result), 2)
         self.assertEqual(mock_urlopen.call_args.kwargs["timeout"], 60.0)
 
-    def test_batch_timeout_retries_smaller_chunks_without_losing_items(self):
+    def test_batch_timeout_recycles_without_queuing_recursive_retries(self):
         e = self._make_embedder()
 
-        def fake_embed(chunk):
+        def fake_embed(chunk, purpose="document"):
             if len(chunk) > 2:
                 e._last_batch_timeout = True
+                e._ready = False
+                e._last_recycle_reason = "embedding request timeout"
                 return None
             e._last_batch_timeout = False
             return [[1.0, 0.0] for _ in chunk]
 
-        with patch.object(e, "_llama_embed_batch", side_effect=fake_embed):
+        with patch.object(e, "_llama_embed_batch", side_effect=fake_embed) as mocked_embed:
             result = e.embed_batch(["a", "b", "c", "d"])
 
         self.assertEqual(len(result), 4)
-        self.assertTrue(all(row.ok and row.vector for row in result))
+        self.assertTrue(all(not row.ok and row.vector is None for row in result))
+        self.assertEqual(mocked_embed.call_count, 1)
+        self.assertEqual(e._batch_size, 2)
 
 
 class TestNaNHandling(unittest.TestCase):
@@ -268,8 +284,14 @@ class TestNaNHandling(unittest.TestCase):
         e._port = 12345
         e._ready = True
         e._use_llama = True
+        e._dimension = 0
+        e._model_path = ""
+        e._server_bin = ""
+        e._identity_cache = None
         e._consecutive_rpc_failures = 0
         e._max_rpc_failures = 2
+        e._last_batch_timeout = False
+        e._last_recycle_reason = ""
         return e
 
     def test_nan_components_filtered(self):
@@ -294,8 +316,8 @@ class TestNaNHandling(unittest.TestCase):
         self.assertAlmostEqual(vec[0], 0.6, places=5)
         self.assertAlmostEqual(vec[1], 0.8, places=5)
 
-    def test_all_nan_returns_unit_vector_of_zeros(self):
-        """If all components are NaN, should not crash."""
+    def test_all_nan_is_rejected(self):
+        """An all-NaN response is unavailable, never an empty vector."""
         e = self._make_embedder()
         mock_response = json.dumps([
             {"index": 0, "embedding": [[float("nan"), float("nan")]]}
@@ -310,9 +332,7 @@ class TestNaNHandling(unittest.TestCase):
 
             vec = e._llama_embed("test code")
 
-        # All NaN filtered -> no components -> norm falls back to 1.0 -> empty vec
-        self.assertIsNotNone(vec)
-        self.assertEqual(vec, [])
+        self.assertIsNone(vec)
 
     def test_finite_values_work_normally(self):
         """Normal finite values should still work after NaN guard."""

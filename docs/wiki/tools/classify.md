@@ -1,6 +1,7 @@
 # classify
 
-Classifies functions and binaries by behavior using zero-shot ML (bge-code-v1) in embedding-first mode.
+Classifies functions and binaries by behavior using the configured local
+embedding profile in embedding-first mode.
 
 ## Actions
 - `function` — classify a single function's behavior; params: `address`. Returns `behavior_tags`.
@@ -26,6 +27,6 @@ Classifies functions and binaries by behavior using zero-shot ML (bge-code-v1) i
 ```
 
 ## Notes
-- `function` uses BehaviorClassifier (bge-code-v1 zero-shot) as the primary ranking signal.
+- `function` uses BehaviorClassifier (local embedding zero-shot) as the primary ranking signal.
 - `induce_schema` produces structured attribute-value schemas for function classification.
 - Batch actions (`all_functions`, `library_code`, etc.) support `offset`/`count` pagination.

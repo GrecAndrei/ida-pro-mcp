@@ -1,13 +1,11 @@
 """
 Intelligence layer for IDA Pro MCP.
 
-Replaces the fake ML systems (cognitive_layer, cartographer, attention_kernel,
-11 SQLite databases, Hadamard random projections, untrained SSMs) with a real
-embedding model backed by bge-code-v1 via llama-server.
+Provides local embedding models through llama-server.
 
 Architecture:
-  BgeCodeEmbedder      — manages llama-server subprocess, exposes embed()
-  FunctionEmbeddingIndex — per-binary SQLite store of 1536-dim embeddings
+  BgeCodeEmbedder      — compatibility name for the model-profile embedder
+  FunctionEmbeddingIndex — per-binary SQLite embedding store
   BehaviorClassifier   — zero-shot via cosine sim to anchor descriptions
   ContextAssembler     — orchestrates everything, produces context_pack per call
 
@@ -18,9 +16,10 @@ Environment variables:
   IDA_MCP_EMBED_THREADS      CPU threads (default: cpu_count // 2)
   IDA_MCP_EMBED_BATCH_THREADS CPU threads for batched indexing (default: up to 16)
   IDA_MCP_EMBED_CTX          context tokens (default: 2048)
+  IDA_MCP_EMBED_IDLE_TIMEOUT seconds to retain an idle embedding server (default: 15)
   IDA_MCP_DECOMP_DOCUMENT_FRACTION fraction of context used by full-decomp documents (default: 0.20)
   IDA_MCP_DECOMP_DOCUMENT_CHARS explicit full-decomp document character budget
-  IDA_MCP_EMBED_DISABLED     set to 1 to force TF-IDF fallback
+  IDA_MCP_EMBED_DISABLED     set to 1 to disable semantic embeddings
 
 Manual override:
   The installer (or a user) may write an `embedder.json` file under the
@@ -59,6 +58,13 @@ from pathlib import Path
 from typing import Any
 
 from .embeddings import NOISE_WORDS, FunctionEmbeddingIndex  # noqa: F401
+from .model_profiles import (
+    BGE_CODE_V1,
+    EmbeddingModelProfile,
+    get_model_profile,
+    model_dimension,
+    profile_from_model,
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -77,7 +83,7 @@ except ImportError:
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 _EMBED_LEASE_FILE = os.path.join(CACHE_DIR, "ida-mcp-embed-server-lease.json")
-_MODEL_PATH_CACHE = None
+_MODEL_PATH_CACHE: tuple[str, str] | None = None
 
 
 def hash_file(path: str, max_bytes: int | None = None) -> str:
@@ -247,6 +253,7 @@ def write_embedder_state(
     *,
     model_path: str = "",
     server_bin: str = "",
+    profile: str = "",
     disabled: bool | None = None,
 ) -> str:
     """Persist a manual embedder override to `<install_root>/embedder.json`.
@@ -269,6 +276,11 @@ def write_embedder_state(
         payload["model_path"] = os.path.abspath(os.path.expanduser(model_path))
     if server_bin:
         payload["server_bin"] = os.path.abspath(os.path.expanduser(server_bin))
+    if profile:
+        selected = get_model_profile(profile)
+        if selected is None and profile != "custom":
+            raise ValueError(f"unknown embedding model profile: {profile}")
+        payload["profile"] = profile
     if disabled is not None:
         payload["disabled"] = bool(disabled)
     with open(state_path, "w", encoding="utf-8") as f:
@@ -401,7 +413,7 @@ def _find_llama_server() -> str:
             if _is_executable(c):
                 return os.path.abspath(c)
 
-    return ""  # will trigger TF-IDF fallback
+    return ""  # semantic embeddings remain unavailable
 
 
 def _find_model() -> str:
@@ -410,16 +422,20 @@ def _find_model() -> str:
     Resolution order:
       1. `IDA_MCP_EMBED_MODEL` env var (string or `;`-separated list)
       2. Manual override in `embedder.json` (`model_path`)
-      3. Project-local: `<project>/bge-code-v1[-q8_0].gguf`,
-         `<project>/models/bge-code-v1[-q8_0].gguf`
-      4. Install root: `<install_root>/bge-code-v1[-q8_0].gguf`,
-         `<install_root>/models/bge-code-v1[-q8_0].gguf`
+      3. Project-local model files matching the selected profile
+      4. Install-root model files matching the selected profile
       5. User home: `~/models`, `~/Downloads`, `~/Documents`
-      6. Hugging Face cache: `~/.cache/huggingface/hub/models--*/snapshots/*/bge-code-v1*.gguf`
+      6. Hugging Face cache snapshots matching the selected profile
     """
     global _MODEL_PATH_CACHE
-    if isinstance(_MODEL_PATH_CACHE, str):
-        return _MODEL_PATH_CACHE
+    state = _read_embedder_state()
+    requested_profile = str(
+        os.environ.get("IDA_MCP_EMBED_PROFILE") or state.get("profile") or "bge-code-v1"
+    ).strip().lower()
+    requested_profile = (get_model_profile(requested_profile) or BGE_CODE_V1).key
+    cache_key = requested_profile
+    if _MODEL_PATH_CACHE is not None and _MODEL_PATH_CACHE[0] == cache_key:
+        return _MODEL_PATH_CACHE[1]
 
     # 1) explicit env var
     env_val = os.environ.get("IDA_MCP_EMBED_MODEL", "")
@@ -433,20 +449,33 @@ def _find_model() -> str:
             except Exception:
                 continue
             if os.path.isfile(expanded):
-                _MODEL_PATH_CACHE = os.path.abspath(expanded)
-                return _MODEL_PATH_CACHE
+                selected = os.path.abspath(expanded)
+                _MODEL_PATH_CACHE = (cache_key, selected)
+                return selected
 
     # 2) embedder.json manual override
-    state = _read_embedder_state()
     manual = _select_state_path(state.get("model_path"))
-    if manual:
-        _MODEL_PATH_CACHE = manual
-        return _MODEL_PATH_CACHE
+    state_profile = str(state.get("profile") or "").strip().lower()
+    if state_profile:
+        state_profile = (get_model_profile(state_profile) or BGE_CODE_V1).key
+    if manual and (
+        (
+            not state_profile
+            and profile_from_model(manual).key == requested_profile
+        )
+        or state_profile == requested_profile
+    ):
+        _MODEL_PATH_CACHE = (cache_key, manual)
+        return manual
 
     home = str(Path.home())
     install_root = _install_root()
     candidates: list[str] = []
-    model_filenames = ("bge-code-v1-q8_0.gguf", "bge-code-v1.gguf")
+    profile = get_model_profile(requested_profile) or BGE_CODE_V1
+    model_filenames = profile.filename_patterns
+    if not model_filenames:
+        _MODEL_PATH_CACHE = (cache_key, "")
+        return ""
     bases = [_PROJECT_ROOT, install_root, os.path.join(install_root, "models"),
              os.path.join(home, "models"),
              os.path.join(home, "Downloads"),
@@ -454,8 +483,8 @@ def _find_model() -> str:
     for base in bases:
         if not base:
             continue
-        for fn in model_filenames:
-            candidates.append(os.path.join(base, fn))
+        for pattern in model_filenames:
+            candidates.extend(glob.glob(os.path.join(base, pattern)))
 
     seen: set[str] = set()
     for c in candidates:
@@ -467,24 +496,22 @@ def _find_model() -> str:
             continue
         seen.add(p)
         if os.path.isfile(p):
-            _MODEL_PATH_CACHE = p
+            _MODEL_PATH_CACHE = (cache_key, p)
             return p
 
     # 6) Hugging Face cache snapshots for local model files
     hf_root = os.path.join(home, ".cache", "huggingface", "hub")
     if os.path.isdir(hf_root):
         for p in glob.glob(
-            os.path.join(hf_root, "models--*", "snapshots", "*", "bge-code-v1*.gguf")
+            os.path.join(hf_root, "models--*", "snapshots", "*", model_filenames[0])
         ):
             if os.path.isfile(p):
-                _MODEL_PATH_CACHE = os.path.abspath(p)
-                return _MODEL_PATH_CACHE
+                selected = os.path.abspath(p)
+                _MODEL_PATH_CACHE = (cache_key, selected)
+                return selected
 
-    _MODEL_PATH_CACHE = ""
+    _MODEL_PATH_CACHE = (cache_key, "")
     return ""
-
-
-EMBED_DIM = 1536          # bge-code-v1 embedding dimension
 
 
 def _safe_int_env(key: str, default: str) -> int:
@@ -538,9 +565,128 @@ EMBED_REQUEST_TIMEOUT = _safe_float_env("IDA_MCP_EMBED_REQUEST_TIMEOUT", "5.0")
 EMBED_BATCH_REQUEST_TIMEOUT = _safe_float_env(
     "IDA_MCP_EMBED_BATCH_REQUEST_TIMEOUT", "60.0"
 )
+EMBED_LOCK_TIMEOUT = _safe_float_env("IDA_MCP_EMBED_LOCK_TIMEOUT", "30.0")
+EMBED_MAX_REQUESTS = _safe_int_env("IDA_MCP_EMBED_MAX_REQUESTS", "512")
+EMBED_MAX_RSS_MB = _safe_int_env("IDA_MCP_EMBED_MAX_RSS_MB", "0")
+EMBED_MAX_RSS_GROWTH_MB = _safe_int_env("IDA_MCP_EMBED_MAX_RSS_GROWTH_MB", "768")
 EMBED_MAX_FAILURES = _safe_int_env("IDA_MCP_EMBED_MAX_FAILURES", "2")
+# Keep the large CPU model process only while it is useful.  Some llama.cpp
+# builds can retain a busy worker after a cancelled request, so an idle
+# server is both unnecessary memory pressure and a reliability risk.
+EMBED_IDLE_TIMEOUT = max(0.0, _safe_float_env("IDA_MCP_EMBED_IDLE_TIMEOUT", "15.0"))
+# An explicit operation can spend a little time decompiling before its first
+# embedding request.  Give that first request a longer grace period; every
+# completed request switches back to the normal short idle timeout above.
+EMBED_ACTIVATION_GRACE_TIMEOUT = max(
+    EMBED_IDLE_TIMEOUT,
+    _safe_float_env("IDA_MCP_EMBED_ACTIVATION_GRACE_TIMEOUT", "60.0"),
+)
 EMBED_DISABLED = os.environ.get("IDA_MCP_EMBED_DISABLED", "") in ("1", "true", "yes")
 INTEL_PROFILE = os.environ.get("IDA_MCP_INTEL_PROFILE", "") in ("1", "true", "yes")
+
+_EMBED_LEASE_SCHEMA = 2
+
+
+def _embed_request_lock_path() -> str:
+    """Keep the queue lock colocated with an overridable lease file."""
+    return _EMBED_LEASE_FILE + ".request.lock"
+
+
+def _embed_start_lock_path() -> str:
+    """Serialize lease check/start across independent MCP host processes."""
+    return _EMBED_LEASE_FILE + ".startup.lock"
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _process_command(pid: int) -> str:
+    if sys.platform.startswith("linux"):
+        try:
+            return Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(
+                "utf-8", errors="replace"
+            ).strip()
+        except OSError:
+            return ""
+    return ""
+
+
+def _process_start_token(pid: int) -> str:
+    if sys.platform.startswith("linux"):
+        try:
+            fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").split()
+            return fields[21] if len(fields) > 21 else ""
+        except OSError:
+            return ""
+    return ""
+
+
+def _process_rss_bytes(pid: int) -> int:
+    if sys.platform.startswith("linux"):
+        try:
+            for line in Path(f"/proc/{pid}/status").read_text(encoding="utf-8").splitlines():
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) * 1024
+        except (OSError, ValueError, IndexError):
+            pass
+    return 0
+
+
+class EmbeddingQueueTimeout(TimeoutError):
+    """The shared embedder is busy, but has not failed or been abandoned."""
+
+
+class _InterProcessLock:
+    """Small cross-platform advisory file lock with a bounded wait."""
+
+    def __init__(self, path: str, timeout: float):
+        self.path = path
+        self.timeout = max(0.0, timeout)
+        self.handle = None
+
+    def __enter__(self):
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        self.handle = open(self.path, "a+b")
+        deadline = time.monotonic() + self.timeout
+        while True:
+            try:
+                if sys.platform == "win32":
+                    import msvcrt
+                    self.handle.seek(0)
+                    msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except (BlockingIOError, OSError):
+                if time.monotonic() >= deadline:
+                    self.handle.close()
+                    self.handle = None
+                    raise EmbeddingQueueTimeout("embedding request queue is busy") from None
+                time.sleep(0.05)
+
+    def __exit__(self, exc_type, exc, tb):
+        if self.handle is None:
+            return False
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+                self.handle.seek(0)
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.handle.close()
+            self.handle = None
+        return False
 
 
 _IDENT_RE = re.compile(r'\b[A-Za-z_][A-Za-z0-9_]{2,}\b')
@@ -588,7 +734,7 @@ def _extract_signature(pseudocode: str, max_idents: int = 40) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TF-IDF fallback (works with zero dependencies when llama-server is absent)
+# Explicit unavailable result when llama-server or the model is absent
 # ─────────────────────────────────────────────────────────────────────────────
 
 class _EmbedResult:
@@ -613,12 +759,12 @@ class _EmbedResult:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# BgeCodeEmbedder — llama-server subprocess manager
+# BgeCodeEmbedder — profile-aware llama-server subprocess manager
 # ─────────────────────────────────────────────────────────────────────────────
 
 class BgeCodeEmbedder:
     """
-    Manages a llama-server subprocess running bge-code-v1.
+    Manages a llama-server subprocess for the selected embedding profile.
     Lazy start on first embed() call.  Thread-safe singleton per process.
 
     No silent fallback: if the model binary or server is unavailable,
@@ -641,6 +787,12 @@ class BgeCodeEmbedder:
     def _init(self) -> None:
         self._server_bin   = _find_llama_server()
         self._model_path   = _find_model()
+        state = _read_embedder_state()
+        requested_profile = os.environ.get("IDA_MCP_EMBED_PROFILE") or state.get("profile")
+        self._profile: EmbeddingModelProfile = profile_from_model(
+            self._model_path, str(requested_profile or "")
+        )
+        self._dimension = model_dimension(self._model_path, self._profile)
         self._port: int | None = None
         self._proc: subprocess.Popen | None = None
         self._ready        = False
@@ -649,17 +801,33 @@ class BgeCodeEmbedder:
                               and not EMBED_DISABLED)
         # Cached anchor embeddings for BehaviorClassifier
         self._anchor_cache: dict[str, list[float]] = {}
-        # Full decompilations are far larger than the short snippets used by
-        # interactive semantic search.  Eight is a dependable CPU-only
-        # starting point; successful calls can still grow it gradually.
-        self._batch_size = int(os.environ.get("IDA_MCP_EMBED_BATCH", "8"))
-        self._batch_size = max(1, min(64, self._batch_size))
+        # Full decompilations are much longer than search snippets.  Start
+        # with one document so a new CPU/model combination proves its actual
+        # latency before increasing work.  The cap follows available CPUs;
+        # users who benchmark a faster machine can still override it.
+        adaptive_max_batch = max(1, min(4, _EMBED_CPU_COUNT // 4))
+        self._max_batch_size = max(
+            1,
+            min(32, _safe_int_env("IDA_MCP_EMBED_MAX_BATCH", str(adaptive_max_batch))),
+        )
+        self._batch_size = max(
+            1,
+            min(
+                self._max_batch_size,
+                _safe_int_env("IDA_MCP_EMBED_BATCH", "1"),
+            ),
+        )
         self._batch_lock = threading.Lock()
         self._owns_proc = False
         self._stop_registered = False
         self._consecutive_rpc_failures = 0
         self._max_rpc_failures = max(1, EMBED_MAX_FAILURES)
         self._last_batch_timeout = False
+        self._last_recycle_reason = ""
+        self._identity_cache: dict[str, Any] | None = None
+        self._idle_lock = threading.Lock()
+        self._idle_timer: threading.Timer | None = None
+        self._idle_generation = 0
 
     def status(self, probe: bool = False, deep_hash: bool = False) -> dict:
         server_ready = bool(self._ready)
@@ -707,10 +875,18 @@ class BgeCodeEmbedder:
             "port": self._port,
             "owns_process": bool(self._owns_proc),
             "dim": self.dim,
+            "profile": self._profile.key,
+            "profile_name": self._profile.display_name,
+            "model_license": self._profile.license,
+            "query_document_prompts": bool(
+                self._profile.query_prefix or self._profile.document_prefix
+            ),
             "batch_size": int(self._batch_size),
+            "max_batch_size": int(self._max_batch_size),
             "max_input_chars": self.max_input_chars,
             "decomp_document_chars": self.decomp_document_chars,
             "consecutive_rpc_failures": int(self._consecutive_rpc_failures),
+            "last_recycle_reason": self._last_recycle_reason,
             "fingerprints": {
                 "model": model_fingerprint(self._model_path, deep_hash=deep_hash),
                 "server": server_fingerprint(self._server_bin, deep_hash=deep_hash),
@@ -729,38 +905,261 @@ class BgeCodeEmbedder:
             s.bind(("127.0.0.1", 0))
             return s.getsockname()[1]
 
+    def _lease_identity(self) -> dict[str, Any]:
+        cached = getattr(self, "_identity_cache", None)
+        if cached is not None:
+            return dict(cached)
+        model = model_fingerprint(self._model_path)
+        server = server_fingerprint(self._server_bin)
+        identity = {
+            "profile": self._profile.key,
+            "dimension": self.dim,
+            "model_path": os.path.realpath(self._model_path) if self._model_path else "",
+            "model_size": int(model.get("size") or 0),
+            "model_mtime_ns": int(model.get("mtime_ns") or 0),
+            "model_sha256_head": str(model.get("sha256_head_16mb") or ""),
+            "server_path": os.path.realpath(self._server_bin) if self._server_bin else "",
+            "server_size": int(server.get("size") or 0),
+            "server_mtime_ns": int(server.get("mtime_ns") or 0),
+        }
+        self._identity_cache = identity
+        return dict(identity)
+
+    @staticmethod
+    def _read_lease() -> dict[str, Any]:
+        try:
+            with open(_EMBED_LEASE_FILE, encoding="utf-8") as handle:
+                lease = json.load(handle)
+            return lease if isinstance(lease, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    @staticmethod
+    def _write_lease(lease: dict[str, Any]) -> None:
+        """Atomically publish a lease so readers never observe partial JSON."""
+        directory = os.path.dirname(_EMBED_LEASE_FILE) or "."
+        os.makedirs(directory, exist_ok=True)
+        temporary = (
+            f"{_EMBED_LEASE_FILE}.{os.getpid()}.{threading.get_ident()}.tmp"
+        )
+        try:
+            with open(temporary, "w", encoding="utf-8") as handle:
+                json.dump(lease, handle)
+            os.replace(temporary, _EMBED_LEASE_FILE)
+        finally:
+            with contextlib.suppress(OSError):
+                os.unlink(temporary)
+
+    @staticmethod
+    def _server_json(port: int, endpoint: str, timeout: float = 2.0) -> Any:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/{endpoint.lstrip('/')}", timeout=timeout
+        ) as response:
+            return json.loads(response.read())
+
+    def _lease_matches(self, lease: dict[str, Any]) -> bool:
+        try:
+            if int(lease.get("schema") or 0) != _EMBED_LEASE_SCHEMA:
+                return False
+            pid = int(lease.get("pid") or 0)
+            owner_pid = int(lease.get("owner_pid") or 0)
+            port = int(lease.get("port") or 0)
+        except (TypeError, ValueError):
+            return False
+        if not _pid_alive(pid) or not _pid_alive(owner_pid) or port <= 0:
+            return False
+        expected_start = str(lease.get("process_start_token") or "")
+        if expected_start and _process_start_token(pid) != expected_start:
+            return False
+        expected_owner_start = str(lease.get("owner_start_token") or "")
+        if expected_owner_start and _process_start_token(owner_pid) != expected_owner_start:
+            return False
+        identity = self._lease_identity()
+        for key, expected in identity.items():
+            if lease.get(key) != expected:
+                return False
+        if lease.get("recycle_requested"):
+            return False
+        try:
+            health = self._server_json(port, "health")
+            if not isinstance(health, dict) or health.get("status") != "ok":
+                return False
+            props = self._server_json(port, "props")
+            served_model = os.path.realpath(str(props.get("model_path") or ""))
+            if served_model != identity["model_path"]:
+                return False
+        except Exception:
+            return False
+        return True
+
+    def _pid_is_expected_server(self, pid: int, lease: dict[str, Any] | None = None) -> bool:
+        command = _process_command(pid)
+        if not command:
+            # On platforms without process-command inspection, only terminate
+            # a process represented by a current, identity-bearing lease.
+            return bool(lease and int(lease.get("schema") or 0) == _EMBED_LEASE_SCHEMA)
+        server_path = str((lease or {}).get("server_path") or self._server_bin or "")
+        model_path = str((lease or {}).get("model_path") or self._model_path or "")
+        return bool(
+            "llama-server" in command
+            and "--embedding" in command
+            and (not server_path or server_path in command)
+            and (not model_path or model_path in command)
+        )
+
+    def _retire_lease_process(self, lease: dict[str, Any], reason: str) -> None:
+        try:
+            pid = int(lease.get("pid") or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        if pid > 0 and _pid_alive(pid) and self._pid_is_expected_server(pid, lease):
+            with contextlib.suppress(OSError):
+                os.kill(pid, 15)
+            deadline = time.monotonic() + 3.0
+            while _pid_alive(pid) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            if _pid_alive(pid):
+                with contextlib.suppress(OSError):
+                    os.kill(pid, 9)
+        with contextlib.suppress(OSError):
+            current = self._read_lease()
+            if not current or current.get("pid") == lease.get("pid"):
+                os.unlink(_EMBED_LEASE_FILE)
+        self._last_recycle_reason = reason
+        self._ready = False
+        if getattr(self, "_proc", None) is not None and getattr(self._proc, "pid", None) == pid:
+            # Popen.poll() reaps a terminated direct child.  Without it, a
+            # timeout/recycle path can leave zombies under a long-lived host.
+            with contextlib.suppress(Exception):
+                self._proc.wait(timeout=0.1)
+            self._proc = None
+        self._owns_proc = False
+
+    def _cancel_idle_shutdown(self) -> None:
+        """Cancel a pending idle retirement before embedding work begins."""
+        lock = getattr(self, "_idle_lock", None)
+        if lock is None:
+            return
+        with lock:
+            self._idle_generation += 1
+            timer = self._idle_timer
+            self._idle_timer = None
+        if timer is not None:
+            timer.cancel()
+
+    def _schedule_idle_shutdown(self, timeout: float | None = None) -> None:
+        """Retire an unused local server without affecting another host's lease."""
+        delay = EMBED_IDLE_TIMEOUT if timeout is None else max(0.0, timeout)
+        if delay <= 0.0:
+            return
+        lock = getattr(self, "_idle_lock", None)
+        if lock is None:
+            return
+        with lock:
+            self._idle_generation += 1
+            generation = self._idle_generation
+            previous = self._idle_timer
+            timer = threading.Timer(delay, self._shutdown_if_idle, args=(generation,))
+            timer.daemon = True
+            self._idle_timer = timer
+        if previous is not None:
+            previous.cancel()
+        timer.start()
+
+    def _shutdown_if_idle(self, generation: int) -> None:
+        lock = getattr(self, "_idle_lock", None)
+        if lock is None:
+            return
+        with lock:
+            if generation != self._idle_generation:
+                return
+            self._idle_timer = None
+        # A request can have crossed the process boundary immediately before
+        # this callback.  Ask llama.cpp before stopping anything.
+        if self._server_has_active_slots():
+            self._schedule_idle_shutdown()
+            return
+        self.stop()
+
+    def _server_has_active_slots(self) -> bool:
+        if not self._port or not self._read_lease():
+            return False
+        try:
+            slots = self._server_json(self._port, "slots")
+            return bool(
+                isinstance(slots, list)
+                and any(bool(slot.get("is_processing")) for slot in slots if isinstance(slot, dict))
+            )
+        except Exception:
+            return False
+
+    def _rss_limit_bytes(self) -> int:
+        if EMBED_MAX_RSS_MB > 0:
+            return EMBED_MAX_RSS_MB * 1024 * 1024
+        try:
+            model_size = os.path.getsize(self._model_path)
+        except OSError:
+            model_size = 0
+        return max(2 * 1024**3, int(model_size * 2.0) + 512 * 1024**2)
+
+    def _record_success_and_maybe_recycle(self) -> None:
+        lease = self._read_lease()
+        if not lease or not self._lease_matches(lease):
+            return
+        pid = int(lease.get("pid") or 0)
+        rss = _process_rss_bytes(pid)
+        baseline = int(lease.get("baseline_rss") or 0)
+        count = int(lease.get("request_count") or 0) + 1
+        lease.update({"request_count": count, "rss": rss, "updated_at": time.time()})
+        reason = ""
+        if EMBED_MAX_REQUESTS > 0 and count >= EMBED_MAX_REQUESTS:
+            reason = f"request limit reached ({count})"
+        elif rss and rss > self._rss_limit_bytes():
+            reason = f"RSS limit exceeded ({rss // (1024 * 1024)} MiB)"
+        elif baseline and rss - baseline > EMBED_MAX_RSS_GROWTH_MB * 1024 * 1024:
+            reason = f"RSS growth exceeded ({(rss - baseline) // (1024 * 1024)} MiB)"
+        if reason:
+            self._retire_lease_process(lease, reason)
+            return
+        with contextlib.suppress(OSError):
+            self._write_lease(lease)
+
     def _start_server(self) -> bool:
         with self._start_lock:
+            try:
+                with _InterProcessLock(_embed_start_lock_path(), EMBED_LOCK_TIMEOUT):
+                    return self._start_server_locked()
+            except EmbeddingQueueTimeout:
+                # A peer is starting or replacing the shared server.  Do not
+                # race it by spawning another process; a later call can attach.
+                return False
+
+    def _start_server_locked(self) -> bool:
+        with contextlib.nullcontext():
             if self._ready:
                 return True
             # Reuse existing shared embed server when available.
             # Check this regardless of _use_llama — paths may not have
             # been available at init time but a server is already running.
-            try:
-                if os.path.isfile(_EMBED_LEASE_FILE):
-                    with open(_EMBED_LEASE_FILE, encoding="utf-8") as f:
-                        lease = json.load(f)
-                    port = int(lease.get("port") or 0)
-                    if port > 0:
-                        try:
-                            req = urllib.request.urlopen(
-                                f"http://127.0.0.1:{port}/health", timeout=2
-                            )
-                            if b'"status":"ok"' in req.read():
-                                self._port = port
-                                self._ready = True
-                                self._owns_proc = False
-                                self._use_llama = True
-                                return True
-                        except Exception:
-                            pass
-            except Exception:
-                pass
+            lease = self._read_lease()
+            if lease and self._lease_matches(lease):
+                self._port = int(lease["port"])
+                self._ready = True
+                self._owns_proc = False
+                self._use_llama = True
+                return True
+            if lease:
+                self._retire_lease_process(lease, "stale or incompatible lease")
             # Re-check paths: they may not have been available at init
             # (e.g. embedder.json written after singleton creation).
             if not self._use_llama:
                 self._server_bin = _find_llama_server()
                 self._model_path = _find_model()
+                state = _read_embedder_state()
+                requested_profile = os.environ.get("IDA_MCP_EMBED_PROFILE") or state.get("profile")
+                self._profile = profile_from_model(self._model_path, str(requested_profile or ""))
+                self._dimension = model_dimension(self._model_path, self._profile)
+                self._identity_cache = None
                 self._use_llama = (
                     bool(self._server_bin) and bool(self._model_path)
                     and not EMBED_DISABLED
@@ -775,8 +1174,9 @@ class BgeCodeEmbedder:
                 "--port",     str(self._port),
                 "--ctx-size", str(EMBED_CTX),
                 "--batch-size", str(max(EMBED_CTX, 2048)),
-                "--ubatch-size", str(max(EMBED_CTX, 2048)),
+                "--ubatch-size", str(min(max(256, EMBED_CTX // 4), 512)),
                 "--pooling", "mean",
+                "--parallel", "1",
                 "--threads",  str(EMBED_THREADS),
                 "--threads-batch", str(EMBED_BATCH_THREADS),
                 "--n-predict", "0",
@@ -821,16 +1221,20 @@ class BgeCodeEmbedder:
                     if b'"status":"ok"' in req.read():
                         self._ready = True
                         try:
-                            with open(_EMBED_LEASE_FILE, "w", encoding="utf-8") as f:
-                                json.dump(
-                                    {
-                                        "pid": self._proc.pid if self._proc else None,
-                                        "owner_pid": os.getpid(),
-                                        "port": self._port,
-                                        "updated_at": time.time(),
-                                    },
-                                    f,
-                                )
+                            pid = self._proc.pid if self._proc else 0
+                            payload = {
+                                "schema": _EMBED_LEASE_SCHEMA,
+                                "pid": pid,
+                                "owner_pid": os.getpid(),
+                                "owner_start_token": _process_start_token(os.getpid()),
+                                "process_start_token": _process_start_token(pid),
+                                "port": self._port,
+                                "baseline_rss": _process_rss_bytes(pid),
+                                "request_count": 0,
+                                "updated_at": time.time(),
+                            }
+                            payload.update(self._lease_identity())
+                            self._write_lease(payload)
                         except Exception:
                             pass
                         return True
@@ -844,6 +1248,7 @@ class BgeCodeEmbedder:
             return False
 
     def stop(self) -> None:
+        self._cancel_idle_shutdown()
         owned_pid = self._proc.pid if self._owns_proc and self._proc else None
         try:
             with open(_EMBED_LEASE_FILE, encoding="utf-8") as f:
@@ -886,8 +1291,17 @@ class BgeCodeEmbedder:
         self._owns_proc = False
 
     def ensure_ready(self) -> bool:
-        """Start or attach to the shared embedding server."""
-        return bool(self._start_server())
+        """Explicitly start or attach to the shared embedding server.
+
+        Routine tool enrichment must not make a cold model start.  Callers
+        that genuinely need semantic work (indexing or semantic search) use
+        this entry point first; the server then retires if no request arrives.
+        """
+        self._cancel_idle_shutdown()
+        ready = bool(self._start_server())
+        if ready:
+            self._schedule_idle_shutdown(EMBED_ACTIVATION_GRACE_TIMEOUT)
+        return ready
 
     # ── embedding ──────────────────────────────────────────────────────────
 
@@ -910,61 +1324,44 @@ class BgeCodeEmbedder:
             return None
         return [float(x) for x in vec]
 
-    def _llama_embed(self, text: str) -> list[float] | None:
-        if not self._ready and not self._start_server():
-            return None
-        try:
-            body = json.dumps({"input": text, "encoding_format": "float"}).encode()
-            req = urllib.request.Request(
-                f"http://127.0.0.1:{self._port}/embeddings",
-                data=body,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=EMBED_REQUEST_TIMEOUT) as resp:
-                data = json.loads(resp.read())
-            if isinstance(data, dict):
-                item = (data.get("data") or [None])[0]
-            elif isinstance(data, list):
-                item = data[0]
-            else:
-                item = None
-            vec = self._extract_embedding(item) if item else None
-            if vec is None:
-                raise RuntimeError("no embedding in response")
-            vec = [x for x in vec if math.isfinite(x)]
-            if not vec:
-                return []
-            norm = math.sqrt(sum(x * x for x in vec)) or 1.0
-            self._consecutive_rpc_failures = 0
-            return [x / norm for x in vec]
-        except ( OSError, ValueError, KeyError, json.JSONDecodeError, RuntimeError ):
-            self._consecutive_rpc_failures += 1
-            if self._consecutive_rpc_failures >= self._max_rpc_failures:
-                # Transient failure — mark not-ready but allow retry.
-                self._ready = False
-                self._consecutive_rpc_failures = 0
-            return None
-
-    def _llama_embed_batch(self, texts: list[str]) -> list[list[float]] | None:
+    def _request_embeddings(
+        self,
+        texts: list[str],
+        *,
+        purpose: str,
+        timeout: float,
+    ) -> list[list[float]] | None:
         if not texts:
             return []
-        self._last_batch_timeout = False
-        if not self._ready and not self._start_server():
+        # Do not make ordinary tools pay for a cold model start.  Explicit
+        # indexing/search calls activate the backend with ensure_ready();
+        # incidental context/behavior enrichment simply degrades gracefully.
+        if not self._ready:
             return None
+        self._cancel_idle_shutdown()
         try:
-            body = json.dumps({"input": texts, "encoding_format": "float"}).encode()
-            req = urllib.request.Request(
-                f"http://127.0.0.1:{self._port}/embeddings",
-                data=body,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(
-                req,
-                timeout=max(EMBED_REQUEST_TIMEOUT, EMBED_BATCH_REQUEST_TIMEOUT),
-            ) as resp:
-                data = json.loads(resp.read())
+            with _InterProcessLock(
+                _embed_request_lock_path(), min(EMBED_LOCK_TIMEOUT, timeout)
+            ):
+                # With the request lock held, an already-processing slot can
+                # only be an abandoned request from a timed-out/older client.
+                if self._server_has_active_slots():
+                    self._retire_lease_process(
+                        self._read_lease(), "abandoned embedding request"
+                    )
+                    return None
+                profile = getattr(self, "_profile", BGE_CODE_V1)
+                formatted = [profile.format_text(text, purpose) for text in texts]
+                payload: str | list[str] = formatted[0] if len(formatted) == 1 else formatted
+                body = json.dumps({"input": payload, "encoding_format": "float"}).encode()
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{self._port}/embeddings",
+                    data=body,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    data = json.loads(resp.read())
             if isinstance(data, dict):
                 rows = data.get("data") or []
             elif isinstance(data, list):
@@ -972,28 +1369,65 @@ class BgeCodeEmbedder:
             else:
                 rows = []
             if len(rows) != len(texts):
-                return None
+                raise RuntimeError("embedding response count mismatch")
+            if all(isinstance(row, dict) and isinstance(row.get("index"), int) for row in rows):
+                rows = sorted(rows, key=lambda row: row["index"])
             out: list[list[float]] = []
             for row in rows:
                 vec = self._extract_embedding(row) if isinstance(row, dict) else None
                 if vec is None:
-                    return None
+                    raise RuntimeError("no embedding in response")
                 vec = [x for x in vec if math.isfinite(x)]
                 if not vec:
-                    return None
+                    raise RuntimeError("empty embedding in response")
+                if self.dim and len(vec) != self.dim:
+                    raise RuntimeError(
+                        f"embedding dimension mismatch: expected {self.dim}, got {len(vec)}"
+                    )
                 norm = math.sqrt(sum(x * x for x in vec)) or 1.0
                 out.append([x / norm for x in vec])
             self._consecutive_rpc_failures = 0
+            self._record_success_and_maybe_recycle()
             return out
+        except EmbeddingQueueTimeout:
+            # Another valid client owns the single-server queue.  This is a
+            # load-shedding event, never evidence that the server is wedged.
+            return None
         except (OSError, ValueError, KeyError, json.JSONDecodeError, RuntimeError) as exc:
-            self._last_batch_timeout = isinstance(exc, (TimeoutError, socket.timeout))
+            if isinstance(exc, (TimeoutError, socket.timeout)):
+                self._last_batch_timeout = True
+                self._retire_lease_process(self._read_lease(), "embedding request timeout")
             self._consecutive_rpc_failures += 1
             if self._consecutive_rpc_failures >= self._max_rpc_failures:
+                # Transient failure — mark not-ready but allow retry.
                 self._ready = False
                 self._consecutive_rpc_failures = 0
             return None
+        finally:
+            # Even a failed request may leave a llama.cpp worker spinning.
+            # The bounded idle lifecycle makes that state self-healing.
+            if self._ready:
+                self._schedule_idle_shutdown()
 
-    def embed(self, text: str) -> _EmbedResult:
+    def _llama_embed(self, text: str, purpose: str = "document") -> list[float] | None:
+        rows = self._request_embeddings(
+            [text], purpose=purpose, timeout=EMBED_REQUEST_TIMEOUT
+        )
+        return rows[0] if rows else None
+
+    def _llama_embed_batch(
+        self, texts: list[str], purpose: str = "document"
+    ) -> list[list[float]] | None:
+        if not texts:
+            return []
+        self._last_batch_timeout = False
+        return self._request_embeddings(
+            texts,
+            purpose=purpose,
+            timeout=max(EMBED_REQUEST_TIMEOUT, EMBED_BATCH_REQUEST_TIMEOUT),
+        )
+
+    def embed(self, text: str, purpose: str = "document") -> _EmbedResult:
         """Return an :class:`_EmbedResult` for *text*.
 
         When the real model is unavailable, ``result.ok`` is False and
@@ -1001,21 +1435,35 @@ class BgeCodeEmbedder:
         no silent fallback to a weaker backend.
         """
         if self._use_llama:
-            vec = self._llama_embed(text)
+            vec = self._llama_embed(text, purpose=purpose)
             if vec is not None:
-                return _EmbedResult(vec, "bge-code-v1", True)
+                return _EmbedResult(vec, self.backend, True)
         return _EmbedResult(None, "unavailable", False)
 
-    def embed_vector(self, text: str) -> list[float] | None:
+    def embed_vector(self, text: str, purpose: str = "document") -> list[float] | None:
         """Convenience wrapper returning the embedding vector or None.
 
         Use this when you only need the vector and want None to mean
         "embedding unavailable" without inspecting the full result object.
         """
-        result = self.embed(text)
+        result = self.embed(text, purpose=purpose)
         return result.vector if result.ok else None
 
-    def embed_batch(self, texts: list[str]) -> list[_EmbedResult]:
+    def embed_query(self, text: str) -> _EmbedResult:
+        return self.embed(text, purpose="query")
+
+    def embed_query_vector(self, text: str) -> list[float] | None:
+        return self.embed_vector(text, purpose="query")
+
+    def embed_document(self, text: str) -> _EmbedResult:
+        return self.embed(text, purpose="document")
+
+    def embed_documents(self, texts: list[str]) -> list[_EmbedResult]:
+        return self.embed_batch(texts, purpose="document")
+
+    def embed_batch(
+        self, texts: list[str], purpose: str = "document"
+    ) -> list[_EmbedResult]:
         """Batch version of :meth:`embed`.  Each text gets its own result
         object so callers can identify exactly which items failed."""
         if not texts:
@@ -1025,26 +1473,23 @@ class BgeCodeEmbedder:
         out: list[_EmbedResult] = []
 
         def embed_chunk(chunk: list[str]) -> list[_EmbedResult]:
-            """Embed a chunk, subdividing it rather than losing it on timeout."""
             if not chunk:
                 return []
-            vecs = self._llama_embed_batch(chunk)
+            vecs = self._llama_embed_batch(chunk, purpose=purpose)
             if vecs is not None:
                 self._last_batch_timeout = False
                 with self._batch_lock:
-                    if self._batch_size < 64 and len(chunk) == self._batch_size:
+                    max_batch = int(getattr(self, "_max_batch_size", 32) or 32)
+                    if self._batch_size < max_batch and len(chunk) == self._batch_size:
                         self._batch_size += 1
-                return [_EmbedResult(v, "bge-code-v1", True) for v in vecs]
-            if len(chunk) == 1 or not getattr(self, "_last_batch_timeout", False):
-                return [_EmbedResult(None, "unavailable", False) for _ in chunk]
-
-            # A large request may exceed the batch deadline even though each
-            # individual embedding is valid. Retry smaller chunks so index
-            # construction is complete instead of silently dropping functions.
-            split_at = len(chunk) // 2
-            with self._batch_lock:
-                self._batch_size = min(self._batch_size, split_at)
-            return embed_chunk(chunk[:split_at]) + embed_chunk(chunk[split_at:])
+                return [_EmbedResult(v, self.backend, True) for v in vecs]
+            # llama-server does not reliably cancel work when an HTTP client
+            # times out. Never enqueue recursive retries behind abandoned work;
+            # the timed-out server has already been recycled.
+            if getattr(self, "_last_batch_timeout", False):
+                with self._batch_lock:
+                    self._batch_size = max(1, min(self._batch_size, len(chunk) // 2 or 1))
+            return [_EmbedResult(None, "unavailable", False) for _ in chunk]
 
         i = 0
         while i < len(texts):
@@ -1053,11 +1498,17 @@ class BgeCodeEmbedder:
             chunk = texts[i : i + bs]
             out.extend(embed_chunk(chunk))
             i += len(chunk)
+            if not self._ready and self._last_recycle_reason:
+                out.extend(
+                    _EmbedResult(None, "unavailable", False)
+                    for _ in texts[i:]
+                )
+                break
         return out
 
     @property
     def dim(self) -> int:
-        return EMBED_DIM
+        return int(getattr(self, "_dimension", 0) or 0)
 
     @property
     def max_input_chars(self) -> int:
@@ -1075,7 +1526,16 @@ class BgeCodeEmbedder:
 
     @property
     def backend(self) -> str:
-        return "bge-code-v1" if self._use_llama else "unavailable"
+        profile = getattr(self, "_profile", BGE_CODE_V1)
+        return profile.key if self._use_llama else "unavailable"
+
+    @property
+    def embedding_format(self) -> str:
+        profile = getattr(self, "_profile", BGE_CODE_V1)
+        prompt_hash = hashlib.sha256(
+            f"{profile.query_prefix}\0{profile.document_prefix}\0{profile.suffix}".encode()
+        ).hexdigest()[:12]
+        return f"profile-v1:{profile.key}:{prompt_hash}"
 
     @staticmethod
     def cosine(a: list[float], b: list[float]) -> float:
@@ -1097,9 +1557,8 @@ class BehaviorClassifier:
     untrained pattern matchers.
     """
 
-    # Anchors are written as pseudo-code patterns rather than keyword lists so
-    # bge-code-v1 (code-specialized, last-token pooling) embeds them in the
-    # same space as actual decompiled pseudocode.
+    # Anchors are written as pseudo-code patterns so a code embedding profile
+    # can compare them against actual decompiled pseudocode.
     ANCHORS: dict[str, str] = {
         "crypto_symmetric": "state = load_block(input); round = 0; while (round < nr) { state ^= round_keys[round]; sub_bytes(state, sbox); shift_rows(state); if (round != nr - 1) mix_columns(state, gf_mul); round++; } store_block(out, state ^ round_keys[nr]); key_schedule(key, round_keys);",
         "crypto_hash": "ctx->h0 = 0x67452301; ctx->h1 = 0xefcdab89; while (len >= 64) { compress_block(ctx, block); block += 64; len -= 64; } pad_and_finalize(ctx); digest[0] = bswap32(ctx->h0); digest[1] = bswap32(ctx->h1); if (hmac) inner_outer_hash(ctx, key_block);",
@@ -1140,13 +1599,11 @@ class BehaviorClassifier:
         with cls._shared_lock:
             if cls._shared is None:
                 cls._shared = cls(embedder)
-                cls._shared._preload_anchors_async()
             elif cls._shared._embedder is not embedder:
                 # Rebind the shared classifier when the embedding backend changes.
                 # This keeps anchor similarity scores aligned with the active embedder.
                 cls._shared._embedder = embedder
                 cls._shared.clear_cache()
-                cls._shared._preload_anchors_async()
         return cls._shared
 
     def __init__(self, embedder: BgeCodeEmbedder):
@@ -1193,7 +1650,7 @@ class BehaviorClassifier:
             result = self._embedder.embed(self.ANCHORS[behavior])
             # Production always returns _EmbedResult; some tests mock the
             # embedder to return a raw list. Treat anything without .ok
-            # as a failure so the preload thread doesn't crash.
+            # as an unavailable embedding.
             if hasattr(result, "ok"):
                 if not result.ok or result.vector is None:
                     return None
@@ -1210,21 +1667,6 @@ class BehaviorClassifier:
             self._anchor_embs.setdefault(behavior, vec)
         return self._anchor_embs.get(behavior)
 
-    def _preload_anchors_async(self) -> None:
-        """Load all anchors in background, one at a time, no lock contention."""
-        def _load():
-            with self._anchor_lock:
-                generation = self._anchor_generation
-            # Snapshot the keys so a concurrent clear_cache can't mutate
-            # the dict mid-iteration (RuntimeError: dict changed size).
-            behaviors = list(self.ANCHORS)
-            for b in behaviors:
-                with self._anchor_lock:
-                    if b in self._anchor_embs:
-                        continue
-                self._get_anchor(b, generation=generation)   # embeds outside lock
-        threading.Thread(target=_load, daemon=True, name="anchor-preload").start()
-
     def classify_vec(
         self,
         query_vec: list[float],
@@ -1236,8 +1678,7 @@ class BehaviorClassifier:
         Classify a pre-computed embedding vector against all behavior anchors.
 
         block=False (default): uses only anchors already in cache — returns
-            immediately even if preload isn't done yet.  May return fewer
-            behaviors on the very first call, but is never slow.
+            immediately when anchors have not been explicitly refreshed.
         block=True: embeds any missing anchors inline — complete results
             but may take up to 14 × embed_time on the first call.
         """
@@ -1311,14 +1752,15 @@ class BehaviorClassifier:
         Embeds text and delegates to classify_vec.
 
         Each result carries a ``backend`` field so callers can tell whether
-        the score came from bge-code-v1 or from a failed embedding.  No
+        the score came from the selected local profile or from a failed embedding. No
         keyword-bonus is applied on top of the embedding score — the cosine
         similarity is the confidence.
         """
         if not text or not text.strip():
             return []
         query = _extract_signature(text[:max_tokens]) or text[:max_tokens]
-        result = self._embedder.embed(query)
+        embed_query = getattr(self._embedder, "embed_query", None)
+        result = embed_query(query) if callable(embed_query) else self._embedder.embed(query)
         if not result.ok or result.vector is None:
             return []
         rows = self.classify_vec(result.vector, threshold=threshold, top_k=top_k, block=block)

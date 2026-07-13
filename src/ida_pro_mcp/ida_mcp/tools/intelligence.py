@@ -701,6 +701,28 @@ def intelligence(
 
         embedder = BgeCodeEmbedder()
 
+        # Embeddings are an opt-in workload.  Do not let ordinary context or
+        # behavior enrichment cold-start llama.cpp; only the operations whose
+        # public purpose is semantic indexing/retrieval activate it.
+        embedding_actions = {
+            "refresh_anchors",
+            "classify_text",
+            "classify_function",
+            "index_function",
+            "index_batch",
+            "index_fast",
+            "index_range",
+            "similar_functions",
+            "semantic_search",
+            "blackboard_search",
+        }
+        if action in embedding_actions and not embedder.ensure_ready():
+            return make_error(
+                MCPError.IDA_ERROR,
+                "Embedding backend unavailable; semantic operation was not started.",
+                hint="Configure an embedding model and llama-server, then retry.",
+            )
+
         def _classifier():
             # Indexing and semantic search do not use behavior anchors. Starting
             # their 22 background embeddings here competes with the function
@@ -1005,6 +1027,9 @@ def intelligence(
             selected = remaining_candidates[:limit] if limit else remaining_candidates
             has_more = len(selected) < len(remaining_candidates)
             next_cursor = hex(selected[-1][0]) if has_more and selected else None
+            retry_required = False
+            retry_cursor = None
+            retry_remaining = 0
 
             try:
                 env_commit_batch = int(os.environ.get("IDA_MCP_INDEX_COMMIT_BATCH", "0") or 0)
@@ -1066,13 +1091,34 @@ def intelligence(
                 batch_result = idx.index_many(pending)
                 embed_seconds += time.monotonic() - embed_started
                 count += int(batch_result["indexed"])
-                failures += int(batch_result["failed"])
+                batch_failed = int(batch_result["failed"])
+                failures += batch_failed
+                if batch_failed:
+                    # A timed-out llama-server cannot reliably cancel its
+                    # in-flight request.  The embedder recycles it, so stop
+                    # this IDA call immediately and resume from before this
+                    # batch.  Advancing past it would falsely mark a full
+                    # decompilation index complete while silently losing
+                    # functions.
+                    retry_required = True
+                    retry_cursor = (
+                        hex(selected[offset - 1][0]) if offset else
+                        (hex(start_after) if start_after is not None else None)
+                    )
+                    retry_remaining = len(selected) - offset
+                    break
             if count == 0:
                 return make_error(
                     MCPError.IDA_ERROR,
                     "No embeddings were created; semantic search is unavailable.",
-                    hint="Configure bge-code-v1 and llama-server, then retry indexing.",
-                    details={"failed": failures, "skipped": skipped, "index_path": db_path},
+                    hint="Check embedder_status, then retry indexing after the returned cursor.",
+                    details={
+                        "failed": failures,
+                        "skipped": skipped,
+                        "index_path": db_path,
+                        "retry_required": retry_required,
+                        "next_cursor": retry_cursor,
+                    },
                 )
             _persist_embedder_state(idx, action_label)
             quality_counts = idx.quality_counts()
@@ -1091,10 +1137,17 @@ def intelligence(
                 "skipped": skipped,
                 "eligible": eligible_count,
                 "pass_limit": limit or None,
-                "complete": not has_more,
-                "fully_indexed": not has_more and failures == 0 and quality_coverage >= eligible_count,
-                "remaining": max(0, len(remaining_candidates) - len(selected)),
-                "next_cursor": next_cursor,
+                "complete": not has_more and not retry_required,
+                "fully_indexed": (
+                    not has_more and not retry_required and failures == 0
+                    and quality_coverage >= eligible_count
+                ),
+                "remaining": (
+                    retry_remaining + max(0, len(remaining_candidates) - len(selected))
+                    if retry_required else max(0, len(remaining_candidates) - len(selected))
+                ),
+                "next_cursor": retry_cursor if retry_required else next_cursor,
+                "retry_required": retry_required,
                 "ranges_specified": len(ranges),
                 "index": {
                     "path": db_path,

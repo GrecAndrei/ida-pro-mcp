@@ -22,6 +22,12 @@ def main() -> int:
     parser.add_argument("--ida-dir", help="Directory containing idat or idat64")
     parser.add_argument("--idat", help="Explicit idat/idat64 executable")
     parser.add_argument("--binary", help="Optional binary; otherwise compile the deterministic fixture")
+    parser.add_argument(
+        "--embed-profile", choices=["bge-code-v1", "zembed-1"],
+        help="Optional local embedding profile for semantic coverage",
+    )
+    parser.add_argument("--embed-model", help="Optional GGUF model path for semantic coverage")
+    parser.add_argument("--embed-server-bin", help="Optional llama-server path for semantic coverage")
     parser.add_argument("--call-timeout", type=int, default=180, help="Maximum seconds for one MCP call or IDA startup")
     parser.add_argument("--pytest-timeout", type=int, default=600, help="Maximum seconds for each pytest case")
     args = parser.parse_args()
@@ -35,6 +41,12 @@ def main() -> int:
         env["IDA_MCP_LIVE_IDAT"] = str(Path(args.idat).expanduser().resolve())
     if args.binary:
         env["IDA_MCP_LIVE_BINARY"] = str(Path(args.binary).expanduser().resolve())
+    if args.embed_profile:
+        env["IDA_MCP_EMBED_PROFILE"] = args.embed_profile
+    if args.embed_model:
+        env["IDA_MCP_EMBED_MODEL"] = str(Path(args.embed_model).expanduser().resolve())
+    if args.embed_server_bin:
+        env["IDA_MCP_EMBED_SERVER_BIN"] = str(Path(args.embed_server_bin).expanduser().resolve())
 
     return subprocess.run(
         [

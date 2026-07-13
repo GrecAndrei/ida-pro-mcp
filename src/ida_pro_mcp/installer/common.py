@@ -19,9 +19,12 @@ class InstallerOptions:
     install_claude_skills: bool = True  # install skills for Claude Code / OpenCode
     interactive: bool | None = None
     embed_auto: bool = True
+    embed_profile: str = "bge-code-v1"
     embed_model_path: str = ""
     embed_server_bin: str = ""
     install_llama_server: bool = False
+    download_embed_model: bool = False
+    accept_model_license: bool = False
     embedder_doctor: bool = False
     setup_embedder: bool = False
     only: set[str] = field(default_factory=set)

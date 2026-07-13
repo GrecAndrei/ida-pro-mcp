@@ -1,5 +1,6 @@
 import os
 import sys
+import threading
 import unittest
 import urllib.error
 from unittest import mock
@@ -11,7 +12,7 @@ if SRC not in sys.path:
 
 import contextlib
 
-from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder
+from ida_pro_mcp.host.intelligence.core import BehaviorClassifier, BgeCodeEmbedder
 
 
 class TestBgeCodeEmbedderFailOpen(unittest.TestCase):
@@ -36,6 +37,7 @@ class TestBgeCodeEmbedderFailOpen(unittest.TestCase):
         emb._use_llama = True
         emb._ready = True
         emb._port = 9
+        emb._dimension = 2
         emb._max_rpc_failures = 2
         emb._consecutive_rpc_failures = 0
 
@@ -62,6 +64,7 @@ class TestBgeCodeEmbedderFailOpen(unittest.TestCase):
         emb._use_llama = True
         emb._ready = True
         emb._port = 9
+        emb._dimension = 2
         emb._max_rpc_failures = 2
         emb._consecutive_rpc_failures = 1
 
@@ -78,11 +81,41 @@ class TestBgeCodeEmbedderFailOpen(unittest.TestCase):
         self.assertEqual(emb._consecutive_rpc_failures, 0)
         self.assertTrue(emb._use_llama)
 
+    def test_incidental_embed_does_not_launch_a_cold_server(self):
+        """Routine enrichment fails closed until an explicit semantic action activates it."""
+        emb = BgeCodeEmbedder()
+        emb._use_llama = True
+        emb._ready = False
+
+        with mock.patch("ida_pro_mcp.host.intelligence.core.subprocess.Popen") as popen:
+            result = emb.embed("ordinary tool context")
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.vector)
+        popen.assert_not_called()
+
+    def test_constructing_classifier_does_not_preload_anchors(self):
+        """Ordinary tool setup must not queue background model work."""
+        old_shared = BehaviorClassifier._shared
+        BehaviorClassifier._shared = None
+        called = threading.Event()
+
+        class Embedder:
+            def embed(self, _text):
+                called.set()
+
+        try:
+            BehaviorClassifier.instance(Embedder())
+            self.assertFalse(called.wait(0.15))
+        finally:
+            BehaviorClassifier._shared = old_shared
+
     def test_embed_batch_marks_not_ready_after_repeated_rpc_failures(self):
         emb = BgeCodeEmbedder()
         emb._use_llama = True
         emb._ready = True
         emb._port = 9
+        emb._dimension = 2
         emb._batch_size = 2
         emb._max_rpc_failures = 2
         emb._consecutive_rpc_failures = 0
@@ -107,6 +140,7 @@ class TestBgeCodeEmbedderFailOpen(unittest.TestCase):
         emb._use_llama = True
         emb._ready = True
         emb._port = 9
+        emb._dimension = 2
         emb._batch_size = 2
         emb._max_rpc_failures = 2
         emb._consecutive_rpc_failures = 1

@@ -18,7 +18,6 @@ from typing import Any
 
 from . import helpers as _helpers
 from .core import (
-    EMBED_DIM,
     BehaviorClassifier,
     BgeCodeEmbedder,
     FunctionEmbeddingIndex,
@@ -947,7 +946,7 @@ class ContextAssembler:
             "llama_server_bin": self._embedder._server_bin or "not found",
             "model_path": self._embedder._model_path or "not found",
             "model_ready": self._embedder._ready,
-            "embed_dim": EMBED_DIM,
+            "embed_dim": self._embedder.dim,
             "indexes": {
                 idb: {"functions_indexed": idx.size}
                 for idb, idx in self._indexes.items()
