@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Core-path smoke for Tier A agent workflow (live IDA required).
+"""Core-path smoke for the public agent workflow (live IDA required).
 
 Exercises:
-  session.create → state → analysis.wait → search.find →
-  (optional) intelligence.index_fast → search.nl → code.decompile →
-  blackboard.write → session.close
+  ida_open_binary → ida_session_state → ida_find → ida_decompile →
+  ida_write_finding → optional ida_index_functions/ida_semantic_search
 
 Usage:
   python scripts/smoke_core_path.py --binary /path/to/bin
@@ -41,7 +40,7 @@ def _call(client, tool: str, args: dict, label: str) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--binary", required=True, help="Path to binary to open")
-    ap.add_argument("--with-nl", action="store_true", help="Also run index_fast + search.nl")
+    ap.add_argument("--with-nl", action="store_true", help="Also run indexing + semantic search")
     ap.add_argument("--timeout", type=int, default=120)
     args = ap.parse_args()
 
@@ -70,32 +69,31 @@ def main() -> int:
     try:
         created = _call(
             client,
-            "session",
-            {"action": "create", "binary_path": str(binary)},
-            "session.create",
+            "ida_open_binary",
+            {"binary_path": str(binary)},
+            "ida_open_binary",
         )
         created.get("session_id") or created.get("sid")
 
-        _call(client, "session", {"action": "state"}, "session.state")
-        _call(client, "analysis", {"action": "wait"}, "analysis.wait")
+        _call(client, "ida_session_state", {}, "ida_session_state")
 
         find_res = _call(
             client,
-            "search",
-            {"action": "find", "pattern": "main", "limit": 5},
-            "search.find",
+            "ida_find",
+            {"query": "main", "limit": 5},
+            "ida_find",
         )
         addr = None
         items = find_res.get("items") or []
         if items and isinstance(items[0], dict):
             addr = items[0].get("addr") or items[0].get("ea")
         if not addr:
-            # fall back to first function via data.functions if available
+            # Fall back to the first listed function if no match has an address.
             data_res = _call(
                 client,
-                "data",
-                {"action": "functions", "count": 1},
-                "data.functions",
+                "ida_list_functions",
+                {"limit": 1},
+                "ida_list_functions",
             )
             funcs = data_res.get("functions") or data_res.get("items") or []
             if funcs and isinstance(funcs[0], dict):
@@ -104,47 +102,45 @@ def main() -> int:
         if addr:
             _call(
                 client,
-                "code",
-                {"action": "decompile", "addrs": str(addr)},
-                "code.decompile",
+                "ida_decompile",
+                {"address": str(addr)},
+                "ida_decompile",
             )
             _call(
                 client,
-                "blackboard",
+                "ida_write_finding",
                 {
-                    "action": "write",
-                    "addr": str(addr),
+                    "address": str(addr),
                     "category": "smoke",
                     "title": "core_path_smoke",
                     "confidence": 0.5,
                 },
-                "blackboard.write",
+                "ida_write_finding",
             )
 
         if args.with_nl:
             _call(
                 client,
-                "intelligence",
-                {"action": "index_fast"},
-                "intelligence.index_fast",
+                "ida_index_functions",
+                {},
+                "ida_index_functions",
             )
             _call(
                 client,
-                "search",
-                {"action": "nl", "query": "entry point or main", "mode": "quick", "limit": 5},
-                "search.nl",
+                "ida_semantic_search",
+                {"query": "entry point or main", "mode": "quick", "limit": 5},
+                "ida_semantic_search",
             )
 
         print("core-path smoke PASSED")
         return 0
     finally:
-        if True:
-            try:
-                _call(client, "session", {"action": "close"}, "session.close")
-            except SystemExit:
-                pass
-            except Exception as e:
-                print(f"session.close cleanup: {e}", file=sys.stderr)
+        try:
+            _call(client, "ida_close_session", {}, "ida_close_session")
+        except SystemExit:
+            pass
+        except Exception as e:
+            print(f"session cleanup: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

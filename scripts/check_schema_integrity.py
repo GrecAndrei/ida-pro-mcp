@@ -16,6 +16,7 @@ def main() -> int:
     sys.path.insert(0, str(repo_root / "src"))
 
     from ida_pro_mcp.host import schemas
+    from ida_pro_mcp.host.agent_operations import list_agent_operations
     from ida_pro_mcp.host.schemas_data import (  # pylint: disable=import-error
         TOOL_ACTIONS,
         TOOL_ARG_SCHEMAS,
@@ -49,13 +50,48 @@ def main() -> int:
         if not isinstance(schema, dict):
             errors.append(f"TOOL_ARG_SCHEMAS[{tool!r}] must be dict")
 
+    # The public agent surface is intentionally smaller than the legacy
+    # tool/action backend. Validate the translation contract here so a new
+    # operation cannot be advertised without a valid backend destination.
+    operations = list_agent_operations()
+    operation_names = [operation.name for operation in operations]
+    if len(set(operation_names)) != len(operation_names):
+        errors.append("agent operation registry contains duplicate names")
+    for operation in operations:
+        schema = operation.input_schema
+        if not operation.name.startswith("ida_"):
+            errors.append(f"agent operation {operation.name!r} must start with 'ida_'")
+        if not isinstance(schema, dict) or schema.get("type") != "object":
+            errors.append(f"agent operation {operation.name!r} must have an object input schema")
+            continue
+        if schema.get("additionalProperties") is not False:
+            errors.append(f"agent operation {operation.name!r} must reject unknown arguments")
+        if not isinstance(schema.get("properties"), dict):
+            errors.append(f"agent operation {operation.name!r} must define properties as an object")
+        validation_error = operation.validate(operation.example)
+        if validation_error:
+            errors.append(f"agent operation {operation.name!r} has an invalid example: {validation_error}")
+        if operation.help_only:
+            continue
+        if not operation.backend_tool or not operation.backend_action:
+            errors.append(f"agent operation {operation.name!r} is missing a backend mapping")
+        elif operation.backend_tool not in TOOL_ACTIONS:
+            errors.append(
+                f"agent operation {operation.name!r} maps to unknown tool {operation.backend_tool!r}"
+            )
+        elif operation.backend_action not in TOOL_ACTIONS[operation.backend_tool]:
+            errors.append(
+                f"agent operation {operation.name!r} maps to unknown action "
+                f"{operation.backend_tool}.{operation.backend_action}"
+            )
+
     if errors:
         print("Schema integrity check failed:", file=sys.stderr)
         for err in errors:
             print(f"- {err}", file=sys.stderr)
         return 1
 
-    print(f"Schema integrity OK: {len(tool_set)} tools")
+    print(f"Schema integrity OK: {len(tool_set)} legacy tools, {len(operations)} agent operations")
     return 0
 
 

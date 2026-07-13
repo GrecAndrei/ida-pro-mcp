@@ -750,7 +750,12 @@ def intelligence(
                 return make_error(MCPError.IDA_ERROR, "failed to decompile function")
             idx, db_path = _index_for_current_idb()
             name = ida_funcs.get_func_name(ea) or hex(ea)
-            idx.index(hex(ea), name, pseudo)
+            if not idx.index(hex(ea), name, pseudo):
+                return make_error(
+                    MCPError.IDA_ERROR,
+                    "Embedding backend unavailable; the function was not indexed.",
+                    hint="Configure bge-code-v1 and llama-server, then retry indexing.",
+                )
             _persist_embedder_state(idx, "index_function")
             return {
                 "ok": True,
@@ -911,10 +916,19 @@ def intelligence(
                         "is_thunk": is_thunk,
                         "cyclomatic": cyclomatic,
                     }
-                    idx.index(hex(fea), name, text, metadata=md)
-                    count += 1
+                    if idx.index(hex(fea), name, text, metadata=md):
+                        count += 1
+                    else:
+                        failures += 1
                 except Exception:
                     failures += 1
+            if count == 0:
+                return make_error(
+                    MCPError.IDA_ERROR,
+                    "No embeddings were created; semantic search is unavailable.",
+                    hint="Configure bge-code-v1 and llama-server, then retry indexing.",
+                    details={"failed": failures, "skipped": skipped, "index_path": db_path},
+                )
             _persist_embedder_state(idx, action_label)
             return {
                 "ok": True,

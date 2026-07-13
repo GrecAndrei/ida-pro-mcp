@@ -291,7 +291,7 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
 
     opts.skills_mode = _prompt_choice(
         "Codex skills mode",
-        ["router", "full", "none"],
+        ["agent", "none"],
         opts.skills_mode,
     )
 
@@ -436,9 +436,11 @@ def install_codex_skills(source_root: Path, mode: str, report: InstallReport, dr
     if not source_root_skills.exists():
         report.add_warning("skills source not found; skipping")
         return
-    selected = [p for p in source_root_skills.iterdir() if p.is_dir() and (p / "SKILL.md").exists()]
-    if mode == "router":
-        selected = [p for p in selected if p.name == "ida-tool-router"]
+    agent_skill = source_root_skills / "ida-pro-mcp"
+    if not (agent_skill / "SKILL.md").exists():
+        report.add_warning("agent skill source not found; regenerate skills before installing")
+        return
+    selected = [agent_skill]
     codex_skills = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser() / "skills"
     if dry_run:
         report.add_step("skills", "dry-run", f"would install {len(selected)} entries to {codex_skills}")
@@ -477,7 +479,7 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         help="download and install llama-server automatically when embed model is enabled/found",
     )
     parser.add_argument("--no-embed-auto", action="store_true", help="disable automatic embedder/server discovery")
-    parser.add_argument("--skills-mode", choices=["router", "full", "none"], default="router", help="Codex skill installation mode")
+    parser.add_argument("--skills-mode", choices=["agent", "none"], default="agent", help="Codex skill installation mode")
     parser.add_argument("--install-skills", action="store_true", default=True, help="install auto-generated skills for Claude Code / OpenCode (default: on)")
     parser.add_argument("--no-install-skills", action="store_true", help="skip Claude Code / OpenCode skill installation")
 

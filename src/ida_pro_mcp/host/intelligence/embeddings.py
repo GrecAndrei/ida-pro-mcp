@@ -537,8 +537,8 @@ class FunctionEmbeddingIndex:
             return {}
         return rows
 
-    def index(self, func_ea: str, name: str, pseudocode: str, metadata: dict | None = None) -> None:
-        """Embed and store a function. Skips if pseudocode unchanged.
+    def index(self, func_ea: str, name: str, pseudocode: str, metadata: dict | None = None) -> bool:
+        """Embed and store a function, returning whether the index is usable.
 
         Optional metadata dict stores structural attributes for filtering:
         func_size, bb_count, has_loops, api_count, string_count, segment, is_thunk, cyclomatic
@@ -566,20 +566,20 @@ class FunctionEmbeddingIndex:
                                  md.get("is_thunk", 0), md.get("cyclomatic", 0), func_ea),
                             )
                             conn.commit()
-                        return  # completely unchanged
+                        return True  # completely unchanged, but already usable
                     conn.execute(
                         "UPDATE func_embeddings SET name=?, signature_text=?, signature_hash=?, indexed_at=? WHERE ea=?",
                         (name, signature_text, signature_hash, time.time(), func_ea),
                     )
                     self._meta_set(conn, "updated_at", _now_iso())
                     conn.commit()
-                    return
+                    return True
         except Exception:
             pass
 
         vec = self._embedder.embed_vector(pseudocode)
         if vec is None:
-            return None
+            return False
         blob = self._pack(vec)
         with self._cache_lock:
             self._cache[func_ea] = vec
@@ -641,7 +641,10 @@ class FunctionEmbeddingIndex:
                     self._meta_set(conn, k, v)
                 conn.commit()
         except Exception:
-            pass
+            with self._cache_lock:
+                self._cache.pop(func_ea, None)
+            return False
+        return True
 
     def index_async(self, func_ea: str, name: str, pseudocode: str, metadata: dict | None = None) -> None:
         """Non-blocking index: fire-and-forget in background thread."""
@@ -1054,4 +1057,3 @@ class FunctionEmbeddingIndex:
     def size(self) -> int:
         with self._cache_lock:
             return len(self._cache)
-

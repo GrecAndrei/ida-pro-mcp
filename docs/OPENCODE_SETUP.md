@@ -1,43 +1,27 @@
 # OpenCode Integration Guide
 
-[OpenCode](https://opencode.ai) is an open source AI coding agent with MCP support.
-
-## Installation
-
-The IDA Pro MCP installer automatically configures OpenCode:
+The installer configures OpenCode and installs one portable `ida-pro-mcp`
+skill. Its operation reference is installed inside the skill directory, so it
+remains readable outside the source checkout.
 
 ```bash
 python install.py
 ```
 
-The installer writes `~/.config/opencode/opencode.json` and installs skills to `~/.config/opencode/skills/`.
-
-## Configuration
-
-The installer creates a config like this:
+The resulting MCP configuration starts `ida_pro_mcp.host.server`. Its default
+tool surface is `agent`: action-specific `ida_*` tools with complete JSON
+schemas.
 
 ```json
 {
-  "$schema": "https://opencode.ai/config.json",
   "mcp": {
     "ida-pro-mcp": {
       "type": "local",
-      "command": [
-        "/home/user/.local/share/ida-pro-mcp/.venv/bin/python",
-        "-u",
-        "-m",
-        "ida_pro_mcp.host.server"
-      ],
+      "command": ["/home/user/.local/share/ida-pro-mcp/.venv/bin/python", "-u", "-m", "ida_pro_mcp.host.server"],
       "enabled": true,
       "environment": {
+        "IDA_MCP_TOOL_SURFACE": "agent",
         "IDA_MCP_RESPONSE_MODE": "compact",
-        "IDA_MCP_QOL_MODE": "balanced",
-        "IDA_MCP_TOOLS_LIST_MODE": "ultra",
-        "IDA_MCP_BATCH_COMPACT": "1",
-        "IDA_MCP_COMPACT_MAX_ITEMS": "48",
-        "IDA_MCP_COMPACT_MAX_STRING": "1400",
-        "IDA_MCP_COMPACT_CHAR_BUDGET": "30000",
-        "IDA_MCP_TRUNCATE_TOKENS": "2000",
         "IDADIR": "/path/to/ida-pro"
       }
     }
@@ -45,48 +29,19 @@ The installer creates a config like this:
 }
 ```
 
-### Key environment variables
+## First calls
 
-| Variable | Value | Why |
-|----------|-------|-----|
-| `IDA_MCP_TOOLS_LIST_MODE` | `ultra` | ~9.5k tokens per `tools/list` call. `lean` is also available (~18k tokens). |
-| `IDA_MCP_RESPONSE_MODE` | `compact` | Compact responses by default. Use `_response_mode='full'` per-call when needed. |
-
-### MCP resources
-
-MCP resources (`ida://state`, `ida://blackboard/frontier`, etc.) are defined in the protocol but are **application-driven** — OpenCode does not auto-inject them into context. The LLM cannot read them autonomously.
-
-Use `session(action='state')` instead of `ida://state`.
-
-## Skills
-
-The installer copies auto-generated skills to `~/.config/opencode/skills/`:
-
-- `ida-start` — orientation, IDA key shortcuts, first-turn playbook
-- `ida-core` — session, batch, bookmarks, truncation
-- `ida-analysis` — decompile, search, data, funcs, types, modify
-- `ida-security` — classify, gadgets, crypto, ABI, deobfuscate
-- `ida-advanced` — ctree, microcode, graph, imports, export, history
-- `ida-debug` — debugger, coverage, traces
-- `ida-workflow` — blackboard, firmware, intelligence, taint, governance
-- `ida-project` — save/load IDB, scripts, recent files
-
-Invoke with `/ida-start`, `/ida-analysis`, etc. in OpenCode.
-
-Regenerate after tool metadata changes:
-```bash
-ida-pro-mcp-install --only skills
+```text
+ida_open_binary(binary_path="/path/to/binary")
+ida_session_state()
+ida_overview()
+ida_find(query="recv")
+ida_decompile(address="0x401000")
 ```
 
-## Platform-specific notes
+Use `ida_help(topic="ida_decompile")` for an in-band schema and example. MCP
+resources are application-driven in OpenCode, so use `ida_session_state()`
+instead of expecting `ida://state` to be injected automatically.
 
-- **Linux/macOS**: config at `~/.config/opencode/opencode.json`, Python at `.venv/bin/python`
-- **Windows**: config at `%USERPROFILE%\.config\opencode\opencode.json`, Python at `.venv\Scripts\python.exe`
-
-## Troubleshooting
-
-**Server not loading**: Verify the `command` path points to the venv python and `IDADIR` is correct.
-
-**Large context usage**: Check that `IDA_MCP_TOOLS_LIST_MODE=ultra` (the default).
-
-**Changes not taking effect after reinstall**: Kill the running MCP server process so OpenCode relaunches it with the updated package.
+Set `IDA_MCP_TOOL_SURFACE=legacy` only for existing scripts that still call
+the older broad `tool(action=...)` APIs.

@@ -210,3 +210,6 @@ timeout = 30
 timeout_method = "thread"
 testpaths = ["tests"]
 addopts = "--ignore=tests/probes --ignore=tests/benchmarks"
+markers = [
+    "live_ida: starts a licensed IDA instance and performs real MCP integration testing",
+]

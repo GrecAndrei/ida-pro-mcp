@@ -51,10 +51,13 @@ LONG_RUNNING_ACTIONS: set[tuple[str, str]] = {
     ("summarize", "security_posture"),
     ("summarize", "report"),
     # intelligence — embedding-heavy ops
+    ("intelligence", "index_fast"),
     ("intelligence", "index_batch"),
+    ("intelligence", "index_range"),
     ("intelligence", "index_function"),
     ("intelligence", "refresh_anchors"),
     ("intelligence", "semantic_search"),
+    ("intelligence", "similar_functions"),
     # search — full-binary scans, graph BFS, embedding
     ("search", "find"),
     ("search", "bytes"),
@@ -1232,5 +1235,4 @@ class ServerDispatchMixin:
                     "No active session. Create one first with: session(action='create', binary_path='path/to/binary')",
                 )
             return self.call_tool(tool_name, ip, **args)
-
 

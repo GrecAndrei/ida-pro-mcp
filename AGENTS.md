@@ -3,7 +3,9 @@
 ## Project
 
 IDA Pro MCP — JSON-RPC stdio server exposing IDA Pro RE capabilities to LLMs.
-Tool-action model: each tool exposes multiple actions.
+
+The default agent surface is action-specific `ida_*` MCP operations. The old
+`tool(action=...)` API is a compatibility backend, not the public contract.
 
 ## Testing
 
@@ -28,11 +30,21 @@ Test behavior through stable interfaces, not implementation details.
 **What not to test:**
 - IDA-side tools that need a live IDA session (these are validated via MCP integration)
 
-## Adding a Tool
+## Adding an Agent Operation
+
+1. Add an `AgentOperation` to `host/agent_operations.py` with a strict schema,
+   valid example, concise description, and backend mapping.
+2. Add a behavior-focused public-contract test.
+3. Run `python scripts/generate_tool_skills.py`.
+
+The operation registry generates `tools/list`, `ida_help`, installed skill
+references, and `docs/TOOLS_REFERENCE.md`.
+
+## Adding a Legacy Backend Tool
 
 1. Create `ida_mcp/tools/<name>.py` with `@tool` function
 2. Add to `_TOOL_ACTIONS` in `host/server/tool_registry.py`
-3. Add to `TOOLS` + `ADVERTISED_TOOLS` in `host/schemas_data.py`
+3. Add to `TOOLS` in `host/schemas_data.py`
 4. Add description to `TOOL_DESCRIPTIONS`
 5. Add to `ida_mcp/tools/__init__.py::__all__`
 6. If host-side only: add `tool_name == "<name>"` branch in `server_dispatch.py`
@@ -47,20 +59,23 @@ Test behavior through stable interfaces, not implementation details.
 
 | File | Purpose |
 |------|---------|
-| `host/server/tool_registry.py` | `_TOOL_ACTIONS` dict |
-| `host/schemas_data.py` | `TOOLS`, `ADVERTISED_TOOLS`, `TOOL_DESCRIPTIONS` |
+| `host/agent_operations.py` | Public `ida_*` schemas, examples, mappings, help/docs source |
+| `host/server/tool_registry.py` | Legacy backend `_TOOL_ACTIONS` dict |
+| `host/schemas_data.py` | Legacy backend `TOOLS`, descriptions, RPC argument admission |
 | `host/server/server_dispatch.py` | Tool routing and handlers |
 | `ida_mcp/tools/__init__.py` | `__all__` list, `_TOOL_MODULE_MAP` |
 
 ## Invariants
 
 - Every tool in `TOOLS` has entry in `_TOOL_ACTIONS`
-- Every tool in `ADVERTISED_TOOLS` is in `TOOLS`
 - Every tool has description in `TOOL_DESCRIPTIONS`
+- Every public operation has a strict schema and an example that validates
+- Generated skill/docs match `agent_operations.py`
 
 ## Conventions
 
 - No marketing jargon in descriptions
-- Descriptions: one sentence + "Actions: a, b, c"
+- Public operation descriptions: one clear sentence; do not expose action enums
+- Legacy descriptions: one sentence + "Actions: a, b, c"
 - `@tool` decorator on IDA-side functions, `@idaread` for read-only
 - Wrapper actions (grep/pick/head/tail/next/stats) are dynamic — don't list in `_TOOL_ACTIONS`

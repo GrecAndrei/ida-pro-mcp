@@ -3,6 +3,7 @@
 
 import time
 
+from ..agent_operations import list_agent_operations
 from ..config import (
     EMBEDDING_FIRST_MODE,
     _bounded_int,
@@ -1058,6 +1059,34 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
         return batch_result
 
     def _build_tools_list_catalog(self, mode: str) -> list[dict]:
+        """Build the MCP catalog for the selected public interface.
+
+        ``agent`` is the default: every visible function has one purpose and
+        an exact input schema.  ``legacy`` retains the broad tool/action
+        catalog for scripts that explicitly opt into it.
+        """
+        if getattr(self, "tool_surface", "agent") == "agent":
+            cache_key = ("agent",)
+            cached = self._tools_list_cache.get(cache_key)
+            if cached and cached[0] == cache_key:
+                return cached[1]
+
+            catalog: list[dict] = []
+            for operation in list_agent_operations():
+                schema = dict(operation.input_schema)
+                if getattr(self, "vertex_compat", False):
+                    schema = sanitize_schema_for_vertex(schema)
+                catalog.append(
+                    {
+                        "name": operation.name,
+                        "description": operation.description,
+                        "inputSchema": schema,
+                        "category": operation.category,
+                    }
+                )
+            self._tools_list_cache[cache_key] = (cache_key, catalog)
+            return catalog
+
         cache_key = (mode,)
         cached = self._tools_list_cache.get(cache_key)
         if cached and cached[0] == cache_key:

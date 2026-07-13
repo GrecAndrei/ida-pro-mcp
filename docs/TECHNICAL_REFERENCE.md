@@ -1,92 +1,47 @@
-# IDA Pro MCP - Technical Reference
+# IDA Pro MCP Technical Reference
 
-Architecture and design decisions for the IDA Pro MCP server.
+## Public contract
 
-## Overview
+`src/ida_pro_mcp/host/agent_operations.py` is the single source of truth for
+the agent-facing MCP interface. Each `AgentOperation` contains:
 
-IDA Pro MCP is a JSON-RPC stdio server that exposes IDA Pro's reverse
-engineering capabilities to LLM clients. It uses a tool-action model where
-each tool (e.g., `code`, `search`, `intelligence`) exposes multiple actions
-(e.g., `decompile`, `find`, `index_fast`).
+- a public `ida_*` name and concise description;
+- a strict JSON input schema and a valid example;
+- a mapping to one legacy backend tool/action; and
+- data used to generate `ida_help`, the installed skill reference, and
+  `docs/TOOLS_REFERENCE.md`.
 
-## Tool-Action Model
+The host server advertises this catalog by default. It validates public
+arguments before translating a call into the existing IDA backend dispatcher.
+The backend continues to perform policy checks, session selection, RPC
+admission, and execution.
 
-```
-tool:code
-  ├── action:decompile      → Hex-Rays decompilation
-  ├── action:disasm         → Disassembly listing
-  ├── action:smart_decompile→ Decompile + CFG + behavior tags
-  └── action:diff_functions → Compare two functions
+## Compatibility backend
 
-tool:search
-  ├── action:find           → Search names, strings, imports
-  ├── action:nl             → Natural language (embedding-based)
-  ├── action:vulnerable     → Dangerous API pattern scan
-  └── action:semantic       → Embedding-index similarity
-```
+`src/ida_pro_mcp/ida_mcp/tools/` and the associated registry retain the older
+`tool(action=...)` implementation for existing scripts. Set
+`IDA_MCP_TOOL_SURFACE=legacy` to advertise that interface intentionally.
+
+New agent-facing features must not add a broad action enum. Add an exact
+`AgentOperation` instead, then expose only the operation needed by the
+workflow.
+
+## Adding an operation
+
+1. Add an `AgentOperation` in `host.agent_operations` with a strict schema,
+   example, backend mapping, and concise description.
+2. Add a behavior-focused contract test for the public schema and mapping.
+3. Run `python scripts/generate_tool_skills.py` to refresh the installed skill
+   and documentation reference.
+4. Run `python scripts/check_schema_integrity.py` and `pytest -q`.
 
 ## Architecture
 
+```text
+MCP client
+  → agent_operations (schema validation + mapping)
+  → host server (policy, sessions, response handling)
+  → legacy tool/action dispatcher
+  → local TCP bridge
+  → IDA Pro SDK
 ```
-src/ida_pro_mcp/
-├── ida_mcp/
-│   ├── tools/              ← IDA-side tool implementations
-│   │   ├── code.py         ← @tool decorated functions
-│   │   ├── search/         ← Package (basic + advanced)
-│   │   └── __init__.py     ← Lazy loader + _TOOL_MODULE_MAP
-│   └── support/            ← Shared IDA-side helpers
-├── host/
-│   ├── schemas_data.py     ← TOOLS, ADVERTISED_TOOLS, descriptions
-│   ├── server/
-│   │   ├── tool_registry.py    ← _TOOL_ACTIONS dict
-│   │   ├── server_dispatch.py  ← Routes tool→handler
-│   │   └── server.py           ← Main MCP server class
-│   └── config.py           ← Runtime configuration
-└── installer/              ← Installation and corpus setup
-```
-
-## Key Design Decisions
-
-### 1. Single Source of Truth
-
-Tool lists are defined in one place:
-- `host/server/tool_registry.py` → `_TOOL_ACTIONS` (action lists per tool)
-- `host/schemas_data.py` → `TOOLS` (all tools), `ADVERTISED_TOOLS` (exposed to LLM)
-
-All other locations derive from these.
-
-### 2. Embedding Index
-
-The `intelligence` tool manages a SQLite-backed embedding index:
-- `index_fast` — disassembly-based, seconds
-- `index_batch` — decompile-based, minutes (best quality)
-- `semantic_search` — cosine similarity over stored embeddings
-- `similar_functions` — nearest neighbors by embedding distance
-
-### 3. Contract Tests
-
-Tests exercise stable inputs and outputs. Contract tests verify that schema,
-dispatch, tool registries, and documentation remain synchronized without
-binding tests to private implementation details or file hashes.
-
-## Adding a New Tool
-
-1. Create `ida_mcp/tools/<name>.py` with an `@tool` decorated function
-2. Add to `_TOOL_ACTIONS` in `host/server/tool_registry.py`
-3. Add to `TOOLS` and, when appropriate, `ADVERTISED_TOOLS` in `host/schemas_data.py`
-4. Add description to `TOOL_DESCRIPTIONS`
-5. Add the module to `ida_mcp/tools/__init__.py::__all__`
-6. For a host-only tool, add its dispatch branch in `server_dispatch.py`
-7. Add behavior tests for host-side logic and run the schema integrity check
-
-## Removed Tools
-
-The following tools were removed to reduce complexity:
-
-| Tool | Reason |
-|------|--------|
-| `agent` | Superseded by `intelligence` tool |
-| `query` | Thin wrapper, no unique value |
-| `llm_helpers` | Replaced by standard tool composition |
-| `colorize` | Visual-only, no analysis value |
-| `predictor` | Heuristic-based, replaced by embedding search |

@@ -7,8 +7,44 @@ except ImportError:
 
 try:
     from .code_helpers import *
+    # ``import *`` intentionally omits private helper names. This dispatcher
+    # uses them directly, so import the implementation helpers explicitly.
+    from .code_helpers import (
+        _build_decompile_enrichment,
+        _build_decompiler_dataflow,
+        _collect_compact_callees,
+        _collect_compact_callers,
+        _collect_function_strings,
+        _compute_cfg_semantics,
+        _decompile_with_diagnostics,
+        _disasm_range,
+        _disasm_range_structured,
+        _disasm_window,
+        _get_next_func,
+        _get_prev_func,
+        _run_custom_detector,
+        _semantic_pseudocode_summary,
+        _trace_argument_origin,
+    )
 except ImportError:
     from code_helpers import *  # type: ignore[import-not-found]
+    from code_helpers import (  # type: ignore[import-not-found]
+        _build_decompile_enrichment,
+        _build_decompiler_dataflow,
+        _collect_compact_callees,
+        _collect_compact_callers,
+        _collect_function_strings,
+        _compute_cfg_semantics,
+        _decompile_with_diagnostics,
+        _disasm_range,
+        _disasm_range_structured,
+        _disasm_window,
+        _get_next_func,
+        _get_prev_func,
+        _run_custom_detector,
+        _semantic_pseudocode_summary,
+        _trace_argument_origin,
+    )
 
 @tool
 @idaread
@@ -1236,5 +1272,4 @@ def code(
 # ---------------------------------------------------------------------------
 # Argument origin tracer — backward BFS through callers
 # ---------------------------------------------------------------------------
-
 

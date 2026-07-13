@@ -18,6 +18,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 import contextlib  # noqa: E402
 
+from ..agent_operations import build_agent_help, get_agent_operation  # noqa: E402
 from ..analysis.context_density import ContextDensityOptimizer  # noqa: E402
 from ..analysis.patterns import GlobalFactsDatabase  # noqa: E402
 from ..config import (  # noqa: E402
@@ -97,6 +98,9 @@ class IDAMCPServer(
         )
         if tools_list_mode not in {"ultra", "lean"}:
             tools_list_mode = "ultra"
+        tool_surface = str(os.environ.get("IDA_MCP_TOOL_SURFACE", "agent")).strip().lower()
+        if tool_surface not in {"agent", "legacy"}:
+            tool_surface = "agent"
         detail_level = (
             str(os.environ.get("IDA_MCP_ERROR_DETAIL_LEVEL", "basic")).strip().lower()
         )
@@ -105,6 +109,7 @@ class IDAMCPServer(
         self.default_response_mode = mode
         self.default_qol_mode = qol_mode
         self.default_tools_list_mode = tools_list_mode
+        self.tool_surface = tool_surface
         self.default_error_detail_level = detail_level
         self.default_batch_compact = _env_bool("IDA_MCP_BATCH_COMPACT", True)
         # Heavy response enrichments are useful but can inflate context usage.
@@ -494,7 +499,8 @@ class IDAMCPServer(
                 "id": rid,
                 "result": {
                     "tools": tools_page,
-                    "mode": mode,
+                    "mode": "agent" if self.tool_surface == "agent" else mode,
+                    "surface": self.tool_surface,
                     "total": total,
                     "offset": offset,
                     "limit": limit,
@@ -503,13 +509,32 @@ class IDAMCPServer(
             }
         if m == "tools/call":
             tn, args = p.get("name"), p.get("arguments", {})
+            public_tool_name = str(tn or "")
+            operation = get_agent_operation(tn)
             resolved_tn = _resolve_tool_alias(tn)
             if isinstance(args, dict):
                 call_args, response_opts = self._extract_response_options(args)
             else:
                 call_args = args
                 response_opts = self._default_response_options()
-            if resolved_tn == "batch":
+
+            precomputed_result = None
+            if operation is not None:
+                validation_error = operation.validate(call_args)
+                if validation_error:
+                    precomputed_result = validation_error
+                elif operation.help_only:
+                    precomputed_result = build_agent_help(call_args)
+                else:
+                    # The public operation is validated before translation.
+                    # Backend calls still pass through their normal policy and
+                    # RPC admission layers after this mapping.
+                    tn, call_args = operation.to_backend_call(call_args)
+                    resolved_tn = _resolve_tool_alias(tn)
+
+            if precomputed_result is not None:
+                res = precomputed_result
+            elif resolved_tn == "batch":
                 if not isinstance(call_args, dict):
                     res = make_error(
                         MCPError.INVALID_ARGS, "arguments must be an object"
@@ -549,7 +574,7 @@ class IDAMCPServer(
             res = self._prepare_response_payload(
                 res,
                 response_opts,
-                tool_name=resolved_tn or str(tn or ""),
+                tool_name=public_tool_name if operation is not None else (resolved_tn or str(tn or "")),
                 call_args=call_args,
             )
             is_error = is_error_result(raw_res)

@@ -38,7 +38,7 @@ jobs:
         run: |
           python scripts/check_schema_integrity.py
           python scripts/generate_tool_skills.py
-          git diff --exit-code -- .agents/skills .agents/tool-docs
+          git diff --exit-code -- .agents/skills docs/TOOLS_REFERENCE.md
 
       - name: Run standalone test suite
         env:
