@@ -322,6 +322,48 @@ def test_live_session_discovery_and_index_surface(live_context: LiveContext):
     )
 
 
+def test_live_full_decomp_index_is_resumable_and_retrieves_behavior(live_context: LiveContext):
+    if os.environ.get("IDA_MCP_LIVE_BINARY"):
+        pytest.skip("deterministic semantic assertion requires the generated fixture")
+
+    client = live_context.client
+    cursor = None
+    passes: list[dict[str, Any]] = []
+    for _ in range(64):
+        arguments: dict[str, Any] = {"quality": "full", "limit": 8}
+        if cursor:
+            arguments["cursor"] = cursor
+        payload = _assert_ok(client.call("ida_index_functions", arguments), "ida_index_functions full")
+        passes.append(payload)
+        if payload.get("complete"):
+            break
+        cursor = payload.get("next_cursor")
+        assert cursor, f"incomplete full index did not return a cursor: {payload}"
+    else:
+        pytest.fail(f"full index did not complete after {len(passes)} passes")
+
+    assert sum(int(row.get("input", {}).get("pseudocode_chars", 0)) for row in passes) > 0
+    final_counts = passes[-1].get("index", {}).get("quality_counts", {})
+    assert int(final_counts.get("full", 0)) > 0, passes[-1]
+    assert passes[-1].get("fully_indexed") is True, passes[-1]
+
+    behavior_queries = {
+        "function that prints the fixed agent surface marker": "fixture_entry",
+        "function that updates a global side effect and adds seven": "fixture_leaf",
+        "function that multiplies a child function result by three": "fixture_helper",
+        "function that indexes a 96-entry string table using modulo": "fixture_mutation_target",
+    }
+    for query, expected_name in behavior_queries.items():
+        search = _assert_ok(
+            client.call(
+                "ida_semantic_search",
+                {"query": query, "mode": "quick", "limit": 5},
+            ),
+            "ida_semantic_search after full index",
+        )
+        assert expected_name in json.dumps(search).lower(), {"query": query, "search": search}
+
+
 def test_live_code_navigation_uses_fixture_symbols(live_context: LiveContext):
     client = live_context.client
     calls = (

@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 
 from ida_pro_mcp.host.agent_operations import build_agent_help, get_agent_operation, list_agent_operations
+from ida_pro_mcp.host.schemas import TOOL_ARG_SCHEMAS
+from ida_pro_mcp.host.server.rpc_args import prepare_rpc_args
 from ida_pro_mcp.host.server.server import IDAMCPServer
 
 
@@ -30,6 +32,23 @@ def test_find_translates_to_the_legacy_backend_without_losing_its_required_query
     assert backend_args == {"action": "find", "pattern": "recv", "limit": 5}
     assert operation.validate({"limit": 5})
     assert operation.validate({"query": "recv", "pattern": "wrong field"})
+
+
+def test_full_function_indexing_has_an_explicit_resumable_contract():
+    operation = get_agent_operation("ida_index_functions")
+    assert operation is not None
+    arguments = {"quality": "full", "limit": 16, "cursor": "0x401000"}
+    assert not operation.validate(arguments)
+    backend_tool, backend_args = operation.to_backend_call(arguments)
+    assert backend_tool == "intelligence"
+    assert backend_args == {
+        "action": "index_fast",
+        "mode": "full",
+        "index_limit": 16,
+        "start_after": "0x401000",
+    }
+    assert prepare_rpc_args(backend_tool, backend_args, TOOL_ARG_SCHEMAS) == backend_args
+    assert operation.validate({"quality": "lossy"})
 
 
 def test_help_is_in_band_and_returns_the_exact_visible_schema():

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -97,6 +98,21 @@ LONG_RUNNING_ACTIONS: set[tuple[str, str]] = {
     ("workflow", "plan"),
 }
 
+_EMBEDDING_RPC_ACTIONS = {
+    "intelligence": {
+        "refresh_anchors",
+        "classify_text",
+        "classify_function",
+        "index_function",
+        "index_batch",
+        "index_fast",
+        "index_range",
+        "similar_functions",
+        "semantic_search",
+    },
+    "search": {"nl", "behavior", "analyze"},
+}
+
 
 def _long_running_sock_timeout(tool_name: str, rpc_args: dict) -> int:
     """Compute the socket recv timeout for a (tool, action) call.
@@ -116,6 +132,16 @@ def _long_running_sock_timeout(tool_name: str, rpc_args: dict) -> int:
     action = str(rpc_args.get("action") or "")
     if (tool_name, action) not in LONG_RUNNING_ACTIONS:
         return -1
+
+    if tool_name == "intelligence" and (
+        action == "index_batch"
+        or (action in {"index_fast", "index_range"} and rpc_args.get("mode") == "full")
+    ):
+        try:
+            full_index_timeout = int(os.environ.get("IDA_MCP_FULL_INDEX_RPC_TIMEOUT", "600"))
+        except Exception:
+            full_index_timeout = 600
+        return min(max(120, full_index_timeout), cap)
 
     requested = (
         rpc_args.get("timeout")
@@ -215,6 +241,12 @@ class ServerDispatchMixin:
                 rpc_args = prepare_rpc_args(tool_name, kwargs, TOOL_ARG_SCHEMAS)
                 if is_error_result(rpc_args):
                     return rpc_args
+                # Keep the shared inference process owned by the MCP host.
+                # IDA-side tools attach through its lease instead of spawning
+                # a child of idat that can survive after the session exits.
+                if rpc_args.get("action") in _EMBEDDING_RPC_ACTIONS.get(tool_name, set()):
+                    with contextlib.suppress(Exception):
+                        self.assembler.ensure_embedding_server()
                 _t0 = time.time()
                 # Long-running actions get an extended socket recv timeout
                 # so the host doesn't kill the connection before IDA

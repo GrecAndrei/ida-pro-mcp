@@ -18,6 +18,8 @@ Environment variables:
   IDA_MCP_EMBED_THREADS      CPU threads (default: cpu_count // 2)
   IDA_MCP_EMBED_BATCH_THREADS CPU threads for batched indexing (default: up to 16)
   IDA_MCP_EMBED_CTX          context tokens (default: 2048)
+  IDA_MCP_DECOMP_DOCUMENT_FRACTION fraction of context used by full-decomp documents (default: 0.20)
+  IDA_MCP_DECOMP_DOCUMENT_CHARS explicit full-decomp document character budget
   IDA_MCP_EMBED_DISABLED     set to 1 to force TF-IDF fallback
 
 Manual override:
@@ -37,6 +39,7 @@ Discovery:
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import glob
 import hashlib
@@ -513,6 +516,9 @@ def _available_cpu_count() -> int:
 
 _EMBED_CPU_COUNT = _available_cpu_count()
 EMBED_CTX = _safe_int_env("IDA_MCP_EMBED_CTX", "2048")
+EMBED_CHARS_PER_TOKEN = _safe_float_env("IDA_MCP_EMBED_CHARS_PER_TOKEN", "3.0")
+DECOMP_DOCUMENT_FRACTION = _safe_float_env("IDA_MCP_DECOMP_DOCUMENT_FRACTION", "0.20")
+DECOMP_DOCUMENT_CHARS = _safe_int_env("IDA_MCP_DECOMP_DOCUMENT_CHARS", "0")
 EMBED_THREADS = _safe_int_env(
     "IDA_MCP_EMBED_THREADS",
     str(max(1, _EMBED_CPU_COUNT // 2))
@@ -650,6 +656,7 @@ class BgeCodeEmbedder:
         self._batch_size = max(1, min(64, self._batch_size))
         self._batch_lock = threading.Lock()
         self._owns_proc = False
+        self._stop_registered = False
         self._consecutive_rpc_failures = 0
         self._max_rpc_failures = max(1, EMBED_MAX_FAILURES)
         self._last_batch_timeout = False
@@ -701,6 +708,8 @@ class BgeCodeEmbedder:
             "owns_process": bool(self._owns_proc),
             "dim": self.dim,
             "batch_size": int(self._batch_size),
+            "max_input_chars": self.max_input_chars,
+            "decomp_document_chars": self.decomp_document_chars,
             "consecutive_rpc_failures": int(self._consecutive_rpc_failures),
             "fingerprints": {
                 "model": model_fingerprint(self._model_path, deep_hash=deep_hash),
@@ -794,6 +803,9 @@ class BgeCodeEmbedder:
                     env=_env,
                 )
                 self._owns_proc = True
+                if isinstance(self._proc.pid, int) and not self._stop_registered:
+                    atexit.register(self.stop)
+                    self._stop_registered = True
             except OSError:
                 self._ready = False
                 return False
@@ -810,7 +822,15 @@ class BgeCodeEmbedder:
                         self._ready = True
                         try:
                             with open(_EMBED_LEASE_FILE, "w", encoding="utf-8") as f:
-                                json.dump({"pid": self._proc.pid if self._proc else None, "port": self._port, "updated_at": time.time()}, f)
+                                json.dump(
+                                    {
+                                        "pid": self._proc.pid if self._proc else None,
+                                        "owner_pid": os.getpid(),
+                                        "port": self._port,
+                                        "updated_at": time.time(),
+                                    },
+                                    f,
+                                )
                         except Exception:
                             pass
                         return True
@@ -824,15 +844,50 @@ class BgeCodeEmbedder:
             return False
 
     def stop(self) -> None:
-        if self._owns_proc and self._proc and self._proc.poll() is None:
+        owned_pid = self._proc.pid if self._owns_proc and self._proc else None
+        try:
+            with open(_EMBED_LEASE_FILE, encoding="utf-8") as f:
+                lease = json.load(f)
+            lease_pid = int(lease.get("pid") or 0)
+            if int(lease.get("owner_pid") or 0) == os.getpid() and lease_pid > 0:
+                owned_pid = owned_pid or lease_pid
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            lease_pid = 0
+        if owned_pid and self._proc and self._proc.poll() is None:
             self._proc.terminate()
             try:
                 self._proc.wait(timeout=5)
             except Exception:
                 self._proc.kill()
+                with contextlib.suppress(Exception):
+                    self._proc.wait(timeout=2)
+        elif owned_pid and self._proc is None:
+            try:
+                os.kill(owned_pid, 15)
+                deadline = time.monotonic() + 2.0
+                while time.monotonic() < deadline:
+                    try:
+                        os.kill(owned_pid, 0)
+                    except OSError:
+                        break
+                    time.sleep(0.05)
+                else:
+                    os.kill(owned_pid, 9)
+            except OSError:
+                pass
+        if owned_pid:
+            try:
+                if lease_pid == owned_pid:
+                    os.unlink(_EMBED_LEASE_FILE)
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                pass
         self._ready = False
         self._proc = None
         self._owns_proc = False
+
+    def ensure_ready(self) -> bool:
+        """Start or attach to the shared embedding server."""
+        return bool(self._start_server())
 
     # ── embedding ──────────────────────────────────────────────────────────
 
@@ -1003,6 +1058,20 @@ class BgeCodeEmbedder:
     @property
     def dim(self) -> int:
         return EMBED_DIM
+
+    @property
+    def max_input_chars(self) -> int:
+        """Conservative character budget derived from the configured context."""
+        usable_tokens = max(512, EMBED_CTX - 128)
+        return max(1024, min(32768, int(usable_tokens * max(1.0, EMBED_CHARS_PER_TOKEN))))
+
+    @property
+    def decomp_document_chars(self) -> int:
+        """Signal-dense full-decomp document budget used during indexing."""
+        if DECOMP_DOCUMENT_CHARS > 0:
+            return max(1024, min(self.max_input_chars, DECOMP_DOCUMENT_CHARS))
+        fraction = max(0.1, min(1.0, DECOMP_DOCUMENT_FRACTION))
+        return max(1024, min(self.max_input_chars, int(self.max_input_chars * fraction)))
 
     @property
     def backend(self) -> str:

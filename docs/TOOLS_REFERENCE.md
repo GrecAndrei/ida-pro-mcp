@@ -226,13 +226,29 @@ Example:
 
 ## `ida_index_functions`
 
-Build the local function index required for semantic search.
+Build the function index for semantic search, using fast metadata or full Hex-Rays decompilation.
 
 Input schema:
 ```json
 {
   "type": "object",
   "properties": {
+    "quality": {
+      "type": "string",
+      "enum": [
+        "fast",
+        "full"
+      ],
+      "description": "fast scans metadata and disassembly; full decompiles functions in resumable passes for best retrieval quality."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Optional functions to process in this pass; full mode otherwise chooses an adaptive pass size."
+    },
+    "cursor": {
+      "type": "string",
+      "description": "Resume after the next_cursor returned by a limited indexing pass."
+    },
     "idb": {
       "type": "string",
       "description": "Optional session ID, IDB path, or binary path."
@@ -247,7 +263,9 @@ Example:
 ```json
 {
   "name": "ida_index_functions",
-  "arguments": {}
+  "arguments": {
+    "quality": "full"
+  }
 }
 ```
 

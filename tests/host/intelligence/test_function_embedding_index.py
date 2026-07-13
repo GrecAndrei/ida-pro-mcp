@@ -57,10 +57,57 @@ def test_index_many_persists_batch_results_for_a_fresh_reader(tmp_path):
     result = writer.index_many(
         [
             ("0x401000", "first", "first fixture pseudocode", None),
-            ("0x401100", "second", "second fixture pseudocode", {"func_size": 32}),
+            (
+                "0x401100",
+                "second",
+                "second fixture pseudocode",
+                {"func_size": 32, "index_quality": "full"},
+            ),
         ]
     )
 
     assert result == {"indexed": 2, "failed": 0}
     reader = FunctionEmbeddingIndex(db_path, _BatchEmbedder())
     assert reader.size == 2
+    assert reader.quality_counts() == {"full": 1, "unknown": 1}
+
+
+def test_fast_refresh_does_not_downgrade_an_existing_full_decomp_vector(tmp_path):
+    db_path = str(tmp_path / "sample.embeddings.db")
+    index = FunctionEmbeddingIndex(db_path, _BatchEmbedder())
+    assert index.index_many(
+        [("0x401000", "target", "deep_behavior_marker full pseudocode", {"index_quality": "full"})]
+    ) == {"indexed": 1, "failed": 0}
+
+    assert index.index_many(
+        [("0x401000", "renamed_target", "short fast signature", {"index_quality": "fast"})]
+    ) == {"indexed": 1, "failed": 0}
+
+    assert index.quality_counts() == {"full": 1}
+    matches = index.search_text("deep behavior marker", top_k=5)
+    assert matches and matches[0]["name"] == "renamed_target"
+
+
+def test_lexical_search_normalizes_behavior_verbs_and_print_apis(tmp_path):
+    index = FunctionEmbeddingIndex(str(tmp_path / "sample.embeddings.db"), _BatchEmbedder())
+    index.index_many(
+        [
+            (
+                "0x401000",
+                "fixture_entry",
+                'int fixture_entry(void) { puts("AGENT_SURFACE_MARKER"); }',
+                {"index_quality": "full"},
+            ),
+            (
+                "0x401100",
+                "fixture_leaf",
+                "int fixture_leaf(int value) { return value + 7; }",
+                {"index_quality": "full"},
+            ),
+        ]
+    )
+
+    matches = index.search_text("function that prints the fixed agent surface marker", top_k=2)
+
+    assert matches[0]["name"] == "fixture_entry"
+    assert {"print", "puts", "agent", "surface", "marker"}.intersection(matches[0]["matched_tokens"])

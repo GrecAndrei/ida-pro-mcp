@@ -218,12 +218,30 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     ),
     AgentOperation(
         name="ida_index_functions",
-        description="Build the local function index required for semantic search.",
+        description="Build the function index for semantic search, using fast metadata or full Hex-Rays decompilation.",
         category="discovery",
-        input_schema=_schema({"idb": IDB}),
-        example={},
+        input_schema=_schema(
+            {
+                "quality": {
+                    "type": "string",
+                    "enum": ["fast", "full"],
+                    "description": "fast scans metadata and disassembly; full decompiles functions in resumable passes for best retrieval quality.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Optional functions to process in this pass; full mode otherwise chooses an adaptive pass size.",
+                },
+                "cursor": {
+                    "type": "string",
+                    "description": "Resume after the next_cursor returned by a limited indexing pass.",
+                },
+                "idb": IDB,
+            }
+        ),
+        example={"quality": "full"},
         backend_tool="intelligence",
         backend_action="index_fast",
+        argument_map={"quality": "mode", "limit": "index_limit", "cursor": "start_after"},
     ),
     AgentOperation(
         name="ida_list_functions",
@@ -482,7 +500,9 @@ available.
 ## Working rules
 
 - Build the semantic index with `ida_index_functions()` before
-  `ida_semantic_search(...)`.
+  `ida_semantic_search(...)`. Use `quality="full"` when retrieval quality
+  matters; full indexing uses bounded passes, so repeat with the returned
+  `next_cursor` until `complete` is true.
 - Use hex address strings exactly as returned by tools.
 - `ida_rename` and `ida_comment` mutate the IDB. Set `risk_ack=true` only
   after verifying the target and intended change.

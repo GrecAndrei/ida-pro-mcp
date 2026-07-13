@@ -165,17 +165,23 @@ def search_nl(
                 reverse=True,
             )
 
-    # Phase 3: adaptive gating via quartiles on similarity scores
-    sims = [float(r.get("similarity") or 0.0) for r in raw_results]
-    if sims and min_score <= 0.0:
-        ss = sorted(sims)
+    # Phase 3: adaptive gating on the score used to rank the hybrid results.
+    # Gating only on raw cosine similarity discarded strong lexical matches
+    # (for example, an exact API or string reference) after hybrid_search had
+    # correctly promoted them.
+    def rank_score(result: dict) -> float:
+        return float(result.get("score") or result.get("similarity") or 0.0)
+
+    scores = [rank_score(r) for r in raw_results]
+    if scores and min_score <= 0.0:
+        ss = sorted(scores)
         q50 = ss[len(ss) // 2]
         q75 = ss[min(len(ss) - 1, int(round((len(ss) - 1) * 0.75)))]
         gate = q50 + max(0.0, q75 - q50)
-        filtered = [r for r in raw_results if float(r.get("similarity") or 0.0) >= gate]
+        filtered = [r for r in raw_results if rank_score(r) >= gate]
         raw_results = (filtered or raw_results)[:limit]
     elif min_score > 0.0:
-        raw_results = [r for r in raw_results if float(r.get("similarity") or 0.0) >= min_score][:limit]
+        raw_results = [r for r in raw_results if rank_score(r) >= min_score][:limit]
     else:
         raw_results = raw_results[:limit]
 

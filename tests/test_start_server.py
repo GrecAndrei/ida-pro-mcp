@@ -32,6 +32,7 @@ def _make_minimal_embedder():
     e._batch_size = 16
     e._batch_lock = __import__("threading").Lock()
     e._owns_proc = False
+    e._stop_registered = False
     e._consecutive_rpc_failures = 0
     e._max_rpc_failures = 2
     return e
@@ -107,6 +108,37 @@ class TestStartServerLeaseFilePriority(unittest.TestCase):
             result = e._start_server()
 
         self.assertFalse(result)
+
+    def test_stop_terminates_owned_server_and_removes_its_lease(self):
+        class FakeProcess:
+            pid = 12345
+
+            def __init__(self):
+                self.alive = True
+
+            def poll(self):
+                return None if self.alive else 0
+
+            def terminate(self):
+                self.alive = False
+
+            def wait(self, timeout=None):
+                return 0
+
+        process = FakeProcess()
+        embedder = _make_minimal_embedder()
+        embedder._proc = process
+        embedder._owns_proc = True
+        embedder._ready = True
+        with open(self._lease_file, "w", encoding="utf-8") as f:
+            json.dump({"pid": process.pid, "owner_pid": os.getpid(), "port": 5555}, f)
+
+        embedder.stop()
+
+        self.assertFalse(process.alive)
+        self.assertFalse(embedder._ready)
+        self.assertIsNone(embedder._proc)
+        self.assertFalse(os.path.exists(self._lease_file))
 
 
 class TestStartServerPathRecheck(unittest.TestCase):

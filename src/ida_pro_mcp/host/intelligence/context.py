@@ -936,6 +936,10 @@ class ContextAssembler:
         """Shut down the llama-server subprocess cleanly."""
         self._embedder.stop()
 
+    def ensure_embedding_server(self) -> bool:
+        """Ensure the host owns or is attached to the shared embedder."""
+        return self._embedder.ensure_ready()
+
     @property
     def status(self) -> dict[str, Any]:
         return {

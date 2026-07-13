@@ -282,6 +282,14 @@ class ServerRuntimeLeasesMixin:
             self._shutdown = True
             self._shutdown_requested = True
             self._stop_runtime_lease_heartbeat()
+            # Stop host-owned inference first. Runtime cleanup can wait on IDA
+            # long enough for stdio clients to escalate to SIGTERM; leaving
+            # this until the end allowed llama-server to be orphaned.
+            try:
+                if hasattr(self, "assembler") and self.assembler is not None:
+                    self.assembler.stop()
+            except Exception as e:
+                log_rpc(f"Failed to stop intelligence embedder: {e}")
             # Stop all analysis engines
             for sid in list(getattr(self, "_analysis_engines", {}).keys()):
                 with contextlib.suppress(Exception):
@@ -302,8 +310,3 @@ class ServerRuntimeLeasesMixin:
                     self._global_facts.close()
             except Exception as e:
                 log_rpc(f"Failed to close global facts DB: {e}")
-            try:
-                if hasattr(self, "assembler") and self.assembler is not None:
-                    self.assembler.stop()
-            except Exception as e:
-                log_rpc(f"Failed to stop intelligence embedder: {e}")

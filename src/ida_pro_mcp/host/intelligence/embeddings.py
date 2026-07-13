@@ -22,6 +22,19 @@ logger = logging.getLogger(__name__)
 
 _SEARCH_TOKEN_RE = re.compile(r"0x[0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]{1,}|\b\d+\b")
 _CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+_DECOMP_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b")
+_DECOMP_CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+_DECOMP_STRING_RE = re.compile(r'(?s)(?:L|u8|u|U)?"((?:\\.|[^"\\])*)"')
+_DECOMP_CONSTANT_RE = re.compile(r"\b(?:0x[0-9A-Fa-f]{2,}|\d{3,})\b")
+_DECOMP_NOISE = frozenset(
+    {
+        "auto", "bool", "break", "case", "char", "const", "continue", "default",
+        "do", "double", "else", "enum", "extern", "false", "float", "for", "goto",
+        "if", "inline", "int", "long", "null", "return", "short", "signed", "sizeof",
+        "static", "struct", "switch", "true", "typedef", "union", "unsigned", "void",
+        "volatile", "while", "this", "result", "value", "arg", "args", "ptr", "data",
+    }
+)
 
 # Consolidated noise-word set used by both text-search tokenisation and
 # signature extraction.  Kept in one place to avoid drift between the two
@@ -34,7 +47,7 @@ NOISE_WORDS = frozenset({
     "ptr", "tmp", "ret", "arg", "args", "result", "value", "values", "data",
     "var", "vars", "out", "dst", "src", "count", "index", "idx",
     "NULL", "sizeof", "else", "inline", "typedef", "goto", "continue",
-    "switch", "type", "flag", "mode", "num", "res", "val", "msg",
+    "switch", "type", "flag", "mode", "num", "res", "val", "msg", "function", "functions",
     "str", "memcpy", "memset", "memcmp", "memmove", "malloc", "calloc",
     "free", "printf", "sprintf", "strcpy", "strlen", "strcat", "strcmp",
 })
@@ -63,7 +76,181 @@ _TOKEN_SYNONYMS: dict[str, tuple[str, ...]] = {
     "overflow": ("bounds", "memcpy", "strcpy"),
     "uaf": ("use", "after", "free"),
     "format": ("printf", "syslog", "snprintf"),
+    "print": ("puts", "printf", "fprintf", "write"),
+    "prints": ("print", "puts", "printf", "fprintf", "write"),
 }
+_INDEX_QUALITY_RANK = {"unknown": 0, "fast_fallback": 1, "fast": 1, "full": 2}
+
+
+def _unique_matches(pattern: re.Pattern, text: str, limit: int) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for match in pattern.finditer(text):
+        value = match.group(1) if match.lastindex else match.group(0)
+        value = re.sub(r"\s+", " ", str(value or "")).strip()
+        key = value.lower()
+        if not value or key in seen:
+            continue
+        seen.add(key)
+        out.append(value)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _sample_pseudocode_lines(pseudocode: str, char_budget: int) -> str:
+    """Keep representative code from the whole function within a fixed budget."""
+    if char_budget <= 0:
+        return ""
+    lines = [re.sub(r"\s+", " ", line).strip() for line in pseudocode.splitlines()]
+    lines = [line for line in lines if line]
+    if not lines:
+        return ""
+    compact = "\n".join(lines)
+    if len(compact) <= char_budget:
+        return compact
+
+    priority: list[int] = []
+    seen_priority: set[int] = set()
+
+    def prioritize(index: int) -> None:
+        if index not in seen_priority:
+            seen_priority.add(index)
+            priority.append(index)
+
+    # Literal- and control-bearing lines usually carry more behavioral signal
+    # than long runs of assignments/calls. Reserve those before even sampling.
+    for index, line in enumerate(lines):
+        if '"' in line:
+            prioritize(index)
+    for index, line in enumerate(lines):
+        if re.search(r"\b(if|else|for|while|switch|case|return)\b", line):
+            prioritize(index)
+    for index in list(range(min(4, len(lines)))) + list(range(max(0, len(lines) - 4), len(lines))):
+        prioritize(index)
+    sample_count = min(len(lines), max(8, char_budget // 96))
+    if sample_count > 1:
+        for index in range(sample_count):
+            prioritize(round(index * (len(lines) - 1) / (sample_count - 1)))
+    else:
+        prioritize(0)
+    for index in range(len(lines)):
+        prioritize(index)
+
+    selected_indexes: list[int] = []
+    used = 0
+    for index in priority:
+        line = lines[index]
+        cost = len(line) + (1 if selected_indexes else 0)
+        if used + cost > char_budget:
+            continue
+        selected_indexes.append(index)
+        used += cost
+    return "\n".join(lines[index] for index in sorted(selected_indexes))
+
+
+def _format_document_section(label: str, values: list[str], char_budget: int, separator: str = " ") -> str:
+    if not values or char_budget <= len(label) + 2:
+        return ""
+    prefix = f"{label}: "
+    available = char_budget - len(prefix)
+    priority: list[int] = []
+    left, right = 0, len(values) - 1
+    while left <= right:
+        priority.append(left)
+        if right != left:
+            priority.append(right)
+        left += 1
+        right -= 1
+    selected: list[int] = []
+    used = 0
+    for index in priority:
+        value = re.sub(r"\s+", " ", str(values[index])).strip()
+        cost = len(value) + (len(separator) if selected else 0)
+        if not value or used + cost > available:
+            continue
+        selected.append(index)
+        used += cost
+    if not selected:
+        return prefix + re.sub(r"\s+", " ", str(values[0])).strip()[:available]
+    return prefix + separator.join(str(values[index]).strip() for index in sorted(selected))
+
+
+def _decomp_operation_features(pseudocode: str) -> list[str]:
+    features: list[str] = []
+    checks = (
+        ("%", "modulo"),
+        ("[", "array_index"),
+        ("^", "bitwise_xor"),
+        ("<<", "shift_left"),
+        (">>", "shift_right"),
+        ("+=", "state_update"),
+        ("-=", "state_update"),
+    )
+    for marker, feature in checks:
+        if marker in pseudocode and feature not in features:
+            features.append(feature)
+    if re.search(r"\b(?:memcpy|memmove|strcpy|strncpy)\s*\(", pseudocode):
+        features.append("buffer_copy")
+    return features
+
+
+def build_decomp_document(name: str, pseudocode: str, max_chars: int = 5760) -> str:
+    """Build a context-bounded embedding document from a whole decompilation."""
+    pseudo = str(pseudocode or "").strip()
+    safe_name = re.sub(r"\s+", " ", str(name or "function")).strip()[:256]
+    max_chars = max(1024, min(int(max_chars or 5760), 32768))
+    operation_features = _decomp_operation_features(pseudo)
+    if len(pseudo) <= max_chars:
+        name_budget = min(160, max(32, max_chars // 6))
+        prefix = f"function: {safe_name[:name_budget]}"
+        if operation_features:
+            prefix += "\noperations: " + " ".join(operation_features)
+        return f"{prefix}\n{pseudo}"[:max_chars]
+
+    all_identifiers: list[str] = []
+    seen_identifiers: set[str] = set()
+    for match in _DECOMP_IDENTIFIER_RE.finditer(pseudo):
+        ident = match.group(0)
+        low = ident.lower()
+        if low in _DECOMP_NOISE or low in seen_identifiers:
+            continue
+        seen_identifiers.add(low)
+        all_identifiers.append(ident)
+    if len(all_identifiers) <= 160:
+        identifiers = all_identifiers
+    else:
+        identifiers = all_identifiers[:80] + all_identifiers[-80:]
+    strings = [value[:96] for value in _unique_matches(_DECOMP_STRING_RE, pseudo, 128)]
+    calls = [
+        value
+        for value in _unique_matches(_DECOMP_CALL_RE, pseudo, 256)
+        if value.lower() not in _DECOMP_NOISE
+    ]
+    constants = _unique_matches(_DECOMP_CONSTANT_RE, pseudo, 128)
+    controls = {
+        "calls": len(re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\s*\(", pseudo)),
+        "branches": len(re.findall(r"\b(?:if|else|switch|case)\b", pseudo)),
+        "loops": len(re.findall(r"\b(?:for|while|do)\b", pseudo)),
+        "returns": len(re.findall(r"\breturn\b", pseudo)),
+    }
+    header_parts = [
+        _format_document_section("function", [safe_name], int(max_chars * 0.10)),
+        _format_document_section("string_literals", strings, int(max_chars * 0.16), " | "),
+        _format_document_section("calls", calls, int(max_chars * 0.18)),
+        _format_document_section("constants", constants, int(max_chars * 0.08)),
+        _format_document_section("behavior_identifiers", identifiers, int(max_chars * 0.18)),
+        _format_document_section("operations", operation_features, int(max_chars * 0.07)),
+        _format_document_section(
+            "control_profile",
+            [f"{key}={value}" for key, value in controls.items()],
+            int(max_chars * 0.07),
+        ),
+    ]
+    header = "\n".join(part for part in header_parts if part)
+    code_budget = max_chars - len(header) - len("\npseudocode:\n")
+    sample = _sample_pseudocode_lines(pseudo, code_budget)
+    return f"{header}\npseudocode:\n{sample}"[:max_chars]
 
 
 def _now_iso() -> str:
@@ -118,6 +305,22 @@ def _expand_query_tokens(tokens: set[str]) -> set[str]:
     return expanded
 
 
+def _search_token_forms(token: str) -> list[str]:
+    """Return a token plus conservative English verb/plural variants."""
+    forms = [token]
+    if len(token) > 4 and token.endswith("ies"):
+        forms.append(token[:-3] + "y")
+    elif len(token) > 4 and token.endswith(("ches", "shes", "xes")):
+        forms.append(token[:-2])
+    elif len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
+        forms.append(token[:-1])
+    if len(token) > 5 and token.endswith("ing"):
+        stem = token[:-3]
+        forms.append(stem)
+        forms.append(stem + "e")
+    return list(dict.fromkeys(forms))
+
+
 def _idf_scores(docs: list[set[str]]) -> dict[str, float]:
     df: Counter[str] = Counter()
     for doc in docs:
@@ -150,25 +353,27 @@ def _tokenize_search_text(text: str, max_tokens: int = 96) -> list[str]:
     out: list[str] = []
     for raw in _SEARCH_TOKEN_RE.findall(str(text or "").replace("_", " ")):
         for low in _split_identifier_token(raw):
-            if low in seen or low in _SEARCH_NOISE_TOKENS:
-                continue
-            if low.isdigit() and len(low) < 3:
-                continue
-            seen.add(low)
-            out.append(low)
-            if len(out) >= max_tokens:
-                return out
+            for form in _search_token_forms(low):
+                if form in seen or form in _SEARCH_NOISE_TOKENS:
+                    continue
+                if form.isdigit() and len(form) < 3:
+                    continue
+                seen.add(form)
+                out.append(form)
+                if len(out) >= max_tokens:
+                    return out
     for raw in re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", str(text or "")):
         low = raw.lower()
         if low in seen or low in _SEARCH_NOISE_TOKENS:
             continue
         for part in [low] + _split_identifier_token(raw):
-            if part in seen or part in _SEARCH_NOISE_TOKENS:
-                continue
-            seen.add(part)
-            out.append(part)
-            if len(out) >= max_tokens:
-                return out
+            for form in _search_token_forms(part):
+                if form in seen or form in _SEARCH_NOISE_TOKENS:
+                    continue
+                seen.add(form)
+                out.append(form)
+                if len(out) >= max_tokens:
+                    return out
     return out
 
 
@@ -193,7 +398,7 @@ class FunctionEmbeddingIndex:
     designed for).
     """
 
-    INDEX_SCHEMA_VERSION = 2
+    INDEX_SCHEMA_VERSION = 3
 
     def __init__(self, db_path: str, embedder: Any):
         self._embedder = embedder
@@ -235,7 +440,7 @@ class FunctionEmbeddingIndex:
                     now = _now_iso()
                     base = {
                         "index_schema_version": str(self.INDEX_SCHEMA_VERSION),
-                        "signature_extractor_version": "v1",
+                        "signature_extractor_version": "v2",
                         "anchor_set_hash": "",
                         "created_at": now,
                         "updated_at": now,
@@ -300,6 +505,8 @@ class FunctionEmbeddingIndex:
                 conn.execute("ALTER TABLE func_embeddings ADD COLUMN is_thunk INTEGER DEFAULT 0")
             if "cyclomatic" not in cols:
                 conn.execute("ALTER TABLE func_embeddings ADD COLUMN cyclomatic INTEGER DEFAULT 0")
+            if "index_quality" not in cols:
+                conn.execute("ALTER TABLE func_embeddings ADD COLUMN index_quality TEXT DEFAULT 'unknown'")
             # Indexes for structural filters
             conn.execute("CREATE INDEX IF NOT EXISTS idx_fe_size ON func_embeddings(func_size)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_fe_bb ON func_embeddings(bb_count)")
@@ -379,7 +586,7 @@ class FunctionEmbeddingIndex:
             now = _now_iso()
             base = {
                 "index_schema_version": str(self.INDEX_SCHEMA_VERSION),
-                "signature_extractor_version": "v1",
+                "signature_extractor_version": "v2",
                 "anchor_set_hash": "",
                 "created_at": now,
                 "updated_at": now,
@@ -430,6 +637,17 @@ class FunctionEmbeddingIndex:
             return []
         return rows
 
+    def quality_counts(self) -> dict[str, int]:
+        """Return persisted function counts by indexing quality."""
+        try:
+            with self._conn() as conn:
+                rows = conn.execute(
+                    "SELECT COALESCE(index_quality, 'unknown'), COUNT(*) FROM func_embeddings GROUP BY index_quality"
+                ).fetchall()
+            return {str(quality): int(count) for quality, count in rows}
+        except Exception:
+            return {}
+
     def build_embedding_state_payload(self) -> dict[str, Any]:
         """Build an embedding state payload."""
         meta = self.metadata()
@@ -443,6 +661,7 @@ class FunctionEmbeddingIndex:
             "source_fingerprint": str(meta.get("source_fingerprint") or ""),
             "embedding_backend": str(meta.get("embedding_backend") or ""),
             "function_count": int(self.size),
+            "quality_counts": self.quality_counts(),
             "updated_at": str(meta.get("updated_at") or _now_iso()),
         }
         return {
@@ -467,6 +686,15 @@ class FunctionEmbeddingIndex:
             "embedding_dim": current_dim,
         }
         mismatches: dict[str, dict[str, Any]] = {}
+        try:
+            stored_schema = int(stored.get("index_schema_version", 0) or 0)
+        except Exception:
+            stored_schema = 0
+        if stored_schema != self.INDEX_SCHEMA_VERSION:
+            mismatches["index_schema_version"] = {
+                "stored": stored_schema,
+                "current": self.INDEX_SCHEMA_VERSION,
+            }
         if str(stored.get("embedding_backend", "")) != current_backend:
             mismatches["embedding_backend"] = {
                 "stored": stored.get("embedding_backend"),
@@ -556,24 +784,37 @@ class FunctionEmbeddingIndex:
             with self._conn() as conn:
                 for func_ea, name, pseudocode, metadata in functions:
                     ph = self._phash(pseudocode)
-                    signature_text = _extract_signature_text(pseudocode)
+                    signature_text = _extract_signature_text(pseudocode, max_tokens=256)
                     signature_hash = self._phash(signature_text or pseudocode)
                     md = metadata or {}
                     row = conn.execute(
-                        "SELECT pseudo_hash, name, signature_hash, signature_text FROM func_embeddings WHERE ea=?",
+                        "SELECT pseudo_hash, name, signature_hash, signature_text, index_quality FROM func_embeddings WHERE ea=?",
                         (func_ea,),
                     ).fetchone()
+                    incoming_quality = str(md.get("index_quality") or "unknown")
+                    stored_quality = str(row[4] or "unknown") if row else "unknown"
+                    if row and _INDEX_QUALITY_RANK.get(stored_quality, 0) > _INDEX_QUALITY_RANK.get(incoming_quality, 0):
+                        conn.execute(
+                            "UPDATE func_embeddings SET name=?, func_size=?, bb_count=?, has_loops=?, api_count=?, string_count=?, segment=?, is_thunk=?, cyclomatic=? WHERE ea=?",
+                            (
+                                name, md.get("func_size", 0), md.get("bb_count", 0), md.get("has_loops", 0),
+                                md.get("api_count", 0), md.get("string_count", 0), md.get("segment", ""),
+                                md.get("is_thunk", 0), md.get("cyclomatic", 0), func_ea,
+                            ),
+                        )
+                        indexed += 1
+                        continue
                     if row and row[0] == ph:
                         stored_sig_hash = str(row[2] or "")
                         stored_sig_text = str(row[3] or "")
                         if row[1] == name and stored_sig_hash == signature_hash and stored_sig_text == signature_text:
                             if md:
                                 conn.execute(
-                                    "UPDATE func_embeddings SET func_size=?, bb_count=?, has_loops=?, api_count=?, string_count=?, segment=?, is_thunk=?, cyclomatic=? WHERE ea=?",
+                                    "UPDATE func_embeddings SET func_size=?, bb_count=?, has_loops=?, api_count=?, string_count=?, segment=?, is_thunk=?, cyclomatic=?, index_quality=? WHERE ea=?",
                                     (
                                         md.get("func_size", 0), md.get("bb_count", 0), md.get("has_loops", 0),
                                         md.get("api_count", 0), md.get("string_count", 0), md.get("segment", ""),
-                                        md.get("is_thunk", 0), md.get("cyclomatic", 0), func_ea,
+                                        md.get("is_thunk", 0), md.get("cyclomatic", 0), md.get("index_quality", "unknown"), func_ea,
                                     ),
                                 )
                         else:
@@ -632,9 +873,9 @@ class FunctionEmbeddingIndex:
                             ea, name, dim, vec_blob, pseudo_hash, indexed_at,
                             source_kind, source_hash, signature_text, signature_hash,
                             func_size, bb_count, has_loops, api_count, string_count,
-                            segment, is_thunk, cyclomatic
+                            segment, is_thunk, cyclomatic, index_quality
                         )
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         ON CONFLICT(ea) DO UPDATE SET
                             name=excluded.name,
                             dim=excluded.dim,
@@ -652,14 +893,15 @@ class FunctionEmbeddingIndex:
                             string_count=excluded.string_count,
                             segment=excluded.segment,
                             is_thunk=excluded.is_thunk,
-                            cyclomatic=excluded.cyclomatic
+                            cyclomatic=excluded.cyclomatic,
+                            index_quality=excluded.index_quality
                         """,
                         (
                             entry["ea"], entry["name"], len(vec), self._pack(vec), entry["pseudo_hash"], time.time(),
                             "function", hashlib.sha256(f"{entry['ea']}:{entry['pseudo_hash']}".encode()).hexdigest()[:24],
                             entry["signature_text"], entry["signature_hash"], md.get("func_size", 0), md.get("bb_count", 0),
                             md.get("has_loops", 0), md.get("api_count", 0), md.get("string_count", 0), md.get("segment", ""),
-                            md.get("is_thunk", 0), md.get("cyclomatic", 0),
+                            md.get("is_thunk", 0), md.get("cyclomatic", 0), md.get("index_quality", "unknown"),
                         ),
                     )
                 self._meta_set(conn, "updated_at", _now_iso())
@@ -678,7 +920,7 @@ class FunctionEmbeddingIndex:
     def index_async(self, func_ea: str, name: str, pseudocode: str, metadata: dict | None = None) -> None:
         """Non-blocking index: fire-and-forget in background thread."""
         ph = self._phash(pseudocode)
-        signature_text = _extract_signature_text(pseudocode)
+        signature_text = _extract_signature_text(pseudocode, max_tokens=256)
         signature_hash = self._phash(signature_text or pseudocode)
         with self._cache_lock:
             cached_vec = self._cache.get(func_ea)

@@ -28,6 +28,22 @@ def test_available_cpu_count_respects_process_affinity(monkeypatch):
     assert core._available_cpu_count() == 3
 
 
+def test_decomp_document_budget_adapts_to_model_context(monkeypatch):
+    old = _reset_singleton()
+    monkeypatch.setattr(core, "EMBED_CTX", 4096)
+    monkeypatch.setattr(core, "EMBED_CHARS_PER_TOKEN", 3.0)
+    monkeypatch.setattr(core, "DECOMP_DOCUMENT_FRACTION", 0.2)
+    monkeypatch.setattr(core, "DECOMP_DOCUMENT_CHARS", 0)
+    monkeypatch.setattr("ida_pro_mcp.host.intelligence.core._find_llama_server", lambda: "")
+    monkeypatch.setattr("ida_pro_mcp.host.intelligence.core._find_model", lambda: "")
+    try:
+        emb = BgeCodeEmbedder()
+        assert emb.max_input_chars == 11904
+        assert emb.decomp_document_chars == 2380
+    finally:
+        _restore_singleton(old)
+
+
 def test_embedder_unavailable_without_model_or_server(monkeypatch):
     old = _reset_singleton()
     monkeypatch.setattr("ida_pro_mcp.host.intelligence.core._find_llama_server", lambda: "")

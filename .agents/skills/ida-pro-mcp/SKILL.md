@@ -22,7 +22,9 @@ available.
 ## Working rules
 
 - Build the semantic index with `ida_index_functions()` before
-  `ida_semantic_search(...)`.
+  `ida_semantic_search(...)`. Use `quality="full"` when retrieval quality
+  matters; full indexing uses bounded passes, so repeat with the returned
+  `next_cursor` until `complete` is true.
 - Use hex address strings exactly as returned by tools.
 - `ida_rename` and `ida_comment` mutate the IDB. Set `risk_ack=true` only
   after verifying the target and intended change.
