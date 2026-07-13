@@ -207,6 +207,7 @@ class ServerDispatchMixin:
                     details={"has_process": bool(runtime.get("process")), "port": port},
                 )
 
+            _rpc_sock_timeout = None
             try:
                 # Reject unknown keys instead of silently stripping them.
                 # Silent strip made tuned tool calls look successful while
@@ -337,10 +338,13 @@ class ServerDispatchMixin:
                 # a recoverable timeout so the caller retries / raises the
                 # deadline instead of chasing a nonexistent IDA crash.
                 import socket as _socket
-                try:
-                    _recv_to = int(os.environ.get("IDA_MCP_RPC_TIMEOUT", "30"))
-                except Exception:
-                    _recv_to = 30
+                if _rpc_sock_timeout is not None:
+                    _recv_to = _rpc_sock_timeout
+                else:
+                    try:
+                        _recv_to = int(os.environ.get("IDA_MCP_RPC_TIMEOUT", "30"))
+                    except Exception:
+                        _recv_to = 30
                 if isinstance(e, (_socket.timeout, TimeoutError, OSError)):
                     return make_error(
                         MCPError.IDA_TIMEOUT,
@@ -1235,4 +1239,3 @@ class ServerDispatchMixin:
                     "No active session. Create one first with: session(action='create', binary_path='path/to/binary')",
                 )
             return self.call_tool(tool_name, ip, **args)
-

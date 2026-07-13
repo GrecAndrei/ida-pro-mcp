@@ -219,6 +219,46 @@ class TestLlamaEmbedBatchResponseHandling(unittest.TestCase):
 
         self.assertIsNone(result)
 
+    def test_batch_uses_the_dedicated_batch_timeout(self):
+        """CPU indexing may need longer than one interactive embedding."""
+        e = self._make_embedder()
+        mock_response = json.dumps([
+            {"index": 0, "embedding": [[0.1] * 10]},
+            {"index": 1, "embedding": [[0.2] * 10]},
+        ]).encode()
+
+        with patch("urllib.request.urlopen") as mock_urlopen, patch(
+            "ida_pro_mcp.host.intelligence.core.EMBED_REQUEST_TIMEOUT", 5.0
+        ), patch(
+            "ida_pro_mcp.host.intelligence.core.EMBED_BATCH_REQUEST_TIMEOUT", 60.0
+        ):
+            mock_ctx = MagicMock()
+            mock_ctx.__enter__ = MagicMock(return_value=mock_ctx)
+            mock_ctx.__exit__ = MagicMock(return_value=False)
+            mock_ctx.read.return_value = mock_response
+            mock_urlopen.return_value = mock_ctx
+
+            result = e._llama_embed_batch(["a", "b"])
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(mock_urlopen.call_args.kwargs["timeout"], 60.0)
+
+    def test_batch_timeout_retries_smaller_chunks_without_losing_items(self):
+        e = self._make_embedder()
+
+        def fake_embed(chunk):
+            if len(chunk) > 2:
+                e._last_batch_timeout = True
+                return None
+            e._last_batch_timeout = False
+            return [[1.0, 0.0] for _ in chunk]
+
+        with patch.object(e, "_llama_embed_batch", side_effect=fake_embed):
+            result = e.embed_batch(["a", "b", "c", "d"])
+
+        self.assertEqual(len(result), 4)
+        self.assertTrue(all(row.ok and row.vector for row in result))
+
 
 class TestNaNHandling(unittest.TestCase):
     """Test that NaN values in embeddings don't propagate."""

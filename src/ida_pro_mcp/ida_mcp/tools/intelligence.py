@@ -100,6 +100,10 @@ def _build_fast_signature(fea: int, func=None) -> str:
         return ida_funcs.get_func_name(fea) or hex(fea)
     name = ida_funcs.get_func_name(fea) or hex(fea)
     parts = [name]
+    # Keep the fast-index document deliberately small.  Embedding cost is
+    # proportional to tokens, while name, APIs, string references, and a
+    # short instruction sample carry the useful retrieval signal.  Full
+    # decompilations remain available through index_batch.
     # API calls
     apis = set()
     for head in idautils.Heads(func.start_ea, func.end_ea):
@@ -107,10 +111,10 @@ def _build_fast_signature(fea: int, func=None) -> str:
             ref_name = idc.get_name(ref) or ""
             if ref_name:
                 apis.add(ref_name)
-        if len(apis) > 20:
+        if len(apis) > 12:
             break
     if apis:
-        parts.append("apis:" + ",".join(sorted(apis)[:20]))
+        parts.append("apis:" + ",".join(sorted(apis)[:12]))
     # String refs
     str_refs = set()
     for head in idautils.Heads(func.start_ea, func.end_ea):
@@ -118,25 +122,26 @@ def _build_fast_signature(fea: int, func=None) -> str:
             s = idc.get_strlit_contents(ref, -1, 0)
             if s:
                 try:
-                    s = s.decode("utf-8", errors="replace")[:60]
+                    s = s.decode("utf-8", errors="replace")[:48]
                     str_refs.add(s)
                 except Exception:
                     pass
-        if len(str_refs) > 10:
+        if len(str_refs) > 4:
             break
     if str_refs:
-        parts.append("strings:" + ",".join(sorted(str_refs)[:10]))
+        parts.append("strings:" + ",".join(sorted(str_refs)[:4]))
     _tag_remove = getattr(idc, "tag_remove", None)
-    # First 15 instructions
+    # A few instructions distinguish otherwise similar wrappers without
+    # turning index_fast into a decompiler-sized embedding request.
     insns = []
     for head in idautils.Heads(func.start_ea, min(func.start_ea + 256, func.end_ea)):
         dis = idc.generate_disasm_line(head, 0)
         if dis:
             insns.append(_tag_remove(dis) if _tag_remove else dis)
-        if len(insns) >= 15:
+        if len(insns) >= 6:
             break
     if insns:
-        parts.append("code:" + "; ".join(i[:80] for i in insns))
+        parts.append("code:" + "; ".join(i[:56] for i in insns))
     return " | ".join(parts)
 
 
@@ -846,8 +851,9 @@ def intelligence(
             count = 0
             failures = 0
             skipped = 0
+            pending: list[tuple[str, str, str, dict[str, Any]]] = []
             for fea in idautils.Functions():
-                if limit and count >= limit:
+                if limit and len(pending) >= limit:
                     break
                 try:
                     func = idaapi.get_func(fea)
@@ -916,12 +922,12 @@ def intelligence(
                         "is_thunk": is_thunk,
                         "cyclomatic": cyclomatic,
                     }
-                    if idx.index(hex(fea), name, text, metadata=md):
-                        count += 1
-                    else:
-                        failures += 1
+                    pending.append((hex(fea), name, text, md))
                 except Exception:
                     failures += 1
+            batch_result = idx.index_many(pending)
+            count = int(batch_result["indexed"])
+            failures += int(batch_result["failed"])
             if count == 0:
                 return make_error(
                     MCPError.IDA_ERROR,

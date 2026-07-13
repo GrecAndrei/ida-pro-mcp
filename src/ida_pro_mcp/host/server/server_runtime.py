@@ -82,8 +82,6 @@ def _kill_process_tree(proc: subprocess.Popen, grace_seconds: float = 2.0) -> No
     On POSIX, ``os.killpg`` against a process started in a new process group
     will signal the whole tree.
     """
-    if proc.poll() is not None:
-        return
     pid = proc.pid
     if pid is None:
         return
@@ -98,18 +96,14 @@ def _kill_process_tree(proc: subprocess.Popen, grace_seconds: float = 2.0) -> No
             proc.wait(timeout=grace_seconds)
         return
     # POSIX: child must be in its own process group (set via
-    # _popen_new_session_kwargs in the matching Popen call). If the group
-    # is gone (ProcessLookupError) the child already exited; do not try
-    # to kill the parent's group.
+    # _popen_new_session_kwargs in the matching Popen call).  Do this even
+    # if the direct IDA launcher has already exited: its llama-server child
+    # can still be alive in that process group. If the group is gone,
+    # ProcessLookupError makes this a harmless no-op.
     try:
-        pgid = os.getpgid(pid)
+        os.killpg(pid, signal.SIGTERM)
     except ProcessLookupError:
         log_rpc(f"Process group already gone for pid {pid}; nothing to kill")
-        return
-    try:
-        os.killpg(pgid, signal.SIGTERM)
-    except ProcessLookupError:
-        log_rpc(f"Process group vanished after getpgid for pid {pid}")
         return
     except Exception as exc:
         log_rpc(f"killpg(SIGTERM) failed for pid {pid}: {exc}")
@@ -119,7 +113,7 @@ def _kill_process_tree(proc: subprocess.Popen, grace_seconds: float = 2.0) -> No
     except Exception:
         pass
     try:
-        os.killpg(pgid, signal.SIGKILL)
+        os.killpg(pid, signal.SIGKILL)
     except ProcessLookupError:
         log_rpc(f"Process group vanished before SIGKILL for pid {pid}")
     except Exception as exc:

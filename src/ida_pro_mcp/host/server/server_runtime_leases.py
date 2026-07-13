@@ -271,6 +271,10 @@ class ServerRuntimeLeasesMixin:
     def _handle_termination_signal(self, signum, frame):
             self._shutdown_requested = True
             self._lease_thread_stop.set()
+            # A stdio client may have to terminate a host blocked on input.
+            # Release owned IDA and embedding subprocesses before that forced
+            # exit can orphan them.
+            self.shutdown()
 
     def shutdown(self) -> None:
             if self._shutdown:
@@ -303,4 +307,3 @@ class ServerRuntimeLeasesMixin:
                     self.assembler.stop()
             except Exception as e:
                 log_rpc(f"Failed to stop intelligence embedder: {e}")
-

@@ -16,6 +16,7 @@ Environment variables:
   IDA_MCP_EMBED_MODEL        path to .gguf file
   IDA_MCP_EMBED_PORT         port (default: random 18100-19000)
   IDA_MCP_EMBED_THREADS      CPU threads (default: cpu_count // 2)
+  IDA_MCP_EMBED_BATCH_THREADS CPU threads for batched indexing (default: up to 16)
   IDA_MCP_EMBED_CTX          context tokens (default: 2048)
   IDA_MCP_EMBED_DISABLED     set to 1 to force TF-IDF fallback
 
@@ -44,6 +45,7 @@ import math
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -496,12 +498,40 @@ def _safe_float_env(key: str, default: str) -> float:
         return float(default)
 
 
+def _available_cpu_count() -> int:
+    """Return CPUs usable by this process, respecting Linux CPU affinity."""
+    get_affinity = getattr(os, "sched_getaffinity", None)
+    if get_affinity is not None:
+        try:
+            count = len(get_affinity(0))
+            if count > 0:
+                return count
+        except OSError:
+            pass
+    return max(1, os.cpu_count() or 1)
+
+
+_EMBED_CPU_COUNT = _available_cpu_count()
 EMBED_CTX = _safe_int_env("IDA_MCP_EMBED_CTX", "2048")
 EMBED_THREADS = _safe_int_env(
     "IDA_MCP_EMBED_THREADS",
-    str(max(2, (os.cpu_count() or 4) // 2))
+    str(max(1, _EMBED_CPU_COUNT // 2))
+)
+# Indexing submits multiple full function signatures at once.  llama.cpp can
+# use more CPU threads for that batch work than for latency-sensitive one-off
+# semantic queries.  Cap the default so high-core machines remain usable.
+EMBED_BATCH_THREADS = _safe_int_env(
+    "IDA_MCP_EMBED_BATCH_THREADS",
+    str(min(16, _EMBED_CPU_COUNT)),
 )
 EMBED_REQUEST_TIMEOUT = _safe_float_env("IDA_MCP_EMBED_REQUEST_TIMEOUT", "5.0")
+# A batch contains full decompilations, so it can legitimately take longer
+# than the interactive single-query deadline.  Keep the two independently
+# tunable: search stays responsive while indexing can complete on CPU-only
+# hosts.
+EMBED_BATCH_REQUEST_TIMEOUT = _safe_float_env(
+    "IDA_MCP_EMBED_BATCH_REQUEST_TIMEOUT", "60.0"
+)
 EMBED_MAX_FAILURES = _safe_int_env("IDA_MCP_EMBED_MAX_FAILURES", "2")
 EMBED_DISABLED = os.environ.get("IDA_MCP_EMBED_DISABLED", "") in ("1", "true", "yes")
 INTEL_PROFILE = os.environ.get("IDA_MCP_INTEL_PROFILE", "") in ("1", "true", "yes")
@@ -613,12 +643,16 @@ class BgeCodeEmbedder:
                               and not EMBED_DISABLED)
         # Cached anchor embeddings for BehaviorClassifier
         self._anchor_cache: dict[str, list[float]] = {}
-        self._batch_size = int(os.environ.get("IDA_MCP_EMBED_BATCH", "16"))
+        # Full decompilations are far larger than the short snippets used by
+        # interactive semantic search.  Eight is a dependable CPU-only
+        # starting point; successful calls can still grow it gradually.
+        self._batch_size = int(os.environ.get("IDA_MCP_EMBED_BATCH", "8"))
         self._batch_size = max(1, min(64, self._batch_size))
         self._batch_lock = threading.Lock()
         self._owns_proc = False
         self._consecutive_rpc_failures = 0
         self._max_rpc_failures = max(1, EMBED_MAX_FAILURES)
+        self._last_batch_timeout = False
 
     def status(self, probe: bool = False, deep_hash: bool = False) -> dict:
         server_ready = bool(self._ready)
@@ -735,6 +769,7 @@ class BgeCodeEmbedder:
                 "--ubatch-size", str(max(EMBED_CTX, 2048)),
                 "--pooling", "mean",
                 "--threads",  str(EMBED_THREADS),
+                "--threads-batch", str(EMBED_BATCH_THREADS),
                 "--n-predict", "0",
                 "--log-disable",
             ]
@@ -859,9 +894,7 @@ class BgeCodeEmbedder:
     def _llama_embed_batch(self, texts: list[str]) -> list[list[float]] | None:
         if not texts:
             return []
-        if len(texts) == 1:
-            vec = self._llama_embed(texts[0])
-            return [vec] if vec is not None else None
+        self._last_batch_timeout = False
         if not self._ready and not self._start_server():
             return None
         try:
@@ -872,7 +905,10 @@ class BgeCodeEmbedder:
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=max(EMBED_REQUEST_TIMEOUT, 10.0)) as resp:
+            with urllib.request.urlopen(
+                req,
+                timeout=max(EMBED_REQUEST_TIMEOUT, EMBED_BATCH_REQUEST_TIMEOUT),
+            ) as resp:
                 data = json.loads(resp.read())
             if isinstance(data, dict):
                 rows = data.get("data") or []
@@ -894,7 +930,8 @@ class BgeCodeEmbedder:
                 out.append([x / norm for x in vec])
             self._consecutive_rpc_failures = 0
             return out
-        except (OSError, ValueError, KeyError, json.JSONDecodeError, RuntimeError):
+        except (OSError, ValueError, KeyError, json.JSONDecodeError, RuntimeError) as exc:
+            self._last_batch_timeout = isinstance(exc, (TimeoutError, socket.timeout))
             self._consecutive_rpc_failures += 1
             if self._consecutive_rpc_failures >= self._max_rpc_failures:
                 self._ready = False
@@ -931,26 +968,35 @@ class BgeCodeEmbedder:
         if not self._use_llama:
             return [_EmbedResult(None, "unavailable", False) for _ in texts]
         out: list[_EmbedResult] = []
+
+        def embed_chunk(chunk: list[str]) -> list[_EmbedResult]:
+            """Embed a chunk, subdividing it rather than losing it on timeout."""
+            if not chunk:
+                return []
+            vecs = self._llama_embed_batch(chunk)
+            if vecs is not None:
+                self._last_batch_timeout = False
+                with self._batch_lock:
+                    if self._batch_size < 64 and len(chunk) == self._batch_size:
+                        self._batch_size += 1
+                return [_EmbedResult(v, "bge-code-v1", True) for v in vecs]
+            if len(chunk) == 1 or not getattr(self, "_last_batch_timeout", False):
+                return [_EmbedResult(None, "unavailable", False) for _ in chunk]
+
+            # A large request may exceed the batch deadline even though each
+            # individual embedding is valid. Retry smaller chunks so index
+            # construction is complete instead of silently dropping functions.
+            split_at = len(chunk) // 2
+            with self._batch_lock:
+                self._batch_size = min(self._batch_size, split_at)
+            return embed_chunk(chunk[:split_at]) + embed_chunk(chunk[split_at:])
+
         i = 0
         while i < len(texts):
             with self._batch_lock:
                 bs = self._batch_size
             chunk = texts[i : i + bs]
-            vecs = self._llama_embed_batch(chunk)
-            if vecs is None:
-                with self._batch_lock:
-                    self._batch_size = max(1, self._batch_size // 2)
-                # Real failure — mark the whole chunk so callers see it.
-                for _ in chunk:
-                    out.append(_EmbedResult(None, "unavailable", False))
-                i += len(chunk)
-                continue
-            for v in vecs:
-                out.append(_EmbedResult(v, "bge-code-v1", True))
-            # gentle increase when stable
-            with self._batch_lock:
-                if self._batch_size < 64 and len(chunk) == self._batch_size:
-                    self._batch_size += 1
+            out.extend(embed_chunk(chunk))
             i += len(chunk)
         return out
 

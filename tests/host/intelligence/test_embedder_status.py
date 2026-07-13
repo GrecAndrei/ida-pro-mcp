@@ -5,6 +5,7 @@ import urllib.error
 from pathlib import Path
 from unittest import mock
 
+from ida_pro_mcp.host.intelligence import core
 from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder
 
 
@@ -20,6 +21,11 @@ def _restore_singleton(old):
         with contextlib.suppress(Exception):
             inst.stop()
     BgeCodeEmbedder._instance = old
+
+
+def test_available_cpu_count_respects_process_affinity(monkeypatch):
+    monkeypatch.setattr(core.os, "sched_getaffinity", lambda _pid: {2, 4, 6}, raising=False)
+    assert core._available_cpu_count() == 3
 
 
 def test_embedder_unavailable_without_model_or_server(monkeypatch):
@@ -144,5 +150,36 @@ def test_status_has_fingerprints(monkeypatch, tmp_path: Path):
         assert st["fingerprints"]["model"]["sha256_head_16mb"]
         assert st["fingerprints"]["model"]["sha256_full"]
         assert st["fingerprints"]["server"]["sha256_head_16mb"]
+    finally:
+        _restore_singleton(old)
+
+
+def test_server_uses_batch_threads_without_raising_query_threads(monkeypatch, tmp_path: Path):
+    """Indexing throughput can use more cores without slowing single queries."""
+    old = _reset_singleton()
+    server = tmp_path / "llama-server"
+    server.write_bytes(b"#!/bin/sh\n")
+    server.chmod(0o755)
+    model = tmp_path / "bge-code-v1-q8_0.gguf"
+    model.write_bytes(b"tiny-model")
+    monkeypatch.setattr("ida_pro_mcp.host.intelligence.core._find_llama_server", lambda: str(server))
+    monkeypatch.setattr("ida_pro_mcp.host.intelligence.core._find_model", lambda: str(model))
+    monkeypatch.setattr("ida_pro_mcp.host.intelligence.core._EMBED_LEASE_FILE", str(tmp_path / "lease.json"))
+    monkeypatch.setattr("ida_pro_mcp.host.intelligence.core.EMBED_THREADS", 4)
+    monkeypatch.setattr("ida_pro_mcp.host.intelligence.core.EMBED_BATCH_THREADS", 8)
+    try:
+        emb = BgeCodeEmbedder()
+        proc = mock.MagicMock()
+        proc.pid = 1234
+        proc.poll.return_value = None
+        health = mock.MagicMock()
+        health.read.return_value = b'{"status":"ok"}'
+        with mock.patch("ida_pro_mcp.host.intelligence.core.subprocess.Popen", return_value=proc) as popen, mock.patch(
+            "ida_pro_mcp.host.intelligence.core.urllib.request.urlopen", return_value=health
+        ), mock.patch("ida_pro_mcp.host.intelligence.core.time.sleep"):
+            assert emb._start_server() is True
+        command = popen.call_args.args[0]
+        assert command[command.index("--threads") + 1] == "4"
+        assert command[command.index("--threads-batch") + 1] == "8"
     finally:
         _restore_singleton(old)

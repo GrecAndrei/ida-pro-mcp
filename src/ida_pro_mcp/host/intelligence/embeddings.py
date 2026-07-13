@@ -538,113 +538,142 @@ class FunctionEmbeddingIndex:
         return rows
 
     def index(self, func_ea: str, name: str, pseudocode: str, metadata: dict | None = None) -> bool:
-        """Embed and store a function, returning whether the index is usable.
+        """Embed and store one function, returning whether the index is usable."""
+        result = self.index_many([(func_ea, name, pseudocode, metadata)])
+        return result["indexed"] == 1
 
-        Optional metadata dict stores structural attributes for filtering:
-        func_size, bb_count, has_loops, api_count, string_count, segment, is_thunk, cyclomatic
+    def index_many(self, functions: list[tuple[str, str, str, dict | None]]) -> dict[str, int]:
+        """Embed and persist functions in batches.
+
+        Existing, unchanged rows are refreshed without an embedding request. New
+        or changed rows are passed to the embedder together so a cold model is
+        loaded once and the embedding backend can use its configured batch size.
         """
-        ph = self._phash(pseudocode)
-        signature_text = _extract_signature_text(pseudocode)
-        signature_hash = self._phash(signature_text or pseudocode)
-        md = metadata or {}
+        prepared: list[dict[str, Any]] = []
+        indexed = 0
+        failed = 0
         try:
             with self._conn() as conn:
-                row = conn.execute(
-                    "SELECT pseudo_hash, name, signature_hash, signature_text FROM func_embeddings WHERE ea=?",
-                    (func_ea,),
-                ).fetchone()
-                if row and row[0] == ph:
-                    stored_sig_hash = str(row[2] or "") if len(row) > 2 else ""
-                    stored_sig_text = str(row[3] or "") if len(row) > 3 else ""
-                    if row[1] == name and stored_sig_hash == signature_hash and stored_sig_text == signature_text:
-                        # Update metadata even if pseudocode unchanged
-                        if md:
+                for func_ea, name, pseudocode, metadata in functions:
+                    ph = self._phash(pseudocode)
+                    signature_text = _extract_signature_text(pseudocode)
+                    signature_hash = self._phash(signature_text or pseudocode)
+                    md = metadata or {}
+                    row = conn.execute(
+                        "SELECT pseudo_hash, name, signature_hash, signature_text FROM func_embeddings WHERE ea=?",
+                        (func_ea,),
+                    ).fetchone()
+                    if row and row[0] == ph:
+                        stored_sig_hash = str(row[2] or "")
+                        stored_sig_text = str(row[3] or "")
+                        if row[1] == name and stored_sig_hash == signature_hash and stored_sig_text == signature_text:
+                            if md:
+                                conn.execute(
+                                    "UPDATE func_embeddings SET func_size=?, bb_count=?, has_loops=?, api_count=?, string_count=?, segment=?, is_thunk=?, cyclomatic=? WHERE ea=?",
+                                    (
+                                        md.get("func_size", 0), md.get("bb_count", 0), md.get("has_loops", 0),
+                                        md.get("api_count", 0), md.get("string_count", 0), md.get("segment", ""),
+                                        md.get("is_thunk", 0), md.get("cyclomatic", 0), func_ea,
+                                    ),
+                                )
+                        else:
                             conn.execute(
-                                "UPDATE func_embeddings SET func_size=?, bb_count=?, has_loops=?, api_count=?, string_count=?, segment=?, is_thunk=?, cyclomatic=? WHERE ea=?",
-                                (md.get("func_size", 0), md.get("bb_count", 0), md.get("has_loops", 0),
-                                 md.get("api_count", 0), md.get("string_count", 0), md.get("segment", ""),
-                                 md.get("is_thunk", 0), md.get("cyclomatic", 0), func_ea),
+                                "UPDATE func_embeddings SET name=?, signature_text=?, signature_hash=?, indexed_at=? WHERE ea=?",
+                                (name, signature_text, signature_hash, time.time(), func_ea),
                             )
-                            conn.commit()
-                        return True  # completely unchanged, but already usable
-                    conn.execute(
-                        "UPDATE func_embeddings SET name=?, signature_text=?, signature_hash=?, indexed_at=? WHERE ea=?",
-                        (name, signature_text, signature_hash, time.time(), func_ea),
+                        indexed += 1
+                        continue
+                    prepared.append(
+                        {
+                            "ea": func_ea,
+                            "name": name,
+                            "pseudocode": pseudocode,
+                            "pseudo_hash": ph,
+                            "signature_text": signature_text,
+                            "signature_hash": signature_hash,
+                            "metadata": md,
+                        }
                     )
+                if indexed:
                     self._meta_set(conn, "updated_at", _now_iso())
-                    conn.commit()
-                    return True
+                conn.commit()
         except Exception:
-            pass
+            return {"indexed": 0, "failed": len(functions)}
 
-        vec = self._embedder.embed_vector(pseudocode)
-        if vec is None:
-            return False
-        blob = self._pack(vec)
-        with self._cache_lock:
-            self._cache[func_ea] = vec
-        src_hash = hashlib.sha256(f"{func_ea}:{ph}".encode()).hexdigest()[:24]
+        if not prepared:
+            return {"indexed": indexed, "failed": failed}
+
+        embed_batch = getattr(self._embedder, "embed_batch", None)
+        try:
+            embedded = embed_batch([entry["pseudocode"] for entry in prepared]) if callable(embed_batch) else None
+        except Exception:
+            embedded = None
+        if not isinstance(embedded, list) or len(embedded) != len(prepared):
+            embedded = [getattr(self._embedder, "embed_vector", lambda _text: None)(entry["pseudocode"]) for entry in prepared]
+
+        ready: list[tuple[dict[str, Any], list[float]]] = []
+        for entry, result in zip(prepared, embedded, strict=True):
+            vec = getattr(result, "vector", result)
+            if vec is None:
+                failed += 1
+                continue
+            ready.append((entry, vec))
+
+        if not ready:
+            return {"indexed": indexed, "failed": failed}
+
         try:
             with self._conn() as conn:
-                conn.execute(
-                    """
-                    INSERT INTO func_embeddings(
-                        ea, name, dim, vec_blob, pseudo_hash, indexed_at,
-                        source_kind, source_hash, signature_text, signature_hash,
-                        func_size, bb_count, has_loops, api_count, string_count,
-                        segment, is_thunk, cyclomatic
+                for entry, vec in ready:
+                    md = entry["metadata"]
+                    conn.execute(
+                        """
+                        INSERT INTO func_embeddings(
+                            ea, name, dim, vec_blob, pseudo_hash, indexed_at,
+                            source_kind, source_hash, signature_text, signature_hash,
+                            func_size, bb_count, has_loops, api_count, string_count,
+                            segment, is_thunk, cyclomatic
+                        )
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        ON CONFLICT(ea) DO UPDATE SET
+                            name=excluded.name,
+                            dim=excluded.dim,
+                            vec_blob=excluded.vec_blob,
+                            pseudo_hash=excluded.pseudo_hash,
+                            indexed_at=excluded.indexed_at,
+                            source_kind=excluded.source_kind,
+                            source_hash=excluded.source_hash,
+                            signature_text=excluded.signature_text,
+                            signature_hash=excluded.signature_hash,
+                            func_size=excluded.func_size,
+                            bb_count=excluded.bb_count,
+                            has_loops=excluded.has_loops,
+                            api_count=excluded.api_count,
+                            string_count=excluded.string_count,
+                            segment=excluded.segment,
+                            is_thunk=excluded.is_thunk,
+                            cyclomatic=excluded.cyclomatic
+                        """,
+                        (
+                            entry["ea"], entry["name"], len(vec), self._pack(vec), entry["pseudo_hash"], time.time(),
+                            "function", hashlib.sha256(f"{entry['ea']}:{entry['pseudo_hash']}".encode()).hexdigest()[:24],
+                            entry["signature_text"], entry["signature_hash"], md.get("func_size", 0), md.get("bb_count", 0),
+                            md.get("has_loops", 0), md.get("api_count", 0), md.get("string_count", 0), md.get("segment", ""),
+                            md.get("is_thunk", 0), md.get("cyclomatic", 0),
+                        ),
                     )
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    ON CONFLICT(ea) DO UPDATE SET
-                        name=excluded.name,
-                        dim=excluded.dim,
-                        vec_blob=excluded.vec_blob,
-                        pseudo_hash=excluded.pseudo_hash,
-                        indexed_at=excluded.indexed_at,
-                        source_kind=excluded.source_kind,
-                        source_hash=excluded.source_hash,
-                        signature_text=excluded.signature_text,
-                        signature_hash=excluded.signature_hash,
-                        func_size=excluded.func_size,
-                        bb_count=excluded.bb_count,
-                        has_loops=excluded.has_loops,
-                        api_count=excluded.api_count,
-                        string_count=excluded.string_count,
-                        segment=excluded.segment,
-                        is_thunk=excluded.is_thunk,
-                        cyclomatic=excluded.cyclomatic
-                    """,
-                    (
-                        func_ea,
-                        name,
-                        len(vec),
-                        blob,
-                        ph,
-                        time.time(),
-                        "function",
-                        src_hash,
-                        signature_text,
-                        signature_hash,
-                        md.get("func_size", 0),
-                        md.get("bb_count", 0),
-                        md.get("has_loops", 0),
-                        md.get("api_count", 0),
-                        md.get("string_count", 0),
-                        md.get("segment", ""),
-                        md.get("is_thunk", 0),
-                        md.get("cyclomatic", 0),
-                    ),
-                )
                 self._meta_set(conn, "updated_at", _now_iso())
                 self._meta_set(conn, "source_fingerprint", self._source_fingerprint())
                 for k, v in self._embedder_meta_snapshot().items():
                     self._meta_set(conn, k, v)
                 conn.commit()
         except Exception:
-            with self._cache_lock:
-                self._cache.pop(func_ea, None)
-            return False
-        return True
+            return {"indexed": indexed, "failed": failed + len(ready)}
+
+        with self._cache_lock:
+            for entry, vec in ready:
+                self._cache[entry["ea"]] = vec
+        return {"indexed": indexed + len(ready), "failed": failed}
 
     def index_async(self, func_ea: str, name: str, pseudocode: str, metadata: dict | None = None) -> None:
         """Non-blocking index: fire-and-forget in background thread."""
