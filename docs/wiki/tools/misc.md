@@ -2,6 +2,11 @@
 
 Utility operations: script execution, file I/O, signature loading, plugin management, and cache stats.
 
+The default agent surface exposes Python execution as `ida_python`; use
+`ida_python(code="...", risk_ack=true)` for an explicitly acknowledged
+IDA-side expression or script. The action-specific operation is policy-gated
+and does not require the legacy `action="python"` wrapper.
+
 ## Actions
 - `python` — execute Python code in IDA context. Params: `code`
 - `idc` — execute IDC script. Params: `code`

@@ -131,6 +131,10 @@ RISK_ACK = {
     "type": "boolean",
     "description": "Set true only after verifying this IDB mutation is intended.",
 }
+CODE_EXEC_ACK = {
+    "type": "boolean",
+    "description": "Set true only after verifying this code execution is authorized and intended.",
+}
 
 
 AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
@@ -396,11 +400,56 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         backend_action="next_target",
     ),
     AgentOperation(
-        name="ida_continue",
-        description="Continue a truncated result using the continuation token returned by a previous call.",
+        name="ida_python",
+        description="Execute a Python expression or script in the active IDA process.",
         category="support",
-        input_schema=_schema({"token": {"type": "string", "description": "Continuation token from a truncated response."}}, ["token"]),
-        example={"token": "ABC123"},
+        input_schema=_schema(
+            {
+                "code": {
+                    "type": "string",
+                    "description": "Python expression or script to execute in IDA context.",
+                },
+                "risk_ack": CODE_EXEC_ACK,
+            },
+            ["code"],
+        ),
+        example={"code": "print(idaapi.get_imagebase())", "risk_ack": True},
+        backend_tool="misc",
+        backend_action="python",
+        argument_map={"risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_continue",
+        description=(
+            "Continue a truncated result; pass field when the response lists "
+            "more than one truncated field."
+        ),
+        category="support",
+        input_schema=_schema(
+            {
+                "token": {
+                    "type": "string",
+                    "description": "Continuation token from the response's _continue.token field.",
+                },
+                "field": {
+                    "type": "string",
+                    "description": (
+                        "Exact field name from _continue.fields, required when "
+                        "more than one field is truncated (for example code or annotated_code)."
+                    ),
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Optional item/character offset within the selected field.",
+                },
+                "count": {
+                    "type": "integer",
+                    "description": "Optional number of items/characters to return.",
+                },
+            },
+            ["token"],
+        ),
+        example={"token": "ABC123", "field": "code"},
         backend_tool="truncation",
         backend_action="continue",
     ),
@@ -513,9 +562,14 @@ available.
 - Use hex address strings exactly as returned by tools.
 - `ida_rename` and `ida_comment` mutate the IDB. Set `risk_ack=true` only
   after verifying the target and intended change.
+- Use `ida_python(code=..., risk_ack=true)` for narrowly scoped IDA-side
+  scripting; it executes in the live IDA process and is policy-gated.
 - Record confirmed work with `ida_write_finding`; use `ida_next_target` to
   choose the next investigation point.
-- If a result is truncated, call `ida_continue(token=...)`.
+- If a result is truncated, read `_continue.token` and `_continue.fields`.
+  Call `ida_continue(token=...)` when one field is listed; when multiple
+  fields are listed, pass the exact selected name as `field=...` (for example
+  `ida_continue(token="ABC123", field="code")`).
 
 ## Help
 

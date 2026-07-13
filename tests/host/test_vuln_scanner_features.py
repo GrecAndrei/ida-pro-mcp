@@ -248,6 +248,22 @@ class TestTruncationContinueEdgeCases(unittest.TestCase):
         self.assertNotIn("error", result)
         self.assertEqual(result.get("count"), 0)
 
+    def test_multiple_fields_explains_required_field_argument(self):
+        token = _store_truncation(
+            {"code": "x" * 100, "annotated_code": "y" * 100},
+            {
+                "code": {"type": "string", "total": 100, "chunk_size": 50, "next_offset": 0},
+                "annotated_code": {"type": "string", "total": 100, "chunk_size": 50, "next_offset": 0},
+            },
+        )
+
+        result = continue_truncated(token)
+
+        self.assertEqual(result["code"], "TRUNCATION_FIELD_MISSING")
+        self.assertEqual(result["details"]["fields"], ["annotated_code", "code"])
+        self.assertEqual(result["details"]["required_argument"], "field")
+        self.assertIn("ida_continue", result["hint"])
+
 
 class TestTruncateResponseNested(unittest.TestCase):
     """Nested dict truncation."""

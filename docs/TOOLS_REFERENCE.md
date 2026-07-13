@@ -777,9 +777,45 @@ Example:
 }
 ```
 
+## `ida_python`
+
+Execute a Python expression or script in the active IDA process.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "code": {
+      "type": "string",
+      "description": "Python expression or script to execute in IDA context."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this code execution is authorized and intended."
+    }
+  },
+  "required": [
+    "code"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_python",
+  "arguments": {
+    "code": "print(idaapi.get_imagebase())",
+    "risk_ack": true
+  }
+}
+```
+
 ## `ida_continue`
 
-Continue a truncated result using the continuation token returned by a previous call.
+Continue a truncated result; pass field when the response lists more than one truncated field.
 
 Input schema:
 ```json
@@ -788,7 +824,19 @@ Input schema:
   "properties": {
     "token": {
       "type": "string",
-      "description": "Continuation token from a truncated response."
+      "description": "Continuation token from the response's _continue.token field."
+    },
+    "field": {
+      "type": "string",
+      "description": "Exact field name from _continue.fields, required when more than one field is truncated (for example code or annotated_code)."
+    },
+    "offset": {
+      "type": "integer",
+      "description": "Optional item/character offset within the selected field."
+    },
+    "count": {
+      "type": "integer",
+      "description": "Optional number of items/characters to return."
     }
   },
   "required": [
@@ -803,7 +851,8 @@ Example:
 {
   "name": "ida_continue",
   "arguments": {
-    "token": "ABC123"
+    "token": "ABC123",
+    "field": "code"
   }
 }
 ```

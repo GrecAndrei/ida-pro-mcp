@@ -51,6 +51,40 @@ def test_full_function_indexing_has_an_explicit_resumable_contract():
     assert operation.validate({"quality": "lossy"})
 
 
+def test_continue_contract_documents_multi_field_selection():
+    operation = get_agent_operation("ida_continue")
+    assert operation is not None
+    arguments = {"token": "ABC123", "field": "code", "offset": 0, "count": 20}
+    assert not operation.validate(arguments)
+    backend_tool, backend_args = operation.to_backend_call(arguments)
+    assert backend_tool == "truncation"
+    assert backend_args == {
+        "action": "continue",
+        "token": "ABC123",
+        "field": "code",
+        "offset": 0,
+        "count": 20,
+    }
+    assert "field" in operation.input_schema["properties"]
+    assert "more than one" in operation.description
+
+
+def test_python_exposes_scoped_code_execution_with_policy_acknowledgement():
+    operation = get_agent_operation("ida_python")
+    assert operation is not None
+    arguments = {"code": "print(idaapi.get_imagebase())", "risk_ack": True}
+    assert not operation.validate(arguments)
+    backend_tool, backend_args = operation.to_backend_call(arguments)
+    assert backend_tool == "misc"
+    assert backend_args == {
+        "action": "python",
+        "code": "print(idaapi.get_imagebase())",
+        "_risk_ack": True,
+    }
+    assert operation.validate({})
+    assert operation.validate({"expr": "1 + 1"})
+
+
 def test_help_is_in_band_and_returns_the_exact_visible_schema():
     response = build_agent_help({"topic": "ida_decompile"})
     assert response["ok"] is True
@@ -72,6 +106,7 @@ def test_default_tools_list_exposes_agent_operations_with_required_operands(monk
     assert tools["ida_find"]["inputSchema"]["required"] == ["query"]
     assert tools["ida_decompile"]["inputSchema"]["required"] == ["address"]
     assert tools["ida_rename"]["inputSchema"]["required"] == ["address", "name"]
+    assert tools["ida_python"]["inputSchema"]["required"] == ["code"]
 
 
 def test_help_is_callable_through_the_public_mcp_protocol():

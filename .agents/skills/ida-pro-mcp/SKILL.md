@@ -35,9 +35,14 @@ available.
 - Use hex address strings exactly as returned by tools.
 - `ida_rename` and `ida_comment` mutate the IDB. Set `risk_ack=true` only
   after verifying the target and intended change.
+- Use `ida_python(code=..., risk_ack=true)` for narrowly scoped IDA-side
+  scripting; it executes in the live IDA process and is policy-gated.
 - Record confirmed work with `ida_write_finding`; use `ida_next_target` to
   choose the next investigation point.
-- If a result is truncated, call `ida_continue(token=...)`.
+- If a result is truncated, read `_continue.token` and `_continue.fields`.
+  Call `ida_continue(token=...)` when one field is listed; when multiple
+  fields are listed, pass the exact selected name as `field=...` (for example
+  `ida_continue(token="ABC123", field="code")`).
 
 ## Help
 

@@ -85,7 +85,11 @@ def _resolve_field(
             return None, make_error(
                 MCPError.TRUNCATION_FIELD_MISSING,
                 "field is required when multiple truncated fields exist",
-                details={"fields": sorted(fields.keys())},
+                hint=(
+                    "Pass field=<one of the listed fields> to ida_continue "
+                    "using the exact name from _continue.fields."
+                ),
+                details={"fields": sorted(fields.keys()), "required_argument": "field"},
             ), None
 
     info = fields.get(field)
@@ -93,7 +97,11 @@ def _resolve_field(
         return None, make_error(
             MCPError.TRUNCATION_FIELD_MISSING,
             f"Unknown field: {field}",
-            details={"fields": sorted(fields.keys())},
+            hint=(
+                "Pass field=<one of the listed fields> to ida_continue "
+                "using the exact name from _continue.fields."
+            ),
+            details={"fields": sorted(fields.keys()), "required_argument": "field"},
         ), None
 
     response = entry.get("response", {})
@@ -486,7 +494,11 @@ def truncate_response(
         pruned["_continue"] = {
             "token": token,
             "fields": truncated_fields,
-            "hint": f"Use truncation(action='continue', token='{token}', field='...') to read more, or truncation(action='peek'|'search'|'summary', token='{token}').",
+            "hint": (
+                f"Call ida_continue(token='{token}', field='<field name>') when "
+                "multiple fields are listed; use the exact key from fields. "
+                "With one field, field is optional."
+            ),
         }
 
     return pruned
