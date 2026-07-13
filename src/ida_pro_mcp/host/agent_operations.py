@@ -274,7 +274,7 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     ),
     AgentOperation(
         name="ida_decompile",
-        description="Decompile one function to pseudocode.",
+        description="Decompile one function with bounded CFG and ctree-derived structural evidence.",
         category="code",
         input_schema=_schema({"address": ADDRESS, "idb": IDB}, ["address"]),
         example={"address": "0x401000"},
@@ -284,7 +284,7 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     ),
     AgentOperation(
         name="ida_disassemble",
-        description="Disassemble one function or address range.",
+        description="Disassemble one function or address range with compact CFG and call-target evidence when available.",
         category="code",
         input_schema=_schema(
             {
@@ -501,8 +501,15 @@ available.
 
 - Build the semantic index with `ida_index_functions()` before
   `ida_semantic_search(...)`. Use `quality="full"` when retrieval quality
-  matters; full indexing uses bounded passes, so repeat with the returned
-  `next_cursor` until `complete` is true.
+  matters; both index qualities include bounded CFG/call evidence, while full
+  quality also includes ctree-derived control and local data-flow evidence.
+  Full indexing uses bounded passes, so repeat with the returned `next_cursor`
+  until `complete` is true.
+- Treat the `structure` field returned by `ida_decompile` and
+  `ida_disassemble` as evidence: it summarizes CFG shape and call targets;
+  decompilation additionally supplies bounded ctree control points and local
+  data-flow. Use `ida_help` or the dedicated graph/legacy tools only when the
+  compact summary is insufficient.
 - Use hex address strings exactly as returned by tools.
 - `ida_rename` and `ida_comment` mutate the IDB. Set `risk_ack=true` only
   after verifying the target and intended change.

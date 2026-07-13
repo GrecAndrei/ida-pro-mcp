@@ -17,6 +17,12 @@ ida_open_binary → ida_session_state → ida_overview → ida_find
 → ida_decompile / ida_disassemble / ida_xrefs_to → ida_write_finding
 ```
 
+`ida_decompile` returns pseudocode plus a bounded `structure` evidence block:
+CFG shape, resolved call targets, ctree control points, and local data-flow.
+`ida_disassemble` returns the CFG/call-target portion without starting the
+decompiler. Both fast and full semantic indexing include the same structural
+signal; full indexing adds the ctree evidence when Hex-Rays is available.
+
 Use `ida_help(topic="ida_decompile")` for an exact operation contract or
 `ida_help(query="strings")` to discover an operation. Help is served over MCP,
 so it works in every client without filesystem access.

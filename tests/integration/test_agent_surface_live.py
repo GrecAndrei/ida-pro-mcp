@@ -367,12 +367,19 @@ def test_live_full_decomp_index_is_resumable_and_retrieves_behavior(live_context
 def test_live_code_navigation_uses_fixture_symbols(live_context: LiveContext):
     client = live_context.client
     calls = (
-        ("ida_decompile", {"address": "fixture_entry"}),
-        ("ida_disassemble", {"address": "fixture_entry", "style": "classic", "limit": 80}),
         ("ida_xrefs_to", {"address": "fixture_leaf"}),
         ("ida_callers", {"address": "fixture_leaf"}),
         ("ida_callees", {"address": "fixture_entry"}),
     )
+    decompile = _assert_ok(client.call("ida_decompile", {"address": "fixture_entry"}), "ida_decompile")
+    disassembly = _assert_ok(
+        client.call("ida_disassemble", {"address": "fixture_entry", "style": "classic", "limit": 80}),
+        "ida_disassemble",
+    )
+    for payload in (decompile, disassembly):
+        serialized = json.dumps(payload)
+        assert '"structure"' in serialized, payload
+        assert '"cfg"' in serialized, payload
     for name, arguments in calls:
         payload = _assert_ok(client.call(name, arguments), name)
         assert payload

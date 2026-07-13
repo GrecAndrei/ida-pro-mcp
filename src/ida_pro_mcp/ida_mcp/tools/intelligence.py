@@ -47,6 +47,11 @@ try:
 except ImportError:
     from host.intelligence.embeddings import build_decomp_document as _build_decomp_document  # type: ignore[import-not-found]
 
+try:
+    from .code_helpers import _build_function_structure_summary
+except ImportError:
+    from code_helpers import _build_function_structure_summary  # type: ignore[import-not-found]
+
 
 def _parse_register_offset(op_str: str) -> Optional[tuple[str, int]]:
     op_str = op_str.lower()
@@ -149,10 +154,18 @@ def _build_fast_signature(fea: int, func=None) -> str:
             break
     if insns:
         parts.append("code:" + "; ".join(i[:56] for i in insns))
-    return " | ".join(parts)
+    # Fast mode must remain Hex-Rays-free, but a compact CFG + call-target
+    # summary carries control-flow semantics that instruction samples lose.
+    try:
+        structure = _build_function_structure_summary(func, max_items=8)
+        if structure.get("evidence"):
+            parts.append(str(structure["evidence"])[:360])
+    except Exception:
+        pass
+    return " | ".join(parts)[:768]
 
 
-def _build_full_index_document(fea: int, name: str, pseudocode: str, func, embedder) -> str:
+def _build_full_index_document(fea: int, name: str, pseudocode: str, func, embedder, cfunc=None) -> str:
     """Combine Hex-Rays pseudocode with compact IDA xref evidence."""
     max_chars = int(getattr(embedder, "decomp_document_chars", 1152) or 1152)
     document = _build_decomp_document(name, pseudocode, max_chars=max_chars)
@@ -160,8 +173,18 @@ def _build_full_index_document(fea: int, name: str, pseudocode: str, func, embed
     # visible calls and literals. Extra xref text only increases CPU inference
     # cost. For oversized functions it replaces sampled code at a fixed size
     # and can restore evidence omitted by the sampler.
+    try:
+        structure_evidence = str(
+            _build_function_structure_summary(func, cfunc, max_items=8).get("evidence") or ""
+        )[:420]
+    except Exception:
+        structure_evidence = ""
+    appendages = [f"ida_structure: {structure_evidence}"] if structure_evidence else []
     if len(str(pseudocode or "").strip()) <= max_chars:
-        return document
+        if not appendages:
+            return document
+        suffix = "\n" + "\n".join(appendages)
+        return document[: max(0, max_chars - len(suffix))] + suffix
     fast_parts = _build_fast_signature(fea, func).split(" | ")
     document_lower = document.lower()
     novel_parts: list[str] = []
@@ -180,9 +203,11 @@ def _build_full_index_document(fea: int, name: str, pseudocode: str, func, embed
         if novel_values:
             novel_parts.append(f"{label}:{','.join(novel_values)}")
     evidence = " | ".join(novel_parts)[:256]
-    if not evidence:
+    if evidence:
+        appendages.append(f"ida_refs: {evidence}")
+    if not appendages:
         return document
-    suffix = f"\nida_refs: {evidence}"
+    suffix = "\n" + "\n".join(appendages)
     if len(suffix) >= max_chars:
         return suffix[-max_chars:]
     return document[: max_chars - len(suffix)] + suffix
@@ -1062,7 +1087,7 @@ def intelligence(
                             if pseudo:
                                 source_chars = len(pseudo)
                                 pseudocode_chars += source_chars
-                                text = _build_full_index_document(fea, name, pseudo, func, embedder)
+                                text = _build_full_index_document(fea, name, pseudo, func, embedder, cfunc)
                             else:
                                 # Some thunks/library stubs are not Hex-Rays
                                 # decompilable. Keep complete search coverage

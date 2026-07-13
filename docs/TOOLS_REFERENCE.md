@@ -379,7 +379,7 @@ Example:
 
 ## `ida_decompile`
 
-Decompile one function to pseudocode.
+Decompile one function with bounded CFG and ctree-derived structural evidence.
 
 Input schema:
 ```json
@@ -414,7 +414,7 @@ Example:
 
 ## `ida_disassemble`
 
-Disassemble one function or address range.
+Disassemble one function or address range with compact CFG and call-target evidence when available.
 
 Input schema:
 ```json

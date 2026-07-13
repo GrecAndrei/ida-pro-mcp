@@ -12,6 +12,7 @@ try:
     from .code_helpers import (
         _build_decompile_enrichment,
         _build_decompiler_dataflow,
+        _build_function_structure_summary,
         _collect_compact_callees,
         _collect_compact_callers,
         _collect_function_strings,
@@ -31,6 +32,7 @@ except ImportError:
     from code_helpers import (  # type: ignore[import-not-found]
         _build_decompile_enrichment,
         _build_decompiler_dataflow,
+        _build_function_structure_summary,
         _collect_compact_callees,
         _collect_compact_callers,
         _collect_function_strings,
@@ -292,6 +294,7 @@ def code(
                             "addr": hex_ea(func.start_ea),
                             "code": pseudo,
                             "prototype": get_prototype(func),
+                            "structure": _build_function_structure_summary(func, cfunc),
                         }
                         # Inline enrichment shared with smart_decompile so the two
                         # decompilation entrypoints do not drift apart.
@@ -502,6 +505,8 @@ def code(
                         "range": f"{first_addr}-{last_addr}",
                         "window": radius,
                     }
+                    if func:
+                        entry["structure"] = _build_function_structure_summary(func)
                     if not func:
                         entry["warning"] = "Address is not within a defined function. Showing raw disassembly."
                     results.append(entry)
@@ -538,7 +543,8 @@ def code(
                     items = _disasm_range_structured(disasm_start, disasm_end, max_items)
                     fname = ida_funcs.get_func_name(func.start_ea)
                     results.append({"ok": True, "addr": hex_ea(func.start_ea), "name": fname,
-                                    "instructions": items, "count": len(items)})
+                                    "instructions": items, "count": len(items),
+                                    "structure": _build_function_structure_summary(func)})
                     continue
                 lines = _disasm_range(
                     disasm_start,
@@ -558,6 +564,7 @@ def code(
                     "count": len(lines),
                     "style": disasm_style,
                     "range": f"{hex_ea(disasm_start)}-{hex_ea(disasm_end)}",
+                    "structure": _build_function_structure_summary(func),
                 }
                 try:
                     ctx = gather_function_context(func.start_ea, max_refs=6)
@@ -1272,4 +1279,3 @@ def code(
 # ---------------------------------------------------------------------------
 # Argument origin tracer — backward BFS through callers
 # ---------------------------------------------------------------------------
-

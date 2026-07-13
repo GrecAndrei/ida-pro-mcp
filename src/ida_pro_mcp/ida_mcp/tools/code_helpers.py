@@ -86,6 +86,105 @@ def _compute_cfg_semantics(func):
     }
 
 
+def _build_function_structure_summary(func, cfunc=None, max_items=12):
+    """Return compact CFG/ctree evidence suitable for normal LLM responses.
+
+    This deliberately does not export a raw graph or an AST dump.  Those are
+    available through ``graph`` and ``ctree`` when an investigation needs
+    them.  The common path instead gets deterministic, bounded facts that can
+    be read beside disassembly or pseudocode without drowning out the code.
+    ``cfunc`` is optional so disassembly can benefit without starting Hex-Rays.
+    """
+    summary: dict[str, Any] = {"cfg": _compute_cfg_semantics(func)}
+    call_targets: list[str] = []
+    try:
+        for item_ea in idautils.FuncItems(func.start_ea):
+            for target in idautils.CodeRefsFrom(item_ea, 0):
+                target_func = ida_funcs.get_func(target)
+                if target_func and target_func.start_ea != func.start_ea:
+                    name = ida_funcs.get_func_name(target_func.start_ea) or hex_ea(target_func.start_ea)
+                    if name not in call_targets:
+                        call_targets.append(name)
+                        if len(call_targets) >= max_items:
+                            break
+            if len(call_targets) >= max_items:
+                break
+    except Exception:
+        pass
+    if call_targets:
+        summary["call_targets"] = call_targets
+
+    if cfunc is not None:
+        control_points: list[dict[str, str]] = []
+
+        class ControlVisitor(ida_hexrays.ctree_visitor_t):
+            def __init__(self):
+                ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+
+            def visit_insn(self, insn):
+                if len(control_points) >= max_items:
+                    return 1
+                kinds = {
+                    ida_hexrays.cit_if: ("if", "cif", "expr"),
+                    ida_hexrays.cit_while: ("while", "cwhile", "expr"),
+                    ida_hexrays.cit_for: ("for", "cfor", "cond"),
+                    ida_hexrays.cit_switch: ("switch", "cswitch", "expr"),
+                }
+                detail = kinds.get(insn.op)
+                if not detail:
+                    return 0
+                kind, container, field = detail
+                condition = ""
+                try:
+                    expr = getattr(getattr(insn, container), field)
+                    condition = ida_lines.tag_remove(expr.print1(None)) if expr else ""
+                except Exception:
+                    pass
+                control_points.append({
+                    "kind": kind,
+                    "ea": hex_ea(insn.ea) if insn.ea != idaapi.BADADDR else "",
+                    "condition": condition[:160],
+                })
+                return 0
+
+        try:
+            ControlVisitor().apply_to(cfunc.body, None)
+        except Exception:
+            pass
+        if control_points:
+            summary["control_points"] = control_points
+        try:
+            dataflow = _build_decompiler_dataflow(cfunc, max_items=min(160, max_items * 16))
+            summary["dataflow"] = {
+                "argument_variables": dataflow.get("argument_variables", [])[:max_items],
+                "top_hubs": dataflow.get("top_hubs", [])[:max_items],
+                "assignment_edges": dataflow.get("assignment_edges", 0),
+                "call_edges": dataflow.get("call_edges", 0),
+            }
+        except Exception:
+            pass
+
+    evidence: list[str] = []
+    cfg = summary["cfg"]
+    evidence.append(
+        "cfg: {nodes} blocks, {edges} edges, complexity {cyclomatic_complexity}, "
+        "back_edges {back_edges}".format(**cfg)
+    )
+    if call_targets:
+        evidence.append("calls: " + ", ".join(call_targets[:max_items]))
+    if summary.get("control_points"):
+        rendered = [
+            f"{point['kind']}({point['condition']})" if point.get("condition") else point["kind"]
+            for point in summary["control_points"][:max_items]
+        ]
+        evidence.append("control: " + "; ".join(rendered))
+    dataflow = summary.get("dataflow")
+    if isinstance(dataflow, dict) and dataflow.get("argument_variables"):
+        evidence.append("args: " + ", ".join(dataflow["argument_variables"]))
+    summary["evidence"] = " | ".join(evidence)
+    return summary
+
+
 def _build_decompiler_dataflow(cfunc, max_items=800):
     """
     Build variable dependency graph from decompiler expressions.
