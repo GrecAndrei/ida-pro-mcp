@@ -108,6 +108,70 @@ Example:
 }
 ```
 
+## `ida_batch`
+
+Execute several deterministic analysis operations sequentially in one request.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "calls": {
+      "type": "array",
+      "description": "Public ida_* calls as {name, arguments} objects, or parameterless ida_* names.",
+      "items": {
+        "type": [
+          "object",
+          "string"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "continue_on_error": {
+      "type": "boolean",
+      "description": "Continue later calls after an error."
+    }
+  },
+  "required": [
+    "calls"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_batch",
+  "arguments": {
+    "calls": [
+      {
+        "name": "ida_overview",
+        "arguments": {}
+      },
+      {
+        "name": "ida_list_functions",
+        "arguments": {
+          "limit": 20
+        }
+      }
+    ]
+  }
+}
+```
+
 ## `ida_overview`
 
 Get binary metadata, architecture, entry points, and high-level analysis context.
@@ -302,6 +366,564 @@ Example:
   "name": "ida_list_functions",
   "arguments": {
     "limit": 50
+  }
+}
+```
+
+## `ida_create_function`
+
+Define a function at an address, optionally naming it and setting an explicit end boundary.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "end": {
+      "type": "string",
+      "description": "Optional exclusive end address."
+    },
+    "name": {
+      "type": "string",
+      "description": "Optional function name."
+    },
+    "flags": {
+      "type": "integer",
+      "description": "Optional IDA function flags to add."
+    },
+    "force": {
+      "type": "boolean",
+      "description": "Delete overlapping definitions before creating the function."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path."
+    }
+  },
+  "required": [
+    "address"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_create_function",
+  "arguments": {
+    "address": "0x401000",
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_change_function`
+
+Change a function's end boundary, equivalent to IDA's Set function end command.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "end": {
+      "type": "string",
+      "description": "New exclusive function end address, like the GUI cursor position."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path."
+    }
+  },
+  "required": [
+    "address",
+    "end"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_change_function",
+  "arguments": {
+    "address": "0x401000",
+    "end": "0x401080",
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_calc_eval`
+
+Evaluate a safe arithmetic or bitwise expression involving addresses and symbols.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "expr": {
+      "type": "string",
+      "description": "Expression such as 0x401000 + 0x20."
+    },
+    "query": {
+      "type": "string"
+    },
+    "intent": {
+      "type": "string"
+    },
+    "persist": {
+      "type": "boolean",
+      "description": "Save the calculation result to the analysis notebook."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path."
+    }
+  },
+  "required": [
+    "expr"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_calc_eval",
+  "arguments": {
+    "expr": "0x401000 + 0x20"
+  }
+}
+```
+
+## `ida_calc_offset`
+
+Calculate the signed and absolute distance between two addresses or symbols.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "target": {
+      "type": [
+        "string",
+        "integer"
+      ],
+      "description": "Numeric value, hexadecimal address, or symbol accepted by the calculation backend."
+    },
+    "intent": {
+      "type": "string"
+    },
+    "persist": {
+      "type": "boolean",
+      "description": "Save the calculation result to the analysis notebook."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path."
+    }
+  },
+  "required": [
+    "address",
+    "target"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_calc_offset",
+  "arguments": {
+    "address": "0x401000",
+    "target": "0x401050"
+  }
+}
+```
+
+## `ida_calc_convert`
+
+Convert an integer or address into hexadecimal, decimal, binary, octal, byte, and ASCII forms.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "value": {
+      "type": [
+        "string",
+        "integer"
+      ],
+      "description": "Numeric value, hexadecimal address, or symbol accepted by the calculation backend."
+    },
+    "persist": {
+      "type": "boolean",
+      "description": "Save the calculation result to the analysis notebook."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path."
+    }
+  },
+  "required": [
+    "value"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_calc_convert",
+  "arguments": {
+    "value": "1234"
+  }
+}
+```
+
+## `ida_calc_resolve`
+
+Translate an IDA virtual address or file offset using the binary's segment mapping.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "address": {
+      "type": [
+        "string",
+        "integer"
+      ],
+      "description": "Numeric value, hexadecimal address, or symbol accepted by the calculation backend."
+    },
+    "value": {
+      "type": [
+        "string",
+        "integer"
+      ],
+      "description": "Numeric value, hexadecimal address, or symbol accepted by the calculation backend."
+    },
+    "to_va": {
+      "type": "boolean"
+    },
+    "from_file": {
+      "type": "boolean"
+    },
+    "intent": {
+      "type": "string"
+    },
+    "persist": {
+      "type": "boolean",
+      "description": "Save the calculation result to the analysis notebook."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_calc_resolve",
+  "arguments": {
+    "address": "0x401000"
+  }
+}
+```
+
+## `ida_calc_deref`
+
+Read a typed value or pointer from an address, optionally following multiple pointer hops.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "bytes",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "s8",
+        "s16",
+        "s32",
+        "s64",
+        "f32",
+        "f64",
+        "ptr",
+        "string"
+      ]
+    },
+    "size": {
+      "type": "integer"
+    },
+    "deref_depth": {
+      "type": "integer"
+    },
+    "intent": {
+      "type": "string"
+    },
+    "persist": {
+      "type": "boolean",
+      "description": "Save the calculation result to the analysis notebook."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path."
+    }
+  },
+  "required": [
+    "address"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_calc_deref",
+  "arguments": {
+    "address": "0x401000",
+    "type": "u32"
+  }
+}
+```
+
+## `ida_calc_chain`
+
+Follow a pointer chain from an address using explicit offsets.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "offsets": {
+      "type": [
+        "array",
+        "string"
+      ],
+      "items": {
+        "type": "string"
+      },
+      "description": "Pointer-chain offsets, either as a list or a comma-separated string."
+    },
+    "size": {
+      "type": "integer"
+    },
+    "intent": {
+      "type": "string"
+    },
+    "persist": {
+      "type": "boolean",
+      "description": "Save the calculation result to the analysis notebook."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path."
+    }
+  },
+  "required": [
+    "address",
+    "offsets"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_calc_chain",
+  "arguments": {
+    "address": "0x601020",
+    "offsets": [
+      "0x10",
+      "0x20"
+    ]
+  }
+}
+```
+
+## `ida_calc_align`
+
+Align a value or address down, up, and to the nearest requested boundary.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "value": {
+      "type": [
+        "string",
+        "integer"
+      ],
+      "description": "Numeric value, hexadecimal address, or symbol accepted by the calculation backend."
+    },
+    "address": {
+      "type": [
+        "string",
+        "integer"
+      ],
+      "description": "Numeric value, hexadecimal address, or symbol accepted by the calculation backend."
+    },
+    "expr": {
+      "type": "string"
+    },
+    "size": {
+      "type": "integer"
+    },
+    "intent": {
+      "type": "string"
+    },
+    "persist": {
+      "type": "boolean",
+      "description": "Save the calculation result to the analysis notebook."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path."
+    }
+  },
+  "required": [
+    "size"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_calc_align",
+  "arguments": {
+    "value": "0x401003",
+    "size": 16
+  }
+}
+```
+
+## `ida_calc_bitops`
+
+Apply a bitwise and, or, xor, not, shift-left, or shift-right operation to integer values.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "value": {
+      "type": [
+        "string",
+        "integer"
+      ],
+      "description": "Numeric value, hexadecimal address, or symbol accepted by the calculation backend."
+    },
+    "target": {
+      "type": [
+        "string",
+        "integer"
+      ],
+      "description": "Numeric value, hexadecimal address, or symbol accepted by the calculation backend."
+    },
+    "bit_op": {
+      "type": "string",
+      "enum": [
+        "and",
+        "or",
+        "xor",
+        "not",
+        "shl",
+        "shr"
+      ]
+    },
+    "op": {
+      "type": "string",
+      "enum": [
+        "and",
+        "or",
+        "xor",
+        "not",
+        "shl",
+        "shr"
+      ]
+    },
+    "intent": {
+      "type": "string"
+    },
+    "persist": {
+      "type": "boolean",
+      "description": "Save the calculation result to the analysis notebook."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path."
+    }
+  },
+  "required": [
+    "value"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_calc_bitops",
+  "arguments": {
+    "value": "0xff",
+    "target": "0x0f",
+    "bit_op": "xor"
   }
 }
 ```

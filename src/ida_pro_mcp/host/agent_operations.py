@@ -14,10 +14,11 @@ help tool, and the Codex skill references are generated from this data.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from .errors import MCPError, make_error
+from .errors import MCPError, is_error_result, make_error
 
 
 @dataclass(frozen=True)
@@ -127,6 +128,19 @@ ADDRESS = {
 }
 IDB = {"type": "string", "description": "Optional session ID, IDB path, or binary path."}
 LIMIT = {"type": "integer", "description": "Maximum result items to return."}
+CALC_VALUE = {
+    "type": ["string", "integer"],
+    "description": "Numeric value, hexadecimal address, or symbol accepted by the calculation backend.",
+}
+CALC_OFFSETS = {
+    "type": ["array", "string"],
+    "items": {"type": "string"},
+    "description": "Pointer-chain offsets, either as a list or a comma-separated string.",
+}
+PERSIST = {
+    "type": "boolean",
+    "description": "Save the calculation result to the analysis notebook.",
+}
 RISK_ACK = {
     "type": "boolean",
     "description": "Set true only after verifying this IDB mutation is intended.",
@@ -180,6 +194,35 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         example={},
         backend_tool="session",
         backend_action="close",
+    ),
+    AgentOperation(
+        name="ida_batch",
+        description="Execute several deterministic analysis operations sequentially in one request.",
+        category="workflow",
+        input_schema=_schema(
+            {
+                "calls": {
+                    "type": "array",
+                    "description": "Public ida_* calls as {name, arguments} objects, or parameterless ida_* names.",
+                    "items": {
+                        "type": ["object", "string"],
+                        "properties": {
+                            "name": {"type": "string"},
+                            "arguments": {"type": "object"},
+                        },
+                        "required": ["name"],
+                        "additionalProperties": False,
+                    },
+                },
+                "continue_on_error": {"type": "boolean", "description": "Continue later calls after an error."},
+            },
+            ["calls"],
+        ),
+        example={"calls": [{"name": "ida_overview", "arguments": {}}, {"name": "ida_list_functions", "arguments": {"limit": 20}}]},
+        backend_tool="batch",
+        # The legacy batch tool has no action argument; this registry marker
+        # lets schema-integrity checks recognize the host-side dispatch.
+        backend_action="(pass calls array)",
     ),
     AgentOperation(
         name="ida_overview",
@@ -255,6 +298,164 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         example={"limit": 50},
         backend_tool="funcs",
         backend_action="list",
+        argument_map={"limit": "count"},
+    ),
+    AgentOperation(
+        name="ida_create_function",
+        description="Define a function at an address, optionally naming it and setting an explicit end boundary.",
+        category="edit",
+        input_schema=_schema(
+            {
+                "address": ADDRESS,
+                "end": {"type": "string", "description": "Optional exclusive end address."},
+                "name": {"type": "string", "description": "Optional function name."},
+                "flags": {"type": "integer", "description": "Optional IDA function flags to add."},
+                "force": {"type": "boolean", "description": "Delete overlapping definitions before creating the function."},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["address"],
+        ),
+        example={"address": "0x401000", "risk_ack": True},
+        backend_tool="funcs",
+        backend_action="create",
+        argument_map={"address": "addr", "risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_change_function",
+        description="Change a function's end boundary, equivalent to IDA's Set function end command.",
+        category="edit",
+        input_schema=_schema(
+            {
+                "address": ADDRESS,
+                "end": {"type": "string", "description": "New exclusive function end address, like the GUI cursor position."},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["address", "end"],
+        ),
+        example={"address": "0x401000", "end": "0x401080", "risk_ack": True},
+        backend_tool="funcs",
+        backend_action="change",
+        argument_map={"address": "addr", "risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_calc_eval",
+        description="Evaluate a safe arithmetic or bitwise expression involving addresses and symbols.",
+        category="calculation",
+        input_schema=_schema(
+            {"expr": {"type": "string", "description": "Expression such as 0x401000 + 0x20."}, "query": {"type": "string"}, "intent": {"type": "string"}, "persist": PERSIST, "idb": IDB},
+            ["expr"],
+        ),
+        example={"expr": "0x401000 + 0x20"},
+        backend_tool="calc",
+        backend_action="eval",
+    ),
+    AgentOperation(
+        name="ida_calc_offset",
+        description="Calculate the signed and absolute distance between two addresses or symbols.",
+        category="calculation",
+        input_schema=_schema({"address": ADDRESS, "target": CALC_VALUE, "intent": {"type": "string"}, "persist": PERSIST, "idb": IDB}, ["address", "target"]),
+        example={"address": "0x401000", "target": "0x401050"},
+        backend_tool="calc",
+        backend_action="offset",
+        argument_map={"address": "addr"},
+    ),
+    AgentOperation(
+        name="ida_calc_convert",
+        description="Convert an integer or address into hexadecimal, decimal, binary, octal, byte, and ASCII forms.",
+        category="calculation",
+        input_schema=_schema({"value": CALC_VALUE, "persist": PERSIST, "idb": IDB}, ["value"]),
+        example={"value": "1234"},
+        backend_tool="calc",
+        backend_action="convert",
+    ),
+    AgentOperation(
+        name="ida_calc_resolve",
+        description="Translate an IDA virtual address or file offset using the binary's segment mapping.",
+        category="calculation",
+        input_schema=_schema(
+            {"address": CALC_VALUE, "value": CALC_VALUE, "to_va": {"type": "boolean"}, "from_file": {"type": "boolean"}, "intent": {"type": "string"}, "persist": PERSIST, "idb": IDB},
+        ),
+        example={"address": "0x401000"},
+        backend_tool="calc",
+        backend_action="resolve",
+        argument_map={"address": "addr"},
+    ),
+    AgentOperation(
+        name="ida_calc_deref",
+        description="Read a typed value or pointer from an address, optionally following multiple pointer hops.",
+        category="calculation",
+        input_schema=_schema(
+            {
+                "address": ADDRESS,
+                "type": {
+                    "type": "string",
+                    "enum": ["bytes", "u8", "u16", "u32", "u64", "s8", "s16", "s32", "s64", "f32", "f64", "ptr", "string"],
+                },
+                "size": {"type": "integer"},
+                "deref_depth": {"type": "integer"},
+                "intent": {"type": "string"},
+                "persist": PERSIST,
+                "idb": IDB,
+            },
+            ["address"],
+        ),
+        example={"address": "0x401000", "type": "u32"},
+        backend_tool="calc",
+        backend_action="deref",
+        argument_map={"address": "addr"},
+    ),
+    AgentOperation(
+        name="ida_calc_chain",
+        description="Follow a pointer chain from an address using explicit offsets.",
+        category="calculation",
+        input_schema=_schema({"address": ADDRESS, "offsets": CALC_OFFSETS, "size": {"type": "integer"}, "intent": {"type": "string"}, "persist": PERSIST, "idb": IDB}, ["address", "offsets"]),
+        example={"address": "0x601020", "offsets": ["0x10", "0x20"]},
+        backend_tool="calc",
+        backend_action="chain",
+        argument_map={"address": "addr"},
+    ),
+    AgentOperation(
+        name="ida_calc_align",
+        description="Align a value or address down, up, and to the nearest requested boundary.",
+        category="calculation",
+        input_schema=_schema(
+            {
+                "value": CALC_VALUE,
+                "address": CALC_VALUE,
+                "expr": {"type": "string"},
+                "size": {"type": "integer"},
+                "intent": {"type": "string"},
+                "persist": PERSIST,
+                "idb": IDB,
+            },
+            ["size"],
+        ),
+        example={"value": "0x401003", "size": 16},
+        backend_tool="calc",
+        backend_action="align",
+        argument_map={"address": "addr"},
+    ),
+    AgentOperation(
+        name="ida_calc_bitops",
+        description="Apply a bitwise and, or, xor, not, shift-left, or shift-right operation to integer values.",
+        category="calculation",
+        input_schema=_schema(
+            {
+                "value": CALC_VALUE,
+                "target": CALC_VALUE,
+                "bit_op": {"type": "string", "enum": ["and", "or", "xor", "not", "shl", "shr"]},
+                "op": {"type": "string", "enum": ["and", "or", "xor", "not", "shl", "shr"]},
+                "intent": {"type": "string"},
+                "persist": PERSIST,
+                "idb": IDB,
+            },
+            ["value"],
+        ),
+        example={"value": "0xff", "target": "0x0f", "bit_op": "xor"},
+        backend_tool="calc",
+        backend_action="bitops",
     ),
     AgentOperation(
         name="ida_list_strings",
@@ -469,6 +670,178 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
 )
 
 _OPERATIONS_BY_NAME = {operation.name: operation for operation in AGENT_OPERATIONS}
+_OPERATIONS_BY_BACKEND = {
+    (operation.backend_tool, operation.backend_action): operation
+    for operation in AGENT_OPERATIONS
+    if operation.backend_tool and operation.backend_action
+}
+
+# A few backend actions have a deliberately different public name or are
+# aliases of an action-specific operation.  Keep these here so public errors
+# can offer valid agentic recovery guidance without changing the legacy API.
+_BACKEND_REFERENCE_ALIASES = {
+    ("data", "functions"): "ida_list_functions",
+    ("intelligence", "index_batch"): "ida_index_functions",
+    ("session", "health"): "ida_session_status",
+}
+_LEGACY_ACTION_CALL = re.compile(
+    r"\b([A-Za-z_]\w*)\(\s*action\s*=\s*(['\"])([^'\"]+)\2[^)]*\)"
+)
+_LEGACY_REFERENCE = re.compile(
+    r"\b[A-Za-z_]\w*\(\s*action\s*=|\b(?:funcs|code|data|search|session|misc|"
+    r"intelligence|truncation|analysis|calc)\.[A-Za-z_]\w*|\baction\s*=\s*"
+)
+
+
+def _public_operation_for_backend(tool: Any, action: Any) -> AgentOperation | None:
+    """Resolve a legacy backend pair to its public agentic operation."""
+    key = (str(tool or "").strip(), str(action or "").strip())
+    operation_name = _BACKEND_REFERENCE_ALIASES.get(key)
+    if operation_name:
+        return _OPERATIONS_BY_NAME.get(operation_name)
+    return _OPERATIONS_BY_BACKEND.get(key)
+
+
+def _rewrite_public_text(text: Any, operation_name: str) -> str:
+    """Remove legacy call syntax from text returned for a public operation."""
+    value = str(text or "")
+
+    def replace_call(match: re.Match[str]) -> str:
+        operation = _public_operation_for_backend(match.group(1), match.group(3))
+        return operation.name if operation else match.group(0)
+
+    value = _LEGACY_ACTION_CALL.sub(replace_call, value)
+    if "index_fast" in value:
+        value = value.replace("index_fast", "ida_index_functions(quality='fast')")
+    if "index_batch" in value:
+        value = value.replace("index_batch", "ida_index_functions(quality='full')")
+    if not _LEGACY_REFERENCE.search(value):
+        return value
+    return (
+        f"Use ida_help(topic='{operation_name}') for the public agentic contract. "
+        "The legacy backend recovery syntax is not exposed on this surface."
+    )
+
+
+def _public_recovery_item(item: Any) -> dict[str, Any] | None:
+    """Translate one legacy recovery recipe when a public equivalent exists."""
+    if not isinstance(item, dict):
+        return None
+    args = item.get("args")
+    if not isinstance(args, dict):
+        return None
+    operation = _public_operation_for_backend(item.get("tool"), args.get("action"))
+    if operation is None:
+        return None
+
+    public_args: dict[str, Any] = {}
+    reverse_map = {backend: public for public, backend in operation.argument_map.items()}
+    for key, value in args.items():
+        if key == "action":
+            continue
+        public_args[reverse_map.get(key, key)] = value
+    required = operation.input_schema.get("required", [])
+    if any(key not in public_args for key in required):
+        return None
+    result: dict[str, Any] = {"tool": operation.name, "args": public_args}
+    if item.get("note"):
+        result["note"] = _rewrite_public_text(item["note"], operation.name)
+    return result
+
+
+def _adapt_one_agent_error(payload: dict[str, Any], public_name: str) -> dict[str, Any]:
+    adapted = dict(payload)
+    for key in ("message", "hint"):
+        if key in adapted and isinstance(adapted[key], str):
+            adapted[key] = _rewrite_public_text(adapted[key], public_name)
+
+    recovery = adapted.get("recovery")
+    if isinstance(recovery, list):
+        public_recovery = [item for raw in recovery if (item := _public_recovery_item(raw))]
+        if public_recovery:
+            adapted["recovery"] = public_recovery
+        else:
+            adapted.pop("recovery", None)
+    return adapted
+
+
+def adapt_agent_error_payload(payload: Any, operation_name: Any) -> Any:
+    """Adapt legacy hints/recovery recipes before returning a public result.
+
+    IDA-side handlers still serve the compatibility dispatcher, so their
+    errors may mention ``tool(action=...)``.  The same handler is reached by
+    public ``ida_*`` operations, where those references are invalid guidance.
+    Adapt both top-level errors and per-item errors inside aggregate results.
+    Legacy calls made through the legacy surface are left untouched.
+    """
+    public_name = str(operation_name or "").strip()
+    if not public_name.startswith("ida_"):
+        return payload
+    if isinstance(payload, list):
+        return [adapt_agent_error_payload(item, public_name) for item in payload]
+    if not isinstance(payload, dict):
+        return payload
+    if is_error_result(payload):
+        return _adapt_one_agent_error(payload, public_name)
+    return {
+        key: adapt_agent_error_payload(value, public_name)
+        for key, value in payload.items()
+    }
+
+
+def translate_public_batch_arguments(arguments: Any) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Translate nested public ``ida_*`` calls to the compatibility batch form."""
+    if not isinstance(arguments, dict):
+        return None, make_error(MCPError.INVALID_ARGS, "arguments must be an object")
+    calls = arguments.get("calls")
+    if not isinstance(calls, list) or not calls:
+        return None, make_error(MCPError.BATCH_EMPTY, "No calls provided in batch")
+
+    translated: list[Any] = []
+    for index, raw_call in enumerate(calls):
+        if isinstance(raw_call, str):
+            name = raw_call.strip()
+            nested_args: dict[str, Any] = {}
+        elif isinstance(raw_call, dict):
+            name = raw_call.get("name")
+            nested_args = raw_call.get("arguments", {})
+            if not isinstance(nested_args, dict):
+                return None, make_error(
+                    MCPError.INVALID_ARGS,
+                    f"Batch call {index} arguments must be an object",
+                )
+        else:
+            return None, make_error(
+                MCPError.INVALID_ARGS,
+                f"Batch call {index} must be an ida_* name or {{name, arguments}} object",
+            )
+
+        operation = get_agent_operation(name) if isinstance(name, str) else None
+        if operation is None:
+            # Preserve legacy entries for compatibility with callers migrating
+            # to the public surface; the outer batch dispatcher validates them.
+            translated.append(raw_call)
+            continue
+        if operation.name == "ida_batch":
+            return None, make_error(MCPError.INVALID_ARGS, "Nested ida_batch calls are not allowed")
+        validation_error = operation.validate(nested_args)
+        if validation_error:
+            validation_error = dict(validation_error)
+            validation_error.setdefault("details", {})
+            if isinstance(validation_error["details"], dict):
+                validation_error["details"] = {"batch_index": index, **validation_error["details"]}
+            return None, validation_error
+        if operation.help_only:
+            return None, make_error(MCPError.INVALID_ARGS, "ida_help cannot be used inside ida_batch")
+        backend_tool, backend_args = operation.to_backend_call(nested_args)
+        translated.append({"name": backend_tool, "arguments": backend_args})
+
+    result = dict(arguments)
+    result["calls"] = translated
+    # ``ida_batch`` uses a synthetic backend action only to enter the host's
+    # batch branch; the actual batch payload must not contain it.
+    result.pop("action", None)
+    return result, None
 
 
 def get_agent_operation(name: Any) -> AgentOperation | None:
@@ -557,8 +930,8 @@ available.
 - Treat the `structure` field returned by `ida_decompile` and
   `ida_disassemble` as evidence: it summarizes CFG shape and call targets;
   decompilation additionally supplies bounded ctree control points and local
-  data-flow. Use `ida_help` or the dedicated graph/legacy tools only when the
-  compact summary is insufficient.
+  data-flow. Use `ida_help` or dedicated graph/advanced operations only when
+  the compact summary is insufficient.
 - Use hex address strings exactly as returned by tools.
 - `ida_rename` and `ida_comment` mutate the IDB. Set `risk_ack=true` only
   after verifying the target and intended change.

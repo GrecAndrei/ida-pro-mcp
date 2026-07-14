@@ -4,6 +4,7 @@ Create, delete, query, and annotate functions with metrics and ML-powered name s
 
 ## Actions
 - `create` — create a new function at address; params: `address`, `end` (optional)
+- `change` — set the current function's end address, equivalent to IDA's Set function end command; params: `address`, `end`
 - `delete` — delete a function; params: `address`
 - `set_flags` — set function flags; params: `address`, `flags`
 - `set_name` (alias: `rename`) — rename a function; params: `address`, `name`

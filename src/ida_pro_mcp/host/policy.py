@@ -120,6 +120,7 @@ WRITE_ACTIONS = {
     "auto_comment_function",
     "cleanup",
     "comment",
+    "change",
     "create",
     "import",
     "label",

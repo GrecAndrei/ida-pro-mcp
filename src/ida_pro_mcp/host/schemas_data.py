@@ -150,7 +150,7 @@ ADVERTISED_ACTIONS: dict[str, list[str]] = {
         "decompile", "smart_decompile", "disasm", "blocks", "callees", "callers",
     ],
     "funcs": [
-        "list", "info", "create", "delete", "set_flags", "metrics",
+        "list", "info", "create", "change", "delete", "set_flags", "metrics",
         "find_similar", "suggest_names",
     ],
     "misc": [
@@ -280,7 +280,7 @@ TOOL_DESCRIPTIONS = {
     "export": "Write real on-disk artifacts from the IDB. listing/html/idc/json/headers always write files. binexport uses Google BinExport when installed (explicit path via BinExportBinary); otherwise writes a labeled JSON fallback — use bindiff(action='snapshot') for cross-version diffs without the plugin. sarif exports blackboard findings only (no invented noise). redact redacts IPs/emails/hashes from text=. Actions: listing, html, idc, json, sarif, binexport, headers, redact, vtable.",
     "firmware_view": "Firmware triage: region scanning, pointer sweeps, table carving, deterministic detection logic, multi-region campaigns, and bootstrap orchestration. Actions: scan_region, auto_retype, pointer_sweep, recommend, table_candidates, smart_carve, rollback_last, review_contradictions, region_profile, pointer_clusters, carve_plan, campaign, segment_sweep, multi_region_campaign, detect_load_address, detect_vector_table, detect_mmio, rtos_scan, triage_snapshot, bootstrap.",
     "fixups": "Manage relocations/fixups (relocation table entries) in the IDB. Actions: list, get, add, delete.",
-    "funcs": "Function boundary management (≈ IDA P/Delete keys). create: define a function at addr (≡ pressing P in IDA). delete: remove function definition. info: full function metadata — pass include_xrefs/include_prototype/include_stack for richer output. metrics: size/complexity/call counts. find_similar: structural similarity search. suggest_names: name candidates from heuristics. list: paginated function listing (like data(functions)) with structured output. Note: regex-based filters live in search, while renames and comments live on modify. Actions: create, delete, set_flags, info, metrics, find_similar, suggest_names, list.",
+    "funcs": "Function boundary management (≈ IDA P/Delete keys). create: define a function at addr (≡ pressing P in IDA). change: set the current function end (≡ IDA Set function end). delete: remove function definition. info: full function metadata — pass include_xrefs/include_prototype/include_stack for richer output. metrics: size/complexity/call counts. find_similar: structural similarity search. suggest_names: name candidates from heuristics. list: paginated function listing (like data(functions)) with structured output. Note: regex-based filters live in search, while renames and comments live on modify. Actions: create, change, delete, set_flags, info, metrics, find_similar, suggest_names, list.",
     "gadgets": "Find ROP/JOP/COP gadgets, stack pivots, and classify exploit chains. Actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains, classify_chain.",
     "governance": "Pre-flight validation for edits: detect contradictions, PII, dangerous patches. Actions: check, redact, list_rules, stats.",
     "graph": "Generate call graphs, CFGs, dominator trees, and xref graphs for visualization. Actions: callgraph, cfg, dominators, xref_graph.",

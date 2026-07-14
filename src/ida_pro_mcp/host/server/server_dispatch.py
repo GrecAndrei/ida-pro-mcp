@@ -1184,6 +1184,7 @@ class ServerDispatchMixin:
                     "make_code",
                     "make_data",
                     "delete",
+                    "change",
                     "set_name",
                     "set_attr",
                     "set_perms",

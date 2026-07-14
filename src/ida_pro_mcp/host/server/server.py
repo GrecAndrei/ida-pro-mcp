@@ -18,7 +18,12 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 import contextlib  # noqa: E402
 
-from ..agent_operations import build_agent_help, get_agent_operation  # noqa: E402
+from ..agent_operations import (  # noqa: E402
+    adapt_agent_error_payload,
+    build_agent_help,
+    get_agent_operation,
+    translate_public_batch_arguments,
+)
 from ..analysis.context_density import ContextDensityOptimizer  # noqa: E402
 from ..analysis.patterns import GlobalFactsDatabase  # noqa: E402
 from ..config import (  # noqa: E402
@@ -539,6 +544,9 @@ class IDAMCPServer(
                     res = make_error(
                         MCPError.INVALID_ARGS, "arguments must be an object"
                     )
+                elif operation is not None and operation.name == "ida_batch":
+                    call_args, batch_error = translate_public_batch_arguments(call_args)
+                    res = batch_error if batch_error else self._handle_batch(call_args)
                 else:
                     res = self._handle_batch(call_args)
             else:
@@ -571,6 +579,8 @@ class IDAMCPServer(
                     res = self._cache_next_page(resolved_tn or "", call_args, res)
                     self._record_activity(resolved_tn or "", call_args, res)
             raw_res = res
+            if operation is not None:
+                res = adapt_agent_error_payload(res, operation.name)
             res = self._prepare_response_payload(
                 res,
                 response_opts,

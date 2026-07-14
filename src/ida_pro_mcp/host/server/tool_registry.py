@@ -94,7 +94,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "export": ["listing", "html", "idc", "json", "sarif", "binexport", "headers", "redact", "vtable"],
     "firmware_view": ["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign", "detect_load_address", "detect_vector_table", "detect_mmio", "rtos_scan", "triage_snapshot", "bootstrap"],
     "fixups": ["list", "get", "add", "delete"],
-    "funcs": ["create", "delete", "set_flags", "info", "metrics", "find_similar", "suggest_names", "list"],
+    "funcs": ["create", "change", "delete", "set_flags", "info", "metrics", "find_similar", "suggest_names", "list"],
     "gadgets": ["rop", "jop", "cop", "syscall", "write_what_where", "stack_pivot", "shellcode_space", "mitigations", "seh_handlers", "pivot_chains", "classify_chain"],
     "governance": ["check", "redact", "list_rules", "stats"],
     "graph": ["callgraph", "cfg", "dominators", "xref_graph"],

@@ -321,8 +321,8 @@ def _embedding_rename_suggestions(
 
 
 def _funcs_impl(
-    action: Annotated[Literal["create", "delete", "set_flags", "info", "metrics", "find_similar", "suggest_names"],
-                      "Action: create|delete|set_flags|info|metrics|find_similar|suggest_names"],
+    action: Annotated[Literal["create", "change", "delete", "set_flags", "info", "metrics", "find_similar", "suggest_names"],
+                      "Action: create|change|delete|set_flags|info|metrics|find_similar|suggest_names"],
     addr: Annotated[Optional[str], "Address"] = None,
     end: Annotated[Optional[str], "Optional end address (for create)"] = None,
     name: Annotated[Optional[str], "Function name (for create)"] = None,
@@ -463,6 +463,42 @@ def _funcs_impl(
                     result["note"] = f"Deleted containing function (start was at {hex(target_ea)}, you specified {hex(ea)})"
                 return result
             return make_error(MCPError.IDA_ERROR, f"Failed to delete function at {hex(target_ea)}")
+
+        elif action == "change":
+            # This is the programmatic equivalent of IDA's "Set function end"
+            # command: keep the function start and move its end to the
+            # requested address (the GUI uses the cursor as the new end).
+            ea, err = _resolve_func_addr(addr)
+            if err:
+                return err
+            func = ida_funcs.get_func(ea)
+            if not func:
+                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at or containing {hex(ea)}")
+            if not end:
+                return make_error(MCPError.INVALID_ARGS, "end required to change a function boundary")
+            new_end, err = validate_addr(end)
+            if err:
+                return err
+            if new_end <= func.start_ea:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    f"end address {hex(new_end)} must be greater than function start {hex(func.start_ea)}",
+                )
+            old_end = int(func.end_ea)
+            if not ida_funcs.set_func_end(func.start_ea, new_end):
+                return make_error(
+                    MCPError.IDA_ERROR,
+                    f"IDA could not set function end to {hex(new_end)}",
+                    "The requested boundary may overlap another function or invalid code; inspect the function first.",
+                )
+            updated = ida_funcs.get_func(func.start_ea)
+            return {
+                "ok": True,
+                "addr": hex(func.start_ea),
+                "old_end": hex(old_end),
+                "end": hex(updated.end_ea if updated else new_end),
+                "changed": old_end != new_end,
+            }
 
         elif action == "set_flags":
             ea, err = _resolve_func_addr(addr)
@@ -710,10 +746,10 @@ def _funcs_impl(
 @tool
 def funcs(
     action: Annotated[Literal[
-        "create", "delete", "set_flags", "info", "metrics", "find_similar",
+        "create", "change", "delete", "set_flags", "info", "metrics", "find_similar",
         "suggest_names", "list",
     ],
-                      "Action: create|delete|set_flags|info|metrics|find_similar|suggest_names|list"],
+                      "Action: create|change|delete|set_flags|info|metrics|find_similar|suggest_names|list"],
     addr: Annotated[Optional[str], "Address"] = None,
     end: Annotated[Optional[str], "Optional end address (for create)"] = None,
     name: Annotated[Optional[str], "Function name (for create)"] = None,
@@ -739,6 +775,8 @@ def funcs(
       if needed. If address is inside an existing function, offers to split or
       suggests using the existing function's start. Optionally set `end`, `name`,
       `flags`, or `force` to delete overlapping functions/data.
+    - change: Change the current function's end address, equivalent to IDA's
+      Set function end command (the GUI uses the cursor as the new end).
     - delete: Remove function definition at `addr`. If addr is inside a function
       (but not at its start), the containing function is deleted.
     - set_flags: Update function attribute flags.
