@@ -1024,9 +1024,11 @@ def intelligence(
                     if not func:
                         failures += 1
                         continue
-                    # range filter: function must overlap at least one range
+                    # Standard half-open interval overlap: functions that
+                    # start before a range but extend into or across it still
+                    # belong to the requested radius/range.
                     if ranges:
-                        in_range = any(s <= fea < e or s < func.end_ea <= e for s, e in ranges)
+                        in_range = any(fea < e and func.end_ea > s for s, e in ranges)
                         if not in_range:
                             skipped += 1
                             continue

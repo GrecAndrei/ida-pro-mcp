@@ -351,6 +351,15 @@ def search(
             response = run_query_lang(query or actual_pattern or "")
         elif action == "nl":
             mode = str(kwargs.get("mode", "expand"))
+            center_ea = None
+            raw_center = kwargs.get("addr")
+            raw_radius = kwargs.get("radius")
+            if raw_radius is not None and raw_center is None:
+                return make_error(MCPError.INVALID_ARGS, "addr is required when radius is set")
+            if raw_center is not None:
+                center_ea, center_error = validate_addr(raw_center, require_func=False)
+                if center_error:
+                    return center_error
             response = _search_nl_impl(
                 actual_pattern,
                 limit=limit,
@@ -358,6 +367,10 @@ def search(
                 min_score=semantic_min_score,
                 timeout_ms=timeout_ms,
                 include_items=include_items,
+                range_start=range_start,
+                range_end=range_end,
+                center_ea=center_ea,
+                radius=raw_radius,
             )
 
         elif action == "behavior":

@@ -38,6 +38,30 @@ def test_find_translates_to_the_legacy_backend_without_losing_its_required_query
     assert operation.validate({"query": "recv", "pattern": "wrong field"})
 
 
+def test_semantic_search_translates_address_scope_and_score_controls():
+    operation = get_agent_operation("ida_semantic_search")
+    assert operation is not None
+    arguments = {
+        "query": "packet decoder",
+        "address": "0x4000",
+        "radius": 1024,
+        "min_score": 0.35,
+        "limit": 12,
+    }
+    assert not operation.validate(arguments)
+    assert operation.to_backend_call(arguments) == (
+        "search",
+        {
+            "action": "nl",
+            "query": "packet decoder",
+            "addr": "0x4000",
+            "radius": 1024,
+            "semantic_min_score": 0.35,
+            "limit": 12,
+        },
+    )
+
+
 def test_function_listing_uses_the_legacy_funcs_backend_behind_a_public_operation():
     operation = get_agent_operation("ida_list_functions")
     assert operation is not None
@@ -250,18 +274,61 @@ def test_structured_tool_results_are_opt_in(monkeypatch):
 def test_full_function_indexing_has_an_explicit_resumable_contract():
     operation = get_agent_operation("ida_index_functions")
     assert operation is not None
-    arguments = {"quality": "full", "limit": 16, "cursor": "0x401000"}
+    arguments = {
+        "quality": "full",
+        "limit": 500,
+        "cursor": "0x401000",
+        "address": "0x402000",
+        "radius": 4096,
+        "slice_size": 8,
+    }
     assert not operation.validate(arguments)
     backend_tool, backend_args = operation.to_backend_call(arguments)
     assert backend_tool == "intelligence"
     assert backend_args == {
         "action": "index_fast",
+        "_background": True,
         "mode": "full",
-        "index_limit": 16,
+        "limit": 500,
         "start_after": "0x401000",
+        "addr": "0x402000",
+        "radius": 4096,
+        "_index_slice_size": 8,
     }
-    assert prepare_rpc_args(backend_tool, backend_args, TOOL_ARG_SCHEMAS) == backend_args
+    assert prepare_rpc_args(backend_tool, backend_args, TOOL_ARG_SCHEMAS) == {
+        key: value for key, value in backend_args.items() if not key.startswith("_")
+    }
     assert operation.validate({"quality": "lossy"})
+
+
+def test_function_indexing_exposes_scopes_and_background_job_controls():
+    operation = get_agent_operation("ida_index_functions")
+    status = get_agent_operation("ida_index_status")
+    cancel = get_agent_operation("ida_cancel_index")
+    assert operation is not None and status is not None and cancel is not None
+    arguments = {
+        "ranges": [
+            {"start": "0x1000", "end": "0x2000"},
+            {"start": "0x4000", "end": "0x4800"},
+        ],
+        "query": "jpeg_*",
+        "min_size": 16,
+        "max_size": 4096,
+        "background": False,
+    }
+    assert not operation.validate(arguments)
+    tool, backend_args = operation.to_backend_call(arguments)
+    assert tool == "intelligence"
+    assert backend_args["ranges"] == arguments["ranges"]
+    assert backend_args["_background"] is False
+    assert status.to_backend_call({"task_id": "task1"}) == (
+        "background",
+        {"action": "status", "task_id": "task1"},
+    )
+    assert cancel.to_backend_call({"task_id": "task1"}) == (
+        "background",
+        {"action": "cancel", "task_id": "task1"},
+    )
 
 
 def test_continue_contract_documents_multi_field_selection():

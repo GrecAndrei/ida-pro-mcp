@@ -262,6 +262,23 @@ def _assert_ok(payload: dict[str, Any], operation: str) -> dict[str, Any]:
     return payload
 
 
+def _wait_for_index(client: LiveMCPClient, submission: dict[str, Any], timeout: float = 300) -> dict[str, Any]:
+    task_id = submission.get("task_id")
+    assert task_id, f"background index did not return a task_id: {submission}"
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        status = _assert_ok(client.call("ida_index_status", {"task_id": task_id}), "ida_index_status")
+        tasks = status.get("tasks") or []
+        assert tasks, f"index task disappeared: {task_id}"
+        task = tasks[0]
+        if task.get("state") == "done":
+            return _assert_ok(task.get("result") or {}, "ida_index_functions result")
+        if task.get("state") in {"failed", "cancelled"}:
+            return task
+        time.sleep(0.1)
+    pytest.fail(f"semantic index task {task_id} did not finish within {timeout}s")
+
+
 @dataclass
 class LiveContext:
     client: LiveMCPClient
@@ -293,7 +310,7 @@ def test_public_catalog_and_help_are_live_contracts(live_context: LiveContext):
     tools = response["result"]["tools"]
     names = {tool["name"] for tool in tools}
     assert response["result"]["surface"] == "agent"
-    assert len(names) == 23
+    assert len(names) == 25
     assert all(name.startswith("ida_") for name in names)
     assert "search" not in names
     help_payload = _assert_ok(live_context.client.call("ida_help", {"topic": "ida_decompile"}), "ida_help")
@@ -315,7 +332,8 @@ def test_live_session_discovery_and_index_surface(live_context: LiveContext):
         if name == "ida_find":
             assert "fixture_entry" in json.dumps(payload).lower()
 
-    index_payload = _assert_ok(client.call("ida_index_functions", {}), "ida_index_functions")
+    submission = _assert_ok(client.call("ida_index_functions", {}), "ida_index_functions")
+    index_payload = _wait_for_index(client, submission)
     assert index_payload.get("indexed", 0) > 0, f"ida_index_functions did not build an index: {index_payload}"
     semantic_payload = client.call(
         "ida_semantic_search", {"query": "function that prints the marker string", "mode": "quick", "limit": 10}
@@ -326,30 +344,20 @@ def test_live_session_discovery_and_index_surface(live_context: LiveContext):
     )
 
 
-def test_live_full_decomp_index_is_resumable_and_retrieves_behavior(live_context: LiveContext):
+def test_live_full_decomp_index_runs_to_completion_in_background(live_context: LiveContext):
     if os.environ.get("IDA_MCP_LIVE_BINARY"):
         pytest.skip("deterministic semantic assertion requires the generated fixture")
 
     client = live_context.client
-    cursor = None
-    passes: list[dict[str, Any]] = []
-    for _ in range(64):
-        arguments: dict[str, Any] = {"quality": "full", "limit": 8}
-        if cursor:
-            arguments["cursor"] = cursor
-        payload = _assert_ok(client.call("ida_index_functions", arguments), "ida_index_functions full")
-        passes.append(payload)
-        if payload.get("complete"):
-            break
-        cursor = payload.get("next_cursor")
-        assert cursor, f"incomplete full index did not return a cursor: {payload}"
-    else:
-        pytest.fail(f"full index did not complete after {len(passes)} passes")
-
-    assert sum(int(row.get("input", {}).get("pseudocode_chars", 0)) for row in passes) > 0
-    final_counts = passes[-1].get("index", {}).get("quality_counts", {})
-    assert int(final_counts.get("full", 0)) > 0, passes[-1]
-    assert passes[-1].get("fully_indexed") is True, passes[-1]
+    submission = _assert_ok(
+        client.call("ida_index_functions", {"quality": "full", "slice_size": 8}),
+        "ida_index_functions full",
+    )
+    payload = _wait_for_index(client, submission)
+    assert int(payload.get("input", {}).get("pseudocode_chars", 0)) > 0
+    final_counts = payload.get("index", {}).get("quality_counts", {})
+    assert int(final_counts.get("full", 0)) > 0, payload
+    assert payload.get("fully_indexed") is True, payload
 
     behavior_queries = {
         "function that prints the fixed agent surface marker": "fixture_entry",
@@ -452,7 +460,10 @@ def test_live_index_fails_honestly_when_embeddings_are_disabled(
     client.start()
     try:
         _assert_ok(client.call("ida_open_binary", {"binary_path": str(live_context.binary)}), "ida_open_binary (no embeddings)")
-        payload = client.call("ida_index_functions", {})
+        submission = _assert_ok(client.call("ida_index_functions", {}), "ida_index_functions submit")
+        task = _wait_for_index(client, submission)
+        assert task.get("state") == "failed", task
+        payload = task.get("result") or {}
         assert payload.get("error") is True, f"disabled embeddings produced a fake index: {payload}"
         assert payload.get("code") == "IDA_ERROR"
         assert "No embeddings were created" in str(payload.get("message"))

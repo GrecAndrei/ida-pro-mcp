@@ -241,6 +241,15 @@ class ServerDispatchMixin:
                 rpc_args = prepare_rpc_args(tool_name, kwargs, TOOL_ARG_SCHEMAS)
                 if is_error_result(rpc_args):
                     return rpc_args
+                if (
+                    (tool_name == "intelligence" and rpc_args.get("action") == "semantic_search")
+                    or (tool_name == "search" and rpc_args.get("action") == "nl")
+                ):
+                    # Session startup performs this match asynchronously, but
+                    # a first search may beat that worker. Guarantee exact-
+                    # binary reuse here before asking IDA to open its index.
+                    with contextlib.suppress(Exception):
+                        self._seed_index_from_matching_binary(session)
                 # Keep the shared inference process owned by the MCP host.
                 # IDA-side tools attach through its lease instead of spawning
                 # a child of idat that can survive after the session exits.
@@ -1262,6 +1271,23 @@ class ServerDispatchMixin:
             if tool_name == "multi_session":
                 action = str(args.get("action") or "").strip()
                 return self._handle_multi_session(action, args)
+
+            if tool_name == "intelligence" and str(args.get("action") or "") in {
+                "index_fast", "index_batch", "index_range"
+            }:
+                validation_error = self._validate_semantic_index_scope(args)
+                if validation_error:
+                    return validation_error
+                if _coerce_bool(args.pop("_background", False), False):
+                    idb_ref = args.pop(
+                        "idb", self.current_session.idb_path if self.current_session else None
+                    )
+                    if not idb_ref:
+                        return make_error(
+                            MCPError.SESSION_REQUIRED,
+                            "No active session. Open a binary before starting semantic indexing.",
+                        )
+                    return self._submit_semantic_index(args, idb_ref)
 
             ip = args.pop(
                 "idb", self.current_session.idb_path if self.current_session else None

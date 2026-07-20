@@ -66,6 +66,7 @@ READ_ONLY_TOOLS = {
     "history",
     "idb",
     "imports_deep",
+    "intelligence",
     "knowledge",
     "lumina",
     "microcode",

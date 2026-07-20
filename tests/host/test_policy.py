@@ -13,6 +13,14 @@ def test_read_only_action_allowed_by_default():
 
     assert result.decision == PolicyDecision.ALLOW
     assert result.risk == RiskTier.READ
+
+
+def test_semantic_indexing_is_read_only_analysis_and_needs_no_ack():
+    result = evaluate_policy("intelligence", "index_fast", mode=PolicyMode.ASSIST)
+
+    assert result.decision == PolicyDecision.ALLOW
+    assert result.risk == RiskTier.READ
+    assert result.requires_ack is False
     assert result.allowed is True
     assert result.requires_ack is False
 

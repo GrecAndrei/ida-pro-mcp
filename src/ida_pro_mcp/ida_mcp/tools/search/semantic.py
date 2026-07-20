@@ -52,6 +52,13 @@ def get_backend():
 
     idx = asm._get_index(idb_path)
     if idx.size == 0:
+        # The host may have copied an exact-binary index into this session
+        # after the IDA-side assembler first cached an empty reader.
+        try:
+            idx.refresh_from_disk()
+        except Exception:
+            pass
+    if idx.size == 0:
         return _err(
             "No embeddings indexed yet.",
             hint=(
@@ -93,6 +100,10 @@ def search_nl(
     timeout_ms: int = 0,
     include_items: bool = False,
     classifier_threshold: float = 0.25,
+    range_start: int | None = None,
+    range_end: int | None = None,
+    center_ea: int | None = None,
+    radius: int | None = None,
 ) -> dict:
     """Natural language search via FunctionEmbeddingIndex.
 
@@ -121,8 +132,36 @@ def search_nl(
 
     started_at = _time.time()
 
-    # Phase 1: primary search via hybrid semantic+lexical
-    raw_results = idx.search(query, top_k=max(6, limit * 3), threshold=0.0)
+    scope_start = range_start
+    scope_end = range_end
+    if center_ea is not None and radius is not None:
+        try:
+            radius_int = int(radius)
+        except (TypeError, ValueError):
+            return make_error(MCPError.INVALID_ARGS, "radius must be an integer")
+        if radius_int <= 0:
+            return make_error(MCPError.INVALID_ARGS, "radius must be greater than zero")
+        radius_start = max(0, int(center_ea) - radius_int)
+        radius_end = int(center_ea) + radius_int + 1
+        scope_start = max(scope_start, radius_start) if scope_start is not None else radius_start
+        scope_end = min(scope_end, radius_end) if scope_end is not None else radius_end
+    if scope_start is not None and scope_end is not None and scope_end <= scope_start:
+        return make_error(MCPError.INVALID_ARGS, "range and radius scopes do not overlap")
+    address_ranges = (
+        [(scope_start if scope_start is not None else 0, scope_end if scope_end is not None else (1 << 64))]
+        if scope_start is not None or scope_end is not None
+        else None
+    )
+
+    # Phase 1: primary search via hybrid semantic+lexical. The embedding index
+    # applies address_ranges before top-k truncation.
+    candidate_limit = max(6, limit * 3)
+    raw_results = idx.search(
+        query,
+        top_k=candidate_limit,
+        threshold=0.0,
+        address_ranges=address_ranges,
+    )
 
     # Phase 2: behavior-driven query expansion (only in "expand" mode)
     expansion_queries: list[str] = []
@@ -149,7 +188,12 @@ def search_nl(
                 if (_time.time() - started_at) >= (timeout_ms / 1000.0):
                     break
                 try:
-                    extra_hits = idx.search(extra_q, top_k=max(3, limit), threshold=0.0)
+                    extra_hits = idx.search(
+                        extra_q,
+                        top_k=max(3, limit),
+                        threshold=0.0,
+                        address_ranges=address_ranges,
+                    )
                 except Exception:
                     continue
                 for h in extra_hits:
@@ -174,7 +218,24 @@ def search_nl(
                 reverse=True,
             )
 
-    # Phase 3: adaptive gating on the score used to rank the hybrid results.
+    # Phase 3: deterministic address scoping before score gating. Fetching a
+    # wider candidate set above ensures a narrow radius is not starved by
+    # globally higher-ranked functions outside the requested region.
+    if scope_start is not None or scope_end is not None:
+        scoped_results = []
+        for result in raw_results:
+            try:
+                ea = int(str(result.get("ea") or ""), 0)
+            except (TypeError, ValueError):
+                continue
+            if scope_start is not None and ea < scope_start:
+                continue
+            if scope_end is not None and ea >= scope_end:
+                continue
+            scoped_results.append(result)
+        raw_results = scoped_results
+
+    # Phase 4: adaptive gating on the score used to rank the hybrid results.
     # Gating only on raw cosine similarity discarded strong lexical matches
     # (for example, an exact API or string reference) after hybrid_search had
     # correctly promoted them.
@@ -209,6 +270,12 @@ def search_nl(
         "backend_bge": getattr(idx, "_embedder", None) and getattr(idx._embedder, "backend", "unavailable"),
         "results": "\n".join(rows),
         "count": len(rows),
+        "scope": {
+            "start": hex(scope_start) if scope_start is not None else None,
+            "end": hex(scope_end) if scope_end is not None else None,
+            "center": hex(center_ea) if center_ea is not None else None,
+            "radius": int(radius) if radius is not None else None,
+        },
         "items": [
             {
                 "addr": r.get("ea"),

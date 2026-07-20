@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import os
+import sqlite3
+import threading
+import time
 from typing import Any
 
 from ..batch_manager import BatchManager
-from ..errors import MCPError, make_error
+from ..errors import MCPError, is_error_result, make_error
 from ..policy import PolicyDecision, evaluate_policy
 
 _BACKGROUND_ACTIONS = {
@@ -17,6 +22,409 @@ _BACKGROUND_ACTIONS = {
 
 
 class BackgroundMixin:
+
+    @staticmethod
+    def _semantic_binary_digest(path: str) -> str:
+        digest = hashlib.sha256()
+        with open(path, "rb") as binary:
+            for chunk in iter(lambda: binary.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    @staticmethod
+    def _semantic_load_profiles_compatible(left: Any, right: Any) -> bool:
+        keys = {
+            "processor", "loader", "base", "base_address", "load_address",
+            "image_base", "bitness", "bits", "endian",
+        }
+        left_options = dict(getattr(left, "analysis_options", None) or {})
+        right_options = dict(getattr(right, "analysis_options", None) or {})
+        for key in keys:
+            left_value = left_options.get(key)
+            right_value = right_options.get(key)
+            if left_value not in (None, "") and right_value not in (None, ""):
+                if str(left_value).strip().lower() != str(right_value).strip().lower():
+                    return False
+        return True
+
+    def _seed_index_from_matching_binary(self, session: Any) -> dict[str, Any]:
+        lock = getattr(self, "_semantic_index_reuse_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._semantic_index_reuse_lock = lock
+        with lock:
+            return self._seed_index_from_matching_binary_unlocked(session)
+
+    def _seed_index_from_matching_binary_unlocked(self, session: Any) -> dict[str, Any]:
+        """Copy a completed exact-binary index into this session's private DB."""
+        target_db = f"{session.idb_path}.embeddings.db"
+
+        def _row_counts(path: str) -> tuple[int, int]:
+            if not os.path.isfile(path):
+                return 0, 0
+            try:
+                with sqlite3.connect(path) as conn:
+                    total = int(conn.execute("SELECT COUNT(*) FROM func_embeddings").fetchone()[0])
+                    columns = {
+                        str(row[1]) for row in conn.execute("PRAGMA table_info(func_embeddings)")
+                    }
+                    full = 0
+                    if "index_quality" in columns:
+                        full = int(
+                            conn.execute(
+                                "SELECT COUNT(*) FROM func_embeddings WHERE index_quality='full'"
+                            ).fetchone()[0]
+                        )
+                    return total, full
+            except (OSError, sqlite3.Error, TypeError, ValueError):
+                return 0, 0
+
+        existing_count, _ = _row_counts(target_db)
+        if existing_count:
+            return {"reused": False, "reason": "target_index_present", "functions": existing_count}
+        binary_path = str(getattr(session, "binary_path", "") or "")
+        if not os.path.isfile(binary_path):
+            return {"reused": False, "reason": "binary_unavailable"}
+
+        target_stat = os.stat(binary_path)
+        target_digest = self._semantic_binary_digest(binary_path)
+        digest_cache = {os.path.realpath(binary_path): target_digest}
+        candidates: list[tuple[int, int, Any, str]] = []
+        for candidate in self.session_mgr.discover_sessions():
+            if str(candidate.session_id) == str(session.session_id):
+                continue
+            if not self._semantic_load_profiles_compatible(session, candidate):
+                continue
+            candidate_binary = str(getattr(candidate, "binary_path", "") or "")
+            source_db = f"{candidate.idb_path}.embeddings.db"
+            total, full = _row_counts(source_db)
+            if not total or not os.path.isfile(candidate_binary):
+                continue
+            try:
+                candidate_stat = os.stat(candidate_binary)
+                if candidate_stat.st_size != target_stat.st_size:
+                    continue
+                real_candidate = os.path.realpath(candidate_binary)
+                candidate_digest = digest_cache.get(real_candidate)
+                if candidate_digest is None:
+                    candidate_digest = self._semantic_binary_digest(candidate_binary)
+                    digest_cache[real_candidate] = candidate_digest
+                if candidate_digest != target_digest:
+                    continue
+            except OSError:
+                continue
+            candidates.append((full, total, candidate, source_db))
+
+        if not candidates:
+            return {
+                "reused": False,
+                "reason": "no_compatible_index",
+                "binary_sha256": target_digest,
+            }
+        full, total, source_session, source_db = max(candidates, key=lambda row: (row[0], row[1]))
+        os.makedirs(os.path.dirname(target_db) or ".", exist_ok=True)
+        with sqlite3.connect(source_db) as source, sqlite3.connect(target_db) as target:
+            source.backup(target)
+            if os.path.isfile(session.idb_path):
+                idb_stat = os.stat(session.idb_path)
+                source_fingerprint = hashlib.sha256(
+                    f"{session.idb_path}:{idb_stat.st_size}:{idb_stat.st_mtime_ns}".encode()
+                ).hexdigest()
+            else:
+                source_fingerprint = hashlib.sha256(str(session.idb_path).encode()).hexdigest()
+            metadata = {
+                "source_idb_path": str(session.idb_path),
+                "source_binary_path": binary_path,
+                "source_binary_sha256": target_digest,
+                "source_fingerprint": source_fingerprint,
+                "reused_from_session": str(source_session.session_id),
+                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }
+            target.executemany(
+                """
+                INSERT INTO embedding_meta(key, value) VALUES(?, ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """,
+                metadata.items(),
+            )
+            target.commit()
+        assembler = getattr(self, "assembler", None)
+        embedder = getattr(assembler, "_embedder", None)
+        if embedder is not None:
+            # FunctionEmbeddingIndex performs the authoritative model format,
+            # dimension, schema, and source-fingerprint compatibility check.
+            from ..intelligence.embeddings import FunctionEmbeddingIndex
+
+            validated = FunctionEmbeddingIndex(target_db, embedder)
+            if validated.size == 0 and total:
+                return {
+                    "reused": False,
+                    "reason": "incompatible_embedding_profile",
+                    "from_session": str(source_session.session_id),
+                    "binary_sha256": target_digest,
+                }
+        return {
+            "reused": True,
+            "from_session": str(source_session.session_id),
+            "functions": total,
+            "full_quality_functions": full,
+            "binary_sha256": target_digest,
+        }
+
+    def _semantic_index_job_state(self) -> tuple[threading.RLock, dict[str, str]]:
+        lock = getattr(self, "_semantic_index_jobs_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._semantic_index_jobs_lock = lock
+        active = getattr(self, "_semantic_index_tasks", None)
+        if active is None:
+            active = {}
+            self._semantic_index_tasks = active
+        return lock, active
+
+    @staticmethod
+    def _validate_semantic_index_scope(args: dict[str, Any]) -> dict | None:
+        def _positive(name: str, *, allow_zero: bool = False) -> dict | None:
+            value = args.get(name)
+            if value is None:
+                return None
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                return make_error(MCPError.INVALID_ARGS, f"{name} must be an integer")
+            if number < 0 or (number == 0 and not allow_zero):
+                return make_error(MCPError.INVALID_ARGS, f"{name} must be greater than zero")
+            return None
+
+        for field in ("limit", "_index_slice_size", "radius", "min_size", "max_size"):
+            if error := _positive(field, allow_zero=field in {"min_size", "max_size"}):
+                return error
+        if args.get("radius") is not None and not args.get("addr"):
+            return make_error(MCPError.INVALID_ARGS, "address is required when radius is set")
+        if bool(args.get("start")) != bool(args.get("end")):
+            return make_error(MCPError.INVALID_ARGS, "start and end must be provided together")
+
+        def _range_error(start: Any, end: Any, label: str) -> dict | None:
+            try:
+                start_int = int(str(start), 0)
+                end_int = int(str(end), 0)
+            except (TypeError, ValueError):
+                return make_error(MCPError.INVALID_ARGS, f"{label} must contain hexadecimal or integer addresses")
+            if end_int <= start_int:
+                return make_error(MCPError.INVALID_ARGS, f"{label} end must be greater than start")
+            return None
+
+        if args.get("start") is not None:
+            if error := _range_error(args.get("start"), args.get("end"), "range"):
+                return error
+        ranges = args.get("ranges")
+        if ranges is not None:
+            if not isinstance(ranges, list) or not ranges:
+                return make_error(MCPError.INVALID_ARGS, "ranges must be a non-empty array")
+            for index, item in enumerate(ranges):
+                if not isinstance(item, dict) or set(item) != {"start", "end"}:
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        f"ranges[{index}] must contain exactly start and end",
+                    )
+                if error := _range_error(item["start"], item["end"], f"ranges[{index}]"):
+                    return error
+        min_size = args.get("min_size")
+        max_size = args.get("max_size")
+        if min_size is not None and max_size is not None and int(min_size) > int(max_size):
+            return make_error(MCPError.INVALID_ARGS, "min_size cannot exceed max_size")
+        return None
+
+    def _submit_semantic_index(self, args: dict[str, Any], idb_ref: Any) -> dict:
+        """Run a complete semantic-index request as small, interruptible RPC slices."""
+        session = self._resolve_session_from_idb_ref(idb_ref)
+        if not session:
+            return make_error(
+                MCPError.FILE_NOT_FOUND,
+                f"No session found for idb reference: {idb_ref}",
+            )
+        validation_error = self._validate_semantic_index_scope(args)
+        if validation_error:
+            return validation_error
+
+        session_id = str(session.session_id)
+        lock, active = self._semantic_index_job_state()
+        with lock:
+            previous_id = active.get(session_id)
+            if previous_id:
+                status = self._batch_manager.status(previous_id)
+                if status and status[0].get("state") in {"pending", "running"}:
+                    return {
+                        "ok": True,
+                        "task_id": previous_id,
+                        "state": status[0]["state"],
+                        "background": True,
+                        "reused": True,
+                        "message": "A semantic-index job is already active for this IDA session.",
+                    }
+
+            request_args = dict(args)
+            request_args.pop("_background", None)
+            raw_slice_size = request_args.pop("_index_slice_size", None)
+            quality = str(request_args.get("mode") or "fast").strip().lower()
+            default_slice_size = 8 if quality == "full" else 64
+            slice_size = max(1, min(256, int(raw_slice_size or default_slice_size)))
+            raw_total_limit = request_args.pop("limit", None)
+            total_limit = int(raw_total_limit) if raw_total_limit is not None else None
+            initial_cursor = request_args.pop("start_after", None)
+            request_args.pop("index_limit", None)
+            scope = {
+                key: request_args[key]
+                for key in ("start", "end", "addr", "radius", "ranges", "query", "min_size", "max_size")
+                if request_args.get(key) is not None
+            }
+
+            def _run(task):
+                cursor = str(initial_cursor) if initial_cursor else None
+                indexed = attempted = failed = passes = 0
+                eligible = None
+                last_index: dict[str, Any] = {}
+                limit_reached = False
+                scope_complete = False
+                fully_indexed = False
+                pseudocode_chars = 0
+                document_chars = 0
+                self._update_session_indexing_metadata(
+                    session_id,
+                    indexing_mode=f"semantic_{quality}",
+                    indexing_state="running",
+                    semantic_index_task_id=task.task_id,
+                    semantic_indexed_count=0,
+                )
+                try:
+                    task.progress = {"state": "matching_binary", "quality": quality}
+                    reuse = self._seed_index_from_matching_binary(session)
+                    while not task._cancel_event.is_set():
+                        remaining = None if total_limit is None else total_limit - attempted
+                        if remaining is not None and remaining <= 0:
+                            limit_reached = True
+                            break
+                        pass_size = slice_size if remaining is None else min(slice_size, remaining)
+                        rpc_args = dict(request_args)
+                        rpc_args["action"] = "index_fast"
+                        rpc_args["index_limit"] = pass_size
+                        if cursor:
+                            rpc_args["start_after"] = cursor
+
+                        result = self.call_tool("intelligence", session.idb_path, **rpc_args)
+                        if is_error_result(result):
+                            task.result = result
+                            message = result.get("message") or result.get("error") or "semantic indexing failed"
+                            raise RuntimeError(str(message))
+
+                        passes += 1
+                        indexed += int(result.get("indexed") or 0)
+                        pass_attempted = int(result.get("attempted") or 0)
+                        attempted += pass_attempted
+                        failed += int(result.get("failed") or 0)
+                        eligible = result.get("eligible", eligible)
+                        last_index = dict(result.get("index") or {})
+                        fully_indexed = bool(result.get("fully_indexed"))
+                        pass_input = result.get("input") or {}
+                        pseudocode_chars += int(pass_input.get("pseudocode_chars") or 0)
+                        document_chars += int(pass_input.get("document_chars") or 0)
+                        next_cursor = result.get("next_cursor")
+                        complete = bool(result.get("complete"))
+                        task.progress = {
+                            "passes": passes,
+                            "indexed": indexed,
+                            "attempted": attempted,
+                            "failed": failed,
+                            "eligible": eligible,
+                            "next_cursor": next_cursor,
+                            "quality": quality,
+                        }
+                        self._update_session_indexing_metadata(
+                            session_id,
+                            indexing_state="running",
+                            semantic_indexed_count=indexed,
+                            semantic_index_progress=task.progress,
+                        )
+                        if complete or not next_cursor:
+                            scope_complete = complete
+                            break
+                        if next_cursor == cursor and pass_attempted == 0:
+                            raise RuntimeError("semantic index made no progress at the resume cursor")
+                        cursor = str(next_cursor)
+                        # Release the per-runtime RPC lane between slices and
+                        # give interactive calls a chance to acquire it.
+                        time.sleep(0.01)
+
+                    if task._cancel_event.is_set():
+                        self._update_session_indexing_metadata(
+                            session_id,
+                            indexing_state="cancelled",
+                            indexing_complete=False,
+                            semantic_indexed_count=indexed,
+                            semantic_index_progress=task.progress,
+                        )
+                        return {"ok": True, "cancelled": True, "next_cursor": cursor}
+                    result = {
+                        "ok": True,
+                        "quality": quality,
+                        "passes": passes,
+                        "indexed": indexed,
+                        "attempted": attempted,
+                        "failed": failed,
+                        "eligible": eligible,
+                        "complete": scope_complete and not limit_reached,
+                        "fully_indexed": fully_indexed and scope_complete and not limit_reached,
+                        "limit_reached": limit_reached,
+                        "next_cursor": cursor if limit_reached or not scope_complete else None,
+                        "scope": scope,
+                        "binary_match": reuse,
+                        "index": last_index,
+                        "input": {
+                            "pseudocode_chars": pseudocode_chars,
+                            "document_chars": document_chars,
+                        },
+                    }
+                    self._update_session_indexing_metadata(
+                        session_id,
+                        indexing_state="complete" if scope_complete and not limit_reached else "limit_reached",
+                        indexing_complete=scope_complete and not limit_reached,
+                        semantic_indexed_count=indexed,
+                        semantic_index_progress=result,
+                    )
+                    return result
+                except Exception:
+                    self._update_session_indexing_metadata(
+                        session_id,
+                        indexing_state="failed",
+                        indexing_complete=False,
+                        semantic_index_progress=task.progress,
+                    )
+                    raise
+
+            task_id = self._batch_manager.submit(
+                action="semantic_index",
+                args={
+                    "quality": quality,
+                    "limit": total_limit,
+                    "slice_size": slice_size,
+                    "scope": scope,
+                },
+                session_id=session_id,
+                run_fn=_run,
+            )
+            active[session_id] = task_id
+
+        return {
+            "ok": True,
+            "task_id": task_id,
+            "state": "pending",
+            "background": True,
+            "quality": quality,
+            "limit": total_limit,
+            "slice_size": slice_size,
+            "scope": scope,
+            "message": "Semantic indexing is running in the background; use ida_index_status with this task_id.",
+        }
 
     def _background_policy_preflight(self, *, script: Any, tool_call: Any) -> dict | None:
         if script:

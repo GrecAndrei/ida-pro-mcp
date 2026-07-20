@@ -33,6 +33,7 @@ class AgentOperation:
     backend_tool: str | None = None
     backend_action: str | None = None
     argument_map: Mapping[str, str] = field(default_factory=dict)
+    backend_defaults: Mapping[str, Any] = field(default_factory=dict)
     help_only: bool = False
 
     def validate(self, arguments: Any) -> dict[str, Any] | None:
@@ -82,7 +83,10 @@ class AgentOperation:
         """Translate a public operation call to the legacy dispatcher shape."""
         if not self.backend_tool or not self.backend_action:
             raise ValueError(f"Operation {self.name} does not dispatch to a backend tool")
-        backend_args: dict[str, Any] = {"action": self.backend_action}
+        backend_args: dict[str, Any] = {
+            "action": self.backend_action,
+            **self.backend_defaults,
+        }
         for key, value in arguments.items():
             backend_args[self.argument_map.get(key, key)] = value
         return self.backend_tool, backend_args
@@ -265,6 +269,11 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
                 "query": {"type": "string", "description": "Behavior to find, such as 'function that decrypts strings'."},
                 "mode": {"type": "string", "enum": ["quick", "expand"], "description": "quick is faster; expand adds behavior-driven matches."},
                 "limit": LIMIT,
+                "min_score": {"type": "number", "description": "Minimum semantic or hybrid rank score."},
+                "start": {"type": "string", "description": "Inclusive start address for result filtering."},
+                "end": {"type": "string", "description": "Exclusive end address for result filtering."},
+                "address": {"type": "string", "description": "Center address or function for radius filtering."},
+                "radius": {"type": "integer", "description": "Byte radius around address for result filtering."},
                 "idb": IDB,
             },
             ["query"],
@@ -272,25 +281,54 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         example={"query": "function that decrypts strings", "mode": "quick", "limit": 20},
         backend_tool="search",
         backend_action="nl",
+        argument_map={"min_score": "semantic_min_score", "address": "addr"},
     ),
     AgentOperation(
         name="ida_index_functions",
-        description="Build the function index for semantic search, using fast metadata or full Hex-Rays decompilation.",
+        description="Build a scoped semantic function index in responsive background slices.",
         category="discovery",
         input_schema=_schema(
             {
                 "quality": {
                     "type": "string",
                     "enum": ["fast", "full"],
-                    "description": "fast scans metadata and disassembly; full decompiles functions in resumable passes for best retrieval quality.",
+                    "description": "fast scans metadata and disassembly; full adds Hex-Rays decompilation for better retrieval quality.",
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Optional functions to process in this pass; full mode otherwise chooses an adaptive pass size.",
+                    "description": "Maximum functions for the whole job; omit to index every matching function.",
                 },
                 "cursor": {
                     "type": "string",
-                    "description": "Resume after the next_cursor returned by a limited indexing pass.",
+                    "description": "Start after this hexadecimal function address.",
+                },
+                "start": {"type": "string", "description": "Inclusive start address for one index range."},
+                "end": {"type": "string", "description": "Exclusive end address for one index range."},
+                "address": {"type": "string", "description": "Center function or address for radius-based indexing."},
+                "radius": {"type": "integer", "description": "Byte radius around address; indexes overlapping functions."},
+                "ranges": {
+                    "type": "array",
+                    "description": "Multiple address ranges to index.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "start": {"type": "string"},
+                            "end": {"type": "string"},
+                        },
+                        "required": ["start", "end"],
+                        "additionalProperties": False,
+                    },
+                },
+                "query": {"type": "string", "description": "Optional function-name filter; glob and regex forms are supported."},
+                "min_size": {"type": "integer", "description": "Minimum function size in bytes."},
+                "max_size": {"type": "integer", "description": "Maximum function size in bytes."},
+                "slice_size": {
+                    "type": "integer",
+                    "description": "Functions processed per IDA RPC slice; smaller values improve interactive responsiveness.",
+                },
+                "background": {
+                    "type": "boolean",
+                    "description": "Run non-blocking and return a task ID; defaults to true.",
                 },
                 "idb": IDB,
             }
@@ -298,7 +336,37 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         example={"quality": "full"},
         backend_tool="intelligence",
         backend_action="index_fast",
-        argument_map={"quality": "mode", "limit": "index_limit", "cursor": "start_after"},
+        argument_map={
+            "quality": "mode",
+            "cursor": "start_after",
+            "address": "addr",
+            "background": "_background",
+            "slice_size": "_index_slice_size",
+        },
+        backend_defaults={"_background": True},
+    ),
+    AgentOperation(
+        name="ida_index_status",
+        description="Check progress or retrieve the result of a background semantic-index job.",
+        category="discovery",
+        input_schema=_schema(
+            {"task_id": {"type": "string", "description": "Task ID returned by ida_index_functions."}}
+        ),
+        example={},
+        backend_tool="background",
+        backend_action="status",
+    ),
+    AgentOperation(
+        name="ida_cancel_index",
+        description="Cancel a queued or running semantic-index job after its current slice.",
+        category="discovery",
+        input_schema=_schema(
+            {"task_id": {"type": "string", "description": "Task ID returned by ida_index_functions."}},
+            ["task_id"],
+        ),
+        example={"task_id": "abc123def456"},
+        backend_tool="background",
+        backend_action="cancel",
     ),
     AgentOperation(
         name="ida_list_functions",
@@ -935,8 +1003,9 @@ available.
   `ida_semantic_search(...)`. Use `quality="full"` when retrieval quality
   matters; both index qualities include bounded CFG/call evidence, while full
   quality also includes ctree-derived control and local data-flow evidence.
-  Full indexing uses bounded passes, so repeat with the returned `next_cursor`
-  until `complete` is true.
+  Indexing runs as a background job by default; poll `ida_index_status()` with
+  the returned task ID. Use range, radius, size, or name filters for a scoped
+  job. Exact matching binaries can reuse compatible indexes across sessions.
 - Treat the `structure` field returned by `ida_decompile` and
   `ida_disassemble` as evidence: it summarizes CFG shape and call targets;
   decompilation additionally supplies bounded ctree control points and local

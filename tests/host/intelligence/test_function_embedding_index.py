@@ -61,6 +61,17 @@ def test_index_persists_a_successful_embedding_for_a_fresh_reader(tmp_path):
     assert reader.size == 1
 
 
+def test_reader_refreshes_rows_written_after_its_cache_was_created(tmp_path):
+    db_path = str(tmp_path / "sample.embeddings.db")
+    reader = FunctionEmbeddingIndex(db_path, _FixedEmbedder())
+    writer = FunctionEmbeddingIndex(db_path, _FixedEmbedder())
+    assert reader.size == 0
+
+    assert writer.index("0x401000", "fixture", "fixture pseudocode") is True
+
+    assert reader.refresh_from_disk() == 1
+
+
 def test_index_many_persists_batch_results_for_a_fresh_reader(tmp_path):
     db_path = str(tmp_path / "sample.embeddings.db")
     writer = FunctionEmbeddingIndex(db_path, _BatchEmbedder())
@@ -135,3 +146,23 @@ def test_lexical_search_normalizes_behavior_verbs_and_print_apis(tmp_path):
 
     assert matches[0]["name"] == "fixture_entry"
     assert {"print", "puts", "agent", "surface", "marker"}.intersection(matches[0]["matched_tokens"])
+
+
+def test_semantic_candidates_are_filtered_by_address_range_before_limit(tmp_path):
+    index = FunctionEmbeddingIndex(str(tmp_path / "sample.embeddings.db"), _BatchEmbedder())
+    index.index_many(
+        [
+            ("0x1000", "global_best", "packet decoder exact marker", None),
+            ("0x3f00", "near_low", "packet decoder", None),
+            ("0x4100", "near_high", "packet decoder", None),
+            ("0x9000", "global_second", "packet decoder exact marker", None),
+        ]
+    )
+
+    matches = index.search_text(
+        "packet decoder exact marker",
+        top_k=2,
+        address_ranges=[(0x3E00, 0x4201)],
+    )
+
+    assert {match["ea"] for match in matches} == {"0x3f00", "0x4100"}

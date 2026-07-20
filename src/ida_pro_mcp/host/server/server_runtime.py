@@ -2333,6 +2333,26 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             # call every 5 s — cheap enough not to starve auto-analysis.
             self._start_analysis_watchdog(session_id, server_port)
 
+            # Reuse an exact-content compatible semantic index without
+            # coupling this IDA process to another session's live database.
+            # Hashing and SQLite backup stay off the session-open path.
+            def _reuse_index() -> None:
+                try:
+                    reused = self._seed_index_from_matching_binary(session)
+                    self._update_session_indexing_metadata(
+                        session_id,
+                        semantic_index_reuse=reused,
+                        indexing_state="reused" if reused.get("reused") else "idle",
+                    )
+                except Exception as exc:
+                    log_rpc(f"[semantic-index] reuse scan failed for {session_id}: {exc}")
+
+            threading.Thread(
+                target=_reuse_index,
+                daemon=True,
+                name=f"semantic-reuse-{session_id}",
+            ).start()
+
     def _stop_analysis_engine(self, sid: str, join_timeout: float = 2.0) -> None:
             engine = getattr(self, "_analysis_engines", {}).pop(sid, None)
             if engine is None:

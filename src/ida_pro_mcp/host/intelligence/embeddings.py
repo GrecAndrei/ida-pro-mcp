@@ -741,6 +741,11 @@ class FunctionEmbeddingIndex:
         except Exception:
             pass
 
+    def refresh_from_disk(self) -> int:
+        """Observe rows written or copied by another process and return size."""
+        self._load_cache()
+        return self.size
+
     def _pack(self, vec: list[float]) -> bytes:
         from .helpers import pack_floats
         return pack_floats(vec)
@@ -969,6 +974,7 @@ class FunctionEmbeddingIndex:
         top_k: int = 5,
         exclude_ea: str | None = None,
         threshold: float = 0.6,
+        address_ranges: list[tuple[int, int]] | None = None,
     ) -> list[dict[str, Any]]:
         """Return top-k most similar functions given a pre-computed query vector."""
         with self._cache_lock:
@@ -979,6 +985,13 @@ class FunctionEmbeddingIndex:
         for ea, vec in snapshot:
             if ea == exclude_ea:
                 continue
+            if address_ranges:
+                try:
+                    ea_int = int(str(ea), 0)
+                except (TypeError, ValueError):
+                    continue
+                if not any(start <= ea_int < end for start, end in address_ranges):
+                    continue
             sim = _cosine(query_vec, vec)
             if sim >= threshold:
                 scored.append((sim, ea))
@@ -1048,6 +1061,7 @@ class FunctionEmbeddingIndex:
         top_k: int = 10,
         threshold: float = 0.0,
         exclude_ea: str | None = None,
+        address_ranges: list[tuple[int, int]] | None = None,
     ) -> list[dict[str, Any]]:
         """Rank indexed functions by lexical overlap over stored signatures and names."""
         q_norm = _normalize_search_text(query)
@@ -1064,6 +1078,13 @@ class FunctionEmbeddingIndex:
                     ea = str(row[0])
                     if exclude_ea and ea == exclude_ea:
                         continue
+                    if address_ranges:
+                        try:
+                            ea_int = int(ea, 0)
+                        except (TypeError, ValueError):
+                            continue
+                        if not any(start <= ea_int < end for start, end in address_ranges):
+                            continue
                     name = str(row[1] or ea)
                     signature_text = str(row[2] or "")
                     blob = f"{name} {signature_text}".strip()
@@ -1118,6 +1139,7 @@ class FunctionEmbeddingIndex:
         top_k: int = 10,
         threshold: float = 0.0,
         exclude_ea: str | None = None,
+        address_ranges: list[tuple[int, int]] | None = None,
     ) -> list[dict[str, Any]]:
         """Blend semantic similarity with lexical signature overlap."""
         if not query:
@@ -1129,6 +1151,7 @@ class FunctionEmbeddingIndex:
             top_k=max(max(1, int(top_k)) * 6, 48),
             threshold=0.0,
             exclude_ea=exclude_ea,
+            address_ranges=address_ranges,
         )
         try:
             query_text = _extract_signature_text(query, max_tokens=64) or str(query)
@@ -1145,6 +1168,7 @@ class FunctionEmbeddingIndex:
                 top_k=max(max(1, int(top_k)) * 6, 48),
                 exclude_ea=exclude_ea,
                 threshold=0.0,
+                address_ranges=address_ranges,
             )
         except Exception:
             semantic_hits = []
@@ -1225,6 +1249,7 @@ class FunctionEmbeddingIndex:
         top_k: int = 10,
         threshold: float = 0.0,
         exclude_ea: str | None = None,
+        address_ranges: list[tuple[int, int]] | None = None,
     ) -> list[dict[str, Any]]:
         """Compatibility entrypoint for semantic or hybrid function search."""
         if isinstance(query_or_vec, (list, tuple)):
@@ -1232,8 +1257,20 @@ class FunctionEmbeddingIndex:
                 vec = [float(v) for v in query_or_vec]
             except Exception:
                 return []
-            return self.similar_vec(vec, top_k=top_k, exclude_ea=exclude_ea, threshold=threshold)
-        return self.hybrid_search(str(query_or_vec or ""), top_k=top_k, threshold=threshold, exclude_ea=exclude_ea)
+            return self.similar_vec(
+                vec,
+                top_k=top_k,
+                exclude_ea=exclude_ea,
+                threshold=threshold,
+                address_ranges=address_ranges,
+            )
+        return self.hybrid_search(
+            str(query_or_vec or ""),
+            top_k=top_k,
+            threshold=threshold,
+            exclude_ea=exclude_ea,
+            address_ranges=address_ranges,
+        )
 
     def search_structured(
         self,

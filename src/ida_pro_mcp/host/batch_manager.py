@@ -35,7 +35,7 @@ class BatchTask:
     finished_at: float | None = None
     result: Any = None
     error: str | None = None
-    progress: str | None = None
+    progress: Any = None
     _future: Future | None = field(default=None, repr=False)
     _cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
@@ -57,7 +57,7 @@ class BatchTask:
             "finished_at": self.finished_at,
             "elapsed": round(self.elapsed, 3),
             "progress": self.progress,
-            "result": self.result if self.state == "done" else None,
+            "result": self.result if self.state in {"done", "failed", "cancelled"} else None,
             "error": self.error,
         }
 
