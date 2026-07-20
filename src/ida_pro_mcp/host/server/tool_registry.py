@@ -60,7 +60,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "next_target", "frontier", "coverage", "propagate_labels",
         "start_crawler", "stop_crawler", "crawler_status",
         "accept", "reject", "add_evidence", "calibrate", "decay",
-        "campaign_summary", "auto_tag_propagate",
+        "campaign_summary", "workspace_brief", "auto_tag_propagate",
         "accept_proposal", "reject_proposal",
         "add_system", "add_struct", "add_gap", "fill_gap",
         "add_state_machine", "add_peripheral", "add_attack_surface",

@@ -166,6 +166,11 @@ class BlackboardStore:
                 ("entropy", "REAL DEFAULT 0.0"),
                 ("xref_count", "INTEGER DEFAULT 0"),
                 ("calibrated", "INTEGER DEFAULT 0"),
+                # Investigation-workspace fields. Legacy rows remain valid.
+                ("kind", "TEXT DEFAULT 'finding'"),
+                ("status", "TEXT DEFAULT 'open'"),
+                ("priority", "REAL DEFAULT 0.5"),
+                ("fingerprint", "TEXT DEFAULT ''"),
                 # Legacy compat
                 ("bridges", "TEXT DEFAULT '{}'"),
                 ("schema", "TEXT DEFAULT '{}'"),
@@ -183,6 +188,24 @@ class BlackboardStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_bb_ioc ON blackboard(ioc_type)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_bb_source_type ON blackboard(source_type)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_bb_xref ON blackboard(xref_count)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_bb_kind_status ON blackboard(kind, status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_bb_fingerprint ON blackboard(fingerprint)")
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_bb_fingerprint_unique "
+                "ON blackboard(fingerprint) WHERE fingerprint != ''"
+            )
+            conn.execute("UPDATE blackboard SET status='resolved' WHERE resolved=1 AND status='open'")
+            conn.execute("UPDATE blackboard SET status='rejected' WHERE contradicted=1 AND status='open'")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS finding_events (
+                    seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+                    entry_id   TEXT NOT NULL,
+                    event      TEXT NOT NULL,
+                    details    TEXT DEFAULT '{}',
+                    created_at REAL NOT NULL
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_finding_events_entry ON finding_events(entry_id, seq)")
             conn.commit()
 
     def _get_embedder(self):
@@ -212,7 +235,7 @@ class BlackboardStore:
         tags: builtins.list[str] | None = None,
         confidence: float = 0.5,
         source: str = "manual",
-        embed: bool = True,
+        embed: bool = False,
         ioc_type: str = "",
         ioc_value: str = "",
         depends_on: str = "",
@@ -223,8 +246,18 @@ class BlackboardStore:
         source_type: str = "",
         entropy: float = 0.0,
         xref_count: int = 0,
+        kind: str = "finding",
+        status: str = "open",
+        priority: float = 0.5,
+        fingerprint: str = "",
         **_legacy_kwargs,
     ) -> str:
+        kind = str(kind or "finding").strip().lower()
+        status = str(status or "open").strip().lower()
+        if kind not in {"finding", "hypothesis", "question", "task", "decision"}:
+            raise ValueError("kind must be finding, hypothesis, question, task, or decision")
+        if status not in {"open", "confirmed", "resolved", "rejected"}:
+            raise ValueError("status must be open, confirmed, resolved, or rejected")
         entry_id = str(uuid.uuid4())[:8]
         now = time.time()
         vector_blob = None
@@ -239,17 +272,169 @@ class BlackboardStore:
                     (id, category, title, content, addr, addr_end, tags, confidence,
                      created_at, updated_at, q_value, source, vector,
                      ioc_type, ioc_value, depends_on, blocks_addr, register, reg_type,
-                     evidence, source_type, entropy, xref_count, version)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     evidence, source_type, entropy, xref_count, version,
+                     kind, status, priority, fingerprint, resolved, contradicted)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 entry_id, category, title, content, addr, addr_end,
                 json.dumps(tags or []), confidence,
                 now, now, confidence, source, vector_blob,
                 ioc_type, ioc_value, depends_on, blocks_addr, register, reg_type,
                 json.dumps(evidence or []), source_type, entropy, xref_count, 1,
+                kind, status, priority, fingerprint,
+                int(status == "resolved"), int(status == "rejected"),
             ))
             conn.commit()
+        self._record_event(entry_id, "created", {"kind": kind, "status": status})
         return entry_id
+
+    @staticmethod
+    def _finding_key(title: str, category: str, addr: str) -> tuple[str, str, str]:
+        """Return the stable identity used to coalesce repeated observations."""
+        normalized_title = " ".join(str(title).lower().split())
+        normalized_category = str(category or "general").strip().lower()
+        normalized_addr = str(addr or "").strip().lower()
+        return normalized_title, normalized_category, normalized_addr
+
+    @classmethod
+    def _finding_fingerprint(cls, title: str, category: str, addr: str, kind: str) -> str:
+        key = (*cls._finding_key(title, category, addr), str(kind or "finding").strip().lower())
+        return hashlib.sha256("\x1f".join(key).encode("utf-8")).hexdigest()[:24]
+
+    def _record_event(self, entry_id: str, event: str, details: dict[str, Any] | None = None) -> None:
+        with closing(self._conn()) as conn:
+            conn.execute(
+                "INSERT INTO finding_events(entry_id, event, details, created_at) VALUES (?,?,?,?)",
+                (entry_id, event, json.dumps(details or {}, sort_keys=True, ensure_ascii=True), time.time()),
+            )
+            conn.commit()
+
+    def upsert_finding(
+        self,
+        title: str,
+        content: str = "",
+        category: str = "general",
+        addr: str = "",
+        tags: builtins.list[str] | None = None,
+        confidence: float = 0.5,
+        evidence: builtins.list[dict] | None = None,
+        source: str = "manual",
+        kind: str = "finding",
+        status: str = "open",
+        priority: float = 0.5,
+    ) -> dict[str, Any]:
+        """Create a finding or merge it into the same address/category/title."""
+        key = self._finding_key(title, category, addr)
+        fingerprint = self._finding_fingerprint(title, category, addr, kind)
+        with closing(self._conn()) as conn:
+            rows = conn.execute(
+                "SELECT * FROM blackboard WHERE fingerprint=? OR "
+                "(lower(category)=? AND lower(COALESCE(addr,''))=?) "
+                "ORDER BY updated_at DESC LIMIT 200",
+                (fingerprint, key[1], key[2]),
+            ).fetchall()
+        existing = next(
+            (row for row in (self._row_to_dict(item) for item in rows)
+             if row.get("fingerprint") == fingerprint or (
+                 self._finding_key(row.get("title", ""), row.get("category", ""), row.get("addr", "")) == key
+                 and str(row.get("kind") or "finding") == str(kind or "finding")
+             )),
+            None,
+        )
+        clean_tags = sorted({str(tag).strip() for tag in (tags or []) if str(tag).strip()})
+        clean_evidence = [item for item in (evidence or []) if isinstance(item, dict)]
+        if existing is None:
+            try:
+                entry_id = self.write(
+                    title=title,
+                    content=content,
+                    category=category,
+                    addr=addr,
+                    tags=clean_tags,
+                    confidence=max(0.0, min(1.0, float(confidence))),
+                    evidence=clean_evidence,
+                    source=source,
+                    source_type=source,
+                    embed=False,
+                    kind=kind,
+                    status=status,
+                    priority=max(0.0, min(1.0, float(priority))),
+                    fingerprint=fingerprint,
+                )
+            except sqlite3.IntegrityError:
+                # Another client recorded the same observation between our
+                # lookup and insert. Re-read and merge into the winner.
+                return self.upsert_finding(
+                    title=title,
+                    content=content,
+                    category=category,
+                    addr=addr,
+                    tags=clean_tags,
+                    confidence=confidence,
+                    evidence=clean_evidence,
+                    source=source,
+                    kind=kind,
+                    status=status,
+                    priority=priority,
+                )
+            return {"entry_id": entry_id, "created": True, "version": 1}
+
+        # Serialize read/merge/write so simultaneous LLM clients cannot lose
+        # each other's evidence through a last-writer-wins update.
+        with closing(self._conn()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM blackboard WHERE fingerprint=? ORDER BY updated_at DESC LIMIT 1",
+                (fingerprint,),
+            ).fetchone()
+            if row is None:
+                row = conn.execute(
+                    "SELECT * FROM blackboard WHERE id=?",
+                    (str(existing["id"]),),
+                ).fetchone()
+            self._col_cache = [item[1] for item in conn.execute("PRAGMA table_info(blackboard)").fetchall()]
+            current = self._row_to_dict(row) if row else existing
+            merged_tags = sorted(set(current.get("tags") or []) | set(clean_tags))
+            merged_evidence = list(current.get("evidence") or [])
+            seen_evidence = {json.dumps(item, sort_keys=True, ensure_ascii=True) for item in merged_evidence}
+            for item in clean_evidence:
+                marker = json.dumps(item, sort_keys=True, ensure_ascii=True)
+                if marker not in seen_evidence:
+                    merged_evidence.append(item)
+                    seen_evidence.add(marker)
+            current_status = str(current.get("status") or "open")
+            merged_status = status if current_status == "open" and status != "open" else current_status
+            merged_content = str(current.get("content") or "")
+            if str(content).strip() and str(content).strip() != merged_content.strip():
+                merged_content = str(content).strip()
+            now = time.time()
+            conn.execute(
+                "UPDATE blackboard SET content=?, tags=?, evidence=?, confidence=?, priority=?, "
+                "kind=?, status=?, resolved=?, contradicted=?, fingerprint=?, updated_at=?, version=? WHERE id=?",
+                (
+                    merged_content,
+                    json.dumps(merged_tags),
+                    json.dumps(merged_evidence),
+                    max(float(current.get("confidence") or 0.0), 0.0, min(1.0, float(confidence))),
+                    max(float(current.get("priority") or 0.0), 0.0, min(1.0, float(priority))),
+                    kind,
+                    merged_status,
+                    int(merged_status == "resolved"),
+                    int(merged_status == "rejected"),
+                    fingerprint,
+                    now,
+                    int(current.get("version") or 1) + 1,
+                    str(current["id"]),
+                ),
+            )
+            conn.commit()
+        self._record_event(str(current["id"]), "observation_merged", {"source": source})
+        refreshed = self.read(str(current["id"])) or current
+        return {
+            "entry_id": str(current["id"]),
+            "created": False,
+            "version": int(refreshed.get("version") or 1),
+        }
 
     def read(self, entry_id: str) -> dict | None:
         with closing(self._conn()) as conn:
@@ -267,6 +452,8 @@ class BlackboardStore:
         include_resolved: bool = True,
         include_contradicted: bool = False,
         ioc_type: str | None = None,
+        kind: str | None = None,
+        status: str | None = None,
     ) -> builtins.list[dict]:
         conditions = ["confidence >= ?"]
         params: list = [min_confidence]
@@ -286,6 +473,12 @@ class BlackboardStore:
         if ioc_type:
             conditions.append("ioc_type = ?")
             params.append(ioc_type)
+        if kind:
+            conditions.append("kind = ?")
+            params.append(kind)
+        if status:
+            conditions.append("status = ?")
+            params.append(status)
         where = "WHERE " + " AND ".join(conditions)
         with closing(self._conn()) as conn:
             rows = conn.execute(
@@ -303,9 +496,9 @@ class BlackboardStore:
         include_resolved: bool = True,
         include_contradicted: bool = False,
     ) -> builtins.list[dict]:
-        embedder = self._get_embedder()
-        if embedder is None:
+        def lexical_search() -> builtins.list[dict]:
             q = query.lower()
+            terms = {term for term in q.split() if len(term) > 1}
             with closing(self._conn()) as conn:
                 rows = conn.execute("SELECT * FROM blackboard ORDER BY updated_at DESC LIMIT 200").fetchall()
             results = []
@@ -315,18 +508,33 @@ class BlackboardStore:
                     continue
                 if not include_contradicted and d.get("contradicted"):
                     continue
+                if category and d.get("category") != category:
+                    continue
                 text = f"{d.get('title','')} {d.get('content','')}".lower()
-                if q in text:
-                    d["similarity"] = 1.0
+                matched = sum(1 for term in terms if term in text)
+                if q in text or (terms and matched):
+                    d["similarity"] = 1.0 if q in text else round(matched / len(terms), 4)
                     results.append(d)
+            results.sort(key=lambda item: (item["similarity"], item.get("updated_at", 0)), reverse=True)
             return results[:top_k]
+
+        with closing(self._conn()) as conn:
+            has_vectors = bool(
+                conn.execute("SELECT 1 FROM blackboard WHERE vector IS NOT NULL LIMIT 1").fetchone()
+            )
+        if not has_vectors:
+            return lexical_search()
+
+        embedder = self._get_embedder()
+        if embedder is None:
+            return lexical_search()
 
         try:
             q_vec = embedder.embed_vector(query)
             if q_vec is None:
                 raise RuntimeError("embedding unavailable")
         except Exception:
-            return []
+            return lexical_search()
 
         conditions = ["vector IS NOT NULL"]
         params: list = []
@@ -360,13 +568,15 @@ class BlackboardStore:
             except Exception:
                 continue
 
+        if not scored:
+            return lexical_search()
         scored.sort(key=lambda x: x["similarity"], reverse=True)
         return scored[:top_k]
 
     def contradict(self, entry_id: str, reason: str) -> bool:
         with closing(self._conn()) as conn:
             cur = conn.execute(
-                "UPDATE blackboard SET contradicted=1, contradiction_reason=?, updated_at=? WHERE id=?",
+                "UPDATE blackboard SET contradicted=1, status='rejected', contradiction_reason=?, updated_at=? WHERE id=?",
                 (reason, time.time(), entry_id),
             )
             conn.commit()
@@ -375,7 +585,7 @@ class BlackboardStore:
     def mark_resolved(self, entry_id: str) -> bool:
         with closing(self._conn()) as conn:
             cur = conn.execute(
-                "UPDATE blackboard SET resolved=1, updated_at=? WHERE id=?",
+                "UPDATE blackboard SET resolved=1, status='resolved', updated_at=? WHERE id=?",
                 (time.time(), entry_id),
             )
             conn.commit()
@@ -620,7 +830,8 @@ class BlackboardStore:
         with closing(self._conn()) as conn:
             rows = conn.execute("""
                 SELECT id, addr, category, title, confidence, depends_on,
-                       created_at, xref_count, entropy, source_type, vector, content
+                       created_at, xref_count, entropy, source_type, vector, content,
+                       priority, kind, status
                 FROM blackboard
                 WHERE resolved=0 AND contradicted=0 AND addr != '' AND addr IS NOT NULL
                 ORDER BY confidence DESC
@@ -649,7 +860,7 @@ class BlackboardStore:
         q_ent75 = _quantile(ent_vals, 0.75, default=1.0)
 
         for row in rows:
-            eid, addr, cat, title, conf, depends_on, created_at, xref_count, entropy, source_type, vector_blob, content = row
+            eid, addr, cat, title, conf, depends_on, created_at, xref_count, entropy, source_type, vector_blob, content, priority, kind, status = row
             if addr in seen_addrs:
                 continue
             seen_addrs.add(addr)
@@ -671,6 +882,7 @@ class BlackboardStore:
 
             # Adaptive confidence baseline around current frontier distribution.
             score = max(1e-6, float(conf or 0.5))
+            score *= 0.5 + max(0.0, min(1.0, float(priority or 0.5)))
 
             # Time decay: smooth half-life derived from confidence spread.
             age_days = (now - (created_at or now)) / 86400
@@ -720,6 +932,8 @@ class BlackboardStore:
                 "xref_count": xref_count or 0,
                 "entropy": entropy or 0.0,
                 "source_type": source_type or "manual",
+                "kind": kind or "finding",
+                "status": status or "open",
                 "age_days": round(age_days, 1),
                 "semantic_similarity": round(query_similarity, 4) if (query and query.strip()) else None,
             })
@@ -798,11 +1012,13 @@ class BlackboardStore:
         candidates.sort(key=lambda x: x["priority_score"], reverse=True)
         return candidates[:limit]
 
-    def update(self, entry_id: str, **kwargs) -> bool:
+    def update(self, entry_id: str, embed: bool = False, **kwargs) -> bool:
         allowed = {"title", "content", "category", "addr", "addr_end", "tags",
                    "confidence", "q_value", "resolved", "ioc_type", "ioc_value",
                    "depends_on", "blocks_addr", "register", "reg_type",
-                   "evidence", "source_type", "entropy", "xref_count", "calibrated"}
+                   "evidence", "source_type", "entropy", "xref_count", "calibrated",
+                   "kind", "status", "priority", "fingerprint", "contradicted",
+                   "contradiction_reason"}
         updates = {k: v for k, v in kwargs.items() if k in allowed}
         if not updates:
             return False
@@ -812,7 +1028,7 @@ class BlackboardStore:
             updates["tags"] = json.dumps(updates["tags"])
         if "evidence" in updates:
             updates["evidence"] = json.dumps(updates["evidence"])
-        if "title" in updates or "content" in updates:
+        if embed and ("title" in updates or "content" in updates):
             existing = self.read(entry_id)
             if existing:
                 t = updates.get("title", existing.get("title", ""))
@@ -829,6 +1045,7 @@ class BlackboardStore:
             conn.commit()
             ok = cur.rowcount > 0
         if ok:
+            self._record_event(entry_id, "updated", {"fields": sorted(k for k in updates if k not in {"updated_at", "version"})})
             entry = self.read(entry_id)
             if entry:
                 try:
@@ -838,6 +1055,98 @@ class BlackboardStore:
                 except Exception:
                     pass
         return ok
+
+    def transition(
+        self,
+        entry_id: str,
+        status: str,
+        reason: str = "",
+        content: str | None = None,
+        confidence: float | None = None,
+        priority: float | None = None,
+        tags: builtins.list[str] | None = None,
+    ) -> dict[str, Any] | None:
+        """Apply one explicit lifecycle transition and retain an audit event."""
+        status = str(status or "open").strip().lower()
+        if status not in {"open", "confirmed", "resolved", "rejected"}:
+            raise ValueError("status must be open, confirmed, resolved, or rejected")
+        existing = self.read(entry_id)
+        if existing is None:
+            return None
+        updates: dict[str, Any] = {
+            "status": status,
+            "resolved": int(status == "resolved"),
+            "contradicted": int(status == "rejected"),
+            "contradiction_reason": reason if status == "rejected" else "",
+        }
+        if content is not None:
+            updates["content"] = content
+        if confidence is not None:
+            updates["confidence"] = max(0.0, min(1.0, float(confidence)))
+        if priority is not None:
+            updates["priority"] = max(0.0, min(1.0, float(priority)))
+        if tags is not None:
+            updates["tags"] = sorted({str(tag).strip() for tag in tags if str(tag).strip()})
+        self.update(entry_id, embed=False, **updates)
+        self._record_event(entry_id, f"status:{status}", {"reason": reason} if reason else {})
+        return self.read(entry_id)
+
+    def workspace_brief(self, limit: int = 8) -> dict[str, Any]:
+        """Return a compact, actionable snapshot of the investigation."""
+        with closing(self._conn()) as conn:
+            rows = conn.execute(
+                "SELECT * FROM blackboard WHERE contradicted=0 "
+                "ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'confirmed' THEN 1 ELSE 2 END, "
+                "priority DESC, confidence DESC, updated_at DESC LIMIT 500"
+            ).fetchall()
+            conflicts = conn.execute(
+                "SELECT * FROM blackboard WHERE contradicted=1 OR status='rejected' "
+                "ORDER BY updated_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+            recent_events = conn.execute(
+                "SELECT entry_id, event, details, created_at FROM finding_events "
+                "ORDER BY seq DESC LIMIT ?", (limit,)
+            ).fetchall()
+        entries = [self._row_to_dict(row) for row in rows]
+
+        def brief(entry: dict[str, Any]) -> dict[str, Any]:
+            result = {
+                "id": entry.get("id"),
+                "kind": entry.get("kind") or "finding",
+                "status": entry.get("status") or ("resolved" if entry.get("resolved") else "open"),
+                "title": entry.get("title"),
+                "address": entry.get("addr") or None,
+                "confidence": entry.get("confidence"),
+                "priority": entry.get("priority"),
+            }
+            if entry.get("depends_on"):
+                result["depends_on"] = entry["depends_on"]
+            return result
+
+        open_items = [item for item in entries if (item.get("status") or "open") == "open"]
+        questions = [item for item in open_items if (item.get("kind") or "finding") in {"question", "hypothesis", "task"}]
+        confirmed = [item for item in entries if (item.get("status") or "open") == "confirmed"]
+        return {
+            "counts": {
+                "total": len(entries) + len(conflicts),
+                "open": len(open_items),
+                "confirmed": len(confirmed),
+                "conflicts": len(conflicts),
+                "questions": len(questions),
+            },
+            "focus": [brief(item) for item in (questions or open_items)[:limit]],
+            "confirmed": [brief(item) for item in confirmed[:limit]],
+            "conflicts": [brief(self._row_to_dict(row)) for row in conflicts],
+            "recent_activity": [
+                {
+                    "entry_id": row[0],
+                    "event": row[1],
+                    "details": json.loads(row[2] or "{}"),
+                    "created_at": row[3],
+                }
+                for row in recent_events
+            ],
+        }
 
     def semantic_index(self, category: str | None = None) -> dict[str, Any]:
         conditions = []
@@ -1067,4 +1376,3 @@ class BlackboardStore:
         for k in ("vector", "quantized", "q_signs"):
             d.pop(k, None)
         return d
-

@@ -284,10 +284,9 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                             title = str(e.get("title") or "").strip()
                             if not title:
                                 continue
-                            parts = [title]
-                            cat = str(e.get("category") or "").strip()
-                            if cat and cat != "general":
-                                parts.append(cat)
+                            kind = str(e.get("kind") or "finding").strip()
+                            status = str(e.get("status") or "open").strip()
+                            parts = [f"{kind}/{status}: {title}"]
                             addr_e = str(e.get("addr") or "").strip()
                             if addr_e:
                                 parts.append(f"@ {addr_e}")

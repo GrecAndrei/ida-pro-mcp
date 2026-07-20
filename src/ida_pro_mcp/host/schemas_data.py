@@ -144,7 +144,7 @@ ADVERTISED_ACTIONS: dict[str, list[str]] = {
     ],
     "blackboard": [
         "write", "read", "list", "search", "update", "delete",
-        "frontier", "next_target", "decision_card", "stats",
+        "workspace_brief", "frontier", "next_target", "decision_card", "stats",
     ],
     "code": [
         "decompile", "smart_decompile", "disasm", "blocks", "callees", "callers",
@@ -931,6 +931,11 @@ TOOL_ARG_SCHEMAS = {
         "query": {"type": "string", "description": "Semantic/behavior query for search and related_by_behavior"},
         "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags for categorization"},
         "confidence": {"type": "number", "description": "Confidence score 0-1"},
+        "priority": {"type": "number", "description": "Investigation priority 0-1"},
+        "kind": {"type": "string", "description": "finding, hypothesis, question, task, or decision"},
+        "status": {"type": "string", "description": "open, confirmed, resolved, or rejected"},
+        "reason": {"type": "string", "description": "Lifecycle transition reason"},
+        "evidence": {"type": "array", "items": {"type": "object"}, "description": "Structured supporting observations"},
         "tag": {"type": "string", "description": "Filter by single tag"},
         "min_confidence": {"type": "number", "description": "Minimum confidence filter"},
         "limit": {"type": "integer", "description": "Max entries to return"},

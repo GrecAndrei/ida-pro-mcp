@@ -261,6 +261,26 @@ Input schema:
       "type": "integer",
       "description": "Maximum result items to return."
     },
+    "min_score": {
+      "type": "number",
+      "description": "Minimum semantic or hybrid rank score."
+    },
+    "start": {
+      "type": "string",
+      "description": "Inclusive start address for result filtering."
+    },
+    "end": {
+      "type": "string",
+      "description": "Exclusive end address for result filtering."
+    },
+    "address": {
+      "type": "string",
+      "description": "Center address or function for radius filtering."
+    },
+    "radius": {
+      "type": "integer",
+      "description": "Byte radius around address for result filtering."
+    },
     "idb": {
       "type": "string",
       "description": "Optional session ID, IDB path, or binary path."
@@ -287,7 +307,7 @@ Example:
 
 ## `ida_index_functions`
 
-Build the function index for semantic search, using fast metadata or full Hex-Rays decompilation.
+Build a scoped semantic function index in responsive background slices.
 
 Input schema:
 ```json
@@ -300,15 +320,71 @@ Input schema:
         "fast",
         "full"
       ],
-      "description": "fast scans metadata and disassembly; full decompiles functions in resumable passes for best retrieval quality."
+      "description": "fast scans metadata and disassembly; full adds Hex-Rays decompilation for better retrieval quality."
     },
     "limit": {
       "type": "integer",
-      "description": "Optional functions to process in this pass; full mode otherwise chooses an adaptive pass size."
+      "description": "Maximum functions for the whole job; omit to index every matching function."
     },
     "cursor": {
       "type": "string",
-      "description": "Resume after the next_cursor returned by a limited indexing pass."
+      "description": "Start after this hexadecimal function address."
+    },
+    "start": {
+      "type": "string",
+      "description": "Inclusive start address for one index range."
+    },
+    "end": {
+      "type": "string",
+      "description": "Exclusive end address for one index range."
+    },
+    "address": {
+      "type": "string",
+      "description": "Center function or address for radius-based indexing."
+    },
+    "radius": {
+      "type": "integer",
+      "description": "Byte radius around address; indexes overlapping functions."
+    },
+    "ranges": {
+      "type": "array",
+      "description": "Multiple address ranges to index.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "query": {
+      "type": "string",
+      "description": "Optional function-name filter; glob and regex forms are supported."
+    },
+    "min_size": {
+      "type": "integer",
+      "description": "Minimum function size in bytes."
+    },
+    "max_size": {
+      "type": "integer",
+      "description": "Maximum function size in bytes."
+    },
+    "slice_size": {
+      "type": "integer",
+      "description": "Functions processed per IDA RPC slice; smaller values improve interactive responsiveness."
+    },
+    "background": {
+      "type": "boolean",
+      "description": "Run non-blocking and return a task ID; defaults to true."
     },
     "idb": {
       "type": "string",
@@ -326,6 +402,64 @@ Example:
   "name": "ida_index_functions",
   "arguments": {
     "quality": "full"
+  }
+}
+```
+
+## `ida_index_status`
+
+Check progress or retrieve the result of a background semantic-index job.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "description": "Task ID returned by ida_index_functions."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_index_status",
+  "arguments": {}
+}
+```
+
+## `ida_cancel_index`
+
+Cancel a queued or running semantic-index job after its current slice.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "description": "Task ID returned by ida_index_functions."
+    }
+  },
+  "required": [
+    "task_id"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_cancel_index",
+  "arguments": {
+    "task_id": "abc123def456"
   }
 }
 ```
@@ -1256,7 +1390,7 @@ Example:
 
 ## `ida_write_finding`
 
-Save an analysis finding to the durable session notebook.
+Record or merge a typed claim, question, task, or decision with its evidence.
 
 Input schema:
 ```json
@@ -1265,11 +1399,11 @@ Input schema:
   "properties": {
     "title": {
       "type": "string",
-      "description": "Short finding title."
+      "description": "Short, stable statement of the insight."
     },
     "content": {
       "type": "string",
-      "description": "Evidence and reasoning."
+      "description": "Reasoning, implications, or next verification step."
     },
     "address": {
       "type": "string",
@@ -1283,12 +1417,63 @@ Input schema:
       "type": "number",
       "description": "Confidence from 0 to 1."
     },
+    "priority": {
+      "type": "number",
+      "description": "Investigation priority from 0 to 1."
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "finding",
+        "hypothesis",
+        "question",
+        "task",
+        "decision"
+      ],
+      "description": "Role this item plays in the investigation."
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "open",
+        "confirmed",
+        "resolved",
+        "rejected"
+      ],
+      "description": "Current lifecycle state."
+    },
     "tags": {
       "type": "array",
       "items": {
         "type": "string"
       },
       "description": "Optional tags."
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          },
+          "weight": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "type",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "description": "Concrete observations supporting the item."
     }
   },
   "required": [
@@ -1303,23 +1488,71 @@ Example:
 {
   "name": "ida_write_finding",
   "arguments": {
-    "title": "recv handler",
-    "content": "Receives and parses inbound packets.",
+    "title": "recv handler parses framed input",
+    "content": "Length is read before dispatch.",
     "address": "0x401000",
-    "confidence": 0.8
+    "kind": "finding",
+    "status": "confirmed",
+    "confidence": 0.8,
+    "priority": 0.7,
+    "evidence": [
+      {
+        "type": "call",
+        "value": "recv",
+        "address": "0x401024"
+      }
+    ]
   }
 }
 ```
 
 ## `ida_list_findings`
 
-List durable findings from the current analysis session.
+List investigation items with lifecycle and type filters.
 
 Input schema:
 ```json
 {
   "type": "object",
   "properties": {
+    "kind": {
+      "type": "string",
+      "enum": [
+        "finding",
+        "hypothesis",
+        "question",
+        "task",
+        "decision"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "open",
+        "confirmed",
+        "resolved",
+        "rejected"
+      ]
+    },
+    "category": {
+      "type": "string"
+    },
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "tag": {
+      "type": "string"
+    },
+    "min_confidence": {
+      "type": "number"
+    },
+    "include_resolved": {
+      "type": "boolean"
+    },
+    "include_contradicted": {
+      "type": "boolean"
+    },
     "limit": {
       "type": "integer",
       "description": "Maximum result items to return."
@@ -1335,14 +1568,124 @@ Example:
 {
   "name": "ida_list_findings",
   "arguments": {
+    "status": "open",
     "limit": 20
   }
 }
 ```
 
-## `ida_next_target`
+## `ida_search_findings`
 
-Get the highest-priority next analysis target from the notebook frontier.
+Search investigation memory by meaning or keywords.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "Concept, behavior, or keyword to recall."
+    },
+    "category": {
+      "type": "string"
+    },
+    "include_resolved": {
+      "type": "boolean"
+    },
+    "include_contradicted": {
+      "type": "boolean"
+    },
+    "threshold": {
+      "type": "number"
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Maximum result items to return."
+    }
+  },
+  "required": [
+    "query"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_search_findings",
+  "arguments": {
+    "query": "unchecked packet length",
+    "limit": 10
+  }
+}
+```
+
+## `ida_update_finding`
+
+Revise an investigation item or transition its lifecycle state.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "entry_id": {
+      "type": "string",
+      "description": "Finding identifier."
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "open",
+        "confirmed",
+        "resolved",
+        "rejected"
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "description": "Reason for the transition, especially rejection."
+    },
+    "content": {
+      "type": "string"
+    },
+    "confidence": {
+      "type": "number"
+    },
+    "priority": {
+      "type": "number"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "entry_id"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_update_finding",
+  "arguments": {
+    "entry_id": "a1b2c3d4",
+    "status": "resolved",
+    "reason": "Verified in callers."
+  }
+}
+```
+
+## `ida_analysis_brief`
+
+Summarize confirmed knowledge, open questions, conflicts, and current focus.
 
 Input schema:
 ```json
@@ -1362,8 +1705,42 @@ Input schema:
 Example:
 ```json
 {
+  "name": "ida_analysis_brief",
+  "arguments": {
+    "limit": 8
+  }
+}
+```
+
+## `ida_next_target`
+
+Get the highest-priority next analysis target from the notebook frontier.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "Optional investigation theme."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Maximum result items to return."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
   "name": "ida_next_target",
   "arguments": {
+    "query": "input validation",
     "limit": 10
   }
 }

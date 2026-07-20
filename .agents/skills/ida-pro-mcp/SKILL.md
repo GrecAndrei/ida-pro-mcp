@@ -25,8 +25,9 @@ available.
   `ida_semantic_search(...)`. Use `quality="full"` when retrieval quality
   matters; both index qualities include bounded CFG/call evidence, while full
   quality also includes ctree-derived control and local data-flow evidence.
-  Full indexing uses bounded passes, so repeat with the returned `next_cursor`
-  until `complete` is true.
+  Indexing runs as a background job by default; poll `ida_index_status()` with
+  the returned task ID. Use range, radius, size, or name filters for a scoped
+  job. Exact matching binaries can reuse compatible indexes across sessions.
 - Treat the `structure` field returned by `ida_decompile` and
   `ida_disassemble` as evidence: it summarizes CFG shape and call targets;
   decompilation additionally supplies bounded ctree control points and local

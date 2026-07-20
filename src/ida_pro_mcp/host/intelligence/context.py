@@ -108,7 +108,7 @@ class ContextAssembler:
         if bb_store is None or not addr:
             return []
         try:
-            entries = bb_store.list(addr=addr, limit=5)
+            entries = bb_store.list(addr=addr, limit=5, include_resolved=False)
             return entries or []
         except Exception:
             return []
@@ -141,6 +141,7 @@ class ContextAssembler:
             filtered_entries = sorted(
                 filtered_entries,
                 key=lambda e: (
+                    float(e.get("priority") or 0.5),
                     float(e.get("confidence") or 0.0),
                     float(e.get("updated_at") or 0.0),
                 ),
@@ -181,6 +182,7 @@ class ContextAssembler:
             key=lambda x: (
                 src_rank.get(str(x.get("retrieval_source") or "semantic_linked"), 0),
                 float(x.get("retrieval_weight") or 1.0),
+                float(x.get("priority") or 0.5),
                 float(x.get("confidence") or 0.0),
                 float(x.get("updated_at") or 0.0),
             ),

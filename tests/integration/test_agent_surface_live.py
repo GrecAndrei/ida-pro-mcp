@@ -310,7 +310,7 @@ def test_public_catalog_and_help_are_live_contracts(live_context: LiveContext):
     tools = response["result"]["tools"]
     names = {tool["name"] for tool in tools}
     assert response["result"]["surface"] == "agent"
-    assert len(names) == 25
+    assert len(names) == 40
     assert all(name.startswith("ida_") for name in names)
     assert "search" not in names
     help_payload = _assert_ok(live_context.client.call("ida_help", {"topic": "ida_decompile"}), "ida_help")
@@ -412,7 +412,7 @@ def test_live_mutations_and_findings_are_observable(live_context: LiveContext):
     assert renamed in json.dumps(find_payload)
 
     title = "live agent-surface finding"
-    _assert_ok(
+    recorded = _assert_ok(
         client.call(
             "ida_write_finding",
             {
@@ -428,6 +428,19 @@ def test_live_mutations_and_findings_are_observable(live_context: LiveContext):
     )
     findings = _assert_ok(client.call("ida_list_findings", {"limit": 50}), "ida_list_findings")
     assert title in json.dumps(findings)
+    searched = _assert_ok(
+        client.call("ida_search_findings", {"query": "caller/callee chain", "limit": 10}),
+        "ida_search_findings",
+    )
+    assert title in json.dumps(searched)
+    _assert_ok(client.call("ida_analysis_brief", {"limit": 8}), "ida_analysis_brief")
+    _assert_ok(
+        client.call(
+            "ida_update_finding",
+            {"entry_id": recorded["entry_id"], "status": "confirmed", "reason": "Live verification passed."},
+        ),
+        "ida_update_finding",
+    )
     _assert_ok(client.call("ida_next_target", {"limit": 10}), "ida_next_target")
 
 

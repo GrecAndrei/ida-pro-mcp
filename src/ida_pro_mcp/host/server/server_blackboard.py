@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Blackboard store and host-side orchestration helpers."""
 
-import contextlib
 import hashlib
 import json
 import os
 import re
+import sqlite3
 import time
 from collections import Counter
 from typing import Any
@@ -175,6 +175,38 @@ class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMix
                 session = self.current_session
         if session is None and self.current_session and not sid_text:
             session = self.current_session
+
+        binary_path = str(getattr(session, "binary_path", "") or "").strip() if session else ""
+        if binary_path and os.path.isfile(binary_path):
+            cache = getattr(self, "_blackboard_path_cache", None)
+            if not isinstance(cache, dict):
+                cache = {}
+                self._blackboard_path_cache = cache
+            try:
+                stat = os.stat(binary_path)
+                cache_key = (os.path.realpath(binary_path), stat.st_size, stat.st_mtime_ns)
+            except OSError:
+                cache_key = (os.path.realpath(binary_path), 0, 0)
+            workspace_path = cache.get(cache_key)
+            if not workspace_path:
+                digest = self._binary_sha256(binary_path)
+                if digest:
+                    workspace_dir = os.path.join(self.cache_dir, "blackboards")
+                    os.makedirs(workspace_dir, exist_ok=True)
+                    workspace_path = os.path.join(workspace_dir, f"sha256-{digest}.db")
+                    cache[cache_key] = workspace_path
+            if workspace_path:
+                # Preserve notebooks created by older releases while moving to
+                # a content-addressed workspace shared by this exact binary.
+                idb_path = str(getattr(session, "idb_path", "") or "").strip()
+                legacy_path = idb_path + ".blackboard.db" if idb_path else ""
+                if legacy_path and os.path.isfile(legacy_path) and not os.path.exists(workspace_path):
+                    try:
+                        with sqlite3.connect(legacy_path) as source, sqlite3.connect(workspace_path) as target:
+                            source.backup(target)
+                    except sqlite3.Error:
+                        pass
+                return workspace_path
 
         idb_path = str(getattr(session, "idb_path", "") or "").strip() if session else ""
         if idb_path:
@@ -978,20 +1010,6 @@ class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMix
             title = str(args.get("name") or args.get("title") or "").strip()
             if not title:
                 return make_error(MCPError.INVALID_ARGS, "name/title required for write")
-            # Parse Cartographer-μ metadata if provided
-            bridges_raw = str(args.get("bridges") or "")
-            bridges = parse_str_list(bridges_raw)
-            schema_str = str(args.get("schema") or "")
-            schema = {}
-            if schema_str:
-                with contextlib.suppress(Exception):
-                    schema = json.loads(schema_str)
-            vector = args.get("vector")
-            quantized = args.get("quantized")
-            q_signs = args.get("q_signs")
-            norm = float(args.get("norm", 0.0))
-            q_value = float(args.get("q_value", 0.5))
-            call_idx = int(args.get("call_idx", 0))
             raw_tags = args.get("tags")
             if isinstance(raw_tags, list):
                 tags = [str(t).strip() for t in raw_tags if str(t).strip()]
@@ -1000,25 +1018,29 @@ class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMix
             else:
                 tags = []
 
-            eid = store.write(
-                title=title,
-                content=str(args.get("notes") or args.get("content") or ""),
-                category=str(args.get("category") or "general"),
-                addr=str(args.get("addr") or ""),
-                tags=tags,
-                confidence=float(args.get("confidence", 0.5)),
-                bridges=bridges,
-                schema=schema,
-                vector=vector,
-                quantized=quantized,
-                q_signs=q_signs,
-                norm=norm,
-                q_value=q_value,
-                call_idx=call_idx,
-            )
+            evidence = args.get("evidence")
+            if not isinstance(evidence, list):
+                evidence = []
+            try:
+                result = store.upsert_finding(
+                    title=title,
+                    content=str(args.get("notes") or args.get("content") or ""),
+                    category=str(args.get("category") or "general"),
+                    addr=str(args.get("addr") or ""),
+                    tags=tags,
+                    confidence=float(args.get("confidence", 0.5)),
+                    evidence=evidence,
+                    source=str(args.get("source") or "manual"),
+                    kind=str(args.get("kind") or "finding"),
+                    status=str(args.get("status") or "open"),
+                    priority=float(args.get("priority", 0.5)),
+                )
+            except (TypeError, ValueError) as exc:
+                return make_error(MCPError.INVALID_ARGS, str(exc))
+            eid = result["entry_id"]
             self._bb_policy_mark(policy_state, "write")
             gravity = self._evidence_gravity(store, source_entry_id=eid, addr=str(args.get("addr") or ""), source_text=str(args.get("notes") or args.get("content") or ""))
-            return {"ok": True, "entry_id": eid, "action": "write", "gravity": gravity, "phase": self._phase_snapshot(phase_state, store)}
+            return {"ok": True, **result, "action": "write", "gravity": gravity, "phase": self._phase_snapshot(phase_state, store)}
         if action == "decision_card":
             claim = str(args.get("claim") or args.get("title") or "").strip()
             if not claim:
@@ -1350,6 +1372,10 @@ class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMix
                 min_confidence=float(args.get("min_confidence", 0.0)),
                 limit=_bounded_int(args.get("limit", 100), 100, min_value=1, max_value=1000),
                 offset=_bounded_int(args.get("offset", 0), 0, min_value=0),
+                include_resolved=bool(args.get("include_resolved", True)),
+                include_contradicted=bool(args.get("include_contradicted", False)),
+                kind=str(args.get("kind") or "").strip() or None,
+                status=str(args.get("status") or "").strip() or None,
             )
             return {"ok": True, "entries": entries, "count": len(entries), "summary": _entry_collection_summary(entries)}
         if action == "search":
@@ -1385,8 +1411,16 @@ class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMix
             }
             if not updates:
                 return make_error(MCPError.INVALID_ARGS, "No update fields provided")
-            ok = store.update(entry_id, **updates)
-            return {"ok": ok, "action": "update", "entry_id": entry_id} if ok else make_error(MCPError.NOT_FOUND, f"Entry '{entry_id}' not found or no valid fields")
+            status = str(updates.pop("status", "") or "").strip().lower()
+            reason = str(updates.pop("reason", "") or "").strip()
+            if status:
+                try:
+                    entry = store.transition(entry_id, status=status, reason=reason, **updates)
+                except ValueError as exc:
+                    return make_error(MCPError.INVALID_ARGS, str(exc))
+                return {"ok": True, "action": "update", "entry": entry} if entry else make_error(MCPError.NOT_FOUND, f"Entry '{entry_id}' not found")
+            ok = store.update(entry_id, embed=False, **updates)
+            return {"ok": ok, "action": "update", "entry": store.read(entry_id)} if ok else make_error(MCPError.NOT_FOUND, f"Entry '{entry_id}' not found or no valid fields")
         if action == "delete":
             ok = store.delete(str(args.get("entry_id") or ""))
             return {"ok": ok, "action": "delete"}
@@ -1423,13 +1457,19 @@ class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMix
             ok = store.mark_resolved(eid)
             return {"ok": ok} if ok else make_error(MCPError.NOT_FOUND, f"Entry '{eid}' not found")
         if action == "next_target":
+            rpc_fn = None
+            idb_ref = str(getattr(self.current_session, "idb_path", "") or "") if self.current_session else ""
+            if idb_ref:
+                def rpc_fn(tool, payload):
+                    return self.call_tool(tool, idb_ref, **payload)
             targets = store.next_target(
-                limit=int(args.get("limit") or 5),
+                limit=_bounded_int(args.get("limit", 5), 5, min_value=1, max_value=100),
+                rpc_fn=rpc_fn,
                 query=args.get("query"),
             )
             return {"ok": True, "targets": targets, "count": len(targets),
                     "summary": _target_collection_summary(targets),
-                    "note": "Highest-priority unexplored addresses. Use code(action='decompile') on the top target."}
+                    "note": "Highest-priority open investigation items and unexplored IDA functions."}
         if action == "frontier":
             try:
                 from ..analysis.frontier import FrontierEngine
@@ -1497,6 +1537,13 @@ class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMix
             return {"ok": True, "decayed": updated, "half_life_days": half_life, "min_confidence": min_conf}
         if action == "campaign_summary":
             return {"ok": True, "summary": store.campaign_summary()}
+        if action == "workspace_brief":
+            return {
+                "ok": True,
+                "brief": store.workspace_brief(
+                    limit=_bounded_int(args.get("limit", 8), 8, min_value=1, max_value=25)
+                ),
+            }
         if action == "auto_tag_propagate":
             updated = store.auto_tag_propagate()
             return {"ok": True, "updated": int(updated)}
@@ -1577,5 +1624,5 @@ class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMix
         return make_error(
             MCPError.ACTION_NOT_FOUND,
             f"Unsupported blackboard action: '{action}'",
-            hint="Valid actions: policy_set, policy_status, policy_check, phase_status, phase_set, phase_tick, quest_board, quest_complete, memory_compile, phase_finalize, trace_ingest, trace_run, trace_status, proposal_create, proposal_list, proposal_accept, proposal_reject, decision_card, working_set, state_health, notes_export, notes_import, write, read, list, search, update, delete, clear, stats, merge, prune, contradict, resolve, next_target, frontier, propagate_labels, start_crawler, stop_crawler, crawler_status, accept, reject, accept_proposal, reject_proposal, add_evidence, calibrate, campaign_summary, auto_tag_propagate",
+            hint="Valid actions include write, read, list, search, update, workspace_brief, next_target, frontier, stats, and legacy analysis actions.",
         )
