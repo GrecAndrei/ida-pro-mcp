@@ -45,6 +45,8 @@ class ServerRuntimeLeasesMixin:
                 "pid": int(proc.pid),
                 "port": int(runtime.get("port") or 0),
                 "idat_exe": str(self.idat_exe or ""),
+                "owner_pid": os.getpid(),
+                "owner_id": str(getattr(self, "_runtime_owner_id", "") or ""),
                 "updated_at": time.time(),
             }
             path = self._runtime_lease_path(sid)
@@ -142,6 +144,34 @@ class ServerRuntimeLeasesMixin:
                 return True
             return any(os.path.basename(part).lower() in expected_names for part in parts)
 
+    @staticmethod
+    def _lease_has_live_foreign_owner(lease: dict) -> bool:
+            """Whether a different live MCP host still owns this lease.
+
+            A shared cache may be used by multiple stdio hosts.  An expired
+            heartbeat alone is not enough authority for one host to terminate
+            an IDA process owned by another host that is still alive.
+            Legacy leases without an owner retain the existing stale-cleanup
+            behavior.
+            """
+            try:
+                owner_pid = int(lease.get("owner_pid") or 0)
+            except Exception:
+                return False
+            if owner_pid <= 0 or owner_pid == os.getpid():
+                return False
+            try:
+                os.kill(owner_pid, 0)
+            except ProcessLookupError:
+                return False
+            except PermissionError:
+                # We cannot inspect a process owned by another user, so never
+                # risk terminating the IDA process it claims to own.
+                return True
+            except Exception:
+                return False
+            return True
+
     def _cleanup_stale_runtime_leases(self) -> None:
             try:
                 entries = os.listdir(self._runtime_lease_dir)
@@ -188,6 +218,9 @@ class ServerRuntimeLeasesMixin:
                 if tracked_after:
                     continue
                 if not expired:
+                    continue
+                if self._lease_has_live_foreign_owner(lease):
+                    kept_count += 1
                     continue
                 if pid <= 0:
                     with contextlib.suppress(OSError):

@@ -3,6 +3,7 @@
 MCP Server: IDAMCPServer — the main JSON-RPC stdio server.
 """
 import atexit
+import contextvars
 import json
 import os
 import socket as _socket_mod
@@ -10,6 +11,8 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
+from dataclasses import dataclass, field
 from typing import Any
 
 from ida_pro_mcp import __version__
@@ -72,6 +75,22 @@ from .server_workflow import ServerWorkflowMixin  # noqa: E402
 # =============================================================================
 
 
+@dataclass
+class _ClientRequestState:
+    """Mutable state that belongs to one MCP client connection.
+
+    The stdio transport has one client per process, while the optional daemon
+    serves several connections concurrently.  Keeping this state in a
+    ``ContextVar`` lets both transports use the same request handlers without
+    allowing one daemon client to switch another client's active IDA session.
+    """
+
+    current_session: Any = None
+    pending_post_process: dict[str, Any] = field(default_factory=dict)
+    pending_truncation: dict[str, Any] = field(default_factory=dict)
+    last_spawn_error: Any = None
+
+
 class IDAMCPServer(
     ServerArgsMixin,
     ServerResponseMixin,
@@ -93,7 +112,67 @@ class IDAMCPServer(
     _blackboard_module = None
     _blackboard_store = None
 
+    def _client_request_state(self) -> _ClientRequestState:
+        """Return state local to the current MCP connection/request thread."""
+        state = self._client_request_state_var.get()
+        if state is None:
+            state = _ClientRequestState()
+            self._client_request_state_var.set(state)
+        return state
+
+    def _begin_client_connection(self) -> contextvars.Token:
+        """Start an isolated state scope for one daemon connection."""
+        return self._client_request_state_var.set(_ClientRequestState())
+
+    def _end_client_connection(self, token: contextvars.Token) -> None:
+        """Discard a daemon connection's state when its socket closes."""
+        self._client_request_state_var.reset(token)
+
+    @property
+    def current_session(self):
+        return self._client_request_state().current_session
+
+    @current_session.setter
+    def current_session(self, value) -> None:
+        self._client_request_state().current_session = value
+
+    @property
+    def _pending_pp(self) -> dict[str, Any]:
+        return self._client_request_state().pending_post_process
+
+    @_pending_pp.setter
+    def _pending_pp(self, value: Any) -> None:
+        self._client_request_state().pending_post_process = (
+            value if isinstance(value, dict) else {}
+        )
+
+    @property
+    def _pending_truncation(self) -> dict[str, Any]:
+        return self._client_request_state().pending_truncation
+
+    @_pending_truncation.setter
+    def _pending_truncation(self, value: Any) -> None:
+        self._client_request_state().pending_truncation = (
+            value if isinstance(value, dict) else {}
+        )
+
+    @property
+    def _last_spawn_error(self):
+        return self._client_request_state().last_spawn_error
+
+    @_last_spawn_error.setter
+    def _last_spawn_error(self, value) -> None:
+        self._client_request_state().last_spawn_error = value
+
     def __init__(self):
+        # A ContextVar is empty in newly spawned daemon threads.  Seed the
+        # construction thread for regular stdio and direct in-process callers.
+        self._client_request_state_var: contextvars.ContextVar[_ClientRequestState | None] = (
+            contextvars.ContextVar(
+                f"ida_mcp_client_request_state_{id(self):x}", default=None
+            )
+        )
+        self._client_request_state_var.set(_ClientRequestState())
         mode = str(os.environ.get("IDA_MCP_RESPONSE_MODE", "compact")).strip().lower()
         if mode not in {"compact", "full"}:
             mode = "compact"
@@ -332,6 +411,10 @@ class IDAMCPServer(
         self._last_injected_entries: list[dict[str, Any]] = []
         self._last_query_bridges: list[str] = []
         self._call_counter = 0
+        # Runtime leases are shared by independently launched MCP hosts that
+        # use the same durable cache.  This identity prevents one live host
+        # from cleaning up another live host's IDA process.
+        self._runtime_owner_id = uuid.uuid4().hex
         self._macro_path = os.path.join(self.cache_dir, "session_macros.json")
         self._runtime_lease_dir = os.path.join(self.cache_dir, "runtime_leases")
         os.makedirs(self._runtime_lease_dir, exist_ok=True)
@@ -776,6 +859,7 @@ class IDAMCPServer(
             self.shutdown()
 
     def _handle_daemon_conn(self, conn) -> None:
+        state_token = self._begin_client_connection()
         try:
             conn.settimeout(30.0)
             buf = b""
@@ -803,6 +887,7 @@ class IDAMCPServer(
         finally:
             with contextlib.suppress(Exception):
                 conn.close()
+            self._end_client_connection(state_token)
 
     @staticmethod
     def _cleanup_daemon() -> None:

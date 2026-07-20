@@ -79,7 +79,14 @@ class BackgroundMixin:
     def _bg_submit(self, args: dict) -> dict:
         script = args.get("script")
         tool_call = args.get("tool_call")
+        # Background work runs in a worker thread, which deliberately does
+        # not inherit a daemon connection's context. Capture the submitting
+        # client's active session now so the task stays bound to its IDA
+        # runtime instead of falling back to another client's session later.
         session_id = args.get("session_id")
+        if not session_id:
+            current = getattr(self, "current_session", None)
+            session_id = getattr(current, "session_id", None)
         if not script and not tool_call:
             return make_error(
                 MCPError.INVALID_ARGS,
