@@ -354,6 +354,17 @@ def process_single(r):
 
         return _build_error(tool_name, msg, details=details, hint=hint)
 
+
+def _recv_exact(conn, length):
+    """Receive exactly *length* bytes or return None on an early close."""
+    data = bytearray()
+    while len(data) < length:
+        chunk = conn.recv(min(length - len(data), 65536))
+        if not chunk:
+            return None
+        data.extend(chunk)
+    return bytes(data)
+
 def run_server():
     global _BOUND_PORT
     port = int(os.environ.get("IDA_MCP_PORT", 13337))
@@ -377,7 +388,21 @@ def run_server():
                 raise
             log_ev(f"Port {try_port} unavailable ({e}); falling back to ephemeral")
     _BOUND_PORT = bound_port
-    server_sock.listen(1)
+    # Execution is deliberately synchronous inside one IDA process, but a
+    # deeper accept queue prevents concurrent host probes from being refused.
+    # The host serializes real work per runtime and parallelizes across IDAs.
+    server_sock.listen(64)
+    port_file = str(os.environ.get("IDA_MCP_PORT_FILE", "") or "").strip()
+    if port_file:
+        tmp_port_file = port_file + ".tmp"
+        try:
+            with open(tmp_port_file, "w", encoding="ascii") as port_fh:
+                port_fh.write(str(bound_port))
+                port_fh.flush()
+                os.fsync(port_fh.fileno())
+            os.replace(tmp_port_file, port_file)
+        except Exception as e:
+            log_ev(f"Failed to publish RPC port: {e}")
     log_ev(f"Listening on {bound_port}")
 
     while True:
@@ -393,7 +418,7 @@ def run_server():
             conn.settimeout(5.0) # 5s timeout for the actual request data
             log_ev("Connection accepted")
 
-            raw_len = conn.recv(4)
+            raw_len = _recv_exact(conn, 4)
             if not raw_len:
                 continue
 
@@ -409,17 +434,13 @@ def run_server():
                 resp_json = json.dumps(res, separators=(",", ":")).encode("utf-8")
                 conn.sendall((len(resp_json)).to_bytes(4, 'big') + resp_json)
                 continue
-            data = b""
-            while len(data) < length:
-                chunk = conn.recv(min(length - len(data), 4096))
-                if not chunk: break
-                data += chunk
-            if len(data) != length:
+            data = _recv_exact(conn, length)
+            if data is None:
                 res = _build_error(
                     "bridge",
                     "Truncated request body",
                     code="INVALID_REQUEST",
-                    details={"expected": length, "received": len(data)},
+                    details={"expected": length},
                     hint="Ensure full request payload is sent with proper length prefix.",
                 )
                 resp_json = json.dumps(res, separators=(",", ":")).encode("utf-8")

@@ -485,6 +485,16 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             # with different arch, e.g. metapc instead of arm), which
             # would cause a fresh session + duplicate idat every call.
             candidates = self.session_mgr.find_sessions_by_path(binary_path)
+            # Persisted sessions are shared discovery metadata, not implicit
+            # client ownership.  Reuse only sessions this MCP connection has
+            # already created or explicitly switched to.  Otherwise two LLMs
+            # can launch separate IDA processes against the same IDB and
+            # corrupt/disrupt each other's work.
+            owns_session = getattr(self, "_client_owns_session", None)
+            if callable(owns_session):
+                candidates = [
+                    cand for cand in candidates if owns_session(cand.session_id)
+                ]
             preload_keys = ("processor", "bitness", "endian", "loader", "flags", "loader_options", "value")
             for cand in candidates:
                 if not cand.analysis_options:

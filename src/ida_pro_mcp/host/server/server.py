@@ -89,6 +89,8 @@ class _ClientRequestState:
     pending_post_process: dict[str, Any] = field(default_factory=dict)
     pending_truncation: dict[str, Any] = field(default_factory=dict)
     last_spawn_error: Any = None
+    vertex_compat: bool = False
+    owned_session_ids: set[str] = field(default_factory=set)
 
 
 class IDAMCPServer(
@@ -122,7 +124,11 @@ class IDAMCPServer(
 
     def _begin_client_connection(self) -> contextvars.Token:
         """Start an isolated state scope for one daemon connection."""
-        return self._client_request_state_var.set(_ClientRequestState())
+        return self._client_request_state_var.set(
+            _ClientRequestState(
+                vertex_compat=bool(getattr(self, "default_vertex_compat", False))
+            )
+        )
 
     def _end_client_connection(self, token: contextvars.Token) -> None:
         """Discard a daemon connection's state when its socket closes."""
@@ -134,7 +140,15 @@ class IDAMCPServer(
 
     @current_session.setter
     def current_session(self, value) -> None:
-        self._client_request_state().current_session = value
+        state = self._client_request_state()
+        state.current_session = value
+        sid = getattr(value, "session_id", None) if value is not None else None
+        if sid:
+            state.owned_session_ids.add(str(sid))
+
+    def _client_owns_session(self, session_id: str) -> bool:
+        """Whether this MCP connection has explicitly selected the session."""
+        return str(session_id) in self._client_request_state().owned_session_ids
 
     @property
     def _pending_pp(self) -> dict[str, Any]:
@@ -163,6 +177,14 @@ class IDAMCPServer(
     @_last_spawn_error.setter
     def _last_spawn_error(self, value) -> None:
         self._client_request_state().last_spawn_error = value
+
+    @property
+    def vertex_compat(self) -> bool:
+        return self._client_request_state().vertex_compat
+
+    @vertex_compat.setter
+    def vertex_compat(self, value: Any) -> None:
+        self._client_request_state().vertex_compat = bool(value)
 
     def __init__(self):
         # A ContextVar is empty in newly spawned daemon threads.  Seed the
@@ -349,10 +371,11 @@ class IDAMCPServer(
         # IDA_MCP_PHASE_GATES=1 if a strict LLM agent needs the steering.
         self._phase_gates_enabled = _env_bool("IDA_MCP_PHASE_GATES", False)
         # Translation layer for Google Vertex AI / Gemini API schema compatibility
-        self.vertex_compat = _env_bool(
+        self.default_vertex_compat = _env_bool(
             "IDA_MCP_VERTEX_COMPAT",
             False,
         )
+        self.vertex_compat = self.default_vertex_compat
         # structuredContent duplicates the text block in many MCP clients.
         # Keep it opt-in for machine consumers that need exact field access.
         self.include_structured_content = _env_bool(
@@ -843,7 +866,9 @@ class IDAMCPServer(
         _write_pidfile()
         sock = _socket_mod.socket(_socket_mod.AF_UNIX, _socket_mod.SOCK_STREAM)
         sock.bind(DAEMON_SOCKET)
-        sock.listen(5)
+        # A daemon can serve many independent MCP clients.  A larger backlog
+        # avoids connection refusal bursts while IDA sessions are starting.
+        sock.listen(128)
         sock.settimeout(1.0)
         atexit.register(self._cleanup_daemon)
         try:
@@ -861,16 +886,24 @@ class IDAMCPServer(
     def _handle_daemon_conn(self, conn) -> None:
         state_token = self._begin_client_connection()
         try:
-            conn.settimeout(30.0)
+            # Keep long-lived MCP connections alive.  The old 30 second socket
+            # timeout escaped the receive loop and disconnected idle clients.
+            conn.settimeout(1.0)
             buf = b""
             while True:
-                chunk = conn.recv(65536)
+                try:
+                    chunk = conn.recv(65536)
+                except TimeoutError:
+                    if self._shutdown_requested:
+                        break
+                    continue
                 if not chunk:
                     break
                 buf += chunk
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
                     if line.strip():
+                        req_obj = None
                         try:
                             req_obj = json.loads(line.decode("utf-8"))
                             resp = self.handle_request(req_obj)
@@ -880,10 +913,21 @@ class IDAMCPServer(
                                     conn.sendall(out.encode("utf-8"))
                                 except Exception:
                                     return
-                        except Exception:
-                            pass
-        except Exception:
-            pass
+                        except Exception as exc:
+                            error = {
+                                "jsonrpc": "2.0",
+                                "id": req_obj.get("id") if isinstance(req_obj, dict) else None,
+                                "error": {
+                                    "code": -32000,
+                                    "message": f"Internal server error: {exc}",
+                                },
+                            }
+                            with contextlib.suppress(Exception):
+                                conn.sendall(
+                                    (json.dumps(error, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+                                )
+        except Exception as exc:
+            log_rpc(f"Daemon client connection failed: {exc}")
         finally:
             with contextlib.suppress(Exception):
                 conn.close()

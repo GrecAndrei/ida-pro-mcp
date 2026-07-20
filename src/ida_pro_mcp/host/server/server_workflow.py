@@ -1066,7 +1066,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
         catalog for scripts that explicitly opt into it.
         """
         if getattr(self, "tool_surface", "agent") == "agent":
-            cache_key = ("agent",)
+            cache_key = ("agent", bool(getattr(self, "vertex_compat", False)))
             cached = self._tools_list_cache.get(cache_key)
             if cached and cached[0] == cache_key:
                 return cached[1]
@@ -1087,7 +1087,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
             self._tools_list_cache[cache_key] = (cache_key, catalog)
             return catalog
 
-        cache_key = (mode,)
+        cache_key = (mode, bool(getattr(self, "vertex_compat", False)))
         cached = self._tools_list_cache.get(cache_key)
         if cached and cached[0] == cache_key:
             return cached[1]

@@ -86,3 +86,81 @@ def test_simultaneous_clients_keep_independent_active_sessions(tmp_path, monkeyp
         assert status_b["binary_path"] == str(binary_b)
     finally:
         server.shutdown()
+
+
+def test_simultaneous_clients_opening_same_binary_get_separate_sessions(
+    tmp_path, monkeypatch
+):
+    """A persisted IDB is never silently shared by independent clients."""
+    monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
+    monkeypatch.setattr(IDAMCPServer, "_detect_ida_dir", lambda self: "")
+    monkeypatch.setattr(IDAMCPServer, "_find_idat", lambda self: "")
+
+    binary_path = tmp_path / "shared-input.bin"
+    binary_path.write_bytes(b"same immutable input")
+
+    server = IDAMCPServer()
+    monkeypatch.setattr(server, "_ensure_runtime_and_idb", lambda session: None)
+    barrier = threading.Barrier(2)
+    results: dict[str, dict] = {}
+
+    def client(label: str) -> None:
+        barrier.wait(timeout=5)
+        results[label] = _tool_call(
+            server, 1, "ida_open_binary", {"binary_path": str(binary_path)}
+        )
+
+    threads = [
+        threading.Thread(target=client, args=("a",)),
+        threading.Thread(target=client, args=("b",)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+
+    try:
+        session_a = results["a"]["session"]
+        session_b = results["b"]["session"]
+        assert session_a["binary_path"] == str(binary_path)
+        assert session_b["binary_path"] == str(binary_path)
+        assert session_a["session_id"] != session_b["session_id"]
+        assert session_a["idb_path"] != session_b["idb_path"]
+    finally:
+        server.shutdown()
+
+
+def test_idle_daemon_connection_is_not_closed_on_receive_timeout(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setattr(IDAMCPServer, "_detect_ida_dir", lambda self: "")
+    monkeypatch.setattr(IDAMCPServer, "_find_idat", lambda self: "")
+
+    class IdleThenClosedConnection:
+        def __init__(self):
+            self.recv_count = 0
+            self.closed = False
+
+        def settimeout(self, timeout):
+            self.timeout = timeout
+
+        def recv(self, size):
+            self.recv_count += 1
+            if self.recv_count == 1:
+                raise TimeoutError("idle")
+            return b""
+
+        def close(self):
+            self.closed = True
+
+    server = IDAMCPServer()
+    conn = IdleThenClosedConnection()
+    try:
+        server._handle_daemon_conn(conn)
+        assert conn.recv_count == 2
+        assert conn.closed is True
+    finally:
+        server.shutdown()

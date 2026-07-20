@@ -121,6 +121,70 @@ def _kill_process_tree(proc: subprocess.Popen, grace_seconds: float = 2.0) -> No
 
 
 class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
+    def _runtime_owner_path(self, sid: str) -> str:
+            return os.path.join(self._runtime_lease_dir, f"SID_{sid}.owner.json")
+
+    def _claim_runtime_ownership(self, sid: str) -> str | None:
+            """Atomically claim exclusive ownership of one session IDB."""
+            path = self._runtime_owner_path(sid)
+            record = json.dumps(
+                {
+                    "session_id": sid,
+                    "owner_pid": os.getpid(),
+                    "owner_id": self._runtime_owner_id,
+                    "created_at": time.time(),
+                },
+                separators=(",", ":"),
+            ).encode("utf-8")
+            for _ in range(2):
+                try:
+                    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                except FileExistsError:
+                    try:
+                        with open(path, encoding="utf-8") as owner_fh:
+                            owner = json.load(owner_fh)
+                    except Exception:
+                        owner = {}
+                    if str(owner.get("owner_id") or "") == self._runtime_owner_id:
+                        return path
+                    try:
+                        owner_pid = int(owner.get("owner_pid") or 0)
+                    except Exception:
+                        owner_pid = 0
+                    if owner_pid > 0:
+                        try:
+                            os.kill(owner_pid, 0)
+                        except ProcessLookupError:
+                            pass
+                        except PermissionError:
+                            return None
+                        except Exception:
+                            return None
+                        else:
+                            return None
+                    with contextlib.suppress(OSError):
+                        os.remove(path)
+                    continue
+                else:
+                    try:
+                        os.write(fd, record)
+                    finally:
+                        os.close(fd)
+                    return path
+            return None
+
+    def _release_runtime_ownership(self, sid: str) -> None:
+            path = self._runtime_owner_path(sid)
+            try:
+                with open(path, encoding="utf-8") as owner_fh:
+                    owner = json.load(owner_fh)
+            except Exception:
+                return
+            if str(owner.get("owner_id") or "") != self._runtime_owner_id:
+                return
+            with contextlib.suppress(OSError):
+                os.remove(path)
+
     def _ida_binary_names(self) -> list[str]:
             if sys.platform == "win32":
                 base_names = ["idat.exe", "idat64.exe", "ida.exe", "ida64.exe"]
@@ -366,21 +430,59 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
 
         return snapshot
 
-    def _send_rpc_raw(self, request, port, timeout=5, auth_token: str | None = None, recv_timeout: int | None = None):
+    def _send_rpc_raw(
+        self,
+        request,
+        port,
+        timeout=5,
+        auth_token: str | None = None,
+        recv_timeout: int | None = None,
+        queue_timeout: float | None = None,
+    ):
+            """Send one request through the target IDA runtime's RPC lane.
+
+            IDA executes SDK work synchronously and its bridge accepts one
+            request at a time. Serializing per runtime prevents watchdogs,
+            indexing workers, and overlapping LLM calls from filling the
+            listener backlog and producing false timeouts. Locks are scoped
+            per runtime, so different IDA processes remain fully parallel.
+            """
             import socket
 
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(timeout)
+            rpc_lock = None
+            token = auth_token
+            with self._runtime_lock:
+                for runtime in self.session_runtimes.values():
+                    if int(runtime.get("port") or 0) != int(port):
+                        continue
+                    rpc_lock = runtime.get("rpc_lock")
+                    if rpc_lock is None:
+                        rpc_lock = threading.Lock()
+                        runtime["rpc_lock"] = rpc_lock
+                    if not token:
+                        token = str(runtime.get("auth_token") or "")
+                    break
+
+            acquired = False
+            if rpc_lock is not None:
+                if queue_timeout is None:
+                    rpc_lock.acquire()
+                    acquired = True
+                else:
+                    acquired = rpc_lock.acquire(
+                        timeout=max(0.0, float(queue_timeout))
+                    )
+                if not acquired:
+                    raise TimeoutError(
+                        f"IDA runtime on port {port} is busy with another request"
+                    )
+
+            s = None
             try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(timeout)
                 s.connect(("127.0.0.1", port))
                 payload = dict(request) if isinstance(request, dict) else request
-                token = auth_token
-                if not token and isinstance(payload, dict):
-                    with self._runtime_lock:
-                        for runtime in self.session_runtimes.values():
-                            if int(runtime.get("port") or 0) == int(port):
-                                token = str(runtime.get("auth_token") or "")
-                                break
                 if token and isinstance(payload, dict):
                     payload["session_token"] = token
                 data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
@@ -418,7 +520,10 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     rd += c
                 return json.loads(rd.decode("utf-8"))
             finally:
-                s.close()
+                if s is not None:
+                    s.close()
+                if acquired:
+                    rpc_lock.release()
 
     def _send_rpc_with_retry(
         self,
@@ -1026,6 +1131,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     port,
                     timeout=timeout,
                     auth_token=runtime.get("auth_token") if isinstance(runtime, dict) else None,
+                    queue_timeout=0,
                 )
             except Exception:
                 return None
@@ -1499,7 +1605,25 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 # already started the runtime while we were waiting.
                 if self._runtime_alive(self.session_runtimes.get(sid)):
                     return {"ok": True, "idb_path": session.idb_path, "_already_running": True}
-                return self._start_server_inner(session)
+                ownership_path = self._claim_runtime_ownership(sid)
+                if not ownership_path:
+                    return make_error(
+                        MCPError.FILE_LOCKED,
+                        "This session is active in another MCP client.",
+                        hint=(
+                            "Open the binary in this client to create an independent "
+                            "session, or close the other client before switching here."
+                        ),
+                        details={"session_id": sid},
+                    )
+                try:
+                    result = self._start_server_inner(session)
+                except Exception:
+                    self._release_runtime_ownership(sid)
+                    raise
+                if is_error_result(result):
+                    self._release_runtime_ownership(sid)
+                return result
 
     def _start_server_inner(self, session):
             opts = session.analysis_options or {}
@@ -1517,15 +1641,16 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     details={"ida_dir": self.ida_dir, "idat_exe": self.idat_exe},
                 )
 
-            # DYNAMIC PORT ASSIGNMENT
-            import socket
-
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.bind(("127.0.0.1", 0))
-            server_port = sock.getsockname()[1]
-            sock.close()
-
-            log_rpc(f"Assigned dynamic port: {server_port}")
+            # Let IDA bind port 0 itself, then publish the kernel-selected port
+            # through a unique handoff file.  Pre-selecting and releasing a
+            # port here created a TOCTOU race during concurrent launches.
+            server_port = 0
+            port_file = os.path.join(
+                self.cache_dir,
+                f"ida_rpc_{session.session_id}_{self._runtime_owner_id[:12]}.port",
+            )
+            with contextlib.suppress(OSError):
+                os.remove(port_file)
 
             # server_script.py lives at the package root (ida_pro_mcp/).
             # SCRIPT_DIR is host/server/, so the package root is two levels up.
@@ -1537,6 +1662,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             if ida_runtime_dir:
                 env["IDADIR"] = ida_runtime_dir
             env["IDA_MCP_PORT"] = str(server_port)
+            env["IDA_MCP_PORT_FILE"] = port_file
             session_token = secrets.token_urlsafe(32)
             env["IDA_MCP_SESSION_TOKEN"] = session_token
             env["IDA_MCP_BYPASS_SYNC"] = "1"
@@ -1616,7 +1742,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 start_time = time.time()
                 ida_crashed = False
                 exit_code = None
-                actual_port = server_port
+                actual_port = 0
                 while time.time() - start_time < startup_timeout:
                     exit_code = server_process.poll()
                     if exit_code is not None:
@@ -1624,20 +1750,20 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         break
 
                     try:
+                        if actual_port <= 0 and os.path.isfile(port_file):
+                            with open(port_file, encoding="ascii") as port_fh:
+                                actual_port = int(port_fh.read().strip())
+                        if actual_port <= 0:
+                            time.sleep(0.05)
+                            continue
                         res = self._send_rpc_raw(
                             {"type": "ping"},
-                            server_port,
+                            actual_port,
                             timeout=0.5,
                             auth_token=session_token,
                         )
                         if res.get("pong"):
-                            # IDA may have rebound to an ephemeral port if
-                            # the host's pre-allocated one was taken in the
-                            # TOCTOU window. Trust the port IDA reports.
-                            try:
-                                actual_port = int(res.get("port") or server_port)
-                            except Exception:
-                                actual_port = server_port
+                            actual_port = int(res.get("port") or actual_port)
                             log_rpc(
                                 f"IDA RPC listener is ready for {session.idb_path} on port {actual_port}"
                             )
@@ -1649,14 +1775,18 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                                 "stderr_log": stderr_log,
                                 "ida_log": log_file,
                                 "auth_token": session_token,
+                                "rpc_lock": threading.Lock(),
                                 "log_handles": [stdout_fh, stderr_fh],
                             }
                             with self._runtime_lock:
                                 self.session_runtimes[session.session_id] = runtime
+                            with contextlib.suppress(OSError):
+                                os.remove(port_file)
                             self._write_runtime_lease(session.session_id, runtime)
                             _handles_transferred = True
                             apply_res = self._apply_session_options(session, runtime)
                             if is_error_result(apply_res):
+                                self._cleanup_runtime(session.session_id)
                                 return apply_res
                             # Start lightweight host services immediately, and defer
                             # structural indexing until the session goes idle.
@@ -1705,6 +1835,10 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 # handed off to a registered runtime — close them so we do
                 # not leak file descriptors across repeated failed starts.
                 if not _handles_transferred:
+                    with contextlib.suppress(OSError):
+                        os.remove(port_file)
+                    with contextlib.suppress(Exception):
+                        _kill_process_tree(server_process)
                     for fh in (stdout_fh, stderr_fh):
                         with contextlib.suppress(Exception):
                             fh.close()
@@ -1716,7 +1850,18 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             ida_runtime_dir = self.ida_dir or os.path.dirname(self.idat_exe)
             if ida_runtime_dir:
                 env["IDADIR"] = ida_runtime_dir
-            env["IDA_MCP_PORT"] = str(server_port)
+            # Recovery launches use the same race-free port handoff as normal
+            # launches. The server_port argument is retained for compatibility
+            # with callers but is intentionally not reused.
+            recovery_tag = "clean" if sanitize_env else "normal"
+            port_file = os.path.join(
+                self.cache_dir,
+                f"ida_rpc_{session.session_id}_{self._runtime_owner_id[:12]}_{recovery_tag}.port",
+            )
+            with contextlib.suppress(OSError):
+                os.remove(port_file)
+            env["IDA_MCP_PORT"] = "0"
+            env["IDA_MCP_PORT_FILE"] = port_file
             session_token = secrets.token_urlsafe(32)
             env["IDA_MCP_SESSION_TOKEN"] = session_token
             env["IDA_MCP_BYPASS_SYNC"] = "1"
@@ -1774,6 +1919,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
 
                 startup_timeout = int(os.environ.get("IDA_MCP_STARTUP_TIMEOUT", "240"))
                 start_time = time.time()
+                actual_port = 0
                 while time.time() - start_time < startup_timeout:
                     exit_code = server_process.poll()
                     if exit_code is not None:
@@ -1791,18 +1937,20 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         )
 
                     try:
+                        if actual_port <= 0 and os.path.isfile(port_file):
+                            with open(port_file, encoding="ascii") as port_fh:
+                                actual_port = int(port_fh.read().strip())
+                        if actual_port <= 0:
+                            time.sleep(0.05)
+                            continue
                         res = self._send_rpc_raw(
                             {"type": "ping"},
-                            server_port,
+                            actual_port,
                             timeout=0.5,
                             auth_token=session_token,
                         )
                         if res.get("pong"):
-                            # Trust the port IDA reports (TOCTOU self-heal).
-                            try:
-                                actual_port = int(res.get("port") or server_port)
-                            except Exception:
-                                actual_port = server_port
+                            actual_port = int(res.get("port") or actual_port)
                             log_rpc(
                                 f"IDA RPC listener is ready for {session.idb_path} on port {actual_port}"
                             )
@@ -1814,10 +1962,13 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                                 "stderr_log": stderr_log,
                                 "ida_log": log_file,
                                 "auth_token": session_token,
+                                "rpc_lock": threading.Lock(),
                                 "log_handles": [stdout_fh, stderr_fh],
                             }
                             with self._runtime_lock:
                                 self.session_runtimes[session.session_id] = runtime
+                            with contextlib.suppress(OSError):
+                                os.remove(port_file)
                             self._write_runtime_lease(session.session_id, runtime)
                             _handles_transferred = True
                             return {"ok": True, "idb_path": session.idb_path, "port": actual_port}
@@ -1832,6 +1983,10 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 )
             finally:
                 if not _handles_transferred:
+                    with contextlib.suppress(OSError):
+                        os.remove(port_file)
+                    with contextlib.suppress(Exception):
+                        _kill_process_tree(server_process)
                     for fh in (stdout_fh, stderr_fh):
                         with contextlib.suppress(Exception):
                             fh.close()
@@ -2201,12 +2356,18 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 self._session_startup_locks.pop(sid, None)
             self._remove_runtime_lease(sid)
             if not runtime:
+                self._release_runtime_ownership(sid)
                 return
             proc = runtime.get("process")
             port = runtime.get("port")
             if proc:
                 with contextlib.suppress(Exception):
-                    self._send_rpc_raw({"type": "shutdown"}, port, timeout=1)
+                    self._send_rpc_raw(
+                        {"type": "shutdown"},
+                        port,
+                        timeout=1,
+                        queue_timeout=0,
+                    )
                 # Use _kill_process_tree so the full idat.exe -> ida.exe
                 # tree is terminated; otherwise ida.exe can be left
                 # orphaned holding the unpacked .id0/.id1 files.
@@ -2214,6 +2375,9 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             for fh in runtime.get("log_handles", []):
                 with contextlib.suppress(Exception):
                     fh.close()
+            # Ownership is released only after the old process and its file
+            # handles are gone, so another host cannot race onto the same IDB.
+            self._release_runtime_ownership(sid)
 
     def _cleanup_all_runtimes(self):
             with self._runtime_lock:
