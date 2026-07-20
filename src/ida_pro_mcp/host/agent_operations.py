@@ -203,9 +203,14 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
             {
                 "calls": {
                     "type": "array",
-                    "description": "Public ida_* calls as {name, arguments} objects, or parameterless ida_* names.",
+                    "description": "Public ida_* calls as {name, arguments} objects; omit arguments for a parameterless call.",
                     "items": {
-                        "type": ["object", "string"],
+                        # Vertex AI converts JSON Schema type unions to
+                        # ``any_of``. Its function-declaration schema rejects
+                        # sibling fields such as properties beside that union,
+                        # so model the parameterless form as {name} instead of
+                        # allowing a bare string here.
+                        "type": "object",
                         "properties": {
                             "name": {"type": "string"},
                             "arguments": {"type": "object"},

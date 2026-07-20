@@ -119,12 +119,9 @@ Input schema:
   "properties": {
     "calls": {
       "type": "array",
-      "description": "Public ida_* calls as {name, arguments} objects, or parameterless ida_* names.",
+      "description": "Public ida_* calls as {name, arguments} objects; omit arguments for a parameterless call.",
       "items": {
-        "type": [
-          "object",
-          "string"
-        ],
+        "type": "object",
         "properties": {
           "name": {
             "type": "string"

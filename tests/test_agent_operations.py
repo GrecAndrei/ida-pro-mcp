@@ -125,6 +125,26 @@ def test_public_batch_translates_nested_ida_operations_and_rejects_invalid_neste
     assert error["details"]["batch_index"] == 0
 
 
+def test_vertex_tools_list_models_batch_calls_as_objects(monkeypatch):
+    monkeypatch.setenv("IDA_MCP_VERTEX_COMPAT", "1")
+    response = IDAMCPServer().handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": {"prefix": "ida_batch"},
+        }
+    )
+
+    tools = response["result"]["tools"]
+    assert [tool["name"] for tool in tools] == ["ida_batch"]
+    calls = tools[0]["inputSchema"]["properties"]["calls"]
+    assert calls["items"]["type"] == "object"
+    assert calls["items"]["required"] == ["name"]
+    assert "anyOf" not in calls["items"]
+    assert "any_of" not in calls["items"]
+
+
 def test_public_batch_protocol_dispatches_translated_calls(monkeypatch):
     server = IDAMCPServer()
     observed = {}
