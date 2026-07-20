@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 from ida_pro_mcp.host.agent_operations import (
     adapt_agent_error_payload,
     build_agent_help,
@@ -125,24 +123,42 @@ def test_public_batch_translates_nested_ida_operations_and_rejects_invalid_neste
     assert error["details"]["batch_index"] == 0
 
 
-def test_vertex_tools_list_models_batch_calls_as_objects(monkeypatch):
-    monkeypatch.setenv("IDA_MCP_VERTEX_COMPAT", "1")
+def test_agent_tools_list_avoids_schema_unions_without_vertex_compat(monkeypatch):
+    monkeypatch.delenv("IDA_MCP_VERTEX_COMPAT", raising=False)
     response = IDAMCPServer().handle_request(
         {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/list",
-            "params": {"prefix": "ida_batch"},
+            "params": {},
         }
     )
 
     tools = response["result"]["tools"]
-    assert [tool["name"] for tool in tools] == ["ida_batch"]
-    calls = tools[0]["inputSchema"]["properties"]["calls"]
+    assert tools
+    batch = next(tool for tool in tools if tool["name"] == "ida_batch")
+    calls = batch["inputSchema"]["properties"]["calls"]
     assert calls["items"]["type"] == "object"
     assert calls["items"]["required"] == ["name"]
-    assert "anyOf" not in calls["items"]
-    assert "any_of" not in calls["items"]
+
+    chain = next(tool for tool in tools if tool["name"] == "ida_calc_chain")
+    offsets = chain["inputSchema"]["properties"]["offsets"]
+    assert offsets["type"] == "array"
+    assert offsets["items"] == {"type": "string"}
+
+    def assert_no_unions(value):
+        if isinstance(value, dict):
+            assert not isinstance(value.get("type"), list)
+            assert "anyOf" not in value
+            assert "any_of" not in value
+            for child in value.values():
+                assert_no_unions(child)
+        elif isinstance(value, list):
+            for child in value:
+                assert_no_unions(child)
+
+    for tool in tools:
+        assert_no_unions(tool["inputSchema"])
 
 
 def test_public_batch_protocol_dispatches_translated_calls(monkeypatch):
@@ -171,12 +187,64 @@ def test_public_batch_protocol_dispatches_translated_calls(monkeypatch):
         }
     )
 
-    payload = json.loads(response["result"]["content"][0]["text"])
-    assert payload == {"ok": True, "count": 2}
+    assert response["result"]["content"][0]["text"] == "ok: true\ncount: 2"
+    assert "structuredContent" not in response["result"]
     assert observed["calls"] == [
         {"name": "idb", "arguments": {"action": "overview"}},
         {"name": "calc", "arguments": {"action": "eval", "expr": "1 + 1"}},
     ]
+
+
+def test_all_clients_receive_readable_tool_results_without_duplicate_data(monkeypatch):
+    monkeypatch.delenv("IDA_MCP_VERTEX_COMPAT", raising=False)
+    server = IDAMCPServer()
+    assert server.vertex_compat is False
+
+    expected = {
+        "summary": 'found "quoted" text at C:\\temp',
+        "pseudocode": 'puts("hello");\nreturn 0;',
+    }
+    monkeypatch.setattr(server, "_handle_batch", lambda _arguments: expected)
+    response = server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "ida_batch",
+                "arguments": {"calls": [{"name": "ida_overview"}]},
+            },
+        }
+    )
+
+    result = response["result"]
+    assert "structuredContent" not in result
+    text = result["content"][0]["text"]
+    assert 'summary: found "quoted" text at C:\\temp' in text
+    assert 'puts("hello");\nreturn 0;' in text
+    assert '\\"' not in text
+    assert not text.startswith("{")
+
+
+def test_structured_tool_results_are_opt_in(monkeypatch):
+    monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
+    server = IDAMCPServer()
+    expected = {"ok": True, "count": 1}
+    monkeypatch.setattr(server, "_handle_batch", lambda _arguments: expected)
+
+    response = server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "ida_batch",
+                "arguments": {"calls": [{"name": "ida_overview"}]},
+            },
+        }
+    )
+
+    assert response["result"]["structuredContent"] == expected
 
 
 def test_full_function_indexing_has_an_explicit_resumable_contract():
@@ -308,8 +376,7 @@ def test_public_protocol_adapts_backend_error_hints(monkeypatch):
             "params": {"name": "ida_decompile", "arguments": {"address": "0x401000"}},
         }
     )
-    payload = json.loads(response["result"]["content"][0]["text"])
-    assert payload["hint"] == "Try ida_disassemble for assembly."
+    assert "hint: Try ida_disassemble for assembly." in response["result"]["content"][0]["text"]
 
 
 def test_help_is_in_band_and_returns_the_exact_visible_schema():
@@ -346,10 +413,10 @@ def test_help_is_callable_through_the_public_mcp_protocol():
             "params": {"name": "ida_help", "arguments": {"topic": "ida_find"}},
         }
     )
-    content = response["result"]["content"]
-    payload = json.loads(content[0]["text"])
-    assert payload["operation"]["name"] == "ida_find"
-    assert payload["operation"]["inputSchema"]["required"] == ["query"]
+    text = response["result"]["content"][0]["text"]
+    assert "operation:" in text
+    assert "name: ida_find" in text
+    assert "- query" in text
 
 
 def test_public_protocol_rejects_unknown_or_missing_operands_before_dispatch():
@@ -364,6 +431,6 @@ def test_public_protocol_rejects_unknown_or_missing_operands_before_dispatch():
     )
 
     assert response["result"]["isError"] is True
-    payload = json.loads(response["result"]["content"][0]["text"])
-    assert payload["code"] == "INVALID_ARGS"
-    assert "Unknown argument" in payload["message"]
+    text = response["result"]["content"][0]["text"]
+    assert "code: INVALID_ARGS" in text
+    assert "Unknown argument" in text

@@ -1171,6 +1171,73 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 return json.dumps(payload, ensure_ascii=False, indent=2)
             return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
+    def _render_payload_text(self, payload: Any) -> str:
+            """Render a JSON-safe result as readable text without JSON escaping.
+
+            Gemini displays an MCP text block verbatim inside a Vertex function
+            response. A JSON string therefore leaves quoted source code and
+            newlines looking double-escaped (for example ``\\\"`` and ``\\n``).
+            This renderer keeps the same information while reserving JSON for
+            ``structuredContent``.
+            """
+            value = self._json_safe_value(payload)
+
+            def _scalar(item: Any) -> str:
+                if item is None:
+                    return "null"
+                if item is True:
+                    return "true"
+                if item is False:
+                    return "false"
+                return str(item)
+
+            def _fence(text: str) -> str:
+                fence = "```"
+                while fence in text:
+                    fence += "`"
+                return fence
+
+            def _lines(item: Any, indent: int = 0) -> list[str]:
+                prefix = " " * indent
+                if isinstance(item, dict):
+                    if not item:
+                        return [f"{prefix}(empty)"]
+                    rendered: list[str] = []
+                    for key, child in item.items():
+                        label = str(key)
+                        if isinstance(child, (dict, list)):
+                            rendered.append(f"{prefix}{label}:")
+                            rendered.extend(_lines(child, indent + 2))
+                        elif isinstance(child, str) and "\n" in child:
+                            fence = _fence(child)
+                            rendered.append(f"{prefix}{label}:")
+                            rendered.append(f"{prefix}{fence}text")
+                            rendered.extend(f"{prefix}{line}" for line in child.splitlines())
+                            rendered.append(f"{prefix}{fence}")
+                        else:
+                            rendered.append(f"{prefix}{label}: {_scalar(child)}")
+                    return rendered
+                if isinstance(item, list):
+                    if not item:
+                        return [f"{prefix}(empty)"]
+                    rendered = []
+                    for child in item:
+                        if isinstance(child, (dict, list)):
+                            rendered.append(f"{prefix}-")
+                            rendered.extend(_lines(child, indent + 2))
+                        elif isinstance(child, str) and "\n" in child:
+                            fence = _fence(child)
+                            rendered.append(f"{prefix}-")
+                            rendered.append(f"{prefix}  {fence}text")
+                            rendered.extend(f"{prefix}  {line}" for line in child.splitlines())
+                            rendered.append(f"{prefix}  {fence}")
+                        else:
+                            rendered.append(f"{prefix}- {_scalar(child)}")
+                    return rendered
+                return [f"{prefix}{_scalar(item)}"]
+
+            return "\n".join(_lines(value))
+
     def _build_ida_command(
             self, session, log_file, script_path, use_existing_idb: bool, effective_idb_path: str | None = None
         ):

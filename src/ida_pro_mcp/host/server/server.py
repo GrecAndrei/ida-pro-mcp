@@ -16,6 +16,8 @@ from ida_pro_mcp import __version__
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
+_VERTEX_COMPAT_CLIENT_MARKERS = ("gemini", "antigravity", "opencode")
+
 import contextlib  # noqa: E402
 
 from ..agent_operations import (  # noqa: E402
@@ -272,6 +274,12 @@ class IDAMCPServer(
             "IDA_MCP_VERTEX_COMPAT",
             False,
         )
+        # structuredContent duplicates the text block in many MCP clients.
+        # Keep it opt-in for machine consumers that need exact field access.
+        self.include_structured_content = _env_bool(
+            "IDA_MCP_STRUCTURED_CONTENT",
+            False,
+        )
         self.ida_dir = self._detect_ida_dir()
         self.idat_exe = self._find_idat()
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -426,6 +434,19 @@ class IDAMCPServer(
     def handle_request(self, req):
         m, rid, p = req.get("method"), req.get("id"), req.get("params", {})
         if m == "initialize":
+            client_info = p.get("clientInfo") if isinstance(p, dict) else None
+            client_name = (
+                str(client_info.get("name") or "").strip().lower()
+                if isinstance(client_info, dict)
+                else ""
+            )
+            if client_name and any(marker in client_name for marker in _VERTEX_COMPAT_CLIENT_MARKERS):
+                # Existing Gemini configs may predate the installer setting
+                # IDA_MCP_VERTEX_COMPAT. Detect the client during protocol
+                # negotiation so its schemas and result formatting are still
+                # compatible.
+                self.vertex_compat = True
+                self._tools_list_cache.clear()
             return {
                 "jsonrpc": "2.0",
                 "id": rid,
@@ -588,18 +609,27 @@ class IDAMCPServer(
                 call_args=call_args,
             )
             is_error = is_error_result(raw_res)
+            # Text blocks are for models and people, so keep source code and
+            # multiline strings readable for every MCP client. Structured
+            # output is opt-in because sending both doubles context usage.
+            safe_res = self._json_safe_value(res)
+            structured = safe_res if isinstance(safe_res, dict) else {"result": safe_res}
+            content_text = self._render_payload_text(safe_res)
+            result = {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": content_text,
+                    }
+                ],
+                "isError": is_error,
+            }
+            if self.include_structured_content:
+                result["structuredContent"] = structured
             return {
                 "jsonrpc": "2.0",
                 "id": rid,
-                "result": {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": self._serialize_payload(res, response_opts),
-                        }
-                    ],
-                    "isError": is_error,
-                },
+                "result": result,
             }
         if m == "resources/list":
             return {

@@ -528,10 +528,7 @@ Input schema:
       "description": "Function name or hexadecimal address, for example 0x401000."
     },
     "target": {
-      "type": [
-        "string",
-        "integer"
-      ],
+      "type": "string",
       "description": "Numeric value, hexadecimal address, or symbol accepted by the calculation backend."
     },
     "intent": {
@@ -575,10 +572,7 @@ Input schema:
   "type": "object",
   "properties": {
     "value": {
-      "type": [
-        "string",
-        "integer"
-      ],
+      "type": "string",
       "description": "Numeric value, hexadecimal address, or symbol accepted by the calculation backend."
     },
     "persist": {
@@ -617,17 +611,11 @@ Input schema:
   "type": "object",
   "properties": {
     "address": {
-      "type": [
-        "string",
-        "integer"
-      ],
+      "type": "string",
       "description": "Numeric value, hexadecimal address, or symbol accepted by the calculation backend."
     },
     "value": {
-      "type": [
-        "string",
-        "integer"
-      ],
+      "type": "string",
       "description": "Numeric value, hexadecimal address, or symbol accepted by the calculation backend."
     },
     "to_va": {
@@ -744,14 +732,11 @@ Input schema:
       "description": "Function name or hexadecimal address, for example 0x401000."
     },
     "offsets": {
-      "type": [
-        "array",
-        "string"
-      ],
+      "type": "array",
       "items": {
         "type": "string"
       },
-      "description": "Pointer-chain offsets, either as a list or a comma-separated string."
+      "description": "Ordered pointer-chain offsets."
     },
     "size": {
       "type": "integer"
@@ -800,17 +785,11 @@ Input schema:
   "type": "object",
   "properties": {
     "value": {
-      "type": [
-        "string",
-        "integer"
-      ],
+      "type": "string",
       "description": "Numeric value, hexadecimal address, or symbol accepted by the calculation backend."
     },
     "address": {
-      "type": [
-        "string",
-        "integer"
-      ],
+      "type": "string",
       "description": "Numeric value, hexadecimal address, or symbol accepted by the calculation backend."
     },
     "expr": {
@@ -859,17 +838,11 @@ Input schema:
   "type": "object",
   "properties": {
     "value": {
-      "type": [
-        "string",
-        "integer"
-      ],
+      "type": "string",
       "description": "Numeric value, hexadecimal address, or symbol accepted by the calculation backend."
     },
     "target": {
-      "type": [
-        "string",
-        "integer"
-      ],
+      "type": "string",
       "description": "Numeric value, hexadecimal address, or symbol accepted by the calculation backend."
     },
     "bit_op": {

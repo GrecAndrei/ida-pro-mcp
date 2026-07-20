@@ -129,13 +129,18 @@ ADDRESS = {
 IDB = {"type": "string", "description": "Optional session ID, IDB path, or binary path."}
 LIMIT = {"type": "integer", "description": "Maximum result items to return."}
 CALC_VALUE = {
-    "type": ["string", "integer"],
+    # Use a string for numeric values as well as addresses and symbols.  Vertex
+    # converts JSON Schema type unions into ``any_of``, which cannot be
+    # combined with this field's description in a function declaration.
+    "type": "string",
     "description": "Numeric value, hexadecimal address, or symbol accepted by the calculation backend.",
 }
 CALC_OFFSETS = {
-    "type": ["array", "string"],
+    # A list is unambiguous for agents and avoids a Vertex-incompatible union
+    # between an array and a comma-separated string.
+    "type": "array",
     "items": {"type": "string"},
-    "description": "Pointer-chain offsets, either as a list or a comma-separated string.",
+    "description": "Ordered pointer-chain offsets.",
 }
 PERSIST = {
     "type": "boolean",

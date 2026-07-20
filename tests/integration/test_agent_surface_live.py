@@ -161,6 +161,7 @@ class LiveMCPClient:
                 "IDA_MCP_DISABLE_STUCK_DETECTION": "1",
                 "IDA_MCP_POLICY_MODE": "permissive",
                 "IDA_MCP_EMBED_DISABLED": "0" if self.embeddings_enabled else "1",
+                "IDA_MCP_STRUCTURED_CONTENT": "1",
                 "IDA_MCP_STARTUP_TIMEOUT": str(self.timeout),
             }
         )
@@ -220,6 +221,9 @@ class LiveMCPClient:
         result = response.get("result")
         if not isinstance(result, dict):
             raise AssertionError(f"{name} returned no MCP result: {response}")
+        structured = result.get("structuredContent")
+        if isinstance(structured, dict):
+            return structured
         content = result.get("content")
         if not isinstance(content, list) or not content or not isinstance(content[0], dict):
             raise AssertionError(f"{name} returned no text content: {result}")
