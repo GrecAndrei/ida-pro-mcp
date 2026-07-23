@@ -57,9 +57,10 @@ def _get_entry(token: str, session_id: str = "") -> dict[str, Any] | None:
     entry = _TRUNCATION_STORE.get(token)
     if not entry:
         return None
-    # Session scoping: if caller provides session_id, reject mismatch
+    # Session scoping: when the entry was stored under a session, require an
+    # exact match. Empty caller session_id must not unlock foreign tokens.
     entry_sid = entry.get("session_id", "")
-    if session_id and entry_sid and session_id != entry_sid:
+    if entry_sid and session_id != entry_sid:
         return None
     return entry
 

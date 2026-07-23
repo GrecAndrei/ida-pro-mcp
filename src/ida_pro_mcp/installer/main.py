@@ -571,7 +571,16 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         if not opts.only:
             opts.only = {"clients"}
     opts.install_root = Path(args.install_root).expanduser() if args.install_root else get_install_root()
-    opts.source_root = Path(__file__).resolve().parents[3]
+    # Prefer a checkout root that contains client_configs.json; otherwise use
+    # the installed package directory so pip installs still find bundled assets.
+    pkg_dir = Path(__file__).resolve().parents[1]
+    repo_candidate = Path(__file__).resolve().parents[3]
+    if (repo_candidate / "client_configs.json").exists():
+        opts.source_root = repo_candidate
+    elif (Path(__file__).resolve().parent / "client_configs.json").exists():
+        opts.source_root = Path(__file__).resolve().parent
+    else:
+        opts.source_root = pkg_dir
     opts.ida_dir = args.ida_dir
     opts.ida_version = args.ida_version
     opts.no_ida_prompt = args.no_ida_prompt
@@ -834,6 +843,10 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
             ui.warn(f"Failure report written to {report_path}")
         except Exception:
             pass
+        return 1
+
+    return 0
+
 
 def main(argv: list[str] | None = None) -> int:
     ui = UI()

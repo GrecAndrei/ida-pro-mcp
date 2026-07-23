@@ -213,3 +213,6 @@ addopts = "--ignore=tests/probes --ignore=tests/benchmarks"
 markers = [
     "live_ida: starts a licensed IDA instance and performs real MCP integration testing",
 ]
+
+[tool.setuptools.package-data]
+"ida_pro_mcp.installer" = ["client_configs.json"]

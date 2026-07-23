@@ -13,7 +13,7 @@ import ida_loader
 # ============================================================================
 
 @tool
-@idaread
+@idawrite
 def history(
     action: Annotated[Literal["undo", "redo", "list", "snapshot", "restore", "diff"],
                       "Action: undo|redo|list|snapshot|restore|diff"],

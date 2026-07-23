@@ -269,10 +269,10 @@ class ServerDispatchMixin:
                 _rpc_sock_timeout = _long_running_sock_timeout(tool_name, rpc_args)
                 if _rpc_sock_timeout == -1:
                     _rpc_sock_timeout = None
-                # Hard wall-clock cap on the entire call_tool path (RPC +
-                # retries + IDA). Anything beyond this gets the process
-                # signalled and we surface IDA_TIMEOUT so the user can
-                # decide whether to restart.
+                # Hard wall-clock cap around the RPC itself (not startup /
+                # seeding). Anything beyond this gets the process signalled
+                # and we surface IDA_TIMEOUT so the user can decide whether
+                # to restart — but only when the RPC did not already succeed.
                 try:
                     _wallclock_cap = float(
                         os.environ.get("IDA_MCP_RPC_HARD_WALLCLOCK_SEC", "900")
@@ -280,6 +280,7 @@ class ServerDispatchMixin:
                 except Exception:
                     _wallclock_cap = 900.0
                 _wallclock_cap = max(_wallclock_cap, 30.0)
+                _rpc_started = time.time()
                 try:
                     res = self._send_rpc_with_retry(
                         {"tool": tool_name, "args": rpc_args}, port,
@@ -293,12 +294,11 @@ class ServerDispatchMixin:
                         f"RPC to IDA failed after retries: {exc}",
                         details={"exception_type": type(exc).__name__, "tool": tool_name},
                     )
-                # Wall-clock watchdog: catches the case where IDA is alive
-                # but stuck in an unwatched infinite loop (no socket
-                # progress, no timeout firing). Force-kill the process and
-                # surface IDA_TIMEOUT so the next call re-spawns.
-                _elapsed_wallclock = time.time() - _t0
-                if _elapsed_wallclock >= _wallclock_cap:
+                # Wall-clock watchdog: only force-kill when the RPC path itself
+                # exceeded the cap *and* we somehow still returned without a
+                # usable result. Successful payloads must not be discarded.
+                _elapsed_wallclock = time.time() - _rpc_started
+                if _elapsed_wallclock >= _wallclock_cap and is_error_result(res):
                     try:
                         proc = runtime.get("process") if isinstance(runtime, dict) else None
                         if proc is not None and hasattr(proc, "poll"):
@@ -326,6 +326,11 @@ class ServerDispatchMixin:
                             "wallclock_cap_sec": _wallclock_cap,
                             "elapsed_sec": round(_elapsed_wallclock, 2),
                         },
+                    )
+                if _elapsed_wallclock >= _wallclock_cap:
+                    log_rpc(
+                        f"wallclock cap {_wallclock_cap:.0f}s exceeded for {tool_name} "
+                        f"(elapsed={_elapsed_wallclock:.1f}s) but RPC returned successfully"
                     )
                 # Other socket errors (TimeoutError, OSError) propagate to the
                 # existing handler below, which distinguishes IDA_TIMEOUT from
@@ -812,7 +817,40 @@ class ServerDispatchMixin:
             if k != "next_token" and v is not None:
                 cached_pp[k] = v
 
-        # Execute the original tool action.
+        # Execute the original tool action — re-run policy so continuation
+        # pages cannot bypass the preflight gates that protected page 1.
+        try:
+            policy_result = evaluate_policy(
+                tool_name,
+                base_args.get("action"),
+                mode=self._resolve_policy_mode(),
+                purpose=base_args.get("_purpose") or pp_params.get("_purpose"),
+                ack=_coerce_bool(pp_params.get("_risk_ack"), False)
+                or _coerce_bool(pp_params.get("_guardrail_ack"), False)
+                or _coerce_bool(base_args.get("_risk_ack"), False),
+            )
+            if policy_result.decision == PolicyDecision.BLOCK:
+                return make_error(
+                    MCPError.POLICY_DENIED,
+                    "Policy blocked this continuation",
+                    details=policy_result.to_dict(),
+                )
+            if policy_result.decision == PolicyDecision.REQUIRE_ACK:
+                return make_error(
+                    MCPError.POLICY_DENIED,
+                    "Policy requires acknowledgement for this continuation",
+                    hint="Retry with _risk_ack=true.",
+                    details=policy_result.to_dict(),
+                )
+        except Exception as e:
+            mode = self._resolve_policy_mode()
+            if str(mode or "").strip().lower() not in {"off", "permissive"}:
+                return make_error(
+                    MCPError.POLICY_DENIED,
+                    "Policy evaluation failed; refusing continuation",
+                    details={"exception": str(e)},
+                )
+
         ip = base_args.pop(
             "idb", self.current_session.idb_path if self.current_session else None
         )
@@ -1040,20 +1078,28 @@ class ServerDispatchMixin:
                             log_rpc(f"Policy audit logging failed for {tool_name}: {e}")
                     if policy_result.decision == PolicyDecision.BLOCK:
                         return make_error(
-                            getattr(MCPError, "GOVERNANCE_BLOCKED", MCPError.INVALID_ARGS),
+                            MCPError.POLICY_DENIED,
                             "Policy blocked this tool action",
                             hint="Use an allowed purpose and verify the workflow is authorized.",
                             details=policy_details,
                         )
                     if policy_result.decision == PolicyDecision.REQUIRE_ACK:
                         return make_error(
-                            getattr(MCPError, "GOVERNANCE_BLOCKED", MCPError.INVALID_ARGS),
+                            MCPError.POLICY_DENIED,
                             "Policy requires explicit acknowledgement for this tool action",
                             hint="Retry with _risk_ack=true after verifying the action is authorized.",
                             details=policy_details,
                         )
                 except Exception as e:
                     log_rpc(f"Policy evaluation failed for {tool_name}: {e}")
+                    mode = self._resolve_policy_mode()
+                    if str(mode or "").strip().lower() not in {"off", "permissive"}:
+                        return make_error(
+                            MCPError.POLICY_DENIED,
+                            "Policy evaluation failed; refusing tool call",
+                            hint="Fix policy configuration or set IDA_MCP_POLICY_MODE=permissive to bypass.",
+                            details={"exception": str(e), "tool": tool_name},
+                        )
             args.pop("_purpose", None)
             args.pop("_risk_ack", None)
 
@@ -1077,7 +1123,6 @@ class ServerDispatchMixin:
                         "batch",
                         "truncation",
                         "blackboard",
-                        "misc",
                     }
                     phase_name = "scout"
                     if hasattr(self, "_phase_state"):
@@ -1246,6 +1291,13 @@ class ServerDispatchMixin:
                         )
             if tool_name == "session":
                 return self._handle_session(args)
+
+            if tool_name == "misc" and str(args.get("action") or "").strip() in (
+                "read_file",
+                "write_file",
+            ):
+                # Same host-side sandbox as memory filesystem I/O.
+                return self._handle_memory_filesystem(args)
 
             if tool_name == "memory" and str(args.get("action") or "").strip() in ("read_file", "write_file"):
                 return self._handle_memory_filesystem(args)

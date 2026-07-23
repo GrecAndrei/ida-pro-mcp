@@ -63,7 +63,6 @@ READ_ONLY_TOOLS = {
     "export",
     "firmware_view",
     "graph",
-    "history",
     "idb",
     "imports_deep",
     "intelligence",
@@ -150,11 +149,13 @@ LOCAL_CODE_EXEC_ACTIONS = {
 
 FILESYSTEM_WRITE_ACTIONS = {
     ("memory", "write_file"),
+    ("misc", "write_file"),
     ("project", "write"),
 }
 
 FILESYSTEM_READ_ACTIONS = {
     ("memory", "read_file"),
+    ("misc", "read_file"),
     ("project", "read"),
 }
 

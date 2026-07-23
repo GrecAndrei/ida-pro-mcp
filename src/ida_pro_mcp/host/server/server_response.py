@@ -620,9 +620,16 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                     pass  # skip truncation
                 else:
                     _budget = _tc.get("max_tokens") or budget
-                    compacted = truncate_response(compacted, max_tokens=_budget,
-                                                  trunc_offset=_tc.get("trunc_offset"),
-                                                  trunc_limit=_tc.get("trunc_limit"))
+                    _sid = ""
+                    if getattr(self, "current_session", None) is not None:
+                        _sid = str(getattr(self.current_session, "session_id", "") or "")
+                    compacted = truncate_response(
+                        compacted,
+                        max_tokens=_budget,
+                        trunc_offset=_tc.get("trunc_offset"),
+                        trunc_limit=_tc.get("trunc_limit"),
+                        session_id=_sid,
+                    )
 
         # ---- Context Density Auto-Compaction Middleware ----
         # Skip if the caller explicitly requests raw output.

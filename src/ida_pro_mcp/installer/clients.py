@@ -59,11 +59,15 @@ def _atomic_write_bytes(path: Path, content: bytes) -> None:
 
 
 def load_client_map(source_root: Path) -> dict:
-    config_path = source_root / "client_configs.json"
-    if not config_path.exists():
-        return {}
-    data = json.loads(config_path.read_text(encoding="utf-8"))
-    return data.get("clients", {})
+    candidates = [
+        source_root / "client_configs.json",
+        Path(__file__).resolve().parent / "client_configs.json",
+    ]
+    for config_path in candidates:
+        if config_path.exists():
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+            return data.get("clients", {})
+    return {}
 
 
 def backup_file(path: Path, report: InstallReport, dry_run: bool) -> Path | None:
