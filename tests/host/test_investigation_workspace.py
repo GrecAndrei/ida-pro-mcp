@@ -7,7 +7,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
-from ida_pro_mcp.host.server.server_blackboard import ServerBlackboardMixin
+from ida_pro_mcp.host.server.server_blackboard import ServerBlackboardMixin, _entry_brief
 from ida_pro_mcp.host.stores.blackboard_store import BlackboardStore
 
 
@@ -93,6 +93,33 @@ def test_workspace_brief_tracks_questions_transitions_conflicts_and_activity(tmp
     assert brief["conflicts"][0]["id"] == rejected
     assert brief["counts"] == {"total": 3, "open": 1, "confirmed": 1, "conflicts": 1, "questions": 1}
     assert any(event["event"] == "status:rejected" for event in brief["recent_activity"])
+
+
+def test_entry_brief_prefers_status_column_over_legacy_flags(tmp_path):
+    store = BlackboardStore(str(tmp_path / "workspace.db"))
+    entry_id = store.upsert_finding(
+        "Confirmed parser length",
+        kind="finding",
+        status="confirmed",
+    )["entry_id"]
+    entry = store.read(entry_id)
+    brief = _entry_brief(entry)
+    assert brief["status"] == "confirmed"
+
+
+def test_workspace_brief_hides_internal_auto_enrichment_rows(tmp_path):
+    store = BlackboardStore(str(tmp_path / "workspace.db"))
+    store.upsert_finding("User-visible hypothesis", kind="hypothesis")
+    store.write(
+        title="evidence gravity 0x401000",
+        content="{}",
+        category="evidence_gravity",
+        addr="0x401000",
+        source_type="gravity",
+    )
+    brief = store.workspace_brief()
+    titles = [item["title"] for item in brief["focus"]]
+    assert titles == ["User-visible hypothesis"]
 
 
 def test_search_falls_back_to_keywords_when_embeddings_are_unavailable(tmp_path):

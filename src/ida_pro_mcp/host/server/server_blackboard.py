@@ -41,7 +41,15 @@ def _entry_brief(entry: dict[str, Any]) -> dict[str, Any]:
     title = str(entry.get("title") or "").strip()
     category = str(entry.get("category") or "general").strip()
     confidence = float(entry.get("confidence") or 0.0)
-    status = "resolved" if entry.get("resolved") else "contradicted" if entry.get("contradicted") else "open"
+    raw_status = str(entry.get("status") or "").strip().lower()
+    if raw_status in {"open", "confirmed", "resolved", "rejected"}:
+        status = raw_status
+    elif entry.get("resolved"):
+        status = "resolved"
+    elif entry.get("contradicted"):
+        status = "rejected"
+    else:
+        status = "open"
     tag_list = tags if isinstance(tags, list) else []
     return {
         "entry_id": entry.get("id") or entry.get("entry_id"),
@@ -758,11 +766,7 @@ class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMix
         return {"ok": True, "applied": applied}
 
     def _get_blackboard_store(self):
-        """
-        Return a BlackboardStore scoped to the current session's IDB path.
-        Creates a new store object per session so binaries don't share findings.
-        Falls back to the cached global store when no session is active.
-        """
+        """Return a BlackboardStore scoped to the current session workspace."""
         try:
             if type(self)._blackboard_module is None:
                 import importlib.util
@@ -778,17 +782,12 @@ class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMix
                 spec.loader.exec_module(mod)
                 type(self)._blackboard_module = mod
             mod = type(self)._blackboard_module
-            # Per-binary scoping: derive path from current session IDB
-            idb = self._session_blackboard_path()
-            return mod.BlackboardStore(db_path=idb)
+            db_path = self._session_blackboard_path()
+            if not str(db_path or "").strip():
+                return None
+            return mod.BlackboardStore(db_path=db_path)
         except Exception:
-            # Last-resort fallback: global store
-            if type(self)._blackboard_store is None:
-                try:
-                    type(self)._blackboard_store = type(self)._blackboard_module.BlackboardStore()
-                except Exception:
-                    return None
-            return type(self)._blackboard_store
+            return None
 
     def _binary_sha256(self, binary_path: str) -> str:
         try:
@@ -1039,7 +1038,14 @@ class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMix
                 return make_error(MCPError.INVALID_ARGS, str(exc))
             eid = result["entry_id"]
             self._bb_policy_mark(policy_state, "write")
-            gravity = self._evidence_gravity(store, source_entry_id=eid, addr=str(args.get("addr") or ""), source_text=str(args.get("notes") or args.get("content") or ""))
+            gravity = None
+            if result.get("created"):
+                gravity = self._evidence_gravity(
+                    store,
+                    source_entry_id=eid,
+                    addr=str(args.get("addr") or ""),
+                    source_text=str(args.get("notes") or args.get("content") or ""),
+                )
             return {"ok": True, **result, "action": "write", "gravity": gravity, "phase": self._phase_snapshot(phase_state, store)}
         if action == "decision_card":
             claim = str(args.get("claim") or args.get("title") or "").strip()

@@ -21,10 +21,20 @@ from typing import Any
 
 from ..intelligence.helpers import quantile as _quantile
 
+_INTERNAL_WORKSPACE_CATEGORIES = frozenset(
+    {"evidence_gravity", "wm_now", "quest_log", "proposal_feedback"}
+)
+_INTERNAL_WORKSPACE_SOURCE_TYPES = frozenset(
+    {"evidence_gravity", "gravity", "auto_enrich", "proposal_feedback"}
+)
+
 
 def _resolve_db_path(db_path: str | None = None) -> str:
-    if db_path:
-        return db_path
+    if db_path is not None:
+        resolved = str(db_path).strip()
+        if not resolved:
+            raise ValueError("blackboard db_path is required")
+        return resolved
     try:
         import idc as _idc
         p = _idc.get_idb_path()
@@ -1096,8 +1106,17 @@ class BlackboardStore:
         with closing(self._conn()) as conn:
             rows = conn.execute(
                 "SELECT * FROM blackboard WHERE contradicted=0 "
+                "AND lower(category) NOT IN ("
+                + ",".join("?" for _ in _INTERNAL_WORKSPACE_CATEGORIES)
+                + ") AND lower(COALESCE(source_type, '')) NOT IN ("
+                + ",".join("?" for _ in _INTERNAL_WORKSPACE_SOURCE_TYPES)
+                + ") "
                 "ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'confirmed' THEN 1 ELSE 2 END, "
-                "priority DESC, confidence DESC, updated_at DESC LIMIT 500"
+                "priority DESC, confidence DESC, updated_at DESC LIMIT 500",
+                (
+                    *sorted(_INTERNAL_WORKSPACE_CATEGORIES),
+                    *sorted(_INTERNAL_WORKSPACE_SOURCE_TYPES),
+                ),
             ).fetchall()
             conflicts = conn.execute(
                 "SELECT * FROM blackboard WHERE contradicted=1 OR status='rejected' "
