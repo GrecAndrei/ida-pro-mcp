@@ -163,7 +163,7 @@ def test_empty_frontier_seeds_from_live_ida_function_inventory(tmp_path):
     assert targets[0]["source_type"] == "seed"
 
 
-def test_blackboard_workspace_follows_binary_content_not_session_path(tmp_path):
+def test_blackboard_workspace_is_isolated_per_session_for_same_binary(tmp_path):
     binary_a = tmp_path / "first.bin"
     binary_copy = tmp_path / "copy.bin"
     binary_b = tmp_path / "different.bin"
@@ -179,5 +179,13 @@ def test_blackboard_workspace_follows_binary_content_not_session_path(tmp_path):
     copy = SimpleNamespace(binary_path=str(binary_copy), idb_path=str(tmp_path / "two.i64"), session_id="two")
     different = SimpleNamespace(binary_path=str(binary_b), idb_path=str(tmp_path / "three.i64"), session_id="three")
 
-    assert server._session_blackboard_path(session_obj=first) == server._session_blackboard_path(session_obj=copy)
-    assert server._session_blackboard_path(session_obj=first) != server._session_blackboard_path(session_obj=different)
+    first_path = server._session_blackboard_path(session_obj=first)
+    copy_path = server._session_blackboard_path(session_obj=copy)
+    different_path = server._session_blackboard_path(session_obj=different)
+
+    assert first_path != copy_path
+    assert first_path != different_path
+    assert copy_path != different_path
+    assert first_path == server._session_blackboard_path(session_obj=first)
+    assert "-one.db" in first_path
+    assert "-two.db" in copy_path

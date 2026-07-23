@@ -185,6 +185,7 @@ class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMix
             session = self.current_session
 
         binary_path = str(getattr(session, "binary_path", "") or "").strip() if session else ""
+        session_id = str(getattr(session, "session_id", "") or sid_text or "").strip()
         if binary_path and os.path.isfile(binary_path):
             cache = getattr(self, "_blackboard_path_cache", None)
             if not isinstance(cache, dict):
@@ -192,25 +193,55 @@ class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMix
                 self._blackboard_path_cache = cache
             try:
                 stat = os.stat(binary_path)
-                cache_key = (os.path.realpath(binary_path), stat.st_size, stat.st_mtime_ns)
+                cache_key = (
+                    os.path.realpath(binary_path),
+                    stat.st_size,
+                    stat.st_mtime_ns,
+                    session_id.lower(),
+                )
             except OSError:
-                cache_key = (os.path.realpath(binary_path), 0, 0)
+                cache_key = (os.path.realpath(binary_path), 0, 0, session_id.lower())
             workspace_path = cache.get(cache_key)
             if not workspace_path:
                 digest = self._binary_sha256(binary_path)
                 if digest:
                     workspace_dir = os.path.join(self.cache_dir, "blackboards")
                     os.makedirs(workspace_dir, exist_ok=True)
-                    workspace_path = os.path.join(workspace_dir, f"sha256-{digest}.db")
+                    if session_id:
+                        workspace_path = os.path.join(
+                            workspace_dir,
+                            f"sha256-{digest}-{session_id.lower()}.db",
+                        )
+                    else:
+                        workspace_path = os.path.join(workspace_dir, f"sha256-{digest}.db")
                     cache[cache_key] = workspace_path
             if workspace_path:
                 # Preserve notebooks created by older releases while moving to
                 # a content-addressed workspace shared by this exact binary.
                 idb_path = str(getattr(session, "idb_path", "") or "").strip()
                 legacy_path = idb_path + ".blackboard.db" if idb_path else ""
+                shared_path = ""
+                digest = self._binary_sha256(binary_path)
+                if digest:
+                    shared_path = os.path.join(
+                        self.cache_dir,
+                        "blackboards",
+                        f"sha256-{digest}.db",
+                    )
                 if legacy_path and os.path.isfile(legacy_path) and not os.path.exists(workspace_path):
                     try:
                         with sqlite3.connect(legacy_path) as source, sqlite3.connect(workspace_path) as target:
+                            source.backup(target)
+                    except sqlite3.Error:
+                        pass
+                elif (
+                    shared_path
+                    and shared_path != workspace_path
+                    and os.path.isfile(shared_path)
+                    and not os.path.exists(workspace_path)
+                ):
+                    try:
+                        with sqlite3.connect(shared_path) as source, sqlite3.connect(workspace_path) as target:
                             source.backup(target)
                     except sqlite3.Error:
                         pass
