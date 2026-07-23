@@ -537,7 +537,7 @@ def code(
                         "range": f"{hex_ea(ea)}-{hex_ea(raw_end)}",
                     })
                     continue
-                disasm_start = ea if end_ea is not None else func.start_ea
+                disasm_start = ea
                 disasm_end = end_ea if end_ea is not None else func.end_ea
                 if structured:
                     items = _disasm_range_structured(disasm_start, disasm_end, max_items)

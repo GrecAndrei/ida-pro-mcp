@@ -4,7 +4,13 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 import contextlib
+import functools
 import hashlib
+
+try:
+    from ida_pro_mcp.ida_mcp.sync import sync_wrapper
+except ImportError:
+    from sync import sync_wrapper  # type: ignore[import-not-found]
 
 # ============================================================================
 # 10. FUNCS - Function management
@@ -743,6 +749,9 @@ def _funcs_impl(
         return handle_error(e)
 
 
+_FUNCS_WRITE_ACTIONS = frozenset({"create", "change", "delete", "set_flags"})
+
+
 @tool
 def funcs(
     action: Annotated[Literal[
@@ -810,7 +819,13 @@ def funcs(
         "force": force,
         **kwargs,
     }
-    return _funcs_impl(**call_kwargs)
+    if action in _FUNCS_WRITE_ACTIONS:
+        ff = functools.partial(_funcs_impl, **call_kwargs)
+        ff.__name__ = "_funcs_impl"
+        return sync_wrapper(ff, idaapi.MFF_WRITE)
+    ff = functools.partial(_funcs_impl, **call_kwargs)
+    ff.__name__ = "_funcs_impl"
+    return sync_wrapper(ff, idaapi.MFF_READ)
 
 
 # ============================================================================
