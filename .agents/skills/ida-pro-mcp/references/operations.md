@@ -180,7 +180,7 @@ Input schema:
   "properties": {
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [],
@@ -215,7 +215,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [
@@ -283,7 +283,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [
@@ -388,7 +388,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [],
@@ -408,7 +408,7 @@ Example:
 
 ## `ida_index_status`
 
-Check progress or retrieve the result of a background semantic-index job.
+Check progress or retrieve the result of a background semantic-index job started by this client.
 
 Input schema:
 ```json
@@ -435,7 +435,7 @@ Example:
 
 ## `ida_cancel_index`
 
-Cancel a queued or running semantic-index job after its current slice.
+Cancel a queued or running semantic-index job started by this client after its current slice.
 
 Input schema:
 ```json
@@ -483,7 +483,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [],
@@ -536,7 +536,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [
@@ -580,7 +580,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [
@@ -628,7 +628,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [
@@ -674,7 +674,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [
@@ -715,7 +715,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [
@@ -767,7 +767,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [],
@@ -831,7 +831,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [
@@ -884,7 +884,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [
@@ -941,7 +941,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [
@@ -1010,7 +1010,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [
@@ -1051,7 +1051,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [],
@@ -1085,7 +1085,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [],
@@ -1118,7 +1118,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [
@@ -1170,7 +1170,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [
@@ -1206,7 +1206,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [
@@ -1241,7 +1241,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [
@@ -1276,7 +1276,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [
@@ -1319,7 +1319,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [
@@ -1365,7 +1365,7 @@ Input schema:
     },
     "idb": {
       "type": "string",
-      "description": "Optional session ID, IDB path, or binary path."
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [

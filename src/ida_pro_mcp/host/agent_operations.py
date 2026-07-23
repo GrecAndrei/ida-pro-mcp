@@ -130,7 +130,10 @@ ADDRESS = {
     "type": "string",
     "description": "Function name or hexadecimal address, for example 0x401000.",
 }
-IDB = {"type": "string", "description": "Optional session ID, IDB path, or binary path."}
+IDB = {
+    "type": "string",
+    "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client.",
+}
 LIMIT = {"type": "integer", "description": "Maximum result items to return."}
 CALC_VALUE = {
     # Use a string for numeric values as well as addresses and symbols.  Vertex
@@ -347,7 +350,7 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     ),
     AgentOperation(
         name="ida_index_status",
-        description="Check progress or retrieve the result of a background semantic-index job.",
+        description="Check progress or retrieve the result of a background semantic-index job started by this client.",
         category="discovery",
         input_schema=_schema(
             {"task_id": {"type": "string", "description": "Task ID returned by ida_index_functions."}}
@@ -358,7 +361,7 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     ),
     AgentOperation(
         name="ida_cancel_index",
-        description="Cancel a queued or running semantic-index job after its current slice.",
+        description="Cancel a queued or running semantic-index job started by this client after its current slice.",
         category="discovery",
         input_schema=_schema(
             {"task_id": {"type": "string", "description": "Task ID returned by ida_index_functions."}},
@@ -1097,8 +1100,8 @@ available.
 - Treat the `structure` field returned by `ida_decompile` and
   `ida_disassemble` as evidence: it summarizes CFG shape and call targets;
   decompilation additionally supplies bounded ctree control points and local
-  data-flow. Use `ida_help` or dedicated graph/advanced operations only when
-  the compact summary is insufficient.
+  data-flow. Use `ida_help` for exact schemas when the compact summary is
+  insufficient.
 - Use hex address strings exactly as returned by tools.
 - `ida_rename` and `ida_comment` mutate the IDB. Set `risk_ack=true` only
   after verifying the target and intended change.

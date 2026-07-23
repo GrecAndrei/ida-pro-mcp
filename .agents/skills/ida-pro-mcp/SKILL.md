@@ -31,8 +31,8 @@ available.
 - Treat the `structure` field returned by `ida_decompile` and
   `ida_disassemble` as evidence: it summarizes CFG shape and call targets;
   decompilation additionally supplies bounded ctree control points and local
-  data-flow. Use `ida_help` or dedicated graph/advanced operations only when
-  the compact summary is insufficient.
+  data-flow. Use `ida_help` for exact schemas when the compact summary is
+  insufficient.
 - Use hex address strings exactly as returned by tools.
 - `ida_rename` and `ida_comment` mutate the IDB. Set `risk_ack=true` only
   after verifying the target and intended change.
