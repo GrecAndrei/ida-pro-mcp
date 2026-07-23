@@ -65,18 +65,10 @@ from .unified import (
 def _insight_index_path() -> str:
     """Return the insight index JSON path scoped to the active IDB when possible."""
     try:
-        import idc as _idc
-
-        idb_path = str(_idc.get_idb_path() or "").strip()
-        if idb_path:
-            return idb_path + ".insight_index.json"
-    except Exception:
-        pass
-    cache_dir = os.environ.get("IDA_MCP_CACHE_DIR") or os.environ.get("IDA_MCP_DATA_DIR")
-    if not cache_dir:
-        import tempfile
-        cache_dir = os.path.join(tempfile.gettempdir(), "ida-pro-mcp")
-    return os.path.join(cache_dir, "insight_index.json")
+        from ida_pro_mcp.host.intelligence.insight_paths import resolve_insight_index_path
+    except ImportError:
+        from host.intelligence.insight_paths import resolve_insight_index_path  # type: ignore
+    return resolve_insight_index_path()
 
 
 def _load_insight_index(path: str = "") -> dict:
