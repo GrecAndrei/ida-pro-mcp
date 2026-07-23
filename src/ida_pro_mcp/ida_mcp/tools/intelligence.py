@@ -1032,11 +1032,11 @@ def intelligence(
                     if not func:
                         failures += 1
                         continue
-                    # Standard half-open interval overlap: functions that
-                    # start before a range but extend into or across it still
-                    # belong to the requested radius/range.
+                    # Match semantic search: include only functions whose entry EA
+                    # lies inside the requested half-open radius/range window.
                     if ranges:
-                        in_range = any(fea < e and func.end_ea > s for s, e in ranges)
+                        from ida_pro_mcp.host.intelligence.scope_window import function_entry_in_ranges
+                        in_range = function_entry_in_ranges(fea, ranges)
                         if not in_range:
                             skipped += 1
                             continue

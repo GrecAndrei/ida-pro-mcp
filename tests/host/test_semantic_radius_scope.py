@@ -22,3 +22,13 @@ def test_radius_address_range_rejects_non_positive():
         radius_address_range(0x1000, 0)
     with pytest.raises(ValueError):
         radius_address_range(0x1000, -1)
+
+
+def test_function_entry_in_ranges_uses_half_open_entry_semantics():
+    from ida_pro_mcp.host.intelligence.scope_window import function_entry_in_ranges
+
+    ranges = [radius_address_range(100, 10)]
+    assert function_entry_in_ranges(90, ranges)
+    assert function_entry_in_ranges(109, ranges)
+    assert not function_entry_in_ranges(89, ranges)
+    assert not function_entry_in_ranges(110, ranges)
