@@ -1371,7 +1371,7 @@ def _find_hook_targets(category=None, limit=50):
 
 def _detect_protocol_impl(addr, limit):
     """Detect protocol usage in the binary."""
-    if _get_protocol_classifier is None:
+    if BehaviorClassifier is None or BgeCodeEmbedder is None:
         return {"ok": True, "note": "BehaviorClassifier not available", "network_apis": {}}
 
     def _get_protocol_classifier_fn():

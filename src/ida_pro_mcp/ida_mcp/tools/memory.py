@@ -49,7 +49,7 @@ def _find_pointers(data, start_ea):
     """Find all valid pointers in a byte sequence."""
     is_64 = _inf_bitness() == 64
     ptr_size = 8 if is_64 else 4
-    endian = ">" if _inf_inf_is_be() else "<"
+    endian = ">" if _inf_is_be() else "<"
     fmt = f"{endian}Q" if is_64 else f"{endian}I"
     import struct
     pointers = []

@@ -591,9 +591,10 @@ def _detect_mitigations(addr, _limit, _max_insns, _query):
 
         # NX: check if any segment is both writable and executable
         has_wx = False
+        wx_mask = idaapi.SEGPERM_WRITE | idaapi.SEGPERM_EXEC
         for seg_ea in idautils.Segments():
             seg = idaapi.getseg(seg_ea)
-            if seg and (seg.perm & 3) == 3:  # write + exec
+            if seg and (seg.perm & wx_mask) == wx_mask:
                 has_wx = True
                 break
         mitigations["NX"] = not has_wx

@@ -132,6 +132,13 @@ class IDAMCPServer(
 
     def _end_client_connection(self, token: contextvars.Token) -> None:
         """Discard a daemon connection's state when its socket closes."""
+        state = self._client_request_state_var.get()
+        if state is not None:
+            # Tear down IDA runtimes owned by this connection so disconnect
+            # does not leave orphaned idat processes holding IDB locks.
+            for sid in list(getattr(state, "owned_session_ids", set()) or set()):
+                with contextlib.suppress(Exception):
+                    self._cleanup_runtime(str(sid))
         self._client_request_state_var.reset(token)
 
     @property

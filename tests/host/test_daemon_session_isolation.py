@@ -226,6 +226,46 @@ def test_foreign_idb_argument_cannot_drive_another_clients_session(
         server.shutdown()
 
 
+def test_foreign_client_cannot_close_or_kill_peer_session(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
+    monkeypatch.setattr(IDAMCPServer, "_detect_ida_dir", lambda self: "")
+    monkeypatch.setattr(IDAMCPServer, "_find_idat", lambda self: "")
+
+    binary_a = tmp_path / "alpha.bin"
+    binary_b = tmp_path / "bravo.bin"
+    binary_a.write_bytes(b"alpha")
+    binary_b.write_bytes(b"bravo")
+
+    server = IDAMCPServer()
+    monkeypatch.setattr(server, "_ensure_runtime_and_idb", lambda session: None)
+
+    token_a = server._begin_client_connection()
+    try:
+        opened_a = _open_owned_session(server, str(binary_a))
+        sid_a = opened_a["session"]["session_id"]
+    finally:
+        # Keep runtime metadata around; disconnect cleanup would remove it.
+        # For this test we only need the session row to remain.
+        server._client_request_state_var.reset(token_a)
+
+    token_b = server._begin_client_connection()
+    try:
+        _open_owned_session(server, str(binary_b))
+        denied_close = server._session_action_close({"session_id": sid_a})
+        assert denied_close.get("error") is True
+        assert denied_close.get("code") == "FILE_LOCKED"
+        denied_kill = server._session_action_kill({"session_id": sid_a})
+        assert denied_kill.get("error") is True
+        assert denied_kill.get("code") == "FILE_LOCKED"
+        assert server.session_mgr.get_session(sid_a) is not None
+    finally:
+        server._end_client_connection(token_b)
+        server.shutdown()
+
+
 def test_background_index_worker_retains_session_ownership(
     tmp_path, monkeypatch
 ):
@@ -280,6 +320,11 @@ def test_background_index_worker_retains_session_ownership(
     finally:
         server._end_client_connection(token)
         server.shutdown()
+
+
+def test_session_switch_cannot_claim_another_clients_session(
+    tmp_path, monkeypatch
+):
     """switch must not grant ownership of a peer client's session."""
     monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
     monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
@@ -300,7 +345,7 @@ def test_background_index_worker_retains_session_ownership(
         sid_a = opened_a["session"]["session_id"]
         path_a = opened_a["session"]["binary_path"]
     finally:
-        server._end_client_connection(token_a)
+        server._client_request_state_var.reset(token_a)
 
     token_b = server._begin_client_connection()
     try:
@@ -318,6 +363,11 @@ def test_background_index_worker_retains_session_ownership(
     finally:
         server._end_client_connection(token_b)
         server.shutdown()
+
+
+def test_index_status_and_cancel_are_scoped_to_owning_client(
+    tmp_path, monkeypatch
+):
     """Unscoped status must not list peer jobs; cancel must not stop them."""
     monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
     monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
@@ -343,7 +393,7 @@ def test_background_index_worker_retains_session_ownership(
             run_fn=lambda task: {"ok": True},
         )
     finally:
-        server._end_client_connection(token_a)
+        server._client_request_state_var.reset(token_a)
 
     token_b = server._begin_client_connection()
     try:

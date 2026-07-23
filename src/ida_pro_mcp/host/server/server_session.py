@@ -346,6 +346,18 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             MCPError.INVALID_ARGS, "Invalid session_id format"
         )
 
+    def _require_owned_session_id(self, sid: str) -> dict | None:
+        """Reject mutating session actions against another client's session."""
+        session = self.session_mgr.get_session(sid)
+        if not session:
+            return make_error(
+                MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
+            )
+        ensure = getattr(self, "_ensure_client_owns_session", None)
+        if callable(ensure):
+            return ensure(session)
+        return None
+
     def _session_action_health(self, args: dict) -> dict:
         return self._handle_session_health(args)
 
@@ -1088,6 +1100,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 "session_id required (or have an active session)",
                 hint="Provide session_id or create/switch to a session first.",
             )
+        owned_err = self._require_owned_session_id(sid)
+        if owned_err:
+            return owned_err
         self._export_session_hypotheses_to_symbol_db(sid)
         self._cleanup_runtime(sid)
         closed = self.session_mgr.delete_session(sid)
@@ -1294,6 +1309,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 MCPError.INVALID_ARGS,
                 "session_id required (or create/switch to a session first)",
             )
+        owned_err = self._require_owned_session_id(sid)
+        if owned_err:
+            return owned_err
         runtime = self.session_runtimes.get(sid)
         if not isinstance(runtime, dict):
             return make_error(
@@ -1318,6 +1336,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 f"session.kill sid={sid} signaled={result.get('signaled')} "
                 f"terminated={result.get('terminated')} exit={result.get('exit_code')}"
             )
+        # Drop stale runtime metadata so the next tool call can respawn cleanly.
+        with contextlib.suppress(Exception):
+            self._cleanup_runtime(sid)
         return {"ok": True, **result}
 
     def _session_action_rebuild(self, args: dict) -> dict:
@@ -1330,6 +1351,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                 "session_id required",
                 hint="Provide session_id or create/switch to a session first.",
             )
+        owned_err = self._require_owned_session_id(sid)
+        if owned_err:
+            return owned_err
         session = self.session_mgr.get_session(sid)
         if not session:
             return make_error(
@@ -1539,6 +1563,10 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             sid = _normalize_session_id(raw.get("session_id") or "")
             if not sid:
                 continue
+            owned_err = self._require_owned_session_id(sid)
+            if owned_err:
+                skipped_sids.append(sid)
+                continue
             last_accessed = raw.get("last_accessed") or raw.get("last_used")
             if not last_accessed:
                 # Unknown liveness — leave it alone so a brand-new session
@@ -1687,7 +1715,14 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
                     MCPError.INVALID_ARGS,
                     f"Invalid session_id in list: {raw_sid}",
                 )
+            owned_err = self._require_owned_session_id(sid)
+            if owned_err:
+                return owned_err
             cleaned_sids.append(sid)
+        # Tear down live IDA runtimes before deleting metadata.
+        for sid in cleaned_sids:
+            with contextlib.suppress(Exception):
+                self._cleanup_runtime(sid)
         results = self.session_mgr.bulk_delete(cleaned_sids)
         # Clear current session if it was deleted
         if (

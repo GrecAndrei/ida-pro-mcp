@@ -702,6 +702,7 @@ class ContextAssembler:
         func_name = payload.get("name") or f"sub_{addr}"
 
         # ── Behavior classification via the shared zero-shot classifier ──
+        behavior_hits: list = []
         if _full and pseudocode.strip():
             try:
                 behavior_hits = self._behavior_classifier().classify(

@@ -61,7 +61,8 @@ class _BreakpointHooks(idaapi.DBG_Hooks):
         try:
             cond = _BP_CONDITIONS.get(int(ea))
             if not cond:
-                return 0
+                # No custom condition — pause normally.
+                return 1
             # Restricted eval via IDC expression evaluator as requested.
             try:
                 ok = bool(idc.eval_idc(cond))
@@ -70,9 +71,10 @@ class _BreakpointHooks(idaapi.DBG_Hooks):
             if not ok:
                 import ida_dbg
                 ida_dbg.continue_process()
+                return 0
+            return 1
         except Exception:
-            pass
-        return 0
+            return 1
 
 def _is_safe_bp_condition(expr: str) -> bool:
     if not isinstance(expr, str):

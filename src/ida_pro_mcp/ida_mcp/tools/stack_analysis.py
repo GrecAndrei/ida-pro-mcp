@@ -224,9 +224,9 @@ def stack_analysis(
                 return err
             frame_size = _frame_size(frame)
             members = []
-            for _, _member, name, offset, size, type_str in _iter_frame_members(frame):
+            for idx, _member, name, offset, size, type_str in _iter_frame_members(frame):
                 members.append({
-                    "index": i,
+                    "index": idx,
                     "name": name,
                     "offset": hex(offset),
                     "size": size,
@@ -253,7 +253,8 @@ def stack_analysis(
             for _, _member, name, offset, size, type_str in _iter_frame_members(frame):
                 is_buffer = False
                 # Arrays are buffers
-                if "[" in type_str or size >= 8 and "char" in type_str.lower() or size >= 16 and "*" not in type_str:
+                type_l = type_str.lower()
+                if "[" in type_str or (size >= 8 and "char" in type_l):
                     is_buffer = True
                 if is_buffer:
                     buffers.append({
