@@ -70,9 +70,11 @@ def graph(
                 stack.add(f_ea)
                 for item in idautils.FuncItems(f_ea):
                     if item_count >= max_items: break
-                    for xref in idautils.CodeRefsFrom(item, 0):
+                    for xref in idautils.XrefsFrom(item):
                         if item_count >= max_items: break
-                        target = ida_funcs.get_func(xref)
+                        if not xref.iscode or xref.type not in (idaapi.fl_CN, idaapi.fl_CF):
+                            continue
+                        target = ida_funcs.get_func(xref.to)
                         if target and target.start_ea != f_ea:
                             add_node(target.start_ea)
                             edge = (f_ea, target.start_ea)
@@ -140,9 +142,6 @@ def graph(
                     etype = "branch" if len(succs) > 1 else "fall_through"
                     edges.append({"from": src, "to": dst, "type": etype})
                     mm.append(f"  {src} --> {dst}")
-                if not succs:
-                    # terminal block
-                    edges.append({"from": src, "to": src, "type": "ret"})
 
             result = {
                 "ok": True,

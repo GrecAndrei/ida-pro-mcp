@@ -163,7 +163,7 @@ class ServerWorkflowBatchMixin:
             if is_error_result(item.get("result"))
         )
         return {
-            "ok": True,
+            "ok": errors == 0,
             "results": results,
             "count": len(results),
             "summary": {
