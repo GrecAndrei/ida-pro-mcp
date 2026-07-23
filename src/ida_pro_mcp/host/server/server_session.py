@@ -880,10 +880,14 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         reopen = bool(args.get("reopen") or args.get("restart"))
         sid = args.get("session_id")
         if not sid:
-            # Try to find by binary_path
+            # Try to find by binary_path among sessions this connection owns.
             path = args.get("binary_path")
             if path:
-                found = self.session_mgr.find_session_by_path(path)
+                owns = getattr(self, "_client_owns_session", None)
+                candidates = self.session_mgr.find_sessions_by_path(path)
+                if callable(owns):
+                    candidates = [c for c in candidates if owns(c.session_id)]
+                found = candidates[0] if candidates else None
                 if found:
                     sid = found.session_id
         if not sid:
@@ -908,6 +912,11 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             return make_error(
                 MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
             )
+        ensure_owned = getattr(self, "_ensure_client_owns_session", None)
+        if callable(ensure_owned):
+            ownership_error = ensure_owned(session)
+            if ownership_error:
+                return ownership_error
 
         self.current_session = session
         new_idb = getattr(session, "idb_path", None)
@@ -1478,7 +1487,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
         used in the last second" (effectively close-all-else).
 
         Sessions tracked here are real entries in session_mgr whose
-        ``last_used`` timestamp is older than ``now - idle_seconds``. We
+        ``last_accessed`` timestamp is older than ``now - idle_seconds``. We
         only act on sessions that ALSO have a live runtime attached —
         pre-existing cleanup_stale handles db-only stale rows.
 
@@ -1515,7 +1524,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
 
         prune_orphans = bool(args.get("prune_orphans", True))
 
-        # ``last_used`` is stored as ISO 8601 in self.sessions[*] via
+        # ``last_accessed`` is stored as ISO 8601 via Session.to_dict /
         # Session.update_access; parse it to epoch so we don't fight
         # the timezone layer. Unknown / unparseable timestamps are
         # treated as "fresh" and skipped.
@@ -1530,14 +1539,14 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             sid = _normalize_session_id(raw.get("session_id") or "")
             if not sid:
                 continue
-            last_used = raw.get("last_used")
-            if not last_used:
+            last_accessed = raw.get("last_accessed") or raw.get("last_used")
+            if not last_accessed:
                 # Unknown liveness — leave it alone so a brand-new session
                 # doesn't get killed before its first touch.
                 skipped_sids.append(sid)
                 continue
             try:
-                parsed = datetime.fromisoformat(last_used.replace("Z", "+00:00"))
+                parsed = datetime.fromisoformat(last_accessed.replace("Z", "+00:00"))
                 last_used_epoch = parsed.timestamp()
             except Exception:
                 skipped_sids.append(sid)

@@ -150,6 +150,26 @@ class IDAMCPServer(
         """Whether this MCP connection has explicitly selected the session."""
         return str(session_id) in self._client_request_state().owned_session_ids
 
+    def _ensure_client_owns_session(self, session: Any) -> dict[str, Any] | None:
+        """Reject cross-client use of a session that this connection never selected."""
+        sid = getattr(session, "session_id", None)
+        if not sid:
+            return make_error(
+                MCPError.SESSION_NOT_FOUND,
+                "Session reference is incomplete.",
+            )
+        if self._client_owns_session(str(sid)):
+            return None
+        return make_error(
+            MCPError.FILE_LOCKED,
+            "This session is not available to the current MCP client.",
+            hint=(
+                "Open the binary in this client to create an independent session, "
+                "or switch only to a session this connection already owns."
+            ),
+            details={"session_id": str(sid)},
+        )
+
     @property
     def _pending_pp(self) -> dict[str, Any]:
         return self._client_request_state().pending_post_process

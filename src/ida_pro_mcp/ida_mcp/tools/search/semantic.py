@@ -141,8 +141,14 @@ def search_nl(
             return make_error(MCPError.INVALID_ARGS, "radius must be an integer")
         if radius_int <= 0:
             return make_error(MCPError.INVALID_ARGS, "radius must be greater than zero")
-        radius_start = max(0, int(center_ea) - radius_int)
-        radius_end = int(center_ea) + radius_int + 1
+        try:
+            from ida_pro_mcp.host.intelligence.scope_window import radius_address_range
+        except ImportError:
+            from host.intelligence.scope_window import radius_address_range  # type: ignore
+        try:
+            radius_start, radius_end = radius_address_range(int(center_ea), radius_int)
+        except ValueError as exc:
+            return make_error(MCPError.INVALID_ARGS, str(exc))
         scope_start = max(scope_start, radius_start) if scope_start is not None else radius_start
         scope_end = min(scope_end, radius_end) if scope_end is not None else radius_end
     if scope_start is not None and scope_end is not None and scope_end <= scope_start:

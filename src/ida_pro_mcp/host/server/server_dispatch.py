@@ -210,6 +210,9 @@ class ServerDispatchMixin:
                     f"No session found for idb reference: {idb_path}",
                     hint="Use session_id, SID_* IDB id, binary/idb path, or create/switch a session first.",
                 )
+            ownership_error = self._ensure_client_owns_session(session)
+            if ownership_error:
+                return ownership_error
 
             runtime = self.session_runtimes.get(session.session_id)
             if not self._runtime_alive(runtime):

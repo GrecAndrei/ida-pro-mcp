@@ -964,7 +964,15 @@ def intelligence(
                     try:
                         c = int(str(raw_start), 0)
                         r = abs(int(str(raw_radius), 0))
-                        ranges.append((c - r, c + r))
+                        try:
+                            from ida_pro_mcp.host.intelligence.scope_window import (
+                                radius_address_range,
+                            )
+                        except ImportError:
+                            from host.intelligence.scope_window import (  # type: ignore
+                                radius_address_range,
+                            )
+                        ranges.append(radius_address_range(c, r))
                     except (ValueError, TypeError):
                         pass
             # size filters

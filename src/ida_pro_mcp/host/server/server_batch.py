@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import os
 import sqlite3
@@ -22,6 +23,30 @@ _BACKGROUND_ACTIONS = {
 
 
 class BackgroundMixin:
+
+    def _bind_background_run(self, run_fn, *, session: Any = None):
+        """Preserve submitting-client ownership for ThreadPoolExecutor workers."""
+        ctx = contextvars.copy_context()
+
+        def bound(task):
+            def inner():
+                if session is not None:
+                    # Ensure the job session is owned even if the copied
+                    # ContextVar was empty (harness / stdio edge cases).
+                    state_fn = getattr(self, "_client_request_state", None)
+                    if callable(state_fn):
+                        state = state_fn()
+                        sid = str(getattr(session, "session_id", "") or "")
+                        if sid:
+                            state.owned_session_ids.add(sid)
+                        state.current_session = session
+                    else:
+                        self.current_session = session
+                return run_fn(task)
+
+            return ctx.run(inner)
+
+        return bound
 
     @staticmethod
     def _semantic_binary_digest(path: str) -> str:
@@ -243,6 +268,11 @@ class BackgroundMixin:
                 MCPError.FILE_NOT_FOUND,
                 f"No session found for idb reference: {idb_ref}",
             )
+        ensure_owned = getattr(self, "_ensure_client_owns_session", None)
+        if callable(ensure_owned):
+            ownership_error = ensure_owned(session)
+            if ownership_error:
+                return ownership_error
         validation_error = self._validate_semantic_index_scope(args)
         if validation_error:
             return validation_error
@@ -410,7 +440,7 @@ class BackgroundMixin:
                     "scope": scope,
                 },
                 session_id=session_id,
-                run_fn=_run,
+                run_fn=self._bind_background_run(_run, session=session),
             )
             active[session_id] = task_id
 
@@ -538,32 +568,94 @@ class BackgroundMixin:
             action=action,
             args={"script": script, "tool_call": tool_call},
             session_id=session_id,
-            run_fn=_run,
+            run_fn=self._bind_background_run(
+                _run,
+                session=(
+                    self.session_mgr.get_session(session_id)
+                    if session_id and hasattr(self, "session_mgr")
+                    else getattr(self, "current_session", None)
+                ),
+            ),
         )
         return {"task_id": task_id, "state": "pending"}
 
+    def _owned_batch_session_ids(self) -> set[str] | None:
+        """Session IDs this connection may see in BatchManager, or None if unenforced."""
+        owns = getattr(self, "_client_owns_session", None)
+        if not callable(owns):
+            return None
+        owned: set[str] = set()
+        state = getattr(self, "_client_request_state", None)
+        if callable(state):
+            request_state = state()
+            for sid in getattr(request_state, "owned_session_ids", set()) or set():
+                if owns(str(sid)):
+                    owned.add(str(sid))
+        current = getattr(self, "current_session", None)
+        sid = getattr(current, "session_id", None)
+        if sid and owns(str(sid)):
+            owned.add(str(sid))
+        return owned
+
+    def _filter_owned_batch_tasks(self, tasks: list[dict]) -> list[dict]:
+        owned = self._owned_batch_session_ids()
+        if owned is None:
+            return tasks
+        return [task for task in tasks if str(task.get("session_id") or "") in owned]
+
+    def _require_owned_batch_task(self, task_id: str) -> dict | None:
+        """Return an error if task_id is missing or belongs to another client."""
+        tasks = self._batch_manager.status(task_id)
+        if not tasks:
+            return make_error(MCPError.NOT_FOUND, f"task {task_id} not found")
+        owned = self._owned_batch_session_ids()
+        if owned is None:
+            return None
+        if not self._filter_owned_batch_tasks(tasks):
+            return make_error(
+                MCPError.NOT_FOUND,
+                f"task {task_id} not found",
+                hint="Background tasks are visible only to the MCP client that owns their session.",
+            )
+        return None
+
     def _bg_status(self, args: dict) -> dict:
         task_id = args.get("task_id")
-        tasks = self._batch_manager.status(task_id)
-        return {"tasks": tasks}
+        if task_id:
+            denied = self._require_owned_batch_task(str(task_id))
+            if denied:
+                return denied
+            tasks = self._batch_manager.status(task_id)
+            return {"tasks": self._filter_owned_batch_tasks(tasks)}
+        tasks = self._batch_manager.status(None)
+        return {"tasks": self._filter_owned_batch_tasks(tasks)}
 
     def _bg_result(self, args: dict) -> dict:
         task_id = args.get("task_id")
         if not task_id:
             return make_error(MCPError.INVALID_ARGS, "task_id required")
+        denied = self._require_owned_batch_task(str(task_id))
+        if denied:
+            return denied
         return self._batch_manager.result(str(task_id))
 
     def _bg_cancel(self, args: dict) -> dict:
         task_id = args.get("task_id")
         if not task_id:
             return make_error(MCPError.INVALID_ARGS, "task_id required")
+        denied = self._require_owned_batch_task(str(task_id))
+        if denied:
+            return denied
         return self._batch_manager.cancel(str(task_id))
 
     def _bg_list(self, args: dict) -> dict:
         state = args.get("state")
         session_id = args.get("session_id")
-        tasks = self._batch_manager.list_tasks(state)
+        tasks = self._filter_owned_batch_tasks(self._batch_manager.list_tasks(state))
         if session_id:
+            owned = self._owned_batch_session_ids()
+            if owned is not None and str(session_id) not in owned:
+                return {"tasks": []}
             tasks = [t for t in tasks if t.get("session_id") == session_id]
         return {"tasks": tasks}
 
@@ -571,6 +663,9 @@ class BackgroundMixin:
         task_id = args.get("task_id")
         if not task_id:
             return make_error(MCPError.INVALID_ARGS, "task_id required")
+        denied = self._require_owned_batch_task(str(task_id))
+        if denied:
+            return denied
         timeout = args.get("timeout")
         if timeout is not None:
             timeout = float(timeout)
