@@ -205,6 +205,35 @@ class IDAMCPServer(
     def _last_spawn_error(self, value) -> None:
         self._client_request_state().last_spawn_error = value
 
+    def _insight_index_for_session(self, session=None) -> InsightIndex:
+        session = session if session is not None else getattr(self, "current_session", None)
+        sid = str(getattr(session, "session_id", "") or "").strip().upper()
+        if not sid:
+            sid = "_GLOBAL"
+        indexes = getattr(self, "_insight_indexes", None)
+        if not isinstance(indexes, dict):
+            self._insight_indexes = {}
+            indexes = self._insight_indexes
+        if sid not in indexes:
+            index_dir = os.path.join(self.cache_dir, "insight_indexes")
+            os.makedirs(index_dir, exist_ok=True)
+            indexes[sid] = InsightIndex(
+                persistence_path=os.path.join(index_dir, f"{sid}.json")
+            )
+        return indexes[sid]
+
+    @property
+    def _insight_index(self) -> InsightIndex:
+        return self._insight_index_for_session()
+
+    @_insight_index.setter
+    def _insight_index(self, value: InsightIndex) -> None:
+        session = getattr(self, "current_session", None)
+        sid = str(getattr(session, "session_id", "") or "").strip().upper() or "_GLOBAL"
+        if not isinstance(getattr(self, "_insight_indexes", None), dict):
+            self._insight_indexes = {}
+        self._insight_indexes[sid] = value
+
     @property
     def vertex_compat(self) -> bool:
         return self._client_request_state().vertex_compat
@@ -497,9 +526,7 @@ class IDAMCPServer(
             max_xref_items=CONTEXT_DENSITY_MAX_XREF_ITEMS,
         )
         # L1 / L2 memory tiers
-        self._insight_index = InsightIndex(
-            persistence_path=os.path.join(self.cache_dir, "insight_index.json")
-        )
+        self._insight_indexes: dict[str, InsightIndex] = {}
         self._global_facts = GlobalFactsDatabase(
             db_path=os.path.join(self.cache_dir, "global_facts.db")
         )

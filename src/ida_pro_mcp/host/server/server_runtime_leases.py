@@ -334,7 +334,11 @@ class ServerRuntimeLeasesMixin:
                     self._usage_intel.stop()
             # Persist memory tiers
             try:
-                if hasattr(self, "_insight_index"):
+                indexes = getattr(self, "_insight_indexes", None)
+                if isinstance(indexes, dict):
+                    for index in indexes.values():
+                        index.save()
+                elif hasattr(self, "_insight_index"):
                     self._insight_index.save()
             except Exception as e:
                 log_rpc(f"Failed to save insight index: {e}")
