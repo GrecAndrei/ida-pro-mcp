@@ -86,6 +86,15 @@ class TestTruncationSessionScoping(unittest.TestCase):
         # Should work (no session scoping)
         self.assertNotIn("error", result)
 
+    def test_token_uses_high_entropy_identifier(self):
+        token = _store_truncation(
+            {"data": [1]},
+            {"data": {"type": "list", "total": 1, "chunk_size": 1, "next_offset": 1}},
+            session_id="sess1",
+        )
+        self.assertGreaterEqual(len(token), 16)
+        self.assertNotEqual(token, token.upper())
+
 
 class TestTruncationPeek(unittest.TestCase):
     """Peek action: show metadata without consuming data."""

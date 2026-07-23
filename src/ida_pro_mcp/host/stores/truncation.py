@@ -2,8 +2,8 @@ import contextlib
 import copy
 import json
 import re
+import secrets
 import time
-import uuid
 from collections import deque
 from typing import Any
 
@@ -37,7 +37,7 @@ def _store_truncation(
     session_id: str = "",
 ) -> str:
     _prune_expired()
-    token = uuid.uuid4().hex[:8].upper()
+    token = secrets.token_urlsafe(16)
     _TRUNCATION_STORE[token] = {
         "response": response,
         "fields": fields,
