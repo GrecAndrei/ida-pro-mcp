@@ -345,10 +345,17 @@ class ServerDispatchMixin:
                 else:
                     _budget = _tc.get("max_tokens") or self.default_truncate_tokens
                     _sid = getattr(self.current_session, "session_id", "") if self.current_session else ""
-                    res = truncate_response(res, max_tokens=_budget,
-                                           trunc_offset=_tc.get("trunc_offset"),
-                                           trunc_limit=_tc.get("trunc_limit"),
-                                           session_id=_sid)
+                    _owner = ""
+                    if hasattr(self, "_truncation_owner_id"):
+                        _owner = self._truncation_owner_id()
+                    res = truncate_response(
+                        res,
+                        max_tokens=_budget,
+                        trunc_offset=_tc.get("trunc_offset"),
+                        trunc_limit=_tc.get("trunc_limit"),
+                        session_id=_sid,
+                        owner_id=_owner,
+                    )
                 try:
                     _slow_threshold = float(
                         os.environ.get("IDA_MCP_SLOW_CALL_SEC", "5.0")
@@ -727,6 +734,7 @@ class ServerDispatchMixin:
                 )
             token = token.strip()
             sid = getattr(self.current_session, "session_id", "") if self.current_session else ""
+            owner = self._truncation_owner_id() if hasattr(self, "_truncation_owner_id") else ""
             from . import server as _server_mod
 
             if action == "continue":
@@ -743,9 +751,10 @@ class ServerDispatchMixin:
                     if count is not None
                     else None,
                     session_id=sid,
+                    owner_id=owner,
                 )
             elif action == "peek":
-                result = _server_mod.peek_truncated(token, session_id=sid)
+                result = _server_mod.peek_truncated(token, session_id=sid, owner_id=owner)
             elif action == "search":
                 pattern = str(args.get("pattern") or args.get("query") or "").strip()
                 field = args.get("field")
@@ -757,6 +766,7 @@ class ServerDispatchMixin:
                     case_sensitive=_coerce_bool(args.get("case_sensitive"), False),
                     limit=_bounded_int(args.get("limit", 50), 50, min_value=1, max_value=500),
                     session_id=sid,
+                    owner_id=owner,
                 )
             elif action == "summary":
                 field = args.get("field")
@@ -765,6 +775,7 @@ class ServerDispatchMixin:
                     field=field if isinstance(field, str) else None,
                     limit=_bounded_int(args.get("limit", 20), 20, min_value=1, max_value=100),
                     session_id=sid,
+                    owner_id=owner,
                 )
             else:
                 return make_error(

@@ -48,11 +48,31 @@ def test_truncation_token_stores_session_scope():
     assert _get_entry(token, session_id="") is None
 
 
-def test_truncate_response_binds_continue_token_to_session():
+def test_truncation_token_requires_matching_owner_id():
+    token = _store_truncation(
+        {"data": [1, 2, 3]},
+        {"data": {"type": "list", "total": 3, "chunk_size": 2, "next_offset": 2}},
+        session_id="sess-a",
+        owner_id="client-a",
+    )
+
+    assert _get_entry(token, session_id="sess-a", owner_id="client-a") is not None
+    assert _get_entry(token, session_id="sess-a", owner_id="client-b") is None
+    assert _get_entry(token, session_id="sess-a", owner_id="") is None
+    assert continue_truncated(token, session_id="sess-a", owner_id="client-b").get("error")
+
+
+def test_truncate_response_binds_continue_token_to_session_and_owner():
     payload = {"items": [{"id": index, "value": "x" * 200} for index in range(40)]}
-    result = truncate_response(payload, max_tokens=500, session_id="session-42")
+    result = truncate_response(
+        payload,
+        max_tokens=500,
+        session_id="session-42",
+        owner_id="owner-42",
+    )
 
     assert result.get("_truncated") is True
     token = result["_continue"]["token"]
-    assert continue_truncated(token, session_id="session-42").get("ok") is True
-    assert continue_truncated(token, session_id="session-99").get("error")
+    assert continue_truncated(token, session_id="session-42", owner_id="owner-42").get("ok") is True
+    assert continue_truncated(token, session_id="session-42", owner_id="owner-99").get("error")
+    assert continue_truncated(token, session_id="session-99", owner_id="owner-42").get("error")

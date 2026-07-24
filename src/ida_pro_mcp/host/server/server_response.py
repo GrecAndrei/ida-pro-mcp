@@ -623,12 +623,16 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                     _sid = ""
                     if getattr(self, "current_session", None) is not None:
                         _sid = str(getattr(self.current_session, "session_id", "") or "")
+                    _owner = ""
+                    if hasattr(self, "_truncation_owner_id"):
+                        _owner = self._truncation_owner_id()
                     compacted = truncate_response(
                         compacted,
                         max_tokens=_budget,
                         trunc_offset=_tc.get("trunc_offset"),
                         trunc_limit=_tc.get("trunc_limit"),
                         session_id=_sid,
+                        owner_id=_owner,
                     )
 
         # ---- Context Density Auto-Compaction Middleware ----

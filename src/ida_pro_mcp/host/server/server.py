@@ -6,6 +6,7 @@ import atexit
 import contextvars
 import json
 import os
+import secrets
 import socket as _socket_mod
 import sys
 import tempfile
@@ -91,6 +92,7 @@ class _ClientRequestState:
     last_spawn_error: Any = None
     vertex_compat: bool = False
     owned_session_ids: set[str] = field(default_factory=set)
+    connection_id: str = field(default_factory=lambda: secrets.token_urlsafe(16))
 
 
 class IDAMCPServer(
@@ -156,6 +158,10 @@ class IDAMCPServer(
     def _client_owns_session(self, session_id: str) -> bool:
         """Whether this MCP connection has explicitly selected the session."""
         return str(session_id) in self._client_request_state().owned_session_ids
+
+    def _truncation_owner_id(self) -> str:
+        """Stable per-connection id used to scope truncated response tokens."""
+        return str(self._client_request_state().connection_id or "")
 
     def _ensure_client_owns_session(self, session: Any) -> dict[str, Any] | None:
         """Reject cross-client use of a session that this connection never selected."""

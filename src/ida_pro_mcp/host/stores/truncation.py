@@ -35,6 +35,7 @@ def _store_truncation(
     response: dict[str, Any],
     fields: dict[str, dict[str, Any]],
     session_id: str = "",
+    owner_id: str = "",
 ) -> str:
     _prune_expired()
     token = secrets.token_urlsafe(16)
@@ -42,6 +43,7 @@ def _store_truncation(
         "response": response,
         "fields": fields,
         "session_id": session_id or "",
+        "owner_id": owner_id or "",
         "created_at": time.time(),
     }
     _TRUNCATION_ORDER.append(token)
@@ -51,8 +53,8 @@ def _store_truncation(
     return token
 
 
-def _get_entry(token: str, session_id: str = "") -> dict[str, Any] | None:
-    """Retrieve a token entry, checking TTL and session scope."""
+def _get_entry(token: str, session_id: str = "", owner_id: str = "") -> dict[str, Any] | None:
+    """Retrieve a token entry, checking TTL, session, and owner scope."""
     _prune_expired()
     entry = _TRUNCATION_STORE.get(token)
     if not entry:
@@ -61,6 +63,11 @@ def _get_entry(token: str, session_id: str = "") -> dict[str, Any] | None:
     # exact match. Empty caller session_id must not unlock foreign tokens.
     entry_sid = entry.get("session_id", "")
     if entry_sid and session_id != entry_sid:
+        return None
+    # Connection ownership: when the entry was bound to a client connection,
+    # require an exact owner match so daemon peers cannot continue each other.
+    entry_owner = entry.get("owner_id", "")
+    if entry_owner and owner_id != entry_owner:
         return None
     return entry
 
@@ -122,8 +129,9 @@ def continue_truncated(
     offset: int | None = None,
     count: int | None = None,
     session_id: str = "",
+    owner_id: str = "",
 ) -> dict[str, Any]:
-    entry = _get_entry(token, session_id)
+    entry = _get_entry(token, session_id, owner_id=owner_id)
     if not entry:
         return make_error(
             MCPError.TRUNCATION_TOKEN_INVALID,
@@ -193,9 +201,10 @@ def continue_truncated(
 def peek_truncated(
     token: str,
     session_id: str = "",
+    owner_id: str = "",
 ) -> dict[str, Any]:
     """Show truncation metadata without consuming data."""
-    entry = _get_entry(token, session_id)
+    entry = _get_entry(token, session_id, owner_id=owner_id)
     if not entry:
         return make_error(
             MCPError.TRUNCATION_TOKEN_INVALID,
@@ -234,9 +243,10 @@ def search_truncated(
     case_sensitive: bool = False,
     limit: int = 50,
     session_id: str = "",
+    owner_id: str = "",
 ) -> dict[str, Any]:
     """Grep within the full original content without materializing it all."""
-    entry = _get_entry(token, session_id)
+    entry = _get_entry(token, session_id, owner_id=owner_id)
     if not entry:
         return make_error(
             MCPError.TRUNCATION_TOKEN_INVALID,
@@ -321,9 +331,10 @@ def summary_truncated(
     field: str | None = None,
     limit: int = 20,
     session_id: str = "",
+    owner_id: str = "",
 ) -> dict[str, Any]:
     """Generate a compact summary of truncated content."""
-    entry = _get_entry(token, session_id)
+    entry = _get_entry(token, session_id, owner_id=owner_id)
     if not entry:
         return make_error(
             MCPError.TRUNCATION_TOKEN_INVALID,
@@ -449,6 +460,7 @@ def truncate_response(
     trunc_offset: int | None = None,
     trunc_limit: int | None = None,
     session_id: str = "",
+    owner_id: str = "",
 ) -> dict[str, Any]:
     """
     Intelligently truncate large MCP responses to fit within LLM context windows.
@@ -460,6 +472,7 @@ def truncate_response(
         trunc_offset: Start offset for paginating through truncated content.
         trunc_limit: Max items/chars to return when paginating.
         session_id: Scope the continuation token to this session.
+        owner_id: Scope the continuation token to this MCP client connection.
 
     Returns:
         A pruned response with truncation markers. Original dict is never modified.
@@ -491,7 +504,12 @@ def truncate_response(
         )
 
     if truncated_fields:
-        token = _store_truncation(response, truncated_fields, session_id=session_id)
+        token = _store_truncation(
+            response,
+            truncated_fields,
+            session_id=session_id,
+            owner_id=owner_id,
+        )
         pruned["_continue"] = {
             "token": token,
             "fields": truncated_fields,
