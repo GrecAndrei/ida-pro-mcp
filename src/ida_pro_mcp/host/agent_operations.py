@@ -52,7 +52,8 @@ class AgentOperation:
                 hint=f"Use ida_help(topic='{self.name}') for the exact contract.",
                 details={"operation": self.name, "unknown": unknown},
             )
-        for key in self.input_schema.get("required", []):
+        required = self.input_schema.get("required", [])
+        for key in required:
             if key not in arguments or arguments[key] is None or arguments[key] == "":
                 return make_error(
                     MCPError.INVALID_ARGS,
@@ -77,6 +78,15 @@ class AgentOperation:
                         f"'{key}' must be one of: {choices}",
                         details={"operation": self.name, "argument": key},
                     )
+        # Mutating ops advertise risk_ack as required; only an explicit true
+        # counts as acknowledgement (false/0/"true" must not pass schema).
+        if "risk_ack" in required and arguments.get("risk_ack") is not True:
+            return make_error(
+                MCPError.INVALID_ARGS,
+                f"'risk_ack' must be true for operation '{self.name}'",
+                hint=f"Example: {self.name}({self._example_text()})",
+                details={"operation": self.name, "required": "risk_ack"},
+            )
         return None
 
     def to_backend_call(self, arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -197,6 +207,22 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         example={},
         backend_tool="session",
         backend_action="status",
+    ),
+    AgentOperation(
+        name="ida_session_health",
+        description="Report MCP server, IDA runtime, cache, and session-process health diagnostics.",
+        category="session",
+        input_schema=_schema(
+            {
+                "verbose": {
+                    "type": "boolean",
+                    "description": "Include per-runtime process details and action counts.",
+                },
+            }
+        ),
+        example={},
+        backend_tool="session",
+        backend_action="health",
     ),
     AgentOperation(
         name="ida_close_session",
@@ -395,7 +421,7 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
                 "risk_ack": RISK_ACK,
                 "idb": IDB,
             },
-            ["address"],
+            ["address", "risk_ack"],
         ),
         example={"address": "0x401000", "risk_ack": True},
         backend_tool="funcs",
@@ -413,7 +439,7 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
                 "risk_ack": RISK_ACK,
                 "idb": IDB,
             },
-            ["address", "end"],
+            ["address", "end", "risk_ack"],
         ),
         example={"address": "0x401000", "end": "0x401080", "risk_ack": True},
         backend_tool="funcs",
@@ -623,7 +649,7 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         category="edit",
         input_schema=_schema(
             {"address": ADDRESS, "name": {"type": "string", "description": "New symbol name."}, "risk_ack": RISK_ACK, "idb": IDB},
-            ["address", "name"],
+            ["address", "name", "risk_ack"],
         ),
         example={"address": "0x401000", "name": "handle_recv", "risk_ack": True},
         backend_tool="modify",
@@ -636,7 +662,7 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         category="edit",
         input_schema=_schema(
             {"address": ADDRESS, "comment": {"type": "string", "description": "Comment text."}, "risk_ack": RISK_ACK, "idb": IDB},
-            ["address", "comment"],
+            ["address", "comment", "risk_ack"],
         ),
         example={"address": "0x401000", "comment": "handles inbound packets", "risk_ack": True},
         backend_tool="modify",
@@ -781,7 +807,7 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
                 },
                 "risk_ack": CODE_EXEC_ACK,
             },
-            ["code"],
+            ["code", "risk_ack"],
         ),
         example={"code": "print(idaapi.get_imagebase())", "risk_ack": True},
         backend_tool="misc",
@@ -851,7 +877,6 @@ _OPERATIONS_BY_BACKEND = {
 _BACKEND_REFERENCE_ALIASES = {
     ("data", "functions"): "ida_list_functions",
     ("intelligence", "index_batch"): "ida_index_functions",
-    ("session", "health"): "ida_session_status",
 }
 _LEGACY_ACTION_CALL = re.compile(
     r"\b([A-Za-z_]\w*)\(\s*action\s*=\s*(['\"])([^'\"]+)\2[^)]*\)"

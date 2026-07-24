@@ -310,7 +310,8 @@ def test_public_catalog_and_help_are_live_contracts(live_context: LiveContext):
     tools = response["result"]["tools"]
     names = {tool["name"] for tool in tools}
     assert response["result"]["surface"] == "agent"
-    assert len(names) == 40
+    assert len(names) == 41
+    assert "ida_session_health" in names
     assert all(name.startswith("ida_") for name in names)
     assert "search" not in names
     help_payload = _assert_ok(live_context.client.call("ida_help", {"topic": "ida_decompile"}), "ida_help")

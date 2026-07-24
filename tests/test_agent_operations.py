@@ -466,8 +466,13 @@ def test_default_tools_list_exposes_agent_operations_with_required_operands(monk
     assert "search" not in tools
     assert tools["ida_find"]["inputSchema"]["required"] == ["query"]
     assert tools["ida_decompile"]["inputSchema"]["required"] == ["address"]
-    assert tools["ida_rename"]["inputSchema"]["required"] == ["address", "name"]
-    assert tools["ida_python"]["inputSchema"]["required"] == ["code"]
+    assert tools["ida_rename"]["inputSchema"]["required"] == ["address", "name", "risk_ack"]
+    assert tools["ida_comment"]["inputSchema"]["required"] == ["address", "comment", "risk_ack"]
+    assert tools["ida_create_function"]["inputSchema"]["required"] == ["address", "risk_ack"]
+    assert tools["ida_change_function"]["inputSchema"]["required"] == ["address", "end", "risk_ack"]
+    assert tools["ida_python"]["inputSchema"]["required"] == ["code", "risk_ack"]
+    assert "ida_session_health" in tools
+    assert tools["ida_session_health"]["inputSchema"]["properties"]["verbose"]["type"] == "boolean"
 
 
 def test_help_is_callable_through_the_public_mcp_protocol():

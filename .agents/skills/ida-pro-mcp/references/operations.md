@@ -86,6 +86,33 @@ Example:
 }
 ```
 
+## `ida_session_health`
+
+Report MCP server, IDA runtime, cache, and session-process health diagnostics.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "verbose": {
+      "type": "boolean",
+      "description": "Include per-runtime process details and action counts."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_session_health",
+  "arguments": {}
+}
+```
+
 ## `ida_close_session`
 
 Close the active IDA analysis session and release its runtime.
@@ -540,7 +567,8 @@ Input schema:
     }
   },
   "required": [
-    "address"
+    "address",
+    "risk_ack"
   ],
   "additionalProperties": false
 }
@@ -585,7 +613,8 @@ Input schema:
   },
   "required": [
     "address",
-    "end"
+    "end",
+    "risk_ack"
   ],
   "additionalProperties": false
 }
@@ -1324,7 +1353,8 @@ Input schema:
   },
   "required": [
     "address",
-    "name"
+    "name",
+    "risk_ack"
   ],
   "additionalProperties": false
 }
@@ -1370,7 +1400,8 @@ Input schema:
   },
   "required": [
     "address",
-    "comment"
+    "comment",
+    "risk_ack"
   ],
   "additionalProperties": false
 }
@@ -1765,7 +1796,8 @@ Input schema:
     }
   },
   "required": [
-    "code"
+    "code",
+    "risk_ack"
   ],
   "additionalProperties": false
 }
