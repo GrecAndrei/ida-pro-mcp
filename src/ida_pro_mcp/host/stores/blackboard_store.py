@@ -1032,22 +1032,43 @@ class BlackboardStore:
         updates = {k: v for k, v in kwargs.items() if k in allowed}
         if not updates:
             return False
-        updates["updated_at"] = time.time()
-        updates["version"] = (self.read(entry_id) or {}).get("version", 1) + 1
-        if "tags" in updates:
-            updates["tags"] = json.dumps(updates["tags"])
-        if "evidence" in updates:
-            updates["evidence"] = json.dumps(updates["evidence"])
-        if embed and ("title" in updates or "content" in updates):
-            existing = self.read(entry_id)
-            if existing:
-                t = updates.get("title", existing.get("title", ""))
-                c = updates.get("content", existing.get("content", ""))
+        with closing(self._conn()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM blackboard WHERE id=?", (entry_id,)).fetchone()
+            if row is None:
+                conn.rollback()
+                return False
+            self._col_cache = [item[1] for item in conn.execute("PRAGMA table_info(blackboard)").fetchall()]
+            current = self._row_to_dict(row)
+            if "tags" in updates and isinstance(updates["tags"], list):
+                updates["tags"] = sorted(
+                    set(current.get("tags") or [])
+                    | {str(tag).strip() for tag in updates["tags"] if str(tag).strip()}
+                )
+            if "evidence" in updates and isinstance(updates["evidence"], list):
+                merged_evidence = list(current.get("evidence") or [])
+                seen = {json.dumps(item, sort_keys=True, ensure_ascii=True) for item in merged_evidence}
+                for item in updates["evidence"]:
+                    if not isinstance(item, dict):
+                        continue
+                    marker = json.dumps(item, sort_keys=True, ensure_ascii=True)
+                    if marker not in seen:
+                        merged_evidence.append(item)
+                        seen.add(marker)
+                updates["evidence"] = merged_evidence
+            updates["updated_at"] = time.time()
+            updates["version"] = int(current.get("version") or 1) + 1
+            if "tags" in updates:
+                updates["tags"] = json.dumps(updates["tags"])
+            if "evidence" in updates:
+                updates["evidence"] = json.dumps(updates["evidence"])
+            if embed and ("title" in updates or "content" in updates):
+                t = updates.get("title", current.get("title", ""))
+                c = updates.get("content", current.get("content", ""))
                 blob = self._embed_text(f"{t} {c}".strip())
                 if blob:
                     updates["vector"] = blob
-        sets = ", ".join(f"{k} = ?" for k in updates)
-        with closing(self._conn()) as conn:
+            sets = ", ".join(f"{k} = ?" for k in updates)
             cur = conn.execute(
                 f"UPDATE blackboard SET {sets} WHERE id = ?",
                 (*updates.values(), entry_id),
@@ -1055,15 +1076,11 @@ class BlackboardStore:
             conn.commit()
             ok = cur.rowcount > 0
         if ok:
-            self._record_event(entry_id, "updated", {"fields": sorted(k for k in updates if k not in {"updated_at", "version"})})
-            entry = self.read(entry_id)
-            if entry:
-                try:
-                    with closing(self._conn()) as conn:
-                        row = conn.execute("SELECT vector FROM blackboard WHERE id=?", (entry_id,)).fetchone()
-                        row[0] if row and row[0] else None
-                except Exception:
-                    pass
+            self._record_event(
+                entry_id,
+                "updated",
+                {"fields": sorted(k for k in updates if k not in {"updated_at", "version"})},
+            )
         return ok
 
     def transition(
