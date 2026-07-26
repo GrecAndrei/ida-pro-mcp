@@ -241,6 +241,27 @@ def normalize_mode(value: Any, default: PolicyMode = PolicyMode.ASSIST) -> Polic
         return default
 
 
+# Strictness ordering used to combine policy modes from different sources.
+MODE_STRICTNESS: dict[PolicyMode, int] = {
+    PolicyMode.OFF: 0,
+    PolicyMode.PERMISSIVE: 1,
+    PolicyMode.ASSIST: 2,
+    PolicyMode.ENFORCE: 3,
+}
+
+
+def strictest(*modes: Any) -> PolicyMode:
+    """Return the strictest of the given modes.
+
+    Callers use this to combine an operator-set baseline with a mode that
+    arrived over the wire, so that the wire value can only tighten policy.
+    """
+    resolved = [normalize_mode(mode) for mode in modes if mode]
+    if not resolved:
+        return PolicyMode.ASSIST
+    return max(resolved, key=lambda mode: MODE_STRICTNESS.get(mode, 0))
+
+
 def normalize_name(value: Any) -> str:
     return str(value or "").strip().lower()
 

@@ -14,7 +14,13 @@ from ida_pro_mcp import __version__
 
 from ..config import _bounded_int, _coerce_bool, _is_writable_dir, log_rpc
 from ..errors import MCPError, is_error_result, make_error
-from ..policy import PolicyDecision, build_audit_record, evaluate_policy
+from ..policy import (
+    PolicyDecision,
+    build_audit_record,
+    evaluate_policy,
+    normalize_mode,
+    strictest,
+)
 from ..schemas import (
     ADVERTISED_TOOLS,
     HIDDEN_TOOLS_IN_LIST,
@@ -171,27 +177,17 @@ class ServerDispatchMixin(ServerClientStateMixin):
         except Exception:
             return False
 
-    def _resolve_policy_mode(self) -> str:
-        """Resolve the governance policy mode.
+    def _policy_baseline_mode(self) -> str:
+        """The operator-set policy mode: env var, then config file, then assist.
 
-        Precedence (highest first):
-          1. Session-level policy_mode (set via session create or set_policy)
-          2. IDA_MCP_POLICY_MODE env var
-          3. ~/.config/ida-pro-mcp/policy.json `mode` key (live override,
-             readable on every call so the user can change it without
-             restarting the bridge)
-          4. Default "assist"
+        The config file is read on every call so it can be changed without
+        restarting the bridge.
         """
-        session = getattr(self, "current_session", None)
-        if session is not None:
-            session_mode = getattr(session, "policy_mode", None)
-            if isinstance(session_mode, str) and session_mode:
-                return session_mode
         env_mode = os.environ.get("IDA_MCP_POLICY_MODE")
         if env_mode:
             return env_mode
+        config_path = os.path.expanduser("~/.config/ida-pro-mcp/policy.json")
         try:
-            config_path = os.path.expanduser("~/.config/ida-pro-mcp/policy.json")
             if os.path.exists(config_path):
                 with open(config_path, encoding="utf-8") as f:
                     data = json.load(f)
@@ -199,9 +195,24 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     mode = data.get("mode")
                     if isinstance(mode, str) and mode:
                         return mode
-        except Exception:
-            pass
+        except Exception as e:
+            log_rpc(f"Ignoring unreadable policy config {config_path}: {e}")
         return "assist"
+
+    def _resolve_policy_mode(self) -> str:
+        """Resolve the governance policy mode for the current call.
+
+        A session may tighten the operator baseline but never weaken it. The
+        baseline is set by whoever runs the bridge; a session value arrives
+        over the wire, so letting it relax policy would make the whole engine
+        opt-out by request.
+        """
+        baseline = self._policy_baseline_mode()
+        session = getattr(self, "current_session", None)
+        session_mode = getattr(session, "policy_mode", None) if session is not None else None
+        if isinstance(session_mode, str) and session_mode:
+            return str(strictest(baseline, session_mode))
+        return str(normalize_mode(baseline))
 
     def call_tool(self, tool_name, idb_path, **kwargs):
             session = self._resolve_session_from_idb_ref(idb_path)
@@ -427,7 +438,13 @@ class ServerDispatchMixin(ServerClientStateMixin):
             runtime_states = []
             running = 0
             stale = 0
-            for sid, runtime in self.session_runtimes.items():
+            # Snapshot under the lock: a concurrent session teardown mutating
+            # session_runtimes mid-iteration would raise RuntimeError and fail
+            # the health check that exists to report on exactly that state.
+            with self._runtime_lock:
+                runtime_items = list(self.session_runtimes.items())
+            tracked = len(runtime_items)
+            for sid, runtime in runtime_items:
                 alive = self._runtime_alive(runtime)
                 if alive:
                     running += 1
@@ -472,7 +489,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     if self.current_session
                     else None,
                     "runtime_processes": {
-                        "tracked": len(self.session_runtimes),
+                        "tracked": tracked,
                         "running": running,
                         "stale": stale,
                     },

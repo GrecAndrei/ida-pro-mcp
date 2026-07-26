@@ -188,6 +188,10 @@ class BlackboardStore:
                 ("q_signs", "BLOB"),
                 ("norm", "REAL DEFAULT 0.0"),
                 ("call_idx", "INTEGER DEFAULT 0"),
+                # When confidence decay last ran for this row. Kept separate
+                # from updated_at so decaying an entry does not make it look
+                # freshly edited.
+                ("decayed_at", "REAL"),
             ]:
                 if col not in existing:
                     conn.execute(f"ALTER TABLE blackboard ADD COLUMN {col} {dtype}")
@@ -641,9 +645,15 @@ class BlackboardStore:
     def decay_stale_confidence(self, half_life_days: float = 14.0, min_confidence: float = 0.1) -> int:
         """Reduce confidence on entries that haven't been updated recently.
 
-        Uses exponential decay: conf *= exp(-age_days * ln(2) / half_life_days).
+        Uses exponential decay: conf *= exp(-elapsed_days * ln(2) / half_life_days).
         Entries with evidence or calibration are decayed more slowly (0.5x rate).
         Returns the number of entries updated.
+
+        ``elapsed`` is measured from the later of the last edit and the last
+        decay run, so repeated runs compound correctly instead of re-applying
+        the full age each time. Only ``decayed_at`` is written: updating
+        ``updated_at`` here would both make a stale entry sort as the most
+        recently touched and reset its own age, so it could never decay twice.
         """
         import math
         now = time.time()
@@ -651,23 +661,24 @@ class BlackboardStore:
         updated = 0
         with closing(self._conn()) as conn:
             rows = conn.execute(
-                "SELECT id, confidence, updated_at, calibrated, "
+                "SELECT id, confidence, updated_at, decayed_at, calibrated, "
                 "json_extract(COALESCE(evidence, '[]'), '$') as ev "
                 "FROM blackboard WHERE confidence > ?",
                 (min_confidence,),
             ).fetchall()
             for row in rows:
-                eid, conf, updated_at, calibrated, ev_json = row
+                eid, conf, updated_at, decayed_at, calibrated, ev_json = row
                 if conf is None or conf <= min_confidence:
                     continue
-                age_days = (now - (updated_at or now)) / 86400
-                if age_days < 1:
+                since = max(updated_at or now, decayed_at or 0.0)
+                elapsed_days = (now - since) / 86400
+                if elapsed_days < 1:
                     continue
                 rate = decay_rate * (0.5 if calibrated or (ev_json and ev_json != '[]') else 1.0)
-                new_conf = round(max(min_confidence, conf * math.exp(-age_days * rate)), 3)
+                new_conf = round(max(min_confidence, conf * math.exp(-elapsed_days * rate)), 3)
                 if new_conf < conf - 0.01:
                     conn.execute(
-                        "UPDATE blackboard SET confidence=?, updated_at=? WHERE id=?",
+                        "UPDATE blackboard SET confidence=?, decayed_at=? WHERE id=?",
                         (new_conf, now, eid),
                     )
                     updated += 1

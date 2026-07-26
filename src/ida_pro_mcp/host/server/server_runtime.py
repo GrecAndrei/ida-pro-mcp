@@ -136,41 +136,58 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 },
                 separators=(",", ":"),
             ).encode("utf-8")
+            tmp_path = f"{path}.{self._runtime_owner_id}.{os.getpid()}.tmp"
             for _ in range(2):
+                # Publish the lease by hard-linking a fully written temp file
+                # into place. Creating the lease with O_CREAT|O_EXCL and
+                # writing afterwards makes it visible while still empty, and a
+                # concurrent claimer that reads it in that window sees no
+                # owner and removes it — both claimants then believe they hold
+                # the IDB. os.link is atomic and fails if the name exists, so
+                # the lease is never observable in a partial state.
                 try:
-                    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                except FileExistsError:
-                    try:
-                        with open(path, encoding="utf-8") as owner_fh:
-                            owner = json.load(owner_fh)
-                    except Exception:
-                        owner = {}
-                    if str(owner.get("owner_id") or "") == self._runtime_owner_id:
-                        return path
-                    try:
-                        owner_pid = int(owner.get("owner_pid") or 0)
-                    except Exception:
-                        owner_pid = 0
-                    if owner_pid > 0:
-                        try:
-                            os.kill(owner_pid, 0)
-                        except ProcessLookupError:
-                            pass
-                        except PermissionError:
-                            return None
-                        except Exception:
-                            return None
-                        else:
-                            return None
-                    with contextlib.suppress(OSError):
-                        os.remove(path)
-                    continue
-                else:
+                    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
                     try:
                         os.write(fd, record)
                     finally:
                         os.close(fd)
+                    try:
+                        os.link(tmp_path, path)
+                        return path
+                    except FileExistsError:
+                        pass
+                finally:
+                    with contextlib.suppress(OSError):
+                        os.unlink(tmp_path)
+
+                # Someone else holds the lease; decide whether they are alive.
+                try:
+                    with open(path, encoding="utf-8") as owner_fh:
+                        owner = json.load(owner_fh)
+                except FileNotFoundError:
+                    continue  # released between our link and this read
+                except Exception as e:
+                    # Cannot happen from an in-flight claim now that the lease
+                    # is published atomically, so this is a damaged file.
+                    log_rpc(f"Discarding unreadable runtime lease {path}: {e}")
+                    owner = {}
+                if str(owner.get("owner_id") or "") == self._runtime_owner_id:
                     return path
+                try:
+                    owner_pid = int(owner.get("owner_pid") or 0)
+                except Exception:
+                    owner_pid = 0
+                if owner_pid > 0:
+                    try:
+                        os.kill(owner_pid, 0)
+                    except ProcessLookupError:
+                        pass  # holder is gone; reclaim below
+                    except Exception:
+                        return None
+                    else:
+                        return None
+                with contextlib.suppress(OSError):
+                    os.remove(path)
             return None
 
     def _release_runtime_ownership(self, sid: str) -> None:
@@ -618,8 +635,10 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             result["terminated"] = True
             result["exit_code"] = proc.returncode
             return result
-        except Exception:
-            pass
+        except subprocess.TimeoutExpired:
+            pass  # expected: escalate to SIGKILL below
+        except Exception as e:
+            result["wait_error"] = str(e)[:200]
         try:
             proc.kill()
             result["signaled"] = "SIGKILL"

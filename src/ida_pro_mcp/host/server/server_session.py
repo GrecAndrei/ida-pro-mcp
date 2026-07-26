@@ -591,7 +591,11 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         inferred = (arch_meta.get("inferred_profile") or {}) if isinstance(arch_meta, dict) else {}
         is_packed_idb = isinstance(inferred, dict) and inferred.get("file_kind") == "packed_idb"
 
-        policy_mode = args.get("policy_mode")
+        # Deliberately no policy_mode here: the policy engine is configured by
+        # the operator through IDA_MCP_POLICY_MODE or the policy config file.
+        # Honouring a caller-supplied mode would let a single session(create)
+        # call — which classifies as a read and so needs no acknowledgement —
+        # turn the whole engine off for the session.
         self.current_session = self.session_mgr.create_session(
             binary_path or "",
             analysis_options=analysis_options,
@@ -599,7 +603,6 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             tags=tags,
             notes=notes,
             packed_idb=is_packed_idb,
-            policy_mode=policy_mode,
         )
         out = {"ok": True, "session": self.current_session.to_dict()}
         imported_symbol_count = 0
@@ -1332,6 +1335,19 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         # Drop stale runtime metadata so the next tool call can respawn cleanly.
         with contextlib.suppress(Exception):
             self._cleanup_runtime(sid)
+        if not result.get("terminated"):
+            # The process outlived SIGTERM and SIGKILL, so it may still hold
+            # the IDB lock. Reporting ok here would tell the caller the
+            # session is safe to reopen when it is not.
+            return make_error(
+                MCPError.IDA_ERROR,
+                f"Failed to terminate the IDA process for session '{sid}'.",
+                hint=(
+                    "The process may still hold the IDB lock. Check the "
+                    "reported pid and terminate it manually before reopening."
+                ),
+                details=result,
+            )
         return {"ok": True, **result}
 
     def _session_action_rebuild(self, args: dict) -> dict:
