@@ -684,7 +684,7 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
                 "kind": {
                     "type": "string",
                     "enum": ["finding", "hypothesis", "question", "task", "decision"],
-                    "description": "Role this item plays in the investigation.",
+                    "description": "Role this item plays in the investigation. To record that an address was read and found uninteresting, use ida_mark_examined instead.",
                 },
                 "status": {
                     "type": "string",
@@ -725,11 +725,33 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         argument_map={"address": "addr"},
     ),
     AgentOperation(
+        name="ida_mark_examined",
+        description="Record that an address was read and judged, including when there was nothing there.",
+        category="findings",
+        input_schema=_schema(
+            {
+                "address": ADDRESS,
+                "verdict": {
+                    "type": "string",
+                    "enum": ["boring", "interesting", "unclear"],
+                    "description": "boring: understood, nothing worth returning to. interesting: warrants a finding. unclear: could not decide.",
+                },
+                "note": {"type": "string", "description": "One line on what it turned out to be."},
+                "name": {"type": "string", "description": "Function name, if known."},
+            },
+            ["address", "verdict"],
+        ),
+        example={"address": "0x401a20", "verdict": "boring", "note": "CRT string helper, no input handling."},
+        backend_tool="blackboard",
+        backend_action="mark_examined",
+        argument_map={"address": "addr"},
+    ),
+    AgentOperation(
         name="ida_list_findings",
         description="List investigation items with lifecycle and type filters.",
         category="findings",
         input_schema=_schema({
-            "kind": {"type": "string", "enum": ["finding", "hypothesis", "question", "task", "decision"]},
+            "kind": {"type": "string", "enum": ["finding", "hypothesis", "question", "task", "decision", "examined"]},
             "status": {"type": "string", "enum": ["open", "confirmed", "resolved", "rejected"]},
             "category": {"type": "string"},
             "address": ADDRESS,
@@ -778,8 +800,45 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         backend_action="update",
     ),
     AgentOperation(
+        name="ida_publish_findings",
+        description="Write confirmed findings into the IDB as repeatable comments and symbols.",
+        category="findings",
+        input_schema=_schema(
+            {
+                "rename": {
+                    "type": "boolean",
+                    "description": "Also rename functions that IDA still auto-named. Never overwrites an existing symbol. Default true.",
+                },
+                "republish": {
+                    "type": "boolean",
+                    "description": "Rewrite findings already published and unchanged since. Default false.",
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "Report what would be written without touching the IDB. Does not need risk_ack.",
+                },
+                "limit": LIMIT,
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+        ),
+        example={"rename": True, "limit": 25, "risk_ack": True},
+        backend_tool="blackboard",
+        backend_action="publish_findings",
+        argument_map={"risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_import_annotations",
+        description="Adopt names and comments already in the IDB as confirmed findings.",
+        category="findings",
+        input_schema=_schema({"limit": LIMIT, "offset": {"type": "integer"}, "idb": IDB}),
+        example={"limit": 100},
+        backend_tool="blackboard",
+        backend_action="import_annotations",
+    ),
+    AgentOperation(
         name="ida_analysis_brief",
-        description="Summarize confirmed knowledge, open questions, conflicts, and current focus.",
+        description="Summarize confirmed knowledge, open questions, conflicts, stale claims, and coverage.",
         category="findings",
         input_schema=_schema({"limit": LIMIT}),
         example={"limit": 8},
@@ -788,10 +847,24 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     ),
     AgentOperation(
         name="ida_next_target",
-        description="Get the highest-priority next analysis target from the notebook frontier.",
+        description="Suggest what to analyze next using one named strategy, with the reason for each candidate.",
         category="findings",
-        input_schema=_schema({"query": {"type": "string", "description": "Optional investigation theme."}, "limit": LIMIT}),
-        example={"query": "input validation", "limit": 10},
+        input_schema=_schema({
+            "strategy": {
+                "type": "string",
+                "enum": ["unresolved", "stale", "conflict", "coverage", "frontier"],
+                "description": (
+                    "unresolved: open threads and unverified findings (default). "
+                    "stale: claims whose code changed since they were written. "
+                    "conflict: contradictions needing reconciliation. "
+                    "coverage: frequently-called functions nobody has read. "
+                    "frontier: unexamined neighbours of confirmed findings."
+                ),
+            },
+            "query": {"type": "string", "description": "Optional theme; reorders candidates by keyword overlap, never drops them."},
+            "limit": LIMIT,
+        }),
+        example={"strategy": "coverage", "limit": 10},
         backend_tool="blackboard",
         backend_action="next_target",
     ),
@@ -1132,8 +1205,23 @@ available.
   after verifying the target and intended change.
 - Use `ida_python(code=..., risk_ack=true)` for narrowly scoped IDA-side
   scripting; it executes in the live IDA process and is policy-gated.
-- Record confirmed work with `ida_write_finding`; use `ida_next_target` to
-  choose the next investigation point.
+- Record confirmed work with `ida_write_finding`, and record dead ends with
+  `ida_mark_examined(verdict="boring")`. A function you read and dismissed is
+  worth one line: without it, the next session reads it again.
+- Responses carry `_recall` (what is already known about this address) and
+  `_already_examined` (returned addresses you previously dismissed). Read them
+  before re-deriving anything. A `_stale` field means the code changed after a
+  claim about it was recorded — re-check that claim rather than trusting it.
+- `ida_next_target(strategy=...)` picks the next investigation point:
+  `unresolved` for open threads, `coverage` for functions nobody has read,
+  `frontier` to expand from confirmed findings, `stale` and `conflict` for
+  claims that need repair. Every candidate states why it was chosen.
+- If `ida_write_finding` returns a `conflict`, two claims about the same thing
+  disagree. Resolve it with `ida_update_finding` before building on either.
+- `ida_import_annotations` early in a session adopts names and comments the
+  last analyst left in the IDB, so you inherit their work instead of redoing
+  it. `ida_publish_findings(risk_ack=true)` writes confirmed findings back as
+  comments and symbols; use `dry_run=true` first to see what it would change.
 - If a result is truncated, read `_continue.token` and `_continue.fields`.
   Call `ida_continue(token=...)` when one field is listed; when multiple
   fields are listed, pass the exact selected name as `field=...` (for example

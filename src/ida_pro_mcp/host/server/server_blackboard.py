@@ -13,11 +13,30 @@ from typing import Any
 from ..config import _bounded_int
 from ..errors import MCPError, is_error_result, make_error
 from ..intelligence.helpers import parse_str_list
+from ..stores.blackboard_store import STRATEGIES as BB_STRATEGIES
 from ..stores.symbol_db import SymbolDB
+from .server_blackboard_idb import ServerBlackboardIdbMixin
 from .server_blackboard_phase import ServerBlackboardPhaseMixin
 from .server_blackboard_trace import ServerBlackboardTraceMixin
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+#: What each target strategy selects for, stated plainly in the response so
+#: the model can judge whether the suggestion is worth taking.
+_STRATEGY_NOTES = {
+    "unresolved": "Open questions, hypotheses, and tasks, plus findings recorded but never verified.",
+    "stale": "Claims whose underlying code changed after they were written.",
+    "conflict": "Entries that contradict another entry and must be reconciled.",
+    "coverage": "Frequently-called functions with no finding and no examination.",
+    "frontier": "Unexamined callers and callees of confirmed findings.",
+}
+_STRATEGY_EMPTY = {
+    "unresolved": " Nothing is open. Try strategy='coverage'.",
+    "stale": " No claim has been invalidated by a code change.",
+    "conflict": " No contradictions recorded.",
+    "coverage": " Every function is already recorded or examined, or no session is open.",
+    "frontier": " Nothing is confirmed yet to expand from, or no session is open.",
+}
 _LANE_CATEGORY = {
     "lane_now": "wm_now",
     "lane_hypotheses": "hypothesis",
@@ -168,7 +187,9 @@ _ADDR_RE = re.compile(r"\b0x[0-9a-fA-F]{4,16}\b")
 _SYMBOL_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{3,63}\b")
 
 
-class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMixin):
+class ServerBlackboardMixin(
+    ServerBlackboardPhaseMixin, ServerBlackboardTraceMixin, ServerBlackboardIdbMixin
+):
     def _session_blackboard_path(self, session_obj=None, sid: str | None = None) -> str:
         session = session_obj
         sid_text = str(sid or "").strip()
@@ -1499,24 +1520,38 @@ class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMix
             if idb_ref:
                 def rpc_fn(tool, payload):
                     return self.call_tool(tool, idb_ref, **payload)
-            targets = store.next_target(
-                limit=_bounded_int(args.get("limit", 5), 5, min_value=1, max_value=100),
-                rpc_fn=rpc_fn,
-                query=args.get("query"),
-            )
-            payload = {"ok": True, "targets": targets, "count": len(targets),
-                       "summary": _target_collection_summary(targets),
-                       "note": "Highest-priority open investigation items and unexplored IDA functions."}
-            if getattr(store, "last_query_applied", None) is False:
-                payload["query_applied"] = False
-                payload["note"] += (
-                    " Semantic query was not applied (embedder unavailable);"
-                    " ranking is structural only."
-                )
-                if getattr(store, "last_query_error", ""):
-                    payload["query_error"] = store.last_query_error
-            elif getattr(store, "last_query_applied", None) is True:
-                payload["query_applied"] = True
+            limit = _bounded_int(args.get("limit", 5), 5, min_value=1, max_value=100)
+            query = args.get("query")
+            strategy = str(args.get("strategy") or "").strip().lower()
+            if strategy:
+                try:
+                    result = store.targets(strategy, limit=limit, rpc_fn=rpc_fn, query=query)
+                except ValueError as exc:
+                    return make_error(MCPError.INVALID_ARGS, str(exc))
+                targets = result["targets"]
+                note = _STRATEGY_NOTES.get(strategy, "")
+                if not targets:
+                    note += _STRATEGY_EMPTY.get(strategy, " Nothing matched this strategy.")
+            else:
+                targets = store.next_target(limit=limit, rpc_fn=rpc_fn, query=query)
+                strategy = "unresolved"
+                note = _STRATEGY_NOTES["unresolved"]
+                if not targets:
+                    note += (
+                        " The workspace has no open threads yet. Try"
+                        " strategy='coverage' for functions nobody has read."
+                    )
+            payload = {
+                "ok": True,
+                "strategy": strategy,
+                "targets": targets,
+                "count": len(targets),
+                "summary": _target_collection_summary(targets),
+                "note": note.strip(),
+                "strategies": list(BB_STRATEGIES),
+            }
+            if query:
+                payload["query_ranking"] = "keyword overlap; candidates are reordered, never dropped"
             return payload
         if action == "frontier":
             try:
@@ -1610,9 +1645,43 @@ class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMix
                     limit=_bounded_int(args.get("limit", 8), 8, min_value=1, max_value=25)
                 ),
             }
-        if action == "auto_tag_propagate":
-            updated = store.auto_tag_propagate()
-            return {"ok": True, "updated": int(updated)}
+        if action == "mark_examined":
+            try:
+                result = store.record_examination(
+                    addr=str(args.get("addr") or ""),
+                    verdict=str(args.get("verdict") or "boring"),
+                    note=str(args.get("note") or args.get("content") or ""),
+                    name=str(args.get("name") or ""),
+                )
+            except ValueError as exc:
+                return make_error(MCPError.INVALID_ARGS, str(exc))
+            self._bb_policy_mark(policy_state, "write")
+            return {"ok": True, "action": "mark_examined", **result}
+        if action == "recall":
+            addrs = _coerce_str_list(args.get("addrs") or args.get("addr"))
+            return {
+                "ok": True,
+                **store.recall(
+                    addrs,
+                    limit=_bounded_int(args.get("limit", 6), 6, min_value=1, max_value=25),
+                ),
+            }
+        if action == "publish_findings":
+            return self._publish_findings(store, args)
+        if action == "import_annotations":
+            return self._import_annotations(store, args)
+        if action == "conflicts":
+            entries = store.conflicts(
+                limit=_bounded_int(args.get("limit", 20), 20, min_value=1, max_value=200)
+            )
+            return {"ok": True, "entries": entries, "count": len(entries),
+                    "summary": _entry_collection_summary(entries)}
+        if action == "stale":
+            entries = store.stale_entries(
+                limit=_bounded_int(args.get("limit", 20), 20, min_value=1, max_value=200)
+            )
+            return {"ok": True, "entries": entries, "count": len(entries),
+                    "note": "Recorded before the code at these addresses changed."}
         if action in ("start_crawler", "stop_crawler", "crawler_status", "accept", "reject"):
             # Delegate to the tool module which owns the crawler singleton
             mod = type(self)._blackboard_module

@@ -228,6 +228,109 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                 )
         return warnings
 
+    # Tools that are the workspace itself, or that carry no address the
+    # analyst is reasoning about. Recalling into these is noise or recursion.
+    _RECALL_EXEMPT_TOOLS = frozenset(
+        {"session", "blackboard", "batch", "truncation", "wiki", "workflow"}
+    )
+
+    # Where rendered code lives in a payload, and which anchor kind it forms.
+    _ANCHOR_SOURCES = (
+        ("pseudocode", "decompile"),
+        ("code", "decompile"),
+        ("disassembly", "disassemble"),
+    )
+
+    @staticmethod
+    def _first_addr(call_args: Any) -> str:
+        """Pull the single address a call was about, whatever spelling it used."""
+        if not isinstance(call_args, dict):
+            return ""
+        raw = call_args.get("addrs") or call_args.get("addr") or call_args.get("address") or ""
+        if isinstance(raw, (list, tuple)):
+            raw = raw[0] if raw else ""
+        text = str(raw).strip()
+        if "," in text:
+            text = text.split(",", 1)[0].strip()
+        return text
+
+    def _capture_code_anchor(
+        self, tool_name: str, action: str, call_args: Any, payload: dict
+    ) -> None:
+        """Record the code just rendered, and flag claims that predate it.
+
+        This is what makes a finding able to notice it has gone out of date:
+        every time code is shown for an address, its digest is compared with
+        the one recorded when claims about that address were written.
+        """
+        if tool_name != "code" or action not in {"decompile", "semantic_decompile", "disasm"}:
+            return
+        addr = self._first_addr(call_args)
+        if not addr:
+            return
+        store = self._get_blackboard_store()
+        if store is None:
+            return
+        for key, anchor_kind in self._ANCHOR_SOURCES:
+            text = payload.get(key)
+            if not isinstance(text, str) or not text.strip():
+                continue
+            result = store.observe_code(addr, anchor_kind, text)
+            marked = int(result.get("stale_marked") or 0)
+            if marked:
+                payload["_stale"] = (
+                    f"{marked} recorded item(s) at {addr} were marked stale: the code "
+                    "changed since they were written. Re-check before relying on them."
+                )
+            return
+
+    def _inject_workspace_recall(self, tool_name: str, payload: dict, call_args: Any) -> None:
+        """Surface what the workspace already knows, without being asked.
+
+        A memory the model has to remember to query is a memory it will not
+        use. Two injections, both bounded:
+
+        ``_recall``
+            Prior findings, verdicts, and open questions about the address
+            this call was about.
+        ``_already_examined``
+            For result sets, which of the returned addresses were previously
+            read and set aside — so a search does not re-offer work that was
+            already dismissed.
+
+        Failures are reported in ``_recall_error`` rather than swallowed: a
+        recall path that silently does nothing is indistinguishable from one
+        that was never wired up, which is how the previous version decayed.
+        """
+        if tool_name in self._RECALL_EXEMPT_TOOLS:
+            return
+        store = self._get_blackboard_store()
+        if store is None:
+            return
+        try:
+            asked_about = self._collect_hex_addresses(call_args, max_items=6)
+            if asked_about:
+                lines = store.recall_lines(asked_about, limit=4)
+                if lines:
+                    payload["_recall"] = lines
+
+            returned = [
+                addr for addr in self._collect_hex_addresses(payload, max_items=50)
+                if addr not in set(asked_about)
+            ]
+            if returned:
+                seen = {}
+                for addr in returned:
+                    prior = store.examination(addr)
+                    if prior:
+                        seen[addr] = prior["verdict"]
+                    if len(seen) >= 10:
+                        break
+                if seen:
+                    payload["_already_examined"] = seen
+        except Exception as exc:  # surfaced, not swallowed
+            payload["_recall_error"] = f"{type(exc).__name__}: {exc}"[:200]
+
     def _assemble_and_inject_context(
         self,
         tool_name: str,
@@ -274,15 +377,17 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                 if mode == "full":
                     payload["context_pack"] = pack
                 else:
-                    # Compact mode: inject the top related blackboard findings as a
-                    # terse recall hint — title, category, and address — so past
-                    # findings reach the LLM without it having to query for them.
+                    # Compact mode: the semantic assembler contributes findings
+                    # related by meaning or by graph distance. Exact-address
+                    # recall has already run, so drop anything it covered
+                    # rather than saying it twice.
+                    already = "\n".join(payload.get("_recall") or [])
                     related = pack.get("related_findings") or []
                     if related:
                         hints = []
                         for e in related[:3]:
                             title = str(e.get("title") or "").strip()
-                            if not title:
+                            if not title or title in already:
                                 continue
                             kind = str(e.get("kind") or "finding").strip()
                             status = str(e.get("status") or "open").strip()
@@ -755,6 +860,16 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                             pass
             except Exception:
                 pass
+
+            # ---- Workspace: anchor the code shown, then recall what is known ----
+            # Order matters: anchoring first means a claim invalidated by this
+            # very response is already flagged stale by the time recall reads it.
+            if isinstance(compacted, dict) and not is_error_result(compacted):
+                try:
+                    self._capture_code_anchor(tool_name, action_name, call_args, compacted)
+                except Exception as exc:
+                    compacted["_anchor_error"] = f"{type(exc).__name__}: {exc}"[:200]
+                self._inject_workspace_recall(tool_name, compacted, call_args)
 
             # ---- Intelligence Layer: assemble real context and inject ----
             try:
