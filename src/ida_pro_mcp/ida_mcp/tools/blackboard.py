@@ -780,9 +780,14 @@ def blackboard(
     elif action == "campaign_summary":
         return {"ok": True, **store.campaign_summary()}
 
-    elif action == "auto_tag_propagate":
-        updated = store.auto_tag_propagate()
-        return {"ok": True, "updated": updated}
+    elif action == "mark_examined":
+        result = store.record_examination(
+            addr=addr,
+            verdict=str(kwargs.get("verdict") or "boring"),
+            note=str(kwargs.get("note") or content or ""),
+            name=str(kwargs.get("name") or title or ""),
+        )
+        return {"ok": True, **result}
 
     # ── Knowledge Graph write actions ─────────────────────────────────────────
     elif action in ("add_system", "add_struct", "add_gap", "fill_gap",

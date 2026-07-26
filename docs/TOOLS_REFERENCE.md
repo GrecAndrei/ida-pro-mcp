@@ -1461,7 +1461,7 @@ Input schema:
         "task",
         "decision"
       ],
-      "description": "Role this item plays in the investigation."
+      "description": "Role this item plays in the investigation. To record that an address was read and found uninteresting, use ida_mark_examined instead."
     },
     "status": {
       "type": "string",
@@ -1537,6 +1537,57 @@ Example:
 }
 ```
 
+## `ida_mark_examined`
+
+Record that an address was read and judged, including when there was nothing there.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "boring",
+        "interesting",
+        "unclear"
+      ],
+      "description": "boring: understood, nothing worth returning to. interesting: warrants a finding. unclear: could not decide."
+    },
+    "note": {
+      "type": "string",
+      "description": "One line on what it turned out to be."
+    },
+    "name": {
+      "type": "string",
+      "description": "Function name, if known."
+    }
+  },
+  "required": [
+    "address",
+    "verdict"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_mark_examined",
+  "arguments": {
+    "address": "0x401a20",
+    "verdict": "boring",
+    "note": "CRT string helper, no input handling."
+  }
+}
+```
+
 ## `ida_list_findings`
 
 List investigation items with lifecycle and type filters.
@@ -1553,7 +1604,8 @@ Input schema:
         "hypothesis",
         "question",
         "task",
-        "decision"
+        "decision",
+        "examined"
       ]
     },
     "status": {
@@ -1716,7 +1768,7 @@ Example:
 
 ## `ida_analysis_brief`
 
-Summarize confirmed knowledge, open questions, conflicts, and current focus.
+Summarize confirmed knowledge, open questions, conflicts, stale claims, and coverage.
 
 Input schema:
 ```json
@@ -1745,16 +1797,27 @@ Example:
 
 ## `ida_next_target`
 
-Get the highest-priority next analysis target from the notebook frontier.
+Suggest what to analyze next using one named strategy, with the reason for each candidate.
 
 Input schema:
 ```json
 {
   "type": "object",
   "properties": {
+    "strategy": {
+      "type": "string",
+      "enum": [
+        "unresolved",
+        "stale",
+        "conflict",
+        "coverage",
+        "frontier"
+      ],
+      "description": "unresolved: open threads and unverified findings (default). stale: claims whose code changed since they were written. conflict: contradictions needing reconciliation. coverage: frequently-called functions nobody has read. frontier: unexamined neighbours of confirmed findings."
+    },
     "query": {
       "type": "string",
-      "description": "Optional investigation theme."
+      "description": "Optional theme; reorders candidates by keyword overlap, never drops them."
     },
     "limit": {
       "type": "integer",
@@ -1771,7 +1834,7 @@ Example:
 {
   "name": "ida_next_target",
   "arguments": {
-    "query": "input validation",
+    "strategy": "coverage",
     "limit": 10
   }
 }

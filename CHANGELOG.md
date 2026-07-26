@@ -2,6 +2,48 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## Unreleased — the blackboard becomes an investigation workspace
+
+The store was write-only in practice. A model recorded findings and then had to *choose* to query them back, which it rarely did; the only automatic recall was three bare titles injected inside a bare `except Exception: pass`. Negative results were unrecordable, nothing ever invalidated, and disagreement was silently merged into whichever claim had higher confidence. `blackboard_store.py` is rewritten around four behaviours it did not have.
+
+### Added — recall without being asked
+- Every address-bearing response now carries `_recall`: prior findings, examination verdicts, and open questions for that address, produced by a new deterministic `BlackboardStore.recall()` — exact address matches, no embeddings, bounded work.
+- Result sets carry `_already_examined`: which of the returned addresses were previously read and dismissed, so a search does not re-offer work that was already thrown away.
+- Failures set `_recall_error` on the payload instead of being swallowed. A recall path that silently does nothing is indistinguishable from one that was never wired up, which is how the previous version decayed.
+
+### Added — negative results
+- New operation `ida_mark_examined(address, verdict, note)` and store method `record_examination()`. Records "I read this, it's a CRT wrapper, skip it" in one line. Re-examining replaces the verdict and keeps the change in the event log.
+- Coverage counts appear in `ida_analysis_brief` and `stats()`.
+
+### Added — claims that notice they are out of date
+- New `code_anchors` table. Every response that renders code for an address records a digest of it; findings written at that address are anchored to that digest.
+- When the code changes, claims anchored to the old text are marked `stale` with a reason — including examination verdicts, since "boring" is also a claim about code that just changed. Staleness annotates; it never deletes or rewrites a claim.
+- Revising an entry re-anchors it and clears the flag. `ida_next_target(strategy="stale")` lists what needs re-checking. Whitespace-only reformatting is not drift.
+
+### Added — disagreement is kept, not merged
+- Recording an opposed status (a rejection over a confirmation, or the reverse) on the same claim now stores both rows and links them via `conflicts_with`, returning a `conflict` block naming what it contradicts. Previously `upsert_finding` merged them and took `max(confidence)`, so a rejection at 0.2 landing on a confirmation at 0.9 left the confirmation untouched and produced no signal at all.
+- `auto_merge` and `prune` refuse to touch conflicting or stale rows: they are low-confidence precisely because they need attention.
+- Merging a repeat observation now takes the **newest** confidence, not the highest. Restating a claim is not evidence for it, and the old ratchet meant confidence only ever rose.
+
+### Changed — target selection explains itself
+- `ida_next_target` takes `strategy`: `unresolved`, `stale`, `conflict`, `coverage`, `frontier`. Every candidate carries a `reason` string ("12 callers, never examined"; "code at 0x401000 changed since this was recorded").
+- This replaces a six-coefficient blended score — priority term, adaptive half-life, dependency factor, category prior, xref sigmoid, entropy sigmoid — that was never calibrated against whether the suggestion paid off, and that nobody could debug.
+- `coverage` prefers auto-named functions but falls back to named ones on a symbolised binary rather than returning nothing, and says which it did.
+- A `query` now reorders candidates by keyword overlap and never drops them; the previous blend could hide work behind a weak semantic match.
+
+### Fixed
+- **The entire semantic path was dead code.** `_pack_vec`/`_unpack_vec`/`_cosine` imported from `.intelligence.helpers` — one dot too few from `host/stores/`, resolving to the non-existent `host.stores.intelligence`. Every call raised `ModuleNotFoundError` into an `except Exception: return None`, so no embedding was ever stored, `vector` was always NULL, and `semantic_search` silently ran lexical-only forever. Fixed; `semantic_search` results now carry `match: "semantic" | "lexical"` so the fallback is visible.
+- `_row_to_dict` cached column names on the instance (`_col_cache`) and could serve a stale layout after a migration. The store now uses `sqlite3.Row` throughout.
+- Addresses are normalised through `normalize_addr` on every write and lookup, so `0X00401000` and `0x401000` are one address rather than two.
+- `exists_similar` derived its match threshold from the quantiles of the very sample it was testing, so a set of uniformly dissimilar titles produced a low gate and reported a match. Fixed threshold now.
+- `semantic_rebuild` reported `rebuilt` counts that included entries whose embedding failed; it now reports `skipped` and why.
+
+### Removed
+- `auto_tag_propagate` — copied tags from any entry above 0.8 confidence to every other entry at the same address, which manufactures agreement between unrelated claims. Replaced in the action registry by `mark_examined`, `recall`, `conflicts`, and `stale`.
+
+### Tests
+- `tests/host/test_workspace_memory.py` (30 tests) and `tests/host/test_workspace_recall_injection.py` (16 tests). Conflict preservation, anchor staleness, the confidence ratchet, and the dispatch-path wiring were each mutation-tested: reverting the fix fails its test. The injection suite drives the real `_prepare_response_payload` with the production MRO, so unwiring the hooks fails rather than degrading into a workspace nobody reads.
+
 ## Unreleased — dead-code cut + host safety fixes
 
 ### Cuts

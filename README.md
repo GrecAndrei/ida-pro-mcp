@@ -3,9 +3,9 @@
 Give an LLM agent a working seat at IDA Pro.
 
 This is an [MCP](https://modelcontextprotocol.io) server that exposes IDA Pro's
-analysis to a model as 41 exact-schema operations — decompile, cross-reference,
-search, rename, annotate — plus a findings workspace so the model's conclusions
-survive across turns instead of living in a context window.
+analysis to a model as 42 exact-schema operations — decompile, cross-reference,
+search, rename, annotate — plus an investigation workspace so the model's
+conclusions survive across turns instead of living in a context window.
 
 It runs deterministic IDA SDK calls. There is no LLM service behind it, and
 nothing about your binary leaves the machine.
@@ -34,11 +34,30 @@ operations return an explicit unavailable result — they never fall back to a
 different vector space, and never hand back a zero vector dressed as a score. The
 index records model, dimension, and prompt format, and rebuilds when any changes.
 
-**Findings are evidence-backed and durable.** `ida_write_finding` records a claim
-against an address with confidence and supporting evidence, into a per-session
-SQLite workspace with an append-only audit trail. Concurrent updates merge
-evidence under a write lock rather than overwriting it. `ida_next_target` ranks
-what to look at next.
+**The workspace remembers, and comes back on its own.** `ida_write_finding`
+records a claim with confidence and evidence into a per-session SQLite workspace
+with an append-only audit trail. You do not have to ask for it back: every
+response about an address carries `_recall` — the findings, verdicts, and open
+questions already recorded there.
+
+**Dead ends are recorded too.** `ida_mark_examined` costs one line and says "I
+read this, it's a CRT wrapper, skip it." Search results come back tagged with
+what you already dismissed, so the next session doesn't re-read forty functions
+to re-conclude the same nothing.
+
+**Claims notice when they go out of date.** Each finding is anchored to a digest
+of the code it was made against. When that code changes, the claim is flagged
+stale — including "boring" verdicts, since that too is a claim about code that
+just changed. `ida_next_target(strategy="stale")` lists them.
+
+**Disagreement is never merged away.** Recording a rejection over a confirmed
+claim keeps both rows and links them as a conflict rather than silently taking
+the higher confidence. `ida_next_target(strategy="conflict")` surfaces them.
+
+**Next-step suggestions explain themselves.** `ida_next_target` takes a named
+strategy — `unresolved`, `stale`, `conflict`, `coverage`, `frontier` — and every
+candidate states why it was chosen ("12 callers, never examined"), rather than
+emerging from an opaque blended score.
 
 **Mutations are gated, and the gate is yours.** Anything that writes to the IDB
 requires an explicit `risk_ack`. Policy strictness comes from the operator, via
@@ -98,6 +117,11 @@ python -u -m ida_pro_mcp.host.server
     "address": "0x401000",
     "confidence": 0.8}}
 
+// Record what you ruled out, so the next session doesn't re-read it
+{"name": "ida_mark_examined", "arguments": {
+    "address": "0x401a20", "verdict": "boring",
+    "note": "CRT string helper, no input handling."}}
+
 // Writes need an acknowledgement
 {"name": "ida_rename", "arguments": {
     "address": "0x401000", "name": "handle_recv", "risk_ack": true}}
@@ -119,7 +143,7 @@ ida_open_binary → ida_session_state → ida_overview → ida_find
 | **Session** | `open_binary`, `close_session`, `session_state`, `session_status`, `session_health` |
 | **Discovery** | `overview`, `find`, `list_functions`, `list_imports`, `list_strings`, `semantic_search`, `index_functions`, `index_status`, `cancel_index` |
 | **Code** | `decompile`, `disassemble`, `xrefs_to`, `callers`, `callees` |
-| **Findings** | `write_finding`, `update_finding`, `list_findings`, `search_findings`, `next_target`, `analysis_brief` |
+| **Findings** | `write_finding`, `mark_examined`, `update_finding`, `list_findings`, `search_findings`, `next_target`, `analysis_brief` |
 | **Edit** | `rename`, `comment`, `change_function`, `create_function` |
 | **Calculation** | `calc_eval`, `calc_convert`, `calc_deref`, `calc_offset`, `calc_align`, `calc_bitops`, `calc_chain`, `calc_resolve` |
 | **Support** | `help`, `continue`, `python` |

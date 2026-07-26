@@ -6,7 +6,7 @@ Firmware RE knowledge base and persistent working memory. SQLite-backed, survive
 
 ## Full Action Surface
 
-`policy_set`, `policy_status`, `policy_check`, `phase_status`, `phase_set`, `phase_tick`, `quest_board`, `quest_complete`, `memory_compile`, `phase_finalize`, `trace_ingest`, `trace_run`, `trace_status`, `proposal_create`, `proposal_list`, `proposal_accept`, `proposal_reject`, `decision_card`, `working_set`, `state_health`, `notes_export`, `notes_import`, `write`, `read`, `list`, `search`, `semantic_index`, `semantic_rebuild`, `related_by_behavior`, `update`, `delete`, `clear`, `stats`, `prune`, `merge`, `contradict`, `resolve`, `next_target`, `frontier`, `coverage`, `propagate_labels`, `start_crawler`, `stop_crawler`, `crawler_status`, `accept`, `reject`, `add_evidence`, `calibrate`, `campaign_summary`, `auto_tag_propagate`, `accept_proposal`, `reject_proposal`, `add_system`, `add_struct`, `add_gap`, `fill_gap`, `add_state_machine`, `add_peripheral`, `add_attack_surface`, `kg_summary`, `kg_systems`, `kg_gaps`, `kg_structs`, `kg_state_machines`, `kg_attack_surface`, `kg_peripherals`, `export_symbols`, `import_symbols`
+`policy_set`, `policy_status`, `policy_check`, `phase_status`, `phase_set`, `phase_tick`, `quest_board`, `quest_complete`, `memory_compile`, `phase_finalize`, `trace_ingest`, `trace_run`, `trace_status`, `proposal_create`, `proposal_list`, `proposal_accept`, `proposal_reject`, `decision_card`, `working_set`, `state_health`, `notes_export`, `notes_import`, `write`, `read`, `list`, `search`, `semantic_index`, `semantic_rebuild`, `related_by_behavior`, `update`, `delete`, `clear`, `stats`, `prune`, `merge`, `contradict`, `resolve`, `next_target`, `frontier`, `coverage`, `propagate_labels`, `start_crawler`, `stop_crawler`, `crawler_status`, `accept`, `reject`, `add_evidence`, `calibrate`, `campaign_summary`, `mark_examined`, `recall`, `conflicts`, `stale`, `accept_proposal`, `reject_proposal`, `add_system`, `add_struct`, `add_gap`, `fill_gap`, `add_state_machine`, `add_peripheral`, `add_attack_surface`, `kg_summary`, `kg_systems`, `kg_gaps`, `kg_structs`, `kg_state_machines`, `kg_attack_surface`, `kg_peripherals`, `export_symbols`, `import_symbols`
 
 ## Categories
 
@@ -93,7 +93,7 @@ Returns: total/active/resolved/contradicted counts, top findings by category, IO
 ## Tag Propagation
 
 ```json
-{"name": "blackboard", "arguments": {"action": "auto_tag_propagate"}}
+{"name": "blackboard", "arguments": {"action": "mark_examined", "addr": "0x401a20", "verdict": "boring", "note": "CRT helper"}}
 ```
 
 Propagates tags from high-confidence (>0.8) entries to other entries at the same address. Run after a batch of classifier results to spread behavior tags.

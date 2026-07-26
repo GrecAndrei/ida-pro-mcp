@@ -38,8 +38,19 @@ available.
   after verifying the target and intended change.
 - Use `ida_python(code=..., risk_ack=true)` for narrowly scoped IDA-side
   scripting; it executes in the live IDA process and is policy-gated.
-- Record confirmed work with `ida_write_finding`; use `ida_next_target` to
-  choose the next investigation point.
+- Record confirmed work with `ida_write_finding`, and record dead ends with
+  `ida_mark_examined(verdict="boring")`. A function you read and dismissed is
+  worth one line: without it, the next session reads it again.
+- Responses carry `_recall` (what is already known about this address) and
+  `_already_examined` (returned addresses you previously dismissed). Read them
+  before re-deriving anything. A `_stale` field means the code changed after a
+  claim about it was recorded — re-check that claim rather than trusting it.
+- `ida_next_target(strategy=...)` picks the next investigation point:
+  `unresolved` for open threads, `coverage` for functions nobody has read,
+  `frontier` to expand from confirmed findings, `stale` and `conflict` for
+  claims that need repair. Every candidate states why it was chosen.
+- If `ida_write_finding` returns a `conflict`, two claims about the same thing
+  disagree. Resolve it with `ida_update_finding` before building on either.
 - If a result is truncated, read `_continue.token` and `_continue.fields`.
   Call `ida_continue(token=...)` when one field is listed; when multiple
   fields are listed, pass the exact selected name as `field=...` (for example

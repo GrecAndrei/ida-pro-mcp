@@ -91,8 +91,13 @@ def test_workspace_brief_tracks_questions_transitions_conflicts_and_activity(tmp
     assert brief["focus"][0]["id"] == question
     assert brief["confirmed"][0]["id"] == fact
     assert brief["conflicts"][0]["id"] == rejected
-    assert brief["counts"] == {"total": 3, "open": 1, "confirmed": 1, "conflicts": 1, "questions": 1}
+    assert brief["counts"] == {
+        "total": 3, "open": 1, "confirmed": 1, "conflicts": 1, "questions": 1,
+        "stale": 0, "examined": 0,
+    }
     assert any(event["event"] == "status:rejected" for event in brief["recent_activity"])
+    assert "Confirmed:" in brief["brief"]
+    assert "Length comes from recv buffer" in brief["brief"]
 
 
 def test_entry_brief_prefers_status_column_over_legacy_flags(tmp_path):
@@ -158,9 +163,30 @@ def test_empty_frontier_seeds_from_live_ida_function_inventory(tmp_path):
 
     targets = store.next_target(limit=5, rpc_fn=rpc)
 
+    # Only the auto-named function is offered: a name means IDA matched a
+    # library signature or someone already understood it.
     assert len(targets) == 1
     assert targets[0]["addr"] == "0x402000"
     assert targets[0]["source_type"] == "seed"
+    assert targets[0]["reason"] == "12 callers, never examined"
+
+
+def test_coverage_falls_back_to_named_functions_on_a_symbolised_binary(tmp_path):
+    """A binary with full symbols must still produce coverage candidates."""
+    store = BlackboardStore(str(tmp_path / "workspace.db"))
+
+    def rpc(tool, arguments):
+        return {
+            "functions": [
+                {"addr": "0x401000", "name": "parse_header", "xref_count": 3},
+                {"addr": "0x402000", "name": "dispatch", "xref_count": 9},
+            ]
+        }
+
+    result = store.targets("coverage", limit=5, rpc_fn=rpc)
+
+    assert [t["address"] for t in result["targets"]] == ["0x402000", "0x401000"]
+    assert "no auto-named functions left to prefer" in result["targets"][0]["reason"]
 
 
 def test_blackboard_workspace_is_isolated_per_session_for_same_binary(tmp_path):
