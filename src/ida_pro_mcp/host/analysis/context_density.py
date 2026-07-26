@@ -149,6 +149,13 @@ class ContextDensityOptimizer:
         return counts
 
     def _addr_to_segment(self, addr: str) -> str:
+        """Bucket an address by magnitude, purely to compress long xref lists.
+
+        These are address ranges, not segments. The bucket names deliberately
+        do not read as ``.text``/``.data``: nothing here consults the IDB, so
+        naming the buckets after real segments asserted a layout that no
+        binary is required to have, and callers surfaced it as fact.
+        """
         m = re.search(r'0x([0-9a-fA-F]+)|\b([0-9a-fA-F]{4,})\b', str(addr))
         if not m:
             return 'unknown'
@@ -158,16 +165,16 @@ class ContextDensityOptimizer:
         except ValueError:
             return 'unknown'
         if val < 0x1000:
-            return 'null'
+            return 'below_0x1000'
         if val < 0x100000:
-            return '.text'
+            return '0x1000-0xfffff'
         if val < 0x200000:
-            return '.data'
+            return '0x100000-0x1fffff'
         if val < 0x300000:
-            return '.rdata'
+            return '0x200000-0x2fffff'
         if val < 0x400000:
-            return '.bss'
-        return '.other'
+            return '0x300000-0x3fffff'
+        return 'above_0x400000'
 
     def _compress_xref_string(self, text: str, max_items: int) -> str:
         xref_re = re.compile(

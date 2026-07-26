@@ -824,29 +824,42 @@ class BlackboardStore:
         """
         Return highest-priority unexplored addresses.
 
-        Priority score = confidence * category_boost * dependency_factor * time_decay
-          * (1 + xref_boost)
+        The score starts at the entry's confidence and is multiplied by, in
+        order: a priority term (``0.5 + priority``), exponential age decay
+        whose half-life is derived from the observed confidence spread and
+        clamped to 5-45 days, a dependency factor (1.25 when the blocker is
+        resolved, 0.35 while it is still open), a category prior formed from
+        the median confidence of that category relative to the overall median
+        and clamped to 0.5-1.6, and adaptive xref/entropy multipliers taken
+        from the current quantiles rather than fixed steps.
 
-        Time decay: score *= exp(-age_days * 0.05)  — halves every ~14 days
-        Xref boost: +0.1 per 10 callers (capped at +0.5)
-        Dependency: blocked entries get 0.3x, satisfied deps get 1.5x
+        The coefficients are hand-tuned, not calibrated against outcomes. The
+        quantile inputs adapt to the workspace; the constants around them do
+        not.
 
         When the blackboard has < 5 entries with addresses, seeds from
         xref-ranked unnamed functions via rpc_fn (if provided).
+
+        Sets ``last_query_applied``/``last_query_error`` so a caller can tell
+        whether a semantic ``query`` reached the ranking.
         """
         import math
 
         embedder = None
         query_vec = None
+        self.last_query_applied = None if not (query and query.strip()) else False
+        self.last_query_error = ""
         if query and query.strip():
             try:
                 embedder = self._get_embedder()
-                if embedder is not None:
-                    query_vec = embedder.embed_vector(query)
-                    if query_vec is None:
-                        raise RuntimeError("embedding unavailable")
-            except Exception:
-                pass
+                if embedder is None:
+                    raise RuntimeError("embedder unavailable")
+                query_vec = embedder.embed_vector(query)
+                if query_vec is None:
+                    raise RuntimeError("embedder returned no vector")
+                self.last_query_applied = True
+            except Exception as e:
+                self.last_query_error = str(e)[:200]
 
         with closing(self._conn()) as conn:
             rows = conn.execute("""
@@ -1311,12 +1324,20 @@ class BlackboardStore:
         }
 
     def prune(self, max_entries: int = 1000, min_q_value: float = 0.0, older_than_days: int = 0) -> dict:
+        """Drop the least valuable entries down to ``max_entries``.
+
+        Ranks by ``confidence``. The legacy ``q_value`` column is written once
+        at insert as a copy of confidence and never updated, so filtering or
+        ordering by it ranked every entry by a constant. ``min_q_value`` is
+        kept as the parameter name for compatibility and is applied to
+        confidence.
+        """
         with closing(self._conn()) as conn:
             total = conn.execute("SELECT COUNT(*) FROM blackboard").fetchone()[0]
             conditions = ["1=1"]
             params: list = []
             if min_q_value > 0:
-                conditions.append("q_value < ?")
+                conditions.append("confidence < ?")
                 params.append(min_q_value)
             if older_than_days > 0:
                 conditions.append("updated_at < ?")
@@ -1325,7 +1346,7 @@ class BlackboardStore:
             to_delete = max(0, total - max_entries)
             if to_delete > 0:
                 ids = [r[0] for r in conn.execute(
-                    f"SELECT id FROM blackboard {where} ORDER BY q_value ASC, updated_at ASC LIMIT ?",
+                    f"SELECT id FROM blackboard {where} ORDER BY confidence ASC, updated_at ASC LIMIT ?",
                     (*params, to_delete),
                 ).fetchall()]
                 for eid in ids:

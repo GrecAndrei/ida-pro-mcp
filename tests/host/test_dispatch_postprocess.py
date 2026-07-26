@@ -1,8 +1,13 @@
-"""Integration tests for post-processing in the dispatch pipeline.
+"""Unit tests for the post-processing helpers used by tool dispatch.
 
-Tests the flow through _execute_tool: PP param extraction, next_token
-continuation, and _cache_post_process_next. Uses a mock harness that
-extends ServerArgsMixin + ServerDispatchMixin with a mocked call_tool.
+These cover the real ``extract_post_process_params``, ``has_post_process``,
+``apply_post_processing``, ``_handle_next_continuation`` and
+``_cache_post_process_next``, wired together by ``_Harness._simulated_dispatch``.
+
+That harness is a stand-in for the ordering production uses, not the
+production path: ``ServerDispatchMixin._execute_tool_inner`` is ~350 lines
+with policy, ownership, truncation and RPC stages, and is NOT exercised
+here. Do not read a pass as cover for the dispatch pipeline itself.
 """
 
 from __future__ import annotations
@@ -46,8 +51,12 @@ class _Harness(ServerArgsMixin, ServerDispatchMixin):
         import copy
         return copy.deepcopy(self._source_payload)
 
-    def _execute_tool_inner(self, tool_name, original_tool_name, args):
-        """Simplified inner dispatch that exercises PP extraction."""
+    def _simulated_dispatch(self, tool_name, original_tool_name, args):
+        """Reproduce only the PP ordering of production dispatch.
+
+        Deliberately not named _execute_tool_inner: overriding the production
+        name made these read as tests of the real dispatcher.
+        """
         from ida_pro_mcp.host.server.postprocess import apply_post_processing, has_post_process
 
         args = self._normalize_tool_call_args(tool_name, args)
@@ -122,7 +131,7 @@ class TestPPExtraction:
             return h._source_payload
 
         h.call_tool = capture_call
-        h._execute_tool_inner("search", "search", {"action": "find", "pattern": "recv", "grep": "memcpy", "limit": 3})
+        h._simulated_dispatch("search", "search", {"action": "find", "pattern": "recv", "grep": "memcpy", "limit": 3})
         assert "grep" not in captured
         assert "limit" not in captured
 
@@ -134,7 +143,7 @@ class TestPPExtraction:
 class TestDispatchIntegration:
     def test_grep_filters_results(self):
         h = _make(_search_payload(10))
-        result = h._execute_tool_inner("search", "search", {
+        result = h._simulated_dispatch("search", "search", {
             "action": "find", "grep": "crypto"
         })
         assert result["_count"] == 5
@@ -142,14 +151,14 @@ class TestDispatchIntegration:
 
     def test_head_slices_results(self):
         h = _make(_search_payload(10))
-        result = h._execute_tool_inner("search", "search", {
+        result = h._simulated_dispatch("search", "search", {
             "action": "find", "head": 3
         })
         assert result["_count"] == 3
 
     def test_limit_with_continuation(self):
         h = _make(_search_payload(10))
-        result = h._execute_tool_inner("search", "search", {
+        result = h._simulated_dispatch("search", "search", {
             "action": "find", "limit": 3
         })
         assert result["_count"] == 3
@@ -157,7 +166,7 @@ class TestDispatchIntegration:
 
     def test_next_token_continuation(self):
         h = _make(_search_payload(10))
-        first = h._execute_tool_inner("search", "search", {
+        first = h._simulated_dispatch("search", "search", {
             "action": "find", "limit": 3
         })
         token = first["next_token"]
@@ -173,7 +182,7 @@ class TestDispatchIntegration:
 
     def test_pick_projects_fields(self):
         h = _make(_search_payload(5))
-        result = h._execute_tool_inner("search", "search", {
+        result = h._simulated_dispatch("search", "search", {
             "action": "find", "pick": ["ok", "matches"]
         })
         assert "ok" in result
@@ -187,7 +196,7 @@ class TestDispatchIntegration:
             "strings": ["x", "y"],
         }
         h = _make(payload)
-        result = h._execute_tool_inner("data", "data", {
+        result = h._simulated_dispatch("data", "data", {
             "action": "functions", "grep": "a", "field": "functions"
         })
         assert result["_count"] == 1
@@ -195,7 +204,7 @@ class TestDispatchIntegration:
 
     def test_error_result_not_post_processed(self):
         h = _make(make_error(MCPError.NOT_FOUND, "not found"))
-        result = h._execute_tool_inner("search", "search", {
+        result = h._simulated_dispatch("search", "search", {
             "action": "find", "grep": "x"
         })
         # Error results pass through without PP metadata

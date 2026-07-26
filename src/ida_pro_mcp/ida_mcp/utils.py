@@ -1,3 +1,16 @@
+"""Shared IDA SDK helpers.
+
+Portions of this module (several of the ``get_*`` accessors and the
+xref/string/constant extraction helpers) derive from ida-pro-mcp by
+mrexodia, MIT licensed:
+
+    Copyright (c) 2025 mrexodia
+    https://github.com/mrexodia/ida-pro-mcp
+
+The vendored ``ida_mcp/zeromcp`` package is from the same author and keeps
+its own LICENSE file alongside the sources.
+"""
+
 import json
 import os
 import struct

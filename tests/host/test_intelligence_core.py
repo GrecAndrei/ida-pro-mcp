@@ -94,11 +94,23 @@ class TestAnchorExplain(unittest.TestCase):
         # "memcpy(dest, src, len)" and "strcpy(buf, input)" should rank higher
         self.assertTrue(any("memcpy" in p for p in result))
 
-    def test_no_overlap(self):
+    def test_no_overlap_explains_nothing(self):
+        """An explanation must rest on the match, not pad itself out.
+
+        This previously returned three arbitrary anchor clauses, which the
+        model was shown as the justification for a classification those
+        clauses had nothing to do with.
+        """
         anchor = "aaa; bbb; ccc;"
         query = "zzz yyy xxx"
         result = BehaviorClassifier._anchor_explain(anchor, query)
-        self.assertEqual(len(result), 3)  # Still returns 3 phrases
+        self.assertEqual(result, [])
+
+    def test_only_overlapping_clauses_are_returned(self):
+        anchor = "memcpy(dest, src, len); socket(AF_INET); printf(fmt);"
+        result = BehaviorClassifier._anchor_explain(anchor, "memcpy length")
+        self.assertTrue(all("memcpy" in p for p in result))
+        self.assertTrue(result)
 
 
 class TestAnchors(unittest.TestCase):

@@ -1723,14 +1723,10 @@ class BehaviorClassifier:
             p_tokens = set(re.findall(r"[A-Za-z0-9_]+", ph.lower()))
             scored.append((len(q_tokens.intersection(p_tokens)), ph))
         scored.sort(key=lambda x: x[0], reverse=True)
-        top = [ph for ov, ph in scored if ov > 0][:3]
-        if len(top) < 3:
-            for _, ph in scored:
-                if ph not in top:
-                    top.append(ph)
-                if len(top) >= 3:
-                    break
-        return top[:3]
+        # Only clauses that actually share a token with the query. Padding the
+        # list out to three with arbitrary anchor clauses presented text the
+        # match did not rest on as if it were the justification.
+        return [ph for ov, ph in scored if ov > 0][:3]
 
     @staticmethod
     def _text_tokens(text: str) -> set[str]:

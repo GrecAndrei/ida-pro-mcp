@@ -113,8 +113,9 @@ class FrontierEngine:
     W_ENTROPY   = 0.15   # byte entropy (0-8 scale)
     W_CLUSTER   = 0.15   # cluster has labeled members
 
-    # Contradiction: same cluster, label cosine < this threshold
-    CONTRADICTION_LABEL_SIM = 0.35
+    # Contradiction: two labelled functions in one cluster whose embeddings are
+    # at least this similar but whose categories disagree.
+    CONTRADICTION_EMB_SIM = 0.75
 
     def __init__(self, embeddings_db: str, blackboard_db: str):
         self._emb_db = embeddings_db
@@ -331,6 +332,11 @@ class FrontierEngine:
         embedder = None
         classifier = None
         query_vec = None
+        # Whether the caller's semantic query actually reached the ranking.
+        # Without this the embedder going down silently drops the query and
+        # returns structural ranks that look like semantic ones.
+        self.last_query_applied = None if not (query and query.strip()) else False
+        self.last_query_error = ""
         try:
             from ..intelligence.core import BehaviorClassifier, BgeCodeEmbedder
             embedder = BgeCodeEmbedder()
@@ -338,9 +344,10 @@ class FrontierEngine:
             if query and query.strip():
                 query_vec = embedder.embed_vector(query)
                 if query_vec is None:
-                    raise RuntimeError("embedding unavailable")
-        except Exception:
-            pass
+                    raise RuntimeError("embedder unavailable")
+                self.last_query_applied = True
+        except Exception as e:
+            self.last_query_error = str(e)[:200]
 
         labels = self._load_bb_labels()
         labeled_eas = set(labels.keys())
@@ -532,7 +539,7 @@ class FrontierEngine:
                     # Category mismatch
                     cat_match = lbl_a["category"] == lbl_b["category"]
                     # High embedding similarity but different categories = contradiction candidate
-                    if emb_sim >= 0.75 and not cat_match:
+                    if emb_sim >= self.CONTRADICTION_EMB_SIM and not cat_match:
                         contradictions.append({
                             "cluster": c_id,
                             "addr_a": ea_a,

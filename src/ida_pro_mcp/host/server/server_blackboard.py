@@ -1504,9 +1504,20 @@ class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMix
                 rpc_fn=rpc_fn,
                 query=args.get("query"),
             )
-            return {"ok": True, "targets": targets, "count": len(targets),
-                    "summary": _target_collection_summary(targets),
-                    "note": "Highest-priority open investigation items and unexplored IDA functions."}
+            payload = {"ok": True, "targets": targets, "count": len(targets),
+                       "summary": _target_collection_summary(targets),
+                       "note": "Highest-priority open investigation items and unexplored IDA functions."}
+            if getattr(store, "last_query_applied", None) is False:
+                payload["query_applied"] = False
+                payload["note"] += (
+                    " Semantic query was not applied (embedder unavailable);"
+                    " ranking is structural only."
+                )
+                if getattr(store, "last_query_error", ""):
+                    payload["query_error"] = store.last_query_error
+            elif getattr(store, "last_query_applied", None) is True:
+                payload["query_applied"] = True
+            return payload
         if action == "frontier":
             try:
                 from ..analysis.frontier import FrontierEngine
@@ -1520,7 +1531,25 @@ class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMix
                     limit=_bounded_int(args.get("limit", 20), 20, min_value=1, max_value=200),
                     query=args.get("query"),
                 )
-                return {"ok": True, "frontier": results, "count": len(results), "summary": _frontier_collection_summary(results)}
+                payload = {
+                    "ok": True,
+                    "frontier": results,
+                    "count": len(results),
+                    "summary": _frontier_collection_summary(results),
+                }
+                if getattr(fe, "last_query_applied", None) is False:
+                    # Say so rather than passing structural ranks off as a
+                    # semantic answer to the query that was asked.
+                    payload["query_applied"] = False
+                    payload["note"] = (
+                        "Semantic query was not applied (embedder unavailable); "
+                        "results are ranked structurally only."
+                    )
+                    if getattr(fe, "last_query_error", ""):
+                        payload["query_error"] = fe.last_query_error
+                elif getattr(fe, "last_query_applied", None) is True:
+                    payload["query_applied"] = True
+                return payload
             except Exception as e:
                 return make_error(MCPError.IO_ERROR, f"frontier unavailable: {e}")
         if action == "propagate_labels":
