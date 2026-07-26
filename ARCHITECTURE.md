@@ -28,7 +28,7 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
   - `server_batch.py` — batch macro execution
   - `server_blackboard.py` — blackboard tool integration
   - `server_semantic.py` — semantic search integration
-  - `server_threat_hunt.py` — threat hunt integration
+  - `server_client_state.py` — per-connection state and the session ownership guard
   - `server_workflow.py` / `server_workflow_batch.py` — workflow orchestration
   - `server_wiki.py` — wiki tool integration
   - `resources.py` — `ida://` MCP resource definitions and `ResourceResolver`
@@ -36,7 +36,6 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
   - `session_skills.py` / `session_skills_bootstrap.py` — session-level skills and bootstrap mixin
 
 - `src/ida_pro_mcp/host/analysis/`
-  - `analysis_engine.py` — AnalysisEngine lifecycle and stage logic
   - `frontier.py` — FrontierEngine (embedding-driven analysis guidance)
   - `context_density.py` — ContextDensityOptimizer
   - `patterns.py` — pattern matching helpers
@@ -98,6 +97,11 @@ schema mode. RPC unknown kwargs are rejected (`INVALID_ARGS`), not stripped.
 ## Design Rules
 
 - **Deterministic first**: tool outputs must not depend on hidden mutable state
+- **Policy is operator-owned**: `IDA_MCP_POLICY_MODE` and the policy config
+  file set the baseline. A value arriving over the wire may tighten it, never
+  relax it — see `policy.strictest`
+- **Guards fail closed**: never look a security check up with `getattr`; a
+  missing check must be an import error, not a silent allow
 - **Stable schemas**: prefer additive changes over breaking shape changes
 - **Backward compatibility**: preserve existing aliases and action compatibility
 - **Defensive errors**: return structured errors (`{"error": true, "code": "...", "message": "..."}`) with actionable hints

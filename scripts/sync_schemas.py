@@ -20,9 +20,6 @@ SCHEMAS_PY = PROJECT_ROOT / "src/ida_pro_mcp/host/schemas.py"
 
 # Tools that should NEVER be advertised (ML infra, UI-only, or internal helpers)
 ALWAYS_HIDDEN = {
-    "colorize",      # IDA UI highlight only, no analysis value to LLM
-    "turboquant",    # Embedding quantization infrastructure
-    "trace",         # Raw trace get/clear — use trace_analysis instead
     "plugins",       # IDA plugin management, not RE analysis
     "cybercane",     # exports as "governance" — already listed under that name
     "_common",       # Not a tool

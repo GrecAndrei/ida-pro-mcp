@@ -2,6 +2,28 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## Unreleased — dead-code cut + host safety fixes
+
+### Cuts
+Roughly 6.9K lines removed. None of it was reachable from any client.
+- **Removed the analysis-engine cluster** (`analysis_engine.py`, `analysis_engine_kg.py`, `gap_engine.py`, `narrative_engine.py`, `analysis_proposal_store.py`). `AnalysisEngine` was never instantiated — `_analysis_engines` was declared and never written to. With it go the `ida://proposals` resource and the `blackboard` `accept_proposal`/`reject_proposal` actions, which could only ever return "no analysis engine running". `accept_proposal` also called `_apply_proposal`, which is not defined anywhere.
+- **Removed `server_threat_hunt.py` and `yara_hunt.py`** — no importers, absent from `TOOLS`, `_TOOL_ACTIONS`, and `schemas_data.py`, so no client could reach them. `threat_corpus` and `intelligence/sources/` are kept: the installer populates them for FindCrypt and the taint signatures.
+- **Removed `mbagcn_engine.py`** — re-exported by `services.py`, imported from there by nothing. It also contained no GCN: no message passing, no learned weights, and a "Johnson-Lindenstrauss projection" that mapped 96 dimensions up to 4096.
+- **Removed `.test-registry.json` and `scripts/test_registry_check.py`** — the magic-header test ceremony `AGENTS.md` forbids. No test carried the header and nothing ran the checker.
+- **Removed three test files** that asserted against production *source text* (`test_send_rpc_with_retry.py`), against logic redefined inside the test (`test_dispatch_postprocess.py`'s shadow `_execute_tool_inner`), or against nothing from the project at all (`test_phase_gates_optin.py`).
+
+### Fixed — safety
+- **Policy could be switched off by request.** `session(action='create')` accepted an undeclared `policy_mode`, session mode outranked the operator's env/config setting, and `("session","create")` classifies as a read — so one unacknowledged call disabled the policy engine, blackboard gate, and phase gate for the session. The operator baseline now wins and a session may only tighten it (`policy.strictest`); the create argument is gone.
+- **Ownership checks could fail open.** Three mixins reached `_ensure_client_owns_session` through `getattr(self, ..., None)`, skipping it on any object that had not inherited it, while `server_dispatch` called it directly and raised `AttributeError`. The check now lives on `ServerClientStateMixin` and is inherited everywhere.
+- **`session(action='health')` could crash.** It iterated `session_runtimes` without `_runtime_lock`, so a concurrent teardown raised `RuntimeError` from the call meant to report runtime state.
+- **A failed kill reported success.** `session(action='kill')` returned `{"ok": true}` even when the process survived SIGTERM and SIGKILL. It now returns a structured error with the pid. The post-SIGTERM wait no longer swallows non-timeout errors.
+- **Ownership leases had a TOCTOU window.** The lease was created empty and written afterwards; a claimer reading that window saw no owner, removed the file, and both processes believed they held the IDB. Leases are now published by hard-linking a fully written temp file.
+- **Confidence decay defeated itself.** `decay_stale_confidence` wrote `updated_at`, making a decayed entry the most recently updated row in every `ORDER BY updated_at DESC` listing and resetting its own age so it could never decay twice. It now records `decayed_at` (additive column) and measures elapsed time from the later of the two.
+
+### Fixed — CI
+- **`pytest` was red on master** (8 failures). Four came from `_ensure_client_owns_session` drift, four from `ida_mcp.rpc` importing the vendored `zeromcp` as a top-level module, which fails outside IDA's flat `sys.path`. Shared SDK stubs also gained the `ida_kernwin`/`idaapi` sync constants that `ida_mcp.sync` reads at import time.
+- Added `tests/host/test_safety_invariants.py`. Each fix above was mutation-tested: reverting it fails its test.
+
 ## Unreleased — search quality + bindiff/export
 
 ### Search

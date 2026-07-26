@@ -44,7 +44,6 @@ HOST_TOOL_ACTIONS = {
     "batch": ["(pass calls array)"],
     "truncation": ["continue"],
     "bookmarks": ["add","list","delete","update","clear","find","export"],
-    "query": ["data","search","idb","code","types","imports_deep","symbols","patterns", "nl", "nl_batch"],
     "wiki": ["list_topics","read","search","semantic_search","index","sections","suggest"],
     "blackboard": [
         "policy_set", "policy_status", "policy_check", "phase_status", "phase_set", "phase_tick",

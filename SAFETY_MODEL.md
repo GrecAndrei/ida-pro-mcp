@@ -108,6 +108,35 @@ Outcome: catches safety regressions before release.
 
 Outcome: lowers accidental disclosure risk; honest about maturity.
 
+### 11) Policy mode is operator-owned
+
+- The baseline comes from `IDA_MCP_POLICY_MODE`, then `~/.config/ida-pro-mcp/policy.json`, then `assist`.
+- A session-level mode may only *tighten* that baseline (`policy.strictest`).
+- `session(action='create')` no longer accepts a `policy_mode` argument. It previously did, undeclared by any schema, while classifying as a read — so one unacknowledged call could set `mode=off` for the session.
+
+Outcome: the policy engine cannot be disabled by a request.
+
+### 12) Session ownership checks cannot fail open
+
+- `_ensure_client_owns_session` lives on `ServerClientStateMixin`, which every mixin performing the check inherits.
+- Call sites invoke it directly. Looking it up with `getattr(..., None)` previously let the check be skipped on any object that had not inherited it.
+
+Outcome: a cross-client session access is always rejected, not conditionally.
+
+### 13) Runtime ownership leases are published atomically
+
+- A lease is written to a temporary file and hard-linked into place.
+- Creating the lease with `O_CREAT|O_EXCL` and writing afterwards made it briefly readable while empty; a concurrent claimer then saw no owner, removed it, and both processes believed they held the IDB.
+
+Outcome: exclusive IDB ownership is actually exclusive.
+
+### 14) Failed process termination is reported as failure
+
+- `session(action='kill')` returns a structured error, with the pid, when the process survived SIGTERM and SIGKILL.
+- It previously returned `{"ok": true}` regardless, implying the IDB lock had been released when it had not.
+
+Outcome: callers do not reopen an IDB that is still locked.
+
 ## Operational Safety Guidance
 
 - Prefer least-privilege runtime environments for host and IDA.
