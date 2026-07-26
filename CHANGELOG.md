@@ -10,7 +10,11 @@ Roughly 6.9K lines removed. None of it was reachable from any client.
 - **Removed `server_threat_hunt.py` and `yara_hunt.py`** — no importers, absent from `TOOLS`, `_TOOL_ACTIONS`, and `schemas_data.py`, so no client could reach them. `threat_corpus` and `intelligence/sources/` are kept: the installer populates them for FindCrypt and the taint signatures.
 - **Removed `mbagcn_engine.py`** — re-exported by `services.py`, imported from there by nothing. It also contained no GCN: no message passing, no learned weights, and a "Johnson-Lindenstrauss projection" that mapped 96 dimensions up to 4096.
 - **Removed `.test-registry.json` and `scripts/test_registry_check.py`** — the magic-header test ceremony `AGENTS.md` forbids. No test carried the header and nothing ran the checker.
-- **Removed three test files** that asserted against production *source text* (`test_send_rpc_with_retry.py`), against logic redefined inside the test (`test_dispatch_postprocess.py`'s shadow `_execute_tool_inner`), or against nothing from the project at all (`test_phase_gates_optin.py`).
+- **Removed three test files**: `test_send_rpc_with_retry.py` (all 7 tests `read_text()` the production source and grep for substrings, never executing `_send_rpc_with_retry`), `test_phase_gates_optin.py` (imports nothing from the project; its 8 tests assert against gate logic written inline, so deleting the production module leaves them green), and `test_analysis_engine.py` (covered the deleted engine).
+
+### Known gaps
+- `tests/host/test_dispatch_postprocess.py` still defines its own 22-line `_execute_tool_inner`, shadowing the 350-line production one its docstring claims to exercise. Left in place rather than deleted, but it does not test what it says it tests.
+- Roughly 26K lines of IDA tool modules stay registered but hidden from `tools/list`, so no client can discover them. Promote or cut is still an open decision.
 
 ### Fixed — safety
 - **Policy could be switched off by request.** `session(action='create')` accepted an undeclared `policy_mode`, session mode outranked the operator's env/config setting, and `("session","create")` classifies as a read — so one unacknowledged call disabled the policy engine, blackboard gate, and phase gate for the session. The operator baseline now wins and a session may only tighten it (`policy.strictest`); the create argument is gone.
