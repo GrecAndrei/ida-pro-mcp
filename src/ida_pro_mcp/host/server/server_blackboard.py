@@ -1020,7 +1020,7 @@ class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMix
             )
             result["phase"] = self._phase_snapshot(phase_state, store)
             return result
-        strict_guard_actions = {"proposal_accept", "trace_run", "accept_proposal"}
+        strict_guard_actions = {"proposal_accept", "trace_run"}
         current_phase = str((phase_state or {}).get("phase") or "scout")
         if self._bb_policy_enforced_for_phase(policy_state, current_phase) and action in strict_guard_actions:
             check = self._bb_policy_check(policy_state)
@@ -1620,44 +1620,6 @@ class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMix
         if action == "attention_policy_upsert":
             return {"ok": True, "action": "attention_policy_upsert",
                     "note": "attention_kernel replaced by intelligence.py"}
-        if action in ("accept_proposal", "reject_proposal"):
-            sid = self.current_session.session_id if self.current_session else ""
-            engine = self._analysis_engines.get(sid)
-            if not engine:
-                return make_error(MCPError.NOT_FOUND, "No analysis engine running for current session")
-            pid = str(args.get("proposal_id") or "").strip()
-            if not pid:
-                return make_error(MCPError.INVALID_PARAMS, "proposal_id required")
-            if action == "accept_proposal":
-                scope = str(args.get("scope") or "all").strip()
-                selected_ids = args.get("selected_ids") or []
-                result = engine.proposals.accept(pid, scope=scope, selected_ids=selected_ids)
-                if result is None:
-                    return make_error(MCPError.NOT_FOUND, f"Proposal '{pid}' not found or already processed")
-                # Apply accepted items based on proposal type
-                applied = self._apply_proposal(result, engine)
-                self._send_notification({
-                    "jsonrpc": "2.0",
-                    "method": "notifications/resources/updated",
-                    "params": {"uri": "ida://state"},
-                })
-                self._send_notification({
-                    "jsonrpc": "2.0",
-                    "method": "notifications/resources/updated",
-                    "params": {"uri": "ida://proposals"},
-                })
-                return {"ok": True, "proposal_id": pid, "accepted_items": len(result.get("accepted_items", [])), "applied": applied}
-            else:
-                bb_path = self._session_blackboard_path(sid=sid)
-                ok = engine.proposals.reject(pid, bb_path=bb_path)
-                if not ok:
-                    return make_error(MCPError.NOT_FOUND, f"Proposal '{pid}' not found or already processed")
-                self._send_notification({
-                    "jsonrpc": "2.0",
-                    "method": "notifications/resources/updated",
-                    "params": {"uri": "ida://proposals"},
-                })
-                return {"ok": True, "proposal_id": pid}
         return make_error(
             MCPError.ACTION_NOT_FOUND,
             f"Unsupported blackboard action: '{action}'",

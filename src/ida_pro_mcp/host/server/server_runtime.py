@@ -2353,22 +2353,9 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 name=f"semantic-reuse-{session_id}",
             ).start()
 
-    def _stop_analysis_engine(self, sid: str, join_timeout: float = 2.0) -> None:
-            engine = getattr(self, "_analysis_engines", {}).pop(sid, None)
-            if engine is None:
-                return
-            try:
-                engine.stop(join_timeout=join_timeout)
-            except TypeError:
-                with contextlib.suppress(Exception):
-                    engine.stop()
-            except Exception:
-                pass
-
     def _cleanup_runtime(self, sid):
             self._stop_idle_index_worker(sid, join_timeout=0.5)
             self._stop_analysis_watchdog(sid, join_timeout=0.5)
-            self._stop_analysis_engine(sid)
             self._session_last_activity.pop(sid, None)
             self._session_inflight_calls.pop(sid, None)
             with self._runtime_lock:

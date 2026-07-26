@@ -16,14 +16,13 @@ Sources:
   - URLhaus malicious URL feed (abuse.ch)
 
 The parsed corpus is cached as per-source JSON files under
-CACHE_DIR/corpus/. Lazy-loaded singleton on first use; can be rebuilt
-on demand via ``threat_hunt(action="load_threat_taxonomy", rebuild=True)``.
+CACHE_DIR/corpus/. Lazy-loaded singleton on first use; the installer
+populates it via ``bron_corpus.download_bron_corpus``.
 
 The corpus is consumed by:
-  - ``threat_hunt(action="classify_threat")`` — match text against corpus
-  - ``threat_hunt(action="run")`` — auto-enriches findings with CWE/ATT&CK/LOLBAS
   - ``taint`` module signature patterns
   - ``SecBertStaticEmbedder`` corpus selection
+  - FindCrypt crypto signature extraction
 """
 
 from __future__ import annotations

@@ -95,7 +95,7 @@ def _field_test_value(field: str) -> str:
 
 
 def _iter_target_tools(host) -> list[str]:
-    return ["threat_hunt", "search", "session", "code"]
+    return ["search", "session", "code"]
 
 
 def generate_variants(seed: int, max_cases: int) -> dict[str, Any]:
@@ -249,7 +249,6 @@ TEST_ARGS = {
     "misc": {"action": "health"},
     "project": {"action": "list_recent"},
     "governance": {"action": "stats"},
-    "threat_hunt": {"action": "quick"},
     "annotation": {"action": "auto_comment", "addr": "0x140001000", "dry_run": True},
     "batch": {"calls": ["data:functions"]},
     "string_ops": {"action": "find_urls", "limit": 1},
@@ -257,9 +256,7 @@ TEST_ARGS = {
     "turboquant": {"action": "stats"},
     "bridgerag": {"action": "stats"},
     "blackboard": {"action": "list"},
-    "mbagcn": {"action": "stats"},
     "cfg_analysis": {"action": "complexity", "addr": "0x140001000"},
-    "yara_hunt": {"action": "list_rules"},
     "deobfuscate": {"action": "detect_encoding"},
     "crypto_id": {"action": "identify"},
     "summarize": {"action": "binary"},

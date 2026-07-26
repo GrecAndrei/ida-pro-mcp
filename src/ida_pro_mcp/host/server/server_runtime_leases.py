@@ -323,10 +323,6 @@ class ServerRuntimeLeasesMixin:
                     self.assembler.stop()
             except Exception as e:
                 log_rpc(f"Failed to stop intelligence embedder: {e}")
-            # Stop all analysis engines
-            for sid in list(getattr(self, "_analysis_engines", {}).keys()):
-                with contextlib.suppress(Exception):
-                    self._stop_analysis_engine(sid)
             self._cleanup_all_runtimes()
             # Stop usage intelligence
             if getattr(self, "_usage_intel", None):

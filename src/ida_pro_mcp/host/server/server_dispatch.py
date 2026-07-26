@@ -14,7 +14,6 @@ from ida_pro_mcp import __version__
 
 from ..config import _bounded_int, _coerce_bool, _is_writable_dir, log_rpc
 from ..errors import MCPError, is_error_result, make_error
-from .server_client_state import ServerClientStateMixin
 from ..policy import PolicyDecision, build_audit_record, evaluate_policy
 from ..schemas import (
     ADVERTISED_TOOLS,
@@ -26,6 +25,7 @@ from ..schemas import (
 )
 from .postprocess import apply_post_processing, extract_post_process_params, has_post_process
 from .rpc_args import prepare_rpc_args
+from .server_client_state import ServerClientStateMixin
 from .server_response import truncate_response
 
 # Actions that legitimately walk the IDB at scale (full-program scans,

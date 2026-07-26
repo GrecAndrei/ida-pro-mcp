@@ -61,7 +61,6 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "start_crawler", "stop_crawler", "crawler_status",
         "accept", "reject", "add_evidence", "calibrate", "decay",
         "campaign_summary", "workspace_brief", "auto_tag_propagate",
-        "accept_proposal", "reject_proposal",
         "add_system", "add_struct", "add_gap", "fill_gap",
         "add_state_machine", "add_peripheral", "add_attack_surface",
         "kg_summary", "kg_systems", "kg_gaps", "kg_structs",

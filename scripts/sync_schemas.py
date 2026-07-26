@@ -21,7 +21,6 @@ SCHEMAS_PY = PROJECT_ROOT / "src/ida_pro_mcp/host/schemas.py"
 # Tools that should NEVER be advertised (ML infra, UI-only, or internal helpers)
 ALWAYS_HIDDEN = {
     "colorize",      # IDA UI highlight only, no analysis value to LLM
-    "mbagcn",        # GCN embedding infrastructure
     "turboquant",    # Embedding quantization infrastructure
     "trace",         # Raw trace get/clear — use trace_analysis instead
     "plugins",       # IDA plugin management, not RE analysis
@@ -38,7 +37,7 @@ ALWAYS_HIDDEN = {
 # Host-side tools registered in server.py — not in tools/ dir, always keep advertised
 HOST_SIDE_TOOLS = {
     "session", "truncation", "bookmarks", "batch", "wiki",
-    "search", "threat_hunt", "predictor", "workflow",
+    "search", "predictor", "workflow",
 }
 
 # cybercane.py exports the function as "governance" — handle separately

@@ -74,7 +74,7 @@ class TestToolModulesExist:
         # Host-side tools with no IDA module
         host_only = {
             "session", "truncation", "bookmarks", "background", "workflow",
-            "multi_session", "threat_hunt",
+            "multi_session",
         }
         # Module map: tool name -> module file name (read directly from source)
         module_map = {}

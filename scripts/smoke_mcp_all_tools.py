@@ -115,13 +115,11 @@ CURATED: dict[str, tuple[str, dict]] = {
     "summarize":      ("binary",        {}),
     "symbols":        ("status",        {}),
     "taint":          ("sources",       {}),
-    "threat_hunt":    ("findings",       {}),
     "trace_analysis": ("get",           {}),
     "truncation":     ("continue",      {"token": "deadbeef"}),
     "types":          ("list",          {}),
     "wiki":           ("list_topics",   {}),
     "workflow":       ("catalog",       {}),
-    "yara_hunt":      ("list_rules",    {}),
 }
 
 # Tools whose only meaningful actions are lifecycle/meta and would corrupt the

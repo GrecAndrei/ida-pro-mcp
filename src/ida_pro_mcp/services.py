@@ -8,15 +8,12 @@ can change freely — only this file needs updating.
 from __future__ import annotations
 
 # --- Host server infrastructure -------------------------------------------
-from ida_pro_mcp.host.analysis.analysis_engine import AnalysisEngine
 from ida_pro_mcp.host.analysis.arch_profile import (
     infer_binary_arch_profile,
     normalize_arch_options,
 )
 from ida_pro_mcp.host.analysis.context_density import ContextDensityOptimizer
 from ida_pro_mcp.host.analysis.frontier import FrontierEngine
-from ida_pro_mcp.host.analysis.gap_engine import GapEngine
-from ida_pro_mcp.host.analysis.narrative_engine import NarrativeEngine
 from ida_pro_mcp.host.analysis.patterns import compile_smart_pattern, smart_match
 from ida_pro_mcp.host.auto_nudge import get_reroute
 from ida_pro_mcp.host.batch_manager import BatchManager, BatchTask
@@ -51,15 +48,6 @@ from ida_pro_mcp.host.intelligence.helpers import (
     quantile,
 )
 from ida_pro_mcp.host.intelligence.usage import UsageIntelligence
-from ida_pro_mcp.host.mbagcn_engine import (
-    CFGExtractor,
-    GraphEmbeddingStore,
-    MbaGCNEncoder,
-    default_db_path,
-    default_db_path as mbagcn_default_db_path,
-    is_available,
-    is_available as mbagcn_is_available,
-)
 from ida_pro_mcp.host.policy import (
     PolicyDecision,
     PolicyMode,
@@ -92,7 +80,6 @@ from ida_pro_mcp.host.stores.knowledge_graph import KnowledgeGraph
 from ida_pro_mcp.host.stores.symbol_db import SymbolDB
 
 __all__ = [
-    "AnalysisEngine",
     "BgeCodeEmbedder",
     "BehaviorClassifier",
     "FunctionEmbeddingIndex",
@@ -125,15 +112,6 @@ __all__ = [
     "CACHE_DIR",
     "ContextDensityOptimizer",
     "FrontierEngine",
-    "GapEngine",
-    "NarrativeEngine",
-    "CFGExtractor",
-    "GraphEmbeddingStore",
-    "MbaGCNEncoder",
-    "mbagcn_default_db_path",
-    "mbagcn_is_available",
-    "default_db_path",
-    "is_available",
     "SymbolDB",
     "compile_smart_pattern",
     "smart_match",

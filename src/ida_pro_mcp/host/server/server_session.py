@@ -28,8 +28,8 @@ from ..errors import MCPError, is_error_result, make_error
 from ..intelligence.helpers import parse_str_list
 from ..schemas import TOOL_ACTIONS
 from ..stores.chip_db import find_chip_profile
-from .server_client_state import ServerClientStateMixin
 from ..stores.symbol_db import SymbolDB
+from .server_client_state import ServerClientStateMixin
 from .server_session_bootstrap import ServerSessionBootstrapMixin
 from .tool_registry import register_tool_actions
 
@@ -1119,9 +1119,6 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             resolver = ResourceResolver(
                 self._execute_tool,
                 session_mgr=getattr(self, "session_mgr", None),
-                engine=getattr(self, "_analysis_engines", {}).get(
-                    getattr(self.current_session, "session_id", "") or ""
-                ),
                 bb_path=self._session_blackboard_path(session_obj=self.current_session)
                     if hasattr(self, "_session_blackboard_path") else None,
             )

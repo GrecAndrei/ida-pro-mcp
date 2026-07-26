@@ -341,14 +341,6 @@ ACTION_ARGS: dict[tuple[str, str], dict] = {
     ("protocol", "packet_struct"):  {},
     ("protocol", "magic_numbers"):  {},
     ("protocol", "state_machine"):  {},
-    # threat_hunt
-    ("threat_hunt", "findings"):  {},
-    ("threat_hunt", "quick"):      {},
-    ("threat_hunt", "malware"):    {},
-    ("threat_hunt", "vuln"):       {},
-    ("threat_hunt", "tracing"):    {},
-    ("threat_hunt", "run"):        {"profile": "quick", "limit": 3},
-    ("threat_hunt", "deep"):      {},
     # trace_analysis
     ("trace_analysis", "get"):               {},
     ("trace_analysis", "set_options"):       {},
@@ -565,9 +557,6 @@ ACTION_ARGS: dict[tuple[str, str], dict] = {
     ("workflow", "audit_plan"):   {"planned_calls": []},
     ("workflow", "prioritize"):   {"planned_calls": []},
     ("workflow", "compose"):       {"workflow_actions": ["triage_fast"]},
-    # yara_hunt
-    ("yara_hunt", "list_rules"):  {},
-    ("yara_hunt", "compile"):     {"rules": "rule x { strings: $a = \"deadbeef\" condition: $a }"},
     # governance
     ("governance", "list_rules"): {},
     ("governance", "stats"):      {},
@@ -660,8 +649,6 @@ SKIP_ACTIONS: set[tuple[str, str]] = {
     ("trace_analysis", "deobfuscate_emulate"),
     ("patterns", "apply_sig"),
     ("history", "snapshot"),  # mutates IDB history; keep list/diff only
-    ("yara_hunt", "scan"), ("yara_hunt", "match_context"),
-    ("yara_hunt", "extract_strings"), ("yara_hunt", "xref_matches"),
     ("governance", "redact"),
     ("hooks", "generate_frida"), ("hooks", "generate_detours"), ("hooks", "inline_hooks"),
     ("firmware_view", "smart_carve"), ("firmware_view", "carve_plan"),
@@ -681,8 +668,7 @@ SKIP_ACTIONS: set[tuple[str, str]] = {
     ("blackboard", "trace_ingest"), ("blackboard", "trace_run"),
     ("blackboard", "trace_status"), ("blackboard", "proposal_create"),
     ("blackboard", "proposal_list"), ("blackboard", "proposal_accept"),
-    ("blackboard", "proposal_reject"), ("blackboard", "accept_proposal"),
-    ("blackboard", "reject_proposal"), ("blackboard", "decision_card"),
+    ("blackboard", "proposal_reject"), ("blackboard", "decision_card"),
     ("blackboard", "working_set"), ("blackboard", "state_health"),
     ("blackboard", "notes_export"), ("blackboard", "notes_import"),
     ("blackboard", "campaign_summary"), ("blackboard", "auto_tag_propagate"),

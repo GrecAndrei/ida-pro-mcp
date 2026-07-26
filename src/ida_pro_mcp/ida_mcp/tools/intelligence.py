@@ -2,7 +2,7 @@
 similarity search, and evidence-card production.
 
 Extracted from `agent.py` in the dedup pass (commit series: shim removal,
-mbagcn fold, comment_mgr merge, firmware_bootstrap fold, **intelligence
+comment_mgr merge, firmware_bootstrap fold, **intelligence
 extraction**). The 14 actions previously hung off `agent` now live here
 because they have a distinct operational identity (embedder/classifier
 lifecycle) and

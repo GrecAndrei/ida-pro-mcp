@@ -56,7 +56,6 @@ HOST_TOOL_ACTIONS = {
         "frontier", "coverage", "propagate_labels",
         "start_crawler","stop_crawler","crawler_status","accept","reject",
         "add_evidence","calibrate","campaign_summary","auto_tag_propagate",
-        "accept_proposal","reject_proposal",
         # KG write
         "add_system","add_struct","add_gap","fill_gap",
         "add_state_machine","add_peripheral","add_attack_surface",
@@ -84,7 +83,6 @@ HOST_TOOL_ACTIONS = {
         "triage_fast","malware_deep","vuln_audit","patch_review"
     ],
     "project": ["save","close","open","load_binary","list_recent","get_cwd","set_cwd","list_dir","exists","evidence_graph","knowledge_merge","confidence_model","replay_pipeline","hypothesis_tracker","temporal_reasoning","semantic_artifact_diff","ai_governance","knowledge_debt","casefile_export"],
-    "threat_hunt": ["run","malware","vuln","tracing","findings","quick","deep","legacy","load_threat_taxonomy","classify_threat"],
     "llm_helpers": [
         "bootstrap", "guided_analysis", "cheatsheet",
         "context_window","function_digest","binary_digest","explain_address",

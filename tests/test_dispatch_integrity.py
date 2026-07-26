@@ -36,7 +36,7 @@ class TestDispatchHandlers:
         # Host-only tools that must have an explicit dispatch branch.
         host_only = {
             "session", "truncation", "bookmarks", "background", "workflow",
-            "multi_session", "threat_hunt", "wiki", "blackboard",
+            "multi_session", "wiki", "blackboard",
         }
         for tool in schemas_data.ADVERTISED_TOOLS:
             has_handler = f"def _handle_{tool}" in dispatch_source

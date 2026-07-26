@@ -164,7 +164,7 @@ for _cat, _apis in API_CATEGORIES.items():
 
 
 # ============================================================================
-# Dangerous APIs (used by annotation, threat_hunt, search)
+# Dangerous APIs (used by annotation and search)
 # ============================================================================
 
 DANGEROUS_APIS = {

@@ -4,9 +4,8 @@ MCP Resource provider: Exposes IDB data as read-only resources.
 Resources are hierarchical URIs that the LLM can read without calling tools.
 This turns the IDA database into a virtual filesystem.
 
-Supported URIs (67 total):
+Supported URIs (36 total):
   ida://state                       - Complete analysis state (read this first on every turn)
-  ida://proposals                   - Pending engine proposals (rename/annotate/vuln/cross-session)
   ida://meta                        - IDB metadata
   ida://segments                    - All segments
   ida://segments/{name}             - Specific segment
@@ -65,7 +64,6 @@ def invalidate_state_cache() -> None:
 RESOURCE_TEMPLATES = [
     # State (read this first — complete analysis picture)
     "ida://state",
-    "ida://proposals",
     "ida://knowledge",
     "ida://knowledge/systems",
     "ida://knowledge/structs",
@@ -127,7 +125,6 @@ def list_resources() -> list[dict]:
     """Return static resource catalog."""
     return [
         {"uri": "ida://state", "name": "Analysis State — complete picture (read first)", "mimeType": "text/plain"},
-        {"uri": "ida://proposals", "name": "Engine Proposals — pending rename/vuln/cross-session actions", "mimeType": "application/json"},
         {"uri": "ida://knowledge", "name": "Knowledge Graph — systems/structs/gaps/attack surface", "mimeType": "application/json"},
         {"uri": "ida://knowledge/systems", "name": "Identified systems (call-graph clusters)", "mimeType": "application/json"},
         {"uri": "ida://knowledge/structs", "name": "Inferred data structures", "mimeType": "application/json"},
@@ -178,13 +175,12 @@ class ResourceResolver:
     """Resolves ida:// URIs by delegating to tool calls or memory tiers."""
 
     def __init__(self, tool_executor, insight_index=None, global_facts=None,
-                 session_mgr=None, engine=None, bb_path: str = "",
+                 session_mgr=None, bb_path: str = "",
                  usage_intel=None):
         self.tool_executor = tool_executor
         self.insight_index = insight_index
         self.global_facts = global_facts
         self.session_mgr = session_mgr
-        self.engine = engine
         self.bb_path = bb_path
         self.usage_intel = usage_intel  # UsageIntelligence instance
 
@@ -202,8 +198,6 @@ class ResourceResolver:
             return self._read_meta()
         elif domain == "state":
             return self._read_state()
-        elif domain == "proposals":
-            return self._read_proposals()
         elif domain == "knowledge":
             return self._read_knowledge(parts)
         elif domain == "usage":
@@ -377,25 +371,7 @@ class ResourceResolver:
         except Exception:
             state["blackboard"] = {}
 
-        # 4. Engine status + pending proposals
-        if self.engine:
-            try:
-                eng_status = self.engine.status()
-                pending = self.engine.proposals.count_pending()
-                state["engine"] = {
-                    "running": eng_status.get("running"),
-                    "pending_proposals": pending,
-                    "classified_functions": eng_status.get("classified_functions"),
-                }
-                if pending:
-                    state["engine"]["note"] = (
-                        f"{pending} proposal(s) waiting. "
-                        "Read ida://proposals to review."
-                    )
-            except Exception:
-                state["engine"] = {}
-
-        # 5. Session info
+        # 4. Session info
         try:
             if self.session_mgr:
                 active = getattr(self.session_mgr, "active_session_id", None)
@@ -451,7 +427,6 @@ class ResourceResolver:
                         header = _json.dumps({
                             "binary": state.get("binary", {}),
                             "coverage": state.get("coverage", {}),
-                            "engine": state.get("engine", {}),
                             "knowledge_graph": state.get("knowledge_graph", {}),
                         }, separators=(",", ":"))
                         full_text = f"<!-- state:{header} -->\n\n{narrative_text}"
@@ -463,14 +438,10 @@ class ResourceResolver:
         actions = []
         bb_state = state.get("blackboard", {})
         cov = state.get("coverage", {})
-        eng = state.get("engine", {})
         binary = state.get("binary", {})
 
         if binary.get("is_firmware"):
             actions.append("firmware_view(action='triage_snapshot')")
-
-        if eng.get("pending_proposals", 0) > 0:
-            actions.append(f"blackboard(action='list', category='proposal') — {eng['pending_proposals']} pending")
 
         next_targets = bb_state.get("next_targets", [])
         if next_targets:
@@ -539,39 +510,6 @@ class ResourceResolver:
     # ------------------------------------------------------------------
     # Proposals
     # ------------------------------------------------------------------
-
-    def _read_proposals(self) -> dict:
-        """
-        ida://proposals — pending engine proposals.
-
-        Each proposal has a type:
-          rename_batch    — suggest renaming N functions
-          annotation_batch — suggest adding comments
-          hypothesis      — engine believes X about address Y
-          cross_session   — N functions match a previous session
-          vuln            — taint trace found a dangerous sink
-
-        To act: call blackboard(action="accept_proposal", proposal_id=..., scope="all")
-                or    blackboard(action="reject_proposal", proposal_id=...)
-        """
-        if not self.engine:
-            return _make_json_content({
-                "proposals": [],
-                "note": "Analysis engine not running. Start a session to activate it.",
-            })
-        try:
-            proposals = self.engine.proposals.list_pending()
-            return _make_json_content({
-                "count": len(proposals),
-                "proposals": proposals,
-                "note": (
-                    "Call blackboard(action='accept_proposal', proposal_id=ID, scope='all') "
-                    "to apply a proposal, or scope='selected' with selected_ids=[...] for partial. "
-                    "Call blackboard(action='reject_proposal', proposal_id=ID) to dismiss."
-                ),
-            })
-        except Exception as e:
-            return _make_json_content({"error": str(e), "proposals": []})
 
     def _read_knowledge(self, parts: list[str]) -> dict:
         """

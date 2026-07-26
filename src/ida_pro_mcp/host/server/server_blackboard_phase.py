@@ -208,8 +208,8 @@ class ServerBlackboardPhaseMixin:
             if seen_count >= 3:
                 self._phase_transition(state, "prove", "auto: >=3 unique addresses discovered")
         proposal_type = str(args.get("proposal_type") or args.get("type") or "").strip().lower()
-        if action in {"proposal_create", "proposal_accept", "accept_proposal"} and phase in {"scout", "commit"}:
-            if proposal_type in {"rename", "patch"} or action in {"proposal_accept", "accept_proposal"}:
+        if action in {"proposal_create", "proposal_accept"} and phase in {"scout", "commit"}:
+            if proposal_type in {"rename", "patch"} or action in {"proposal_accept"}:
                 self._phase_transition(state, "commit", f"auto: {action} requested")
         if action in {"memory_compile", "phase_finalize"}:
             self._phase_transition(state, "finalize", f"auto: {action} requested")
@@ -219,7 +219,7 @@ class ServerBlackboardPhaseMixin:
         if phase == "scout":
             return None
         if phase == "prove":
-            if action in {"proposal_create", "proposal_accept", "accept_proposal"} and not self._phase_has_prove_receipts(store):
+            if action in {"proposal_create", "proposal_accept"} and not self._phase_has_prove_receipts(store):
                 return make_error(
                     MCPError.INVALID_ARGS,
                     "prove phase requires evidence cards and completed trace tasks before proposal operations",
@@ -241,7 +241,7 @@ class ServerBlackboardPhaseMixin:
                         return make_error(MCPError.INVALID_ARGS, f"commit phase requires strict spec: {err}")
             return None
         if phase == "finalize":
-            if action in {"proposal_create", "proposal_accept", "accept_proposal"}:
+            if action in {"proposal_create", "proposal_accept"}:
                 stats = store.stats() or {}
                 contradicted = int(stats.get("contradicted") or 0)
                 if contradicted > 0:

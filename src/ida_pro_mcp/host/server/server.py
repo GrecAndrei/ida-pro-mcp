@@ -6,14 +6,12 @@ import atexit
 import contextvars
 import json
 import os
-import secrets
 import socket as _socket_mod
 import sys
 import tempfile
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
 from typing import Any
 
 from ida_pro_mcp import __version__
@@ -412,7 +410,6 @@ class IDAMCPServer(
         self._shutdown_requested = False
         self._lease_thread_stop = threading.Event()
         self._lease_thread: threading.Thread | None = None
-        self._analysis_engines: dict[str, Any] = {}  # session_id -> AnalysisEngine
         self._wiki_cache: dict[str, Any] = {
             "root": "",
             "expires": 0.0,
@@ -711,9 +708,6 @@ class IDAMCPServer(
                 insight_index=self._insight_index,
                 global_facts=self._global_facts,
                 session_mgr=self.session_mgr,
-                engine=self._analysis_engines.get(
-                    getattr(self, "current_session", None) or ""
-                ),
                 bb_path=self._session_blackboard_path(session_obj=self.current_session),
                 usage_intel=getattr(self, "_usage_intel", None),
             )
