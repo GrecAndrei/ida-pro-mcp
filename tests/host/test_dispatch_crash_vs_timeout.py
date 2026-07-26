@@ -48,6 +48,9 @@ class _Dispatch(ServerDispatchMixin):
             }
         }
         self._rpc_exc = rpc_exc
+        # A real client owns the session it selected; without this the
+        # ownership guard rejects the call before the RPC path is reached.
+        self._client_request_state().owned_session_ids.add("A1B2C3D4")
 
     # --- mocked collaborators -------------------------------------------
     def _resolve_session_from_idb_ref(self, idb_path):

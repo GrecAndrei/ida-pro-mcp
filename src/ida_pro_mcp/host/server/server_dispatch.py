@@ -14,6 +14,7 @@ from ida_pro_mcp import __version__
 
 from ..config import _bounded_int, _coerce_bool, _is_writable_dir, log_rpc
 from ..errors import MCPError, is_error_result, make_error
+from .server_client_state import ServerClientStateMixin
 from ..policy import PolicyDecision, build_audit_record, evaluate_policy
 from ..schemas import (
     ADVERTISED_TOOLS,
@@ -156,7 +157,7 @@ def _long_running_sock_timeout(tool_name: str, rpc_args: dict) -> int:
     return min(candidate, cap)
 
 
-class ServerDispatchMixin:
+class ServerDispatchMixin(ServerClientStateMixin):
     @staticmethod
     def _runtime_alive(runtime: Any) -> bool:
         """Best-effort runtime liveness check for runtime dict records."""

@@ -135,6 +135,20 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
     ):
         mod = sys.modules.setdefault(name, types.ModuleType(name))
         setattr(common, name, mod)
+    # ida_mcp.sync builds its IDASafety enum from these at import time, so any
+    # module that imports a tool transitively needs them present.
+    _base_kernwin = sys.modules["ida_kernwin"]
+    _base_kernwin.MFF_FAST = 0
+    _base_kernwin.MFF_READ = 1
+    _base_kernwin.MFF_WRITE = 2
+    _base_kernwin.execute_sync = lambda fn, flags=0: fn()
+    # Real idaapi re-exports the kernwin sync constants; tools use both names.
+    _base_idaapi = sys.modules["idaapi"]
+    _base_idaapi.get_kernel_version = lambda: "9.2"
+    _base_idaapi.MFF_FAST = 0
+    _base_idaapi.MFF_READ = 1
+    _base_idaapi.MFF_WRITE = 2
+    _base_idaapi.execute_sync = lambda fn, flags=0: fn()
     # Ensure base idc mock has commonly-used SDK functions so that
     # tools work regardless of test ordering (test_packer_detector replaces
     # idautils with a blank module; _isolate_sys_modules restores the

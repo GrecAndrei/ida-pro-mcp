@@ -1,6 +1,9 @@
 from collections.abc import Callable
 
-from zeromcp import McpHttpRequestHandler, McpRpcRegistry, McpServer, McpToolError
+try:
+    from .zeromcp import McpHttpRequestHandler, McpRpcRegistry, McpServer, McpToolError
+except ImportError:  # flat sys.path layout used when IDA loads the plugin by file
+    from zeromcp import McpHttpRequestHandler, McpRpcRegistry, McpServer, McpToolError
 
 MCP_SERVER = McpServer("ida-pro-mcp")
 MCP_UNSAFE: set[str] = set()

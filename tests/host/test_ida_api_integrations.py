@@ -24,6 +24,11 @@ def _make_idaapi():
     mod.get_next_func = lambda ea: mod.BADADDR
     mod.get_idb = lambda: None
     mod.get_inf_structure = lambda: None
+    mod.get_kernel_version = lambda: "9.2"
+    mod.MFF_FAST = 0
+    mod.MFF_READ = 1
+    mod.MFF_WRITE = 2
+    mod.execute_sync = lambda fn, flags=0: fn()
     return mod
 
 

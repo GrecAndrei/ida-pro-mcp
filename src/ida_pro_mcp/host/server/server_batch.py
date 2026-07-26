@@ -11,6 +11,7 @@ from typing import Any
 from ..batch_manager import BatchManager
 from ..errors import MCPError, is_error_result, make_error
 from ..policy import PolicyDecision, evaluate_policy
+from .server_client_state import ServerClientStateMixin
 
 _BACKGROUND_ACTIONS = {
     "submit": "_bg_submit",
@@ -22,7 +23,7 @@ _BACKGROUND_ACTIONS = {
 }
 
 
-class BackgroundMixin:
+class BackgroundMixin(ServerClientStateMixin):
 
     def _bind_background_run(self, run_fn, *, session: Any = None):
         """Preserve submitting-client ownership for ThreadPoolExecutor workers."""
@@ -268,11 +269,9 @@ class BackgroundMixin:
                 MCPError.FILE_NOT_FOUND,
                 f"No session found for idb reference: {idb_ref}",
             )
-        ensure_owned = getattr(self, "_ensure_client_owns_session", None)
-        if callable(ensure_owned):
-            ownership_error = ensure_owned(session)
-            if ownership_error:
-                return ownership_error
+        ownership_error = self._ensure_client_owns_session(session)
+        if ownership_error:
+            return ownership_error
         validation_error = self._validate_semantic_index_scope(args)
         if validation_error:
             return validation_error

@@ -24,6 +24,11 @@ class _IndexHarness(BackgroundMixin):
         self.responses = list(responses or [])
         self.calls = []
         self.metadata = []
+        # A real client owns the sessions it selected; without this the
+        # ownership guard rejects submission before any indexing happens.
+        self._client_request_state().owned_session_ids.update(
+            str(session.session_id) for session in sessions
+        )
 
     def _resolve_session_from_idb_ref(self, ref):
         return next(

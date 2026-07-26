@@ -28,6 +28,7 @@ from ..errors import MCPError, is_error_result, make_error
 from ..intelligence.helpers import parse_str_list
 from ..schemas import TOOL_ACTIONS
 from ..stores.chip_db import find_chip_profile
+from .server_client_state import ServerClientStateMixin
 from ..stores.symbol_db import SymbolDB
 from .server_session_bootstrap import ServerSessionBootstrapMixin
 from .tool_registry import register_tool_actions
@@ -163,7 +164,7 @@ def _substitute_params(obj, params: dict):
     return obj
 
 
-class ServerSessionMixin(ServerSessionBootstrapMixin):
+class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
     @staticmethod
     def _trigger_session_diff(old_idb: str, new_idb: str) -> None:
         import threading
@@ -353,10 +354,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             return make_error(
                 MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
             )
-        ensure = getattr(self, "_ensure_client_owns_session", None)
-        if callable(ensure):
-            return ensure(session)
-        return None
+        return self._ensure_client_owns_session(session)
 
     def _session_action_health(self, args: dict) -> dict:
         return self._handle_session_health(args)
@@ -924,11 +922,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin):
             return make_error(
                 MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
             )
-        ensure_owned = getattr(self, "_ensure_client_owns_session", None)
-        if callable(ensure_owned):
-            ownership_error = ensure_owned(session)
-            if ownership_error:
-                return ownership_error
+        ownership_error = self._ensure_client_owns_session(session)
+        if ownership_error:
+            return ownership_error
 
         self.current_session = session
         new_idb = getattr(session, "idb_path", None)
