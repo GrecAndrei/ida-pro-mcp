@@ -98,10 +98,19 @@ class _HealthHost(ServerDispatchMixin):
     def _resolve_wiki_root(self):
         return ""
 
+    @staticmethod
+    def _runtime_alive(_runtime):
+        # Yield inside the loop so a concurrent writer reliably lands between
+        # iterations. Without this the real liveness check is fast enough that
+        # an unlocked iteration only rarely observes the mutation, and the test
+        # would pass against the unlocked implementation it exists to reject.
+        time.sleep(0.0002)
+        return False
+
 
 def test_session_health_survives_concurrent_runtime_mutation():
     host = _HealthHost()
-    for i in range(64):
+    for i in range(24):
         host.session_runtimes[f"SID{i:04d}"] = {"process": None, "port": 9000 + i}
 
     stop = threading.Event()
@@ -119,7 +128,7 @@ def test_session_health_survives_concurrent_runtime_mutation():
     churner = threading.Thread(target=churn, daemon=True)
     churner.start()
     try:
-        for _ in range(300):
+        for _ in range(8):
             try:
                 payload = host._handle_session_health({"verbose": True})
             except BaseException as e:  # noqa: BLE001 - the point of the test
