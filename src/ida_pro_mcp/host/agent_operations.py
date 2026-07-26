@@ -800,6 +800,43 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         backend_action="update",
     ),
     AgentOperation(
+        name="ida_publish_findings",
+        description="Write confirmed findings into the IDB as repeatable comments and symbols.",
+        category="findings",
+        input_schema=_schema(
+            {
+                "rename": {
+                    "type": "boolean",
+                    "description": "Also rename functions that IDA still auto-named. Never overwrites an existing symbol. Default true.",
+                },
+                "republish": {
+                    "type": "boolean",
+                    "description": "Rewrite findings already published and unchanged since. Default false.",
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "Report what would be written without touching the IDB. Does not need risk_ack.",
+                },
+                "limit": LIMIT,
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+        ),
+        example={"rename": True, "limit": 25, "risk_ack": True},
+        backend_tool="blackboard",
+        backend_action="publish_findings",
+        argument_map={"risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_import_annotations",
+        description="Adopt names and comments already in the IDB as confirmed findings.",
+        category="findings",
+        input_schema=_schema({"limit": LIMIT, "offset": {"type": "integer"}, "idb": IDB}),
+        example={"limit": 100},
+        backend_tool="blackboard",
+        backend_action="import_annotations",
+    ),
+    AgentOperation(
         name="ida_analysis_brief",
         description="Summarize confirmed knowledge, open questions, conflicts, stale claims, and coverage.",
         category="findings",
@@ -1181,6 +1218,10 @@ available.
   claims that need repair. Every candidate states why it was chosen.
 - If `ida_write_finding` returns a `conflict`, two claims about the same thing
   disagree. Resolve it with `ida_update_finding` before building on either.
+- `ida_import_annotations` early in a session adopts names and comments the
+  last analyst left in the IDB, so you inherit their work instead of redoing
+  it. `ida_publish_findings(risk_ack=true)` writes confirmed findings back as
+  comments and symbols; use `dry_run=true` first to see what it would change.
 - If a result is truncated, read `_continue.token` and `_continue.fields`.
   Call `ida_continue(token=...)` when one field is listed; when multiple
   fields are listed, pass the exact selected name as `field=...` (for example

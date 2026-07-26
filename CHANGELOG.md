@@ -25,6 +25,16 @@ The store was write-only in practice. A model recorded findings and then had to 
 - `auto_merge` and `prune` refuse to touch conflicting or stale rows: they are low-confidence precisely because they need attention.
 - Merging a repeat observation now takes the **newest** confidence, not the highest. Restating a claim is not evidence for it, and the old ratchet meant confidence only ever rose.
 
+### Added — the IDB round-trip
+- `ida_publish_findings(risk_ack=true)` writes confirmed, non-stale, non-conflicting findings into the database as repeatable comments, and renames functions IDA still auto-named. The IDB is the artifact an analyst opens; a conclusion that lived only in a side database was a conclusion nobody outside this tool ever saw.
+- It never overwrites a symbol someone else applied — an existing name is either an analyst's own work or a library signature match, and a slug of a finding title is not worth either. Skips are reported with the reason. `dry_run=true` previews without `risk_ack`; a rename that fails still leaves the comment and says so rather than reporting the entry as published. Publishing is idempotent: an entry is written once unless it changes.
+- `ida_import_annotations` adopts existing IDB names and comments as confirmed findings at confidence 0.5, since this tool did not verify them and cannot distinguish an analyst's rename from a FLIRT match. A session inherits whatever the last analyst left behind.
+- Published comments carry an `[mcp:<id>]` marker and the import side skips them, so a publish/import round trip does not turn one claim into a second, independent-looking corroboration of itself.
+- New `data(action="annotations")` on the IDA side. Comments were writable through the tool surface but never readable, so understanding recorded in the IDB was invisible to the host.
+
+### Changed — the brief reads like a case file
+- `ida_analysis_brief` renders Established / Open / Contested / Needs re-checking with a next step chosen from the actual state — reconcile conflicts, re-read stale claims, take an unblocked item, or expand the frontier — instead of emitting counts plus three arrays and raw event rows.
+
 ### Changed — target selection explains itself
 - `ida_next_target` takes `strategy`: `unresolved`, `stale`, `conflict`, `coverage`, `frontier`. Every candidate carries a `reason` string ("12 callers, never examined"; "code at 0x401000 changed since this was recorded").
 - This replaces a six-coefficient blended score — priority term, adaptive half-life, dependency factor, category prior, xref sigmoid, entropy sigmoid — that was never calibrated against whether the suggestion paid off, and that nobody could debug.
@@ -42,7 +52,7 @@ The store was write-only in practice. A model recorded findings and then had to 
 - `auto_tag_propagate` — copied tags from any entry above 0.8 confidence to every other entry at the same address, which manufactures agreement between unrelated claims. Replaced in the action registry by `mark_examined`, `recall`, `conflicts`, and `stale`.
 
 ### Tests
-- `tests/host/test_workspace_memory.py` (30 tests) and `tests/host/test_workspace_recall_injection.py` (16 tests). Conflict preservation, anchor staleness, the confidence ratchet, and the dispatch-path wiring were each mutation-tested: reverting the fix fails its test. The injection suite drives the real `_prepare_response_payload` with the production MRO, so unwiring the hooks fails rather than degrading into a workspace nobody reads.
+- `tests/host/test_workspace_memory.py` (30), `tests/host/test_workspace_recall_injection.py` (16), and `tests/host/test_workspace_idb_roundtrip.py` (20). Conflict preservation, anchor staleness, the confidence ratchet, the dispatch-path wiring, the rename guard, the `risk_ack` gate, the marker skip, and publish idempotence were each mutation-tested: reverting the fix fails its test. The injection suite drives the real `_prepare_response_payload` with the production MRO, so unwiring the hooks fails rather than degrading into a workspace nobody reads.
 
 ## Unreleased — dead-code cut + host safety fixes
 

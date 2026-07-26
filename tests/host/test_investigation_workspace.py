@@ -96,7 +96,7 @@ def test_workspace_brief_tracks_questions_transitions_conflicts_and_activity(tmp
         "stale": 0, "examined": 0,
     }
     assert any(event["event"] == "status:rejected" for event in brief["recent_activity"])
-    assert "Confirmed:" in brief["brief"]
+    assert "Established:" in brief["brief"]
     assert "Length comes from recv buffer" in brief["brief"]
 
 

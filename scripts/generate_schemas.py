@@ -56,6 +56,7 @@ HOST_TOOL_ACTIONS = {
         "start_crawler","stop_crawler","crawler_status","accept","reject",
         "add_evidence","calibrate","campaign_summary",
         "mark_examined","recall","conflicts","stale",
+        "publish_findings","import_annotations",
         # KG write
         "add_system","add_struct","add_gap","fill_gap",
         "add_state_machine","add_peripheral","add_attack_surface",

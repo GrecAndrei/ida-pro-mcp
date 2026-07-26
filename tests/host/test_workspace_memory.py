@@ -155,8 +155,8 @@ def test_conflicts_are_named_in_the_brief_and_drive_the_next_step(store):
     brief = store.workspace_brief()
 
     assert brief["counts"]["conflicts"] == 2
-    assert "Conflicts" in brief["brief"]
-    assert "Next: resolve the conflicts" in brief["brief"]
+    assert "Contested — two claims here cannot both hold" in brief["brief"]
+    assert "Next: reconcile the contested claims" in brief["brief"]
 
 
 def test_repeated_agreement_does_not_ratchet_confidence_upward(store):

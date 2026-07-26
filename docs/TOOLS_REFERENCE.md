@@ -1766,6 +1766,93 @@ Example:
 }
 ```
 
+## `ida_publish_findings`
+
+Write confirmed findings into the IDB as repeatable comments and symbols.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "rename": {
+      "type": "boolean",
+      "description": "Also rename functions that IDA still auto-named. Never overwrites an existing symbol. Default true."
+    },
+    "republish": {
+      "type": "boolean",
+      "description": "Rewrite findings already published and unchanged since. Default false."
+    },
+    "dry_run": {
+      "type": "boolean",
+      "description": "Report what would be written without touching the IDB. Does not need risk_ack."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Maximum result items to return."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_publish_findings",
+  "arguments": {
+    "rename": true,
+    "limit": 25,
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_import_annotations`
+
+Adopt names and comments already in the IDB as confirmed findings.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "limit": {
+      "type": "integer",
+      "description": "Maximum result items to return."
+    },
+    "offset": {
+      "type": "integer"
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_import_annotations",
+  "arguments": {
+    "limit": 100
+  }
+}
+```
+
 ## `ida_analysis_brief`
 
 Summarize confirmed knowledge, open questions, conflicts, stale claims, and coverage.

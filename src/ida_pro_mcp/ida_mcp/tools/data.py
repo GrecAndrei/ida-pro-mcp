@@ -12,8 +12,8 @@ except ImportError:
 @tool
 @idaread
 def data(
-    action: Annotated[Literal["functions", "globals", "strings", "imports", "exports", "lookup", "bulk_query", "capability_matrix", "string_xrefs"],
-                      "Action: functions|globals|strings|imports|exports|lookup|bulk_query|capability_matrix|string_xrefs"],
+    action: Annotated[Literal["functions", "annotations", "globals", "strings", "imports", "exports", "lookup", "bulk_query", "capability_matrix", "string_xrefs"],
+                      "Action: functions|annotations|globals|strings|imports|exports|lookup|bulk_query|capability_matrix|string_xrefs"],
     query: Annotated[Optional[str], "Filter pattern or name/address for lookup (regex/glob/substring/semantic auto-detected)"] = None,
     offset: Annotated[int, "Pagination offset"] = 0,
     count: Annotated[int, "Max results (0=all)"] = 100,
@@ -39,6 +39,11 @@ def data(
         Returns: {functions: "addr  size  name [prototype] [xrefs]\\n...", total, offset, count}
         Tip: setting min_xrefs=3 cuts the long tail of stub functions so callers
         don't pay to paginate thousands of zero-caller entries.
+
+    annotations - List functions carrying recorded understanding: a non-auto name
+        or a comment. The only read path for comments in the tool surface.
+        Params: query (name filter), offset, count
+        Returns: {annotations: [{addr, name, auto_named, comment?, repeatable_comment?}], total}
 
     globals - List global names/variables (non-functions)
         Params: query (name filter), offset, count, include_xrefs
@@ -143,6 +148,47 @@ def data(
             if total == 0:
                 result["warning"] = "No functions found matching query."
             return result
+
+        elif action == "annotations":
+            # Names and comments an analyst (or a previous session) already
+            # applied. This is the only read path for comments: everything
+            # else in the tool surface can write them but not get them back,
+            # so understanding recorded in the IDB was invisible to the host.
+            ann_items: list[dict] = []
+            total = 0
+            _matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
+            for ea in idautils.Functions():
+                name = ida_funcs.get_func_name(ea) or ""
+                auto_named = (
+                    not name
+                    or name.startswith(("sub_", "j_", "loc_", "nullsub_", "unknown_libname_"))
+                )
+                comments = {}
+                for label, repeatable in (("comment", False), ("repeatable_comment", True)):
+                    try:
+                        text = idc.get_func_cmt(ea, repeatable) or ""
+                    except Exception:
+                        text = ""
+                    if text.strip():
+                        comments[label] = text.strip()
+                # A function with an auto name and no comment carries no
+                # recorded understanding; skip it rather than paginate noise.
+                if auto_named and not comments:
+                    continue
+                if _matcher and not _matcher(name):
+                    continue
+                total += 1
+                if total > offset and (count == 0 or len(ann_items) < count):
+                    item = {"addr": hex_ea(ea), "name": name, "auto_named": auto_named}
+                    item.update(comments)
+                    ann_items.append(item)
+            return {
+                "ok": True,
+                "annotations": ann_items,
+                "total": total,
+                "offset": offset,
+                "count": len(ann_items),
+            }
 
         elif action == "globals":
             glob_lines = []

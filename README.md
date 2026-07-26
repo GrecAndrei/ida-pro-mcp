@@ -3,7 +3,7 @@
 Give an LLM agent a working seat at IDA Pro.
 
 This is an [MCP](https://modelcontextprotocol.io) server that exposes IDA Pro's
-analysis to a model as 42 exact-schema operations — decompile, cross-reference,
+analysis to a model as 44 exact-schema operations — decompile, cross-reference,
 search, rename, annotate — plus an investigation workspace so the model's
 conclusions survive across turns instead of living in a context window.
 
@@ -53,6 +53,13 @@ just changed. `ida_next_target(strategy="stale")` lists them.
 **Disagreement is never merged away.** Recording a rejection over a confirmed
 claim keeps both rows and links them as a conflict rather than silently taking
 the higher confidence. `ida_next_target(strategy="conflict")` surfaces them.
+
+**Conclusions land in the IDB, not just here.** `ida_publish_findings` writes
+confirmed findings into the database as repeatable comments and — where IDA
+still auto-named the function — as symbols, so the marked-up IDB is something
+you can open in the GUI without this tool. It never overwrites a name someone
+else applied. `ida_import_annotations` reads existing names and comments back
+as findings, so a session inherits the last analyst's work.
 
 **Next-step suggestions explain themselves.** `ida_next_target` takes a named
 strategy — `unresolved`, `stale`, `conflict`, `coverage`, `frontier` — and every
@@ -122,6 +129,9 @@ python -u -m ida_pro_mcp.host.server
     "address": "0x401a20", "verdict": "boring",
     "note": "CRT string helper, no input handling."}}
 
+// Leave the conclusions in the IDB itself
+{"name": "ida_publish_findings", "arguments": {"dry_run": true}}
+
 // Writes need an acknowledgement
 {"name": "ida_rename", "arguments": {
     "address": "0x401000", "name": "handle_recv", "risk_ack": true}}
@@ -144,6 +154,7 @@ ida_open_binary → ida_session_state → ida_overview → ida_find
 | **Discovery** | `overview`, `find`, `list_functions`, `list_imports`, `list_strings`, `semantic_search`, `index_functions`, `index_status`, `cancel_index` |
 | **Code** | `decompile`, `disassemble`, `xrefs_to`, `callers`, `callees` |
 | **Findings** | `write_finding`, `mark_examined`, `update_finding`, `list_findings`, `search_findings`, `next_target`, `analysis_brief` |
+| **IDB sync** | `publish_findings`, `import_annotations` |
 | **Edit** | `rename`, `comment`, `change_function`, `create_function` |
 | **Calculation** | `calc_eval`, `calc_convert`, `calc_deref`, `calc_offset`, `calc_align`, `calc_bitops`, `calc_chain`, `calc_resolve` |
 | **Support** | `help`, `continue`, `python` |

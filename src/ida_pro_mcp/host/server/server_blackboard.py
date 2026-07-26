@@ -15,6 +15,7 @@ from ..errors import MCPError, is_error_result, make_error
 from ..intelligence.helpers import parse_str_list
 from ..stores.blackboard_store import STRATEGIES as BB_STRATEGIES
 from ..stores.symbol_db import SymbolDB
+from .server_blackboard_idb import ServerBlackboardIdbMixin
 from .server_blackboard_phase import ServerBlackboardPhaseMixin
 from .server_blackboard_trace import ServerBlackboardTraceMixin
 
@@ -186,7 +187,9 @@ _ADDR_RE = re.compile(r"\b0x[0-9a-fA-F]{4,16}\b")
 _SYMBOL_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{3,63}\b")
 
 
-class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMixin):
+class ServerBlackboardMixin(
+    ServerBlackboardPhaseMixin, ServerBlackboardTraceMixin, ServerBlackboardIdbMixin
+):
     def _session_blackboard_path(self, session_obj=None, sid: str | None = None) -> str:
         session = session_obj
         sid_text = str(sid or "").strip()
@@ -1663,6 +1666,10 @@ class ServerBlackboardMixin(ServerBlackboardPhaseMixin, ServerBlackboardTraceMix
                     limit=_bounded_int(args.get("limit", 6), 6, min_value=1, max_value=25),
                 ),
             }
+        if action == "publish_findings":
+            return self._publish_findings(store, args)
+        if action == "import_annotations":
+            return self._import_annotations(store, args)
         if action == "conflicts":
             entries = store.conflicts(
                 limit=_bounded_int(args.get("limit", 20), 20, min_value=1, max_value=200)

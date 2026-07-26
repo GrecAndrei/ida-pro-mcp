@@ -51,6 +51,10 @@ available.
   claims that need repair. Every candidate states why it was chosen.
 - If `ida_write_finding` returns a `conflict`, two claims about the same thing
   disagree. Resolve it with `ida_update_finding` before building on either.
+- `ida_import_annotations` early in a session adopts names and comments the
+  last analyst left in the IDB, so you inherit their work instead of redoing
+  it. `ida_publish_findings(risk_ack=true)` writes confirmed findings back as
+  comments and symbols; use `dry_run=true` first to see what it would change.
 - If a result is truncated, read `_continue.token` and `_continue.fields`.
   Call `ida_continue(token=...)` when one field is listed; when multiple
   fields are listed, pass the exact selected name as `field=...` (for example

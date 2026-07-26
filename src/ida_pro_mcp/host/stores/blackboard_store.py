@@ -66,6 +66,45 @@ _INTERNAL_WORKSPACE_SOURCE_TYPES = frozenset(
 )
 
 _WS_RUN = re.compile(r"\s+")
+_NON_SYMBOL = re.compile(r"[^0-9a-z]+")
+
+#: Tag written into IDB comments so a later import can tell which annotations
+#: this tool produced and not re-adopt its own output as a fresh discovery.
+COMMENT_MARKER = "[mcp:{entry_id}]"
+_MARKER_RE = re.compile(r"\[mcp:([0-9a-f-]{4,})\]")
+
+#: Names IDA generates when it has nothing to say about a function.
+AUTO_NAME_PREFIXES = ("sub_", "j_", "loc_", "nullsub_", "unknown_libname_")
+
+
+def is_auto_name(name: str) -> bool:
+    name = str(name or "").strip()
+    return not name or name.startswith(AUTO_NAME_PREFIXES)
+
+
+def symbol_from_title(title: str, max_len: int = 60) -> str:
+    """Derive a C identifier from a finding's prose title.
+
+    "Packet receive handler" becomes ``packet_receive_handler``. Returns ""
+    when nothing usable survives, which the caller must treat as "do not
+    rename" rather than as a name.
+    """
+    slug = _NON_SYMBOL.sub("_", str(title or "").lower()).strip("_")
+    if not slug:
+        return ""
+    if slug[0].isdigit():
+        slug = "f_" + slug
+    return slug[:max_len].rstrip("_")
+
+
+def marker_for(entry_id: str) -> str:
+    return COMMENT_MARKER.format(entry_id=entry_id)
+
+
+def entry_id_in(text: str) -> str:
+    """Return the finding id embedded in an IDB comment, or ""."""
+    match = _MARKER_RE.search(str(text or ""))
+    return match.group(1) if match else ""
 
 
 def _resolve_db_path(db_path: str | None = None) -> str:
@@ -274,6 +313,10 @@ class BlackboardStore:
                 ("conflicts_with", "TEXT DEFAULT '[]'"),
                 # Coverage verdict, for kind='examined'.
                 ("verdict", "TEXT DEFAULT ''"),
+                # IDB round-trip: when this claim was last written into the
+                # database, and under what symbol.
+                ("published_at", "REAL"),
+                ("published_symbol", "TEXT DEFAULT ''"),
             ]:
                 if col not in existing:
                     conn.execute(f"ALTER TABLE blackboard ADD COLUMN {col} {dtype}")
@@ -877,6 +920,98 @@ class BlackboardStore:
             ).fetchall()
         by_verdict = {str(r["verdict"] or "unclear"): int(r["n"]) for r in rows}
         return {"examined": sum(by_verdict.values()), "by_verdict": by_verdict}
+
+    # ------------------------------------------------------------------
+    # IDB round-trip
+    # ------------------------------------------------------------------
+
+    def publishable(self, limit: int = 50, include_published: bool = False) -> builtins.list[dict]:
+        """Confirmed, addressed claims that belong in the database itself.
+
+        The IDB is the artifact an analyst opens; a conclusion that lives only
+        in this store is a conclusion they never see. Republishing is skipped
+        unless the claim changed after it was last written, so running the
+        export repeatedly is cheap and idempotent.
+        """
+        sql = (
+            "SELECT * FROM blackboard WHERE status='confirmed' AND contradicted=0 "
+            "AND stale=0 AND kind != 'examined' AND addr != '' AND addr IS NOT NULL "
+            "AND (conflicts_with = '[]' OR conflicts_with IS NULL) "
+        )
+        if not include_published:
+            sql += "AND (published_at IS NULL OR published_at < updated_at) "
+        sql += "ORDER BY confidence DESC, updated_at DESC LIMIT ?"
+        with closing(self._conn()) as conn:
+            rows = conn.execute(sql, (max(1, int(limit)),)).fetchall()
+        return [self._row_to_dict(r) for r in rows]
+
+    def mark_published(self, entry_id: str, symbol: str = "") -> bool:
+        with closing(self._conn()) as conn:
+            cur = conn.execute(
+                "UPDATE blackboard SET published_at=?, published_symbol=? WHERE id=?",
+                (time.time(), symbol, entry_id),
+            )
+            conn.commit()
+            ok = cur.rowcount > 0
+        if ok:
+            self._record_event(entry_id, "published", {"symbol": symbol} if symbol else {})
+        return ok
+
+    def comment_for(self, entry: dict[str, Any], max_len: int = 400) -> str:
+        """Render a finding as the IDB comment that will carry it."""
+        title = str(entry.get("title") or "").strip()
+        content = str(entry.get("content") or "").strip()
+        confidence = entry.get("confidence")
+        head = title
+        if confidence is not None:
+            head += f" (confidence {round(float(confidence), 2)})"
+        body = f"{head}\n{content}".strip() if content else head
+        marker = marker_for(str(entry.get("id") or ""))
+        room = max_len - len(marker) - 1
+        if len(body) > room:
+            body = body[: max(0, room - 1)].rstrip() + "…"
+        return f"{body} {marker}"
+
+    def adopt_annotation(
+        self,
+        addr: str,
+        name: str = "",
+        comment: str = "",
+        source: str = "idb",
+    ) -> dict[str, Any] | None:
+        """Record understanding that already exists in the IDB as a finding.
+
+        Skips anything this tool wrote: a comment carrying our own marker is
+        our own output, and adopting it back would manufacture a second,
+        independent-looking claim out of one.
+        """
+        naddr = normalize_addr(addr)
+        if not naddr:
+            return None
+        text = str(comment or "").strip()
+        if entry_id_in(text):
+            return None
+        named = not is_auto_name(name)
+        if not named and not text:
+            return None
+
+        title = text.splitlines()[0].strip() if text else f"{name} (named in the IDB)"
+        title = title[:120]
+        return self.upsert_finding(
+            title=title,
+            content=text if text else "",
+            category="idb",
+            addr=naddr,
+            kind="finding",
+            status="confirmed",
+            # Someone recorded this deliberately, but this tool did not verify
+            # it and cannot tell an analyst's rename from a FLIRT match.
+            confidence=0.5,
+            priority=0.3,
+            tags=["from-idb"],
+            source=source,
+            evidence=[{"type": "idb_symbol", "value": name}] if named else [],
+        )
 
     # ------------------------------------------------------------------
     # Recall: what the workspace already knows about these addresses
@@ -1747,21 +1882,29 @@ class BlackboardStore:
 
     @staticmethod
     def _render_brief(payload: dict[str, Any]) -> str:
-        """Turn the structured brief into something readable on turn one."""
-        counts = payload["counts"]
-        lines: builtins.list[str] = []
-        if not counts["total"] and not counts["examined"]:
-            return "Workspace is empty. Nothing has been recorded or examined yet."
+        """Turn the structured brief into a case file readable on turn one.
 
-        headline = (
-            f"{counts['total']} recorded items — {counts['confirmed']} confirmed, "
-            f"{counts['open']} open, {counts['conflicts']} in conflict, {counts['stale']} stale."
-        )
+        A model starting a session should not have to parse four JSON arrays
+        to learn where the last one got to. This states what is established,
+        what is open, what is contested, what needs re-checking, and what to
+        do next — in the order an analyst would ask.
+        """
+        counts = payload["counts"]
         cover = payload["coverage"]
-        if cover["examined"]:
-            by_verdict = ", ".join(f"{n} {v}" for v, n in sorted(cover["by_verdict"].items()))
-            headline += f" {cover['examined']} addresses examined and set aside ({by_verdict})."
-        lines.append(headline)
+        if not counts["total"] and not cover["examined"]:
+            return (
+                "Workspace is empty — nothing recorded or examined yet.\n\n"
+                "Next: ida_overview to orient, then ida_next_target(strategy='coverage')."
+            )
+
+        lines: builtins.list[str] = []
+
+        def loc(item: dict) -> str:
+            return f"{item['address']} " if item.get("address") else ""
+
+        def conf(item: dict) -> str:
+            value = item.get("confidence")
+            return f" ({round(float(value), 2)})" if value is not None else ""
 
         def section(title: str, items: builtins.list[dict], render) -> None:
             if not items:
@@ -1770,12 +1913,33 @@ class BlackboardStore:
             lines.append(f"{title}:")
             lines.extend(f"  - {render(item)}" for item in items)
 
-        def loc(item: dict) -> str:
-            return f"{item['address']} " if item.get("address") else ""
+        # --- headline -----------------------------------------------------
+        parts = []
+        if counts["confirmed"]:
+            parts.append(f"{counts['confirmed']} confirmed")
+        if counts["open"]:
+            parts.append(f"{counts['open']} open")
+        if counts["conflicts"]:
+            parts.append(f"{counts['conflicts']} contested")
+        if counts["stale"]:
+            parts.append(f"{counts['stale']} stale")
+        state = ", ".join(parts) if parts else "nothing settled yet"
+        lines.append(f"{counts['total']} recorded items: {state}.")
 
+        if cover["examined"]:
+            by_verdict = ", ".join(
+                f"{n} {v}" for v, n in sorted(cover["by_verdict"].items(), key=lambda kv: -kv[1])
+            )
+            lines.append(
+                f"{cover['examined']} addresses examined and set aside ({by_verdict}) — "
+                "do not re-read these without a reason."
+            )
+
+        # --- the case ------------------------------------------------------
         section(
-            "Confirmed", payload["confirmed"],
-            lambda i: f"{loc(i)}{i['title']} ({round(float(i.get('confidence') or 0), 2)})",
+            "Established", payload["confirmed"],
+            lambda i: f"{loc(i)}{i['title']}{conf(i)}"
+            + (f"  [stale: {i['stale']}]" if i.get("stale") else ""),
         )
         section(
             "Open", payload["focus"],
@@ -1783,22 +1947,42 @@ class BlackboardStore:
             + (f" — blocked on {i['depends_on']}" if i.get("depends_on") else ""),
         )
         section(
-            "Conflicts — reconcile before building on these", payload["conflicts"],
-            lambda i: f"{loc(i)}{i['title']} ({i['status']})"
-            + (f" vs {', '.join(i['conflicts_with'])}" if i.get("conflicts_with") else ""),
+            "Contested — two claims here cannot both hold", payload["conflicts"],
+            lambda i: f"{loc(i)}{i['title']} — recorded {i['status']}"
+            + (f", contradicts {', '.join(i['conflicts_with'])}" if i.get("conflicts_with") else ""),
         )
         section(
-            "Stale — the code changed after these were written", payload["stale"],
-            lambda i: f"{loc(i)}{i['title']}",
+            "Needs re-checking — the code changed after these were written",
+            payload["stale"],
+            lambda i: f"{loc(i)}{i['title']}{conf(i)}",
         )
 
+        # --- what to do ----------------------------------------------------
         lines.append("")
         if payload["conflicts"]:
-            lines.append("Next: resolve the conflicts — two claims here cannot both hold.")
+            lines.append(
+                "Next: reconcile the contested claims with ida_update_finding before "
+                "building on either side."
+            )
         elif payload["stale"]:
-            lines.append("Next: re-read the stale entries; their code has since changed.")
+            lines.append(
+                "Next: re-read the entries above — ida_next_target(strategy='stale') "
+                "lists them with their addresses."
+            )
         elif payload["focus"]:
-            lines.append("Next: take the open items above, or ida_next_target for candidates.")
+            blocked = [i for i in payload["focus"] if i.get("depends_on")]
+            if len(blocked) == len(payload["focus"]):
+                lines.append(
+                    "Next: every open item is blocked. Resolve a dependency, or "
+                    "ida_next_target(strategy='coverage') for unrelated ground."
+                )
+            else:
+                lines.append("Next: take an unblocked open item above.")
+        elif payload["confirmed"]:
+            lines.append(
+                "Next: ida_next_target(strategy='frontier') to expand from what is "
+                "confirmed, or publish it with ida_publish_findings."
+            )
         else:
             lines.append("Next: ida_next_target(strategy='coverage') for unexamined functions.")
         return "\n".join(lines)
