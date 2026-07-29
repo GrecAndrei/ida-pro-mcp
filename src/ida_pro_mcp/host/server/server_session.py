@@ -396,6 +396,14 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             "start_ea",
             "min_ea",
             "max_ea",
+            "input_format",
+            "processor_options",
+            "rebase_to",
+            "entry_point",
+            "stack_size",
+            "memory_model",
+            "skip_analysis",
+            "no_analysis",
         )
         for key in merged_keys:
             if key in args:
