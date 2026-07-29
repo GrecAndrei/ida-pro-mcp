@@ -1423,6 +1423,34 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 if opts.get("skip_analysis") or opts.get("no_analysis"):
                     if "-c" not in (session.ida_args or []):
                         cmd.append("-c")
+                # Force a specific file format parser (e.g. bin, elf, pe, macho, ihex, srec).
+                input_format = opts.get("input_format")
+                if input_format and "-F" not in ida_prefixes:
+                    cmd.append(f"-F{input_format}")
+                # Processor-specific options (e.g. ARM CPU type, MIPS ISA variant).
+                processor_options = opts.get("processor_options")
+                if processor_options and "-P" not in ida_prefixes:
+                    cmd.append(f"-P{processor_options}")
+                # Rebase the database to a specific load address after creation.
+                rebase_to = opts.get("rebase_to")
+                if rebase_to is not None and "-R" not in ida_prefixes:
+                    try:
+                        rebase_paragraphs = int(rebase_to) // 16
+                        cmd.append(f"-R{rebase_paragraphs:#x}")
+                    except (TypeError, ValueError):
+                        pass
+                # Override the entry point address.
+                entry_point = opts.get("entry_point")
+                if entry_point is not None and "-e" not in ida_prefixes:
+                    cmd.append(f"-e{entry_point}")
+                # Set the stack size for stack analysis.
+                stack_size = opts.get("stack_size")
+                if stack_size is not None and "-s" not in ida_prefixes:
+                    cmd.append(f"-s{int(stack_size)}")
+                # Memory model: 0=flat, 1=16-bit segmented, 2=32-bit segmented.
+                memory_model = opts.get("memory_model")
+                if memory_model is not None and "-m" not in ida_prefixes:
+                    cmd.append(f"-m{int(memory_model)}")
 
             cmd.append(f"-S{script_path}")
             cmd.append(f"-L{log_file}")

@@ -23,6 +23,116 @@ Input schema:
     "notes": {
       "type": "string",
       "description": "Optional session notes."
+    },
+    "architecture": {
+      "type": "object",
+      "description": "Architecture preload hints. Keys: processor (e.g. metapc, arm, mipsl), bitness (32 or 64), endian (little or big), loader, flags, loader_options. Aliases: arch/proc/architecture → processor, bits → bitness, endianness → endian.",
+      "additionalProperties": false,
+      "properties": {
+        "processor": {
+          "type": "string",
+          "description": "IDA processor name, e.g. metapc, arm, mipsl."
+        },
+        "bitness": {
+          "type": "integer",
+          "description": "32 or 64."
+        },
+        "endian": {
+          "type": "string",
+          "description": "little or big."
+        },
+        "loader": {
+          "type": "string",
+          "description": "IDA loader name, e.g. elf, pe, bin."
+        },
+        "flags": {
+          "type": "integer",
+          "description": "IDA loader flags."
+        },
+        "loader_options": {
+          "type": "string",
+          "description": "Raw loader options string."
+        }
+      }
+    },
+    "analysis_options": {
+      "type": "object",
+      "description": "Full analysis options object; merged with individual keys below."
+    },
+    "processor": {
+      "type": "string",
+      "description": "IDA processor name (shorthand for architecture.processor)."
+    },
+    "bitness": {
+      "type": "integer",
+      "description": "32 or 64 (shorthand for architecture.bitness)."
+    },
+    "endian": {
+      "type": "string",
+      "description": "little or big (shorthand for architecture.endian)."
+    },
+    "loader": {
+      "type": "string",
+      "description": "IDA loader name (shorthand for architecture.loader)."
+    },
+    "flags": {
+      "type": "integer",
+      "description": "IDA loader flags (shorthand for architecture.flags)."
+    },
+    "loader_options": {
+      "type": "string",
+      "description": "Raw loader options (shorthand for architecture.loader_options)."
+    },
+    "baseaddr": {
+      "type": "string",
+      "description": "Load base address, e.g. 0x400000."
+    },
+    "start_ea": {
+      "type": "string",
+      "description": "Start EA for analysis range."
+    },
+    "min_ea": {
+      "type": "string",
+      "description": "Minimum EA for analysis range."
+    },
+    "max_ea": {
+      "type": "string",
+      "description": "Maximum EA for analysis range."
+    },
+    "reanalyze": {
+      "type": "boolean",
+      "description": "Force reanalysis even if IDB exists."
+    },
+    "ida_args": {
+      "type": "array",
+      "description": "Extra raw IDA CLI args (e.g. -A -Sscript -Llog).",
+      "items": {
+        "type": "string"
+      }
+    },
+    "input_format": {
+      "type": "string",
+      "description": "Force a specific file format parser, e.g. bin, elf, pe, macho, ihex, srec."
+    },
+    "processor_options": {
+      "type": "string",
+      "description": "Processor-specific options string, e.g. ARM CPU type or MIPS ISA variant."
+    },
+    "rebase_to": {
+      "type": "string",
+      "description": "Rebase the database to this address (hex or decimal), e.g. 0x400000."
+    },
+    "entry_point": {
+      "type": "string",
+      "description": "Override the entry point address (hex or decimal)."
+    },
+    "stack_size": {
+      "type": "integer",
+      "description": "Stack size in bytes for stack analysis."
+    },
+    "memory_model": {
+      "type": "integer",
+      "description": "Memory model: 0=flat, 1=16-bit segmented, 2=32-bit segmented."
     }
   },
   "required": [
@@ -37,7 +147,11 @@ Example:
 {
   "name": "ida_open_binary",
   "arguments": {
-    "binary_path": "/samples/target.exe"
+    "binary_path": "/samples/target.exe",
+    "architecture": {
+      "processor": "metapc",
+      "bitness": 64
+    }
   }
 }
 ```
@@ -132,6 +246,112 @@ Example:
 {
   "name": "ida_close_session",
   "arguments": {}
+}
+```
+
+## `ida_session_get`
+
+Get details for a specific session by ID.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "Session identifier, e.g. SID_ABC123."
+    }
+  },
+  "required": [
+    "session_id"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_session_get",
+  "arguments": {
+    "session_id": "SID_ABC123"
+  }
+}
+```
+
+## `ida_session_list`
+
+List available analysis sessions, optionally filtered by query.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "Optional filter string (matches id, path, notes, tags)."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Maximum result items to return."
+    },
+    "offset": {
+      "type": "integer",
+      "description": "Pagination offset."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_session_list",
+  "arguments": {
+    "limit": 20
+  }
+}
+```
+
+## `ida_session_switch`
+
+Switch the active session to another session by ID or binary path.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "Target session identifier."
+    },
+    "binary_path": {
+      "type": "string",
+      "description": "Switch to the session for this binary path."
+    },
+    "reopen": {
+      "type": "boolean",
+      "description": "Restart the IDA runtime if it is not alive."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_session_switch",
+  "arguments": {
+    "session_id": "SID_ABC123",
+    "reopen": true
+  }
 }
 ```
 
