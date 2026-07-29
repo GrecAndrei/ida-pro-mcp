@@ -79,14 +79,50 @@ class InsightIndex:
     # Indexing
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _normalize_addr(addr: str) -> str:
+        s = str(addr or "").strip().lower()
+        if s.startswith("0x"):
+            raw = s[2:].lstrip("0") or "0"
+            return f"0x{raw}"
+        return s
+
     def _mark_dirty(self) -> None:
         """Mark index as modified and autosave if enough time has passed."""
-        self._dirty = True
-        now = time.time()
-        if self._persistence_path and now - self._last_save > 60:
-            self._last_save = now
-            self._dirty = False
-            self.save()
+        with self._lock:
+            self._dirty = True
+            now = time.time()
+            if self._persistence_path and now - self._last_save > 60:
+                self._last_save = now
+                self._dirty = False
+                self.save()
+
+    def _index_function_unlocked(self, func_addr: str, attributes: dict[str, Any]) -> None:
+        addr = self._normalize_addr(func_addr)
+        tags = list(attributes.get("behavior_tags", []))
+        meta = {
+            "addr": addr,
+            "name": attributes.get("name", ""),
+            "tier": attributes.get("tier", ""),
+            "target_id": attributes.get("target_id", ""),
+            "tags": tags,
+            "indexed_at": time.time(),
+            "access_count": 0,
+        }
+
+        # Remove stale tag mappings if re-indexing
+        if addr in self._func_map:
+            old_tags = self._func_map[addr].get("tags", [])
+            for tag in old_tags:
+                lst = self._tag_map.get(tag)
+                if lst and addr in lst:
+                    lst.remove(addr)
+
+        self._func_map[addr] = meta
+        for tag in tags:
+            tag = tag.lower()
+            if addr not in self._tag_map[tag]:
+                self._tag_map[tag].append(addr)
 
     def index_function(self, func_addr: str, attributes: dict[str, Any]) -> None:
         """
@@ -109,33 +145,9 @@ class InsightIndex:
                 "target_id": "fact_abc123",
             })
         """
-        addr = str(func_addr).lower()
-        tags = list(attributes.get("behavior_tags", []))
-        meta = {
-            "addr": addr,
-            "name": attributes.get("name", ""),
-            "tier": attributes.get("tier", ""),
-            "target_id": attributes.get("target_id", ""),
-            "tags": tags,
-            "indexed_at": time.time(),
-            "access_count": 0,
-        }
-
         with self._lock:
-            # Remove stale tag mappings if re-indexing
-            if addr in self._func_map:
-                old_tags = self._func_map[addr].get("tags", [])
-                for tag in old_tags:
-                    lst = self._tag_map.get(tag)
-                    if lst and addr in lst:
-                        lst.remove(addr)
-
-            self._func_map[addr] = meta
-            for tag in tags:
-                tag = tag.lower()
-                if addr not in self._tag_map[tag]:
-                    self._tag_map[tag].append(addr)
-        self._mark_dirty()
+            self._index_function_unlocked(func_addr, attributes)
+            self._mark_dirty()
 
     def rebuild(self, functions: list[tuple[str, dict[str, Any]]]) -> None:
         """
@@ -150,7 +162,8 @@ class InsightIndex:
             self._func_map.clear()
             self._access_log.clear()
             for addr, attrs in functions:
-                self.index_function(addr, attrs)
+                self._index_function_unlocked(addr, attrs)
+            self._mark_dirty()
 
     # ------------------------------------------------------------------
     # Querying
@@ -158,7 +171,7 @@ class InsightIndex:
 
     def get_function(self, func_addr: str) -> dict[str, Any] | None:
         """Get metadata for a single function by address."""
-        addr = str(func_addr).lower()
+        addr = self._normalize_addr(func_addr)
         with self._lock:
             meta = self._func_map.get(addr)
             if meta:

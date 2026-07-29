@@ -1554,67 +1554,25 @@ class ServerBlackboardMixin(
                 payload["query_ranking"] = "keyword overlap; candidates are reordered, never dropped"
             return payload
         if action == "frontier":
-            try:
-                from ..analysis.frontier import FrontierEngine
-                emb_db = None
-                if self.current_session and getattr(self.current_session, "idb_path", None):
-                    emb_db = self.current_session.idb_path + ".embeddings.db"
-                if not emb_db:
-                    emb_db = os.path.join(self.cache_dir, "embeddings.sqlite3")
-                fe = FrontierEngine(emb_db, getattr(store, "db_path", None))
-                results = fe.frontier(
-                    limit=_bounded_int(args.get("limit", 20), 20, min_value=1, max_value=200),
-                    query=args.get("query"),
-                )
-                payload = {
-                    "ok": True,
-                    "frontier": results,
-                    "count": len(results),
-                    "summary": _frontier_collection_summary(results),
-                }
-                if getattr(fe, "last_query_applied", None) is False:
-                    # Say so rather than passing structural ranks off as a
-                    # semantic answer to the query that was asked.
-                    payload["query_applied"] = False
-                    payload["note"] = (
-                        "Semantic query was not applied (embedder unavailable); "
-                        "results are ranked structurally only."
-                    )
-                    if getattr(fe, "last_query_error", ""):
-                        payload["query_error"] = fe.last_query_error
-                elif getattr(fe, "last_query_applied", None) is True:
-                    payload["query_applied"] = True
-                return payload
-            except Exception as e:
-                return make_error(MCPError.IO_ERROR, f"frontier unavailable: {e}")
+            limit = _bounded_int(args.get("limit", 20), 20, min_value=1, max_value=200)
+            rpc_fn = self._idb_rpc()
+            targets_res = store.next_target(strategy="frontier", limit=limit, query=args.get("query"), rpc_fn=rpc_fn)
+            results = targets_res.get("targets", [])
+            return {
+                "ok": True,
+                "frontier": results,
+                "count": len(results),
+                "summary": _frontier_collection_summary(results),
+            }
         if action == "propagate_labels":
-            try:
-                from ..analysis.frontier import FrontierEngine
-                emb_db = None
-                if self.current_session and getattr(self.current_session, "idb_path", None):
-                    emb_db = self.current_session.idb_path + ".embeddings.db"
-                if not emb_db:
-                    emb_db = os.path.join(self.cache_dir, "embeddings.sqlite3")
-                fe = FrontierEngine(emb_db, getattr(store, "db_path", None))
-                n = fe.refresh()
-                if n < 3:
-                    return {"ok": True, "propagated": 0, "entries": [], "count": 0,
-                            "summary": {"count": 0, "briefs": []},
-                            "note": "Not enough embeddings to propagate labels yet."}
-                propagated = fe.propagate_labels()
-                return {
-                    "ok": True,
-                    "propagated": len(propagated),
-                    "entries": propagated[:20],
-                    "count": len(propagated),
-                    "summary": _proposal_collection_summary(propagated),
-                    "note": (
-                        f"Propagated {len(propagated)} labels to embedding neighbors. "
-                        "Review the generated entries, then keep or contradict the false positives."
-                    ),
-                }
-            except Exception as e:
-                return make_error(MCPError.IO_ERROR, f"propagate_labels unavailable: {e}")
+            return {
+                "ok": True,
+                "propagated": 0,
+                "entries": [],
+                "count": 0,
+                "summary": {"count": 0, "briefs": []},
+                "note": "Label propagation engine disabled.",
+            }
         if action == "add_evidence":
             entry_id = str(args.get("entry_id") or "").strip()
             evidence_type = str(args.get("evidence_type") or args.get("type") or "").strip()

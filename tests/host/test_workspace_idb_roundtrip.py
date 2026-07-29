@@ -38,6 +38,11 @@ class _FakeIda:
     def __call__(self, tool, payload):
         self.calls.append((tool, dict(payload)))
         action = payload.get("action")
+        if tool == "batch":
+            results = []
+            for call in payload.get("calls", []):
+                results.append(self(call.get("tool", ""), call))
+            return {"ok": True, "results": results}
         if tool == "data" and action == "lookup":
             addr = payload["query"]
             return {"ok": True, "addr": addr, "name": self.names.get(addr, f"sub_{addr[2:]}")}
@@ -299,3 +304,21 @@ def test_imported_findings_are_recalled_like_any_other(store):
     assert store.recall_lines(["0x402000"]) == [
         "finding/confirmed: Decrypts the config blob. — @ 0x402000"
     ]
+
+
+def test_publishing_batches_symbol_lookups(store):
+    ida = _FakeIda()
+    host = _Host(ida)
+    store.upsert_finding("Handler one", addr="0x401000", status="confirmed")
+    store.upsert_finding("Handler two", addr="0x402000", status="confirmed")
+
+    res = host._publish_findings(store, {"_risk_ack": True})
+    assert res["count"] == 2
+
+    batch_calls = [c for c in ida.calls if c[0] == "batch"]
+    assert len(batch_calls) == 1
+    call_payload = batch_calls[0][1]
+    sub_calls = call_payload.get("calls", [])
+    assert len(sub_calls) == 2
+    assert {sc.get("query") for sc in sub_calls} == {"0x401000", "0x402000"}
+

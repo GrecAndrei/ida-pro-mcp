@@ -14,6 +14,18 @@ import re
 from collections import Counter
 from typing import Any
 
+# Useful tokens: addresses, symbol names, register names (x86, ARM, MIPS, RISC-V), type keywords
+_USEFUL_TOKEN_RE = re.compile(
+    r'0x[0-9a-fA-F]+|'
+    r'(?:sub_|loc_|off_|unk_|byte_|word_|dword_|qword_)[0-9a-fA-F]+|'
+    r'\b(?:dword|qword|byte|word|ptr|'
+    r'eax|ebx|ecx|edx|esi|edi|ebp|esp|eip|'
+    r'rax|rbx|rcx|rdx|rsi|rdi|rbp|rsp|rip|'
+    r'r[0-9]{1,2}|w[0-9]{1,2}|x[0-9]{1,2}|sp|lr|pc|fp|'
+    r'\$[a-z0-9]+)\b',
+    re.IGNORECASE,
+)
+
 
 class ContextDensityOptimizer:
     """
@@ -235,16 +247,7 @@ class ContextDensityOptimizer:
             if p > 0:
                 entropy -= p * math.log2(p)
 
-        # Useful tokens: addresses, symbol names, register names, type keywords
-        useful_re = re.compile(
-            r'0x[0-9a-fA-F]+|'
-            r'(?:sub_|loc_|off_|unk_|byte_|word_|dword_|qword_)[0-9a-fA-F]+|'
-            r'\b(?:dword|qword|byte|word|ptr|'
-            r'eax|ebx|ecx|edx|esi|edi|ebp|esp|eip|'
-            r'rax|rbx|rcx|rdx|rsi|rdi|rbp|rsp|rip|'
-            r'rdi|rsi|r8|r9|r10|r11|r12|r13|r14|r15)\b'
-        )
-        useful_count = sum(1 for word in words if useful_re.search(word))
+        useful_count = sum(1 for word in words if _USEFUL_TOKEN_RE.search(word))
         useful_token_ratio = useful_count / len(words)
 
         normalized_lexdiv = min(1.0, lexical_diversity * 3.0)

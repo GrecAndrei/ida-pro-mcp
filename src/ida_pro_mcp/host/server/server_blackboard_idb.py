@@ -57,6 +57,37 @@ class ServerBlackboardIdbMixin:
             return ""
         return str(result.get("name") or "")
 
+    def _current_symbols_batch(self, rpc, addrs: list[str]) -> dict[str, str]:
+        """Read names currently applied across multiple addresses in a single batch."""
+        if not addrs:
+            return {}
+        unique_addrs = sorted(set(addrs))
+        if len(unique_addrs) == 1:
+            addr = unique_addrs[0]
+            return {addr: self._current_symbol(rpc, addr)}
+
+        batch_calls = [{"tool": "data", "action": "lookup", "query": addr} for addr in unique_addrs]
+        try:
+            res = rpc("batch", {"calls": batch_calls})
+            if isinstance(res, dict) and not is_error_result(res):
+                results = res.get("results") or res.get("calls") or []
+                if isinstance(results, list) and len(results) == len(unique_addrs):
+                    mapping = {}
+                    for addr, item in zip(unique_addrs, results, strict=False):
+                        if isinstance(item, dict) and not is_error_result(item):
+                            sub_res = item.get("result", item)
+                            if isinstance(sub_res, dict):
+                                mapping[addr] = str(sub_res.get("name") or "")
+                            else:
+                                mapping[addr] = ""
+                        else:
+                            mapping[addr] = ""
+                    return mapping
+        except Exception:
+            pass
+
+        return {addr: self._current_symbol(rpc, addr) for addr in unique_addrs}
+
     # ------------------------------------------------------------------
     # Export
     # ------------------------------------------------------------------
@@ -83,6 +114,12 @@ class ServerBlackboardIdbMixin:
         published: list[dict] = []
         skipped: list[dict] = []
 
+        if rename and entries:
+            addrs = [str(e.get("addr") or "") for e in entries if e.get("addr")]
+            current_symbols = self._current_symbols_batch(rpc, addrs)
+        else:
+            current_symbols = {}
+
         for entry in entries:
             addr = str(entry.get("addr") or "")
             record: dict[str, Any] = {"entry_id": entry.get("id"), "address": addr,
@@ -92,7 +129,8 @@ class ServerBlackboardIdbMixin:
 
             symbol = ""
             if rename:
-                symbol, reason = self._plan_rename(rpc, entry, addr)
+                curr_sym = current_symbols.get(addr)
+                symbol, reason = self._plan_rename(rpc, entry, addr, current_symbol=curr_sym)
                 if symbol:
                     record["symbol"] = symbol
                 elif reason:
@@ -141,7 +179,9 @@ class ServerBlackboardIdbMixin:
             )
         return payload
 
-    def _plan_rename(self, rpc, entry: dict, addr: str) -> tuple[str, str]:
+    def _plan_rename(
+        self, rpc, entry: dict, addr: str, current_symbol: str | None = None
+    ) -> tuple[str, str]:
         """Decide whether to rename, returning (symbol, reason_if_not).
 
         A name that is not auto-generated is left alone: it is either an
@@ -151,11 +191,12 @@ class ServerBlackboardIdbMixin:
         symbol = symbol_from_title(str(entry.get("title") or ""))
         if not symbol:
             return "", "title yields no usable identifier"
-        current = self._current_symbol(rpc, addr)
-        if current and not is_auto_name(current):
-            if current == symbol:
+        if current_symbol is None:
+            current_symbol = self._current_symbol(rpc, addr)
+        if current_symbol and not is_auto_name(current_symbol):
+            if current_symbol == symbol:
                 return "", "already named"
-            return "", f"already named {current!r}; not overwriting an existing symbol"
+            return "", f"already named {current_symbol!r}; not overwriting an existing symbol"
         return symbol, ""
 
     def _apply(self, rpc, action: str, addr: str, value: str, **extra) -> str | None:

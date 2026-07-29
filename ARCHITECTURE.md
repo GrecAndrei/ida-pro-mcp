@@ -36,7 +36,6 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
   - `session_skills.py` / `session_skills_bootstrap.py` — session-level skills and bootstrap mixin
 
 - `src/ida_pro_mcp/host/analysis/`
-  - `frontier.py` — FrontierEngine (embedding-driven analysis guidance)
   - `context_density.py` — ContextDensityOptimizer
   - `patterns.py` — pattern matching helpers
 

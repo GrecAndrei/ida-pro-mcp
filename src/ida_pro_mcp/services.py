@@ -13,7 +13,6 @@ from ida_pro_mcp.host.analysis.arch_profile import (
     normalize_arch_options,
 )
 from ida_pro_mcp.host.analysis.context_density import ContextDensityOptimizer
-from ida_pro_mcp.host.analysis.frontier import FrontierEngine
 from ida_pro_mcp.host.analysis.patterns import compile_smart_pattern, smart_match
 from ida_pro_mcp.host.auto_nudge import get_reroute
 from ida_pro_mcp.host.batch_manager import BatchManager, BatchTask
@@ -111,7 +110,6 @@ __all__ = [
     "KnowledgeGraph",
     "CACHE_DIR",
     "ContextDensityOptimizer",
-    "FrontierEngine",
     "SymbolDB",
     "compile_smart_pattern",
     "smart_match",

@@ -860,57 +860,26 @@ class ResourceResolver:
             return _make_json_content({"regions": regions, "count": len(regions)})
 
         if sub == "frontier":
-            # Ranked unvisited functions — read this when choosing what to analyze next
-            try:
-                from ..analysis.frontier import FrontierEngine
-                idb_path = self.bb_path.replace(".blackboard.db", "") if self.bb_path else ""
-                emb_db = idb_path + ".embeddings.db" if idb_path else ""
-                fe = FrontierEngine(emb_db, self.bb_path or store.db_path)
-                n = fe.refresh()
-                if n < 3:
-                    return _make_json_content({
-                        "frontier": [],
-                        "note": "Not enough indexed embeddings. Decompile some functions first, then re-read.",
-                    })
-                results = fe.frontier(limit=20)
-                coverage = fe.coverage()
-                lines = [
-                    f"{r['addr']}  {r['name']}  score={r['score']:.3f}"
-                    + (f"  near='{r['nearest_label_title'][:30]}'" if r.get("nearest_label_title") else "")
-                    for r in results
-                ]
-                return _make_json_content({
-                    "frontier": "\n".join(lines),
-                    "items": results,
-                    "count": len(results),
-                    "coverage_pct": coverage["coverage_pct"],
-                    "analyzed": coverage["analyzed"],
-                    "unvisited": coverage["unvisited"],
-                    "note": (
-                        f"Coverage: {coverage['coverage_pct']}% ({coverage['analyzed']}/{coverage['total_indexed']} functions). "
-                        "NEXT ACTION: code(action='smart_decompile', addrs='<top addr>') on the first result."
-                    ),
-                })
-            except Exception as e:
-                return _make_json_content({"error": str(e), "note": "Frontier requires indexed embeddings."})
+            targets_res = store.next_target(strategy="frontier", limit=20)
+            results = targets_res.get("targets", [])
+            lines = [
+                f"{r.get('addr','')}  {r.get('name','')}  reason={r.get('reason','')}"
+                for r in results
+            ]
+            return _make_json_content({
+                "frontier": "\n".join(lines),
+                "items": results,
+                "count": len(results),
+                "note": "Unvisited targets from current workspace inventory.",
+            })
 
         if sub == "coverage":
-            try:
-                from ..analysis.frontier import FrontierEngine
-                idb_path = self.bb_path.replace(".blackboard.db", "") if self.bb_path else ""
-                emb_db = idb_path + ".embeddings.db" if idb_path else ""
-                fe = FrontierEngine(emb_db, self.bb_path or store.db_path)
-                n = fe.refresh()
-                if n < 1:
-                    return _make_json_content({"coverage_pct": 0, "note": "No embeddings indexed yet."})
-                cov = fe.coverage()
-                cov["note"] = (
-                    f"You have analyzed {cov['analyzed']}/{cov['total_indexed']} functions ({cov['coverage_pct']}%). "
-                    f"Read ida://blackboard/frontier to get the {cov['unvisited']} unvisited functions ranked by priority."
-                )
-                return _make_json_content(cov)
-            except Exception as e:
-                return _make_json_content({"error": str(e)})
+            st = store.stats()
+            return _make_json_content({
+                "total_entries": st.get("total_entries", 0),
+                "examined": st.get("total_examined", 0),
+                "note": "Workspace coverage based on recorded findings and examinations.",
+            })
 
         # Generic category
         entries = store.list(category=sub, limit=100, include_resolved=False)
