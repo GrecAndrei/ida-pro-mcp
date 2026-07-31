@@ -1084,13 +1084,29 @@ def _rewrite_public_text(text: Any, operation_name: str) -> str:
 
 
 def _public_recovery_item(item: Any) -> dict[str, Any] | None:
-    """Translate one legacy recovery recipe when a public equivalent exists."""
+    """Translate one recovery recipe when a public equivalent exists.
+
+    Accepts both legacy backend recipes (``{tool, action, ...}``) and
+    already-public recipes (``{tool: ida_*, args: {...}}``).
+    """
     if not isinstance(item, dict):
         return None
     args = item.get("args")
     if not isinstance(args, dict):
         return None
-    operation = _public_operation_for_backend(item.get("tool"), args.get("action"))
+    tool_name = str(item.get("tool") or "")
+    if tool_name.startswith("ida_"):
+        operation = _OPERATIONS_BY_NAME.get(tool_name)
+        if operation is None:
+            return None
+        required = operation.input_schema.get("required", [])
+        if any(key not in args for key in required):
+            return None
+        result: dict[str, Any] = {"tool": operation.name, "args": dict(args)}
+        if item.get("note"):
+            result["note"] = _rewrite_public_text(item["note"], operation.name)
+        return result
+    operation = _public_operation_for_backend(tool_name, args.get("action"))
     if operation is None:
         return None
 
@@ -1099,7 +1115,7 @@ def _public_recovery_item(item: Any) -> dict[str, Any] | None:
     for key, value in args.items():
         if key == "action":
             continue
-        public_args[reverse_map.get(key, key)] = value
+        public_args[str(reverse_map.get(key, key))] = value
     required = operation.input_schema.get("required", [])
     if any(key not in public_args for key in required):
         return None

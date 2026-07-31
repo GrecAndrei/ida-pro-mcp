@@ -366,7 +366,7 @@ class _BackgroundCrawler:
                         "data": {
                             "message": "Crawler generated 1 quick-analysis proposal",
                             "proposals": [{"proposal_id": proposal["proposal_id"], "addr": proposal["addr"], "title": proposal["title"], "behavior_tags": proposal.get("behavior_tags", [])}],
-                            "action": "Use blackboard(action='accept', proposal_id=...) or blackboard(action='reject', proposal_id=...) for each proposal.",
+                            "action": "Use ida_update_finding(entry_id='...', status='confirmed' or 'rejected') to accept or reject each proposal.",
                         },
                     },
                 })
@@ -746,7 +746,7 @@ def blackboard(
             "proposals_pending": len(proposals),
             "addresses_visited": crawler.visited_count(),
             "proposals": proposals[:10],
-            "note": "Use blackboard(action='accept', proposal_id=...) or blackboard(action='reject', proposal_id=...) for each proposal.",
+            "note": "Use ida_update_finding(entry_id='...', status='confirmed' or 'rejected') to accept or reject each proposal.",
         }
 
     elif action == "accept":

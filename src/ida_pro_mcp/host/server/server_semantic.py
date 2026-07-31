@@ -282,7 +282,7 @@ class ServerSemanticMixin:
         if not session:
             return make_error(
                 MCPError.SESSION_REQUIRED,
-                "No active session. Create one first with: session(action='create', binary_path='path/to/binary')",
+                "No active session. Create one first with: ida_open_binary(binary_path='path/to/binary')",
             )
 
         db_path = self._semantic_index_db_path(session.session_id)

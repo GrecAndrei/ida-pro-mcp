@@ -422,6 +422,40 @@ def test_public_error_adapter_rewrites_nested_aggregate_errors():
     assert "funcs(" not in adapted["results"][0]["hint"]
 
 
+def test_public_error_adapter_passes_through_public_recovery_recipes():
+    adapted = adapt_agent_error_payload(
+        {
+            "error": True,
+            "code": "SESSION_REQUIRED",
+            "message": "No session.",
+            "recovery": [
+                {"tool": "ida_open_binary", "args": {"binary_path": "/tmp/x"}, "note": "Create a session"}
+            ],
+        },
+        "ida_decompile",
+    )
+
+    assert adapted["recovery"] == [
+        {"tool": "ida_open_binary", "args": {"binary_path": "/tmp/x"}, "note": "Create a session"}
+    ]
+
+
+def test_public_error_adapter_drops_incomplete_public_recovery_recipes():
+    adapted = adapt_agent_error_payload(
+        {
+            "error": True,
+            "code": "SESSION_REQUIRED",
+            "message": "No session.",
+            "recovery": [
+                {"tool": "ida_open_binary", "args": {}, "note": "Missing required binary_path"}
+            ],
+        },
+        "ida_decompile",
+    )
+
+    assert "recovery" not in adapted
+
+
 def test_public_protocol_adapts_backend_error_hints(monkeypatch):
     server = IDAMCPServer()
     monkeypatch.setattr(

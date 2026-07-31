@@ -118,17 +118,15 @@ def idb(
             if is_firmware:
                 result["firmware_detected"] = True
                 result["next_actions"] = [
-                    "firmware_view(action='triage_snapshot')",
-                    "firmware_view(action='detect_load_address')",
-                    "firmware_view(action='detect_vector_table')",
-                    "firmware_view(action='detect_mmio')",
-                    "llm_helpers(action='guided_analysis')",
+                    "ida_analysis_brief(limit=10)",
+                    "ida_list_imports",
+                    "ida_calc_resolve",
                 ]
             else:
                 result["next_actions"] = [
-                    "data(action='imports')",
-                    "search(action='find', pattern='main')",
-                    "llm_helpers(action='cheatsheet')",
+                    "ida_list_imports",
+                    "ida_find(query='main')",
+                    "ida_help(query='start')",
                 ]
             return result
         if action == "segments":

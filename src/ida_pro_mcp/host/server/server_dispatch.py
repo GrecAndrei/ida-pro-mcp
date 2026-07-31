@@ -695,7 +695,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
                 return make_error(
                     MCPError.IDA_CRASHED,
                     "plugin_run requires a live IDA session; none is active.",
-                    hint="Open a session first with session(action='create', binary_path='...').",
+                    hint="Open a session first with ida_open_binary(binary_path='...').",
                 )
             return self._send_rpc_raw(
                 {"tool": "misc", "args": {"action": "plugin_run", "name": name, "arg": arg}},
@@ -706,7 +706,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
             if not self.current_session:
                 return make_error(
                     MCPError.SESSION_REQUIRED,
-                    "No active session. Create one first with: session(action='create', binary_path='path/to/binary')",
+                    "No active session. Create one first with: ida_open_binary(binary_path='path/to/binary')",
                 )
             action = str(args.get("action") or "").strip().lower()
             sid = self.current_session.session_id
@@ -739,7 +739,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
             return make_error(
                 MCPError.ACTION_NOT_FOUND,
                 f"Unsupported bookmarks action: '{action}'",
-                hint="Use bookmarks(action='list'|'add'|'delete'|'update'|'clear'|'find'|'export').",
+                hint="Bookmarks are not exposed as public operations; use ida_python if code execution is authorized.",
             )
 
     def _handle_truncation(self, args: dict) -> dict:
@@ -1379,6 +1379,6 @@ class ServerDispatchMixin(ServerClientStateMixin):
             if not ip:
                 return make_error(
                     MCPError.SESSION_REQUIRED,
-                    "No active session. Create one first with: session(action='create', binary_path='path/to/binary')",
+                    "No active session. Create one first with: ida_open_binary(binary_path='path/to/binary')",
                 )
             return self.call_tool(tool_name, ip, **args)

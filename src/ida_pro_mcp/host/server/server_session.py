@@ -324,7 +324,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 MCPError.INVALID_ARGS,
                 "The idb_path and use_existing parameters were removed from session create",
                 details={
-                    "hint": "Use session(action='create', binary_path='...') instead; IDB creation/reuse is automatic."
+                    "hint": "Use ida_open_binary(binary_path='...') instead; IDB creation/reuse is automatic."
                 },
             )
         force_new = bool(args.get("force_new"))
@@ -334,7 +334,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 MCPError.INVALID_ARGS,
                 "binary_path must be a string",
                 details={
-                    "hint": "Provide a path string, e.g. session(action='create', binary_path='/abs/path/to/binary')."
+                    "hint": "Provide a path string, e.g. ida_open_binary(binary_path='/abs/path/to/binary')."
                 },
             )
 
@@ -449,7 +449,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 MCPError.INVALID_ARGS,
                 "binary_path is required",
                 details={
-                    "hint": "Provide a binary path, e.g. session(action='create', binary_path='/abs/path/to/binary')."
+                    "hint": "Provide a binary path, e.g. ida_open_binary(binary_path='/abs/path/to/binary')."
                 },
             )
 
@@ -791,7 +791,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             return make_error(
                 MCPError.INVALID_ARGS,
                 "session_id required",
-                hint="Provide a session_id. Use session(action='list') to see available sessions.",
+                hint="Provide a session_id. Use ida_session_list to see available sessions.",
             )
         sid = _normalize_session_id(raw_sid)
         if not sid:
@@ -807,7 +807,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             return make_error(
                 MCPError.SESSION_NOT_FOUND,
                 f"Session '{sid}' not found",
-                hint="Use session(action='list') to see available sessions.",
+                hint="Use ida_session_list to see available sessions.",
             )
         runtime = self.session_runtimes.get(sid)
         is_running = bool(
@@ -873,7 +873,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             return make_error(
                 MCPError.INVALID_ARGS,
                 "session_id or binary_path required",
-                hint="Provide session_id or binary_path. Use session(action='list') to see available sessions.",
+                hint="Provide session_id or binary_path. Use ida_session_list to see available sessions.",
             )
         normalized_sid = _normalize_session_id(sid)
         if normalized_sid:
@@ -941,7 +941,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             response["idb_exists"] = False
             response["hint"] = (
                 "IDB file not on disk at the recorded path. Try "
-                "session(action='switch', session_id='...', reopen=true) "
+                "ida_session_switch(session_id='...', reopen=true) "
                 "to spawn a new IDA runtime."
             )
         spawn_error = getattr(self, "_last_spawn_error", None)

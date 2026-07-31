@@ -100,15 +100,15 @@ _HOST_ERROR_HINTS = {
     MCPError.FILE_LOCKED: "The IDB or file is locked. Close other IDA instances first.",
     MCPError.IDA_TIMEOUT: "IDA took too long to start. Increase IDA_MCP_STARTUP_TIMEOUT or check IDA installation.",
     MCPError.IDA_CRASHED: "IDA exited unexpectedly. Check the log for details.",
-    MCPError.NOT_IMPLEMENTED: "This action is not available in the current runtime/build.",
-    MCPError.SESSION_REQUIRED: "No active session. Create one with session(action='create', binary_path='...').",
-    MCPError.INVALID_ARGS: "Invalid arguments. Check the tool description for valid parameters.",
-    MCPError.ACTION_NOT_FOUND: "Unknown action. Check the tool description for valid actions.",
+    MCPError.NOT_IMPLEMENTED: "This operation is not available in the current runtime/build.",
+    MCPError.SESSION_REQUIRED: "No active session. Create one with ida_open_binary(binary_path='...').",
+    MCPError.INVALID_ARGS: "Invalid arguments. Check the operation schema for valid parameters.",
+    MCPError.ACTION_NOT_FOUND: "Unknown operation. Use ida_help or tools/list to see valid operations.",
     MCPError.TOOL_NOT_FOUND: "Unknown tool. Call tools/list to see valid tool names.",
-    MCPError.SESSION_NOT_FOUND: "Session not found. Use session(action='list') to see available sessions.",
+    MCPError.SESSION_NOT_FOUND: "Session not found. Use ida_session_list to see available sessions.",
     MCPError.BATCH_EMPTY: "The batch call list is empty. Provide at least one call.",
     MCPError.BATCH_TOO_LARGE: "Too many batch calls. Limit to 50 calls per batch.",
-    MCPError.BOOKMARK_NOT_FOUND: "Bookmark not found. Use bookmarks(action='list') to see bookmarks.",
+    MCPError.BOOKMARK_NOT_FOUND: "Bookmark not found. Bookmarks are not exposed as public operations; use ida_python if code execution is authorized.",
     MCPError.TRUNCATION_TOKEN_EXPIRED: "Continuation token expired. Re-run the original query.",
     MCPError.TRUNCATION_TOKEN_INVALID: "Invalid continuation token. Check the token value.",
     MCPError.TRUNCATION_FIELD_MISSING: "Requested field not in truncated response.",
@@ -117,7 +117,7 @@ _HOST_ERROR_HINTS = {
     MCPError.DB_ERROR: "Database error. The index may be corrupted. Delete the .embeddings.db file and re-index.",
     MCPError.POLICY_DENIED: "Action denied by the safety policy. Retry with the required acknowledgement, or operate in a different mode.",
     MCPError.PHASE_GATE: "The session phase requires a follow-up call before this tool can return a final answer. See required_followup_call in the response.",
-    MCPError.DECOMPILER_FAILED: "The decompiler refused this function. Try code(action='disasm') for assembly or code(action='semantic_decompile').",
+    MCPError.DECOMPILER_FAILED: "The decompiler refused this function. Try ida_disassemble for assembly.",
     MCPError.YARA_COMPILE_ERROR: "YARA rule compilation failed. Check rule syntax.",
     MCPError.YARA_SCAN_ERROR: "YARA scan failed. Check rule and target.",
     MCPError.YARA_DISABLED: "yara-python is not installed. Run `pip install yara-python` in the MCP host venv.",
@@ -126,23 +126,22 @@ _HOST_ERROR_HINTS = {
     MCPError.SIZE_LIMIT_EXCEEDED: "The requested size exceeds the limit. Use a smaller range or pagination.",
 }
 
-# Recovery actions: suggested tool calls the LLM can auto-execute when this error occurs.
+# Recovery actions: suggested public operations the LLM can auto-execute when this error occurs.
 _RECOVERY_ACTIONS: dict[str, list[dict]] = {
     MCPError.DECOMPILER_FAILED: [
-        {"tool": "code", "args": {"action": "disasm", "addrs": "$addr"}, "note": "Fall back to disassembly"},
-        {"tool": "analysis", "args": {"action": "reanalyze", "addr": "$addr"}, "note": "Re-analyze and retry"},
+        {"tool": "ida_disassemble", "args": {"address": "$addr"}, "note": "Fall back to disassembly"},
     ],
     MCPError.SESSION_REQUIRED: [
-        {"tool": "session", "args": {"action": "create"}, "note": "Create a session first"},
+        {"tool": "ida_open_binary", "args": {"binary_path": "$binary_path"}, "note": "Create a session first"},
     ],
     MCPError.ADDRESS_INVALID: [
-        {"tool": "calc", "args": {"action": "hex", "expr": "$addr"}, "note": "Verify address is valid hex"},
+        {"tool": "ida_calc_convert", "args": {"value": "$addr"}, "note": "Verify address is valid hex"},
     ],
     MCPError.TRUNCATION_TOKEN_EXPIRED: [
-        {"tool": "truncation", "args": {"action": "peek", "token": "$token"}, "note": "Check if token still exists"},
+        {"tool": "ida_continue", "args": {"token": "$token"}, "note": "Check if token still exists"},
     ],
     MCPError.IDA_TIMEOUT: [
-        {"tool": "session", "args": {"action": "health"}, "note": "Check IDA health"},
+        {"tool": "ida_session_health", "args": {}, "note": "Check IDA health"},
     ],
 }
 

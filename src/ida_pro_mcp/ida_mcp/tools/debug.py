@@ -139,7 +139,7 @@ def _debug_active():
 
 
 def _debug_not_running():
-    return {"ok": True, "note": "Debugger is not running in headless mode", "hint": "Use debug(action='start') to launch the process"}
+    return {"ok": True, "note": "Debugger is not running in headless mode", "hint": "Debugger control is not a public operation; use ida_python (ida_dbg) if code execution is authorized"}
 
 
 def _get_reg_dict(tid=None):

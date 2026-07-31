@@ -178,11 +178,11 @@ class MCPError:
 # Default LLM-actionable hints for each error code
 ERROR_HINTS: Dict[str, str] = {
     MCPError.UNKNOWN: "An unexpected error occurred. Check the traceback for details and retry.",
-    MCPError.INVALID_ARGS: "Check the tool description for valid parameters and retry.",
-    MCPError.NOT_IMPLEMENTED: "This action is not available. Use a different action or tool.",
+    MCPError.INVALID_ARGS: "Check the operation schema for valid parameters and retry.",
+    MCPError.NOT_IMPLEMENTED: "This operation is not available. Use a different operation.",
     MCPError.NOT_FOUND: "The requested item was not found. Verify the identifier and retry.",
     MCPError.TOOL_NOT_FOUND: "The tool name is wrong. Call tools/list to see available tools.",
-    MCPError.ACTION_NOT_FOUND: "The action is not valid for this tool. Check the tool description for valid actions.",
+    MCPError.ACTION_NOT_FOUND: "The operation is not valid. Use ida_help or tools/list to see valid operations.",
     MCPError.MISSING_REQUIRED_ARG: "A required parameter is missing. Check the error details for which one.",
     MCPError.INVALID_ARG_TYPE: "A parameter has the wrong type (e.g. string instead of int). Fix the type and retry.",
     MCPError.INVALID_ARG_VALUE: "A parameter value is out of range or invalid. Check the allowed values.",
@@ -200,47 +200,47 @@ ERROR_HINTS: Dict[str, str] = {
     MCPError.INVALID_FILE_FORMAT: "The file format is not recognized. Check it is a valid binary/IDB.",
     MCPError.IDA_ERROR: "An IDA SDK error occurred. Check the details for the specific error.",
     MCPError.ADDRESS_INVALID: "The address format is invalid. Use hex (0x401000) or a symbol name.",
-    MCPError.ADDRESS_NOT_MAPPED: "The address is not mapped in the database. Use idb(action='segments') to see valid ranges.",
-    MCPError.ADDRESS_NOT_CODE: "The address does not contain code. Use data_ops(action='make_code') to convert it first.",
+    MCPError.ADDRESS_NOT_MAPPED: "The address is not mapped in the database. Use ida_overview to see mapped ranges and segments.",
+    MCPError.ADDRESS_NOT_CODE: "The address does not contain code. Use ida_disassemble to inspect the area, or ida_create_function to define a function at the address.",
     MCPError.ADDRESS_NOT_DATA: "The address does not contain data. It may be code or unexplored.",
     MCPError.ADDRESS_ALIGNMENT: "The address is not properly aligned for this operation.",
-    MCPError.FUNCTION_NOT_FOUND: "No function at this address. Use funcs(action='create', addr='...') to create one.",
+    MCPError.FUNCTION_NOT_FOUND: "No function at this address. Use ida_create_function(address='...') to define one, or ida_list_functions to find existing functions.",
     MCPError.FUNCTION_ALREADY_EXISTS: "A function already exists at this address. Delete it first or use a different address.",
     MCPError.FUNCTION_OVERLAP: "The function range overlaps with an existing function.",
     MCPError.FUNCTION_TOO_LARGE: "The function is too large to process in a single request. Use pagination.",
-    MCPError.SEGMENT_NOT_FOUND: "No segment found at this address. Use idb(action='segments') to list segments.",
+    MCPError.SEGMENT_NOT_FOUND: "No segment found at this address. Use ida_overview to list segments and mapped ranges.",
     MCPError.SEGMENT_OVERLAP: "The segment range overlaps with an existing segment.",
     MCPError.TYPE_ERROR: "Type information error. Check the type declaration syntax.",
     MCPError.TYPE_PARSE_ERROR: "Failed to parse the type declaration. Use C syntax like 'int __cdecl(int, char**)'.",
     MCPError.TYPE_APPLY_ERROR: "Failed to apply the type. The type may be incompatible with this address.",
     MCPError.NAME_CONFLICT: "A symbol with this name already exists. Choose a different name.",
     MCPError.NAME_INVALID: "The name contains invalid characters. Use C identifier rules (a-z, A-Z, 0-9, _).",
-    MCPError.STRUCT_NOT_FOUND: "The structure was not found. Use structs(action='list') to see available structures.",
+    MCPError.STRUCT_NOT_FOUND: "The structure was not found. Search for the type name with ida_find.",
     MCPError.STRUCT_MEMBER_ERROR: "Error adding/modifying structure member. Check offset, size, and type.",
     MCPError.XREF_NOT_FOUND: "No cross-references found at this address.",
-    MCPError.DECOMPILER_UNAVAILABLE: "Hex-Rays decompiler is not available. Use code(action='disasm') instead.",
-    MCPError.DECOMPILER_FAILED: "Decompilation failed for this function. Try code(action='disasm') for assembly.",
+    MCPError.DECOMPILER_UNAVAILABLE: "Hex-Rays decompiler is not available. Use ida_disassemble instead.",
+    MCPError.DECOMPILER_FAILED: "Decompilation failed for this function. Try ida_disassemble for assembly.",
     MCPError.DECOMPILER_TIMEOUT: "Decompilation timed out. The function may be too complex.",
     MCPError.CTREE_ERROR: "CTree analysis failed. The function may not be decompilable.",
     MCPError.MICROCODE_ERROR: "Microcode extraction failed. Ensure Hex-Rays is available.",
-    MCPError.DEBUGGER_NOT_RUNNING: "Debugger is not active. Use debug(action='start') to launch the process.",
-    MCPError.DEBUGGER_ACTIVE: "Debugger is active. Stop it first with debug(action='stop') for static analysis.",
+    MCPError.DEBUGGER_NOT_RUNNING: "Debugger is not active. Debugger control is not a public operation; use ida_python (ida_dbg) if code execution is authorized.",
+    MCPError.DEBUGGER_ACTIVE: "Debugger is active; this operation requires static mode. Use ida_python (ida_dbg) to stop it if code execution is authorized.",
     MCPError.DEBUGGER_BREAKPOINT_ERROR: "Breakpoint operation failed. Check the address is valid code.",
     MCPError.DEBUGGER_MEMORY_ERROR: "Cannot read/write debugger memory. Check the address is accessible.",
     MCPError.DEBUGGER_REGISTER_ERROR: "Invalid register name or the debugger is not paused.",
     MCPError.DEBUGGER_STEP_ERROR: "Step operation failed. The process may have exited.",
     MCPError.DEBUGGER_PROCESS_ERROR: "Process operation failed. Check the binary path and arguments.",
     MCPError.DEBUGGER_THREAD_ERROR: "Thread operation failed. The thread may no longer exist.",
-    MCPError.SESSION_REQUIRED: "No active session. Create one with session(action='create', binary_path='...').",
-    MCPError.SESSION_NOT_FOUND: "Session not found. Use session(action='list') to see available sessions.",
+    MCPError.SESSION_REQUIRED: "No active session. Create one with ida_open_binary(binary_path='...').",
+    MCPError.SESSION_NOT_FOUND: "Session not found. Use ida_session_list to see available sessions.",
     MCPError.SESSION_ALREADY_EXISTS: "A session for this binary already exists. Use force_new=true to create a new one.",
-    MCPError.SESSION_CORRUPTED: "Session data is corrupted. Use session(action='rebuild') to recreate it.",
+    MCPError.SESSION_CORRUPTED: "Session data is corrupted. Recreate it with ida_open_binary(reanalyze=true).",
     MCPError.SESSION_LOCKED: "Session is locked by another process. Close other IDA instances first.",
-    MCPError.SESSION_EXPIRED: "Session has expired. Create a new one with session(action='create').",
+    MCPError.SESSION_EXPIRED: "Session has expired. Create a new one with ida_open_binary.",
     MCPError.DATABASE_LOCKED: "The IDB is locked by another process. Close IDA or wait.",
-    MCPError.DATABASE_CORRUPTED: "The IDB appears corrupted. Use session(action='rebuild') to recreate.",
+    MCPError.DATABASE_CORRUPTED: "The IDB appears corrupted. Recreate it with ida_open_binary(reanalyze=true).",
     MCPError.DATABASE_READ_ONLY: "The database is read-only. Close other IDA instances.",
-    MCPError.DATABASE_NOT_LOADED: "No database is loaded. Create a session first.",
+    MCPError.DATABASE_NOT_LOADED: "No database is loaded. Load a binary first with ida_open_binary.",
     MCPError.DB_ERROR: "Database error. The index may be corrupted. Delete the .embeddings.db file and re-index.",
     MCPError.IDB_NOT_FOUND: "The IDB file was not found. The session may need to be rebuilt.",
     MCPError.IDB_VERSION_MISMATCH: "IDB version mismatch. The IDB may have been created by a different IDA version.",
@@ -259,7 +259,7 @@ ERROR_HINTS: Dict[str, str] = {
     MCPError.EXPORT_FAILED: "Export failed. Check the format and output path.",
     MCPError.IMPORT_FAILED: "Import failed. Check the file format and path.",
     MCPError.FORMAT_UNSUPPORTED: "The requested format is not supported.",
-    MCPError.PLUGIN_NOT_FOUND: "Plugin not found. Use plugins(action='list') to see available plugins.",
+    MCPError.PLUGIN_NOT_FOUND: "Plugin not found. No public operation lists plugins; use ida_python if code execution is authorized.",
     MCPError.PLUGIN_ERROR: "Plugin execution failed. Check the plugin name and arguments.",
     MCPError.SIGNATURE_ERROR: "Signature operation failed. Check the signature file format.",
     MCPError.PDB_ERROR: "PDB loading failed. Check the PDB path and format.",
@@ -284,8 +284,8 @@ ERROR_HINTS: Dict[str, str] = {
     MCPError.SCRIPT_TIMEOUT: "Script execution timed out.",
     MCPError.HOOK_ERROR: "Hook generation failed.",
     MCPError.IDC_ERROR: "IDC script error. Check IDC syntax.",
-    MCPError.BOOKMARK_NOT_FOUND: "Bookmark not found. Use bookmarks(action='list') to see bookmarks.",
-    MCPError.BOOKMARK_DUPLICATE: "A bookmark already exists at this address. Use bookmarks(action='update').",
+    MCPError.BOOKMARK_NOT_FOUND: "Bookmark not found. Bookmarks are not exposed as public operations; use ida_python if code execution is authorized.",
+    MCPError.BOOKMARK_DUPLICATE: "A bookmark already exists at this address. Manage bookmarks via ida_python if code execution is authorized.",
     MCPError.DIFF_NO_CHANGES: "No differences found between the compared items.",
     MCPError.COMPARE_INCOMPATIBLE: "The items cannot be compared (different architectures or types).",
     MCPError.RPC_CONNECTION_ERROR: "Cannot connect to IDA. The IDA process may have crashed.",
@@ -293,7 +293,7 @@ ERROR_HINTS: Dict[str, str] = {
     MCPError.RPC_PROTOCOL_ERROR: "RPC protocol error. Unexpected response from IDA.",
     MCPError.ANNOTATION_ERROR: "Annotation operation failed.",
     MCPError.COMMENT_TOO_LONG: "Comment is too long. Keep comments under 1024 characters.",
-    MCPError.GOVERNANCE_BLOCKED: "Operation blocked by governance rules. Review violations and either fix the operation or set governed=false (not recommended).",
+    MCPError.GOVERNANCE_BLOCKED: "Operation blocked by governance rules. Review the violations and adjust the request accordingly.",
 }
 
 
@@ -383,7 +383,7 @@ def parse_address_safe(addr_str: str | int) -> Tuple[Optional[int], Optional[Dic
         return None, make_error(
             MCPError.MISSING_REQUIRED_ARG,
             "Address is required",
-            hint="Provide the 'addr' parameter as hex (0x401000) or a symbol name (e.g. 'main').",
+            hint="Provide the 'address' parameter as hex (0x401000) or a symbol name (e.g. 'main').",
         )
 
     if isinstance(addr_str, int):
@@ -431,7 +431,7 @@ def parse_address_safe(addr_str: str | int) -> Tuple[Optional[int], Optional[Dic
             MCPError.ADDRESS_INVALID,
             f"Invalid address format: '{addr_str}'",
             hint="Use hex format (0x401000), decimal, or a valid symbol name. "
-                 "Use data(action='functions') or search(action='name') to find addresses.",
+                 "Use ida_list_functions or ida_find to find addresses.",
         )
     except Exception as e:
         return None, make_error(MCPError.ADDRESS_INVALID, f"Failed to parse address: {str(e)}")
@@ -455,8 +455,8 @@ def validate_addr(addr: str | int, require_code: bool = False, require_func: boo
             return None, make_error(
                 MCPError.ADDRESS_NOT_MAPPED,
                 f"Address {hex(ea)} is not mapped in the database",
-                hint="Use idb(action='segments') to see valid address ranges, "
-                     "or search(action='name') to find symbols.",
+                hint="Use ida_overview to see valid address ranges, "
+                     "or ida_find to find symbols.",
             )
 
         if require_code:
@@ -465,8 +465,8 @@ def validate_addr(addr: str | int, require_code: bool = False, require_func: boo
                 return None, make_error(
                     MCPError.ADDRESS_NOT_CODE,
                     f"Address {hex(ea)} is not code",
-                    hint="Target must be a code address. Use data_ops(action='make_code', addr='...') "
-                         "to convert data to code first.",
+                    hint="Target must be a code address. Use ida_disassemble to inspect the area, "
+                         "or ida_create_function to define code at the address.",
                 )
 
         if require_func:
@@ -475,8 +475,8 @@ def validate_addr(addr: str | int, require_code: bool = False, require_func: boo
                 return None, make_error(
                     MCPError.FUNCTION_NOT_FOUND,
                     f"No function found at {hex(ea)}",
-                    hint=f"Use funcs(action='create', addr='{hex(ea)}') to define a function here, "
-                         f"or data(action='functions') to find existing functions.",
+                    hint=f"Use ida_create_function(address='{hex(ea)}') to define a function here, "
+                         f"or ida_list_functions to find existing functions.",
                 )
 
         return ea, None

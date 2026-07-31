@@ -71,7 +71,7 @@ def data_ops(
                 return steps
             if act == "make_code":
                 return [
-                    f"code(action='disasm', addr='{addr}', limit=40) to verify decode quality",
+                    f"ida_disassemble(address='{addr}', limit=40) to verify decode quality",
                     f"ctree(action='get_logic_flow', addr='{addr}') once function boundary is confirmed",
                     f"data_ops(action='undefine', addr='{addr}', size=16) if decode looks misaligned",
                 ]

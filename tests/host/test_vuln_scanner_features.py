@@ -301,12 +301,12 @@ class TestErrorRecovery(unittest.TestCase):
         err = make_error(MCPError.DECOMPILER_FAILED, "decomp failed")
         self.assertIn("recovery", err)
         self.assertGreater(len(err["recovery"]), 0)
-        self.assertEqual(err["recovery"][0]["tool"], "code")
+        self.assertEqual(err["recovery"][0]["tool"], "ida_disassemble")
 
     def test_session_required_has_recovery(self):
         err = make_error(MCPError.SESSION_REQUIRED, "no session")
         self.assertIn("recovery", err)
-        self.assertEqual(err["recovery"][0]["tool"], "session")
+        self.assertEqual(err["recovery"][0]["tool"], "ida_open_binary")
 
     def test_unknown_error_no_recovery(self):
         err = make_error("SOME_UNKNOWN_CODE", "something broke")

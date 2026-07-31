@@ -134,7 +134,7 @@ class ServerMultiSessionMixin:
                 return make_error(
                     MCPError.SESSION_NOT_FOUND,
                     f"Session '{sid}' not found",
-                    hint="All sessions in the group must exist. Use session(action='list').",
+                    hint="All sessions in the group must exist. Use ida_session_list.",
                 )
             valid_sids.append(sid)
 

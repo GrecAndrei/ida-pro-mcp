@@ -649,7 +649,7 @@ def suggest_next_steps(kwargs: dict, default_addr: Any = None) -> dict:
             "suggestions": [],
             "reason": (
                 "no obvious next step from this tool+action. "
-                "try idb(action='state') or blackboard(action='frontier')"
+                "try ida_session_state or ida_next_target"
             ),
         }
 
