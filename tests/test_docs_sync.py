@@ -32,6 +32,30 @@ def test_readme_describes_the_agent_operation_surface():
         f"README mentions only {len(mentioned)} of {len(names)} operations"
     )
 
+    # The operations table must enumerate every operation exactly once, so
+    # adding an operation cannot silently leave the README behind.
+    table = re.search(
+        r"\| \*\*Session\*\*.*?\| \*\*Workflow\*\*.*?\|\n", text, flags=re.S
+    )
+    assert table is not None, "README operations table not found"
+    listed = {
+        op
+        for row in table.group(0).splitlines()
+        for cell in row.split("|")[1:-1]
+        for op in re.findall(r"`([a-z_]+)`", cell)
+    }
+    expected = {name.removeprefix("ida_") for name in names}
+    assert listed == expected, (
+        f"README operations table out of sync: "
+        f"missing {sorted(expected - listed)}, extra {sorted(listed - expected)}"
+    )
+
+
+def test_readme_operation_count_matches_the_registry():
+    text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    count = len(list_agent_operations())
+    assert f"{count} exact-schema operations" in text
+
 
 def test_tools_reference_is_generated_from_the_public_operation_contract():
     reference = REPO_ROOT / "docs" / "TOOLS_REFERENCE.md"
