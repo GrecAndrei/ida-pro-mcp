@@ -20,7 +20,7 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
 - `src/ida_pro_mcp/host/server/`
   - `server.py` — core server object, MCP protocol handling, `tools/list` and `tools/call`
   - `server_dispatch.py` — tool dispatch, routing, phase-gate preflight, policy audit
-  - `server_session.py` — session CRUD and lifecycle (including `session(action='state')`)
+  - `server_session.py` — session CRUD and lifecycle (including `ida_session_state`)
   - `server_session_bootstrap.py` — bootstrap evidence control loop (calibration, tournament, drift)
   - `server_runtime.py` — runtime (idat process) lifecycle and process management
   - `server_runtime_leases.py` — runtime lease file tracking
@@ -63,7 +63,7 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
 
 `ida://` resources are defined in `resources.py` and served via `resources/read`. They are **application-driven** — the LLM cannot read them autonomously; the client UI must explicitly attach them.
 
-The most important resource (`ida://state`) is also accessible as `session(action='state')` — a real tool call the LLM can use directly.
+The most important resource (`ida://state`) is also accessible as `ida_session_state` — a real tool call the LLM can use directly.
 
 ## Tool Call Dispatch Pipeline
 
