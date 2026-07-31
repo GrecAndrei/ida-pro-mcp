@@ -2,6 +2,14 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-07-31 — the agent surface stops teaching the legacy API
+
+Error hints and recovery guidance are the one place models were still being steered to `tool(action=...)`. The default surface is `ida_*`, and the hints are now written that way at the source.
+
+- Rewrote all model-facing error hints (IDA-side `error_handling.py`, host-side `errors.py`, session/bookmark dispatch, `ida_overview` next-actions) to reference public `ida_*` operations; operations without a public equivalent (debugger, bookmarks, plugins) point at `ida_python` instead of the hidden legacy API.
+- Host error `recovery` recipes now ship public-first (`ida_open_binary`, `ida_disassemble`, `ida_calc_convert`, ...); the public-surface adapter passes already-public recipes through instead of dropping them.
+- README operations table and count now match the registry (47 operations) and are pinned by docs-sync tests.
+
 ## Unreleased — the blackboard becomes an investigation workspace
 
 The store was write-only in practice. A model recorded findings and then had to *choose* to query them back, which it rarely did; the only automatic recall was three bare titles injected inside a bare `except Exception: pass`. Negative results were unrecordable, nothing ever invalidated, and disagreement was silently merged into whichever claim had higher confidence. `blackboard_store.py` is rewritten around four behaviours it did not have.
