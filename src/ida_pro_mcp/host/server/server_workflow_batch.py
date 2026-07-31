@@ -139,7 +139,7 @@ class ServerWorkflowBatchMixin:
                 res = make_error(
                     MCPError.INVALID_ARGS,
                     f"Unknown tool {name} in batch call at index {idx}",
-                    hint=f"Valid tools include: {', '.join(TOOLS[:10])}... Use tools/list for full list.",
+                    hint="Use ida_help or tools/list for valid operation names.",
                 )
             elif not isinstance(call_args, dict):
                 res = make_error(
