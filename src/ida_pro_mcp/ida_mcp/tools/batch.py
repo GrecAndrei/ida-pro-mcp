@@ -312,7 +312,7 @@ _BATCH_TEMPLATES = {
         {"tool": "code", "action": "xrefs_from", "addr": "$addr"},
     ],
     "map_binary": [
-        {"tool": "binary_info", "action": "headers"},
+        {"tool": "idb", "action": "summary"},
         {"tool": "segments", "action": "list"},
         {"tool": "data", "action": "imports", "count": 50},
         {"tool": "data", "action": "functions", "count": 50},
@@ -320,17 +320,16 @@ _BATCH_TEMPLATES = {
     "deep_function_audit": [
         {"tool": "code", "action": "decompile", "addr": "$addr"},
         {"tool": "code", "action": "disasm", "addr": "$addr"},
-        {"tool": "string_ops", "action": "find_xrefs", "addr": "$addr"},
-        {"tool": "xref_analysis", "action": "call_chain", "addr": "$addr"},
+        {"tool": "code", "action": "callers", "addr": "$addr"},
+        {"tool": "code", "action": "callees", "addr": "$addr"},
     ],
     "crypto_hunt": [
-        {"tool": "crypto_id", "action": "scan", "limit": 20},
-        {"tool": "entropy", "action": "crypto_detect", "limit": 10},
-        {"tool": "string_ops", "action": "entropy_rank", "limit": 20},
+        {"tool": "search", "action": "find", "query": "aes rc4 blowfish base64", "limit": 20},
+        {"tool": "data", "action": "strings", "count": 20},
     ],
     "network_protocol_hunt": [
-        {"tool": "protocol", "action": "detect", "limit": 20},
-        {"tool": "string_ops", "action": "find_urls", "limit": 20},
+        {"tool": "search", "action": "find", "query": "recv send connect socket", "limit": 20},
+        {"tool": "search", "action": "find", "query": "http:// https:// url ip", "limit": 20},
         {"tool": "data", "action": "strings", "count": 30},
     ],
 }

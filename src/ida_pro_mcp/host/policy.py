@@ -46,40 +46,25 @@ class PolicyDecision(StrEnum):
 
 
 READ_ONLY_TOOLS = {
-    "abi",
     "analysis",
-    "binary_info",
     "bookmarks",
     "calc",
-    "cfg_analysis",
-    "classify",
     "code",
-    "compare",
-    "coverage",
     "crypto_id",
     "ctree",
     "data",
     "entropy",
-    "export",
     "firmware_view",
     "graph",
     "idb",
     "imports_deep",
     "intelligence",
     "knowledge",
-    "lumina",
-    "microcode",
-    "nav",
-    "patterns",
-    "project",
     "protocol",
     "search",
     "session",
     "stack_analysis",
-    "string_ops",
-    "summarize",
     "symbols",
-    "trace_analysis",
     "truncation",
     "types",
     "wiki",
@@ -89,9 +74,6 @@ READ_ONLY_TOOLS = {
 WRITE_IDB_TOOLS = {
     "annotation",
     "blackboard",
-    "bulk",
-    "data_ops",
-    "fixups",
     "funcs",
     "governance",
     "hooks",
@@ -150,13 +132,11 @@ LOCAL_CODE_EXEC_ACTIONS = {
 FILESYSTEM_WRITE_ACTIONS = {
     ("memory", "write_file"),
     ("misc", "write_file"),
-    ("project", "write"),
 }
 
 FILESYSTEM_READ_ACTIONS = {
     ("memory", "read_file"),
     ("misc", "read_file"),
-    ("project", "read"),
 }
 
 READ_ONLY_ACTIONS = {
@@ -172,7 +152,6 @@ READ_ONLY_ACTIONS = {
     ("funcs", "suggest_names"),
 }
 
-DEBUGGER_TOOLS = {"debug"}
 
 DISALLOWED_PURPOSES = {
     "cheating",
@@ -282,8 +261,6 @@ def classify_tool_action(tool: Any, action: Any) -> RiskTier:
         return RiskTier.FILESYSTEM_WRITE
     if pair in FILESYSTEM_READ_ACTIONS:
         return RiskTier.FILESYSTEM_READ
-    if tool_name in DEBUGGER_TOOLS:
-        return RiskTier.DEBUGGER
     if action_name in DESTRUCTIVE_ACTIONS:
         return RiskTier.DESTRUCTIVE
     if pair in READ_ONLY_ACTIONS:

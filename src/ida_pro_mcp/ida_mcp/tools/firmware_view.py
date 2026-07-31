@@ -1350,8 +1350,6 @@ def firmware_view(
                 "recommendations": [
                     {"tool": "firmware_view", "action": "scan_region", "start": hex(around_start), "end": hex(around_end), "reason": "Estimate unknown/data/code mix before deep queries."},
                     {"tool": "firmware_view", "action": "pointer_sweep", "start": hex(around_start), "end": hex(around_end), "stride": ptr_size, "reason": "Find likely tables/vtables/jump pointers."},
-                    {"tool": "data_ops", "action": "cycle_data", "addr": hex(anchor), "reason": "Fast local reinterpretation similar to IDA D cycling."},
-                    {"tool": "data_ops", "action": "set_repr", "addr": hex(anchor), "repr": "offset", "reason": "Show numeric operands as references for firmware pointers."},
                     {"tool": "search", "action": "semantic", "pattern": "boot init parse table checksum", "limit": 60, "reason": "Switch to semantic discovery after view shaping."},
                 ],
             }

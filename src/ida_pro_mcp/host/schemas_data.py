@@ -33,33 +33,20 @@ TOOLS = [
     "modify",
     "funcs",
     "segments",
-    "bulk",
     # Utilities
     "misc",
     "calc",
-    "nav",
     # Debugging and tracing
-    "debug",
-    "coverage",
-    "trace_analysis",
     # Project and file management
-    "project",
 
-    "microcode",
     "graph",
-    "xref_analysis",
     "ctree",
     # Structure and type recovery
     "imports_deep",
-    "patterns",
     "symbols",
     # Differential and comparison
-    "lumina",
     # Export and annotation
-    "export",
-    "history",
 
-    "data_ops",
     "firmware_view",
     # Documentation
     "wiki",
@@ -69,24 +56,16 @@ TOOLS = [
     "workflow",
     "gadgets",
     # Unified security analysis (merged: packer, hooks, deobfuscate, crypto_id, entropy, protocol, taint)
-    "security",
     # ABI & calling conventions
-    "abi",
     # Summarization & classification
-    "summarize",
-    "classify",
     # Function comparison
-    "compare",
     # Stack analysis
     "stack_analysis",
     # Intelligent annotation
     "annotation",
     # String operations
-    "string_ops",
     # CFG analysis
-    "cfg_analysis",
     # Binary info
-    "binary_info",
 
     # Other components
     # --- New infrastructure tools ---
@@ -97,11 +76,7 @@ TOOLS = [
     "knowledge",
     # --- Relocation/fixup management (specialized; not advertised) ---
     # --- New: struct recovery, emulation, binary diffing, multi-session ---
-    "struct_recover",
-    "emulate",
-    "bindiff",
     "multi_session",
-    "fixups",
 ]
 
 # Tier A — default tools/list surface for agents. Everything else stays callable
@@ -195,7 +170,6 @@ _EXTRA_TOOL_ALIASES = {
     "plugins_tool": "misc",
     "python": "misc",
 
-    "c2_detect": "string_ops",
     # Legacy/compat aliases kept for older clients and scripts.
     "comments_ai": "annotation",
     "annotations_ai": "annotation",
@@ -204,9 +178,7 @@ _EXTRA_TOOL_ALIASES = {
     "searches": "search",
     "segment": "segments",
     "session_tool": "session",
-    "strings": "string_ops",
     "symbols_tool": "symbols",
-    "trace_analyze": "trace_analysis",
     "xref": "graph",
     "xrefs": "graph",
     "govern": "governance",
@@ -215,105 +187,64 @@ _EXTRA_TOOL_ALIASES = {
 }
 
 # Canonical legacy threat-route contract used by host dispatchers.
-THREAT_LEGACY_REDIRECT_TOOLS = {
-    "c2_detect": "string_ops",
-}
+THREAT_LEGACY_REDIRECT_TOOLS = {}
 
 THREAT_LEGACY_TRACING_TOOLS = {
     "trace",
-    "trace_analysis",
-    "coverage",
     "taint",
-    "security",
 }
 
 THREAT_LEGACY_VULN_TOOLS = {
     "gadgets",
     "search",
-    "security",
 }
 
 THREAT_LEGACY_MALWARE_PASSTHROUGH_TOOLS = {
     "deobfuscate",
     "crypto_id",
-    "string_ops",
-    "security",
 }
 
 # Tool->optional action allowlist for legacy passthrough flows.
 # `None` means any action is accepted.
 THREAT_LEGACY_CONDITIONAL_PASSTHROUGH = {
-    "classify": None,
     "protocol": None,
-    "security": None,
-    "summarize": {
-        "security_posture",
-        "statistics",
-        "binary",
-        "function",
-    },
 }
 
 TOOL_DESCRIPTIONS = {
-    "abi": "Analyzes calling conventions and ABI details of functions. Actions: detect, stack_args, reg_args, return_type, varargs, struct_return, tail_calls, prologue, epilogue, abi_violations.",
 
     "analysis": "Controls IDA analysis engine settings and triggers reanalysis, and runs IDA plugins. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze, run, analyze, state. Note: analysis(action='plugin_run', name='...') is a host-level alias that forwards to misc(action='plugin_run').",
     "annotation": "Automatically generates and manages comments, labels, and documentation across functions. Actions: auto_comment, auto_comment_function, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, propagate_names, cleanup, validate, get_context, set_structured, bulk_set, export_md, import_md, summary.",
     "background": "Background batch execution for long-running analysis tasks and IDAPython scripts. Submit scripts or tool calls to run in background threads without interrupting IDA. Actions: submit, status, cancel, result, list, wait.",
     "batch": "Executes multiple tool calls in a single request to reduce round trips. Pass a calls array of tool invocations.",
-    "binary_info": "Retrieves binary metadata including PE/ELF headers, sections, and build info. Actions: headers, sections, relocations, resources, debug_info, compiler, linker, timestamps, checksums, overlay.",
     "blackboard": "Durable RE notebook (canonical knowledge store). Prefer write/read/list/search/update/delete, frontier, next_target, decision_card, stats. Other blackboard actions remain callable. wiki is documentation lookup; knowledge is cross-session chip/symbol KB — use blackboard for findings.",
     "bookmarks": "Manages named address bookmarks for quick navigation and milestone tracking. Actions: add, list, delete, update, clear, find, export.",
-    "bulk": "Applies batch edits (renames, comments, types) to multiple addresses in one call. Actions: rename, comment, apply_type, rename_stack, import_annotations, export_annotations.",
     "calc": "Safe address arithmetic and pointer resolution—use instead of mental math. Includes bitwise helper operations. Actions: eval, offset, convert, resolve, deref, chain, align, bitops.",
-    "cfg_analysis": "Analyzes control flow graph structure including loops, dominators, and complexity. Actions: complexity, loops, branches, paths, dominators, post_dominators, back_edges, natural_loops, irreducible, flatten_detect.",
-    "classify": "Classify functions and binaries by purpose. function: single function — embedding-driven BehaviorClassifier (bge-code-v1). binary: overall binary type. all_functions: classify all functions — unnamed functions use BehaviorClassifier. library_code/wrappers/callbacks/initializers/error_handlers: structural classification. hot_functions: most-called functions. orphans: no-caller functions (entry points / dead code). induce_schema: structural attribute-value schema for retrieval. anchor_coverage: report per-anchor coverage over current IDB. NOTE: the binary and function actions share names with summarize.binary / summarize.function but produce DIFFERENT output — classify returns categories/behavior tags, summarize returns counts/structure. Pick the one that matches the question.",
     "code": "Decompilation, disassembly, and code analysis (≈ IDA View menu / F5/Tab). smart_decompile: best first call — pseudocode + behavior tags + callers/callees + crypto hints + suggested next actions. decompile: pseudocode only. disasm: assembly listing. detect: custom per-session detector — define rules at runtime (api_chain, string_ref, type_match, xor_threshold, caller_of, callee_of). register persistent detectors with register=true. Actions: smart_decompile, decompile, disasm, detect, decompile_chain, semantic_decompile, diff_functions, trace_argument_origin, explain, decompile_all, xrefs_to, xrefs_from, xrefs_to_field, callees, callers, blocks, callgraph, find_paths, strings_in_func, decomp_dataflow, export.",
 
-    "compare": "Diff two IDB databases or functions across binaries. Actions: functions, blocks, apis, strings, constants, structure, semantics, batch_compare, find_clones, changelog.",
-    "coverage": "Import and analyze code coverage data to identify hit/missed paths. Actions: import_drcov, import_lighthouse, highlight, report, uncovered, filter, function_coverage, gaps, compare, merge.",
-    "security": "Unified security analysis. 11 actions: detect (packer+entropy+crypto+obfuscation sweep), decode (XOR/Base64 at addr), analyze (what=stack_strings|dead_code|api_hashing|dynamic_dispatch|anti_disasm|crypto_constants|encoding|checksums|aes_ni|entropy_high), hook (method=frida|detours|inline), hook_targets (find hookable functions), protocol (detect protocol usage), protocol_spec (what=parsers|serializers|handlers|endpoints|tls_config|socket_flow|packet_struct|magic_numbers|state_machine|reconstruct|trace_handler|export_spec), taint (trace source→sink), taint_sources (list sources), taint_report (full report), eval (custom Python with all sub-tools + IDA SDK).",
     "ctree": "Query and traverse the Hex-Rays decompiler ctree AST for a function. Actions: get, traverse, find_calls, find_vars, find_strings, find_conditions, get_logic_flow, dominance_map, var_dependency_graph.",
     "data": "Retrieve core IDB data. functions: list all functions — always includes xref count (capped 999). globals: global variables. strings: string literals — always includes xref count. imports: imported modules and functions. exports: exported entry points. lookup: resolve name↔address. bulk_query: multiple queries in one call. capability_matrix: binary capability matrix from imports + function classifications. string_xrefs: ranked string-to-function xref map with module clustering.",
-    "data_ops": "Change data representation at addresses (≈ IDA Edit menu / D/A/O/U keys). cycle_data: step byte→word→dword→qword at addr (≡ pressing D in IDA). make_data: force a specific size. make_array: define an array. make_string: define a string literal (≡ A in IDA). undefine: undefine bytes (≡ U in IDA). make_code: convert to code (≡ C in IDA). set_repr: change display radix (hex/dec/bin/char/offset). make_ptr: mark as pointer. Actions: make_data, make_array, make_string, undefine, make_code, cycle_data, set_repr, make_ptr.",
-    "debug": "Control the debugger: run, step, breakpoints, registers, memory, threads. Actions: status, start, stop, continue, step_into, step_over, run_to, run_until, breakpoints, add_bp, del_bp, enable_bp, add_hw_bp, add_watch, regs, set_reg, reg_diff, snapshot_regs, threads, modules, callstack, read_mem, write_mem, search_mem, stack_dump, mem_map, bp_context, trace_start, trace_stop, trace_read, mem_diff.",
-    "export": "Write real on-disk artifacts from the IDB. listing/html/idc/json/headers always write files. binexport uses Google BinExport when installed (explicit path via BinExportBinary); otherwise writes a labeled JSON fallback — use bindiff(action='snapshot') for cross-version diffs without the plugin. sarif exports blackboard findings only (no invented noise). redact redacts IPs/emails/hashes from text=. Actions: listing, html, idc, json, sarif, binexport, headers, redact, vtable.",
     "firmware_view": "Firmware triage: region scanning, pointer sweeps, table carving, deterministic detection logic, multi-region campaigns, and bootstrap orchestration. Actions: scan_region, auto_retype, pointer_sweep, recommend, table_candidates, smart_carve, rollback_last, review_contradictions, region_profile, pointer_clusters, carve_plan, campaign, segment_sweep, multi_region_campaign, detect_load_address, detect_vector_table, detect_mmio, rtos_scan, triage_snapshot, bootstrap.",
-    "fixups": "Manage relocations/fixups (relocation table entries) in the IDB. Actions: list, get, add, delete.",
     "funcs": "Function boundary management (≈ IDA P/Delete keys). create: define a function at addr (≡ pressing P in IDA). change: set the current function end (≡ IDA Set function end). delete: remove function definition. info: full function metadata — pass include_xrefs/include_prototype/include_stack for richer output. metrics: size/complexity/call counts. find_similar: structural similarity search. suggest_names: name candidates from heuristics. list: paginated function listing (like data(functions)) with structured output. Note: regex-based filters live in search, while renames and comments live on modify. Actions: create, change, delete, set_flags, info, metrics, find_similar, suggest_names, list.",
     "gadgets": "Find ROP/JOP/COP gadgets, stack pivots, and classify exploit chains. Actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains, classify_chain.",
     "governance": "Pre-flight validation for edits: detect contradictions, PII, dangerous patches. Actions: check, redact, list_rules, stats.",
     "graph": "Generate call graphs, CFGs, dominator trees, and xref graphs for visualization. Actions: callgraph, cfg, dominators, xref_graph.",
-    "xref_analysis": "Cross-reference and callgraph analysis: call chains, common callers/callees, hub/leaf functions, recursion detection, dominator analysis, influence reachability, dependency graphs, dead function detection. Actions: call_chain, common_callers, common_callees, hub_functions, leaf_functions, recursive, dominator, influence, dependency_graph, dead_functions.",
-    "history": "Undo/redo IDB changes, create snapshots, restore, and diff states. Actions: undo, redo, list, snapshot, restore, diff.",
     "idb": "Query top-level IDB metadata: binary info, segments, entrypoints, bookmarks, and architecture profile guidance for raw binaries. Actions: meta, summary, segments, entrypoints, bookmarks, overview, architecture_profile, state.",
     "imports_deep": "Deep import analysis: thunks, delay-loads, forwarded, ordinal, and API set resolution. Actions: thunks, delay, forwarded, ordinal, api_sets, resolve.",
      "intelligence": "Local embeddings index + behavior classification backend for search.nl. Prefer index_fast (quick) or index_batch (decompile-quality), then search(action=nl). Actions (core): index_fast, index_batch, semantic_search, similar_functions, embedder_status, intelligence_status.",
     "knowledge": "Cross-session chip/symbol knowledge base (not the analysis notebook). For findings and hypotheses use blackboard. Actions: chip_identify, symbol_lookup, import_symbols, export_session, chip_families.",
 
-    "lumina": "Interface to Hex-Rays Lumina server for collaborative function metadata sharing. Actions: pull, push, status, history, search, get_metadata.",
     "memory": "Read, write, and inspect raw memory/bytes in the binary or debuggee, plus host filesystem read/write helpers. search: set literal=true to bypass integer detection for digit-only patterns. compare: returns hamming_distance for large inputs, edit_distance for small. Actions: read, write, hexdump, search, compare, pointers, entropy, strings, struct_walk, histogram, read_file, write_file.",
-    "microcode": "Access Hex-Rays microcode IR for a function at various maturity levels. Actions: get, blocks, instructions, def_use_graph.",
     "misc": "Utility grab-bag: run scripts (python/idc), load signatures, inspect cache stats, read/write files on the host filesystem, and reload IDA-side tool modules without restarting. reload: pass module='funcs' or modules='funcs,search' (or 'all') to pick up source changes instantly — no opencode restart needed for IDA-side changes. Actions: python, idc, load_sig, cache_stats, plugin_list, plugin_run, read_file, write_file, health, reload. (analysis(action='plugin_run') and memory read/write live alongside here.)",
     "modify": "Apply edits to the IDB: rename symbols, add comments (regular/repeatable/anterior/posterior), set types, and patch assembly (multi-line instructions separated by semicolons). Actions: rename, comment, set_type, patch_asm.",
-    "nav": "Navigate the IDA cursor to addresses or semantically interesting locations. Actions: goto, cursor, interesting, semantic_goto.",
-    "patterns": "Generate, match, and manage FLIRT/byte pattern signatures for function identification. Actions: generate, match, list_sigs, apply_sig, create_sig, matched, yara_from_func, flirt_generate, match_yara.",
 
-    "project": "Project I/O and evidence management. Actions: save, close, open, load_binary, list_recent, get_cwd, set_cwd, list_dir, exists, evidence_graph, knowledge_merge, confidence_model, replay_pipeline, hypothesis_tracker, temporal_reasoning, semantic_artifact_diff, ai_governance, knowledge_debt, casefile_export.",
 
     "search": "Primary discovery tool. find: unified names (incl. demangled)+strings+imports+comments+xrefs (+insns unless identifier-like). Always returns items[].addr. nl: embedding search (index_fast first; mode=quick|expand). analyze: unified structural analysis (neighborhood/outlier/similar/vulnerable/semantic scopes, uses embedding index + cached call graph). symbol/symbol_info: resolve names/addresses. api/callers/callees/xrefs_to_string: refs. string/bytes for raw patterns. Results always include results text + items with addr/name/type/score. Actions (core): find, nl, string, bytes, api, callers, callees, xrefs_to_string, symbol, symbol_info, decompiled, behavior, analyze.",
-    "segments": "List, create, modify, and analyze binary segments and their permissions/attributes. Actions: list, add, delete, set_attr, set_perms, move, info, analyze, find_code, find_data, compare, merge. For relocations/fixups use the dedicated `fixups` tool.",
+    "segments": "List, create, modify, and analyze binary segments and their permissions/attributes. Actions: list, add, delete, set_attr, set_perms, move, info, analyze, find_code, find_data, compare, merge.",
      "session": "Full session lifecycle. Prefer: create/switch/close/list/status/state/logs/health. state: analysis snapshot (binary, coverage, blackboard summary) — call at turn start. logs: tail IDA stdout/stderr without RPC when IDA is busy. narrative: structured chronological log of all tool calls and findings for context recovery. Advanced session notebook/hypothesis/macro actions remain callable by name. Actions (core): create, switch, close, list, status, state, logs, health, narrative, kill.",
     "stack_analysis": "Analyze stack frames: buffer sizes, canaries, alignment, spills, variables, and uninitialized regions. Actions: frame, buffers, canary, alignment, spills, usage, variables, arrays, uninitialized, summary.",
-    "string_ops": "Advanced string analysis and IOC extraction. score_c2/indicators: C2 risk report — BehaviorClassifier on strings + API triads + family guess. ioc_extract: extract all IOCs (URLs, IPs, registry keys, C2 endpoints). persistence/evasion: persistence mechanisms and evasion techniques. find_urls/find_ips/find_paths/find_registry/find_emails/find_commands: pattern extraction. find_c2/find_configs/find_api_keys/find_databases/find_crypto_addrs: semantic extraction. find_stack_strings/find_base64: obfuscated string recovery. entropy_rank: rank strings by Shannon entropy. suspicious/encoding_stats/multilingual/decode_all: analysis utilities.",
-    "summarize": "Structured summaries of binary components. binary: overall binary summary. function: single function summary. segment: segment summary. imports_by_category: imports grouped by API category. strings_by_category: strings grouped by type. complexity: function complexity metrics. call_hierarchy: call tree from entry point. data_flow: data flow summary. security_posture: dangerous APIs + mitigations + risk level. statistics: binary-wide stats. report: FULL REPORT — binary + security_posture + live taint scan + blackboard findings + statistics. NOTE: the binary and function actions share names with classify.binary / classify.function but produce DIFFERENT output — summarize returns counts/structure, classify returns categories/behavior tags. Pick the one that matches the question.",
     "symbols": "Loads and manages debug symbols (PDB/DWARF) for the current binary. Actions: load_pdb, load_dwarf, status, apply, export.",
-    "struct_recover": "Automatic struct/type recovery from field access patterns — walks instructions for [base+offset] accesses, clusters by register, infers field types, generates C structs. Actions: recover, recover_all, propagate, preview, apply.",
-    "emulate": "Unicorn-backed emulation sandbox — execute functions/slices from the IDB without a debugger (x86/x64, ARM/AArch64, MIPS). Maps IDB segments, sets up stack and calling convention. Actions: run, slice, call, decrypt, trace. NOTE: requires `pip install unicorn`.",
-    "bindiff": "Cross-version binary diffing via function fingerprints (no Google BinDiff required). snapshot with path= persists JSON; open the other build and diff/function_match/summary against that path. Matching: exact name, mnemonic hash, string refs, callee signature, structural fuzzy. patch_analysis for one function. For protobuf BinExport use export(action='binexport'). Actions: snapshot, diff, patch_analysis, function_match, summary.",
     "multi_session": "Multi-binary session groups — link IDA sessions for cross-binary import/export resolution, cross-session decompilation, and cross-binary xref queries. Actions: group_create, group_list, group_link, group_remove, cross_resolve, cross_decompile, cross_xrefs, status.",
 
-    "trace_analysis": "Analyzes imported execution traces for coverage, loops, API sequences, and anti-analysis detection. Also provides runtime execution-trace access (get/clear/set_options), static control-flow tracing (static_trace, decrypt_strings, eval_expr, prefetch_context), and emulation-driven deobfuscation (deobfuscate_emulate). Actions: import_trace, analyze_coverage, find_loops, extract_api_calls, basic_blocks_hit, execution_timeline_graph, cross_run_diff, coverage_debug_plan, anti_analysis_detect, trace_entropy, api_sequence, loop_analysis, get, clear, set_options, static_trace, decrypt_strings, eval_expr, deobfuscate_emulate, prefetch_context.",
     "truncation": "Manage truncated tool responses. continue reads the next chunk and requires field when the token contains multiple truncated fields; use the exact name listed in the response's _continue.fields. peek shows metadata (fields, totals, offsets) without consuming data. search greps within full original content. summary gives a compact overview. Also usable as per-call params on any tool: no_truncate=true skips truncation, max_tokens=N overrides budget, trunc_offset/trunc_limit paginate directly. Actions: continue, peek, search, summary.",
     "types": "Manages IDA type system: structs, enums, prototypes, type propagation, and header imports. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header, diff, visualize, propagate, enum_values, type_graph, vtable.",
     "wiki": "Built-in tool/workflow documentation lookup (not the analysis notebook). For findings use blackboard. Actions: list_topics, read, search, semantic_search, index, sections, suggest.",
@@ -797,25 +728,6 @@ TOOL_ARG_SCHEMAS = {
         "query": {"type": "string"},
         "depth": {"type": "integer"},
     },
-    "security": {
-        "action": {"type": "string", "description": "Security analysis action"},
-        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
-        "limit": {"type": "integer"},
-        "size": {"type": "integer"},
-        "threshold": {"type": "number"},
-        "end_addr": {"type": "string"},
-        "window": {"type": "integer"},
-        "step": {"type": "integer"},
-        "rules": {"type": "string"},
-        "category": {"type": "string"},
-        "source": {"type": "string"},
-        "max_depth": {"type": "integer"},
-        "max_paths": {"type": "integer"},
-        "key": {"type": "string"},
-        "depth": {"type": "integer"},
-        "query": {"type": "string"},
-        "code": {"type": "string"},
-    },
     "gadgets": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["gadgets"]},
         "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
@@ -852,43 +764,6 @@ TOOL_ARG_SCHEMAS = {
             "type": "boolean",
             "description": "Include full structural metadata in wiki responses.",
         },
-    },
-    "bindiff": {
-        "action": {"type": "string", "enum": TOOL_ACTIONS["bindiff"]},
-        "addr": {"type": "string", "description": "Function address (for patch_analysis)"},
-        "snapshot": {
-            "type": ["object", "string"],
-            "description": "Previous snapshot dict, JSON string, or file path from snapshot action",
-        },
-        "path": {
-            "type": "string",
-            "description": "snapshot: write path for fingerprint JSON. Other actions: alias for snapshot path",
-        },
-        "limit": {"type": "integer", "description": "Max results to return (default 50)"},
-        "threshold": {"type": "number", "description": "Match confidence threshold 0.0-1.0 (default 0.6)"},
-        "max_functions": {"type": "integer", "description": "Cap functions fingerprinted"},
-        "include_full": {
-            "type": "boolean",
-            "description": "When path is set on snapshot, also return full functions map in-band",
-        },
-    },
-    "export": {
-        "action": {"type": "string", "enum": TOOL_ACTIONS["export"]},
-        "path": {"type": "string", "description": "Output file path (required for most actions for predictable location)"},
-        "addr": {"type": "string", "description": "Address or start:end range for listing"},
-        "include_decompile": {"type": "boolean", "description": "json: include Hex-Rays pseudocode per function"},
-        "text": {"type": "string", "description": "redact: text to redact"},
-        "limit": {"type": "integer", "description": "Max items for strings/comments/sarif/vtables"},
-        "max_functions": {"type": "integer", "description": "Cap functions in listing/html/json/binexport fallback"},
-        "query": {"type": "string", "description": "vtable: name filter pattern"},
-        "out_path": {"type": "string", "description": "redact: optional file to write redacted text"},
-        "output": {"type": "string", "description": "Alias for out_path"},
-    },
-    "bulk": {
-        "action": {"type": "string", "enum": TOOL_ACTIONS["bulk"]},
-        "items": {"type": "array", "items": {"type": "object"}},
-        "path": {"type": "string"},
-        "continue_on_error": {"type": "boolean"},
     },
     "background": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["background"]},
@@ -969,16 +844,6 @@ TOOL_ARG_SCHEMAS = {
         "input_type": {"type": "string"},
         "call_stack": {"type": "array", "items": {"type": "string"}},
         "resolved": {"type": "boolean"},
-    },
-    "fixups": {
-        "action": {"type": "string", "enum": TOOL_ACTIONS["fixups"]},
-        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
-        "target": {"type": "string", "description": "Target address (for add)"},
-        "fixup_type": {"type": "integer", "description": "Fixup type id (processor specific)"},
-        "start": {"type": "string", "description": "Start address for list range"},
-        "end": {"type": "string", "description": "End address for list range"},
-        "offset": {"type": "integer", "description": "Pagination offset"},
-        "count": {"type": "integer", "description": "Max entries (0=all)"},
     },
     "governance": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["governance"]},

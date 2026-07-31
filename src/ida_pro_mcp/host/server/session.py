@@ -47,19 +47,19 @@ _ANALYSIS_PHASES = {
     "triage": {
         "order": 0,
         "threshold": {"functions_listed": 1, "strings_listed": 1, "imports_listed": 1},
-        "suggested_tools": ["binary_info.headers", "idb.summary", "data.imports", "data.strings"],
+        "suggested_tools": ["idb.summary", "data.imports", "data.strings"],
         "description": "Initial triage: identify binary type, imports, and suspicious strings.",
     },
     "import_analysis": {
         "order": 1,
         "threshold": {"imports_categorized": 20, "api_patterns_detected": 1},
-        "suggested_tools": ["imports_deep.thunks", "classify.categorize", "string_ops.find_urls"],
+        "suggested_tools": ["imports_deep.thunks", "data.imports"],
         "description": "Categorize imports and detect API usage patterns.",
     },
     "deep_analysis": {
         "order": 2,
         "threshold": {"functions_decompiled": 10, "function_attrs_indexed": 1},
-        "suggested_tools": ["code.decompile", "ctree.get", "crypto_id.detect"],
+        "suggested_tools": ["code.decompile", "ctree.get"],
         "description": "Deep decompilation and semantic analysis.",
     },
     "behavior_mapping": {
@@ -70,13 +70,13 @@ _ANALYSIS_PHASES = {
     "vulnerability": {
         "order": 4,
         "threshold": {"functions_analyzed": 100, "dangerous_apis_identified": 5},
-        "suggested_tools": ["gadgets.find", "stack_analysis.analyze_frame", "cfg_analysis.complexity"],
+        "suggested_tools": ["gadgets.find", "stack_analysis.analyze_frame"],
         "description": "Vulnerability and exploit analysis.",
     },
     "reporting": {
         "order": 5,
         "threshold": {"bookmarks_created": 5},
-        "suggested_tools": ["blackboard.export", "bulk.export_annotations", "session.notebook"],
+        "suggested_tools": ["blackboard.export", "session.notebook"],
         "description": "Compile findings and produce report.",
     },
 }

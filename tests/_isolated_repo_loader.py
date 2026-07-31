@@ -114,6 +114,17 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
     common.handle_error = lambda e, *a, **kw: {"ok": False, "error": str(e)}
     common.ERROR_HINTS = {}
 
+    def shannon_entropy(data):
+        if not data:
+            return 0.0
+        counts = {}
+        for b in data:
+            counts[b] = counts.get(b, 0) + 1
+        length = len(data)
+        return round(-sum((c / length) * __import__("math").log2(c / length) for c in counts.values()), 4)
+
+    common.shannon_entropy = shannon_entropy
+
     class _MCPError:
         INVALID_ARGS = "INVALID_ARGS"
         DECOMPILER_FAILED = "DECOMPILER_FAILED"

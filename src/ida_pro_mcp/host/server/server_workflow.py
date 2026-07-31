@@ -186,7 +186,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                     duplicate_keys[key_str] = int(duplicate_keys.get(key_str, 1)) + 1
                 else:
                     seen_keys.add(key)
-                if n in {"deobfuscate", "search"} and a in {"malware", "vuln", "api_hashing", "vulnerable"}:
+                if n == "search" and a in {"malware", "vuln", "api_hashing", "vulnerable"}:
                     risk_hints.append(f"high-risk step present: {key_str}")
 
             warnings: list[str] = []
@@ -455,9 +455,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 if mode == "risk_first":
                     risk_order = {
                         "search.vulnerable": 1,
-                        "deobfuscate.api_hashing": 1,
-                        "crypto_id.identify": 2,
-                        "protocol.detect": 2,
                     }
                     return (risk_order.get(call, 50), -source_count, call)
                 # coverage
@@ -623,20 +620,14 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
             tool_categories = {
                 "idb": "orientation",
                 "data": "discovery",
-                "string_ops": "ioc_hunt",
 
-                "deobfuscate": "deobfuscation",
-                "crypto_id": "crypto",
 
                 "gadgets": "exploit_surface",
                 "search": "search",
-                "protocol": "protocol",
-                "summarize": "summary",
                 "firmware_view": "firmware",
 
                 "code": "code",
                 "graph": "graph",
-                "compare": "diff",
             }
             category_counts: dict[str, int] = {}
             unique_tools = set()
@@ -740,23 +731,15 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 "idb.meta": "Captures format/arch/base metadata used by downstream interpretation.",
                 "data.functions": "Builds a function inventory for navigation and prioritization.",
                 "data.imports": "Highlights external capability surface and potential behavior anchors.",
-                "string_ops.find_urls": "Extracts direct network indicators for quick IOC triage.",
-                "string_ops.find_c2": "Targets command-and-control indicators in strings and references.",
-                "deobfuscate.stack_strings": "Recovers runtime-built strings hidden from static string tables.",
-                "deobfuscate.api_hashing": "Flags and resolves hashed API dispatch patterns common in malware.",
-                "crypto_id.identify": "Identifies cryptographic primitives and likely key-handling hotspots.",
                 "gadgets.rop": "Maps exploit-relevant gadget surface for memory corruption risk analysis.",
                 "search.vulnerable": "Finds dangerous API/use patterns tied to common vulnerability classes.",
-                "protocol.detect": "Locates protocol parsers/handlers and potential attack boundaries.",
                 "search.structured": "Uses schema-guided retrieval to find semantically constrained candidates.",
-                "summarize.security_posture": "Produces consolidated risk and mitigation posture snapshot.",
                 "firmware_view.triage_snapshot": "Aggregates load/vector/MMIO hints for firmware-first orientation.",
                 "llm_helpers.focus_area": "Identifies the most interesting area to analyze next.",
                 "code.disasm": "Gets opcode-level view at target address for patch semantics.",
                 "code.xrefs_to": "Shows inbound dependency impact into the patch location.",
                 "code.xrefs_from": "Shows outbound behavior impact from patched block.",
                 "graph.dependency_graph": "Summarizes near-neighbor call/data dependencies around patch.",
-                "compare.functions": "Captures structural/functional differences for regression risk review.",
             }
             explained_steps = []
             for idx, call in enumerate(calls):
@@ -835,7 +818,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                     "supports_dry_run": True,
                 },
                 "vuln_audit": {
-                    "description": "Vulnerability-focused audit: gadgets, dangerous patterns, protocol surface.",
+                    "description": "Vulnerability-focused audit: gadgets, dangerous patterns, dangerous API usage.",
                     "requires_addr": False,
                     "firmware_aware": False,
                     "default_profile": "balanced",
@@ -843,7 +826,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                     "supports_dry_run": True,
                 },
                 "recon_sweep": {
-                    "description": "Broad recon pass combining orientation, structured retrieval, protocol, and security posture.",
+                    "description": "Broad recon pass combining orientation, structured retrieval, and IOC-oriented string scans.",
                     "requires_addr": False,
                     "firmware_aware": True,
                     "default_profile": "balanced",
@@ -885,7 +868,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 {"name": "data", "arguments": {"action": "functions", "count": limit}},
                 {"name": "data", "arguments": {"action": "imports", "count": limit}},
                 {"name": "search", "arguments": {"action": "nl" if has_functions else "find", "query": "entrypoint parser auth decode crypto", "limit": limit}},
-                {"name": "string_ops", "arguments": {"action": "find_urls", "limit": limit}},
+                {"name": "search", "arguments": {"action": "find", "query": "http url ip address", "limit": limit}},
                 {"name": "blackboard", "arguments": {"action": "frontier", "limit": min(limit, 10)}},
             ]
             if firmware_detected or raw_binary_mode:
@@ -897,18 +880,14 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
             workflow_meta["has_functions"] = has_functions
         elif action == "malware_deep":
             step_plan = [
-                {"name": "string_ops", "arguments": {"action": "find_c2", "limit": limit}},
                 {"name": "search", "arguments": {"action": "nl", "query": "beacon c2 command parser persistence injection", "limit": limit}},
-                {"name": "deobfuscate", "arguments": {"action": "stack_strings", "limit": limit}},
-                {"name": "deobfuscate", "arguments": {"action": "api_hashing", "limit": limit}},
-                {"name": "crypto_id", "arguments": {"action": "identify", "limit": limit}},
+                {"name": "search", "arguments": {"action": "find", "query": "GetProcAddress CreateThread VirtualAlloc", "limit": limit}},
             ]
         elif action == "vuln_audit":
             step_plan = [
                 {"name": "gadgets", "arguments": {"action": "rop", "limit": limit}},
                 {"name": "search", "arguments": {"action": "nl", "query": "input validation memcpy strcpy length check auth bypass", "limit": limit}},
                 {"name": "search", "arguments": {"action": "vulnerable", "limit": limit}},
-                {"name": "protocol", "arguments": {"action": "detect", "limit": limit}},
             ]
         elif action == "recon_sweep":
             firmware_detected, firmware_detected_trigger, raw_binary_mode = _detect_firmware_mode()
@@ -922,8 +901,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 {"name": "search", "arguments": {"action": "nl" if has_functions else "find", "query": "dispatcher parser crypto network auth", "limit": limit}},
                 {"name": "search", "arguments": {"action": "structured", "limit": limit}},
                 {"name": "blackboard", "arguments": {"action": "frontier", "limit": min(limit, 10)}},
-                {"name": "protocol", "arguments": {"action": "detect", "limit": limit}},
-                {"name": "summarize", "arguments": {"action": "security_posture", "max_items": limit}},
             ]
             if firmware_detected or raw_binary_mode:
                 step_plan.insert(2, {"name": "firmware_view", "arguments": {"action": "triage_snapshot"}})
@@ -944,7 +921,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 {"name": "code", "arguments": {"action": "xrefs_to", "addr": addr, "limit": limit}},
                 {"name": "code", "arguments": {"action": "xrefs_from", "addr": addr, "limit": limit}},
                 {"name": "graph", "arguments": {"action": "dependency_graph", "addr": addr, "depth": 1, "limit": limit}},
-                {"name": "compare", "arguments": {"action": "functions", "addr": addr, "addr2": addr}},
             ]
         else:
             return make_error(

@@ -10,8 +10,10 @@ This eliminates ~30 lines of boilerplate per tool file.
 """
 
 import io
+import math
 import os
 import sys
+from collections import Counter
 from typing import Annotated, Any, Literal, Optional, Union
 
 import ida_bytes
@@ -455,3 +457,12 @@ __all__ = [
     "_inf_start_ea", "_inf_ptr_size",
     "_inf_procname", "_inf_filetype_id", "_filetype_name", "_inf_bitness",
 ]
+
+
+def shannon_entropy(data):
+    """Shannon entropy of a bytes-like buffer (0.0 if empty)."""
+    if not data:
+        return 0.0
+    counts = Counter(data)
+    length = len(data)
+    return round(-sum((c / length) * math.log2(c / length) for c in counts.values()), 4)

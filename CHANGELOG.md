@@ -2,6 +2,17 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-07-31 — dead legacy tools removed
+
+25 legacy tools were unreachable from every surface: never advertised in `tools/list` (legacy mode included), never exposed as `ida_*` operations, never called by any host service. ~18,000 lines of dead IDA-side code are gone.
+
+- Removed tools: `abi`, `binary_info`, `bindiff`, `bulk`, `cfg_analysis`, `classify`, `compare`, `coverage`, `data_ops`, `debug`, `emulate`, `export`, `fixups`, `history`, `lumina`, `microcode`, `nav`, `patterns`, `project`, `security`, `string_ops`, `struct_recover`, `summarize`, `trace_analysis`, `xref_analysis`.
+- Registry now holds 32 legacy tools (was 57); the 47 public `ida_*` operations are unchanged.
+- Cleaned all references: `tool_registry.py`, `schemas_data.py` (TOOLS, descriptions, arg schemas, alias and threat-route tables), `policy.py` risk tiers, `schemas.py` tool categories, usage-intel tool sets, `server_workflow.py` step plans and category maps, session skill suggestions, legacy `prompts.py`, and batch templates.
+- Kept six tools that initially looked dead but have live call sites: `annotation` (blackboard rename proposals), `ctree`/`stack_analysis`/`imports_deep` (`ida://` resource handlers, multi-session linking), `knowledge`/`firmware_view` (session bootstrap).
+- `shannon_entropy` moved from `string_ops` into `_common.py` (used by `memory` and `intelligence`).
+- Deleted `tests/test_bindiff_export_helpers.py` and the `security`/`summarize` source-scan tests in `test_taint_consolidation.py`.
+
 ## 2026-07-31 — the agent surface stops teaching the legacy API
 
 Error hints and recovery guidance are the one place models were still being steered to `tool(action=...)`. The default surface is `ida_*`, and the hints are now written that way at the source.

@@ -81,7 +81,7 @@ The most important resource (`ida://state`) is also accessible as `ida_session_s
 ## Complexity Hotspots
 
 - `src/ida_pro_mcp/ida_mcp/tools/firmware_view.py` — large firmware analysis campaign tool
-- `src/ida_pro_mcp/ida_mcp/tools/trace_analysis.py` — large tracing surface
+- `src/ida_pro_mcp/ida_mcp/tools/code_helpers.py` — shared code-analysis helpers
 - `src/ida_pro_mcp/host/server/server_workflow.py` — workflow orchestration
 - `src/ida_pro_mcp/host/server/server_runtime.py` — idat process lifecycle
 - `src/ida_pro_mcp/ida_mcp/tools/code.py` — decompile, smart_decompile, ctree integration

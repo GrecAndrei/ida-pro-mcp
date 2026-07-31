@@ -55,9 +55,6 @@ TOOLS = {}
 # taken between host-close and our bind, we bind 0 and report back).
 _BOUND_PORT = None
 TOOL_ALIASES = {
-    # Compatibility typo for xref_analysis.
-    "xfer_analysis": "xref_analysis",
-    "c2_detect": "string_ops",
     # Dispatcher advertises the tool as 'governance'; IDA-side file is
     # 'governance_engine.py' (the file is the engine implementation).
     "governance": "governance_engine",

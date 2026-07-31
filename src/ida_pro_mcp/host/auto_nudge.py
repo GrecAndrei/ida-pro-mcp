@@ -30,7 +30,6 @@ _REROUTE_MAP: dict[tuple[str, str], tuple[str, str]] = {
     ("search", "bytes"): ("search", "string"),
     ("search", "text"): ("search", "name"),
     ("search", "instruction"): ("search", "insns"),
-    ("compare", "compare"): ("compare", "functions"),
 }
 
 # Rule-based reroute: memory.read with explicit disasm intent.

@@ -23,11 +23,6 @@ from typing import Any
 #
 # Tools whose action list lives in the tool file itself are marked below.
 _TOOL_ACTIONS: dict[str, list[str]] = {
-    "abi": [
-        "detect", "stack_args", "reg_args", "return_type",
-        "varargs", "struct_return", "tail_calls",
-        "prologue", "epilogue", "abi_violations",
-    ],
 
     "analysis": [
         "get_options", "set_options", "set_processor",
@@ -43,11 +38,6 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     ],
     "background": ["submit", "status", "cancel", "result", "list", "wait"],
     "batch": ["(pass calls array)"],
-    "binary_info": [
-        "headers", "sections", "relocations", "resources",
-        "debug_info", "compiler", "linker", "timestamps",
-        "checksums", "overlay",
-    ],
     "blackboard": [
         "policy_set", "policy_status", "policy_check", "phase_status",
         "phase_set", "phase_tick", "quest_board", "quest_complete",
@@ -72,35 +62,18 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "deref", "chain",
     ],
     "bookmarks": ["add", "list", "delete", "update", "clear", "find", "export"],
-    "bulk": ["rename", "comment", "apply_type", "rename_stack", "import_annotations", "export_annotations"],
     "calc": ["eval", "offset", "convert", "resolve", "deref", "chain", "align", "bitops"],
-    "cfg_analysis": ["complexity", "loops", "branches", "paths", "dominators", "post_dominators", "back_edges", "natural_loops", "irreducible", "flatten_detect"],
-    "classify": ["function", "binary", "all_functions", "library_code", "wrappers", "callbacks", "initializers", "error_handlers", "hot_functions", "orphans", "induce_schema", "anchor_coverage"],
     "code": ["smart_decompile", "decompile", "decompile_all", "disasm", "detect", "decompile_chain", "semantic_decompile", "diff_functions", "xrefs_to", "xrefs_from", "xrefs_to_field", "callees", "callers", "blocks", "callgraph", "find_paths", "strings_in_func", "decomp_dataflow", "export", "explain"],
 
-    "compare": ["functions", "blocks", "apis", "strings", "constants", "structure", "semantics", "batch_compare", "find_clones", "changelog"],
-    "coverage": ["import_drcov", "import_lighthouse", "highlight", "report", "uncovered", "filter", "function_coverage", "gaps", "compare", "merge"],
-    "security": [
-        "detect", "decode", "analyze", "hook", "hook_targets",
-        "protocol", "protocol_spec",
-        "taint", "taint_sources", "taint_report",
-        "eval",
-    ],
     "ctree": ["get", "traverse", "find_calls", "find_vars", "find_strings", "find_conditions", "get_logic_flow", "dominance_map", "var_dependency_graph"],
     "data": ["functions", "annotations", "globals", "strings", "imports", "exports", "lookup", "bulk_query", "capability_matrix", "string_xrefs"],
-    "data_ops": ["make_data", "make_array", "make_string", "undefine", "make_code", "cycle_data", "set_repr", "make_ptr"],
-    "debug": ["status", "start", "stop", "continue", "step_into", "step_over", "run_to", "run_until", "breakpoints", "add_bp", "del_bp", "enable_bp", "add_hw_bp", "add_watch", "regs", "set_reg", "reg_diff", "snapshot_regs", "threads", "modules", "callstack", "read_mem", "write_mem", "search_mem", "stack_dump", "mem_map", "bp_context", "trace_start", "trace_stop", "trace_read", "mem_diff"],
 
 
-    "export": ["listing", "html", "idc", "json", "sarif", "binexport", "headers", "redact", "vtable"],
     "firmware_view": ["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign", "detect_load_address", "detect_vector_table", "detect_mmio", "rtos_scan", "triage_snapshot", "bootstrap"],
-    "fixups": ["list", "get", "add", "delete"],
     "funcs": ["create", "change", "delete", "set_flags", "info", "metrics", "find_similar", "suggest_names", "list"],
     "gadgets": ["rop", "jop", "cop", "syscall", "write_what_where", "stack_pivot", "shellcode_space", "mitigations", "seh_handlers", "pivot_chains", "classify_chain"],
     "governance": ["check", "redact", "list_rules", "stats"],
     "graph": ["callgraph", "cfg", "dominators", "xref_graph"],
-    "xref_analysis": ["call_chain", "common_callers", "common_callees", "hub_functions", "leaf_functions", "recursive", "dominator", "influence", "dependency_graph", "dead_functions"],
-    "history": ["undo", "redo", "list", "snapshot", "restore", "diff"],
 
 
     "idb": ["meta", "summary", "segments", "entrypoints", "bookmarks", "overview", "architecture_profile", "state"],
@@ -113,17 +86,12 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     ],
     "knowledge": ["chip_identify", "symbol_lookup", "import_symbols", "export_session", "chip_families"],
 
-    "lumina": ["pull", "push", "status", "history", "search", "get_metadata"],
     "memory": ["read", "write", "hexdump", "search", "compare", "pointers", "entropy", "strings", "struct_walk", "histogram", "read_file", "write_file"],
-    "microcode": ["get", "blocks", "instructions", "def_use_graph"],
     "misc": ["python", "idc", "load_sig", "cache_stats", "plugin_list", "plugin_run", "read_file", "write_file", "health", "reload"],
     "modify": ["rename", "comment", "set_type", "patch_asm"],
-    "nav": ["goto", "cursor", "interesting", "semantic_goto"],
-    "patterns": ["generate", "match", "list_sigs", "apply_sig", "create_sig", "matched", "yara_from_func", "flirt_generate", "match_yara"],
 
 
 
-    "project": ["save", "close", "open", "load_binary", "list_recent", "get_cwd", "set_cwd", "list_dir", "exists", "evidence_graph", "knowledge_merge", "confidence_model", "replay_pipeline", "hypothesis_tracker", "temporal_reasoning", "semantic_artifact_diff", "ai_governance", "knowledge_debt", "casefile_export"],
 
 
 
@@ -147,25 +115,10 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "kill", "state", "logs",
     ],
     "stack_analysis": ["frame", "buffers", "canary", "alignment", "spills", "usage", "variables", "arrays", "uninitialized", "summary"],
-    "string_ops": ["score_c2", "indicators", "ioc_extract", "persistence", "evasion", "find_urls", "find_ips", "find_paths", "find_registry", "find_emails", "find_commands", "find_c2", "find_configs", "find_api_keys", "find_databases", "find_crypto_addrs", "find_stack_strings", "find_base64", "find_xrefs", "entropy_rank", "suspicious", "encoding_stats", "multilingual", "decode_all"],
-    "summarize": ["binary", "function", "segment", "imports_by_category", "strings_by_category", "complexity", "call_hierarchy", "data_flow", "security_posture", "statistics", "report"],
     "symbols": ["load_pdb", "load_dwarf", "status", "apply", "export"],
 
 
-    "struct_recover": ["recover", "recover_all", "propagate", "preview", "apply"],
-    "emulate": ["run", "slice", "call", "decrypt", "trace"],
-    "bindiff": ["snapshot", "diff", "patch_analysis", "function_match", "summary"],
     "multi_session": ["group_create", "group_list", "group_link", "group_remove", "cross_resolve", "cross_decompile", "cross_xrefs", "status"],
-    "trace_analysis": [
-        "import_trace", "analyze_coverage", "find_loops",
-        "extract_api_calls", "basic_blocks_hit",
-        "execution_timeline_graph", "cross_run_diff",
-        "coverage_debug_plan", "anti_analysis_detect",
-        "trace_entropy", "api_sequence", "loop_analysis",
-        "get", "clear", "set_options", "static_trace",
-        "decrypt_strings", "eval_expr", "deobfuscate_emulate",
-        "prefetch_context",
-    ],
     "truncation": ["continue", "peek", "search", "summary"],
     "types": ["list", "get", "set_prototype", "parse_decl", "declare", "apply", "search_structs", "infer", "read_struct", "import_header", "diff", "visualize", "propagate", "enum_values", "type_graph", "vtable"],
     "wiki": ["list_topics", "read", "search", "semantic_search", "index", "sections", "suggest"],

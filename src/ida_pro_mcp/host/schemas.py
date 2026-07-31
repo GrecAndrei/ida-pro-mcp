@@ -597,24 +597,15 @@ _TOOL_CATEGORY_ANALYSIS = {
     "modify",
     "funcs",
     "segments",
-    "bulk",
     "calc",
-    "nav",
 }
-_TOOL_CATEGORY_DEBUG = {"debug", "coverage", "trace_analysis"}
-_TOOL_CATEGORY_PROJECT = {"project", "misc"}
+_TOOL_CATEGORY_PROJECT = {"misc"}
 _TOOL_CATEGORY_ADVANCED = {
-    "microcode",
     "graph",
     "ctree",
     "entropy",
     "imports_deep",
-    "patterns",
     "symbols",
-    "lumina",
-    "export",
-    "history",
-    "data_ops",
     "hooks",
 }
 _TOOL_CATEGORY_SECURITY = {
@@ -623,14 +614,7 @@ _TOOL_CATEGORY_SECURITY = {
     "protocol",
     "gadgets",
     "annotation",
-    "string_ops",
-    "cfg_analysis",
-    "binary_info",
-    "abi",
     "stack_analysis",
-    "compare",
-    "classify",
-    "summarize",
 }
 _TOOL_CATEGORY_COMPAT = set()
 
@@ -639,8 +623,6 @@ def classify_tool_category(tool_name: str) -> str:
         return "core"
     if tool_name in _TOOL_CATEGORY_ANALYSIS:
         return "analysis"
-    if tool_name in _TOOL_CATEGORY_DEBUG:
-        return "debug"
     if tool_name in _TOOL_CATEGORY_PROJECT:
         return "project"
     if tool_name in _TOOL_CATEGORY_ADVANCED:

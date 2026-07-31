@@ -100,22 +100,11 @@ class TestNoDuplicateDefinitions(unittest.TestCase):
         with open(path) as f:
             return f.read()
 
-    def test_taint_no_local_taRINT_SOURCES_definition(self):
-        source = self._get_tool_source("security")
-        self.assertNotIn("TAINT_SOURCES = {", source)
-        self.assertNotIn("DANGEROUS_SINKS = {", source)
-
     def test_combinators_no_local_definitions(self):
         source = self._get_tool_source("search/combinators")
         # Should NOT have local frozenset/dict definitions
         self.assertNotIn("frozenset({", source)
         self.assertNotIn('"strcpy": "buffer_overflow"', source)
-
-    def test_summarize_no_local_definitions(self):
-        source = self._get_tool_source("summarize")
-        self.assertNotIn("_IMPORT_CATEGORIES = {", source)
-        self.assertNotIn("_DANGEROUS_APIS = {", source)
-        self.assertNotIn("_MITIGATION_CHECKS = {", source)
 
     def test_code_no_inline_taRINT_SOURCES(self):
         source = self._get_tool_source("code")
@@ -181,12 +170,6 @@ class TestBlackboardAutoWrite(unittest.TestCase):
         with open(path) as f:
             return f.read()
 
-    def test_crypto_id_has_blackboard_write(self):
-        source = self._get_tool_source("security")
-        self.assertIn("BlackboardStore", source)
-        self.assertIn('category="crypto"', source)
-        self.assertIn("engine_crypto", source)
-
     def test_gadgets_has_blackboard_write(self):
         source = self._get_tool_source("gadgets")
         self.assertIn("BlackboardStore", source)
@@ -195,33 +178,6 @@ class TestBlackboardAutoWrite(unittest.TestCase):
     def test_gadgets_mitigations_blackboard_write(self):
         source = self._get_tool_source("gadgets")
         self.assertIn("mitigation_gap", source)
-
-
-class TestCtreeDataflowVisitor(unittest.TestCase):
-    """Verify taint.py has ctree dataflow visitor."""
-
-    def _get_tool_source(self, module_basename):
-        path = os.path.join(
-            os.path.dirname(__file__), "..", "..",
-            "src", "ida_pro_mcp", "ida_mcp", "tools",
-            f"{module_basename}.py",
-        )
-        with open(path) as f:
-            return f.read()
-
-    def test_ctree_visitor_exists(self):
-        source = self._get_tool_source("security")
-        self.assertIn("_dataflow_signal", source)
-
-    def test_dataflow_signal_includes_ctree(self):
-        source = self._get_tool_source("security")
-        self.assertIn("microcode_ssa", source)
-        self.assertIn("regex", source)
-
-    def test_cwe_ids_in_trace_results(self):
-        source = self._get_tool_source("security")
-        self.assertIn("cwe_ids", source)
-        self.assertIn("VULN_TYPE_TO_CWE", source)
 
 
 if __name__ == "__main__":

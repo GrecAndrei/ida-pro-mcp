@@ -43,8 +43,7 @@ class DriftDetector:
     - LATENCY_SPIKE: sudden increase in average latency
     """
 
-    ANALYSIS_TOOLS = {"code", "search", "graph", "cfg_analysis",
-                      "classify", "summarize", "deobfuscate"}
+    ANALYSIS_TOOLS = {"code", "search", "graph", "deobfuscate"}
     RECORD_TOOLS = {"blackboard", "modify", "annotation", "bookmarks"}
 
     def __init__(self, window: int = 20):

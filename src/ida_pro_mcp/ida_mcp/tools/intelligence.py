@@ -27,12 +27,9 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 try:
-    from .string_ops import shannon_entropy as _shannon_entropy
+    from ._common import shannon_entropy as _shannon_entropy
 except ImportError:
-    try:
-        from string_ops import shannon_entropy as _shannon_entropy
-    except ImportError:
-        from ida_pro_mcp.ida_mcp.tools.string_ops import shannon_entropy as _shannon_entropy
+    from _common import shannon_entropy as _shannon_entropy  # type: ignore[import-not-found]
 
 import contextlib
 import re
@@ -638,8 +635,8 @@ def suggest_next_steps(kwargs: dict, default_addr: Any = None) -> dict:
     elif last_tool == "packer" and last_action == "detect":
         if last_payload.get("recommendation") == "do_not_unpack":
             suggestions.append({
-                "tool": "string_ops",
-                "arguments": {"action": "indicators"},
+                "tool": "search",
+                "arguments": {"action": "find", "query": "cheat anticheat hook"},
                 "reason": "confirm which anti-cheat strings are present",
             })
 

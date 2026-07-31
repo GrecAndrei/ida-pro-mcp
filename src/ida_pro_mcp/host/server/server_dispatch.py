@@ -51,13 +51,6 @@ LONG_RUNNING_ACTIONS: set[tuple[str, str]] = {
     ("background", "wait"),
     # agent — full-program algorithmic analysis
 
-    # summarize — full-binary summary walks
-    ("summarize", "binary"),
-    ("summarize", "statistics"),
-    ("summarize", "imports_by_category"),
-    ("summarize", "strings_by_category"),
-    ("summarize", "security_posture"),
-    ("summarize", "report"),
     # intelligence — embedding-heavy ops
     ("intelligence", "index_fast"),
     ("intelligence", "index_batch"),
@@ -73,12 +66,6 @@ LONG_RUNNING_ACTIONS: set[tuple[str, str]] = {
     ("search", "regex"),
     ("search", "nl"),
     ("search", "path"),
-    # bindiff — full-binary fingerprint + compare passes
-    ("bindiff", "snapshot"),
-    ("bindiff", "diff"),
-    ("bindiff", "summary"),
-    ("bindiff", "function_match"),
-    ("bindiff", "patch_analysis"),
     # blackboard — large semantic rebuild / trace operations
     ("blackboard", "semantic_rebuild"),
     ("blackboard", "trace_ingest"),
@@ -1258,7 +1245,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
             guardrail_mode = self._guardrail_mode_from_args(args)
             strict_guardrails = self._guardrail_strict_writes or guardrail_mode == "enforce"
             if strict_guardrails:
-                risky_tools = {"modify", "bulk", "annotation", "funcs", "segments", "memory", "data_ops"}
+                risky_tools = {"modify", "annotation", "funcs", "segments", "memory"}
                 risky_actions = {
                     "patch_asm",
                     "rename",

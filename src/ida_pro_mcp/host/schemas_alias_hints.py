@@ -82,10 +82,6 @@ _TOOL_SPECIFIC_ARG_ALIASES = {
     "query": {
         "subaction": {"sub_action", "sub-action", "sub", "action_name"},
     },
-    "compare": {
-        "addr": {"addr_a", "address_a", "a", "lhs"},
-        "addr2": {"addr_b", "address_b", "b", "rhs"},
-    },
     "data": {
         "query": {"name", "symbol", "lookup"},
     },
@@ -101,10 +97,6 @@ _TOOL_SPECIFIC_ARG_ALIASES = {
 }
 
 _TOOL_ACTION_EXTRA_ALIASES = {
-    "trace_analysis": {
-        "analyze_coverage": {"coverage", "coverage_report", "analyze_trace"},
-        "extract_api_calls": {"api_calls", "apis", "extract_apis"},
-    },
     "annotation": {
         "auto_comment": {"comment", "annotate", "auto_annotate"},
         "cleanup": {"clean", "sanitize", "normalize"},
@@ -198,9 +190,6 @@ _TOOL_ACTION_EXTRA_ALIASES = {
     "ctree": {
         "dominance_map": {"dom_map", "condition_dominance", "control_dominance"},
         "var_dependency_graph": {"var_graph", "dependency_graph", "ssa_like_graph"},
-    },
-    "microcode": {
-        "def_use_graph": {"du_graph", "defuse", "ir_dataflow"},
     },
     "governance": {
         "check": {"evaluate", "inspect", "validate", "review"},

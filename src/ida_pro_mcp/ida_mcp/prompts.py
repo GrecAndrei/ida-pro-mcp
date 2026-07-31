@@ -87,7 +87,7 @@ QUICKREF_TEXT = """\
 
 ## Batch Operations
 - `batch(calls=[{tool:"code",action:"decompile",addr:"0x401000"},{tool:"data",action:"strings",count:10}])`
-- `bulk(action="rename", items=[{addr:"0x401000",name:"func1"},{addr:"0x402000",name:"func2"}])`
+- `modify(action="rename", addr="0x401000", value="func1")` - Rename multiple symbols via repeated calls
 
 ## Graph Visualization
 - `graph(action="callgraph", addr="main", format="mermaid")` - Call graph
@@ -99,18 +99,16 @@ QUICKREF_TEXT = """\
 - `calc(action="eval", expr="0x401000 + 0x100")` - Address math
 - `types(action="list")` - List type library
 - `types(action="infer", addr="0x401000")` - Infer structure layout
-- `entropy(action="packed_detect")` - Detect packed/encrypted sections
+- `search(action="find", query="upx mpress vmprotect")` - Detect packed/encrypted sections
 
 ## Raw Binary / Firmware
-- `binary_info(action="headers")` - Identify format, processor, entrypoints, and image bounds
-- `binary_info(action="sections")` - Inspect segments, permissions, and entropy
-- `binary_info(action="compiler")` - Detect compiler/runtime hints before retyping
+- `idb(action="summary")` - Identify format, processor, entrypoints, and image bounds
+- `segments(action="list")` - Inspect segments, permissions, and entropy
 - `firmware_view(action="triage_snapshot")` - One-shot load/vector/MMIO orientation before deeper carving
 - `firmware_view(action="scan_region")` - Profile unknown raw regions
 - `firmware_view(action="region_profile")` - Measure pointer, string, and unknown-byte density
 - `firmware_view(action="pointer_sweep")` - Find pointer-like cells and candidate tables
 - `firmware_view(action="smart_carve", apply=false)` - Dry-run safe retyping suggestions
-- `data_ops(action="cycle_data", addr="0x401000")` - Recast a concrete anchor once one is identified
 - `blackboard(action="list", category="firmware_view")` - Review prior conversion decisions
 
 ## Security Analysis
@@ -120,21 +118,20 @@ QUICKREF_TEXT = """\
 - `search(action="regex", pattern="system\\(|popen\\(|_popen\\(|exec\\(")` - Command injection hotspots
 - `gadgets(action="mitigations")` - Check ASLR/DEP/canary/CFI
 - `gadgets(action="rop")` - Find ROP gadgets
-- `string_ops(action="indicators")` - Detect C2/malware behavior
+- `search(action="find", query="GetProcAddress CreateThread socket")` - Detect C2/malware behavior
 - `code(action="xrefs_to", addr="<sink>")` - Trace dangerous sinks to callers
 
 ## Deobfuscation & Crypto
-- `deobfuscate(action="xor_scan")` - Find and decode XOR-encoded strings
-- `deobfuscate(action="stack_strings")` - Find stack-built strings
-- `deobfuscate(action="api_hashing")` - Detect API hash resolution
-- `crypto_id(action="identify")` - Identify cryptographic algorithms
+- `search(action="find", query="xor decrypt rc4 base64")` - Find and decode XOR-encoded strings
+- `code(action="smart_decompile", addr="0x401000")` - Pseudocode + behavior tags for stack-built strings
+- `search(action="find", query="aes rc4 blowfish")` - Identify cryptographic algorithms
 
 ## Summarization & Classification
-- `summarize(action="binary")` - Binary overview for LLMs
-- `summarize(action="function", addr="main")` - Function summary
-- `classify(action="function", addr="0x401000")` - Classify function purpose
-- `string_ops(action="find_urls")` - Extract URLs from strings
-- `string_ops(action="suspicious")` - Find suspicious strings
+- `idb(action="overview")` - Binary overview for LLMs
+- `code(action="smart_decompile", addr="main")` - Function summary
+- `search(action="behavior", addr="0x401000")` - Classify function purpose
+- `search(action="find", query="http:// https:// url ip")` - Extract URLs from strings
+- `search(action="find", query="suspicious password admin token")` - Find suspicious strings
 
 ## Tips
 - Use `addr` with function names OR hex addresses: `addr="main"` or `addr="0x401000"`
@@ -164,7 +161,7 @@ WORKFLOW_VULN = """\
 2. **Buffer Overflows**: `search(action="regex", pattern="strcpy|gets|sprintf|strcat")`
 3. **Format Strings**: `search(action="regex", pattern="printf\\(|fprintf\\(|sprintf\\(")`
 4. **Command Injection**: `search(action="regex", pattern="system\\(|popen\\(|_popen\\(|exec\\(")`
-5. **Hardcoded Creds**: `string_ops(action="find_api_keys")` → tokens, keys, secrets
+5. **Hardcoded Creds**: `search(action="find", query="password secret token key")` → tokens, keys, secrets
 6. **Check Mitigations**: `gadgets(action="mitigations")` → ASLR, DEP, stack cookies, CFI
 7. **Trace Data Flow**: Use `code(action="xrefs_to", addr="<sink>")` to trace user input flow
 8. **Stack Analysis**: `stack_analysis(action="buffers")` → find overflow targets
@@ -175,19 +172,16 @@ WORKFLOW_VULN = """\
 WORKFLOW_MALWARE = """\
 # Malware Analysis Workflow
 
-1. **Check Packing**: `entropy(action="packed_detect")` → high entropy = possible packing
-2. **Get Overview**: `summarize(action="binary")` → LLM-friendly binary summary
-3. **Classify Functions**: `classify(action="binary")` → categorize all functions by purpose
-4. **Check Imports**: `summarize(action="imports_by_category")` → API usage by category
-5. **Find C2/Network**: `string_ops(action="indicators")` → detect C2 behavior patterns
-6. **Find Persistence**: `string_ops(action="persistence")` → registry, services, scheduled tasks
-7. **Find Evasion**: `string_ops(action="evasion")` → anti-debug, anti-VM, anti-analysis
-8. **Find Crypto**: `crypto_id(action="identify")` → encryption algorithms
-9. **Decode Strings**: `deobfuscate(action="xor_scan")` → XOR-encoded strings
-10. **Stack Strings**: `deobfuscate(action="stack_strings")` → char-by-char constructed strings
-11. **API Hashing**: `deobfuscate(action="api_hashing")` → hash-resolved API calls
-12. **Extract IOCs**: `string_ops(action="ioc_extract")` → URLs, IPs, domains, file paths
-13. **Find URLs**: `string_ops(action="find_urls")` → extract URLs from strings
+1. **Check Packing**: `search(action="find", query="upx mpress vmprotect")` → packer hints in sections/strings
+2. **Get Overview**: `idb(action="overview")` → LLM-friendly binary summary
+3. **Check Imports**: `data(action="imports")` → API usage by category
+4. **Find C2/Network**: `search(action="find", query="http:// https:// url beacon")` → detect C2 behavior patterns
+5. **Find Persistence**: `search(action="find", query="regsetvalue createprocess service")` → registry, services, scheduled tasks
+6. **Find Evasion**: `search(action="find", query="isdebuggerpresent virtualprotect")` → anti-debug, anti-VM, anti-analysis
+7. **Find Crypto**: `search(action="find", query="aes rc4 blowfish base64")` → encryption algorithms
+8. **Decode Strings**: `code(action="smart_decompile", addr="0x401000")` → decompile for XOR-encoded strings
+12. **Extract IOCs**: `search(action="find", query="http:// https:// url ip domain")` → URLs, IPs, domains, file paths
+13. **Find URLs**: `search(action="find", query="http:// https://")` → extract URLs from strings
 14. **Map Structure**: `graph(action="callgraph", addr="main")` → understand program flow
 """
 
@@ -217,29 +211,22 @@ WORKFLOW_DEBUG = """\
 WORKFLOW_CRYPTO = """\
 # Cryptographic Analysis Workflow
 
-1. **Identify Algorithms**: `crypto_id(action="identify")` → scan for known crypto constants
-2. **Find Constants**: `crypto_id(action="constants")` → AES S-box, SHA magic numbers, CRC tables
-3. **Key Schedule**: `crypto_id(action="key_schedule")` → detect key expansion loops
-4. **Block Ciphers**: `crypto_id(action="block_cipher")` → substitution-permutation patterns
-5. **Hash Functions**: `crypto_id(action="hash_detect")` → Merkle-Damgard, round functions
-6. **Encoding**: `crypto_id(action="encoding")` → Base64, Base32, hex encoding tables
-7. **Checksums**: `crypto_id(action="checksums")` → CRC32, Adler32, Fletcher
-8. **Custom Crypto**: `crypto_id(action="custom_crypto")` → homebrew implementations
-9. **Classify Functions**: `classify(action="function", addr="<crypto_func>")` → confirm category
+1. **Identify Algorithms**: `search(action="find", query="aes rc4 blowfish s-box")` → scan for known crypto constants
+2. **Find Constants**: `search(action="find", query="crc32 md5 sha")` → AES S-box, SHA magic numbers, CRC tables
+3. **Key Schedule**: `code(action="smart_decompile", addr="<crypto_func>")` → detect key expansion loops
+4. **Encoding**: `search(action="find", query="base64 base32 hex")` → Base64, Base32, hex encoding tables
+5. **Checksums**: `search(action="find", query="crc32 adler32")` → CRC32, Adler32, Fletcher
 """
 
 WORKFLOW_PROTOCOL = """\
 # Network Protocol Reverse Engineering Workflow
 
-1. **Detect Protocols**: `protocol(action="detect")` → identify HTTP, DNS, TLS, custom protocols
-2. **Find Endpoints**: `protocol(action="endpoints")` → extract URLs, IPs, hostnames, ports
-3. **Locate Parsers**: `protocol(action="parsers")` → functions reading structured data from buffers
-4. **Find Handlers**: `protocol(action="handlers")` → message/command dispatch tables
-5. **Analyze Structure**: `protocol(action="packet_struct")` → infer packet format from parsing code
-6. **TLS Config**: `protocol(action="tls_config")` → cipher suites, certificate handling
-7. **Socket Flow**: `protocol(action="socket_flow")` → trace socket lifecycle
-8. **State Machine**: `protocol(action="state_machine")` → protocol state transitions
-9. **Document**: Use `annotation(action="auto_comment")` to annotate protocol functions
+1. **Detect Protocols**: `search(action="find", query="recv send connect socket listen")` → identify HTTP, DNS, TLS, custom protocols
+2. **Find Endpoints**: `search(action="find", query="http:// https:// ip port hostname")` → extract URLs, IPs, hostnames, ports
+3. **Locate Parsers**: `code(action="callers", addr="<recv_func>")` → functions reading structured data from buffers
+4. **Find Handlers**: `code(action="decompile", addr="<dispatch_func>")` → message/command dispatch tables
+5. **Analyze Structure**: `code(action="smart_decompile", addr="<parse_func>")` → infer packet format from parsing code
+6. **Document**: Use `annotation(action="auto_comment")` to annotate protocol functions
 """
 
 WORKFLOW_EXPLOIT = """\
@@ -259,29 +246,24 @@ WORKFLOW_EXPLOIT = """\
 WORKFLOW_DEOBFUSCATE = """\
 # Deobfuscation Workflow
 
-1. **Detect Encoding**: `deobfuscate(action="detect_encoding")` → XOR, Base64, RC4, custom
-2. **XOR Scan**: `deobfuscate(action="xor_scan")` → find and auto-decode XOR-encoded strings
-3. **Stack Strings**: `deobfuscate(action="stack_strings")` → character-by-character construction
-4. **API Hashing**: `deobfuscate(action="api_hashing")` → hash-resolved API calls
-5. **Opaque Predicates**: `deobfuscate(action="opaque_predicates")` → always-true/false branches
-6. **CF Flattening**: `deobfuscate(action="control_flow_flatten")` → dispatcher patterns
-7. **Dead Code**: `deobfuscate(action="dead_code")` → unreachable blocks
-8. **Anti-Disasm**: `deobfuscate(action="anti_disasm")` → jump-into-instruction tricks
-9. **Decode Data**: `deobfuscate(action="decode_attempt", addr="0x...", key="0xAB")` → manual decode
+1. **Detect Encoding**: `code(action="smart_decompile", addr="0x401000")` → decompile to spot XOR/Base64/RC4 loops
+2. **Stack Strings**: `code(action="smart_decompile", addr="<func>")` → character-by-character construction
+3. **API Hashing**: `search(action="find", query="rol ror xor hash")` → hash-resolved API calls
+4. **Opaque Predicates**: `code(action="disasm", addr="<func>")` → always-true/false branches
+5. **CF Flattening**: `code(action="disasm", addr="<dispatcher>")` → dispatcher patterns
+6. **Anti-Disasm**: `search(action="find", query="jmp align")` → jump-into-instruction tricks
 """
 
 WORKFLOW_FIRMWARE = """\
 # Raw Binary / Firmware Workflow
 
-1. **Identify Format**: `binary_info(action="headers")` → format, processor, entrypoints, bounds
-2. **Inspect Sections**: `binary_info(action="sections")` → permissions, entropy, segment layout
-3. **Check Compiler Hints**: `binary_info(action="compiler")` → compiler/runtime clues before retyping
+1. **Identify Format**: `idb(action="summary")` → format, processor, entrypoints, bounds
+2. **Inspect Sections**: `segments(action="list")` → permissions, entropy, segment layout
 4. **One-Shot Orientation**: `firmware_view(action="triage_snapshot")` → aggregate load-address, vector-table, and MMIO signals
 5. **Profile Raw Regions**: `firmware_view(action="scan_region")` → estimate code/data/unknown mix
 6. **Summarize Region**: `firmware_view(action="region_profile")` → pointer/string/unknown density
 7. **Sweep Pointers**: `firmware_view(action="pointer_sweep")` → table and vtable candidates
 8. **Dry-Run Carving**: `firmware_view(action="smart_carve", apply=false)` → safe retyping plan
 9. **Review Prior Decisions**: `blackboard(action="list", category="firmware_view")` → reuse local analysis
-10. **Anchor Conversions**: `data_ops(action="cycle_data", addr="<known_addr>")` → only after a concrete address is identified
-11. **Continue Search**: `search(action="semantic", pattern="entry init parser")` → map the now-sharpened binary
+10. **Continue Search**: `search(action="semantic", pattern="entry init parser")` → map the now-sharpened binary
 """

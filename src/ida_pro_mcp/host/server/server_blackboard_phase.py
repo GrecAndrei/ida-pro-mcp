@@ -274,7 +274,7 @@ class ServerBlackboardPhaseMixin:
             if phase == "scout":
                 return None
             if phase == "prove":
-                risky = {"modify", "bulk", "segments", "funcs", "annotation"}
+                risky = {"modify", "segments", "funcs", "annotation"}
                 if str(tool_name or "") in risky and not self._phase_has_prove_receipts(store):
                     return make_error(
                         MCPError.INVALID_ARGS,
@@ -283,7 +283,7 @@ class ServerBlackboardPhaseMixin:
                     )
                 return None
             if phase == "commit":
-                if str(tool_name or "") in {"modify", "bulk"}:
+                if str(tool_name or "") == "modify":
                     ack = bool((args or {}).get("_phase_commit_ack", False))
                     if not ack:
                         return make_error(
@@ -293,7 +293,7 @@ class ServerBlackboardPhaseMixin:
                         )
                 return None
             if phase == "finalize":
-                if str(tool_name or "") in {"modify", "bulk", "segments", "funcs", "annotation"}:
+                if str(tool_name or "") in {"modify", "segments", "funcs", "annotation"}:
                     stats = store.stats() or {}
                     contradicted = int(stats.get("contradicted") or 0)
                     if contradicted > 0:

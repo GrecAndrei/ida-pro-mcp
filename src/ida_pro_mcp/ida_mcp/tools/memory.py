@@ -15,9 +15,9 @@ MAX_HEXDUMP_SIZE = 4096
 # ============================================================================
 
 try:
-    from .string_ops import shannon_entropy as _shannon_entropy
+    from ._common import shannon_entropy as _shannon_entropy
 except ImportError:
-    from string_ops import shannon_entropy as _shannon_entropy  # type: ignore[import-not-found]
+    from _common import shannon_entropy as _shannon_entropy  # type: ignore[import-not-found]
 
 
 def _extract_strings(data, min_len=4):
