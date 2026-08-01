@@ -727,29 +727,6 @@ class ServerBlackboardMixin(
             "recommended_action": fix,
         }
 
-    def _notes_export(self, store, notes_path: str, limit: int = 20) -> dict[str, Any]:
-        lanes = ["lane_now", "lane_hypotheses", "lane_facts", "lane_queue", "lane_dead_ends"]
-        lines = ["# RE Notes", "", "Generated from blackboard working set.", ""]
-        for lane in lanes:
-            lines.append(f"## {lane}")
-            entries = self._lane_fetch(store, lane, limit)
-            if not entries:
-                lines.append("- (empty)")
-                lines.append("")
-                continue
-            for e in entries[:limit]:
-                brief = _entry_brief(e)
-                lines.append(
-                    f"- [{brief.get('entry_id') or ''}] {brief.get('summary')}"
-                )
-                if brief.get("content_preview"):
-                    lines.append(f"  - note: {brief.get('content_preview')}")
-            lines.append("")
-        os.makedirs(os.path.dirname(os.path.abspath(notes_path)) or ".", exist_ok=True)
-        with open(notes_path, "w", encoding="utf-8") as fh:
-            fh.write("\n".join(lines).strip() + "\n")
-        return {"ok": True, "path": os.path.abspath(notes_path), "lines": len(lines)}
-
     def _findings_export(
         self,
         store,
@@ -768,10 +745,10 @@ class ServerBlackboardMixin(
         """Export the investigation in the findings format (kind/status/
         confidence/priority/tags/evidence), JSON or Markdown.
 
-        The legacy ``notes_export`` renders a few lanes as briefs; this is the
-        full-fidelity snapshot of the same workspace, carrying everything the
-        ``ida_write_finding`` contract can express, so a report, another tool,
-        or a later session can consume it without losing evidence.
+        This is the full-fidelity snapshot of the workspace, carrying
+        everything the ``ida_write_finding`` contract can express, so a
+        report, another tool, or a later session can consume it without
+        losing evidence.
         """
         page_size = 1000
         offset = 0
@@ -1638,10 +1615,6 @@ class ServerBlackboardMixin(
             }
         if action == "state_health":
             return {"ok": True, **self._state_health(store), "phase": self._phase_snapshot(phase_state, store)}
-        if action == "notes_export":
-            notes_path = str(args.get("notes_path") or args.get("path") or "re_notes.md").strip()
-            limit = _bounded_int(args.get("limit", 20), 20, min_value=1, max_value=100)
-            return self._notes_export(store, notes_path, limit=limit)
         if action == "export":
             fmt = str(args.get("format") or "json").strip().lower()
             if fmt not in {"json", "markdown"}:

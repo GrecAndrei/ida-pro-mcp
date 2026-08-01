@@ -625,7 +625,7 @@ SKIP_ACTIONS: set[tuple[str, str]] = {
     ("blackboard", "proposal_list"), ("blackboard", "proposal_accept"),
     ("blackboard", "proposal_reject"), ("blackboard", "decision_card"),
     ("blackboard", "working_set"), ("blackboard", "state_health"),
-    ("blackboard", "notes_export"), ("blackboard", "notes_import"),
+    ("blackboard", "notes_import"),
     ("blackboard", "campaign_summary"), ("blackboard", "mark_examined"),
     ("blackboard", "recall"), ("blackboard", "conflicts"), ("blackboard", "stale"),
     ("blackboard", "publish_findings"), ("blackboard", "import_annotations"),

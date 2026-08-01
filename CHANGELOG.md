@@ -44,8 +44,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
 - Tuning: `IDA_MCP_SAFE_MODE_POLL_SEC` (default 5) controls the completion-watcher poll interval, `IDA_MCP_SAFE_MODE_WATCH_SEC` (default 6 h) caps it.
 
 ### Blackboard export in the findings format
-- New `ida_export_findings` operation (findings category) exports the investigation workspace in the new findings format — kind, status, confidence, priority, tags, evidence, conflicts, staleness — instead of the legacy lane-brief `notes_export`. JSON mode returns a full-fidelity `ida-findings-v1` snapshot (machine-readable, internal storage fields stripped); markdown mode renders a grouped report by kind → status with content and evidence bullets. Pass `path` to write a file; otherwise content is returned inline. Filters: kind/status/category/tag/address/min_confidence/include_resolved/include_contradicted/limit.
+- New `ida_export_findings` operation (findings category) exports the investigation workspace in the new findings format — kind, status, confidence, priority, tags, evidence, conflicts, staleness. JSON mode returns a full-fidelity `ida-findings-v1` snapshot (machine-readable, internal storage fields stripped); markdown mode renders a grouped report by kind → status with content and evidence bullets. Pass `path` to write a file; otherwise content is returned inline. Filters: kind/status/category/tag/address/min_confidence/include_resolved/include_contradicted/limit.
 - Backed by a new `blackboard(action='export')` action (registered in the legacy tool too); it reads the binary-scoped SQLite workspace, so it works without an IDA runtime and is safe-mode compatible.
+- The legacy lane-brief export `blackboard(action='notes_export')` is removed: it rendered a few lanes as truncated briefs and dropped evidence, kind, status, and conflicts. `notes_import` stays for ingesting hand-written markdown.
 
 ## 2026-07-31 — dead legacy tools removed
 

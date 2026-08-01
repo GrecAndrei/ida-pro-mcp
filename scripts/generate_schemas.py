@@ -49,7 +49,7 @@ HOST_TOOL_ACTIONS = {
         "policy_set", "policy_status", "policy_check", "phase_status", "phase_set", "phase_tick",
         "quest_board", "quest_complete", "memory_compile", "phase_finalize", "trace_ingest",
         "trace_run", "trace_status", "proposal_create", "proposal_list", "proposal_accept",
-        "proposal_reject", "decision_card", "working_set", "state_health", "notes_export",
+        "proposal_reject", "decision_card", "working_set", "state_health",
         "notes_import", "write","read","list","search","update","delete","clear","stats",
         "prune","merge","contradict","resolve","next_target",
         "frontier", "coverage", "propagate_labels",
