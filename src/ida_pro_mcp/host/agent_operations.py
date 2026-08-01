@@ -298,10 +298,15 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     ),
     AgentOperation(
         name="ida_session_state",
-        description="Get the current binary, analysis progress, and next useful actions.",
+        description=(
+            "Get the current binary, analysis progress, and next useful "
+            "actions. When several agents share one MCP connection, pass "
+            "idb=<session_id> to target a specific session instead of the "
+            "shared active one."
+        ),
         category="session",
-        input_schema=_schema({}),
-        example={},
+        input_schema=_schema({"idb": IDB}),
+        example={"idb": "SID_ABC123"},
         backend_tool="session",
         backend_action="state",
     ),
@@ -312,11 +317,13 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
             "Reports safe_mode and analysis_complete; while safe_mode is "
             "true, full-binary analysis, indexing, and script execution are "
             "blocked. When analysis completes, the response carries a "
-            "one-shot analysis_complete warning."
+            "one-shot analysis_complete warning. When several agents share "
+            "one MCP connection, pass idb=<session_id> to target a specific "
+            "session instead of the shared active one."
         ),
         category="session",
-        input_schema=_schema({}),
-        example={},
+        input_schema=_schema({"idb": IDB}),
+        example={"idb": "SID_ABC123"},
         backend_tool="session",
         backend_action="status",
     ),

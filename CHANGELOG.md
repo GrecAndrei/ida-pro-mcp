@@ -65,6 +65,17 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
   workspace, frontier strategies, and intelligence; `tools/` documents every
   operation by category. Workflow playbooks were removed.
 
+### Per-session targeting on shared MCP connections
+- `ida_session_status` and `ida_session_state` now accept `idb=<session_id>`
+  to report a named session instead of the connection-wide active one (which
+  reflects whoever opened a binary last). Several agents multiplexed over one
+  MCP connection (opencode subagents share the connection; MCP carries no
+  per-agent identity) can therefore each steer status/state at their own
+  session. Naming a session makes it the connection's active session for
+  subsequent calls, subject to the existing ownership guard (a session with a
+  live foreign runtime is rejected with FILE_LOCKED). Analysis operations
+  already accepted `idb`; this closes the gap for the polling operations.
+
 ## 2026-07-31 — dead legacy tools removed
 
 25 legacy tools were unreachable from every surface: never advertised in `tools/list` (legacy mode included), never exposed as `ida_*` operations, never called by any host service. ~18,000 lines of dead IDA-side code are gone.

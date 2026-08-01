@@ -1496,8 +1496,43 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             self.current_session = None
         return {"ok": closed, "session_id": sid}
 
+    def _session_target(self, args: dict) -> tuple[Any, dict | None]:
+        """Resolve an explicit session target from ``idb``/``session_id`` args.
+
+        Several agents can be multiplexed over one MCP connection (opencode
+        subagents share the connection, and MCP carries no per-agent
+        identity), so the "active session" default reflects whoever opened a
+        binary last. Naming a session here steers the call at that session —
+        and, subject to the ownership guard, makes it this connection's
+        active session so later calls keep targeting it.
+        """
+        raw = str(args.get("idb") or args.get("session_id") or "").strip()
+        if not raw:
+            return self.current_session, None
+        sid = _normalize_session_id(raw)
+        if not sid:
+            return None, make_error(
+                MCPError.INVALID_ARGS, "Invalid session idb reference"
+            )
+        try:
+            session = self.session_mgr.get_session(sid)
+        except Exception:
+            session = None
+        if not session:
+            return None, make_error(
+                MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
+            )
+        ownership_error = self._ensure_client_owns_session(session)
+        if ownership_error:
+            return None, ownership_error
+        self.current_session = session
+        return session, None
+
     def _session_action_state(self, args: dict) -> dict:
         """Return the analysis state — same data as the ida://state resource."""
+        session, target_error = self._session_target(args)
+        if target_error:
+            return target_error
         try:
             import json as _json
 
@@ -1574,6 +1609,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         }
 
     def _session_action_status(self, args: dict) -> dict:
+        _target, target_error = self._session_target(args)
+        if target_error:
+            return target_error
         if self.current_session:
             fresh_session = self.session_mgr.get_session(self.current_session.session_id) or self.current_session
             result = fresh_session.to_dict()

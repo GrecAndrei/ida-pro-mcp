@@ -263,13 +263,18 @@ Example:
 
 ## `ida_session_state`
 
-Get the current binary, analysis progress, and next useful actions.
+Get the current binary, analysis progress, and next useful actions. When several agents share one MCP connection, pass idb=<session_id> to target a specific session instead of the shared active one.
 
 Input schema:
 ```json
 {
   "type": "object",
-  "properties": {},
+  "properties": {
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
   "required": [],
   "additionalProperties": false
 }
@@ -279,19 +284,26 @@ Example:
 ```json
 {
   "name": "ida_session_state",
-  "arguments": {}
+  "arguments": {
+    "idb": "SID_ABC123"
+  }
 }
 ```
 
 ## `ida_session_status`
 
-Check whether IDA analysis is ready without starting more work. Reports safe_mode and analysis_complete; while safe_mode is true, full-binary analysis, indexing, and script execution are blocked. When analysis completes, the response carries a one-shot analysis_complete warning.
+Check whether IDA analysis is ready without starting more work. Reports safe_mode and analysis_complete; while safe_mode is true, full-binary analysis, indexing, and script execution are blocked. When analysis completes, the response carries a one-shot analysis_complete warning. When several agents share one MCP connection, pass idb=<session_id> to target a specific session instead of the shared active one.
 
 Input schema:
 ```json
 {
   "type": "object",
-  "properties": {},
+  "properties": {
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
   "required": [],
   "additionalProperties": false
 }
@@ -301,7 +313,9 @@ Example:
 ```json
 {
   "name": "ida_session_status",
-  "arguments": {}
+  "arguments": {
+    "idb": "SID_ABC123"
+  }
 }
 ```
 

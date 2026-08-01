@@ -497,3 +497,70 @@ def test_index_status_and_cancel_are_scoped_to_owning_client(
     finally:
         server._end_client_connection(token_b)
         server.shutdown()
+
+
+def test_status_and_state_can_target_a_specific_session_explicitly(
+    tmp_path, monkeypatch
+):
+    """Several agents share one MCP connection; status must be steerable at
+    a named session instead of always reporting whoever opened last.
+
+    MCP carries no per-agent identity (subagents multiplex over one
+    connection), so the connection-wide active session is a shared default.
+    Passing idb/session_id lets each agent poll — and steer toward — its own
+    session.
+    """
+    monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
+    monkeypatch.setattr(IDAMCPServer, "_detect_ida_dir", lambda self: "")
+    monkeypatch.setattr(IDAMCPServer, "_find_idat", lambda self: "")
+
+    binary_a = tmp_path / "alpha.bin"
+    binary_b = tmp_path / "bravo.bin"
+    binary_a.write_bytes(b"alpha")
+    binary_b.write_bytes(b"bravo")
+
+    server = IDAMCPServer()
+    monkeypatch.setattr(server, "_ensure_runtime_and_idb", lambda session: None)
+
+    token = server._begin_client_connection()
+    try:
+        opened_a = _open_owned_session(server, str(binary_a), request_id=1)
+        opened_b = _open_owned_session(server, str(binary_b), request_id=2)
+        sid_a = opened_a["session_id"]
+        sid_b = opened_b["session_id"]
+
+        # Unscoped status reports whoever opened last (the shared active).
+        active = _tool_call(server, 3, "ida_session_status", {})
+        assert active["session"]["session_id"] == sid_b
+
+        # Explicit idb steers status at session A — and makes it active.
+        targeted = _tool_call(server, 4, "ida_session_status", {"idb": sid_a})
+        assert targeted["session"]["session_id"] == sid_a
+        assert server.current_session.session_id == sid_a
+
+        # Explicit session_id-style targeting works via the idb argument.
+        again = _tool_call(server, 5, "ida_session_status", {"idb": sid_b})
+        assert again["session"]["session_id"] == sid_b
+        assert server.current_session.session_id == sid_b
+
+        # State routing follows the same explicit target (side effect:
+        # connection active session becomes the named one).
+        state = _tool_call(server, 6, "ida_session_state", {"idb": sid_a})
+        assert isinstance(state, dict)
+        assert server.current_session.session_id == sid_a
+
+        # A foreign session id is rejected by the ownership guard when the
+        # owning session's runtime is live.
+        token_peer = server._begin_client_connection()
+        try:
+            _open_owned_session(server, str(binary_b), request_id=7)
+            server.session_runtimes[sid_a] = {"process": _FakeIdaProcess()}
+            denied = server._handle_session({"action": "status", "idb": sid_a})
+            assert denied.get("error") is True
+            assert denied.get("code") in {"FILE_LOCKED", "INVALID_ARGS"}
+        finally:
+            server._end_client_connection(token_peer)
+    finally:
+        server._end_client_connection(token)
+        server.shutdown()

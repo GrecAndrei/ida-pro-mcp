@@ -276,6 +276,7 @@ TOOL_ARG_SCHEMAS = {
         },
         "ida_args": {"type": ["string", "array"], "items": {"type": "string"}},
         "session_id": {"type": "string", "description": "Session ID for switch/close"},
+        "idb": {"type": "string", "description": "Alias for session_id: a session ID, SID_* IDB id, or binary/idb path to target status/state/logs explicitly."},
         "query": {
             "type": "string",
             "description": "Filter sessions by name/path (supports regex, glob, substring)",
