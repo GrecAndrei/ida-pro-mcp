@@ -484,6 +484,26 @@ def _fwb_base_bootstrap_report(chip_family: str, load_base: Optional[int], actio
     }
 
 
+def _coerce_load_base(load_base: Any) -> Optional[int]:
+    """Accept load_base as int, '0x120000' hex string, or '4718592' decimal.
+
+    The host forwards baseaddr verbatim from the session options, where it
+    is commonly a hex string like "0x120000". Dropping it (as the previous
+    ``isinstance(load_base, int)`` gate did) silently disabled the whole
+    firmware bootstrap base.
+    """
+    if load_base is None or isinstance(load_base, bool):
+        return None
+    if isinstance(load_base, int):
+        return load_base
+    if isinstance(load_base, str):
+        try:
+            return int(load_base.strip(), 0)
+        except ValueError:
+            return None
+    return None
+
+
 def run_firmware_bootstrap(
     chip_family: str,
     load_base: Optional[int] = None,
@@ -2013,7 +2033,7 @@ def firmware_view(
 
             report = run_firmware_bootstrap(
                 chip_family=chip or "unknown",
-                load_base=load_base if isinstance(load_base, int) else None,
+                load_base=_coerce_load_base(load_base),
                 memory_map=memory_map if isinstance(memory_map, list) else None,
                 peripheral_addresses=periph if isinstance(periph, list) else None,
                 post_load_actions=actions if isinstance(actions, list) else None,

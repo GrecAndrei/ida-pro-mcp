@@ -182,6 +182,24 @@ def analysis(
             }
             applied = {}
             requested_baseaddr = None
+            # Snapshot the current base BEFORE mutating any attribute. The
+            # rebase delta must be computed against the pre-change state:
+            # setting INF_BASEADDR first would make delta always 0, so the
+            # segments would stay at the old base while INF_BASEADDR claimed
+            # the new one — a silent desync of every address in the database.
+            current_baseaddr = None
+            if mapping.get("baseaddr") is not None:
+                try:
+                    if hasattr(idc, "get_inf_attr"):
+                        current_baseaddr = int(idc.get_inf_attr(mapping["baseaddr"]))
+                except Exception:
+                    current_baseaddr = None
+                if current_baseaddr is None:
+                    try:
+                        current_baseaddr = int(_safe_inf_get("baseaddr", 0) or 0)
+                    except Exception:
+                        current_baseaddr = None
+
             for key, val in options.items():
                 if key not in mapping or mapping[key] is None:
                     continue
@@ -193,6 +211,12 @@ def analysis(
                         f"invalid value for {key}",
                         details={"key": key, "value": val},
                     )
+                if key == "baseaddr":
+                    # Handled below: rebase_program moves segments and updates
+                    # INF_BASEADDR itself. Setting the attribute first would
+                    # corrupt the delta computation.
+                    requested_baseaddr = cast_val
+                    continue
                 try:
                     idc.set_inf_attr(mapping[key], cast_val)
                 except Exception as e:
@@ -202,28 +226,30 @@ def analysis(
                         details={"key": key, "value": cast_val},
                     )
                 applied[key] = cast_val
-                if key == "baseaddr":
-                    requested_baseaddr = cast_val
 
             if requested_baseaddr is not None:
-                current_base = None
-                try:
-                    if hasattr(idc, "get_inf_attr") and getattr(idc, "INF_BASEADDR", None) is not None:
-                        current_base = int(idc.get_inf_attr(idc.INF_BASEADDR))
-                except Exception:
-                    current_base = None
-                if current_base is None:
-                    try:
-                        current_base = int(_safe_inf_get("baseaddr", 0) or 0)
-                    except Exception:
-                        current_base = 0
+                current_base = current_baseaddr if current_baseaddr is not None else 0
                 delta = requested_baseaddr - int(current_base or 0)
                 if delta != 0:
+                    # rebase_program refuses non-page-aligned deltas (it
+                    # returns 0 / throws). Surface the constraint up front
+                    # instead of returning a generic "failed to rebase".
+                    if delta % 0x1000:
+                        return make_error(
+                            MCPError.INVALID_ARGS,
+                            "Failed to rebase program: the baseaddr delta must be page-aligned (multiple of 0x1000)",
+                            details={
+                                "requested_baseaddr": hex(requested_baseaddr),
+                                "current_baseaddr": hex(int(current_base or 0)),
+                                "delta": delta,
+                            },
+                        )
                     rebased = False
                     rebase_errors = []
                     for rebase_fn in (
                         getattr(idc, "rebase_program", None),
                         getattr(idaapi, "rebase_program", None),
+                        getattr(ida_segment, "rebase_program", None),
                     ):
                         if not callable(rebase_fn):
                             continue
@@ -251,6 +277,7 @@ def analysis(
                                 "errors": rebase_errors[:3],
                             },
                         )
+                applied["baseaddr"] = requested_baseaddr
             return {"ok": True, "applied": applied}
 
         if action == "set_processor":

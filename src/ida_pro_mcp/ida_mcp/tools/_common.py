@@ -19,6 +19,7 @@ from typing import Annotated, Any, Literal, Optional, Union
 import ida_bytes
 import ida_frame
 import ida_funcs
+import ida_fixup
 import ida_hexrays
 import ida_kernwin
 import ida_lines
@@ -424,7 +425,7 @@ __all__ = [
     "idaapi", "idautils", "idc",
     "ida_name", "ida_bytes", "ida_hexrays", "ida_typeinf",
     "ida_nalt", "ida_segment", "ida_funcs", "ida_kernwin",
-    "ida_frame", "ida_lines",
+    "ida_frame", "ida_lines", "ida_fixup",
     # MCP infrastructure
     "tool", "unsafe", "idaread", "idawrite", "IDAError",
     # Utilities

@@ -565,24 +565,39 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             "and cite returned evidence."
         )
 
-    def _get_session_imagebase(self, session_id: str | None) -> int:
+    def _get_session_imagebase(self, session_id: str | None) -> int | None:
+        """Resolve the session's real image base, or None when unknown.
+
+        Never fabricates a default: a hardcoded 0x140000000 made every
+        32-bit address (e.g. 0x401000) look like an RVA, so the address
+        enrichment silently "rebased" legitimate absolute addresses into
+        garbage (0x140401000). Only a value actually known for this session
+        (runtime cache, session options, or a live RPC answer) is returned.
+        """
         if not session_id:
-            return 0x140000000
+            return None
 
         # 1. Check runtime cache
         if hasattr(self, "session_runtimes") and isinstance(self.session_runtimes, dict):
             runtime = self.session_runtimes.get(session_id)
             if isinstance(runtime, dict) and "imagebase" in runtime:
-                return runtime["imagebase"]
+                cached = runtime["imagebase"]
+                return int(cached) if isinstance(cached, (int, str)) and str(cached) else None
 
-        # 2. Check current session options
-        session = getattr(self, "current_session", None)
-        if session and session.session_id == session_id:
+        # 2. Check the target session's recorded options (any session, not
+        #    just the current one — the caller may enrich for another session).
+        try:
+            session = self.session_mgr.get_session(session_id)
+        except Exception:
+            session = None
+        if session is None and self.current_session and self.current_session.session_id == session_id:
+            session = self.current_session
+        if session is not None:
             raw_base = (getattr(session, "analysis_options", {}) or {}).get("baseaddr")
             if raw_base is not None:
                 try:
                     return int(str(raw_base), 0)
-                except ValueError:
+                except (ValueError, TypeError):
                     pass
 
         # 3. Query the target IDA Pro RPC server
@@ -603,15 +618,15 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                             img_base_str = res.get("image_base")
                             if img_base_str:
                                 try:
-                                    val = int(img_base_str, 16)
+                                    val = int(str(img_base_str), 16)
                                     runtime["imagebase"] = val
                                     return val
-                                except ValueError:
+                                except (ValueError, TypeError):
                                     pass
                     except Exception:
                         pass
 
-        return 0x140000000
+        return None
 
     def _add_address_calculations(self, compacted: dict, session_id: str | None) -> None:
         try:
@@ -624,9 +639,12 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             return
 
         imagebase = self._get_session_imagebase(session_id)
-
-        if self.current_session:
-            pass
+        if imagebase is None:
+            # No known image base for this session: rebasing "RVAs" would be
+            # pure invention (the old hardcoded 0x140000000 default turned
+            # every 32-bit address into a bogus imagebase+offset). Report
+            # nothing rather than garbage.
+            return
 
         hex_addrs = sorted(set(matches))
         valid_addrs = []
@@ -647,7 +665,10 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             target_val = val
             is_rva = False
 
-            # Check if val is likely an RVA (i.e. smaller than imagebase)
+            # Check if val is likely an RVA (i.e. smaller than imagebase).
+            # Only rebase when the imagebase is genuinely known (guaranteed
+            # here) — and never when the value already lives at/above the
+            # image base, which is the normal case for loaded addresses.
             if val < imagebase:
                 rebased_val = imagebase + val
                 target_val = rebased_val
@@ -677,6 +698,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
 
         if calc_dict:
             compacted["llm_address_calculation"] = calc_dict
+            compacted["llm_address_calculation_imagebase"] = hex(imagebase)
 
     def _prepare_response_payload(
         self,

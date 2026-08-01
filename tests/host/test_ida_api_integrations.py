@@ -252,6 +252,116 @@ class TestMemoryStructWalkTypeAnnotation(unittest.TestCase):
         result = self.mod.memory(action="struct_walk", addr="0x400000", depth=0)
         self.assertTrue(result["ok"])
 
+    def test_struct_walk_reports_fixup_type_for_relocation_slots(self):
+        ida_fixup = sys.modules["ida_fixup"]
+
+        def mock_get_fixup(fdata, ea):
+            if ea == 0x400000:
+                fdata.type = 0x02  # FIXUP_OFF32
+                fdata.base = 0
+                return True
+            return False
+        ida_fixup.get_fixup = mock_get_fixup
+        ida_fixup.FIXUP_OFF32 = 0x02
+        result = self.mod.memory(action="struct_walk", addr="0x400000", depth=1)
+        self.assertTrue(result["ok"])
+        node = next(n for n in result["nodes"] if n["addr"] == "0x400000")
+        self.assertTrue(node.get("relocation"))
+        self.assertEqual(node.get("fixup_type"), 0x02)
+        self.assertEqual(node.get("fixup_name"), "FIXUP_OFF32")
+
+
+class TestAnalysisSetOptionsRebase(unittest.TestCase):
+    """analysis(set_options, baseaddr=...) must rebase with the correct delta.
+
+    Regression: the old flow called set_inf_attr(INF_BASEADDR) BEFORE
+    computing the rebase delta, so current_base always equalled the
+    requested base and rebase_program never moved the segments — the
+    INF_BASEADDR attribute claimed the new base while every segment
+    stayed at the old address.
+    """
+
+    def setUp(self):
+        self.set_inf_attr_calls = []
+        self.rebase_calls = []
+        self.cur_base = 0x400000
+
+        idaapi = types.ModuleType("idaapi")
+        idaapi.rebase_program = self._mock_rebase
+
+        idc = types.ModuleType("idc")
+        idc.INF_BASEADDR = 1
+        idc.INF_START_EA = 2
+        idc.INF_MIN_EA = 3
+        idc.INF_MAX_EA = 4
+        idc.MSF_FIXONCE = 0x01
+        idc.MSF_SILENT = 0x02
+        idc.get_inf_attr = lambda attr: self.cur_base
+        idc.set_inf_attr = self._mock_set_inf_attr
+
+        ida_segment = types.ModuleType("ida_segment")
+        ida_segment.rebase_program = self._mock_rebase
+
+        for name in ("ida_ida", "ida_loader", "ida_entry", "ida_auto", "ida_ua",
+                     "ida_name", "ida_lines", "ida_funcs", "ida_bytes", "idautils"):
+            sys.modules[name] = _make_minimal_module(name)
+        sys.modules["idaapi"] = idaapi
+        sys.modules["idc"] = idc
+        sys.modules["ida_segment"] = ida_segment
+
+        common_overrides = {
+            "idaapi": idaapi,
+            "idc": idc,
+            "ida_segment": ida_segment,
+            "_safe_inf_get": lambda key, default=0: self.cur_base,
+        }
+        install_common_stub(common_overrides)
+        self.mod = load_tool_module("analysis", common_overrides=common_overrides)
+        # install_common_stub resets get_inf_attr to a 0-returning stub
+        # (once directly, once inside load_tool_module); restore the
+        # stateful one so the rebase delta is computed against the real
+        # "current" base.
+        idc.get_inf_attr = lambda attr: self.cur_base
+
+    def _mock_set_inf_attr(self, attr, value):
+        self.set_inf_attr_calls.append((attr, value))
+
+    def _mock_rebase(self, delta, flags):
+        self.rebase_calls.append((delta, flags))
+        self.cur_base += delta
+        return True
+
+    def test_rebase_uses_delta_between_requested_and_actual_base(self):
+        result = self.mod.analysis(action="set_options", options={"baseaddr": "0x401000"})
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.rebase_calls, [(0x1000, 0)])
+        # INF_BASEADDR must not be mutated before the delta is computed.
+        self.assertEqual(self.set_inf_attr_calls, [])
+        self.assertEqual(result["applied"]["baseaddr"], 0x401000)
+
+    def test_no_rebase_when_baseaddr_unchanged(self):
+        result = self.mod.analysis(action="set_options", options={"baseaddr": 0x400000})
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.rebase_calls, [])
+        self.assertEqual(result["applied"]["baseaddr"], 0x400000)
+
+    def test_non_page_aligned_delta_is_rejected_with_hint(self):
+        result = self.mod.analysis(action="set_options", options={"baseaddr": "0x401100"})
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "INVALID_ARGS")
+        self.assertIn("page-aligned", str(result["message"]))
+        self.assertEqual(self.rebase_calls, [])
+
+    def test_rebase_failure_returns_structured_error(self):
+        idc = sys.modules["idc"]
+        idc.rebase_program = lambda delta, flags: False
+        sys.modules["idaapi"].rebase_program = lambda delta, flags: False
+        sys.modules["ida_segment"].rebase_program = lambda delta, flags: False
+        result = self.mod.analysis(action="set_options", options={"baseaddr": "0x402000"})
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "IDA_ERROR")
+        self.assertIn("Failed to rebase", result["message"])
+
 
 class TestFuncsInfoStructuredParams(unittest.TestCase):
     """Test funcs info action returns structured parameters via ida_typeinf."""

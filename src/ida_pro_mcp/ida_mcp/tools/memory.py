@@ -9,6 +9,69 @@ from collections import Counter
 
 MAX_HEXDUMP_SIZE = 4096
 
+# ----------------------------------------------------------------------------
+# Relocation (fixup) introspection
+# ----------------------------------------------------------------------------
+
+_FIXUP_MODULE_NAMES = None
+
+
+def _fixup_name_map():
+    """Reverse-map ida_fixup.FIXUP_* constants to names, cached per load.
+
+    Builds the map from the live ida_fixup module so any IDA version's
+    constants are covered without hardcoding an enum table here.
+    """
+    global _FIXUP_MODULE_NAMES
+    if _FIXUP_MODULE_NAMES is None:
+        names = {}
+        try:
+            for key in dir(ida_fixup):
+                if not key.startswith("FIXUP_"):
+                    continue
+                value = getattr(ida_fixup, key)
+                if isinstance(value, int):
+                    names[value] = key
+        except Exception:
+            names = {}
+        _FIXUP_MODULE_NAMES = names
+    return _FIXUP_MODULE_NAMES
+
+
+def _fixup_type_name(fixup_type):
+    """Human-readable name for a fixup type, e.g. FIXUP_OFF32, FIXUP_REL32."""
+    if not isinstance(fixup_type, int):
+        return None
+    name = _fixup_name_map().get(fixup_type)
+    if name:
+        return name
+    # Coarse fallback for constants the running IDA build does not expose.
+    if 0x00 <= fixup_type <= 0x0E:
+        return "FIXUP_OFF_OR_PTR"
+    if fixup_type == 0x42:
+        return "FIXUP_REL32"
+    return f"FIXUP_0x{fixup_type:x}"
+
+
+def _fixup_info(ea):
+    """Return relocation info for *ea* or None when no fixup exists there."""
+    try:
+        fdata = ida_fixup.fixup_data_t()
+        if not ida_fixup.get_fixup(fdata, ea):
+            return None
+        info: dict[str, Any] = {"relocation": True}
+        ftype = getattr(fdata, "type", None)
+        if isinstance(ftype, int):
+            info["fixup_type"] = ftype
+            info["fixup_name"] = _fixup_type_name(ftype)
+        for attr in ("base", "off", "displacement"):
+            value = getattr(fdata, attr, None)
+            if isinstance(value, int) and value:
+                info[f"fixup_{attr}"] = value
+        return info
+    except Exception:
+        return None
+
 
 # ============================================================================
 # MEMORY - Read/Write/Search/Analyze operations
@@ -56,7 +119,15 @@ def _find_pointers(data, start_ea):
     for i in range(0, len(data) - ptr_size + 1, ptr_size):
         val = struct.unpack_from(fmt, data, i)[0]
         if val != 0 and ida_bytes.is_loaded(val):
-            pointers.append((start_ea + i, hex(val), idc.get_name(val) or ""))
+            entry = {"offset": i, "target_addr": hex(val), "target_name": idc.get_name(val) or ""}
+            # The slot itself may be a relocation (fixup): the value stored
+            # here is what the loader will patch at runtime, not a real
+            # address — flag it so downstream analysis does not trust it.
+            fixup = _fixup_info(start_ea + i)
+            if fixup:
+                entry["relocation"] = True
+                entry["fixup_name"] = fixup.get("fixup_name")
+            pointers.append(entry)
     return pointers
 
 
@@ -412,7 +483,7 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
             if not raw:
                 return make_error(MCPError.IDA_ERROR, f"Could not read region starting at {hex(ea)}")
             ptrs = _find_pointers(raw, ea)
-            lines = [{"offset": int(addr - ea), "target_addr": target, "target_name": name} for addr, target, name in ptrs[:256]]
+            lines = ptrs[:256]
             return {"ok": True, "pointers": lines, "count": len(ptrs), "region": f"{hex(ea)}-{hex(ea + region_size)}"}
 
         elif action == "entropy":
@@ -463,12 +534,9 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
                 except Exception:
                     pass
                 # Check if pointer target is a relocation
-                try:
-                    fdata = ida_fixup.fixup_data_t()
-                    if ida_fixup.get_fixup(fdata, cur_ea):
-                        node["relocation"] = True
-                except Exception:
-                    pass
+                fixup = _fixup_info(cur_ea)
+                if fixup:
+                    node.update(fixup)
                 nodes.append(node)
                 if val != 0 and ida_bytes.is_loaded(val) and level < depth:
                     queue.append((val, level + 1))
