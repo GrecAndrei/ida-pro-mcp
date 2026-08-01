@@ -196,11 +196,23 @@ SEMANTIC_INDEX_MAX_QUERY_WORKERS = 8
 MAX_BATCH_CALLS = 50
 MAX_BATCH_PAYLOAD_BYTES = 512 * 1024
 
-# Binaries at or above this size trigger an upfront-load warning that
-# suggests background loading (session action create_background /
-# ida_open_background). 50 MiB by default; override with IDA_MCP_LARGE_BINARY_MB.
+# Binaries at or above this size are auto-opened in the background (session
+# action create_background / ida_open_background) instead of blocking the
+# caller on upfront analysis; the session then starts in safe mode. 50 MiB by
+# default; override with IDA_MCP_LARGE_BINARY_MB.
 LARGE_BINARY_THRESHOLD_BYTES = (
     max(1, int(os.environ.get("IDA_MCP_LARGE_BINARY_MB", "50"))) * 1024 * 1024
+)
+
+# Safe mode: while a session's IDA auto-analysis is still completing, the
+# host blocks full-binary analysis / indexing / script execution and reports
+# safe_mode in open/status/state/list. The analysis-completion watcher polls
+# the runtime every SAFE_MODE_POLL_SECONDS and gives up after
+# SAFE_MODE_WATCH_SECONDS. Override with IDA_MCP_SAFE_MODE_POLL_SEC and
+# IDA_MCP_SAFE_MODE_WATCH_SEC.
+SAFE_MODE_POLL_SECONDS = max(1.0, float(os.environ.get("IDA_MCP_SAFE_MODE_POLL_SEC", "5")))
+SAFE_MODE_WATCH_SECONDS = max(
+    60.0, float(os.environ.get("IDA_MCP_SAFE_MODE_WATCH_SEC", str(6 * 3600)))
 )
 
 # How long a tool call may wait for a session's RPC lane before the host

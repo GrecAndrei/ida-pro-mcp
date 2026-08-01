@@ -719,6 +719,21 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         # Apply universal output filters first
         payload = self._apply_output_filters(payload, opts)
         payload = self._json_safe_value(payload)
+
+        # ---- One-shot analysis-completion notice ----
+        # When a background-loaded session's analysis completes, the next
+        # response for that session carries the transition warning exactly
+        # once ('the agent is auto moved to the new one with a warning').
+        try:
+            notices = getattr(self, "_pending_session_notices", None)
+            current = getattr(self, "current_session", None)
+            if isinstance(notices, dict) and current is not None:
+                notice = notices.pop(current.session_id, None)
+                if notice is not None and isinstance(payload, dict):
+                    payload = dict(payload)
+                    payload["warning"] = notice
+        except Exception:
+            pass
         full_mode = opts.get("mode") == "full"
         if full_mode:
             if isinstance(payload, dict):
@@ -821,7 +836,17 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                 pass
 
             # ---- Auto-Digest: API calls, patterns, behavior tags ----
-            if self.enable_response_enrichment:
+            # Skipped in safe mode: the agent must do everything manually
+            # while auto-analysis is still running.
+            _safe_mode_fn = getattr(self, "_safe_mode_active", None)
+            _safe_mode_active = bool(
+                _safe_mode_fn(
+                    getattr(self.current_session, "session_id", "") or ""
+                )
+                if callable(_safe_mode_fn)
+                else False
+            )
+            if self.enable_response_enrichment and not _safe_mode_active:
                 try:
                     if tool_name == "code" and action_name in ("decompile", "semantic_decompile"):
                         from .response_enrichment import digest_decompiled
@@ -848,7 +873,9 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                     pass
 
             # ---- Session Resume: first 2 calls only ----
-            if self.enable_response_enrichment:
+            # Also skipped in safe mode: resume summarizes prior analysis,
+            # which is exactly what must not be auto-trusted mid-analysis.
+            if self.enable_response_enrichment and not _safe_mode_active:
                 try:
                     if hasattr(self, 'session_mgr') and self.current_session:
                         from .response_enrichment import build_session_resume

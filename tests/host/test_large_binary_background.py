@@ -1,9 +1,11 @@
-"""Large-binary warning and background loading (ida_open_background).
+"""Auto-background loading and safe mode for large binaries.
 
-Large binaries must not be silently loaded with a blocking upfront call that
-stalls the client for the whole analysis: ida_open_binary returns a warning
-with a suggestion, and ida_open_background creates the session and spawns
-the IDA runtime without waiting.
+Large binaries must never stall the caller on upfront analysis: ida_open_binary
+auto-routes them to the background path (background + auto_backgrounded +
+safe_mode in the response) and ida_open_background always returns immediately.
+Safe mode gates full-binary analysis/indexing/script execution until the
+session's IDA auto-analysis completes; manual small-area operations stay
+available.
 """
 
 from __future__ import annotations
@@ -44,26 +46,49 @@ def _open(server, name, arguments, request_id=1):
     return response["result"]["structuredContent"]
 
 
-def test_large_binary_open_warns_and_suggests_background(tmp_path, server):
+def test_large_binary_open_auto_backgrounds_and_enters_safe_mode(tmp_path, server):
     large = tmp_path / "huge.bin"
     large.write_bytes(b"\x00" * (LARGE_BINARY_THRESHOLD_BYTES + 1))
 
     result = _open(server, "ida_open_binary", {"binary_path": str(large)})
     assert result.get("ok") is True
-    warning = result.get("warning")
-    assert warning is not None
-    assert warning["code"] == "large_binary"
-    assert "ida_open_background" in warning["suggestion"]
-    assert "MiB" in warning["message"]
+    # Not a blocking open: the request returns immediately with the
+    # background contract and the agent is told safe mode is on.
+    assert result.get("background") is True
+    assert result.get("auto_backgrounded") is True
+    assert result.get("safe_mode") is True
+    assert result.get("analysis_complete") is False
+    assert "warning" not in result
+    assert "background" in str(result.get("note") or "")
+    assert "safe mode" in str(result.get("note") or "").lower()
 
 
-def test_small_binary_open_has_no_warning(tmp_path, server):
+def test_small_binary_open_is_not_backgrounded(tmp_path, server):
     small = tmp_path / "small.bin"
     small.write_bytes(b"\x00" * 1024)
 
     result = _open(server, "ida_open_binary", {"binary_path": str(small)})
     assert result.get("ok") is True
-    assert "warning" not in result
+    assert result.get("background") is not True
+    assert "auto_backgrounded" not in result
+
+
+def test_large_binary_with_existing_idb_opens_normally(tmp_path, server):
+    """Reusing a completed IDB does not stall on analysis, so no backgrounding."""
+    large = tmp_path / "huge2.bin"
+    large.write_bytes(b"\x00" * (LARGE_BINARY_THRESHOLD_BYTES + 1))
+
+    first = _open(server, "ida_open_background", {"binary_path": str(large)})
+    sid = first["session_id"]
+    idb = first["idb_path"]
+    with open(idb, "wb") as f:
+        f.write(b"IDB")
+
+    reopened = _open(server, "ida_open_binary", {"binary_path": str(large)}, request_id=2)
+    assert reopened.get("ok") is True
+    assert reopened["session_id"] == sid
+    assert reopened.get("background") is not True
+    assert reopened.get("auto_backgrounded") is not True
 
 
 def test_large_binary_background_open_returns_immediately(tmp_path, server):
@@ -80,8 +105,7 @@ def test_large_binary_background_open_returns_immediately(tmp_path, server):
     assert result.get("ok") is True
     assert result.get("background") is True
     assert result["binary_path"] == str(large)
-    warning = result.get("warning")
-    assert warning is not None and warning["code"] == "large_binary"
+    assert result.get("safe_mode") is True
     assert spawns == [result["session_id"]]
 
 
@@ -186,7 +210,7 @@ def test_background_load_error_surfaces_in_status(tmp_path, server):
     assert "idat exploded" in str(bg_error.get("message") or "")
 
 
-def test_large_binary_warning_threshold_respects_env(tmp_path, monkeypatch, server):
+def test_large_binary_threshold_respects_env(tmp_path, monkeypatch, server):
     from ida_pro_mcp.host.server import server_session
 
     monkeypatch.setenv("IDA_MCP_LARGE_BINARY_MB", "1")
@@ -201,6 +225,9 @@ def test_large_binary_warning_threshold_respects_env(tmp_path, monkeypatch, serv
     small.write_bytes(b"\x00" * (512 * 1024))
 
     server._ensure_runtime_and_idb = lambda session: None
-    warning = _open(server, "ida_open_binary", {"binary_path": str(big)}).get("warning")
-    assert warning is not None and warning["code"] == "large_binary"
-    assert "warning" not in _open(server, "ida_open_binary", {"binary_path": str(small)})
+    auto = _open(server, "ida_open_binary", {"binary_path": str(big)})
+    assert auto.get("auto_backgrounded") is True
+    assert auto.get("safe_mode") is True
+    assert "auto_backgrounded" not in _open(
+        server, "ida_open_binary", {"binary_path": str(small)}
+    )

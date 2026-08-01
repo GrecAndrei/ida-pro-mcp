@@ -99,6 +99,45 @@ LONG_RUNNING_ACTIONS: set[tuple[str, str]] = {
     ("workflow", "plan"),
 }
 
+# (tool, action) pairs blocked while a session is in safe mode (IDA
+# auto-analysis still running). Safe mode blocks anything that would invoke
+# full-binary analysis, index a half-analyzed database, or execute arbitrary
+# scripts; manual small-area operations (disassembly, reads, strings, xrefs,
+# per-function decompilation, comment/rename writes) stay available. The
+# gate lifts automatically once analysis completes.
+SAFE_MODE_BLOCKED_TOOLS: set[str] = {"misc"}  # misc: python/idc/plugin_run run arbitrary code
+SAFE_MODE_BLOCKED_ACTIONS: set[tuple[str, str]] = {
+    # analysis engine invocations (set_processor/loader/architecture force a
+    # fresh load or full reanalysis; reanalyze/run/analyze pump auto-analysis)
+    ("analysis", "set_processor"),
+    ("analysis", "set_loader_options"),
+    ("analysis", "set_architecture"),
+    ("analysis", "reanalyze"),
+    ("analysis", "run"),
+    ("analysis", "analyze"),
+    # decompile-everything indexing / semantic products over partial data
+    ("intelligence", "index_fast"),
+    ("intelligence", "index_batch"),
+    ("intelligence", "index_range"),
+    ("intelligence", "index_function"),
+    ("intelligence", "refresh_anchors"),
+    ("intelligence", "semantic_search"),
+    ("intelligence", "similar_functions"),
+    # firmware bootstrap runs post-load actions (analysis passes)
+    ("firmware_view", "bootstrap"),
+    # whole-program automated workflow runs
+    ("workflow", "execute_plan"),
+    ("workflow", "triage_fast"),
+    ("workflow", "malware_deep"),
+    ("workflow", "vuln_audit"),
+    ("workflow", "recon_sweep"),
+    # symbol loads can trigger full reanalysis of the database
+    ("symbols", "load_pdb"),
+    ("symbols", "load_dwarf"),
+    # segments(action='analyze') runs auto-analysis over the segment
+    ("segments", "analyze"),
+}
+
 _EMBEDDING_RPC_ACTIONS = {
     "intelligence": {
         "refresh_anchors",
@@ -208,6 +247,50 @@ class ServerDispatchMixin(ServerClientStateMixin):
             return str(strictest(baseline, session_mode))
         return str(normalize_mode(baseline))
 
+    def _safe_mode_active(self, sid: str) -> bool:
+        """True while *sid*'s IDA auto-analysis is still completing."""
+        pending = getattr(self, "_pending_analysis", None)
+        if not isinstance(pending, set):
+            return False
+        return sid in pending
+
+    def _safe_mode_gate(self, sid: str, tool_name: str, action: str) -> dict | None:
+        """Return an error response when (tool, action) is blocked in safe mode.
+
+        Safe mode blocks full-binary analysis, decompile-everything indexing,
+        and arbitrary script execution while a session's auto-analysis is
+        still running; manual small-area operations stay available. Lifts
+        automatically once analysis completes.
+        """
+        if not sid or not self._safe_mode_active(sid):
+            return None
+        if tool_name in SAFE_MODE_BLOCKED_TOOLS:
+            return make_error(
+                MCPError.SAFE_MODE,
+                f"Tool '{tool_name}' is blocked while IDA auto-analysis is running",
+                recoverable=True,
+                hint=(
+                    "This operation can run arbitrary code or trigger full "
+                    "analysis of a database that is still being analyzed. "
+                    "Poll ida_session_status until safe_mode clears, then retry."
+                ),
+                details={"session_id": sid, "tool": tool_name},
+            )
+        if (tool_name, action) in SAFE_MODE_BLOCKED_ACTIONS:
+            return make_error(
+                MCPError.SAFE_MODE,
+                f"{tool_name}(action='{action}') is blocked while IDA auto-analysis is running",
+                recoverable=True,
+                hint=(
+                    "This operation invokes full-binary analysis or indexes a "
+                    "half-analyzed database. Manual small-area operations "
+                    "(disassembly, reads, per-function decompilation) remain "
+                    "available. Poll ida_session_status until safe_mode clears."
+                ),
+                details={"session_id": sid, "tool": tool_name, "action": action},
+            )
+        return None
+
     def call_tool(self, tool_name, idb_path, **kwargs):
             session = self._resolve_session_from_idb_ref(idb_path)
             if not session:
@@ -219,6 +302,28 @@ class ServerDispatchMixin(ServerClientStateMixin):
             ownership_error = self._ensure_client_owns_session(session)
             if ownership_error:
                 return ownership_error
+
+            _sid = session.session_id
+
+            # Safe-mode gate: block full-binary analysis / indexing / script
+            # execution while this session's auto-analysis is still running.
+            safe_gate = self._safe_mode_gate(
+                _sid, tool_name, str(kwargs.get("action") or "")
+            )
+            if safe_gate is not None:
+                return safe_gate
+
+            # The analysis-completion watcher is reloading this session
+            # against the fully analyzed IDB; calls would race the restart.
+            _reloading = getattr(self, "_reloading_sessions", None)
+            if isinstance(_reloading, set) and _sid in _reloading:
+                return make_error(
+                    MCPError.IDA_BUSY,
+                    "Session is reloading against the fully analyzed IDB; retry in a moment.",
+                    recoverable=True,
+                    hint="Poll ida_session_status until safe_mode clears.",
+                    details={"session_id": _sid},
+                )
 
             runtime = self.session_runtimes.get(session.session_id)
             if not self._runtime_alive(runtime):
@@ -1168,6 +1273,19 @@ class ServerDispatchMixin(ServerClientStateMixin):
                         )
             args.pop("_purpose", None)
             args.pop("_risk_ack", None)
+
+            # ---- Safe mode gate (analysis still running) ----
+            # While a session's IDA auto-analysis is still completing, block
+            # anything that would invoke full-binary analysis, index the
+            # half-analyzed database, or run arbitrary scripts. The agent
+            # keeps manual small-area operations (disassembly, reads,
+            # strings, xrefs, per-function decompilation) until safe mode
+            # lifts automatically once analysis completes.
+            safe_gate = self._safe_mode_gate(
+                sid, tool_name, str(args.get("action") or "")
+            )
+            if safe_gate is not None:
+                return safe_gate
 
             # ---- Blackboard strict policy preflight (global tool boundary) ----
             # Skipped on _risk_ack=true: explicit ack supersedes the strict

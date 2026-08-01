@@ -32,6 +32,7 @@ class MCPError:
     IDA_TIMEOUT = "IDA_TIMEOUT"
     IDA_BUSY = "IDA_BUSY"
     IDA_CRASHED = "IDA_CRASHED"
+    SAFE_MODE = "SAFE_MODE"
     NOT_IMPLEMENTED = "NOT_IMPLEMENTED"
     SESSION_REQUIRED = "SESSION_REQUIRED"
     INVALID_ARGS = "INVALID_ARGS"
@@ -78,6 +79,8 @@ _ERROR_CATEGORIES: dict[str, str] = {
     MCPError.TRUNCATION_FIELD_MISSING: ErrorCategory.USER,
     MCPError.NOT_IMPLEMENTED: ErrorCategory.USER,
     MCPError.IDA_TIMEOUT: ErrorCategory.RUNTIME,
+    MCPError.IDA_BUSY: ErrorCategory.RUNTIME,
+    MCPError.SAFE_MODE: ErrorCategory.POLICY,
     MCPError.IDA_CRASHED: ErrorCategory.RUNTIME,
     MCPError.RPC_CONNECTION_ERROR: ErrorCategory.RUNTIME,
     MCPError.IDA_ERROR: ErrorCategory.RUNTIME,
@@ -105,6 +108,7 @@ _HOST_ERROR_HINTS = {
     MCPError.SESSION_REQUIRED: "No active session. Create one with ida_open_binary(binary_path='...').",
     MCPError.INVALID_ARGS: "Invalid arguments. Check the operation schema for valid parameters.",
     MCPError.ACTION_NOT_FOUND: "Unknown operation. Use ida_help or tools/list to see valid operations.",
+    MCPError.SAFE_MODE: "IDA auto-analysis is still running for this session. Only manual, small-area operations are allowed until analysis completes; poll ida_session_status for safe_mode to clear.",
     MCPError.TOOL_NOT_FOUND: "Unknown tool. Call tools/list to see valid tool names.",
     MCPError.SESSION_NOT_FOUND: "Session not found. Use ida_session_list to see available sessions.",
     MCPError.BATCH_EMPTY: "The batch call list is empty. Provide at least one call.",

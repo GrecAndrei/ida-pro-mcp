@@ -176,7 +176,12 @@ CODE_EXEC_ACK = {
 AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     AgentOperation(
         name="ida_open_binary",
-        description="Open a binary in a new or existing IDA analysis session.",
+        description=(
+            "Open a binary in a new or existing IDA analysis session. Large "
+            "binaries are opened in the background automatically (background "
+            "and safe_mode in the response); poll ida_session_status until "
+            "safe_mode clears."
+        ),
         category="session",
         input_schema=_schema(
             {
@@ -238,7 +243,14 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     ),
     AgentOperation(
         name="ida_open_background",
-        description="Open a binary in a session without blocking on IDA analysis; poll ida_session_status for progress.",
+        description=(
+            "Open a binary in a session without blocking on IDA analysis. "
+            "The session starts in safe mode (safe_mode: true): full-binary "
+            "analysis, indexing, and script execution are blocked until "
+            "analysis completes — manual small-area operations stay "
+            "available. Poll ida_session_status for progress and for "
+            "safe_mode to clear."
+        ),
         category="session",
         input_schema=_schema(
             {
@@ -295,7 +307,13 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     ),
     AgentOperation(
         name="ida_session_status",
-        description="Check whether IDA analysis is ready without starting more work.",
+        description=(
+            "Check whether IDA analysis is ready without starting more work. "
+            "Reports safe_mode and analysis_complete; while safe_mode is "
+            "true, full-binary analysis, indexing, and script execution are "
+            "blocked. When analysis completes, the response carries a "
+            "one-shot analysis_complete warning."
+        ),
         category="session",
         input_schema=_schema({}),
         example={},

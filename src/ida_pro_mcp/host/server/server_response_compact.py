@@ -250,6 +250,10 @@ class ServerResponseCompactMixin:
         "idb_exists",
         "binary_exists",
         "analysis_applied",
+        "analysis_complete",
+        "safe_mode",
+        "background",
+        "auto_backgrounded",
         "ok",
     })
 
