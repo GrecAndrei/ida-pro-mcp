@@ -30,7 +30,7 @@ def test_get_blackboard_store_returns_none_without_session_workspace(tmp_path, m
     assert server._get_blackboard_store() is None
 
 
-def test_migrates_legacy_shared_sha256_notebook_into_session_scoped_db(tmp_path):
+def test_legacy_shared_sha256_notebook_is_the_workspace(tmp_path):
     binary = tmp_path / "sample.bin"
     binary.write_bytes(b"migrate-me")
     server = _blackboard_server(tmp_path)
@@ -49,11 +49,93 @@ def test_migrates_legacy_shared_sha256_notebook_into_session_scoped_db(tmp_path)
 
     session_path = server._session_blackboard_path(session_obj=session)
 
-    assert session_path.endswith(f"sha256-{digest}-sess-a.db")
+    assert session_path == str(shared_path)
     assert os.path.isfile(session_path)
     session_store = BlackboardStore(session_path)
     assert session_store.stats()["total_entries"] == 1
     assert session_store.list(limit=1)[0]["title"] == "Shared finding"
+
+
+def test_per_session_workspaces_from_previous_releases_are_adopted(tmp_path):
+    binary = tmp_path / "sample.bin"
+    binary.write_bytes(b"adopt-me")
+    server = _blackboard_server(tmp_path)
+    digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+
+    shared_dir = tmp_path / "cache" / "blackboards"
+    shared_dir.mkdir(parents=True)
+    # Two sessions of the same binary from the previous (per-session) layout.
+    old_a = shared_dir / f"sha256-{digest}-aaaa1111.db"
+    old_b = shared_dir / f"sha256-{digest}-bbbb2222.db"
+    store_a = BlackboardStore(str(old_a))
+    store_a.write(title="Finding from session A", content="x", addr="0x401000")
+    store_b = BlackboardStore(str(old_b))
+    store_b.write(title="Finding from session B", content="y", addr="0x402000")
+
+    session = SimpleNamespace(
+        binary_path=str(binary),
+        idb_path=str(tmp_path / "a.i64"),
+        session_id="new-session",
+    )
+    workspace = server._session_blackboard_path(session_obj=session)
+
+    assert workspace.endswith(f"sha256-{digest}.db")
+    store = BlackboardStore(workspace)
+    titles = {e["title"] for e in store.list(limit=50)}
+    assert "Finding from session A" in titles
+    assert "Finding from session B" in titles
+
+
+def test_legacy_idb_sidecar_notebook_is_adopted_into_shared_workspace(tmp_path):
+    binary = tmp_path / "sample.bin"
+    binary.write_bytes(b"legacy-me")
+    server = _blackboard_server(tmp_path)
+
+    idb_path = tmp_path / "a.i64"
+    legacy_path = str(idb_path) + ".blackboard.db"
+    legacy_store = BlackboardStore(legacy_path)
+    legacy_store.write(title="Legacy notebook finding", content="from <idb>.blackboard.db")
+
+    session = SimpleNamespace(
+        binary_path=str(binary),
+        idb_path=str(idb_path),
+        session_id="sess-a",
+    )
+    workspace = server._session_blackboard_path(session_obj=session)
+
+    store = BlackboardStore(workspace)
+    titles = {e["title"] for e in store.list(limit=50)}
+    assert "Legacy notebook finding" in titles
+
+
+def test_seeding_never_overwrites_existing_workspace_rows(tmp_path):
+    binary = tmp_path / "sample.bin"
+    binary.write_bytes(b"keep-me")
+    server = _blackboard_server(tmp_path)
+    digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+
+    shared_dir = tmp_path / "cache" / "blackboards"
+    shared_dir.mkdir(parents=True)
+    shared_path = shared_dir / f"sha256-{digest}.db"
+    fresh_store = BlackboardStore(str(shared_path))
+    fresh_store.write(title="Fresh finding", content="written by the new session")
+
+    old_path = shared_dir / f"sha256-{digest}-aaaa1111.db"
+    old_store = BlackboardStore(str(old_path))
+    old_store.write(title="Old finding", content="older layout")
+
+    session = SimpleNamespace(
+        binary_path=str(binary),
+        idb_path=str(tmp_path / "a.i64"),
+        session_id="sess-a",
+    )
+    workspace = server._session_blackboard_path(session_obj=session)
+    assert workspace == str(shared_path)
+
+    store = BlackboardStore(workspace)
+    titles = {e["title"] for e in store.list(limit=50)}
+    assert "Fresh finding" in titles
+    assert "Old finding" not in titles
 
 
 def test_blackboard_write_runs_evidence_gravity_only_on_create(tmp_path, monkeypatch):

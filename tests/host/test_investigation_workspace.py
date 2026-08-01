@@ -189,7 +189,7 @@ def test_coverage_falls_back_to_named_functions_on_a_symbolised_binary(tmp_path)
     assert "no auto-named functions left to prefer" in result["targets"][0]["reason"]
 
 
-def test_blackboard_workspace_is_isolated_per_session_for_same_binary(tmp_path):
+def test_blackboard_workspace_is_shared_across_sessions_for_same_binary(tmp_path):
     binary_a = tmp_path / "first.bin"
     binary_copy = tmp_path / "copy.bin"
     binary_b = tmp_path / "different.bin"
@@ -209,9 +209,40 @@ def test_blackboard_workspace_is_isolated_per_session_for_same_binary(tmp_path):
     copy_path = server._session_blackboard_path(session_obj=copy)
     different_path = server._session_blackboard_path(session_obj=different)
 
-    assert first_path != copy_path
+    # Findings must survive session changes: every session of the same
+    # binary (even a byte-identical copy) shares one workspace.
+    assert first_path == copy_path
     assert first_path != different_path
-    assert copy_path != different_path
     assert first_path == server._session_blackboard_path(session_obj=first)
-    assert "-one.db" in first_path
-    assert "-two.db" in copy_path
+    assert "sha256-" in first_path
+    assert not first_path.endswith("-one.db")
+
+
+def test_blackboard_findings_survive_a_new_session_for_the_same_binary(tmp_path):
+    binary = tmp_path / "target.bin"
+    binary.write_bytes(b"persist-me")
+    server = object.__new__(ServerBlackboardMixin)
+    server.cache_dir = str(tmp_path / "cache")
+    server.current_session = None
+    server.session_mgr = SimpleNamespace(get_session=lambda _sid: None)
+
+    session_a = SimpleNamespace(binary_path=str(binary), idb_path=str(tmp_path / "a.i64"), session_id="aaaa1111")
+    session_b = SimpleNamespace(binary_path=str(binary), idb_path=str(tmp_path / "b.i64"), session_id="bbbb2222")
+
+    path_a = server._session_blackboard_path(session_obj=session_a)
+    store_a = BlackboardStore(path_a)
+    store_a.write(
+        title="Relocation table at 0x401000",
+        content="high-entropy, loader writes it",
+        addr="0x401000",
+        category="finding",
+        confidence=0.9,
+    )
+
+    # A brand-new session of the same binary reads the same workspace.
+    path_b = server._session_blackboard_path(session_obj=session_b)
+    assert path_a == path_b
+    store_b = BlackboardStore(path_b)
+    found = [e for e in store_b.list(limit=50) if e["title"] == "Relocation table at 0x401000"]
+    assert len(found) == 1
+    assert found[0]["addr"] == "0x401000"

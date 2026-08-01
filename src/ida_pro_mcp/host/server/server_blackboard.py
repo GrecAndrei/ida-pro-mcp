@@ -206,7 +206,6 @@ class ServerBlackboardMixin(
             session = self.current_session
 
         binary_path = str(getattr(session, "binary_path", "") or "").strip() if session else ""
-        session_id = str(getattr(session, "session_id", "") or sid_text or "").strip()
         if binary_path and os.path.isfile(binary_path):
             cache = getattr(self, "_blackboard_path_cache", None)
             if not isinstance(cache, dict):
@@ -214,58 +213,30 @@ class ServerBlackboardMixin(
                 self._blackboard_path_cache = cache
             try:
                 stat = os.stat(binary_path)
+                # Binary identity only — NOT the session id. The workspace is
+                # shared by every session of the same binary so findings
+                # survive session close, session rebuild, and new sessions.
                 cache_key = (
                     os.path.realpath(binary_path),
                     stat.st_size,
                     stat.st_mtime_ns,
-                    session_id.lower(),
                 )
             except OSError:
-                cache_key = (os.path.realpath(binary_path), 0, 0, session_id.lower())
+                cache_key = (os.path.realpath(binary_path), 0, 0)
             workspace_path = cache.get(cache_key)
             if not workspace_path:
                 digest = self._binary_sha256(binary_path)
                 if digest:
                     workspace_dir = os.path.join(self.cache_dir, "blackboards")
                     os.makedirs(workspace_dir, exist_ok=True)
-                    if session_id:
-                        workspace_path = os.path.join(
-                            workspace_dir,
-                            f"sha256-{digest}-{session_id.lower()}.db",
-                        )
-                    else:
-                        workspace_path = os.path.join(workspace_dir, f"sha256-{digest}.db")
-                    cache[cache_key] = workspace_path
-            if workspace_path:
-                # Preserve notebooks created by older releases while moving to
-                # a content-addressed workspace shared by this exact binary.
-                idb_path = str(getattr(session, "idb_path", "") or "").strip()
-                legacy_path = idb_path + ".blackboard.db" if idb_path else ""
-                shared_path = ""
-                digest = self._binary_sha256(binary_path)
-                if digest:
-                    shared_path = os.path.join(
-                        self.cache_dir,
-                        "blackboards",
+                    workspace_path = os.path.join(
+                        workspace_dir,
                         f"sha256-{digest}.db",
                     )
-                if legacy_path and os.path.isfile(legacy_path) and not os.path.exists(workspace_path):
-                    try:
-                        with sqlite3.connect(legacy_path) as source, sqlite3.connect(workspace_path) as target:
-                            source.backup(target)
-                    except sqlite3.Error:
-                        pass
-                elif (
-                    shared_path
-                    and shared_path != workspace_path
-                    and os.path.isfile(shared_path)
-                    and not os.path.exists(workspace_path)
-                ):
-                    try:
-                        with sqlite3.connect(shared_path) as source, sqlite3.connect(workspace_path) as target:
-                            source.backup(target)
-                    except sqlite3.Error:
-                        pass
+                    idb_path = str(getattr(session, "idb_path", "") or "").strip()
+                    self._seed_shared_workspace(workspace_path, digest, idb_path)
+                    cache[cache_key] = workspace_path
+            if workspace_path:
                 return workspace_path
 
         idb_path = str(getattr(session, "idb_path", "") or "").strip() if session else ""
@@ -276,6 +247,92 @@ class ServerBlackboardMixin(
         if fallback_sid:
             return os.path.join(self.cache_dir, f"{fallback_sid}.blackboard.db")
         return ""
+
+    def _seed_shared_workspace(self, workspace_path: str, digest: str, idb_path: str) -> None:
+        """Adopt findings from earlier workspace layouts into the shared db.
+
+        The workspace is binary-scoped (one db per binary digest), so a new
+        session for the same binary starts with the accumulated
+        investigation. Previous releases stored the workspace per session
+        (``sha256-{digest}-{sid}.db``) or next to the IDB
+        (``<idb>.blackboard.db``); those findings are seeded in exactly once,
+        newest first, and never overwrite rows already present.
+
+        ``_merge_workspace_rows`` uses INSERT OR IGNORE, so a row that exists
+        in both sources keeps its original id rather than being duplicated.
+        """
+        # Only seed an empty workspace. A db with rows already reflects the
+        # investigation; re-seeding could replace newer rows with older ones.
+        if os.path.exists(workspace_path):
+            try:
+                with sqlite3.connect(workspace_path) as conn:
+                    has_table = conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='blackboard'"
+                    ).fetchone()
+                    if has_table:
+                        count = conn.execute("SELECT COUNT(*) FROM blackboard").fetchone()[0]
+                        if count > 0:
+                            return
+            except sqlite3.Error:
+                return
+        candidates: list[str] = []
+        blackboards_dir = os.path.join(self.cache_dir, "blackboards")
+        try:
+            for name in os.listdir(blackboards_dir):
+                if name.startswith(f"sha256-{digest}-") and name.endswith(".db"):
+                    candidates.append(os.path.join(blackboards_dir, name))
+        except OSError:
+            pass
+        # Legacy layout: <idb_path>.blackboard.db next to the database.
+        if idb_path:
+            legacy = idb_path + ".blackboard.db"
+            if os.path.isfile(legacy):
+                candidates.append(legacy)
+        if not candidates:
+            return
+        try:
+            ordered = sorted(
+                candidates, key=os.path.getmtime, reverse=True
+            )
+            with sqlite3.connect(ordered[0]) as source, sqlite3.connect(workspace_path) as target:
+                source.backup(target)
+            for older in ordered[1:]:
+                self._merge_workspace_rows(older, workspace_path)
+        except (sqlite3.Error, OSError):
+            pass
+
+    @staticmethod
+    def _merge_workspace_rows(source_path: str, target_path: str) -> None:
+        """Copy rows from one workspace db into another without clobbering."""
+        try:
+            with sqlite3.connect(target_path) as target, sqlite3.connect(source_path) as source:
+                tables = [
+                    str(r[0])
+                    for r in source.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                    ).fetchall()
+                ]
+                for table in tables:
+                    try:
+                        cols = [
+                            str(c[1])
+                            for c in source.execute(f'PRAGMA table_info("{table}")').fetchall()
+                        ]
+                        if not cols:
+                            continue
+                        col_sql = ",".join(f'"{c}"' for c in cols)
+                        placeholders = ",".join("?" * len(cols))
+                        rows = source.execute(f'SELECT {col_sql} FROM "{table}"').fetchall()
+                        if rows:
+                            target.executemany(
+                                f'INSERT OR IGNORE INTO "{table}" ({col_sql}) VALUES ({placeholders})',
+                                rows,
+                            )
+                    except sqlite3.Error:
+                        continue
+                target.commit()
+        except sqlite3.Error:
+            pass
 
     # Phase/policy methods are in ServerBlackboardPhaseMixin (server_blackboard_phase.py)
     # Trace methods are in ServerBlackboardTraceMixin (server_blackboard_trace.py)
