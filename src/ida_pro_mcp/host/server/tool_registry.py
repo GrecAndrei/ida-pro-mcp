@@ -45,6 +45,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "trace_status", "proposal_create", "proposal_list",
         "proposal_accept", "proposal_reject", "decision_card",
         "working_set", "state_health", "notes_export", "notes_import",
+        "export",
         "write", "read", "list", "search", "update", "delete", "clear",
         "stats", "prune", "merge", "contradict", "resolve",
         "next_target", "frontier", "coverage", "propagate_labels",

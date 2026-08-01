@@ -2095,6 +2095,84 @@ Example:
 }
 ```
 
+## `ida_export_findings`
+
+Export the investigation workspace (findings, hypotheses, questions, tasks, decisions) as full-fidelity JSON or human-readable Markdown in the findings format, with evidence, kind, status, confidence, priority, and tags. Pass a path to write a file; otherwise the content is returned inline.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "format": {
+      "type": "string",
+      "enum": [
+        "json",
+        "markdown"
+      ],
+      "description": "json: full-fidelity machine-readable snapshot. markdown: grouped report. Default json."
+    },
+    "path": {
+      "type": "string",
+      "description": "Absolute output file path; when given, the file is written and the response returns the path instead of inline content."
+    },
+    "kind": {
+      "type": "string",
+      "description": "Only export items of this kind."
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "open",
+        "confirmed",
+        "resolved",
+        "rejected"
+      ]
+    },
+    "category": {
+      "type": "string"
+    },
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "tag": {
+      "type": "string"
+    },
+    "min_confidence": {
+      "type": "number",
+      "description": "Only export items at or above this confidence."
+    },
+    "include_resolved": {
+      "type": "boolean",
+      "description": "Include resolved items. Default true."
+    },
+    "include_contradicted": {
+      "type": "boolean",
+      "description": "Include items that contradict another item. Default true."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Cap the number of exported items; omit for the full workspace."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_export_findings",
+  "arguments": {
+    "format": "markdown",
+    "path": "/tmp/findings.md",
+    "limit": 50
+  }
+}
+```
+
 ## `ida_publish_findings`
 
 Write confirmed findings into the IDB as repeatable comments and symbols.

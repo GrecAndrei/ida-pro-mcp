@@ -8,6 +8,7 @@ import re
 import sqlite3
 import time
 from collections import Counter
+from datetime import UTC, datetime
 from typing import Any
 
 from ..config import _bounded_int
@@ -20,6 +21,22 @@ from .server_blackboard_phase import ServerBlackboardPhaseMixin
 from .server_blackboard_trace import ServerBlackboardTraceMixin
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+#: Version stamp of the JSON export format, so consumers can detect
+#: incompatible files instead of guessing.
+_EXPORT_FORMAT_VERSION = "ida-findings-v1"
+
+#: Fields that describe internal storage rather than the investigation, and
+#: are therefore not part of an export.
+_EXPORT_DROP_FIELDS = {
+    "fingerprint", "bridges", "schema", "register", "reg_type",
+    "norm", "call_idx", "decayed_at", "version", "entropy",
+    "quantized", "q_signs", "vector",
+}
+
+#: Render order for the Markdown export: kinds first, statuses within a kind.
+_EXPORT_KIND_ORDER = ("finding", "hypothesis", "question", "task", "decision", "examined")
+_EXPORT_STATUS_ORDER = ("open", "confirmed", "resolved", "rejected")
 
 #: What each target strategy selects for, stated plainly in the response so
 #: the model can judge whether the suggestion is worth taking.
@@ -732,6 +749,168 @@ class ServerBlackboardMixin(
         with open(notes_path, "w", encoding="utf-8") as fh:
             fh.write("\n".join(lines).strip() + "\n")
         return {"ok": True, "path": os.path.abspath(notes_path), "lines": len(lines)}
+
+    def _findings_export(
+        self,
+        store,
+        fmt: str = "json",
+        path: str = "",
+        kind: str = "",
+        status: str = "",
+        category: str = "",
+        tag: str = "",
+        addr: str = "",
+        min_confidence: float = 0.0,
+        include_resolved: bool = True,
+        include_contradicted: bool = True,
+        limit: int = 0,
+    ) -> dict[str, Any]:
+        """Export the investigation in the findings format (kind/status/
+        confidence/priority/tags/evidence), JSON or Markdown.
+
+        The legacy ``notes_export`` renders a few lanes as briefs; this is the
+        full-fidelity snapshot of the same workspace, carrying everything the
+        ``ida_write_finding`` contract can express, so a report, another tool,
+        or a later session can consume it without losing evidence.
+        """
+        page_size = 1000
+        offset = 0
+        entries: list[dict[str, Any]] = []
+        cap = max(0, int(limit))
+        while True:
+            page = store.list(
+                category=category.strip() or None,
+                addr=addr.strip() or None,
+                tag=tag.strip() or None,
+                min_confidence=min_confidence,
+                include_resolved=include_resolved,
+                include_contradicted=include_contradicted,
+                kind=kind.strip() or None,
+                status=status.strip() or None,
+                limit=page_size,
+                offset=offset,
+            )
+            for row in page:
+                if cap and len(entries) >= cap:
+                    break
+                clean = {k: v for k, v in row.items() if k not in _EXPORT_DROP_FIELDS}
+                clean["entry_id"] = str(clean.get("id") or "")
+                entries.append(clean)
+            if len(page) < page_size or (cap and len(entries) >= cap):
+                break
+            offset += page_size
+        stats = store.stats() or {}
+        snapshot = {
+            "format": _EXPORT_FORMAT_VERSION,
+            "exported_at": datetime.now(UTC).isoformat(timespec="seconds"),
+            "stats": {
+                "total_entries": int(stats.get("total_entries") or 0),
+                "resolved": int(stats.get("resolved") or 0),
+                "contradicted": int(stats.get("contradicted") or 0),
+                "stale": int(stats.get("stale") or 0),
+            },
+            "entries": entries,
+        }
+        if fmt == "markdown":
+            content = self._findings_to_markdown(snapshot)
+        else:
+            content = json.dumps(snapshot, indent=2, ensure_ascii=False)
+        if path.strip():
+            out_path = os.path.abspath(path.strip())
+            os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+            with open(out_path, "w", encoding="utf-8") as fh:
+                fh.write(content + ("\n" if fmt == "markdown" else ""))
+            return {
+                "ok": True,
+                "format": fmt,
+                "path": out_path,
+                "entries": len(entries),
+                "stats": snapshot["stats"],
+            }
+        return {
+            "ok": True,
+            "format": fmt,
+            "content": content,
+            "entries": len(entries),
+            "stats": snapshot["stats"],
+        }
+
+    @staticmethod
+    def _findings_to_markdown(snapshot: dict[str, Any]) -> str:
+        lines = ["# IDA Findings Export", ""]
+        lines.append(
+            f"Exported {snapshot.get('exported_at', '')} · format "
+            f"{snapshot.get('format', '')}"
+        )
+        stats = snapshot.get("stats") or {}
+        lines.append(
+            f"Entries: {stats.get('total_entries', 0)} · resolved "
+            f"{stats.get('resolved', 0)} · contradicted "
+            f"{stats.get('contradicted', 0)} · stale {stats.get('stale', 0)}"
+        )
+        lines.append("")
+        by_kind: dict[str, list[dict[str, Any]]] = {}
+        for entry in snapshot.get("entries") or []:
+            by_kind.setdefault(str(entry.get("kind") or "finding"), []).append(entry)
+        for kind in _EXPORT_KIND_ORDER:
+            group = by_kind.pop(kind, None)
+            if group is None:
+                continue
+            lines.append(f"## {kind} ({len(group)})")
+            lines.append("")
+            by_status: dict[str, list[dict[str, Any]]] = {}
+            for entry in group:
+                by_status.setdefault(str(entry.get("status") or "open"), []).append(entry)
+            for status in _EXPORT_STATUS_ORDER:
+                subgroup = by_status.pop(status, None)
+                if subgroup is None:
+                    continue
+                lines.append(f"### {status}")
+                for entry in subgroup:
+                    addr = str(entry.get("addr") or "").strip() or "no-addr"
+                    title = str(entry.get("title") or "").strip() or "(untitled)"
+                    lines.append(f"- **[{addr}] {title}**")
+                    meta = [f"conf={float(entry.get('confidence') or 0.0):.2f}"]
+                    priority = entry.get("priority")
+                    if priority is not None:
+                        meta.append(f"priority={float(priority):.2f}")
+                    tags = entry.get("tags") or []
+                    if isinstance(tags, list) and tags:
+                        meta.append("tags=" + ", ".join(str(t) for t in tags[:8]))
+                    source = str(entry.get("source_type") or "manual")
+                    meta.append(f"source={source}")
+                    if entry.get("stale"):
+                        meta.append("STALE: " + str(entry.get("stale_reason") or ""))
+                    conflicts = entry.get("conflicts_with") or []
+                    if isinstance(conflicts, list) and conflicts:
+                        meta.append("contradicts=" + ",".join(str(c) for c in conflicts))
+                    lines.append(f"  - {', '.join(meta)}")
+                    content = str(entry.get("content") or "").strip()
+                    if content:
+                        lines.append("")
+                        lines.append(f"  > {content}")
+                    evidence = entry.get("evidence") or []
+                    if isinstance(evidence, list) and evidence:
+                        lines.append("")
+                        for ev in evidence[:12]:
+                            ev_addr = str(ev.get("address") or "")
+                            loc = f" @ {ev_addr}" if ev_addr else ""
+                            lines.append(
+                                f"  - evidence: [{ev.get('type')}] {str(ev.get('value') or '')}{loc}"
+                            )
+                lines.append("")
+            for status, subgroup in by_status.items():
+                lines.append(f"### {status}")
+                for entry in subgroup:
+                    lines.append(f"- {str(entry.get('title') or '(untitled)')}")
+                lines.append("")
+        for kind, group in by_kind.items():
+            lines.append(f"## {kind} ({len(group)})")
+            lines.append("")
+            for entry in group:
+                lines.append(f"- {str(entry.get('title') or '(untitled)')}")
+            lines.append("")
+        return "\n".join(lines).strip() + "\n"
 
     def _notes_import(
         self,
@@ -1463,6 +1642,25 @@ class ServerBlackboardMixin(
             notes_path = str(args.get("notes_path") or args.get("path") or "re_notes.md").strip()
             limit = _bounded_int(args.get("limit", 20), 20, min_value=1, max_value=100)
             return self._notes_export(store, notes_path, limit=limit)
+        if action == "export":
+            fmt = str(args.get("format") or "json").strip().lower()
+            if fmt not in {"json", "markdown"}:
+                return make_error(MCPError.INVALID_ARGS, "format must be 'json' or 'markdown'")
+            export_limit = _bounded_int(args.get("limit", 0), 0, min_value=0, max_value=50000)
+            return self._findings_export(
+                store,
+                fmt=fmt,
+                path=str(args.get("path") or "").strip(),
+                kind=str(args.get("kind") or "").strip(),
+                status=str(args.get("status") or "").strip(),
+                category=str(args.get("category") or "").strip(),
+                tag=str(args.get("tag") or "").strip(),
+                addr=str(args.get("addr") or "").strip(),
+                min_confidence=float(args.get("min_confidence", 0.0)),
+                include_resolved=bool(args.get("include_resolved", True)),
+                include_contradicted=bool(args.get("include_contradicted", True)),
+                limit=export_limit,
+            )
         if action == "notes_import":
             notes_path = str(args.get("notes_path") or args.get("path") or "re_notes.md").strip()
             lane = str(args.get("lane") or "lane_hypotheses").strip()
