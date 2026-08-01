@@ -1,41 +1,58 @@
-# IDA Pro MCP Quick Start
+# QuickStart
 
-The default MCP surface uses exact `ida_*` operations. Their schemas are
-complete; use `ida_help` when an operation needs more explanation.
+Five minutes to your first finding.
 
-## Open and orient
+## 1. Open a binary
 
-```json
-{"name":"ida_open_binary","arguments":{"binary_path":"/path/to/binary"}}
-{"name":"ida_session_state","arguments":{}}
-{"name":"ida_overview","arguments":{}}
+```
+ida_open_binary(binary_path="/path/to/sample")
 ```
 
-`ida_session_state` reports current analysis progress. Poll
-`ida_session_status` when IDA is still analyzing; do not call the removed
-`analysis(action='wait')` action.
+You get a `session_id` back. If the response says `safe_mode: true`, the
+binary is large and loaded in the background — poll `ida_session_status`
+until `safe_mode` is false. Everything below that is manual small-area work
+also works while analysis runs.
 
-## Find and inspect code
+## 2. Orient
 
-```json
-{"name":"ida_find","arguments":{"query":"main","limit":10}}
-{"name":"ida_decompile","arguments":{"address":"0x401000"}}
-{"name":"ida_disassemble","arguments":{"address":"0x401000","limit":80}}
+```
+ida_overview
+ida_list_imports
+ida_list_strings
 ```
 
-Pass addresses from results verbatim. Build an index before semantic search:
+## 3. Read code
 
-```json
-{"name":"ida_index_functions","arguments":{}}
-{"name":"ida_semantic_search","arguments":{"query":"function that decrypts strings","mode":"quick"}}
+```
+ida_decompile(address="0x401000")
+ida_xrefs_to(address="0x401000")
 ```
 
-## Save findings and make edits
+## 4. Record
 
-```json
-{"name":"ida_write_finding","arguments":{"title":"recv handler","content":"Parses inbound packets.","address":"0x401000","confidence":0.8}}
-{"name":"ida_rename","arguments":{"address":"0x401000","name":"handle_recv","risk_ack":true}}
+```
+ida_write_finding(
+  title="recv handler parses framed input",
+  address="0x401000", kind="finding", status="confirmed",
+  confidence=0.8, evidence=[{"type": "call", "value": "recv", "address": "0x401024"}])
 ```
 
-Use `ida_next_target` for prioritized next work and `ida_continue` for a
-truncated result. For help, call `ida_help(topic="ida_decompile")`.
+Dead end instead? `ida_mark_examined(address="0x401000", verdict="boring", note="...")`.
+
+## 5. Keep going
+
+```
+ida_next_target()            # what to look at next
+ida_analysis_brief()         # what the workspace knows so far
+ida_export_findings(format="markdown", path="report.md")   # handoff
+ida_publish_findings(dry_run=true)   # then risk_ack=true to write to the IDB
+```
+
+## Docs
+
+- [Sessions](core/sessions.md) — lifecycle, background loading, safe mode.
+- [Investigation](core/investigation.md) — findings, lifecycle, export, IDB round-trip.
+- [Frontier](core/frontier.md) — `ida_next_target` strategies.
+- [Intelligence](core/intelligence.md) — semantic indexing and search.
+- [Tools](tools/) — every operation by category.
+- `ida_help(query="...")` — the exact contract of any operation, on demand.

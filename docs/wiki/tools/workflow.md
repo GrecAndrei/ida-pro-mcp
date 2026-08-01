@@ -1,37 +1,20 @@
-# workflow
+# Workflow
 
-Deterministic orchestration façade for multi-step analysis plans and execution.
+| Operation | Purpose |
+| --- | --- |
+| `ida_batch(calls=[...])` | Execute several deterministic analysis operations sequentially in one request. |
 
-## Core Run Actions
-- `triage_fast` — fast first-pass triage (firmware-aware).
-- `malware_deep` — deeper malware-focused sequence.
-- `vuln_audit` — exploit/vulnerability-oriented sequence.
-- `recon_sweep` — broad orientation + structured retrieval + protocol + posture.
-- `patch_review` — xref/dependency review around one target address.
+Each call is `{name: "<ida_* operation>", arguments: {...}}`; omit arguments
+for parameterless calls. `continue_on_error: true` proceeds with later calls
+after a failure. Use it for fixed pipelines (e.g. overview → find →
+decompile) that don't need intermediate decisions.
 
-## Planning & Control Actions
-- `catalog` — list available workflows/capabilities.
-- `plan` — return dry-run plan for one workflow action.
-- `explain` — dry-run plan + per-step rationale.
-- `estimate` — complexity/risk/category projection for a plan.
-- `compose` — merge multiple workflow plans with dedup + source annotations.
-- `prioritize` — reorder a plan by strategy (`original`, `coverage`, `risk_first`).
-- `audit_plan` — validate/score a plan before execution.
-- `execute_plan` — execute a provided/generated plan through batch.
+## Example
 
-## Examples
 ```json
-{"name":"workflow","arguments":{"action":"plan","workflow_action":"recon_sweep","profile":"deep"}}
+{"calls": [
+  {"name": "ida_overview"},
+  {"name": "ida_find", "arguments": {"query": "main"}},
+  {"name": "ida_decompile", "arguments": {"address": "main"}}
+]}
 ```
-```json
-{"name":"workflow","arguments":{"action":"compose","workflow_actions":["triage_fast","vuln_audit"],"priority_mode":"coverage"}}
-```
-```json
-{"name":"workflow","arguments":{"action":"execute_plan","workflow_action":"triage_fast","continue_on_error":true}}
-```
-
-## Notes
-- `dry_run`, `include_tools`, and `exclude_tools` work across planning paths.
-- `triage_fast`/`recon_sweep` auto-inject firmware orientation steps when firmware is detected.
-- Core run workflows now include embedding-native discovery steps (`search(action="nl")`) and frontier ranking (`blackboard(action="frontier")`) so plans default to semantic recon instead of only lexical scans.
-- `workflow_meta` is preserved across compact/full/output projection modes.

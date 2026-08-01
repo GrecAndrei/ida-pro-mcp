@@ -226,10 +226,13 @@ def ida_processes_running() -> bool:
 
 
 def choose_runtime_source(runtime_source: str, source_root: Path) -> str:
-    if runtime_source in {"local", "pypi"}:
+    if runtime_source in {"local", "snapshot", "pypi"}:
         return runtime_source
+    # Default to a frozen snapshot of the checkout, never the live tree:
+    # a .pth pointer to the working source makes the deployed server change
+    # behavior whenever the checkout changes (or breaks it mid-edit).
     if (source_root / "pyproject.toml").exists():
-        return "local"
+        return "snapshot"
     return "pypi"
 
 
@@ -736,6 +739,46 @@ def _wipe_venv(venv_dir: Path) -> None:
         ) from exc
 
 
+def _snapshot_source(
+    source_root: Path,
+    install_root: Path,
+    dry_run: bool,
+    report: InstallReport,
+) -> Path:
+    """Copy the checkout into ``install_root/runtime-src-<stamp>`` and return
+    the snapshot path.
+
+    The deployed server is pip-installed from this frozen copy, so edits to
+    the working checkout never leak into a running install. Older snapshots
+    are pruned; only the newest is kept.
+    """
+    stamp = time.strftime("%Y%m%d-%H%M")
+    target = install_root / f"runtime-src-{stamp}"
+    if dry_run:
+        report.add_step("snapshot", "dry-run", f"would copy {source_root} -> {target}")
+        return target
+    if target.exists():
+        shutil.rmtree(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    ignore = shutil.ignore_patterns(
+        ".git", "__pycache__", "*.pyc", ".venv", "venv", "dist", "build",
+        "node_modules", "*.egg-info", ".pytest_cache", ".ruff_cache",
+        ".mypy_cache", ".coverage", "htmlcov",
+    )
+    shutil.copytree(source_root, target, ignore=ignore)
+    report.add_modified(target)
+    report.add_step("snapshot", "ok", str(target))
+    siblings = sorted(
+        (p for p in install_root.glob("runtime-src-*") if p != target),
+        key=lambda p: p.name,
+        reverse=True,
+    )
+    for old in siblings:
+        shutil.rmtree(old, ignore_errors=True)
+        report.add_step("snapshot", "pruned", str(old))
+    return target
+
+
 def _write_dev_pth(venv_dir: Path, source_root: Path, dry_run: bool, report: InstallReport) -> Path:
     """Write a ``.pth`` file in the venv site-packages so imports resolve from
     the working source tree instead of a copied package.
@@ -840,9 +883,13 @@ def setup_runtime_environment(
         report.metadata["runtime_package"] = f"pth:{source_root / 'src'}"
     else:
         _remove_dev_pth(venv_dir, report)
-        package_spec = str(source_root) if resolved_source == "local" else "ida-pro-mcp"
+        if runtime_source == "snapshot":
+            package_spec = str(_snapshot_source(source_root, install_root, dry_run, report))
+            report.metadata["runtime_source"] = "snapshot"
+        else:
+            package_spec = str(source_root) if resolved_source == "local" else "ida-pro-mcp"
+            report.metadata["runtime_source"] = resolved_source
         run_checked([str(python_exe), "-m", "pip", "install", package_spec])
-        report.metadata["runtime_source"] = resolved_source
         report.metadata["runtime_package"] = package_spec
 
     run_checked(

@@ -65,18 +65,18 @@ def _fuzzy_find_topic(query, topics_dict, cutoff=0.6):
 
 
 def protocol_resource() -> str:
-    """The Triage Binary workflow — operational guide for AI agents."""
-    path = os.path.join(_get_wiki_root(), "workflows", "TiageBinary.md")
+    """The QuickStart page — operational guide for AI agents."""
+    path = os.path.join(_get_wiki_root(), "QuickStart.md")
     try:
         return _read_wiki_file(path)
     except Exception:
-        return "Use wiki(action='read', topic='workflows/TiageBinary') for the triage workflow."
+        return "Use wiki(action='read', topic='QuickStart') for the quickstart guide."
 
 @tool
 def wiki(
     action: Annotated[Literal["list_topics", "read", "search", "semantic_search", "index", "sections", "suggest"],
                       "Action: list_topics|read|search|semantic_search|index|sections|suggest"],
-    topic: Annotated[Optional[str], "Topic name (e.g. 'debug', 'workflows/ForensicProtocol')"] = None,
+    topic: Annotated[Optional[str], "Topic name (e.g. 'code', 'core/investigation')"] = None,
     query: Annotated[Optional[str], "Search query (alias for topic when action=search)"] = None,
     section: Annotated[Optional[str], "Specific section or subsection to read (header text)"] = None,
     offset: Annotated[int, "Start line offset for chunked reading"] = 0,
@@ -156,7 +156,7 @@ def wiki(
                 candidates.append(os.path.join(wiki_root, *parts) + ".md")
             else:
                 base = parts[0]
-                for sub in ["tools", "workflows", "skills", "core", ""]:
+                for sub in ["tools", "core", ""]:
                     candidates.append(os.path.join(wiki_root, sub, base + ".md"))
 
             for cand in candidates:

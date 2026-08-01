@@ -290,8 +290,8 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
     runtime_default = opts.runtime_source if opts.runtime_source != "auto" else resolved_runtime
     opts.runtime_source = _prompt_choice(
         "Runtime package source",
-        ["local", "pypi"],
-        runtime_default if runtime_default in {"local", "pypi"} else "local",
+        ["snapshot", "pypi", "local"],
+        runtime_default if runtime_default in {"snapshot", "pypi", "local"} else "snapshot",
     )
 
     if sys.platform != "win32":
@@ -498,7 +498,13 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
     )
     parser.add_argument("--install-cli-shim", action="store_true", help="opt-in bashrc PATH shim installation")
     parser.add_argument("--rollback-on-fail", action="store_true", help="restore backed up config files if install fails")
-    parser.add_argument("--runtime-source", choices=["auto", "local", "pypi"], default="auto", help="choose runtime package source")
+    parser.add_argument(
+        "--runtime-source",
+        choices=["auto", "local", "snapshot", "pypi"],
+        default="auto",
+        help="runtime package source: snapshot (default: frozen copy of the "
+        "checkout), pypi, or local (dev mode: live source tree — not recommended)",
+    )
     parser.add_argument("--embed-model", default="", help="explicit path to an embedding GGUF model")
     parser.add_argument(
         "--embed-profile", choices=["bge-code-v1", "zembed-1"], default="bge-code-v1",

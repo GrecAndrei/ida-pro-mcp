@@ -1,6 +1,10 @@
 # Wiki Index
 
-Auto-generated from wiki file structure.
+The wiki documents the current `ida_*` operation surface. The legacy
+`tool(action=...)` API is a compatibility backend, not the supported
+contract. Full contracts for every operation live in
+[docs/TOOLS_REFERENCE.md](../TOOLS_REFERENCE.md) (generated from
+`host/agent_operations.py`); this wiki is the narrative layer.
 
 ## Getting Started
 
@@ -8,118 +12,18 @@ Auto-generated from wiki file structure.
 
 ## Core
 
-- [Addresses](core/addresses.md)
-
-- [Blackboard](core/blackboard.md)
-
-- [Frontier](core/frontier.md)
-
-- [Intelligence](core/intelligence.md)
-
-- [Knowledge Graph](core/knowledge_graph.md)
+- [Sessions](core/sessions.md) — lifecycle, background loading, safe mode, RPC concurrency
+- [Investigation](core/investigation.md) — findings, kinds, lifecycle, evidence, export, IDB round-trip
+- [Frontier](core/frontier.md) — `ida_next_target` strategies
+- [Intelligence](core/intelligence.md) — semantic indexing and search
 
 ## Tools
 
-- [abi](tools/abi.md)
-
-- [analysis](tools/analysis.md)
-
-- [intelligence](tools/intelligence.md)
-
-- [annotation](tools/annotation.md)
-
-- [batch](tools/batch.md)
-
-- [binary_info](tools/binary_info.md)
-
-- [blackboard](tools/blackboard.md)
-
-- [bookmarks](tools/bookmarks.md)
-
-
-- [bulk](tools/bulk.md)
-
-- [calc](tools/calc.md)
-
-- [cfg_analysis](tools/cfg_analysis.md)
-
-- [classify](tools/classify.md)
-
-- [code](tools/code.md)
-
-- [compare](tools/compare.md)
-
-- [coverage](tools/coverage.md)
-
-- [ctree](tools/ctree.md)
-
-- [data](tools/data.md)
-
-- [data_ops](tools/data_ops.md)
-
-- [debug](tools/debug.md)
-
-- [export](tools/export.md)
-- [bindiff](tools/bindiff.md)
-
-
-- [firmware_view](tools/firmware_view.md)
-
-
-- [funcs](tools/funcs.md)
-
-- [gadgets](tools/gadgets.md)
-
-- [governance](tools/governance.md)
-
-- [graph](tools/graph.md)
-
-- [history](tools/history.md)
-
-- [idb](tools/idb.md)
-
-- [imports_deep](tools/imports_deep.md)
-
-- [lumina](tools/lumina.md)
-
-- [memory](tools/memory.md)
-
-- [microcode](tools/microcode.md)
-
-- [misc](tools/misc.md)
-
-- [modify](tools/modify.md)
-
-- [nav](tools/nav.md)
-
-- [patterns](tools/patterns.md)
-
-- [project](tools/project.md)
-
-- [search](tools/search.md)
-
-- [security](tools/security.md)
-
-- [segments](tools/segments.md)
-
-- [session](tools/session.md)
-
-- [stack_analysis](tools/stack_analysis.md)
-
-- [string_ops](tools/string_ops.md)
-
-- [summarize](tools/summarize.md)
-
-- [symbols](tools/symbols.md)
-
-- [trace_analysis](tools/trace_analysis.md)
-
-- [truncation](tools/truncation.md)
-
-- [types](tools/types.md)
-
-- [wiki](tools/wiki.md)
-
-- [workflow](tools/workflow.md)
-
-- [xref_analysis](tools/xref_analysis.md)
+- [Session](tools/session.md) — open/close/switch/status/health
+- [Discovery](tools/discovery.md) — overview, find, functions, strings, imports
+- [Code](tools/code.md) — decompile, disassemble, xrefs, callers, callees
+- [Findings](tools/findings.md) — write/list/search/update/export/publish
+- [Edit](tools/edit.md) — rename, comment, create/change function
+- [Calculation](tools/calculation.md) — eval, offset, convert, deref, chain, align, bitops
+- [Support](tools/support.md) — help, continue, python
+- [Workflow](tools/workflow.md) — batch

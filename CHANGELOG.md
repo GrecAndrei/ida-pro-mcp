@@ -48,6 +48,23 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
 - Backed by a new `blackboard(action='export')` action (registered in the legacy tool too); it reads the binary-scoped SQLite workspace, so it works without an IDA runtime and is safe-mode compatible.
 - The legacy lane-brief export `blackboard(action='notes_export')` is removed: it rendered a few lanes as truncated briefs and dropped evidence, kind, status, and conflicts. `notes_import` stays for ingesting hand-written markdown.
 
+### Installer: frozen runtime by default
+- The installer's `--runtime-source auto` resolved to `local` for any
+  checkout, writing a `ida_pro_mcp_dev.pth` into the install venv so the
+  deployed server imported the **live source tree**. That made every running
+  MCP daemon's behavior depend on when it started relative to the last
+  edit, and broke installed servers whenever the checkout changed. `auto`
+  now resolves to a new **`snapshot`** mode: the checkout is copied to
+  `install_root/runtime-src-<stamp>` (old snapshots pruned) and pip-installed
+  from that frozen copy, so the venv holds a fixed package in site-packages.
+  `local` remains only as an explicit, labeled dev mode (`--runtime-source
+  local`). CLI choices and the interactive prompt are updated accordingly.
+- The wiki is rewritten around the current `ida_*` operation surface: 22
+  stale pages for removed legacy tools and all legacy `tool(action=...)`
+  pages are gone; `core/` documents sessions/safe mode, the investigation
+  workspace, frontier strategies, and intelligence; `tools/` documents every
+  operation by category. Workflow playbooks were removed.
+
 ## 2026-07-31 — dead legacy tools removed
 
 25 legacy tools were unreachable from every surface: never advertised in `tools/list` (legacy mode included), never exposed as `ida_*` operations, never called by any host service. ~18,000 lines of dead IDA-side code are gone.
