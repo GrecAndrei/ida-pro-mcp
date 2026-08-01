@@ -2,6 +2,40 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-08-01 — relocation handling and session lifecycle fixes
+
+### Relocations
+- `ida_open_binary(baseaddr=..., rebase_to=...)` silently dropped the load address when given as a hex string like `"0x400000"` (`int("0x400000")` raised and the `-b`/`-R` flags were skipped). Both flags now parse base-0 values, and `entry_point` ints are hex-formatted (IDA would have misread decimal as hex).
+- `analysis(action='set_options', baseaddr=...)` computed the rebase delta *after* `set_inf_attr(INF_BASEADDR)`, so the delta was always 0: segments stayed at the old base while INF_BASEADDR claimed the new one. The delta is now computed before any mutation, `rebase_program` is the only thing that moves segments, and non-page-aligned deltas return an actionable error instead of a generic failure.
+- Response enrichment no longer fabricates an image base: `_get_session_imagebase` used a hardcoded `0x140000000` default, so every 32-bit address (e.g. `0x401000`) was treated as an RVA and "rebased" to garbage (`0x140401000`). Unknown image bases now skip enrichment instead of inventing offsets, and the value is resolved from the target session's options or a live RPC.
+- `memory` relocation introspection actually runs now: `ida_fixup` was never imported into the tool namespace (the check lived inside `except Exception: pass`), so relocation flags never fired in production. `struct_walk` now reports `fixup_type`/`fixup_name`/`fixup_base`/`fixup_off`, and the `pointers` action flags relocation slots.
+- Firmware bootstrap accepts a string `load_base` (e.g. `"0x120000"`); it previously dropped it with a strict `isinstance(int)` gate.
+
+### Session lifecycle
+- Session metadata (watchdog analysis verdicts, stall state, apply transcripts, indexing state) was written to disk via `_save_metadata` but never serialized, so it vanished on restart. `metadata` now round-trips through `to_dict`/`from_dict`.
+- Metadata writes no longer `fsync` every watchdog tick, and unchanged `_update_session_indexing_metadata` calls skip the disk write entirely.
+- `cleanup_stale`/`auto_prune_if_over_budget` no longer delete sessions that still own a live IDA runtime (previously they could orphan the idat process and leave the IDB lock held forever).
+
+### Investigation workspace persistence
+- The blackboard workspace was keyed by `sha256-{binary}-{session_id}.db`, so every new session of the same binary started from an empty notebook and findings appeared lost. The workspace is now binary-scoped (`sha256-{binary}.db`): all sessions of the same binary — including byte-identical copies — share one investigation, and findings survive session close, rebuild, and new sessions.
+- Workspaces from previous releases are adopted exactly once: per-session `sha256-{digest}-{sid}.db` files (newest first) and the legacy `<idb>.blackboard.db` sidecar are seeded into the shared db with `INSERT OR IGNORE` so nothing is duplicated or overwritten.
+
+### Session cache layout
+- Each session now lives in its own directory: `cache_dir/sessions/SID_<sid>/` holding `metadata.json`, the IDB, `bookmarks.json`, `snapshots.json`, `notebook.md`, `skills.json`, a `logs/` subdirectory for the IDA runtime logs, and the runtime port handoff files. The cache root no longer accumulates `SID_*` flat files and per-session logs.
+- Legacy flat-layout sessions (`SID_<sid>_metadata.json`, sidecar IDB, cache-root logs) are migrated into the per-session directory on first load; the recorded `idb_path` is updated in place. Deleting a session removes the whole directory.
+
+### Session discovery and reuse
+- `ida_session_list` (and the legacy discover action) gained a `binary_name` filter that matches the analyzed file's name, and the free-text query now also matches `auto_name`, tags, and notes.
+- A restarted MCP client reloads its old sessions: a recorded session that nobody is actively running (no live IDA runtime, no live foreign lease) is adopted and reuses the recorded IDB instead of silently creating a fresh session and re-analyzing from scratch. Sessions with a live idat remain locked to their owner (`FILE_LOCKED`).
+
+### Large-binary handling
+- `ida_open_binary` now warns for binaries at or above `IDA_MCP_LARGE_BINARY_MB` (default 50 MiB) and suggests background loading instead of blocking on upfront analysis.
+- New operation `ida_open_background` (session action `create_background`): creates/reuses the session and starts the IDA runtime on a daemon thread, returning immediately; poll `ida_session_status` for progress (`is_running`, `analysis_ready`, and `background_error` on failure).
+
+### idat RPC concurrency
+- The per-session RPC lane keeps serializing requests to one IDA bridge (it executes one SDK request at a time), while different sessions stay fully parallel. The queue is now bounded: after `IDA_MCP_RPC_QUEUE_TIMEOUT` seconds (default 300, `0` = unlimited) a queued call fails fast with a recoverable `IDA_BUSY` error instead of piling up threads behind a stuck request — distinct from `IDA_TIMEOUT` (socket recv deadline) and `IDA_CRASHED` (process exited).
+- `ida_session_health` reports per-session RPC queue depth (`rpc_queued_calls`, and per-runtime `rpc_queued` in verbose mode).
+
 ## 2026-07-31 — dead legacy tools removed
 
 25 legacy tools were unreachable from every surface: never advertised in `tools/list` (legacy mode included), never exposed as `ida_*` operations, never called by any host service. ~18,000 lines of dead IDA-side code are gone.

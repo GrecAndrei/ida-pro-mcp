@@ -104,6 +104,7 @@ class Session:
         linked_sessions: list[str] | None = None,
         packed_idb: bool = False,
         policy_mode: str | None = None,
+        metadata: dict | None = None,
     ):
         self.session_id = session_id
         self.idb_path = idb_path
@@ -120,6 +121,7 @@ class Session:
         self.linked_sessions = linked_sessions or []
         self.packed_idb = bool(packed_idb)
         self.policy_mode = policy_mode
+        self.metadata = metadata or {}
 
     def _derive_auto_name(self) -> str:
         if self.binary_path:
@@ -189,6 +191,7 @@ class Session:
             "linked_sessions": self.linked_sessions,
             "packed_idb": self.packed_idb,
             "policy_mode": self.policy_mode,
+            "metadata": self.metadata,
         }
 
     @classmethod
@@ -219,6 +222,7 @@ class Session:
             data.get("linked_sessions", []) or [],
             data.get("packed_idb", False),
             data.get("policy_mode"),
+            data.get("metadata", {}) or {},
         )
 
 
@@ -358,10 +362,17 @@ class SessionManager(SessionSkillsMixin):
         raise RuntimeError(f"failed to allocate unique session id after {MAX_SESSION_ID_RETRIES} retries")
 
     def _get_metadata_path(self, sid: str) -> str:
-        return os.path.join(self.session_dir, f"SID_{sid}_metadata.json")
+        return os.path.join(self.get_session_artifact_dir(sid, create=False), "metadata.json")
 
     def get_session_artifact_dir(self, sid: str, create: bool = True) -> str:
         path = os.path.join(self.session_dir, f"SID_{sid}")
+        if create:
+            os.makedirs(path, exist_ok=True)
+        return path
+
+    def get_session_log_dir(self, sid: str, create: bool = True) -> str:
+        """Per-session log directory (``sessions/SID_<sid>/logs``)."""
+        path = os.path.join(self.get_session_artifact_dir(sid, create=False), "logs")
         if create:
             os.makedirs(path, exist_ok=True)
         return path
@@ -370,30 +381,97 @@ class SessionManager(SessionSkillsMixin):
         path = self._get_metadata_path(session.session_id)
         tmp = path + ".tmp"
         try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(session.to_dict(), f, indent=2)
+                # Atomic rename, but no fsync: the watchdog and apply-progress
+                # paths call _save_metadata every few seconds, and flushing
+                # to disk on each tick thrashes the disk for zero safety gain
+                # (the rename is already atomic; a lost update only costs a
+                # re-run of the same analysis step).
                 f.flush()
-                os.fsync(f.fileno())
             os.replace(tmp, path)
         except Exception as e:
             log_rpc(f"Failed to save session metadata: {e}")
             with contextlib.suppress(OSError):
                 os.remove(tmp)
 
+    def _load_metadata_file(self, meta_path: str) -> Session | None:
+        try:
+            with open(meta_path, encoding="utf-8") as f:
+                data = json.load(f)
+                session = Session.from_dict(data)
+                if not _normalize_session_id(session.session_id):
+                    log_rpc(f"Skipping metadata with invalid session_id: {meta_path}")
+                    return None
+                self.sessions[session.session_id] = session
+                return session
+        except Exception as e:
+            log_rpc(f"Failed to load session metadata from {meta_path}: {e}")
+            return None
+
     def _load_sessions(self):
-        pattern = os.path.join(self.session_dir, "SID_*_metadata.json")
-        for meta_path in glob.glob(pattern):
-            try:
-                with open(meta_path, encoding="utf-8") as f:
-                    data = json.load(f)
-                    session = Session.from_dict(data)
-                    if not _normalize_session_id(session.session_id):
-                        log_rpc(f"Skipping metadata with invalid session_id: {meta_path}")
-                        continue
-                    self.sessions[session.session_id] = session
-            except Exception as e:
-                log_rpc(f"Failed to load session metadata from {meta_path}: {e}")
+        # Preferred layout: one directory per session (sessions/SID_<sid>/),
+        # with metadata.json inside. Directory session dirs make the cache
+        # folder browsable and let cleanup remove a session as one unit.
+        for meta_path in glob.glob(
+            os.path.join(self.session_dir, "SID_*", "metadata.json")
+        ):
+            self._load_metadata_file(meta_path)
+        # Legacy flat layout: SID_<sid>_metadata.json sitting next to the
+        # other session files. Load and migrate them into their own dir.
+        for meta_path in glob.glob(os.path.join(self.session_dir, "SID_*_metadata.json")):
+            session = self._load_metadata_file(meta_path)
+            if session is not None:
+                self._migrate_legacy_session_files(session)
         self._load_orphaned_idbs()
+
+    def _migrate_legacy_session_files(self, session: Session) -> None:
+        """Move a legacy flat-layout session into its per-session directory.
+
+        Old layout: ``sessions/SID_<sid>_metadata.json``, ``SID_<sid>_<bin>.i64``,
+        ``SID_<sid>_bookmarks.json`` etc., plus logs at the cache root.
+        New layout: everything under ``sessions/SID_<sid>/`` with fixed names
+        (metadata.json, bookmarks.json, logs/ida_mcp.log, ...).
+        """
+        sid = session.session_id
+        target_dir = self.get_session_artifact_dir(sid, create=True)
+        renames = {
+            f"SID_{sid}_metadata.json": "metadata.json",
+            f"SID_{sid}_bookmarks.json": "bookmarks.json",
+            f"SID_{sid}_snapshots.json": "snapshots.json",
+            f"SID_{sid}_notebook.md": "notebook.md",
+            f"SID_{sid}_skills.json": "skills.json",
+        }
+        for legacy_path in glob.glob(os.path.join(self.session_dir, f"SID_{sid}*")):
+            if not os.path.isfile(legacy_path):
+                continue
+            name = os.path.basename(legacy_path)
+            dest = os.path.join(target_dir, renames.get(name, name))
+            if os.path.abspath(legacy_path) == os.path.abspath(dest):
+                continue
+            with contextlib.suppress(OSError):
+                os.replace(legacy_path, dest)
+        # Cache-root logs and runtime port handoff files also belong to the session.
+        for legacy_name, rel in (
+            (f"ida_mcp_{sid}.log", os.path.join("logs", "ida_mcp.log")),
+            (f"ida_stdout_{sid}.log", os.path.join("logs", "ida_stdout.log")),
+            (f"ida_stderr_{sid}.log", os.path.join("logs", "ida_stderr.log")),
+        ):
+            legacy_path = os.path.join(self.cache_dir, legacy_name)
+            if os.path.isfile(legacy_path):
+                dest = os.path.join(target_dir, rel)
+                with contextlib.suppress(OSError):
+                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    os.replace(legacy_path, dest)
+        for port_path in glob.glob(os.path.join(self.cache_dir, f"ida_rpc_{sid}_*.port")):
+            with contextlib.suppress(OSError):
+                os.replace(port_path, os.path.join(target_dir, os.path.basename(port_path)))
+        # The IDB moved along with the rest: point the session at its new home.
+        idb_base = os.path.basename(session.idb_path) if session.idb_path else ""
+        if idb_base and os.path.isfile(os.path.join(target_dir, idb_base)):
+            session.idb_path = os.path.join(target_dir, idb_base)
+        self._save_metadata(session)
 
     def _extract_sid(self, path: str) -> str | None:
         base = os.path.basename(path)
@@ -408,18 +486,24 @@ class SessionManager(SessionSkillsMixin):
         return ""
 
     def _load_orphaned_idbs(self):
-        pattern = os.path.join(self.session_dir, "SID_*.*")
-        for idb_path in glob.glob(pattern):
-            if not idb_path.lower().endswith((".i64", ".idb")):
-                continue
-            sid = self._extract_sid(idb_path)
-            if not sid or sid in self.sessions:
-                continue
-            binary_guess = self._guess_binary_name(sid, os.path.basename(idb_path))
-            session = Session(sid, idb_path, binary_guess or "")
-            self.sessions[sid] = session
-            self._save_metadata(session)
-            log_rpc(f"Recovered orphaned session {sid}")
+        # Both the legacy flat layout and the per-session directory layout
+        # may hold IDBs without a metadata file next to them.
+        patterns = (
+            os.path.join(self.session_dir, "SID_*.*"),
+            os.path.join(self.session_dir, "SID_*", "SID_*.*"),
+        )
+        for pattern in patterns:
+            for idb_path in glob.glob(pattern):
+                if not idb_path.lower().endswith((".i64", ".idb")):
+                    continue
+                sid = self._extract_sid(idb_path)
+                if not sid or sid in self.sessions:
+                    continue
+                binary_guess = self._guess_binary_name(sid, os.path.basename(idb_path))
+                session = Session(sid, idb_path, binary_guess or "")
+                self.sessions[sid] = session
+                self._save_metadata(session)
+                log_rpc(f"Recovered orphaned session {sid}")
 
     # ------------------------------------------------------------------
     # Session CRUD
@@ -439,7 +523,8 @@ class SessionManager(SessionSkillsMixin):
             if idb_base.endswith(".i64"):
                 idb_base = idb_base[:-4]
             idb_name = f"SID_{sid}_{idb_base}.i64"
-            resolved_idb = idb_path or use_existing or os.path.join(self.session_dir, idb_name)
+            idb_dir = os.path.join(self.session_dir, f"SID_{sid}")
+            resolved_idb = idb_path or use_existing or os.path.join(idb_dir, idb_name)
             if resolved_idb and os.path.isdir(resolved_idb):
                 resolved_idb = os.path.join(resolved_idb, idb_name)
             if resolved_idb and not os.path.splitext(resolved_idb)[1]:
@@ -487,13 +572,22 @@ class SessionManager(SessionSkillsMixin):
             matches.sort(key=lambda m: m.last_accessed or "", reverse=True)
             return matches
 
-    def discover_sessions(self, query: str = "") -> list[Session]:
+    def discover_sessions(self, query: str = "", binary_name: str = "") -> list[Session]:
         with self._lock:
+            sessions = list(self.sessions.values())
+            if binary_name:
+                needle = str(binary_name).strip().lower()
+                if needle:
+                    sessions = [
+                        s for s in sessions
+                        if needle in os.path.basename(s.binary_path or "").lower()
+                        or needle in os.path.basename(s.idb_path or "").lower()
+                    ]
             if not query:
-                return [copy.copy(s) for s in self.sessions.values()]
+                return [copy.copy(s) for s in sessions]
             matcher = compile_smart_pattern(query, case_sensitive=False)
             result = []
-            for s in self.sessions.values():
+            for s in sessions:
                 tags_str = " ".join(s.tags) if s.tags else ""
                 searchable = f"{s.session_id} {s.binary_path} {s.idb_path} {s.auto_name} {tags_str} {s.notes}"
                 if matcher(searchable):
@@ -521,7 +615,7 @@ class SessionManager(SessionSkillsMixin):
                     deleted = True
                 except Exception as e:
                     log_rpc(f"Failed to delete {log_path}: {e}")
-        for cache_pattern in (f"{sid}.blackboard.db*", f"{sid}.proposals.db*"):
+        for cache_pattern in (f"{sid}.blackboard.db*", f"{sid}.proposals.db*", f"ida_rpc_{sid}_*.port"):
             for cache_path in glob.glob(os.path.join(self.cache_dir, cache_pattern)):
                 try:
                     os.remove(cache_path)
@@ -563,7 +657,7 @@ class SessionManager(SessionSkillsMixin):
             new_sid = self._new_session_id()
             # Generate a NEW IDB path for the duplicate to avoid corruption
             idb_base = os.path.basename(session.binary_path or f"session_{new_sid}")
-            new_idb = os.path.join(self.session_dir, f"SID_{new_sid}_{idb_base}.i64")
+            new_idb = os.path.join(self.session_dir, f"SID_{new_sid}", f"SID_{new_sid}_{idb_base}.i64")
             new_session = Session(
                 new_sid, new_idb, session.binary_path,
                 analysis_options=dict(session.analysis_options),
@@ -633,32 +727,53 @@ class SessionManager(SessionSkillsMixin):
         session = self.sessions.get(sid)
         return self.update_session(sid, tags=[t for t in getattr(session, 'tags', []) if t != "archived"])
 
-    def list_sessions(self, query: str = "", offset: int = 0, limit: int = 0) -> dict:
+    def list_sessions(self, query: str = "", offset: int = 0, limit: int = 0, binary_name: str = "") -> dict:
         with self._lock:
             sessions = list(self.sessions.values())
+            if binary_name:
+                needle = str(binary_name).strip().lower()
+                if needle:
+                    sessions = [
+                        s for s in sessions
+                        if needle in os.path.basename(s.binary_path or "").lower()
+                        or needle in os.path.basename(s.idb_path or "").lower()
+                    ]
             if query:
                 matcher = compile_smart_pattern(query, case_sensitive=False)
-                sessions = [s for s in sessions if matcher(f"{s.session_id} {s.binary_path} {s.idb_path}")]
+                sessions = [
+                    s for s in sessions
+                    if matcher(
+                        f"{s.session_id} {s.binary_path} {s.idb_path} {s.auto_name} "
+                        f"{' '.join(s.tags)} {s.notes}"
+                    )
+                ]
             sessions.sort(key=lambda s: s.last_accessed, reverse=True)
             total = len(sessions)
             sessions = sessions[offset:offset + limit] if limit > 0 else sessions[offset:]
             return {"sessions": [s.to_dict() for s in sessions], "total": total, "count": len(sessions), "offset": offset, "limit": limit}
 
-    def cleanup_stale(self, max_age_days: int = 30) -> list[str]:
+    def cleanup_stale(self, max_age_days: int = 30, runtime_alive: Any = None) -> list[str]:
         with self._lock:
             cutoff = datetime.now() - timedelta(days=max_age_days)
-            stale = [sid for sid, s in self.sessions.items() if s.last_accessed < cutoff]
+            stale = [
+                sid
+                for sid, s in self.sessions.items()
+                if s.last_accessed < cutoff and not (callable(runtime_alive) and runtime_alive(sid))
+            ]
             for sid in stale:
                 self._delete_session_unlocked(sid)
             return stale
 
-    def auto_prune_if_over_budget(self, budget: int, max_age_days: int) -> int:
+    def auto_prune_if_over_budget(self, budget: int, max_age_days: int, runtime_alive: Any = None) -> int:
         """Auto-prune stale sessions when the store exceeds ``budget``.
 
         Returns the number of sessions deleted. Only acts if the live
         session count is above the budget and at least one session is
         older than ``max_age_days``. Safe to call repeatedly (idempotent
-        once the store is within budget).
+        once the store is within budget). Sessions that still own a live
+        IDA runtime (``runtime_alive(sid)`` returning truthy) are never
+        pruned — deleting their metadata while idat runs would orphan the
+        process and keep the IDB lock held forever.
         """
         try:
             budget_i = int(budget)
@@ -671,7 +786,12 @@ class SessionManager(SessionSkillsMixin):
             if total <= budget_i:
                 return 0
             cutoff = datetime.now() - timedelta(days=max_age_days)
-            stale = [sid for sid, s in self.sessions.items() if s.last_accessed < cutoff]
+            stale = [
+                sid
+                for sid, s in self.sessions.items()
+                if s.last_accessed < cutoff
+                and not (callable(runtime_alive) and runtime_alive(sid))
+            ]
             for sid in stale:
                 self._delete_session_unlocked(sid)
             if stale:
@@ -911,10 +1031,13 @@ class SessionManager(SessionSkillsMixin):
             ]}
 
     def _get_snapshots_path(self, sid: str) -> str:
-        return os.path.join(self.session_dir, f"SID_{sid}_snapshots.json")
+        return os.path.join(self.session_dir, f"SID_{sid}", "snapshots.json")
 
     def _load_snapshots(self, sid: str) -> list[dict]:
         path = self._get_snapshots_path(sid)
+        if not os.path.exists(path):
+            # Legacy flat layout (SID_<sid>_snapshots.json) — read in place.
+            path = os.path.join(self.session_dir, f"SID_{sid}_snapshots.json")
         if os.path.exists(path):
             try:
                 with open(path, encoding="utf-8") as f:
@@ -940,10 +1063,13 @@ class SessionManager(SessionSkillsMixin):
     # ====================================================================
 
     def _get_notebook_path(self, sid: str) -> str:
-        return os.path.join(self.session_dir, f"SID_{sid}_notebook.md")
+        return os.path.join(self.session_dir, f"SID_{sid}", "notebook.md")
 
     def _load_notebook(self, sid: str) -> str:
         path = self._get_notebook_path(sid)
+        if not os.path.exists(path):
+            # Legacy flat layout.
+            path = os.path.join(self.session_dir, f"SID_{sid}_notebook.md")
         if os.path.exists(path):
             try:
                 with open(path, encoding="utf-8") as f:
@@ -1025,10 +1151,13 @@ class BookmarkManager:
         self._lock = threading.RLock()
 
     def _get_path(self, sid: str) -> str:
-        return os.path.join(self.session_dir, f"SID_{sid}_bookmarks.json")
+        return os.path.join(self.session_dir, f"SID_{sid}", "bookmarks.json")
 
     def load(self, sid: str) -> list[dict]:
         path = self._get_path(sid)
+        if not os.path.exists(path):
+            # Legacy flat layout (SID_<sid>_bookmarks.json) — read in place.
+            path = os.path.join(self.session_dir, f"SID_{sid}_bookmarks.json")
         if os.path.exists(path):
             try:
                 with open(path, encoding="utf-8") as f:

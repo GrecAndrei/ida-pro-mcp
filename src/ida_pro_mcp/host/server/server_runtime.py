@@ -58,6 +58,16 @@ def _resolve_max_rpc_bytes() -> int:
 MAX_RPC_REQUEST_SIZE = _resolve_max_rpc_bytes()
 
 
+class RpcQueueTimeout(TimeoutError):
+    """Raised when a session's RPC lane stays busy past the queue bound.
+
+    Subclasses TimeoutError so existing callers that treat queue exhaustion
+    as a timeout (shutdown paths with ``queue_timeout=0``) keep working.
+    Dispatch distinguishes it from socket recv timeouts to report IDA_BUSY
+    instead of a false IDA_TIMEOUT/IDA_CRASHED."""
+
+
+
 def _popen_new_session_kwargs() -> dict:
     """Return the kwargs that put a Popen child in its own process group.
 
@@ -490,7 +500,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         timeout=max(0.0, float(queue_timeout))
                     )
                 if not acquired:
-                    raise TimeoutError(
+                    raise RpcQueueTimeout(
                         f"IDA runtime on port {port} is busy with another request"
                     )
 
@@ -552,6 +562,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
         timeout: int = 5,
         auth_token: str | None = None,
         recv_timeout: int | None = None,
+        queue_timeout: float | None = None,
     ) -> dict:
         """Call ``_send_rpc_raw`` with bounded retry on transient connection errors.
 
@@ -577,11 +588,11 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
         for attempt in range(attempts):
             try:
                 return self._send_rpc_raw(
-                    request,
-                    port,
+                    request, port,
                     timeout=timeout,
                     auth_token=auth_token,
                     recv_timeout=recv_timeout,
+                    queue_timeout=queue_timeout,
                 )
             except (ConnectionRefusedError, EOFError, ConnectionResetError, ConnectionAbortedError) as exc:
                 # Transient connection-layer failures that suggest the
@@ -1032,7 +1043,14 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 sess = self.session_mgr.sessions.get(session_id)
                 if not sess:
                     return
-                sess.metadata = dict(sess.metadata or {})
+                current = dict(getattr(sess, "metadata", None) or {})
+                changed = any(
+                    current.get(key) != value
+                    for key, value in updates.items()
+                )
+                if not changed:
+                    return
+                sess.metadata = current
                 sess.metadata.update(updates)
                 self.session_mgr._save_metadata(sess)
             except Exception:
@@ -1411,12 +1429,12 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 # Apply inferred load base so IDA maps the binary at the correct
                 # address from the start (e.g. AIC8800D80 WFFW at 0x120000).
                 if opts.get("baseaddr") is not None and "-b" not in ida_prefixes:
-                    try:
-                        # IDA -b flag is in 16-byte paragraphs, not bytes.
-                        paragraphs = int(opts["baseaddr"]) // 16
+                    # baseaddr arrives as a string like "0x400000" or an int.
+                    # int("0x400000") raises ValueError, so parse with base 0.
+                    # IDA -b flag is in 16-byte paragraphs, not bytes.
+                    with contextlib.suppress(TypeError, ValueError):
+                        paragraphs = int(str(opts["baseaddr"]), 0) // 16
                         cmd.append(f"-b{paragraphs:#x}")
-                    except (TypeError, ValueError):
-                        pass
                 # skip_analysis=true: pass -c to create IDB without running auto-analysis.
                 # Use for large/raw binaries where analysis blocks indefinitely.
                 # After session create, call analysis(action='run') to trigger manually.
@@ -1434,23 +1452,31 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 # Rebase the database to a specific load address after creation.
                 rebase_to = opts.get("rebase_to")
                 if rebase_to is not None and "-R" not in ida_prefixes:
-                    try:
-                        rebase_paragraphs = int(rebase_to) // 16
+                    # rebase_to may be a hex string like "0x400000".
+                    # IDA -R flag is in 16-byte paragraphs, not bytes.
+                    with contextlib.suppress(TypeError, ValueError):
+                        rebase_paragraphs = int(str(rebase_to), 0) // 16
                         cmd.append(f"-R{rebase_paragraphs:#x}")
-                    except (TypeError, ValueError):
-                        pass
-                # Override the entry point address.
+                # Override the entry point address. IDA expects a hex address
+                # here; ints must be hex-formatted (decimal would be misread
+                # as hex by IDA's option parser).
                 entry_point = opts.get("entry_point")
                 if entry_point is not None and "-e" not in ida_prefixes:
-                    cmd.append(f"-e{entry_point}")
+                    with contextlib.suppress(TypeError, ValueError):
+                        if isinstance(entry_point, str):
+                            cmd.append(f"-e{entry_point.strip()}")
+                        else:
+                            cmd.append(f"-e{int(entry_point):x}")
                 # Set the stack size for stack analysis.
                 stack_size = opts.get("stack_size")
                 if stack_size is not None and "-s" not in ida_prefixes:
-                    cmd.append(f"-s{int(stack_size)}")
+                    with contextlib.suppress(TypeError, ValueError):
+                        cmd.append(f"-s{int(str(stack_size), 0)}")
                 # Memory model: 0=flat, 1=16-bit segmented, 2=32-bit segmented.
                 memory_model = opts.get("memory_model")
                 if memory_model is not None and "-m" not in ida_prefixes:
-                    cmd.append(f"-m{int(memory_model)}")
+                    with contextlib.suppress(TypeError, ValueError):
+                        cmd.append(f"-m{int(str(memory_model), 0)}")
 
             cmd.append(f"-S{script_path}")
             cmd.append(f"-L{log_file}")
@@ -1692,8 +1718,9 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             # through a unique handoff file.  Pre-selecting and releasing a
             # port here created a TOCTOU race during concurrent launches.
             server_port = 0
+            session_dir = self.session_mgr.get_session_artifact_dir(session.session_id)
             port_file = os.path.join(
-                self.cache_dir,
+                session_dir,
                 f"ida_rpc_{session.session_id}_{self._runtime_owner_id[:12]}.port",
             )
             with contextlib.suppress(OSError):
@@ -1737,9 +1764,10 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             env["IDA_MCP_USE_EXISTING_IDB"] = "1" if use_existing_idb else "0"
 
             sid_tag = session.session_id
-            log_file = os.path.join(self.cache_dir, f"ida_mcp_{sid_tag}.log")
-            stdout_log = os.path.join(self.cache_dir, f"ida_stdout_{sid_tag}.log")
-            stderr_log = os.path.join(self.cache_dir, f"ida_stderr_{sid_tag}.log")
+            log_dir = self.session_mgr.get_session_log_dir(sid_tag)
+            log_file = os.path.join(log_dir, "ida_mcp.log")
+            stdout_log = os.path.join(log_dir, "ida_stdout.log")
+            stderr_log = os.path.join(log_dir, "ida_stderr.log")
 
             # Launch IDA: Open existing IDB if present, otherwise analyze binary
             if use_existing_idb:
@@ -1901,8 +1929,9 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             # launches. The server_port argument is retained for compatibility
             # with callers but is intentionally not reused.
             recovery_tag = "clean" if sanitize_env else "normal"
+            session_dir = self.session_mgr.get_session_artifact_dir(session.session_id)
             port_file = os.path.join(
-                self.cache_dir,
+                session_dir,
                 f"ida_rpc_{session.session_id}_{self._runtime_owner_id[:12]}_{recovery_tag}.port",
             )
             with contextlib.suppress(OSError):
@@ -1939,9 +1968,10 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 ):
                     env.pop(k, None)
             sid_tag = session.session_id
-            log_file = os.path.join(self.cache_dir, f"ida_mcp_{sid_tag}.log")
-            stdout_log = os.path.join(self.cache_dir, f"ida_stdout_{sid_tag}.log")
-            stderr_log = os.path.join(self.cache_dir, f"ida_stderr_{sid_tag}.log")
+            log_dir = self.session_mgr.get_session_log_dir(sid_tag)
+            log_file = os.path.join(log_dir, "ida_mcp.log")
+            stdout_log = os.path.join(log_dir, "ida_stdout.log")
+            stderr_log = os.path.join(log_dir, "ida_stderr.log")
 
             if use_existing_idb:
                 log_rpc(f"Opening existing session IDB: {effective_idb_path}")

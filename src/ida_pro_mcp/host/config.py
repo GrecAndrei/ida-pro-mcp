@@ -196,6 +196,23 @@ SEMANTIC_INDEX_MAX_QUERY_WORKERS = 8
 MAX_BATCH_CALLS = 50
 MAX_BATCH_PAYLOAD_BYTES = 512 * 1024
 
+# Binaries at or above this size trigger an upfront-load warning that
+# suggests background loading (session action create_background /
+# ida_open_background). 50 MiB by default; override with IDA_MCP_LARGE_BINARY_MB.
+LARGE_BINARY_THRESHOLD_BYTES = (
+    max(1, int(os.environ.get("IDA_MCP_LARGE_BINARY_MB", "50"))) * 1024 * 1024
+)
+
+# How long a tool call may wait for a session's RPC lane before the host
+# fails fast with IDA_BUSY instead of queueing threads behind a stuck
+# request. IDA executes one SDK request at a time, so concurrent calls to
+# the same session serialize here; different sessions stay fully parallel.
+# 0 disables the bound (unlimited queueing). Override with
+# IDA_MCP_RPC_QUEUE_TIMEOUT (seconds).
+RPC_QUEUE_TIMEOUT_SECONDS = max(
+    0.0, float(os.environ.get("IDA_MCP_RPC_QUEUE_TIMEOUT", "300"))
+)
+
 # Rate limiting defaults
 RATE_LIMIT_PER_TOOL = float(os.environ.get("IDA_MCP_RATE_LIMIT_PER_TOOL", "10.0"))
 RATE_LIMIT_GLOBAL = float(os.environ.get("IDA_MCP_RATE_LIMIT_GLOBAL", "30.0"))

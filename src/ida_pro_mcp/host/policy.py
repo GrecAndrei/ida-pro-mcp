@@ -145,6 +145,7 @@ READ_ONLY_ACTIONS = {
     ("funcs", "find_similar"),
     ("session", "health"),
     ("session", "create"),
+    ("session", "create_background"),
     ("governance", "list_rules"),
     ("governance", "stats"),
     ("governance", "check"),

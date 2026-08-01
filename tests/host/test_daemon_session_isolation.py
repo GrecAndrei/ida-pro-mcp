@@ -21,6 +21,22 @@ def _tool_call(server: IDAMCPServer, request_id: int, name: str, arguments: dict
     return response["result"]["structuredContent"]
 
 
+class _FakeIdaProcess:
+    """A fake idat subprocess that is always alive but cannot be killed.
+
+    ``pid`` is above Linux's pid_max, so ``os.killpg`` on it raises
+    ProcessLookupError/EINVAL and every kill path is a safe no-op.
+    """
+
+    pid = 2147483647
+
+    def poll(self):
+        return None
+
+    def wait(self, timeout=None):
+        return 1
+
+
 def test_simultaneous_clients_keep_independent_active_sessions(tmp_path, monkeypatch):
     """Each daemon client must keep routing default calls to its own binary."""
     monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
@@ -72,8 +88,8 @@ def test_simultaneous_clients_keep_independent_active_sessions(tmp_path, monkeyp
         assert not thread.is_alive()
 
     try:
-        opened_a = results["a"]["opened"]["session"]
-        opened_b = results["b"]["opened"]["session"]
+        opened_a = results["a"]["opened"]
+        opened_b = results["b"]["opened"]
         status_a = results["a"]["status"]["session"]
         status_b = results["b"]["status"]["session"]
 
@@ -91,7 +107,7 @@ def test_simultaneous_clients_keep_independent_active_sessions(tmp_path, monkeyp
 def test_simultaneous_clients_opening_same_binary_get_separate_sessions(
     tmp_path, monkeypatch
 ):
-    """A persisted IDB is never silently shared by independent clients."""
+    """A session that another client is actively running is never shared."""
     monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
     monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
     monkeypatch.setattr(IDAMCPServer, "_detect_ida_dir", lambda self: "")
@@ -105,15 +121,25 @@ def test_simultaneous_clients_opening_same_binary_get_separate_sessions(
     barrier = threading.Barrier(2)
     results: dict[str, dict] = {}
 
-    def client(label: str) -> None:
-        barrier.wait(timeout=5)
-        results[label] = _tool_call(
+    def client_a() -> None:
+        results["a"] = _tool_call(
             server, 1, "ida_open_binary", {"binary_path": str(binary_path)}
+        )
+        sid_a = results["a"]["session_id"]
+        # Client A is actively analyzing: its idat runtime is alive, so a
+        # concurrent client must not adopt the session.
+        server.session_runtimes[sid_a] = {"process": _FakeIdaProcess()}
+        barrier.wait(timeout=5)
+
+    def client_b() -> None:
+        barrier.wait(timeout=5)
+        results["b"] = _tool_call(
+            server, 2, "ida_open_binary", {"binary_path": str(binary_path)}
         )
 
     threads = [
-        threading.Thread(target=client, args=("a",)),
-        threading.Thread(target=client, args=("b",)),
+        threading.Thread(target=client_a),
+        threading.Thread(target=client_b),
     ]
     for thread in threads:
         thread.start()
@@ -122,8 +148,8 @@ def test_simultaneous_clients_opening_same_binary_get_separate_sessions(
         assert not thread.is_alive()
 
     try:
-        session_a = results["a"]["session"]
-        session_b = results["b"]["session"]
+        session_a = results["a"]
+        session_b = results["b"]
         assert session_a["binary_path"] == str(binary_path)
         assert session_b["binary_path"] == str(binary_path)
         assert session_a["session_id"] != session_b["session_id"]
@@ -203,10 +229,13 @@ def test_foreign_idb_argument_cannot_drive_another_clients_session(
     token_a = server._begin_client_connection()
     try:
         opened_a = _open_owned_session(server, str(binary_a))
-        idb_a = opened_a["session"]["idb_path"]
-        sid_a = opened_a["session"]["session_id"]
+        idb_a = opened_a["idb_path"]
+        sid_a = opened_a["session_id"]
     finally:
-        server._end_client_connection(token_a)
+        server._client_request_state_var.reset(token_a)
+    # Client A's idat is still alive and analyzing; the session is busy even
+    # though A's connection state is gone, so B must not be able to drive it.
+    server.session_runtimes[sid_a] = {"process": _FakeIdaProcess()}
 
     token_b = server._begin_client_connection()
     try:
@@ -221,6 +250,47 @@ def test_foreign_idb_argument_cannot_drive_another_clients_session(
         assert denied_exec.get("error") is True
         assert denied_exec.get("code") == "FILE_LOCKED"
         assert starts == []
+    finally:
+        server._end_client_connection(token_b)
+        server.shutdown()
+
+
+def test_restarted_client_adopts_disconnected_sessions_and_reuses_idb(
+    tmp_path, monkeypatch
+):
+    """A restarted client reloads its old session instead of creating a new one.
+
+    When a client disconnects, its runtimes are cleaned up. A later client
+    (the restarted one) may adopt the recorded session and must keep reusing
+    the same IDB — this is what makes analysis survive client restarts.
+    """
+    monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
+    monkeypatch.setattr(IDAMCPServer, "_detect_ida_dir", lambda self: "")
+    monkeypatch.setattr(IDAMCPServer, "_find_idat", lambda self: "")
+
+    binary_a = tmp_path / "alpha.bin"
+    binary_a.write_bytes(b"alpha")
+
+    server = IDAMCPServer()
+    monkeypatch.setattr(server, "_ensure_runtime_and_idb", lambda session: None)
+
+    token_a = server._begin_client_connection()
+    try:
+        opened_a = _open_owned_session(server, str(binary_a))
+        sid_a = opened_a["session_id"]
+        idb_a = opened_a["idb_path"]
+    finally:
+        server._end_client_connection(token_a)
+
+    token_b = server._begin_client_connection()
+    try:
+        reopened = _open_owned_session(server, str(binary_a))
+        assert reopened.get("ok") is True
+        assert reopened["session_id"] == sid_a
+        assert reopened["idb_path"] == idb_a
+        assert "Reusing" in str(reopened.get("note") or "")
+        assert server._client_owns_session(sid_a)
     finally:
         server._end_client_connection(token_b)
         server.shutdown()
@@ -245,11 +315,13 @@ def test_foreign_client_cannot_close_or_kill_peer_session(
     token_a = server._begin_client_connection()
     try:
         opened_a = _open_owned_session(server, str(binary_a))
-        sid_a = opened_a["session"]["session_id"]
+        sid_a = opened_a["session_id"]
     finally:
         # Keep runtime metadata around; disconnect cleanup would remove it.
         # For this test we only need the session row to remain.
         server._client_request_state_var.reset(token_a)
+    # A is still actively analyzing the session: it must stay protected.
+    server.session_runtimes[sid_a] = {"process": _FakeIdaProcess()}
 
     token_b = server._begin_client_connection()
     try:
@@ -311,7 +383,7 @@ def test_background_index_worker_retains_session_ownership(
                 "_background": True,
                 "_index_slice_size": 1,
             },
-            opened["session"]["idb_path"],
+            opened["idb_path"],
         )
         assert submitted.get("error") is not True
         result = server._batch_manager.wait(submitted["task_id"], timeout=5)
@@ -342,15 +414,17 @@ def test_session_switch_cannot_claim_another_clients_session(
     token_a = server._begin_client_connection()
     try:
         opened_a = _open_owned_session(server, str(binary_a))
-        sid_a = opened_a["session"]["session_id"]
-        path_a = opened_a["session"]["binary_path"]
+        sid_a = opened_a["session_id"]
+        path_a = opened_a["binary_path"]
     finally:
         server._client_request_state_var.reset(token_a)
+    # A's session is actively running, so B cannot claim it.
+    server.session_runtimes[sid_a] = {"process": _FakeIdaProcess()}
 
     token_b = server._begin_client_connection()
     try:
         opened_b = _open_owned_session(server, str(binary_b))
-        sid_b = opened_b["session"]["session_id"]
+        sid_b = opened_b["session_id"]
         denied = server._session_action_switch({"session_id": sid_a})
         assert denied.get("error") is True
         assert denied.get("code") == "FILE_LOCKED"
@@ -385,7 +459,7 @@ def test_index_status_and_cancel_are_scoped_to_owning_client(
     token_a = server._begin_client_connection()
     try:
         opened_a = _open_owned_session(server, str(binary_a))
-        sid_a = opened_a["session"]["session_id"]
+        sid_a = opened_a["session_id"]
         task_a = server._batch_manager.submit(
             action="semantic_index",
             args={"mode": "fast"},
@@ -398,7 +472,7 @@ def test_index_status_and_cancel_are_scoped_to_owning_client(
     token_b = server._begin_client_connection()
     try:
         opened_b = _open_owned_session(server, str(binary_b))
-        sid_b = opened_b["session"]["session_id"]
+        sid_b = opened_b["session_id"]
         task_b = server._batch_manager.submit(
             action="semantic_index",
             args={"mode": "fast"},

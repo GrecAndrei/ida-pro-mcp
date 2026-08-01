@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import json
+import os
 import secrets
 from dataclasses import dataclass, field
 from typing import Any
@@ -94,12 +96,50 @@ class ServerClientStateMixin:
         """Whether this MCP connection has explicitly selected the session."""
         return str(session_id) in self._client_request_state().owned_session_ids
 
+    def _session_is_busy(self, session_id: str) -> bool:
+        """Whether another live owner is actively running the session's IDA.
+
+        A session is busy when this host tracks a live runtime for it (daemon
+        mode: any connection may have spawned it) or when a lease in the
+        shared cache is held by a live foreign host (stdio mode: another
+        MCP process). Sessions that are merely *recorded* — persisted across
+        restarts with no running idat — are never busy.
+        """
+        runtime = getattr(self, "session_runtimes", None) or {}
+        if isinstance(runtime, dict):
+            rec = runtime.get(str(session_id))
+            alive = getattr(self, "_runtime_alive", None)
+            if rec is not None and callable(alive) and alive(rec):
+                return True
+        lease_path: str | None = None
+        get_lease = getattr(self, "_runtime_lease_path", None)
+        if callable(get_lease):
+            with contextlib.suppress(Exception):
+                lease_path = str(get_lease(str(session_id)))
+        if lease_path and os.path.exists(lease_path):
+            try:
+                with open(lease_path, encoding="utf-8") as f:
+                    lease = json.load(f)
+            except Exception:
+                lease = None
+            has_live = getattr(self, "_lease_has_live_foreign_owner", None)
+            if lease and callable(has_live) and has_live(lease):
+                return True
+        return False
+
     def _truncation_owner_id(self) -> str:
         """Stable per-connection id used to scope truncated response tokens."""
         return str(self._client_request_state().connection_id or "")
 
     def _ensure_client_owns_session(self, session: Any) -> dict[str, Any] | None:
-        """Reject cross-client use of a session that this connection never selected."""
+        """Reject cross-client use of a session that this connection never selected.
+
+        A session is adoptable — and the guard passes — when nobody is
+        actively running it (no live runtime, no live foreign lease). This is
+        what lets a restarted MCP client reload its old sessions and reuse the
+        recorded IDB instead of silently creating a fresh session each time.
+        Adopting a session records ownership so later calls keep working.
+        """
         sid = getattr(session, "session_id", None)
         if not sid:
             return make_error(
@@ -108,15 +148,21 @@ class ServerClientStateMixin:
             )
         if self._client_owns_session(str(sid)):
             return None
-        return make_error(
-            MCPError.FILE_LOCKED,
-            "This session is not available to the current MCP client.",
-            hint=(
-                "Open the binary in this client to create an independent session, "
-                "or switch only to a session this connection already owns."
-            ),
-            details={"session_id": str(sid)},
-        )
+        if self._session_is_busy(str(sid)):
+            return make_error(
+                MCPError.FILE_LOCKED,
+                "This session is not available to the current MCP client.",
+                hint=(
+                    "The session's IDA runtime is in use by another live "
+                    "client. Close it there, or open the binary with "
+                    "force_new=true to create an independent session."
+                ),
+                details={"session_id": str(sid)},
+            )
+        # Nobody is running it: take it over so the rest of this request
+        # (and later ones) can use the recorded IDB.
+        self._client_request_state().owned_session_ids.add(str(sid))
+        return None
 
     @property
     def _pending_pp(self) -> dict[str, Any]:

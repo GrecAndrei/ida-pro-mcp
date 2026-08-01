@@ -56,10 +56,14 @@ _ANALYSIS_PHASES = {
 class SessionSkillsMixin(SessionBootstrapMixin):
     def _get_skills_path(self, sid: str) -> str:
         safe_sid = str(sid).replace("/", "_").replace("\\", "_")
-        return os.path.join(self.session_dir, f"SID_{safe_sid}_skills.json")
+        return os.path.join(self.session_dir, f"SID_{safe_sid}", "skills.json")
 
     def _load_skills(self, sid: str) -> dict:
         path = self._get_skills_path(sid)
+        if not os.path.exists(path):
+            # Legacy flat layout (SID_<sid>_skills.json) — read in place.
+            safe_sid = str(sid).replace("/", "_").replace("\\", "_")
+            path = os.path.join(self.session_dir, f"SID_{safe_sid}_skills.json")
         if os.path.exists(path):
             try:
                 with open(path, encoding="utf-8") as f:

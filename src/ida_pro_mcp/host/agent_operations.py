@@ -237,6 +237,54 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         backend_action="create",
     ),
     AgentOperation(
+        name="ida_open_background",
+        description="Open a binary in a session without blocking on IDA analysis; poll ida_session_status for progress.",
+        category="session",
+        input_schema=_schema(
+            {
+                "binary_path": {"type": "string", "description": "Absolute path to the binary to analyze."},
+                "force_new": {"type": "boolean", "description": "Create a new session even if the binary is already open."},
+                "notes": {"type": "string", "description": "Optional session notes."},
+                "architecture": {
+                    "type": "object",
+                    "description": (
+                        "Architecture preload hints. Keys: processor (e.g. metapc, arm, mipsl), "
+                        "bitness (32 or 64), endian (little or big), loader, flags, loader_options. "
+                        "Aliases: arch/proc/architecture → processor, bits → bitness, endianness → endian."
+                    ),
+                    "additionalProperties": False,
+                    "properties": {
+                        "processor": {"type": "string", "description": "IDA processor name, e.g. metapc, arm, mipsl."},
+                        "bitness": {"type": "integer", "description": "32 or 64."},
+                        "endian": {"type": "string", "description": "little or big."},
+                        "loader": {"type": "string", "description": "IDA loader name, e.g. elf, pe, bin."},
+                        "flags": {"type": "integer", "description": "IDA loader flags."},
+                        "loader_options": {"type": "string", "description": "Raw loader options string."},
+                    },
+                },
+                "analysis_options": {
+                    "type": "object",
+                    "description": "Full analysis options object; merged with individual keys below.",
+                },
+                "processor": {"type": "string", "description": "IDA processor name (shorthand for architecture.processor)."},
+                "bitness": {"type": "integer", "description": "32 or 64 (shorthand for architecture.bitness)."},
+                "endian": {"type": "string", "description": "little or big (shorthand for architecture.endian)."},
+                "loader": {"type": "string", "description": "IDA loader name (shorthand for architecture.loader)."},
+                "flags": {"type": "integer", "description": "IDA loader flags (shorthand for architecture.flags)."},
+                "loader_options": {"type": "string", "description": "Raw loader options (shorthand for architecture.loader_options)."},
+                "ida_args": {
+                    "type": "array",
+                    "description": "Extra raw IDA CLI args (e.g. -A -Sscript -Llog).",
+                    "items": {"type": "string"},
+                },
+            },
+            ["binary_path"],
+        ),
+        example={"binary_path": "/samples/huge-firmware.bin"},
+        backend_tool="session",
+        backend_action="create_background",
+    ),
+    AgentOperation(
         name="ida_session_state",
         description="Get the current binary, analysis progress, and next useful actions.",
         category="session",
@@ -303,6 +351,7 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         input_schema=_schema(
             {
                 "query": {"type": "string", "description": "Optional filter string (matches id, path, notes, tags)."},
+                "binary_name": {"type": "string", "description": "Optional filter by binary file name (substring of the analyzed file's name)."},
                 "limit": LIMIT,
                 "offset": {"type": "integer", "description": "Pagination offset."},
             }

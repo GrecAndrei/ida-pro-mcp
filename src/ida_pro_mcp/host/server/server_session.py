@@ -6,12 +6,14 @@ from __future__ import annotations
 import contextlib
 import os
 import re
+import threading
 import time
 from datetime import datetime
 from typing import Any
 
 from ..analysis.arch_profile import normalize_arch_options
 from ..config import (
+    LARGE_BINARY_THRESHOLD_BYTES,
     MAX_BATCH_CALLS,
     MAX_LIST_LIMIT,
     MAX_LIST_OFFSET,
@@ -27,13 +29,15 @@ from ..config import (
 from ..errors import MCPError, is_error_result, make_error
 from ..intelligence.helpers import parse_str_list
 from ..schemas import TOOL_ACTIONS
-from ..stores.chip_db import find_chip_profile
-from ..stores.symbol_db import SymbolDB
 from .server_client_state import ServerClientStateMixin
 from .server_session_bootstrap import ServerSessionBootstrapMixin
 from .tool_registry import register_tool_actions
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Keys that count as an architecture/loader preload request when opening a
+# binary; shared by the reuse-decision logic in create/create_background.
+_OPEN_PRELOAD_KEYS = ("processor", "bitness", "endian", "loader", "flags", "loader_options", "value")
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +198,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
     _SESSION_ACTIONS: dict[str, Any] = {
         "health": "_session_action_health",
         "create": "_session_action_create",
+        "create_background": "_session_action_create_background",
         "get": "_session_action_get",
         "list": "_session_action_list",
         "switch": "_session_action_switch",
@@ -318,43 +323,292 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         return self._handle_session_health(args)
 
     def _session_action_create(self, args: dict) -> dict:
+        binary_path, analysis_options, arch_meta, force_new, ida_args, prep_error = (
+            self._prepare_open_args(args)
+        )
+        if prep_error:
+            return prep_error
+
+        has_preload_request = any(
+            k in analysis_options and analysis_options.get(k) is not None
+            for k in _OPEN_PRELOAD_KEYS
+        )
+
+        existing = self._select_reuse_candidate(
+            binary_path, analysis_options, force_new
+        )
+
+        # Even when the caller passes loader/architecture preload options,
+        # reuse the existing session if those options already match — this
+         # stops smoke runs from spawning a new idat child for the same
+         # binary on every restart. force_new=true still wins.
+        if existing and not force_new and has_preload_request and analysis_options:
+            existing_opts = dict(existing.analysis_options or {})
+            mismatch = any(
+                str(existing_opts.get(k) or "") != str(analysis_options.get(k) or "")
+                for k in _OPEN_PRELOAD_KEYS
+                if k in analysis_options
+            )
+            if not mismatch:
+                # Pretend preload request was absent so the existing reuse
+                # branch runs.
+                has_preload_request = False
+        if existing and not force_new and not has_preload_request:
+            # Update the REAL session through the manager, not the shallow copy
+            update_kwargs = {"analysis_applied": False}
+            if analysis_options:
+                merged_opts = dict(existing.analysis_options)
+                merged_opts.update(analysis_options)
+                update_kwargs["analysis_options"] = merged_opts
+            if ida_args is not None:
+                update_kwargs["ida_args"] = ida_args
+            updated = self.session_mgr.update_session(
+                existing.session_id, **update_kwargs
+            )
+            if updated is None:
+                return make_error(
+                    MCPError.SESSION_NOT_FOUND,
+                    f"Session '{existing.session_id}' disappeared during reuse",
+                )
+            self.current_session = updated
+            out = self._open_result(
+                updated,
+                reused=True,
+                note="Reusing existing session. Use force_new=true to create a new session.",
+            )
+            # If the runtime for this session is dead, spawn a fresh
+            # idat and block until the IDB is on disk. The caller then
+            # gets a usable session without extra round-trips.
+            self._ensure_runtime_and_idb(updated)
+            out["idb_exists"] = bool(
+                updated.idb_path and os.path.isfile(updated.idb_path)
+            )
+            out["is_running"] = self._session_is_running(updated.session_id)
+            out.update(self._open_analysis_state(updated))
+            large_warning = self._large_binary_warning(binary_path)
+            if large_warning:
+                out["warning"] = large_warning
+            return out
+
+        create_note = None
+        if existing and not force_new and has_preload_request:
+            create_note = (
+                "Created a fresh session because architecture/loader options were provided; "
+                "reusing an old IDB can preserve previous metapc/default analysis state."
+            )
+
+        if not analysis_options:
+            analysis_options = None
+
+        tags = args.get("tags", [])
+        if isinstance(tags, str):
+            tags = parse_str_list(tags)
+        tags = tags[:MAX_TAGS_PER_SESSION]
+        notes = str(args.get("notes", ""))[:MAX_NOTE_LEN]
+
+        inferred = (arch_meta.get("inferred_profile") or {}) if isinstance(arch_meta, dict) else {}
+        is_packed_idb = isinstance(inferred, dict) and inferred.get("file_kind") == "packed_idb"
+
+        # Deliberately no policy_mode here: the policy engine is configured by
+        # the operator through IDA_MCP_POLICY_MODE or the policy config file.
+        # Honouring a caller-supplied mode would let a single session(create)
+        # call — which classifies as a read and so needs no acknowledgement —
+        # turn the whole engine off for the session.
+        self.current_session = self.session_mgr.create_session(
+            binary_path or "",
+            analysis_options=analysis_options,
+            ida_args=ida_args,
+            tags=tags,
+            notes=notes,
+            packed_idb=is_packed_idb,
+        )
+        out = self._open_result(self.current_session)
+        if create_note:
+            out["note"] = create_note
+        if arch_meta:
+            inferred = arch_meta.get("inferred_profile") if isinstance(arch_meta, dict) else None
+            if isinstance(inferred, dict):
+                candidates = inferred.get("candidates") if isinstance(inferred.get("candidates"), list) else []
+                if candidates:
+                    out["architecture_recommendations"] = [
+                        {
+                            "tool": "analysis",
+                            "arguments": {
+                                "action": "set_architecture",
+                                "processor": c.get("processor"),
+                                "bitness": c.get("bitness"),
+                                "endian": c.get("endian"),
+                            },
+                            "confidence": c.get("confidence"),
+                            "reason": c.get("reason"),
+                        }
+                        for c in candidates[:3]
+                        if isinstance(c, dict) and c.get("processor")
+                    ]
+                elif not candidates:
+                    out["architecture_recommendations"] = [
+                        {
+                            "tool": "analysis",
+                            "arguments": {
+                                "action": "set_architecture",
+                                "processor": "arm",
+                                "bitness": 32,
+                                "endian": "little",
+                            },
+                            "confidence": 0.2,
+                            "reason": "raw binary ambiguous; apply explicit architecture before deep analysis",
+                        }
+                    ]
+        with contextlib.suppress(Exception):
+            self._import_cross_session_hypotheses(self.current_session)
+
+        # Spawn idat and wait for the IDB so the caller gets a usable
+        # session on the first call.
+        self._ensure_runtime_and_idb(self.current_session)
+        out["idb_exists"] = bool(
+            self.current_session.idb_path
+            and os.path.isfile(self.current_session.idb_path)
+        )
+        out["is_running"] = self._session_is_running(self.current_session.session_id)
+
+        # Check analysis state via lightweight RPC (always, not blocking)
+        out.update(self._open_analysis_state(self.current_session))
+
+        large_warning = self._large_binary_warning(binary_path)
+        if large_warning:
+            out["warning"] = large_warning
+        return out
+
+    def _session_is_running(self, sid: str) -> bool:
+        """True when the session has a live IDA runtime process."""
+        runtime = self.session_runtimes.get(sid)
+        return bool(
+            runtime and runtime.get("process") and runtime["process"].poll() is None
+        )
+
+    def _open_result(
+        self,
+        session,
+        *,
+        background: bool = False,
+        reused: bool = False,
+        note: str | None = None,
+        extra: dict | None = None,
+    ) -> dict:
+        """Build the minimal 'session opened' response.
+
+        The open operations report a flat summary — session_id plus
+        readiness flags — instead of dumping the full session record and
+        implementation bookkeeping (import counters, bootstrap reports,
+        architecture dumps). Details are one ida_session_get away.
+        """
+        out = {
+            "ok": True,
+            "session_id": session.session_id,
+            "binary_path": session.binary_path or "",
+            "idb_path": session.idb_path or "",
+            "idb_exists": bool(
+                session.idb_path and os.path.isfile(session.idb_path)
+            ),
+            "is_running": self._session_is_running(session.session_id),
+        }
+        if reused:
+            out["reused_existing_session"] = True
+        if background:
+            out["background"] = True
+        if note:
+            out["note"] = note
+        if extra:
+            out.update(extra)
+        return out
+
+    def _open_analysis_state(self, session) -> dict:
+        """Read analysis progress from a live runtime, if any.
+
+        Returns {} when the runtime is not alive or does not answer, so
+        callers can attach analysis_complete/analysis_functions when known.
+        """
+        sid = session.session_id
+        runtime = self.session_runtimes.get(sid)
+        if not (runtime and self._runtime_alive(runtime)):
+            return {}
+        port = runtime.get("port")
+        if not (isinstance(port, int) and port > 0):
+            return {}
+        try:
+            state_res = self._send_rpc_raw(
+                {"tool": "analysis", "args": {"action": "state"}},
+                port,
+                recv_timeout=10,
+            )
+            if isinstance(state_res, dict) and "error" not in state_res:
+                return {
+                    "analysis_complete": bool(
+                        state_res.get("analysis_complete", True)
+                    ),
+                    "analysis_functions": int(state_res.get("functions") or 0),
+                }
+        except Exception:
+            pass
+        return {}
+
+    def _prepare_open_args(self, args: dict) -> tuple:
+        """Validate and normalize ida_open_binary-style arguments.
+
+        Shared by the blocking create action and the non-blocking
+        create_background action. Returns
+        (binary_path, analysis_options, arch_meta, force_new, ida_args, error)
+        where error is None on success.
+        """
         binary_path = args.get("binary_path")
         if "idb_path" in args or "use_existing" in args:
-            return make_error(
-                MCPError.INVALID_ARGS,
-                "The idb_path and use_existing parameters were removed from session create",
-                details={
-                    "hint": "Use ida_open_binary(binary_path='...') instead; IDB creation/reuse is automatic."
-                },
+            return (
+                None, None, None, False, None,
+                make_error(
+                    MCPError.INVALID_ARGS,
+                    "The idb_path and use_existing parameters were removed from session create",
+                    details={
+                        "hint": "Use ida_open_binary(binary_path='...') instead; IDB creation/reuse is automatic."
+                    },
+                ),
             )
         force_new = bool(args.get("force_new"))
 
         if binary_path is not None and not isinstance(binary_path, str):
-            return make_error(
-                MCPError.INVALID_ARGS,
-                "binary_path must be a string",
-                details={
-                    "hint": "Provide a path string, e.g. ida_open_binary(binary_path='/abs/path/to/binary')."
-                },
+            return (
+                None, None, None, False, None,
+                make_error(
+                    MCPError.INVALID_ARGS,
+                    "binary_path must be a string",
+                    details={
+                        "hint": "Provide a path string, e.g. ida_open_binary(binary_path='/abs/path/to/binary')."
+                    },
+                ),
             )
 
         analysis_options = {}
         raw_analysis_options = args.get("analysis_options")
         if raw_analysis_options is not None and not isinstance(raw_analysis_options, dict):
-            return make_error(
-                MCPError.INVALID_ARGS,
-                "analysis_options must be an object",
-                details={"analysis_options_type": type(raw_analysis_options).__name__},
+            return (
+                None, None, None, False, None,
+                make_error(
+                    MCPError.INVALID_ARGS,
+                    "analysis_options must be an object",
+                    details={"analysis_options_type": type(raw_analysis_options).__name__},
+                ),
             )
         if isinstance(raw_analysis_options, dict):
             analysis_options.update(raw_analysis_options or {})
 
         architecture = args.get("architecture")
         if architecture is not None and not isinstance(architecture, dict):
-            return make_error(
-                MCPError.INVALID_ARGS,
-                "architecture must be an object",
-                details={"architecture_type": type(architecture).__name__},
+            return (
+                None, None, None, False, None,
+                make_error(
+                    MCPError.INVALID_ARGS,
+                    "architecture must be an object",
+                    details={"architecture_type": type(architecture).__name__},
+                ),
             )
         if isinstance(architecture, dict):
             arch_aliases = {
@@ -368,10 +622,13 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 canon = arch_aliases.get(str(k), str(k))
                 if canon in ("processor", "bitness", "endian", "loader", "flags", "loader_options", "value"):
                     if canon in analysis_options and analysis_options[canon] != v:
-                        return make_error(
-                            MCPError.INVALID_ARGS,
-                            f"Conflicting architecture value for '{canon}'",
-                            details={"analysis_options": analysis_options.get(canon), "architecture": v},
+                        return (
+                            None, None, None, False, None,
+                            make_error(
+                                MCPError.INVALID_ARGS,
+                                f"Conflicting architecture value for '{canon}'",
+                                details={"analysis_options": analysis_options.get(canon), "architecture": v},
+                            ),
                         )
                     analysis_options[canon] = v
 
@@ -409,102 +666,162 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             if key in args:
                 top_val = args.get(key)
                 if key in analysis_options and analysis_options[key] != top_val:
-                    return make_error(
-                        MCPError.INVALID_ARGS,
-                        f"Conflicting value for '{key}' between top-level and analysis_options/architecture",
-                        details={"top_level": top_val, "analysis_options": analysis_options.get(key)},
+                    return (
+                        None, None, None, False, None,
+                        make_error(
+                            MCPError.INVALID_ARGS,
+                            f"Conflicting value for '{key}' between top-level and analysis_options/architecture",
+                            details={"top_level": top_val, "analysis_options": analysis_options.get(key)},
+                        ),
                     )
                 analysis_options[key] = top_val
 
         analysis_options, arch_meta = normalize_arch_options(analysis_options)
-
-        preload_keys = {"processor", "bitness", "endian", "loader", "value", "loader_options", "flags"}
-        has_preload_request = any(k in analysis_options and analysis_options.get(k) is not None for k in preload_keys)
 
         ida_args = None
         if "ida_args" in args:
             try:
                 ida_args = self._normalize_ida_args(args.get("ida_args"))
             except ValueError as e:
-                return make_error(MCPError.INVALID_ARGS, str(e))
+                return (None, None, None, False, None, make_error(MCPError.INVALID_ARGS, str(e)))
 
         if binary_path:
             if not os.path.isabs(binary_path):
                 binary_path = os.path.abspath(binary_path)
             args["binary_path"] = binary_path
             if not os.path.exists(binary_path):
-                return make_error(
-                    MCPError.FILE_NOT_FOUND,
-                    f"Binary not found: {binary_path}",
-                    details={
-                        "binary_path": binary_path,
-                        "hint": "Provide an absolute path to an existing binary file.",
-                    },
+                return (
+                    None, None, None, False, None,
+                    make_error(
+                        MCPError.FILE_NOT_FOUND,
+                        f"Binary not found: {binary_path}",
+                        details={
+                            "binary_path": binary_path,
+                            "hint": "Provide an absolute path to an existing binary file.",
+                        },
+                    ),
                 )
             arch_meta = dict(arch_meta or {})
             arch_meta["inference_applied"] = False
 
         if not binary_path:
-            return make_error(
-                MCPError.INVALID_ARGS,
-                "binary_path is required",
-                details={
-                    "hint": "Provide a binary path, e.g. ida_open_binary(binary_path='/abs/path/to/binary')."
-                },
+            return (
+                None, None, None, False, None,
+                make_error(
+                    MCPError.INVALID_ARGS,
+                    "binary_path is required",
+                    details={
+                        "hint": "Provide a binary path, e.g. ida_open_binary(binary_path='/abs/path/to/binary')."
+                    },
+                ),
             )
+        return binary_path, analysis_options, arch_meta, force_new, ida_args, None
 
+    def _select_reuse_candidate(self, binary_path: str, analysis_options: dict, force_new: bool):
+        """Pick the best persisted session for the same binary to reuse.
+
+        Among all sessions on this binary, prefer one whose recorded arch
+        options match the requested ones. Only sessions this connection
+        owns, or that nobody is actively running, qualify — a live foreign
+        session is never silently shared.
+        """
+        if not binary_path or force_new:
+            return None
+        candidates = self.session_mgr.find_sessions_by_path(binary_path)
+        candidates = [
+            cand for cand in candidates
+            if self._client_owns_session(cand.session_id)
+            or not self._session_is_busy(cand.session_id)
+        ]
         existing = None
-        if binary_path:
-            # Among all sessions on this binary, find one whose recorded
-            # arch options match the requested arch options. The plain
-            # find_session_by_path returns an arbitrary match (often one
-            # with different arch, e.g. metapc instead of arm), which
-            # would cause a fresh session + duplicate idat every call.
-            candidates = self.session_mgr.find_sessions_by_path(binary_path)
-            # Persisted sessions are shared discovery metadata, not implicit
-            # client ownership.  Reuse only sessions this MCP connection has
-            # already created or explicitly switched to.  Otherwise two LLMs
-            # can launch separate IDA processes against the same IDB and
-            # corrupt/disrupt each other's work.
-            owns_session = getattr(self, "_client_owns_session", None)
-            if callable(owns_session):
-                candidates = [
-                    cand for cand in candidates if owns_session(cand.session_id)
-                ]
-            preload_keys = ("processor", "bitness", "endian", "loader", "flags", "loader_options", "value")
-            for cand in candidates:
-                if not cand.analysis_options:
-                    existing = cand
-                    break
-                cand_opts = dict(cand.analysis_options or {})
-                mismatch = any(
-                    str(cand_opts.get(k) or "") != str((analysis_options or {}).get(k) or "")
-                    for k in preload_keys
-                    if k in (analysis_options or {})
-                )
-                if not mismatch:
-                    existing = cand
-                    break
-            if not existing and candidates:
-                existing = candidates[0]
-
-        # Even when the caller passes loader/architecture preload options,
-        # reuse the existing session if those options already match — this
-         # stops smoke runs from spawning a new idat child for the same
-         # binary on every restart. force_new=true still wins.
-        if existing and not force_new and has_preload_request and analysis_options:
-            existing_opts = dict(existing.analysis_options or {})
+        for cand in candidates:
+            if not cand.analysis_options:
+                existing = cand
+                break
+            cand_opts = dict(cand.analysis_options or {})
             mismatch = any(
-                str(existing_opts.get(k) or "") != str(analysis_options.get(k) or "")
-                for k in preload_keys
-                if k in analysis_options
+                str(cand_opts.get(k) or "") != str((analysis_options or {}).get(k) or "")
+                for k in _OPEN_PRELOAD_KEYS
+                if k in (analysis_options or {})
             )
             if not mismatch:
-                # Pretend preload request was absent so the existing reuse
-                # branch runs.
-                has_preload_request = False
+                existing = cand
+                break
+        if not existing and candidates:
+            existing = candidates[0]
+        return existing
+
+    @staticmethod
+    def _large_binary_warning(binary_path: str) -> dict | None:
+        """Warn before an upfront (blocking) load of a very large binary."""
+        if not binary_path:
+            return None
+        try:
+            size = os.path.getsize(binary_path)
+        except OSError:
+            return None
+        if size < LARGE_BINARY_THRESHOLD_BYTES:
+            return None
+        return {
+            "code": "large_binary",
+            "message": (
+                f"Binary is {size / (1024 * 1024):.0f} MiB; upfront synchronous "
+                "loading blocks this request until IDA finishes analyzing it, "
+                "which can take a long time."
+            ),
+            "suggestion": (
+                "Use ida_open_background(binary_path=...) to load it in the "
+                "background and poll ida_session_status for progress."
+            ),
+        }
+
+    def _spawn_runtime_background(self, session: Any) -> None:
+        """Start idat for *session* without blocking the current request.
+
+        The IDA runtime registers itself in session_runtimes when ready; a
+        later ida_session_status / ida_session_state call reports progress.
+        Failures are recorded in _background_load_errors and surfaced by
+        status.
+        """
+        if not isinstance(getattr(self, "_background_load_errors", None), dict):
+            self._background_load_errors = {}
+
+        def _run():
+            try:
+                self._ensure_runtime_and_idb(session)
+            except Exception as exc:  # pragma: no cover - exercised at runtime
+                self._background_load_errors[session.session_id] = make_error(
+                    MCPError.IDA_CRASHED,
+                    f"Background IDA start failed: {exc}",
+                    details={"session_id": session.session_id},
+                )
+
+        threading.Thread(
+            target=_run, daemon=True, name=f"ida-bg-{session.session_id}"
+        ).start()
+
+    def _session_action_create_background(self, args: dict) -> dict:
+        """Create/open a session without blocking on IDA analysis.
+
+        For large binaries the upfront (blocking) load in ida_open_binary can
+        stall the caller for the whole analysis. This action returns as soon
+        as the session exists and the idat launch is dispatched; progress is
+        reported through ida_session_status.
+        """
+        binary_path, analysis_options, arch_meta, force_new, ida_args, prep_error = (
+            self._prepare_open_args(args)
+        )
+        if prep_error:
+            return prep_error
+
+        has_preload_request = any(
+            k in analysis_options and analysis_options.get(k) is not None
+            for k in _OPEN_PRELOAD_KEYS
+        )
+        existing = self._select_reuse_candidate(
+            binary_path, analysis_options, force_new
+        )
         if existing and not force_new and not has_preload_request:
-            # Update the REAL session through the manager, not the shallow copy
             update_kwargs = {"analysis_applied": False}
             if analysis_options:
                 merged_opts = dict(existing.analysis_options)
@@ -521,47 +838,31 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                     f"Session '{existing.session_id}' disappeared during reuse",
                 )
             self.current_session = updated
-            out = {
-                "ok": True,
-                "session": updated.to_dict(),
-                "note": "Reusing existing session. Use force_new=true to create a new session.",
-            }
-            # If the runtime for this session is dead, spawn a fresh
-            # idat and block until the IDB is on disk. The caller then
-            # gets a usable session without extra round-trips.
-            self._ensure_runtime_and_idb(updated)
-            idb_path = updated.idb_path
-            if idb_path and os.path.isfile(idb_path):
-                out["idb_exists"] = True
-                # Refresh the snapshot after the IDB is ready.
-                if hasattr(updated, "to_dict"):
-                    out["session"] = updated.to_dict()
-            return out
-
-        create_note = None
-        if existing and not force_new and has_preload_request:
-            create_note = (
-                "Created a fresh session because architecture/loader options were provided; "
-                "reusing an old IDB can preserve previous metapc/default analysis state."
+            out = self._open_result(
+                updated,
+                background=True,
+                reused=True,
+                note=(
+                    "Reusing existing session; its runtime is starting in the "
+                    "background. Poll ida_session_status for progress."
+                ),
             )
+            large_warning = self._large_binary_warning(binary_path)
+            if large_warning:
+                out["warning"] = large_warning
+            self._spawn_runtime_background(updated)
+            return out
 
         if not analysis_options:
             analysis_options = None
-
         tags = args.get("tags", [])
         if isinstance(tags, str):
             tags = parse_str_list(tags)
         tags = tags[:MAX_TAGS_PER_SESSION]
         notes = str(args.get("notes", ""))[:MAX_NOTE_LEN]
-
         inferred = (arch_meta.get("inferred_profile") or {}) if isinstance(arch_meta, dict) else {}
         is_packed_idb = isinstance(inferred, dict) and inferred.get("file_kind") == "packed_idb"
 
-        # Deliberately no policy_mode here: the policy engine is configured by
-        # the operator through IDA_MCP_POLICY_MODE or the policy config file.
-        # Honouring a caller-supplied mode would let a single session(create)
-        # call — which classifies as a read and so needs no acknowledgement —
-        # turn the whole engine off for the session.
         self.current_session = self.session_mgr.create_session(
             binary_path or "",
             analysis_options=analysis_options,
@@ -570,218 +871,28 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             notes=notes,
             packed_idb=is_packed_idb,
         )
-        out = {"ok": True, "session": self.current_session.to_dict()}
-        imported_symbol_count = 0
-        cross_session_imported = 0
-        try:
-            inferred = arch_meta.get("inferred_profile") if isinstance(arch_meta, dict) else {}
-            chip = str((inferred or {}).get("chip_family") or (arch_meta or {}).get("chip_family") or "").strip()
-            if chip:
-                sdb = SymbolDB()
-                imported_symbol_count = sum(
-                    int(row.get("symbol_count") or 0)
-                    for row in sdb.stats_by_chip()
-                    if str(row.get("chip_family") or "").strip().lower() == chip.lower()
-                )
-        except Exception:
-            imported_symbol_count = 0
-        try:
-            cross_session_imported = self._import_cross_session_hypotheses(self.current_session)
-        except Exception:
-            cross_session_imported = 0
-        if create_note:
-            out["note"] = create_note
-        if arch_meta:
-            out["architecture_profile"] = arch_meta
-            chip_family = arch_meta.get("chip_family")
-            if chip_family:
-                out["chip_family"] = chip_family
-                prof = find_chip_profile(str(chip_family)) or {}
-                out["bootstrap_report"] = {
-                    "status": "scheduled",
-                    "chip_family": chip_family,
-                    "post_load_actions": prof.get("post_load_actions", []),
-                    "note": "Bootstrap runs automatically when the IDA session runtime is started.",
-                }
-            inferred = arch_meta.get("inferred_profile") if isinstance(arch_meta, dict) else None
-            if isinstance(inferred, dict):
-                candidates = inferred.get("candidates") if isinstance(inferred.get("candidates"), list) else []
-                if candidates:
-                    out["architecture_recommendations"] = [
-                        {
-                            "tool": "analysis",
-                            "arguments": {
-                                "action": "set_architecture",
-                                "processor": c.get("processor"),
-                                "bitness": c.get("bitness"),
-                                "endian": c.get("endian"),
-                            },
-                            "confidence": c.get("confidence"),
-                            "reason": c.get("reason"),
-                        }
-                        for c in candidates[:3]
-                        if isinstance(c, dict) and c.get("processor")
-                    ]
-                elif not candidates:
-                    out["architecture_recommendations"] = [
-                        {
-                            "tool": "analysis",
-                            "arguments": {
-                                "action": "set_architecture",
-                                "processor": "arm",
-                                "bitness": 32,
-                                "endian": "little",
-                            },
-                            "confidence": 0.2,
-                            "reason": "raw binary ambiguous; apply explicit architecture before deep analysis",
-                        }
-                    ]
-        out["imported_symbol_count"] = int(imported_symbol_count)
-        out["cross_session_imported"] = int(cross_session_imported)
-
-        # Spawn idat and wait for the IDB so the caller gets a usable
-        # session on the first call.
-        self._ensure_runtime_and_idb(self.current_session)
-
-        # Check analysis state via lightweight RPC (always, not blocking)
-        if out.get("idb_exists"):
-            try:
-                runtime = self.session_runtimes.get(self.current_session.session_id)
-                if runtime and self._runtime_alive(runtime):
-                    port = runtime.get("port")
-                    if isinstance(port, int) and port > 0:
-                        state_res = self._send_rpc_raw(
-                            {"tool": "analysis", "args": {"action": "state"}},
-                            port,
-                            recv_timeout=10,
-                        )
-                        if isinstance(state_res, dict) and "error" not in state_res:
-                            out["analysis_complete"] = state_res.get("analysis_complete", True)
-                            out["analysis_functions"] = state_res.get("functions", -1)
-            except Exception:
-                pass
-
-        # ELF dependency detection: parse NEEDED entries for shared libraries
-        if out.get("idb_exists") and binary_path:
-            try:
-                dependencies = self._parse_elf_dependencies(binary_path)
-                if dependencies:
-                    out["elf_dependencies"] = dependencies
-                    out["note"] = (out.get("note") or "") + (
-                        f" {len(dependencies)} shared lib(s) needed."
-                    )
-            except Exception:
-                pass
-
-        # Refresh the snapshot with idb_exists etc. after wait
-        out["session"] = self.current_session.to_dict()
-        if out["session"].get("idb_exists"):
-            out["note"] = (out.get("note") or "") + (
-                " IDB ready." if out.get("note") else "IDB ready."
-            )
+        out = self._open_result(
+            self.current_session,
+            background=True,
+            note=(
+                "Analysis started in the background; this call did not wait "
+                "for IDA. Poll ida_session_status for progress."
+            ),
+        )
+        large_warning = self._large_binary_warning(binary_path)
+        if large_warning:
+            out["warning"] = large_warning
+        self._spawn_runtime_background(self.current_session)
         return out
-
-    @staticmethod
-    def _parse_elf_dependencies(binary_path: str) -> list[str]:
-        """Parse ELF NEEDED entries to find shared library dependencies.
-        Uses only struct/bytes — no external tools needed."""
-        try:
-            with open(binary_path, "rb") as f:
-                # Check ELF magic
-                magic = f.read(4)
-                if magic != b"\x7fELF":
-                    return []
-                # Read ELF header
-                f.seek(0)
-                ident = f.read(16)
-                is_64 = ident[4] == 2  # ELFCLASS64
-                is_be = ident[5] == 2  # ELFDATA2MSB
-                if is_64:
-                    f.seek(40)  # e_shoff offset for 64-bit
-                    shoff = int.from_bytes(f.read(8), "big" if is_be else "little")
-                    f.seek(58)  # e_shentsize
-                    shentsize = int.from_bytes(f.read(2), "big" if is_be else "little")
-                    f.seek(60)  # e_shnum
-                    shnum = int.from_bytes(f.read(2), "big" if is_be else "little")
-                    f.seek(62)  # e_shstrndx
-                    shstrndx = int.from_bytes(f.read(2), "big" if is_be else "little")
-                else:
-                    f.seek(32)  # e_shoff for 32-bit
-                    shoff = int.from_bytes(f.read(4), "big" if is_be else "little")
-                    f.seek(46)  # e_shentsize
-                    shentsize = int.from_bytes(f.read(2), "big" if is_be else "little")
-                    f.seek(48)  # e_shnum
-                    shnum = int.from_bytes(f.read(2), "big" if is_be else "little")
-                    f.seek(50)  # e_shstrndx
-                    shstrndx = int.from_bytes(f.read(2), "big" if is_be else "little")
-                if not shoff or not shnum:
-                    return []
-                # Read section header string table
-                f.seek(shoff + shstrndx * shentsize)
-                if is_64:
-                    f.seek(24, 1)  # skip to sh_offset
-                    str_offset = int.from_bytes(f.read(8), "big" if is_be else "little")
-                    f.seek(8, 1)  # skip to sh_size
-                    str_size = int.from_bytes(f.read(8), "big" if is_be else "little")
-                else:
-                    f.seek(16, 1)  # skip to sh_offset
-                    str_offset = int.from_bytes(f.read(4), "big" if is_be else "little")
-                    f.seek(4, 1)  # skip to sh_size
-                    str_size = int.from_bytes(f.read(4), "big" if is_be else "little")
-                f.seek(str_offset)
-                strtab = f.read(str_size)
-                # Find DYNAMIC section and parse NEEDED entries
-                needed = []
-                for i in range(shnum):
-                    f.seek(shoff + i * shentsize)
-                    if is_64:
-                        int.from_bytes(f.read(4), "big" if is_be else "little")
-                        sh_type = int.from_bytes(f.read(4), "big" if is_be else "little")
-                    else:
-                        int.from_bytes(f.read(4), "big" if is_be else "little")
-                        sh_type = int.from_bytes(f.read(4), "big" if is_be else "little")
-                    if sh_type == 11:  # SHT_DYNAMIC (6) or SHT_DYNSYM — check for 6
-                        pass
-                    if sh_type == 6:  # SHT_DYNAMIC
-                        if is_64:
-                            f.seek(16, 1)  # skip to sh_offset
-                            dyn_offset = int.from_bytes(f.read(8), "big" if is_be else "little")
-                            dyn_size = int.from_bytes(f.read(8), "big" if is_be else "little")
-                        else:
-                            f.seek(8, 1)  # skip to sh_offset
-                            dyn_offset = int.from_bytes(f.read(4), "big" if is_be else "little")
-                            dyn_size = int.from_bytes(f.read(4), "big" if is_be else "little")
-                        f.seek(dyn_offset)
-                        dyn_data = f.read(dyn_size)
-                        # Parse dynamic entries
-                        entry_size = 16 if is_64 else 8
-                        for j in range(0, len(dyn_data), entry_size):
-                            if j + entry_size > len(dyn_data):
-                                break
-                            if is_64:
-                                d_tag = int.from_bytes(dyn_data[j:j+8], "big" if is_be else "little", signed=True)
-                                d_val = int.from_bytes(dyn_data[j+8:j+16], "big" if is_be else "little")
-                            else:
-                                d_tag = int.from_bytes(dyn_data[j:j+4], "big" if is_be else "little", signed=True)
-                                d_val = int.from_bytes(dyn_data[j+4:j+8], "big" if is_be else "little")
-                            if d_tag == 1:  # DT_NEEDED
-                                # d_val is offset into string table
-                                end = strtab.find(b"\x00", d_val)
-                                if end == -1:
-                                    end = len(strtab)
-                                lib_name = strtab[d_val:end].decode("utf-8", errors="replace")
-                                if lib_name:
-                                    needed.append(lib_name)
-                        break
-                return needed
-        except Exception:
-            return []
 
     def _session_action_discover(self, args: dict) -> dict:
         self.session_mgr._load_orphaned_idbs()
         q = args.get("query", "")
+        binary_name = args.get("binary_name", "")
         sessions = [
-            s.to_dict() for s in self.session_mgr.discover_sessions(query=q)
+            s.to_dict() for s in self.session_mgr.discover_sessions(
+                query=q, binary_name=binary_name
+            )
         ]
         return {"ok": True, "sessions": sessions, "count": len(sessions)}
 
@@ -830,8 +941,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             args.get("offset", 0), 0, min_value=0, max_value=MAX_LIST_OFFSET
         )
         q = args.get("query", "")
+        binary_name = args.get("binary_name", "")
         result = self.session_mgr.list_sessions(
-            query=q, offset=offset, limit=limit
+            query=q, offset=offset, limit=limit, binary_name=binary_name
         )
 
         # Augment with runtime status
@@ -864,8 +976,11 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             if path:
                 owns = getattr(self, "_client_owns_session", None)
                 candidates = self.session_mgr.find_sessions_by_path(path)
-                if callable(owns):
-                    candidates = [c for c in candidates if owns(c.session_id)]
+                candidates = [
+                    c for c in candidates
+                    if (callable(owns) and owns(c.session_id))
+                    or not self._session_is_busy(c.session_id)
+                ]
                 found = candidates[0] if candidates else None
                 if found:
                     sid = found.session_id
@@ -1159,6 +1274,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 and runtime.get("process")
                 and runtime["process"].poll() is None
             )
+            bg_errors = getattr(self, "_background_load_errors", None)
+            if isinstance(bg_errors, dict) and fresh_session.session_id in bg_errors:
+                result["background_error"] = bg_errors[fresh_session.session_id]
             session_meta = getattr(fresh_session, "metadata", None) or {}
             if not isinstance(session_meta, dict):
                 session_meta = {}
@@ -1444,7 +1562,12 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         max_age = _bounded_int(
             args.get("max_age_days", 30), 30, min_value=1, max_value=3650
         )
-        deleted = self.session_mgr.cleanup_stale(max_age_days=max_age)
+        deleted = self.session_mgr.cleanup_stale(
+            max_age_days=max_age,
+            runtime_alive=lambda sid: bool(
+                self.session_runtimes.get(sid) and self._runtime_alive(self.session_runtimes.get(sid))
+            ),
+        )
 
         # Also prune sessions whose binary path no longer exists — those
         # are "stale-by-evidence" rather than age-stale, and they're usually

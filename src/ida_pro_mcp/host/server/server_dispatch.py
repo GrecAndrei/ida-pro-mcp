@@ -12,7 +12,13 @@ from typing import Any
 
 from ida_pro_mcp import __version__
 
-from ..config import _bounded_int, _coerce_bool, _is_writable_dir, log_rpc
+from ..config import (
+    RPC_QUEUE_TIMEOUT_SECONDS,
+    _bounded_int,
+    _coerce_bool,
+    _is_writable_dir,
+    log_rpc,
+)
 from ..errors import MCPError, is_error_result, make_error
 from ..policy import (
     PolicyDecision,
@@ -33,6 +39,7 @@ from .postprocess import apply_post_processing, extract_post_process_params, has
 from .rpc_args import prepare_rpc_args
 from .server_client_state import ServerClientStateMixin
 from .server_response import truncate_response
+from .server_runtime import RpcQueueTimeout
 
 # Actions that legitimately walk the IDB at scale (full-program scans,
 # embedding pipelines, decompile pumps, multi-region firmware carving,
@@ -280,10 +287,39 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     _wallclock_cap = 900.0
                 _wallclock_cap = max(_wallclock_cap, 30.0)
                 _rpc_started = time.time()
+                _sid = session.session_id
+                # Track the request on the session's RPC lane so health and
+                # the watchdog can report queue depth. Requests to different
+                # sessions run in parallel; requests to the same session
+                # serialize on its rpc_lock below.
+                inflight = getattr(self, "_session_inflight_calls", None)
+                if isinstance(inflight, dict):
+                    inflight[_sid] = int(inflight.get(_sid, 0) or 0) + 1
                 try:
                     res = self._send_rpc_with_retry(
                         {"tool": tool_name, "args": rpc_args}, port,
                         recv_timeout=_rpc_sock_timeout,
+                        queue_timeout=(
+                            None
+                            if RPC_QUEUE_TIMEOUT_SECONDS <= 0
+                            else RPC_QUEUE_TIMEOUT_SECONDS
+                        ),
+                    )
+                except RpcQueueTimeout:
+                    return make_error(
+                        MCPError.IDA_BUSY,
+                        "IDA runtime is busy with another request",
+                        recoverable=True,
+                        hint=(
+                            "Wait for the in-flight call to finish, or reduce "
+                            "parallel calls to this session. Increase "
+                            "IDA_MCP_RPC_QUEUE_TIMEOUT (seconds) for deeper queues."
+                        ),
+                        details={
+                            "session_id": _sid,
+                            "queue_timeout": RPC_QUEUE_TIMEOUT_SECONDS,
+                            "tool": tool_name,
+                        },
                     )
                 except (ConnectionRefusedError, EOFError) as exc:
                     # Connection-layer failure that exhausted retries. Surface as
@@ -293,6 +329,13 @@ class ServerDispatchMixin(ServerClientStateMixin):
                         f"RPC to IDA failed after retries: {exc}",
                         details={"exception_type": type(exc).__name__, "tool": tool_name},
                     )
+                finally:
+                    if isinstance(inflight, dict):
+                        remaining = int(inflight.get(_sid, 0) or 0) - 1
+                        if remaining > 0:
+                            inflight[_sid] = remaining
+                        else:
+                            inflight.pop(_sid, None)
                 # Wall-clock watchdog: only force-kill when the RPC path itself
                 # exceeded the cap *and* we somehow still returned without a
                 # usable result. Successful payloads must not be discarded.
@@ -431,6 +474,10 @@ class ServerDispatchMixin(ServerClientStateMixin):
             with self._runtime_lock:
                 runtime_items = list(self.session_runtimes.items())
             tracked = len(runtime_items)
+            inflight = getattr(self, "_session_inflight_calls", None)
+            if not isinstance(inflight, dict):
+                inflight = {}
+            queued_total = 0
             for sid, runtime in runtime_items:
                 alive = self._runtime_alive(runtime)
                 if alive:
@@ -444,8 +491,10 @@ class ServerDispatchMixin(ServerClientStateMixin):
                             "session_id": sid,
                             "alive": alive,
                             "port": runtime_port,
+                            "rpc_queued": int(inflight.get(sid, 0) or 0),
                         }
                     )
+                queued_total += int(inflight.get(sid, 0) or 0)
 
             action_counts = {
                 str(tool): len(list(actions or []))
@@ -480,6 +529,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
                         "running": running,
                         "stale": stale,
                     },
+                    "rpc_queued_calls": queued_total,
                 },
                 "wiki": {"root": wiki_root or None, "available": wiki_available},
                 "tools": {

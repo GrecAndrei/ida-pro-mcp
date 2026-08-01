@@ -107,7 +107,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     ],
     "segments": ["list", "add", "delete", "set_attr", "set_perms", "move", "info", "analyze", "find_code", "find_data", "compare", "merge"],
     "session": [
-        "health", "create", "get", "list", "switch", "close",
+        "health", "create", "create_background", "get", "list", "switch", "close",
         "status", "rebuild", "update", "rename", "duplicate",
         "archive", "unarchive",
         "tag", "untag", "add_note", "clear_notes",

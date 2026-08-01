@@ -106,8 +106,8 @@ ADVERTISED_TOOLS = [
 # accepted at call time for backward compatibility.
 ADVERTISED_ACTIONS: dict[str, list[str]] = {
     "session": [
-        "create", "switch", "close", "list", "status", "state", "logs",
-        "health", "kill",
+        "create", "create_background", "switch", "close", "list", "status",
+        "state", "logs", "health", "kill",
     ],
     "search": [
         "find", "nl", "string", "bytes", "api", "callers", "callees",
@@ -279,6 +279,10 @@ TOOL_ARG_SCHEMAS = {
         "query": {
             "type": "string",
             "description": "Filter sessions by name/path (supports regex, glob, substring)",
+        },
+        "binary_name": {
+            "type": "string",
+            "description": "Filter sessions by binary file name (substring of the analyzed file's name)",
         },
         "processor": {"type": "string", "description": "Processor name (e.g. arm, mipsl, tricore)."},
         "flags": {"type": "integer"},

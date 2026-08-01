@@ -77,34 +77,35 @@ class TestSessionCreateReuseMatchingArch(_SessionReuseBase):
         # First create with metapc/64/little
         first = self._create(processor="metapc", bitness=64, endian="little")
         self.assertTrue(first.get("ok"))
-        first_sid = first["session"]["session_id"]
+        first_sid = first["session_id"]
 
         # Second create with the SAME preload options should reuse
         second = self._create(processor="metapc", bitness=64, endian="little")
         self.assertTrue(second.get("ok"))
-        self.assertEqual(second["session"]["session_id"], first_sid)
-        # The note field is the host's signal that the existing session was reused
+        self.assertEqual(second["session_id"], first_sid)
+        # The response flags reuse explicitly (note explains why)
+        self.assertIs(second.get("reused_existing_session"), True)
         self.assertIn("Reusing", str(second.get("note") or ""))
 
     def test_matching_arm_reuses(self):
         first = self._create(processor="arm", bitness=64, endian="little")
         self.assertTrue(first.get("ok"))
-        first_sid = first["session"]["session_id"]
+        first_sid = first["session_id"]
 
         second = self._create(processor="arm", bitness=64, endian="little")
         self.assertTrue(second.get("ok"))
-        self.assertEqual(second["session"]["session_id"], first_sid)
+        self.assertEqual(second["session_id"], first_sid)
 
     def test_subset_of_existing_options_reuses(self):
         """Caller asks for a subset of the existing session's options."""
         first = self._create(processor="arm", bitness=64, endian="little", flags=["0x8000"])
         self.assertTrue(first.get("ok"))
-        first_sid = first["session"]["session_id"]
+        first_sid = first["session_id"]
 
         # Caller only passes processor — should still reuse
         second = self._create(processor="arm")
         self.assertTrue(second.get("ok"))
-        self.assertEqual(second["session"]["session_id"], first_sid)
+        self.assertEqual(second["session_id"], first_sid)
 
 
 class TestSessionCreateReuseConflict(_SessionReuseBase):
@@ -113,30 +114,30 @@ class TestSessionCreateReuseConflict(_SessionReuseBase):
     def test_different_processor_creates_new(self):
         first = self._create(processor="arm", bitness=64, endian="little")
         self.assertTrue(first.get("ok"))
-        first_sid = first["session"]["session_id"]
+        first_sid = first["session_id"]
 
         # Different processor → must NOT reuse
         second = self._create(processor="metapc", bitness=64, endian="little")
         self.assertTrue(second.get("ok"))
-        self.assertNotEqual(second["session"]["session_id"], first_sid)
+        self.assertNotEqual(second["session_id"], first_sid)
 
     def test_different_bitness_creates_new(self):
         first = self._create(processor="metapc", bitness=32, endian="little")
         self.assertTrue(first.get("ok"))
-        first_sid = first["session"]["session_id"]
+        first_sid = first["session_id"]
 
         second = self._create(processor="metapc", bitness=64, endian="little")
         self.assertTrue(second.get("ok"))
-        self.assertNotEqual(second["session"]["session_id"], first_sid)
+        self.assertNotEqual(second["session_id"], first_sid)
 
     def test_different_endian_creates_new(self):
         first = self._create(processor="metapc", bitness=64, endian="big")
         self.assertTrue(first.get("ok"))
-        first_sid = first["session"]["session_id"]
+        first_sid = first["session_id"]
 
         second = self._create(processor="metapc", bitness=64, endian="little")
         self.assertTrue(second.get("ok"))
-        self.assertNotEqual(second["session"]["session_id"], first_sid)
+        self.assertNotEqual(second["session_id"], first_sid)
 
 
 class TestSessionCreateReuseNoPreload(_SessionReuseBase):
@@ -145,12 +146,12 @@ class TestSessionCreateReuseNoPreload(_SessionReuseBase):
     def test_no_preload_reuses(self):
         first = self._create(processor="arm", bitness=64, endian="little")
         self.assertTrue(first.get("ok"))
-        first_sid = first["session"]["session_id"]
+        first_sid = first["session_id"]
 
         # No preload options at all
         second = self._create()
         self.assertTrue(second.get("ok"))
-        self.assertEqual(second["session"]["session_id"], first_sid)
+        self.assertEqual(second["session_id"], first_sid)
 
 
 class TestSessionCreateReuseForceNew(_SessionReuseBase):
@@ -159,11 +160,11 @@ class TestSessionCreateReuseForceNew(_SessionReuseBase):
     def test_force_new_creates_new(self):
         first = self._create(processor="arm", bitness=64, endian="little")
         self.assertTrue(first.get("ok"))
-        first_sid = first["session"]["session_id"]
+        first_sid = first["session_id"]
 
         second = self._create(processor="arm", bitness=64, endian="little", force_new=True)
         self.assertTrue(second.get("ok"))
-        self.assertNotEqual(second["session"]["session_id"], first_sid)
+        self.assertNotEqual(second["session_id"], first_sid)
         # Should NOT have the "Reusing" note
         self.assertNotIn("Reusing", str(second.get("note") or ""))
 
@@ -174,13 +175,13 @@ class TestSessionCreateReuseNoExisting(_SessionReuseBase):
     def test_no_existing_creates(self):
         result = self._create(processor="arm", bitness=64, endian="little")
         self.assertTrue(result.get("ok"))
-        self.assertIn("session", result)
-        self.assertTrue(result["session"]["session_id"])
+        self.assertIn("session_id", result)
+        self.assertTrue(result["session_id"])
 
     def test_no_existing_no_preload_creates(self):
         result = self._create()
         self.assertTrue(result.get("ok"))
-        self.assertIn("session", result)
+        self.assertIn("session_id", result)
 
 
 class TestSessionCreateReuseFallsThroughToSpawn(_SessionReuseBase):
@@ -189,11 +190,11 @@ class TestSessionCreateReuseFallsThroughToSpawn(_SessionReuseBase):
     def test_reused_session_returns_reuse_note_and_attempts_spawn(self):
         first = self._create(processor="arm", bitness=64, endian="little")
         self.assertTrue(first.get("ok"))
-        first_sid = first["session"]["session_id"]
+        first_sid = first["session_id"]
 
         second = self._create(processor="arm", bitness=64, endian="little")
         self.assertTrue(second.get("ok"))
-        self.assertEqual(second["session"]["session_id"], first_sid)
+        self.assertEqual(second["session_id"], first_sid)
         self.assertIn("Reusing", str(second.get("note") or ""))
 
 
@@ -215,23 +216,23 @@ class TestSessionCreateReuseMixedArch(_SessionReuseBase):
         # Create a metapc session first
         metapc = self._create(processor="metapc", bitness=64, endian="little")
         self.assertTrue(metapc.get("ok"))
-        metapc_sid = metapc["session"]["session_id"]
+        metapc_sid = metapc["session_id"]
 
         # Now create with arm — should NOT reuse metapc, should create new arm session
         arm = self._create(processor="arm", bitness=64, endian="little")
         self.assertTrue(arm.get("ok"))
-        arm_sid = arm["session"]["session_id"]
+        arm_sid = arm["session_id"]
         self.assertNotEqual(arm_sid, metapc_sid)
 
         # Third call with arm — must reuse the arm session
         arm2 = self._create(processor="arm", bitness=64, endian="little")
         self.assertTrue(arm2.get("ok"))
-        self.assertEqual(arm2["session"]["session_id"], arm_sid)
+        self.assertEqual(arm2["session_id"], arm_sid)
 
         # Fourth call with metapc — must reuse the metapc session
         metapc2 = self._create(processor="metapc", bitness=64, endian="little")
         self.assertTrue(metapc2.get("ok"))
-        self.assertEqual(metapc2["session"]["session_id"], metapc_sid)
+        self.assertEqual(metapc2["session_id"], metapc_sid)
 
         # Total: exactly 2 sessions for this binary
         all_sids = sorted(r["session_id"] for r in self._all_sessions_for_binary())
