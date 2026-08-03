@@ -3,7 +3,7 @@
 Give an LLM agent a working seat at IDA Pro.
 
 This is an [MCP](https://modelcontextprotocol.io) server that exposes IDA Pro's
-analysis to a model as 49 exact-schema operations — decompile, cross-reference,
+analysis to a model as 51 exact-schema operations — decompile, cross-reference,
 search, rename, annotate — plus an investigation workspace so the model's
 conclusions survive across turns instead of living in a context window.
 
@@ -155,7 +155,7 @@ ida_open_binary → ida_session_state → ida_overview → ida_find
 | Group | Operations |
 |---|---|
 | **Session** | `open_binary`, `open_background`, `close_session`, `session_get`, `session_list`, `session_switch`, `session_state`, `session_status`, `session_health` |
-| **Discovery** | `overview`, `find`, `list_functions`, `list_imports`, `list_strings`, `semantic_search`, `index_functions`, `index_status`, `cancel_index` |
+| **Discovery** | `overview`, `find`, `list_functions`, `list_imports`, `list_strings`, `semantic_search`, `index_functions`, `index_status`, `cancel_index`, `reranker_status`, `function_families` |
 | **Code** | `decompile`, `disassemble`, `xrefs_to`, `callers`, `callees` |
 | **Findings** | `write_finding`, `mark_examined`, `update_finding`, `list_findings`, `search_findings`, `next_target`, `analysis_brief`, `export_findings` |
 | **IDB sync** | `publish_findings`, `import_annotations` |
@@ -181,32 +181,50 @@ supported contract.
 | `IDA_MCP_RESPONSE_MODE` | `compact` | `full` for unabridged payloads |
 | `IDA_MCP_POLICY_MODE` | `assist` | `off`, `permissive`, `assist`, `enforce` — operator baseline |
 
-### Local embeddings
+### Local embeddings and reranking
 
-Semantic search and full indexing are optional. Default profile is BGE Code v1;
-Zembed 1 is opt-in and non-commercial.
+Semantic search and full indexing are optional. The default recall profile is
+Qwen3-Embedding-0.6B (last-token pooling, 1024 dims); bge-code-v1 remains as a
+legacy fallback and Zembed 1 is opt-in and non-commercial.
 
 | Profile | Dims | License | Notes |
 | --- | ---: | --- | --- |
-| `bge-code-v1` | 1536 | Apache-2.0 | Default. Supply a local GGUF. |
+| `qwen3-embedding-0.6b` | 1024 | Apache-2.0 | Default. 0.6B, fast on CPU. |
+| `bge-code-v1` | 1536 | Apache-2.0 | Legacy fallback. |
 | `zembed-1` | 2560 | CC-BY-NC-4.0 | ~2.5 GB at Q4_K_M; slower on CPU. |
+
+Semantic search is two-stage. Stage 1 recalls a wide candidate pool with the
+embedding index (bi-encoder); Stage 2 re-scores it with a cross-encoder
+reranker so the top of the list is the genuinely most relevant functions. The
+reranker starts on its own llama-server `--rerank` process and is a no-op
+(recall order preserved) when no rerank model is installed.
+
+| Reranker profile | Size | Family | Notes |
+| --- | ---: | --- | --- |
+| `qwen3-reranker-0.6b` | ~0.6 GB Q8 | Qwen3 | Default; speed tier. |
+| `qwen3-reranker-4b` | ~2.5 GB Q4 | Qwen3 | Opt-in; precision tier for deep dives. |
+| `bge-reranker-v2-gemma` | ~1.6 GB Q4 | BGE | Middle tier; the public conversion is headless (constant scores) — verify before relying on it. |
+| `bge-reranker-v2-m3` | ~0.6 GB Q8 | BGE | Opt-in compatibility. |
 
 ```bash
 # managed download, explicit opt-in
-python install.py --embed-profile zembed-1 --download-embed-model \
-  --accept-model-license --install-llama-server
+python install.py --embed-profile qwen3-embedding-0.6b --download-embed-model \
+  --install-llama-server
+python install.py --rerank-profile qwen3-reranker-0.6b --download-rerank-model
 
 # or point at your own GGUF
-python install.py --embed-profile zembed-1 --embed-model /path/to/model.gguf
+python install.py --embed-profile qwen3-embedding-0.6b --embed-model /path/to/model.gguf
+python install.py --rerank-profile qwen3-reranker-0.6b --rerank-model /path/to/reranker.gguf
 
 # check a configuration without opening IDA
-python install.py --embedder-doctor --embed-profile zembed-1
+python install.py --embedder-doctor
 ```
 
-The model starts only for explicit indexing, semantic search, or anchor refresh.
-Ordinary tool calls never spin it up. One request in flight per server; a timed-out
-request recycles that server rather than queueing behind it, and indexing returns a
-resumable cursor to pass back to `ida_index_functions`.
+The embed model starts only for explicit indexing, semantic search, or anchor
+refresh; the reranker starts only for the rerank stage of semantic search.
+Ordinary tool calls never spin them up. One request in flight per server; a
+timed-out request recycles that server rather than queueing behind it, and
+indexing returns a resumable cursor to pass back to `ida_index_functions`.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |

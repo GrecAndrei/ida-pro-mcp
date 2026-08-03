@@ -492,6 +492,12 @@ class FunctionEmbeddingIndex:
                 conn.execute("ALTER TABLE func_embeddings ADD COLUMN signature_text TEXT")
             if "signature_hash" not in cols:
                 conn.execute("ALTER TABLE func_embeddings ADD COLUMN signature_hash TEXT")
+            # Full bounded document text used for cross-encoder reranking.  The
+            # short signature_text is a tokenized lexical fingerprint; the
+            # cross-encoder needs the same text that was embedded (the bounded
+            # decompilation) to score (query, doc) pairs.
+            if "document_text" not in cols:
+                conn.execute("ALTER TABLE func_embeddings ADD COLUMN document_text TEXT")
             # Structural metadata (replaces SchemaBoot)
             if "func_size" not in cols:
                 conn.execute("ALTER TABLE func_embeddings ADD COLUMN func_size INTEGER DEFAULT 0")
@@ -787,6 +793,31 @@ class FunctionEmbeddingIndex:
             return {}
         return rows
 
+    def _row_docs_for_eas(self, eas: list[str]) -> dict[str, str]:
+        """Return the persisted bounded document text for a set of addresses.
+
+        Used by the cross-encoder rerank stage: the short ``signature_text``
+        is a lexical fingerprint, but a reranker scores the *document* that
+        was embedded.  Addresses with no persisted text (legacy rows indexed
+        before this column existed) are simply absent from the result; the
+        caller falls back to re-decompiling those.
+        """
+        if not eas:
+            return {}
+        out: dict[str, str] = {}
+        try:
+            with self._conn() as conn:
+                ph = ",".join("?" * len(eas))
+                for row in conn.execute(
+                    f"SELECT ea, document_text FROM func_embeddings WHERE ea IN ({ph})",
+                    eas,
+                ):
+                    if row[1]:
+                        out[str(row[0])] = str(row[1])
+        except Exception:
+            return {}
+        return out
+
     def index(self, func_ea: str, name: str, pseudocode: str, metadata: dict | None = None) -> bool:
         """Embed and store one function, returning whether the index is usable."""
         result = self.index_many([(func_ea, name, pseudocode, metadata)])
@@ -897,11 +928,11 @@ class FunctionEmbeddingIndex:
                         """
                         INSERT INTO func_embeddings(
                             ea, name, dim, vec_blob, pseudo_hash, indexed_at,
-                            source_kind, source_hash, signature_text, signature_hash,
+                            source_kind, source_hash, signature_text, signature_hash, document_text,
                             func_size, bb_count, has_loops, api_count, string_count,
                             segment, is_thunk, cyclomatic, index_quality
                         )
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         ON CONFLICT(ea) DO UPDATE SET
                             name=excluded.name,
                             dim=excluded.dim,
@@ -912,6 +943,7 @@ class FunctionEmbeddingIndex:
                             source_hash=excluded.source_hash,
                             signature_text=excluded.signature_text,
                             signature_hash=excluded.signature_hash,
+                            document_text=excluded.document_text,
                             func_size=excluded.func_size,
                             bb_count=excluded.bb_count,
                             has_loops=excluded.has_loops,
@@ -925,7 +957,8 @@ class FunctionEmbeddingIndex:
                         (
                             entry["ea"], entry["name"], len(vec), self._pack(vec), entry["pseudo_hash"], time.time(),
                             "function", hashlib.sha256(f"{entry['ea']}:{entry['pseudo_hash']}".encode()).hexdigest()[:24],
-                            entry["signature_text"], entry["signature_hash"], md.get("func_size", 0), md.get("bb_count", 0),
+                            entry["signature_text"], entry["signature_hash"], entry["pseudocode"],
+                            md.get("func_size", 0), md.get("bb_count", 0),
                             md.get("has_loops", 0), md.get("api_count", 0), md.get("string_count", 0), md.get("segment", ""),
                             md.get("is_thunk", 0), md.get("cyclomatic", 0), md.get("index_quality", "unknown"),
                         ),

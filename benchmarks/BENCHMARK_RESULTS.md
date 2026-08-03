@@ -105,3 +105,38 @@ offload is opt-in** via `IDA_MCP_EMBED_GPU=1` for users with a capable GPU.
    models. `pooling` is now a per-profile field; Qwen3-Embedding declares `last`.
 
 Raw reports: `corpus_libgpu_aux.gemini.report.json` (+ `local` when runnable).
+
+## Cross-encoder reranking (two-stage retrieval)
+
+Harness: `benchmarks/rerank_bench.py`. Same `libgpu_aux.so` corpus. Stage 1
+recall is the Qwen3-0.6B embedding index; Stage 2 re-scores the recalled pool
+with the cross-encoder reranker. Gold = hand-authored queries mapped to the
+function the query describes. 3 queries, pool of 8.
+
+| metric | baseline (Qwen3 recall) | bge-reranker-v2-gemma (rerank) |
+|---|---|---|
+| MRR@10 | **1.0** | 0.714 |
+| recall@1 | **1.0** | 0.667 |
+| per-pair latency | — | 2.2 s |
+| pool-of-8 latency | — | 48.9 s |
+| pool reliability | — | failed on 2/3 queries |
+
+**Verdict: the public `bge-reranker-v2-gemma` GGUF is not viable.** The
+reranker *degraded* retrieval — the query it did re-score moved the correct
+function out of rank 1 — and it is pathologically slow on this CPU (a 2.6B
+model on 8 weak cores). The GGUF is a **headless base Gemma** (verified: 164
+tensors, no classification head, no `output.weight`), so its scores are not
+calibrated for relevance. The benchmark's discriminating-score detection and
+early-exit correctly surface this; the pipeline falls back to recall order
+rather than trusting it.
+
+**The comparison this setup needs is the Qwen3-Reranker family** (`ggml-org`
+conversions, which ship the classification head): `qwen3-reranker-0.6b`
+(default, ~130 ms/pair) vs `qwen3-reranker-4b` (opt-in, ~0.5 s/pair). The
+harness runs both once the GGUFs are in `~/Downloads`:
+`python benchmarks/rerank_bench.py --models qwen3-reranker-0.6b qwen3-reranker-4b`.
+
+Two llama.cpp build quirks were found and worked around in the reranker
+manager (verified empirically on build `99111b1`): `--parallel 1` collapses
+`/rerank` to one identical score per document, and a `top_k` field in the
+request body shifts the returned indices by one. Neither is sent.

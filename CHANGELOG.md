@@ -2,6 +2,17 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-08-03 — cross-encoder reranking + function families
+
+- **Two-stage retrieval (Stage 2)**: semantic search now re-scores the recalled candidate pool with a **cross-encoder reranker** — full attention between the query and each candidate's full document, so the top of the list is *correct* instead of merely nearby. The reranker runs on its own `llama-server --rerank` process (llama.cpp serves `--embedding` and `--rerank` as mutually exclusive modes) with the same lifecycle as the embedder: lease file, idle shutdown, activation grace, request lock, RSS/request recycling.
+- **Rerank profiles** (`host/intelligence/rerank_profiles.py`): `qwen3-reranker-0.6b` (default, ggml-org), `qwen3-reranker-4b` (opt-in precision), `bge-reranker-v2-gemma` (middle tier — the known public conversion is *headless* and returns constant scores; flagged), `bge-reranker-v2-m3` (opt-in compat). Discovery scans Downloads/install/HF-cache and falls back to any installed reranker.
+- **Reranker manager** (`host/intelligence/rerank.py`): model switch at runtime via `Reranker.reset(model_path)` (used by the benchmark), `ida_reranker_status(probe=True)` reports installed model/readiness.
+- **Document text persisted in the index**: a `document_text` column (additive migration) stores the bounded decompilation that was embedded, so reranking and function families read the full document instead of the short lexical signature. Legacy rows re-index or fall back to live decompile.
+- **Graceful degradation**: if no rerank model is installed, or the model is non-discriminating (identical scores for every input — the headless-conversion symptom), recall order is preserved and the response's `rerank` block reports `applied: false`. Reranking is a quality boost, never a hard gate.
+- **`ida_function_families`**: clusters lookalike functions by embedding cosine (deterministic connected-components, numpy-only). Each family returns a centroid summary, a named representative (the one to read), per-member `+token`/`-token` deltas, and optional grouped `mark_examined` so the agent reads one function per family instead of all N.
+- **Two llama.cpp build bugs worked around** (verified empirically): passing `--parallel 1` collapses `/rerank` to one identical score per document, and passing `top_k` in the request body shifts the returned indices by one. The reranker sends neither.
+- Installer: `--rerank-profile`, `--rerank-model`, `--download-rerank-model`; `write_embedder_state` accepts a `rerank` subsection pinned in the same `embedder.json`.
+
 ## 2026-08-03 — embedding layer overhaul
 
 - **Vectorized semantic search**: `helpers.batch_cosine_similarity` runs the k-NN scan as a single NumPy matrix multiply (~4× faster than the per-pair Python loop on a 20k×1536 index, exact agreement to float precision), with a pure-Python fallback when NumPy is absent. The function index (`similar_vec`, `similar`), the context assembler's `similar_functions` enrichment, and the blackboard's `semantic_search` all route through it.

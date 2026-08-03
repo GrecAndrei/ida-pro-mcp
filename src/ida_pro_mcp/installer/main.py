@@ -628,6 +628,19 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         help="download the selected managed embedding model",
     )
     parser.add_argument(
+        "--rerank-model", default="", help="explicit path to a cross-encoder rerank GGUF model"
+    )
+    parser.add_argument(
+        "--rerank-profile",
+        choices=["qwen3-reranker-0.6b", "qwen3-reranker-4b", "bge-reranker-v2-gemma", "bge-reranker-v2-m3"],
+        default="qwen3-reranker-0.6b",
+        help="cross-encoder rerank profile (default: qwen3-reranker-0.6b)",
+    )
+    parser.add_argument(
+        "--download-rerank-model", action="store_true",
+        help="download the selected managed rerank model",
+    )
+    parser.add_argument(
         "--accept-model-license", action="store_true",
         help="confirm acceptance of the selected model's license when required",
     )
@@ -689,6 +702,9 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         accept_model_license=args.accept_model_license,
         embedder_doctor=args.embedder_doctor,
         setup_embedder=args.setup_embedder,
+        rerank_profile=args.rerank_profile,
+        rerank_model_path=args.rerank_model,
+        download_rerank_model=args.download_rerank_model,
 
         only=set(args.only),
     )
@@ -926,14 +942,35 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                     ui.warn("No embedding model detected; semantic embedding features remain disabled")
                 if embed_server:
                     report.metadata["embed_server_bin"] = embed_server
-                if (embed_model or embed_server) and not opts.dry_run:
+                rerank_model = opts.rerank_model_path
+                if opts.download_rerank_model and not rerank_model:
+                    from ida_pro_mcp.host.intelligence.rerank_profiles import get_rerank_model_profile
+                    from ida_pro_mcp.installer.runtime import download_rerank_model
+
+                    selected_rerank = get_rerank_model_profile(opts.rerank_profile)
+                    if selected_rerank is None:
+                        raise RuntimeError(f"Unknown rerank profile: {opts.rerank_profile}")
+                    if opts.dry_run:
+                        ui.info(f"Would download {selected_rerank.display_name} rerank model")
+                        report.add_step("rerank_model", "dry-run", selected_rerank.key)
+                    else:
+                        ui.info(f"Downloading {selected_rerank.display_name} rerank model")
+                        rerank_model = download_rerank_model(install_root, selected_rerank.key)
+                if rerank_model:
+                    ui.ok("Rerank model configured for MCP clients")
+                    report.metadata["rerank_model"] = rerank_model
+                if (embed_model or embed_server or rerank_model) and not opts.dry_run:
                     try:
                         from ida_pro_mcp.host.intelligence.core import write_embedder_state
+                        rerank_state = {"profile": opts.rerank_profile}
+                        if rerank_model:
+                            rerank_state["model_path"] = rerank_model
                         state_path = write_embedder_state(
                             install_root,
                             model_path=embed_model,
                             server_bin=embed_server,
                             profile=opts.embed_profile,
+                            rerank=rerank_state if (rerank_model or opts.rerank_profile) else None,
                         )
                         report.metadata["embedder_state"] = str(state_path)
                     except Exception as exc:

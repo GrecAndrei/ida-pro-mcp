@@ -668,6 +668,7 @@ def intelligence(
         Literal[
             "intelligence_status",
             "embedder_status",
+            "reranker_status",
             "anchor_status",
             "refresh_anchors",
             "classify_text",
@@ -680,8 +681,9 @@ def intelligence(
             "semantic_search",
             "blackboard_search",
             "export_index_summary",
+            "function_families",
         ],
-        "Action: intelligence_status|embedder_status|anchor_status|refresh_anchors|classify_text|classify_function|index_function|index_batch|index_fast|index_range|similar_functions|semantic_search|blackboard_search|export_index_summary",
+        "Action: intelligence_status|embedder_status|reranker_status|anchor_status|refresh_anchors|classify_text|classify_function|index_function|index_batch|index_fast|index_range|similar_functions|semantic_search|blackboard_search|export_index_summary|function_families",
     ],
     addr: Annotated[Optional[str], "Address"] = None,
     query: Annotated[Optional[str], "Free-form text or comma-separated list"] = None,
@@ -691,8 +693,9 @@ def intelligence(
     """Intelligence subsystem: embedder, anchor classifier, function
     embedding index, semantic/blackboard search, evidence card production.
 
-    intelligence_status - Combined embedder + anchors + indexes.
+    intelligence_status - Combined embedder + reranker + anchors + indexes.
     embedder_status     - Embedder backend only (alias of the above).
+    reranker_status     - Cross-encoder reranker backend only.
     anchor_status       - BehaviorClassifier ANCHORS count/loaded/hash.
     refresh_anchors     - (re)compute anchor embeddings for the given behaviors.
     classify_text       - BehaviorClassifier.classify on a free-form string.
@@ -703,6 +706,10 @@ def intelligence(
     semantic_search     - free-form text → query vector → k-NN over the index.
     blackboard_search   - free-form text → related_by_behavior on the blackboard.
     export_index_summary - return index path/size/metadata .
+    function_families   - cluster lookalike functions by embedding cosine; each
+                          family gets a centroid summary, a representative member,
+                          and per-member deltas. Optionally marks every member
+                          examined in one call (mark_examined=true).
     """
     try:
         try:
@@ -774,9 +781,16 @@ def intelligence(
         def _persist_embedder_state(idx, action_name: str, thresholds: dict | None = None):
             return {"persisted": False, "embedding_state_id": ""}
 
-        if action in ("intelligence_status", "embedder_status"):
+        if action in ("intelligence_status", "embedder_status", "reranker_status"):
             classifier = _classifier()
             est = embedder.status(probe=bool(kwargs.get("probe", False)), deep_hash=bool(kwargs.get("deep_hash", False)))
+            try:
+                from ida_pro_mcp.host.intelligence.rerank import Reranker
+                rstatus = Reranker().status(probe=bool(kwargs.get("probe", False)))
+            except Exception:
+                rstatus = {"backend": "local", "enabled": False, "profile": None, "model_exists": False, "ready": False}
+            if action == "reranker_status":
+                return {"ok": True, "reranker": rstatus}
             loaded = len(getattr(classifier, "_anchor_embs", {}) or {})
             total = len(getattr(classifier, "ANCHORS", {}) or {})
             idx_count = 0
@@ -795,6 +809,7 @@ def intelligence(
             return {
                 "ok": True,
                 "embedder": est,
+                "reranker": rstatus,
                 "anchors": {
                     "count": total,
                     "loaded": loaded,
@@ -1319,6 +1334,88 @@ def intelligence(
                     "size": idx.size,
                     "metadata": meta,
                 },
+            }
+
+        if action == "function_families":
+            try:
+                from ida_pro_mcp.host.intelligence.families import compute_function_families
+            except Exception:
+                return make_error(MCPError.IDA_ERROR, "function families module unavailable")
+            idx, db_path = _index_for_current_idb()
+            if idx.size == 0:
+                return make_error(
+                    MCPError.NO_RESULTS,
+                    "No functions indexed yet. Index your functions to find families.",
+                    hint="Index your functions first:\n  index_fast:  seconds, disassembly-based (good for quick triage)\n  index_batch: minutes, decompile-based (best quality embeddings)",
+                )
+            address_ranges = None
+            if kwargs.get("start") or kwargs.get("end"):
+                try:
+                    from ida_pro_mcp.ida_mcp.tools._common import validate_range
+                    _s, _e, _err = validate_range(
+                        kwargs.get("start"), kwargs.get("end")
+                    )
+                    if _err:
+                        return _err
+                    address_ranges = [(_s, _e)]
+                except Exception:
+                    address_ranges = None
+            if addr and not address_ranges:
+                try:
+                    from ida_pro_mcp.host.intelligence.scope_window import radius_address_range
+                    radius = int(kwargs.get("radius", 0x1000))
+                    if radius > 0:
+                        _center, _cerr = validate_addr(addr, require_func=False)
+                        if not _cerr and _center:
+                            _rs, _re = radius_address_range(int(_center), radius)
+                            address_ranges = [(_rs, _re)]
+                except Exception:
+                    address_ranges = None
+
+            min_size = max(2, int(kwargs.get("min_size", 2)))
+            min_similarity = min(1.0, max(0.0, float(kwargs.get("min_similarity", 0.85))))
+            limit = max(1, min(100, int(kwargs.get("limit", max_items or 25))))
+            result = compute_function_families(
+                idx,
+                min_size=min_size,
+                min_similarity=min_similarity,
+                address_ranges=address_ranges,
+                name_filter=str(kwargs.get("name_filter") or kwargs.get("query") or ""),
+                limit=limit,
+            )
+            _persist_embedder_state(
+                idx,
+                "function_families",
+                thresholds={"min_similarity": float(min_similarity), "min_size": float(min_size)},
+            )
+
+            # Group mark_examined: record every family member as examined in one
+            # call so the agent reads one representative per family, not all N.
+            if kwargs.get("mark_examined"):
+                try:
+                    from blackboard import BlackboardStore  # type: ignore
+                    store = BlackboardStore()
+                    verdict = str(kwargs.get("verdict") or "boring")
+                    marked = 0
+                    for family in result.get("families", []):
+                        note = family.get("summary", "")
+                        for member in family.get("members", []):
+                            store.record_examination(
+                                addr=str(member.get("ea") or ""),
+                                verdict=verdict,
+                                note=note,
+                                name=str(member.get("name") or ""),
+                            )
+                            marked += 1
+                    result["marked_examined"] = marked
+                except Exception as exc:
+                    result["mark_examined_error"] = str(exc)
+
+            return {
+                "ok": True,
+                "backend": embedder.backend,
+                **result,
+                "index": {"path": db_path, "size": idx.size},
             }
 
         return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

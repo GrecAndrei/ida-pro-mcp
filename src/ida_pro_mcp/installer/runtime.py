@@ -410,6 +410,57 @@ def download_embed_model(install_root: Path, profile: str) -> str:
     return str(destination)
 
 
+def download_rerank_model(install_root: Path, profile: str) -> str:
+    """Download a user-selected reranker profile into the install model dir.
+
+    Mirrors :func:`download_embed_model` — same streaming downloader, same
+    install-root ``models/`` destination, same ``.part`` partial-file cleanup.
+    The host's rerank discovery finds the file there on next start.
+    """
+    from ida_pro_mcp.host.intelligence.rerank_profiles import get_rerank_model_profile
+
+    selected = get_rerank_model_profile(profile)
+    if selected is None:
+        raise RuntimeError(f"Unknown rerank profile: {profile}")
+    if not selected.download_url or not selected.download_filename:
+        raise RuntimeError(
+            f"Profile {selected.key} has no managed download; provide --rerank-model"
+        )
+    model_dir = install_root / "models"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    destination = model_dir / selected.download_filename
+    if destination.is_file() and destination.stat().st_size > 0:
+        return str(destination)
+    partial = destination.with_suffix(destination.suffix + ".part")
+    request = urllib.request.Request(
+        selected.download_url,
+        headers={"User-Agent": "ida-pro-mcp-installer"},
+    )
+    max_bytes = 8 * 1024**3
+    written = 0
+    try:
+        with urllib.request.urlopen(request, timeout=300) as response, open(partial, "wb") as output:
+            content_length = int(response.headers.get("Content-Length") or 0)
+            if content_length > max_bytes:
+                raise RuntimeError("Rerank model download exceeds the 8 GiB safety limit")
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > max_bytes:
+                    raise RuntimeError("Rerank model download exceeds the 8 GiB safety limit")
+                output.write(chunk)
+        if written <= 0:
+            raise RuntimeError("Rerank model download was empty")
+        os.replace(partial, destination)
+    except Exception:
+        with contextlib.suppress(OSError):
+            partial.unlink()
+        raise
+    return str(destination)
+
+
 def find_llama_server_bin(install_root: Path) -> str:
     env_val = os.environ.get("IDA_MCP_EMBED_SERVER_BIN", "").strip()
     if env_val and Path(env_val).is_file():

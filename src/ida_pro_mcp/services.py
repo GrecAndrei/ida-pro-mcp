@@ -36,6 +36,7 @@ from ida_pro_mcp.host.intelligence.core import (
     FunctionEmbeddingIndex,
     _extract_signature,
 )
+from ida_pro_mcp.host.intelligence.rerank import Reranker
 
 # AgentMacroCrystallizer removed (cleanup cut)
 # FederationBridge removed (cleanup cut)
@@ -82,6 +83,7 @@ __all__ = [
     "BgeCodeEmbedder",
     "BehaviorClassifier",
     "FunctionEmbeddingIndex",
+    "Reranker",
     "_extract_signature",
     "INTEL_PROFILE",
     "ContextAssembler",

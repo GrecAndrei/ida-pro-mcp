@@ -458,7 +458,12 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     ),
     AgentOperation(
         name="ida_semantic_search",
-        description="Find functions by behavior or natural-language intent after indexing the binary.",
+        description=(
+            "Find functions by behavior or natural-language intent after indexing the binary. "
+            "Results are recalled by the embedding index (Stage 1) and, when a reranker is "
+            "installed, re-scored by the cross-encoder (Stage 2) so the top of the list is "
+            "the genuinely most relevant functions."
+        ),
         category="discovery",
         input_schema=_schema(
             {
@@ -466,6 +471,10 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
                 "mode": {"type": "string", "enum": ["quick", "expand"], "description": "quick is faster; expand adds behavior-driven matches."},
                 "limit": LIMIT,
                 "min_score": {"type": "number", "description": "Minimum semantic or hybrid rank score."},
+                "rerank": {
+                    "type": "boolean",
+                    "description": "Re-score recalled candidates with the cross-encoder reranker (default true; a no-op when no rerank model is installed).",
+                },
                 "start": {"type": "string", "description": "Inclusive start address for result filtering."},
                 "end": {"type": "string", "description": "Exclusive end address for result filtering."},
                 "address": {"type": "string", "description": "Center address or function for radius filtering."},
@@ -478,6 +487,55 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         backend_tool="search",
         backend_action="nl",
         argument_map={"min_score": "semantic_min_score", "address": "addr"},
+    ),
+    AgentOperation(
+        name="ida_reranker_status",
+        description="Report the cross-encoder reranker backend: installed model, profile, and whether it is ready.",
+        category="discovery",
+        input_schema=_schema(
+            {
+                "probe": {"type": "boolean", "description": "Start or attach the rerank server so ready reflects reality."},
+                "idb": IDB,
+            }
+        ),
+        example={"probe": True},
+        backend_tool="intelligence",
+        backend_action="reranker_status",
+    ),
+    AgentOperation(
+        name="ida_function_families",
+        description=(
+            "Cluster lookalike functions by embedding cosine similarity and return each family "
+            "with a centroid summary, a representative member, and per-member deltas. "
+            "Examine the representative and skip the rest."
+        ),
+        category="discovery",
+        input_schema=_schema(
+            {
+                "address": ADDRESS,
+                "radius": {"type": "integer", "description": "Byte radius around address to scope the clustering."},
+                "start": {"type": "string", "description": "Inclusive start address of a scope range."},
+                "end": {"type": "string", "description": "Exclusive end address of a scope range."},
+                "query": {"type": "string", "description": "Optional function-name filter (substring)."},
+                "min_size": {"type": "integer", "description": "Minimum family size to report (default 2)."},
+                "min_similarity": {"type": "number", "description": "Cosine threshold for 'lookalike' (default 0.85)."},
+                "limit": LIMIT,
+                "mark_examined": {
+                    "type": "boolean",
+                    "description": "Record every family member as examined in one call (default false).",
+                },
+                "verdict": {
+                    "type": "string",
+                    "enum": ["boring", "interesting", "unclear"],
+                    "description": "Verdict used when mark_examined is true (default boring).",
+                },
+                "idb": IDB,
+            }
+        ),
+        example={"min_size": 2, "limit": 10},
+        backend_tool="intelligence",
+        backend_action="function_families",
+        argument_map={"address": "addr"},
     ),
     AgentOperation(
         name="ida_index_functions",

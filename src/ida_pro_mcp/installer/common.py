@@ -33,6 +33,9 @@ class InstallerOptions:
     install_llama_server: bool = False
     download_embed_model: bool = False
     accept_model_license: bool = False
+    rerank_profile: str = "qwen3-reranker-0.6b"  # qwen3-reranker-0.6b | qwen3-reranker-4b | bge-reranker-v2-gemma | bge-reranker-v2-m3
+    rerank_model_path: str = ""
+    download_rerank_model: bool = False
     embedder_doctor: bool = False
     setup_embedder: bool = False
     only: set[str] = field(default_factory=set)

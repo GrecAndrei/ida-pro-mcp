@@ -608,7 +608,7 @@ Example:
 
 ## `ida_semantic_search`
 
-Find functions by behavior or natural-language intent after indexing the binary.
+Find functions by behavior or natural-language intent after indexing the binary. Results are recalled by the embedding index (Stage 1) and, when a reranker is installed, re-scored by the cross-encoder (Stage 2) so the top of the list is the genuinely most relevant functions.
 
 Input schema:
 ```json
@@ -634,6 +634,10 @@ Input schema:
     "min_score": {
       "type": "number",
       "description": "Minimum semantic or hybrid rank score."
+    },
+    "rerank": {
+      "type": "boolean",
+      "description": "Re-score recalled candidates with the cross-encoder reranker (default true; a no-op when no rerank model is installed)."
     },
     "start": {
       "type": "string",
@@ -671,6 +675,114 @@ Example:
     "query": "function that decrypts strings",
     "mode": "quick",
     "limit": 20
+  }
+}
+```
+
+## `ida_reranker_status`
+
+Report the cross-encoder reranker backend: installed model, profile, and whether it is ready.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "probe": {
+      "type": "boolean",
+      "description": "Start or attach the rerank server so ready reflects reality."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_reranker_status",
+  "arguments": {
+    "probe": true
+  }
+}
+```
+
+## `ida_function_families`
+
+Cluster lookalike functions by embedding cosine similarity and return each family with a centroid summary, a representative member, and per-member deltas. Examine the representative and skip the rest.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "radius": {
+      "type": "integer",
+      "description": "Byte radius around address to scope the clustering."
+    },
+    "start": {
+      "type": "string",
+      "description": "Inclusive start address of a scope range."
+    },
+    "end": {
+      "type": "string",
+      "description": "Exclusive end address of a scope range."
+    },
+    "query": {
+      "type": "string",
+      "description": "Optional function-name filter (substring)."
+    },
+    "min_size": {
+      "type": "integer",
+      "description": "Minimum family size to report (default 2)."
+    },
+    "min_similarity": {
+      "type": "number",
+      "description": "Cosine threshold for 'lookalike' (default 0.85)."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Maximum result items to return."
+    },
+    "mark_examined": {
+      "type": "boolean",
+      "description": "Record every family member as examined in one call (default false)."
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "boring",
+        "interesting",
+        "unclear"
+      ],
+      "description": "Verdict used when mark_examined is true (default boring)."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_function_families",
+  "arguments": {
+    "min_size": 2,
+    "limit": 10
   }
 }
 ```

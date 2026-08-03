@@ -30,6 +30,11 @@ EXPANSION_MIN_CONFIDENCE = float(
     os.environ.get("IDA_MCP_EXPANSION_MIN_CONFIDENCE", "0.50") or 0.50
 )
 
+# Bounded document text handed to the cross-encoder when a candidate has no
+# persisted document_text (legacy index row).  Matches the reranker's own
+# payload truncation so the decompile fallback never exceeds it.
+RERANK_MAX_DOC_CHARS = 6000
+
 
 # ---------------------------------------------------------------------------
 # Backend resolution
@@ -112,6 +117,7 @@ def search_nl(
     range_end: int | None = None,
     center_ea: int | None = None,
     radius: int | None = None,
+    rerank: bool = True,
 ) -> dict:
     """Natural language search via FunctionEmbeddingIndex.
 
@@ -123,6 +129,9 @@ def search_nl(
         timeout_ms: Timeout in ms (0 = 10s default).
         include_items: Include structured items in response.
         classifier_threshold: Confidence threshold for behavior expansion.
+        rerank: Cross-encode the recalled candidates with the reranker to fix
+            the top of the list (default True; a no-op when no rerank model
+            is installed or the model is non-discriminating).
 
     Returns:
         Response dict with results, similarity scores, and expansion metadata.
@@ -168,8 +177,15 @@ def search_nl(
     )
 
     # Phase 1: primary search via hybrid semantic+lexical. The embedding index
-    # applies address_ranges before top-k truncation.
-    candidate_limit = max(6, limit * 3)
+    # applies address_ranges before top-k truncation.  When reranking is on,
+    # recall a wider pool so the cross-encoder has real candidates to re-score
+    # (the bi-encoder often places the right function at rank 30-50).
+    try:
+        from ida_pro_mcp.host.intelligence.rerank import RERANK_MAX_CANDIDATES
+        candidate_limit = max(24, limit * 5, RERANK_MAX_CANDIDATES)
+    except Exception:
+        candidate_limit = max(24, limit * 5)
+    candidate_limit = min(candidate_limit, 256)
     raw_results = idx.search(
         query,
         top_k=candidate_limit,
@@ -268,10 +284,70 @@ def search_nl(
             scoped_results.append(result)
         raw_results = scoped_results
 
+    # Phase 3.5: cross-encoder reranking of the scoped candidate pool.  Stage 1
+    # recall is a bi-encoder — query and document vectors never see each other.
+    # The reranker re-scores each (query, doc) pair with full cross-attention so
+    # the top of the list is correct, not merely nearby.  This is a quality
+    # boost, never a hard gate: if the reranker is unavailable, misconfigured,
+    # or returns non-discriminating scores (e.g. a headless conversion), the
+    # recall order is preserved and the response says why.
+    rerank_meta = {"profile": None, "applied": False, "pool": 0, "latency_ms": 0}
+    if rerank and raw_results:
+        try:
+            from ida_pro_mcp.host.intelligence.rerank import Reranker
+            from ida_pro_mcp.host.intelligence.rerank import RERANK_MAX_CANDIDATES
+        except Exception:
+            Reranker = None  # type: ignore[assignment]
+            RERANK_MAX_CANDIDATES = 64
+        if Reranker is not None:
+            try:
+                rr = Reranker()
+            except Exception:
+                rr = None
+            if rr is not None and getattr(rr, "_use_llama", False):
+                pool = raw_results[:RERANK_MAX_CANDIDATES]
+                eas = [str(r.get("ea") or "") for r in pool]
+                docs: list[str] = []
+                stored = idx._row_docs_for_eas(eas) if hasattr(idx, "_row_docs_for_eas") else {}
+                for ea, r in zip(eas, pool, strict=True):
+                    doc = stored.get(ea) or r.get("signature") or ""
+                    if not doc and ea:
+                        try:
+                            ea_int = int(ea, 0)
+                            cfunc = ida_hexrays.decompile(ea_int)
+                            doc = str(cfunc)[:RERANK_MAX_DOC_CHARS] if cfunc else ""
+                        except Exception:
+                            doc = ""
+                    docs.append(doc or str(r.get("name") or ea))
+                rerank_started = _time.time()
+                scored = rr.rerank(query, docs) if docs else None
+                rerank_meta["latency_ms"] = round((_time.time() - rerank_started) * 1000)
+                if scored:
+                    by_index = {int(item["index"]): float(item["score"]) for item in scored}
+                    discriminating = len(set(by_index.values())) >= 2
+                    indices_in_pool = bool(by_index) and max(by_index) < len(pool) and min(by_index) >= 0
+                    if discriminating and len(by_index) == len(pool) and indices_in_pool:
+                        for i, r in enumerate(pool):
+                            r["rerank_score"] = by_index.get(i)
+                            r["rank_reason"] = {
+                                **(r.get("rank_reason") or {}),
+                                "rerank": round(by_index.get(i, 0.0), 4),
+                            }
+                        pool.sort(key=lambda r: float(r.get("rerank_score") or 0.0), reverse=True)
+                        raw_results = pool
+                        rerank_meta["applied"] = True
+                    rerank_meta["profile"] = rr.status().get("profile_name")
+                rerank_meta["pool"] = len(pool)
+        if rerank_meta["applied"]:
+            for r in raw_results:
+                if "rerank_score" in r:
+                    r["score"] = r["rerank_score"]
+
     # Phase 4: adaptive gating on the score used to rank the hybrid results.
     # Gating only on raw cosine similarity discarded strong lexical matches
     # (for example, an exact API or string reference) after hybrid_search had
-    # correctly promoted them.
+    # correctly promoted them.  When reranking applied, the rerank score is the
+    # ordering signal and gates here.
     def rank_score(result: dict) -> float:
         return float(result.get("score") or result.get("similarity") or 0.0)
 
@@ -315,6 +391,7 @@ def search_nl(
                 "name": r.get("name"),
                 "similarity": r.get("similarity"),
                 "score": r.get("score"),
+                "rerank_score": r.get("rerank_score"),
                 "signature": r.get("signature"),
                 "expansion_query": r.get("expansion_query"),
                 "rank_reason": r.get("rank_reason"),
@@ -323,8 +400,10 @@ def search_nl(
         ],
         "note": (
             f"Natural language retrieval via FunctionEmbeddingIndex.search() "
-            f"(mode={mode}, expansion_queries={len(expansion_queries)})."
+            f"(mode={mode}, expansion_queries={len(expansion_queries)}, "
+            f"rerank={'on' if rerank_meta['applied'] else 'off'})."
         ),
+        "rerank": rerank_meta,
     }
     if expansion_queries:
         response["expansion_queries"] = expansion_queries[:3]

@@ -300,6 +300,7 @@ def write_embedder_state(
     gemini_vertex_project: str = "",
     gemini_vertex_location: str = "",
     disabled: bool | None = None,
+    rerank: dict[str, Any] | None = None,
 ) -> str:
     """Persist a manual embedder override to `<install_root>/embedder.json`.
 
@@ -312,6 +313,10 @@ def write_embedder_state(
     fields carry model/dimension/Vertex routing only — **the API key is never
     written to this file** (it lives in the environment or the MCP client
     config env block).
+
+    ``rerank`` is an optional nested dict ({model_path, profile, enabled})
+    pinning the cross-encoder reranker; the host reads it via
+    ``rerank._read_rerank_state()``.
 
     Returns the path of the written file.
     """
@@ -347,6 +352,8 @@ def write_embedder_state(
         payload["gemini_vertex_location"] = str(gemini_vertex_location)
     if disabled is not None:
         payload["disabled"] = bool(disabled)
+    if rerank is not None:
+        payload["rerank"] = {k: v for k, v in rerank.items() if v is not None and v != ""}
     with open(state_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
     return state_path
