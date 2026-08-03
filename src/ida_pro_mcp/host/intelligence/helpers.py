@@ -29,7 +29,11 @@ def dot_product(a: Sequence[float], b: Sequence[float]) -> float:
     try:
         import numpy as np
         return float(np.dot(a, b))
-    except ImportError:
+    except (ImportError, ValueError):
+        # ImportError: numpy unavailable.  ValueError: dimension mismatch —
+        # match the historical per-row loop's truncated zip so a mismatched
+        # (query, row) pair degrades gracefully instead of raising out of the
+        # batch-cosine fallback.
         return sum(x * y for x, y in zip(a, b, strict=False))
 
 
