@@ -191,27 +191,92 @@ class ServerClientStateMixin:
         MCP process). Sessions that are merely *recorded* — persisted across
         restarts with no running idat — are never busy.
         """
+        return bool(self._session_ownership_report(str(session_id)).get("locked"))
+
+    def _session_ownership_report(self, session_id: str) -> dict[str, Any]:
+        """Forensics on who currently holds a session.
+
+        Returns a structured report describing whether the session is locked
+        and, when it is, the identity and liveness of its holder.  This turns
+        the opaque FILE_LOCKED error into an actionable one and lets
+        session-list/state payloads mark busy sessions.
+
+        ``holder`` is ``"this-host-runtime"`` (a live runtime in *this* server,
+        possibly spawned by another daemon connection) or ``"foreign-lease"``
+        (a lease owned by a different MCP host process).  A stale lease whose
+        owner is dead is reported but never marked ``locked`` — it is reclaimable.
+        """
+        report: dict[str, Any] = {
+            "session_id": str(session_id),
+            "locked": False,
+            "holder": None,
+            "owner_id": None,
+            "owner_pid": None,
+            "owner_alive": None,
+            "idat_pid": None,
+            "lease_age_seconds": None,
+            "lease_updated_at": None,
+        }
         runtime = getattr(self, "session_runtimes", None) or {}
         if isinstance(runtime, dict):
             rec = runtime.get(str(session_id))
             alive = getattr(self, "_runtime_alive", None)
             if rec is not None and callable(alive) and alive(rec):
-                return True
+                report["locked"] = True
+                report["holder"] = "this-host-runtime"
+                proc = rec.get("process")
+                report["idat_pid"] = getattr(proc, "pid", None) if proc is not None else None
+                report["owner_id"] = str(
+                    getattr(self, "_runtime_owner_id", None) or "this-host"
+                )
+                report["owner_pid"] = os.getpid()
+                report["owner_alive"] = True
+                return report
         lease_path: str | None = None
         get_lease = getattr(self, "_runtime_lease_path", None)
         if callable(get_lease):
             with contextlib.suppress(Exception):
                 lease_path = str(get_lease(str(session_id)))
+        lease = None
         if lease_path and os.path.exists(lease_path):
             try:
                 with open(lease_path, encoding="utf-8") as f:
                     lease = json.load(f)
             except Exception:
                 lease = None
-            has_live = getattr(self, "_lease_has_live_foreign_owner", None)
-            if lease and callable(has_live) and has_live(lease):
-                return True
-        return False
+        if lease is None:
+            return report
+        try:
+            report["owner_id"] = lease.get("owner_id")
+            report["owner_pid"] = int(lease.get("owner_pid") or 0) or None
+            report["idat_pid"] = int(lease.get("pid") or 0) or None
+            report["lease_updated_at"] = lease.get("updated_at")
+            if report["lease_updated_at"]:
+                report["lease_age_seconds"] = round(
+                    max(0.0, time.time() - float(report["lease_updated_at"])), 1
+                )
+        except Exception:
+            pass
+        has_live = getattr(self, "_lease_has_live_foreign_owner", None)
+        if callable(has_live) and has_live(lease):
+            report["locked"] = True
+            report["holder"] = "foreign-lease"
+            report["owner_alive"] = True
+        else:
+            # Lease present but not held by a live foreign owner: reclaimable.
+            # Determine the owner's actual liveness (a stale lease whose owner
+            # is our own process is still "alive" — the runtime just died).
+            owner_alive: bool | None = None
+            if report["owner_pid"]:
+                try:
+                    os.kill(int(report["owner_pid"]), 0)
+                    owner_alive = True
+                except ProcessLookupError:
+                    owner_alive = False
+                except Exception:
+                    owner_alive = None
+            report["owner_alive"] = owner_alive
+        return report
 
     def _truncation_owner_id(self) -> str:
         """Stable per-connection id used to scope truncated response tokens.
@@ -241,16 +306,42 @@ class ServerClientStateMixin:
             )
         if self._client_owns_session(str(sid)):
             return None
-        if self._session_is_busy(str(sid)):
+        report = self._session_ownership_report(str(sid))
+        if report.get("locked"):
+            holder = report.get("holder")
+            owner_pid = report.get("owner_pid")
+            owner_id = report.get("owner_id")
+            idat_pid = report.get("idat_pid")
+            age = report.get("lease_age_seconds")
+            if holder == "foreign-lease":
+                who = f"another MCP host process"
+                if owner_pid:
+                    who += f" (pid {owner_pid})"
+                if owner_id:
+                    who += f" [owner {owner_id}]"
+                if idat_pid:
+                    who += f" running idat pid {idat_pid}"
+            else:
+                who = "another connection on this server"
+                if idat_pid:
+                    who += f" (idat pid {idat_pid})"
+            age_txt = f"; lease {age:g}s old" if age is not None else ""
             return make_error(
                 MCPError.FILE_LOCKED,
                 "This session is not available to the current MCP client.",
                 hint=(
-                    "The session's IDA runtime is in use by another live "
-                    "client. Close it there, or open the binary with "
-                    "force_new=true to create an independent session."
+                    f"The session's IDA runtime is held by {who}{age_txt}. "
+                    "Close it there, or open the binary with force_new=true "
+                    "to create an independent session."
                 ),
-                details={"session_id": str(sid)},
+                details={
+                    "session_id": str(sid),
+                    **{k: report[k] for k in (
+                        "locked", "holder", "owner_id", "owner_pid",
+                        "owner_alive", "idat_pid", "lease_age_seconds",
+                        "lease_updated_at",
+                    )},
+                },
             )
         # Nobody is running it: take it over so the rest of this request
         # (and later ones) can use the recorded IDB. When an agent is bound,

@@ -98,6 +98,26 @@ session, its own ownership, and teardown scoped to it alone.
 | Logged in on a *different* connection | `POLICY_DENIED` |
 | `agent` tag on an un-logged-in name | `POLICY_DENIED` |
 
+## Ownership forensics (who holds a session)
+
+When several MCP hosts or daemon connections share one session store, a
+`FILE_LOCKED` error used to say only *that* the session was busy — not *who*
+held it, or whether that holder was even alive. Session list/state payloads
+and the `FILE_LOCKED` error now carry an ownership report:
+
+| Field | Meaning |
+| --- | --- |
+| `locked` | Another live owner is actively running this session's IDA. |
+| `holder` | `"this-host-runtime"` (a live runtime in this server) or `"foreign-lease"` (a lease owned by a different MCP host process). |
+| `owner_id` / `owner_pid` | The MCP host identity and PID that holds the lease. |
+| `owner_alive` | Whether that owner process still exists. |
+| `idat_pid` | The IDA runtime process PID. |
+| `lease_age_seconds` | Age of the lease file (stale leases age out). |
+
+A session with a **dead owner** is reported `locked: false` — it is
+reclaimable, and stale-lease cleanup reclaims its `owner.json` and terminates
+its orphaned idat without ever touching anything owned by a live process.
+
 ## RPC concurrency
 
 The per-session RPC lane serializes requests to one IDA bridge (one SDK

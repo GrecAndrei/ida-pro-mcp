@@ -1257,6 +1257,14 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         result["analysis_complete"] = self._analysis_is_complete(sid)
         if is_running:
             result["port"] = runtime.get("port")
+        report = self._session_ownership_report(sid)
+        result["locked"] = report.get("locked", False)
+        result["holder"] = report.get("holder")
+        result["owner_id"] = report.get("owner_id")
+        result["owner_pid"] = report.get("owner_pid")
+        result["owner_alive"] = report.get("owner_alive")
+        result["idat_pid"] = report.get("idat_pid")
+        result["lease_age_seconds"] = report.get("lease_age_seconds")
         return {"ok": True, "session": result}
 
     def _session_action_list(self, args: dict) -> dict:
@@ -1273,7 +1281,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             query=q, offset=offset, limit=limit, binary_name=binary_name
         )
 
-        # Augment with runtime status
+        # Augment with runtime status and ownership forensics so a busy
+        # session is identifiable (who holds it, and whether that owner is
+        # alive) instead of an opaque locked flag.
         session_dicts = []
         for d in result["sessions"]:
             runtime = self.session_runtimes.get(d["session_id"])
@@ -1284,6 +1294,14 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             )
             d["safe_mode"] = self._safe_mode_active(d["session_id"])
             d["analysis_complete"] = self._analysis_is_complete(d["session_id"])
+            report = self._session_ownership_report(d["session_id"])
+            d["locked"] = report.get("locked", False)
+            d["holder"] = report.get("holder")
+            d["owner_id"] = report.get("owner_id")
+            d["owner_pid"] = report.get("owner_pid")
+            d["owner_alive"] = report.get("owner_alive")
+            d["idat_pid"] = report.get("idat_pid")
+            d["lease_age_seconds"] = report.get("lease_age_seconds")
             session_dicts.append(d)
 
         return {
@@ -1590,6 +1608,14 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 state_value["analysis_complete"] = self._analysis_is_complete(
                     getattr(self.current_session, "session_id", None) or ""
                 )
+                report = self._session_ownership_report(
+                    getattr(self.current_session, "session_id", None) or ""
+                )
+                for _k in (
+                    "locked", "holder", "owner_id", "owner_pid",
+                    "owner_alive", "idat_pid", "lease_age_seconds",
+                ):
+                    state_value[_k] = report.get(_k)
             return {"ok": True, "state": state_value}
         except Exception as e:
             return make_error(MCPError.IDA_ERROR, f"state failed: {e}")

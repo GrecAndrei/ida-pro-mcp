@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import os
 import threading
+import time
 
 from ida_pro_mcp.host.errors import MCPError
 from ida_pro_mcp.host.server.server import IDAMCPServer
@@ -721,6 +724,169 @@ def test_python_response_stamps_the_session_it_executed_in(tmp_path, monkeypatch
         assert res["_executed_in"]["session_id"] == sid_a
         assert res["_executed_in"]["image_base"] == "0xc000"
         assert res["_executed_in"]["idb_path"] != server.current_session.idb_path
+    finally:
+        server._end_client_connection(token)
+        server.shutdown()
+
+
+def test_file_locked_reports_foreign_lease_owner(tmp_path, monkeypatch):
+    """FILE_LOCKED must say who holds a foreign-lease session, not just that
+    it is busy — the opaque error was the whole point of the complaint."""
+    monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
+    monkeypatch.setattr(IDAMCPServer, "_detect_ida_dir", lambda self: "")
+    monkeypatch.setattr(IDAMCPServer, "_find_idat", lambda self: "")
+
+    binary_a = tmp_path / "alpha.bin"
+    binary_a.write_bytes(b"alpha")
+    server = IDAMCPServer()
+    monkeypatch.setattr(server, "_ensure_runtime_and_idb", lambda session: None)
+
+    token = server._begin_client_connection()
+    try:
+        opened = _open_owned_session(server, str(binary_a))
+        sid = opened["session_id"]
+    finally:
+        server._client_request_state_var.reset(token)
+
+    # A live foreign owner holds a lease for this session (no local runtime).
+    lease = {
+        "session_id": sid,
+        "pid": 424242,
+        "owner_pid": 424243,
+        "owner_id": "SID_FOREIGN",
+        "updated_at": time.time(),
+    }
+    os.makedirs(server._runtime_lease_dir, exist_ok=True)
+    lease_path = server._runtime_lease_path(sid)
+    with open(lease_path, "w", encoding="utf-8") as f:
+        json.dump(lease, f)
+    monkeypatch.setattr(
+        IDAMCPServer, "_lease_has_live_foreign_owner", staticmethod(lambda lease: True)
+    )
+
+    report = server._session_ownership_report(sid)
+    assert report["locked"] is True
+    assert report["holder"] == "foreign-lease"
+    assert report["owner_id"] == "SID_FOREIGN"
+    assert report["owner_pid"] == 424243
+    assert report["idat_pid"] == 424242
+
+    # The error surfaced to a caller must carry the same forensics.
+    session = server.session_mgr.get_session(sid)
+    error = server._ensure_client_owns_session(session)
+    assert error is not None
+    assert error.get("code") == "FILE_LOCKED"
+    assert error["details"]["holder"] == "foreign-lease"
+    assert error["details"]["owner_id"] == "SID_FOREIGN"
+    assert error["details"]["owner_pid"] == 424243
+    assert "424243" in error["hint"]
+    server.shutdown()
+
+
+def test_stale_lease_with_dead_owner_is_reclaimable(tmp_path, monkeypatch):
+    """A lease whose owner process is gone must NOT be reported locked."""
+    monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
+    monkeypatch.setattr(IDAMCPServer, "_detect_ida_dir", lambda self: "")
+    monkeypatch.setattr(IDAMCPServer, "_find_idat", lambda self: "")
+
+    binary_a = tmp_path / "alpha.bin"
+    binary_a.write_bytes(b"alpha")
+    server = IDAMCPServer()
+    monkeypatch.setattr(server, "_ensure_runtime_and_idb", lambda session: None)
+
+    token = server._begin_client_connection()
+    try:
+        opened = _open_owned_session(server, str(binary_a))
+        sid = opened["session_id"]
+    finally:
+        server._client_request_state_var.reset(token)
+
+    lease = {
+        "session_id": sid,
+        "pid": 424242,
+        "owner_pid": 999999999,  # certainly dead
+        "owner_id": "SID_DEAD",
+        "updated_at": time.time(),
+    }
+    os.makedirs(server._runtime_lease_dir, exist_ok=True)
+    with open(server._runtime_lease_path(sid), "w", encoding="utf-8") as f:
+        json.dump(lease, f)
+
+    report = server._session_ownership_report(sid)
+    assert report["locked"] is False
+    assert report["holder"] is None
+    assert report["owner_alive"] is False
+    assert report["owner_pid"] == 999999999
+    server.shutdown()
+
+
+def test_file_locked_reports_local_runtime_holder(tmp_path, monkeypatch):
+    """A session busy because a live local runtime owns it must say so."""
+    monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
+    monkeypatch.setattr(IDAMCPServer, "_detect_ida_dir", lambda self: "")
+    monkeypatch.setattr(IDAMCPServer, "_find_idat", lambda self: "")
+
+    binary_a = tmp_path / "alpha.bin"
+    binary_a.write_bytes(b"alpha")
+    server = IDAMCPServer()
+    monkeypatch.setattr(server, "_ensure_runtime_and_idb", lambda session: None)
+
+    token = server._begin_client_connection()
+    try:
+        opened = _open_owned_session(server, str(binary_a))
+        sid = opened["session_id"]
+    finally:
+        server._client_request_state_var.reset(token)
+
+    # A live runtime in THIS host holds the session — the holder is the
+    # daemon itself, not a foreign lease.
+    server.session_runtimes[sid] = {"process": _FakeIdaProcess()}
+    report = server._session_ownership_report(sid)
+    assert report["locked"] is True
+    assert report["holder"] == "this-host-runtime"
+    assert report["owner_pid"] == os.getpid()
+    assert report["owner_alive"] is True
+
+    session = server.session_mgr.get_session(sid)
+    error = server._ensure_client_owns_session(session)
+    assert error is not None
+    assert error.get("code") == "FILE_LOCKED"
+    assert error["details"]["holder"] == "this-host-runtime"
+    server.shutdown()
+
+
+def test_session_list_and_state_expose_ownership(tmp_path, monkeypatch):
+    """session list/state must mark locked sessions with who holds them."""
+    monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
+    monkeypatch.setattr(IDAMCPServer, "_detect_ida_dir", lambda self: "")
+    monkeypatch.setattr(IDAMCPServer, "_find_idat", lambda self: "")
+
+    binary_a = tmp_path / "alpha.bin"
+    binary_a.write_bytes(b"alpha")
+    server = IDAMCPServer()
+    monkeypatch.setattr(server, "_ensure_runtime_and_idb", lambda session: None)
+
+    token = server._begin_client_connection()
+    try:
+        opened = _open_owned_session(server, str(binary_a))
+        sid = opened["session_id"]
+        server.session_runtimes[sid] = {"process": _FakeIdaProcess()}
+
+        listing = server._session_action_list({})
+        assert listing["ok"] is True
+        row = next(s for s in listing["sessions"] if s["session_id"] == sid)
+        assert row["locked"] is True
+        assert row["holder"] == "this-host-runtime"
+        assert row["owner_pid"] == os.getpid()
+
+        state = server._session_action_state({"idb": sid})
+        assert state["ok"] is True
+        assert state["state"]["locked"] is True
+        assert state["state"]["holder"] == "this-host-runtime"
     finally:
         server._end_client_connection(token)
         server.shutdown()
