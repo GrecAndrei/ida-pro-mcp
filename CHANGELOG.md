@@ -2,6 +2,15 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-08-03 — embedding/rerank hardening (CPU default, memory bounds)
+
+- **CPU is now forced, not assumed.** A Vulkan-enabled llama.cpp build auto-selects the GPU when no `--device` is given, so on this box the embed server silently loaded `libggml-vulkan` + `libvulkan_intel` and ran on the pathological Intel UHD 620 iGPU even though offload is opt-in (`IDA_MCP_EMBED_GPU=1`). Both the embedder and reranker now pass `--device none` unless the GPU env var is set — the same fix the reranker already had, now applied to the embedder.
+- **Recycle no longer kills healthy servers mid-run.** The RSS-growth check compared current RSS against the *startup* baseline, so the first batch's legitimate one-time compute-graph allocation (measured 0.9 GB → 1.6 GB, then flat) tripped it and recycled a healthy server — the benchmark indexed only 16/33 corpus functions for exactly this reason. Growth is now measured *differentially* (since the previous request), which catches true leaks without punishing one-time graph allocation. Absolute RSS floors were raised to match the real plateau: embed 3 GB, rerank 4 GB.
+- **Rerank memory is bounded by chunking.** llama.cpp sizes its compute buffers for the whole request batch, so a 64-document pool ballooned to ~5.4 GB RSS on a 0.6B model (OOM territory on a 15 GB laptop). `rerank()` now scores documents in chunks (`IDA_MCP_RERANK_CHUNK`, default 8) and merges indices, so peak memory tracks the chunk, not the pool.
+- **Rerank context 8192 → 2048.** The profile's `max_context` (8192) sized the KV cache and physical batch for 8k tokens when every pair under the 6000-char document cap is ≤ ~2100 tokens. `--ctx-size 2048` covers every capped pair while cutting peak memory roughly in half.
+- **Rerank uses `--parallel 2`.** The `--parallel 1` score-collapse build bug was confirmed to be specific to a value of 1 — parallel 2 returns full distinct scores (verified) with lower peak memory than the no-parallel default.
+- The rerank benchmark (`benchmarks/rerank_bench.py`) default pool is now 16 and it logs per-query progress for long runs.
+
 ## 2026-08-03 — cross-encoder reranking + function families
 
 - **Two-stage retrieval (Stage 2)**: semantic search now re-scores the recalled candidate pool with a **cross-encoder reranker** — full attention between the query and each candidate's full document, so the top of the list is *correct* instead of merely nearby. The reranker runs on its own `llama-server --rerank` process (llama.cpp serves `--embedding` and `--rerank` as mutually exclusive modes) with the same lifecycle as the embedder: lease file, idle shutdown, activation grace, request lock, RSS/request recycling.

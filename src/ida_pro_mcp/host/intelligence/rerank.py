@@ -21,11 +21,16 @@ Configuration (env, with ``reranker.json`` state file overrides):
   IDA_MCP_RERANK_PROFILE    qwen3-reranker-0.6b | bge-reranker-v2-gemma |
                             qwen3-reranker-4b | bge-reranker-v2-m3
   IDA_MCP_RERANK_PORT       fixed port (default: random)
-  IDA_MCP_RERANK_CTX        context tokens (default: profile.max_context)
+  IDA_MCP_RERANK_CTX        context tokens (default: 2048 — covers any pair
+                            under the DOC_CHARS cap)
   IDA_MCP_RERANK_THREADS    CPU threads (default: cpu_count // 2)
-  IDA_MCP_RERANK_PARALLEL   llama.cpp slots — default 0 (server decides; must
-                            NOT be set to 1: build 99111b1 then returns one
-                            identical score for every document)
+  IDA_MCP_RERANK_BATCH_THREADS prompt/prefill threads (default: up to 16)
+  IDA_MCP_RERANK_CHUNK      documents per /rerank request (default: 8) — llama
+                            .cpp sizes buffers for the whole request, so chunk
+                            to bound peak memory on large pools
+  (server always runs with --parallel 2: build 99111b1 collapses /rerank to
+   one identical score per document when --parallel is 1, and 2 is the lowest
+   safe slot count that keeps scores distinct while cutting peak memory)
   IDA_MCP_RERANK_DOC_CHARS  per-document truncation for the /rerank payload
   IDA_MCP_RERANK_GPU        1/true to offload to a detected Vulkan device
   IDA_MCP_RERANK_MAX_CANDIDATES default recall pool the search passes here
@@ -84,6 +89,19 @@ _RERANK_LEASE_SCHEMA = 1
 RERANK_THREADS = _safe_int_env(
     "IDA_MCP_RERANK_THREADS", str(max(1, (os.cpu_count() or 4) // 2))
 )
+# Prompt/prefill parallelism.  Rerank is prefill-bound (every pair is a fresh
+# forward pass), so give the batch worker threads the same headroom the
+# embedder does; --threads stays at half cores to leave room for the MCP host.
+RERANK_BATCH_THREADS = _safe_int_env(
+    "IDA_MCP_RERANK_BATCH_THREADS",
+    str(min(16, max(1, os.cpu_count() or 4))),
+)
+# Documents per /rerank request.  llama.cpp sizes its compute buffers for the
+# whole request batch, so a 64-document pool can balloon RSS to 5+ GB and OOM a
+# small laptop.  Chunking keeps the physical batch (and therefore peak memory)
+# bounded while the pool size stays large; the request lock already serializes
+# clients so the extra round-trips are safe.
+RERANK_CHUNK_SIZE = max(1, _safe_int_env("IDA_MCP_RERANK_CHUNK", "8"))
 RERANK_DOC_CHARS = _safe_int_env("IDA_MCP_RERANK_DOC_CHARS", "6000")
 RERANK_REQUEST_TIMEOUT = _safe_float_env("IDA_MCP_RERANK_TIMEOUT", "30.0")
 RERANK_BATCH_REQUEST_TIMEOUT = _safe_float_env("IDA_MCP_RERANK_BATCH_TIMEOUT", "120.0")
@@ -308,7 +326,7 @@ class Reranker:
                 )
                 obj._identity_cache = None
                 obj._ctx = min(
-                    _safe_int_env("IDA_MCP_RERANK_CTX", "4096"),
+                    _safe_int_env("IDA_MCP_RERANK_CTX", "2048"),
                     obj._profile.max_context,
                 )
             cls._instance = obj
@@ -336,12 +354,13 @@ class Reranker:
         self._idle_lock = threading.Lock()
         self._idle_timer: threading.Timer | None = None
         self._idle_generation = 0
-        # Default ctx is 4096, not the profile's max: a rerank pair is a
-        # bounded document (<= RERANK_DOC_CHARS) plus the query (~2000-2200
-        # tokens), so 4096 comfortably fits every pair while keeping the KV
-        # cache and physical batch small enough for a laptop.
+        # Default ctx is 2048, not the profile's max (8192).  A rerank pair is
+        # a bounded document (RERANK_DOC_CHARS chars ~= 2000 tokens) plus the
+        # query, so 2048 covers every pair under the cap while keeping the KV
+        # cache and the physical batch small.  The profile max would size the
+        # compute buffers for 8k tokens and waste gigabytes on a laptop.
         self._ctx = min(
-            _safe_int_env("IDA_MCP_RERANK_CTX", "4096"),
+            _safe_int_env("IDA_MCP_RERANK_CTX", "2048"),
             self._profile.max_context,
         )
 
@@ -562,8 +581,11 @@ class Reranker:
         except OSError:
             model_size = 0
         # Context-sized KV + batch buffers on top of the model file: give the
-        # reranker 3x the model size plus a floor, not the embedder's 2x+512.
-        return max(3 * 1024**3, int(model_size * 3.0) + 1024 * 1024**2)
+        # reranker 4x the model size plus a floor, not the embedder's 2x+512.
+        # A chunked pool of a 0.6B model measures ~3 GB RSS at ctx 2048, so a
+        # 3 GB floor recycles a healthy server right at the edge; 4 GB leaves
+        # headroom while the differential growth check still catches leaks.
+        return max(4 * 1024**3, int(model_size * 4.0) + 1024 * 1024**2)
 
     def _record_success_and_maybe_recycle(self) -> None:
         lease = self._read_lease()
@@ -571,7 +593,7 @@ class Reranker:
             return
         pid = int(lease.get("pid") or 0)
         rss = _process_rss_bytes(pid)
-        baseline = int(lease.get("baseline_rss") or 0)
+        prev_rss = int(lease.get("rss") or 0)
         count = int(lease.get("request_count") or 0) + 1
         lease.update({"request_count": count, "rss": rss, "updated_at": time.time()})
         reason = ""
@@ -579,8 +601,17 @@ class Reranker:
             reason = f"request limit reached ({count})"
         elif rss and rss > self._rss_limit_bytes():
             reason = f"RSS limit exceeded ({rss // (1024 * 1024)} MiB)"
-        elif baseline and rss - baseline > RERANK_MAX_RSS_GROWTH_MB * 1024 * 1024:
-            reason = f"RSS growth exceeded ({(rss - baseline) // (1024 * 1024)} MiB)"
+        elif prev_rss and rss - prev_rss > RERANK_MAX_RSS_GROWTH_MB * 1024 * 1024:
+            # Differential growth since the PREVIOUS request, not startup: the
+            # first pool legitimately allocates the compute graph (RSS steps up
+            # once and plateaus — measured 0.9->1.6 GB then flat), so measuring
+            # against baseline false-positives and recycles a healthy server
+            # after its first big pool.  This catches leaks (memory that keeps
+            # growing request over request) without punishing one-time growth.
+            reason = (
+                f"RSS grew {(rss - prev_rss) // (1024 * 1024)} MiB "
+                f"since last request"
+            )
         if reason:
             self._retire_lease_process(lease, reason)
             return
@@ -644,8 +675,13 @@ class Reranker:
                 # is smaller.  Use ctx so any pair fits; docs are capped at
                 # RERANK_DOC_CHARS so the KV/compute cost stays bounded.
                 "--ubatch-size", str(self._ctx),
+                # --parallel 1 collapses /rerank to one identical score per
+                # document on build 99111b1 (why it was removed), but parallel 2
+                # returns full distinct scores and uses less peak memory, so we
+                # can have concurrency without the bug.
+                "--parallel", "2",
                 "--threads", str(RERANK_THREADS),
-                "--threads-batch", str(RERANK_THREADS),
+                "--threads-batch", str(RERANK_BATCH_THREADS),
                 "--n-predict", "0",
                 "--log-disable",
             ]
@@ -875,13 +911,41 @@ class Reranker:
         unavailable or the request failed.  Callers treat ``None`` as "keep
         the recall order" — reranking is a quality boost, never a hard gate.
         """
-        scored = self._request_rerank(
-            query,
-            documents,
-            timeout=RERANK_REQUEST_TIMEOUT,
-        )
-        if not scored:
-            return None
+        # Auto-recover: a recycled server (RSS ceiling after many pools, idle
+        # shutdown, a mid-request timeout) leaves _ready=False.  Restart once
+        # so reranking keeps working across a long session instead of silently
+        # no-oping for the rest of the process lifetime.  ensure_ready holds
+        # the start lock, so concurrent callers don't stampede the restart.
+        if not self._ready:
+            if not getattr(self, "_use_llama", False):
+                return None
+            try:
+                if not self.ensure_ready():
+                    return None
+            except Exception:
+                return None
+        # Chunk the pool: llama.cpp sizes its compute buffers for the whole
+        # request batch, so a large pool can balloon RSS (a 64-doc pool at
+        # ctx 4096 measured ~5.4 GB on a 0.6B model).  Scoring in bounded
+        # slices keeps peak memory proportional to the chunk, not the pool.
+        # Indices are chunk-relative, so offset them before merging.  A chunk
+        # failure keeps the recall order (None), never a partial reorder.
+        chunk = max(1, RERANK_CHUNK_SIZE)
+        merged: list[dict[str, Any]] = []
+        for start in range(0, len(documents), chunk):
+            part = documents[start:start + chunk]
+            scored = self._request_rerank(
+                query,
+                part,
+                timeout=RERANK_REQUEST_TIMEOUT,
+            )
+            if not scored:
+                return None
+            for item in scored:
+                merged.append(
+                    {"index": int(item["index"]) + start, "score": item["score"]}
+                )
+        merged.sort(key=lambda x: x["score"], reverse=True)
         if top_k and top_k > 0:
-            return scored[: int(top_k)]
-        return scored
+            return merged[: int(top_k)]
+        return merged

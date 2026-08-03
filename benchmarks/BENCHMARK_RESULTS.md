@@ -111,32 +111,61 @@ Raw reports: `corpus_libgpu_aux.gemini.report.json` (+ `local` when runnable).
 Harness: `benchmarks/rerank_bench.py`. Same `libgpu_aux.so` corpus. Stage 1
 recall is the Qwen3-0.6B embedding index; Stage 2 re-scores the recalled pool
 with the cross-encoder reranker. Gold = hand-authored queries mapped to the
-function the query describes. 3 queries, pool of 8.
+function the query describes. Pool of 16, 9 queries run (early-exit).
 
-| metric | baseline (Qwen3 recall) | bge-reranker-v2-gemma (rerank) |
+| metric | baseline (Qwen3 recall) | qwen3-reranker-0.6b (rerank) |
 |---|---|---|
-| MRR@10 | **1.0** | 0.714 |
-| recall@1 | **1.0** | 0.667 |
-| per-pair latency | — | 2.2 s |
-| pool-of-8 latency | — | 48.9 s |
-| pool reliability | — | failed on 2/3 queries |
+| MRR@10 | 0.9444 | **1.0** |
+| recall@1 | 0.8889 | **1.0** |
+| recall@5 | 1.0 | 1.0 |
+| per-pair latency | — | 5.5 s |
+| pool-of-16 latency | — | 101 s |
+| rerank applied | — | 7/9 discriminating queries |
 
-**Verdict: the public `bge-reranker-v2-gemma` GGUF is not viable.** The
-reranker *degraded* retrieval — the query it did re-score moved the correct
-function out of rank 1 — and it is pathologically slow on this CPU (a 2.6B
-model on 8 weak cores). The GGUF is a **headless base Gemma** (verified: 164
-tensors, no classification head, no `output.weight`), so its scores are not
-calibrated for relevance. The benchmark's discriminating-score detection and
-early-exit correctly surface this; the pipeline falls back to recall order
-rather than trusting it.
+**Qwen3-Reranker-0.6B is the correct Stage-2 model.** It is a real
+cross-encoder (311 tensors, `cls.output.weight` classification head — the
+opposite of the headless Gemma below) and it **improves** retrieval: on the
+one query where recall ranked the gold function 2nd, the reranker moved it to
+rank 1, lifting MRR 0.9444 → 1.0 and recall@1 0.8889 → 1.0. It never moved a
+correct answer down. Latency is real CPU cost (~5.5 s/pair on 4 threads) —
+expected for a cross-encoder on a laptop, and why the pipeline only re-scores
+the recalled pool rather than the whole binary. Two of nine pool calls failed
+(RSS ceiling recycled the server mid-benchmark); the pipeline fell back to
+recall order with no accuracy loss, and `rerank()` now auto-recovers by
+restarting the server.
 
-**The comparison this setup needs is the Qwen3-Reranker family** (`ggml-org`
-conversions, which ship the classification head): `qwen3-reranker-0.6b`
-(default, ~130 ms/pair) vs `qwen3-reranker-4b` (opt-in, ~0.5 s/pair). The
-harness runs both once the GGUFs are in `~/Downloads`:
-`python benchmarks/rerank_bench.py --models qwen3-reranker-0.6b qwen3-reranker-4b`.
+### Historical: bge-reranker-v2-gemma (deleted — not viable)
 
-Two llama.cpp build quirks were found and worked around in the reranker
-manager (verified empirically on build `99111b1`): `--parallel 1` collapses
-`/rerank` to one identical score per document, and a `top_k` field in the
-request body shifts the returned indices by one. Neither is sent.
+Before the Qwen3 conversion was available, the only public "reranker" GGUF on
+disk was `bge-reranker-v2-gemma.Q4_K_M` (2.6B). It degraded retrieval (MRR
+1.0 → 0.714 on the 3 queries it ran), took 2.2 s/pair, and failed 2/3 pool
+calls. It was a **headless base Gemma** (verified: 164 tensors, no
+classification head, no `output.weight`), so its scores are not calibrated for
+relevance. The benchmark's discriminating-score detection surfaced it; the
+model was deleted from `~/Downloads`.
+
+### Infra fixes found while benchmarking
+
+The benchmark exposed three real bugs in the embed/rerank servers, now fixed:
+
+1. **Vulkan build auto-grabbed the GPU.** A llama.cpp Vulkan build defaults to
+   the first device when no `--device` is given — on this box that silently
+   loaded `libggml-vulkan` + `libvulkan_intel` and ran on the pathological
+   Intel UHD 620 iGPU even though offload is opt-in. Both servers now force
+   `--device none` unless the GPU env var is set.
+2. **RSS recycle killed healthy servers.** The growth check compared RSS
+   against the startup baseline, so the first batch's one-time compute-graph
+   allocation (0.9 → 1.6 GB, then flat) tripped it — the benchmark indexed
+   only 16/33 corpus functions. Growth is now measured differentially (since
+   the previous request); absolute floors raised to match the real plateaus
+   (embed 3 GB, rerank 4 GB).
+3. **Rerank memory scaled with the whole pool.** llama.cpp sizes buffers for
+   the request batch, so a 64-doc pool ballooned to ~5.4 GB RSS (OOM on this
+   15 GB / 5.6 GB-available box). `rerank()` now scores in chunks of 8
+   (`IDA_MCP_RERANK_CHUNK`), ctx default 2048 (not 8192), and `--parallel 2`
+   (the `--parallel 1` collapse bug is specific to a value of 1). A recycled
+   server auto-recovers on the next call instead of disabling rerank.
+
+Two llama.cpp build quirks remain documented: `--parallel 1` collapses `/rerank`
+to one identical score per document, and a `top_k` field in the request body
+shifts the returned indices by one. Neither is sent.

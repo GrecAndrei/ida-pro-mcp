@@ -17,7 +17,7 @@ e.g. a headless GGUF) is reported as FAIL: reranking cannot improve anything
 and the pipeline correctly falls back to recall order.
 
 Usage:
-  python benchmarks/rerank_bench.py [--models qwen3-reranker-0.6b] [--max-candidates 32]
+  python benchmarks/rerank_bench.py [--models qwen3-reranker-0.6b] [--max-candidates 16]
 """
 
 from __future__ import annotations
@@ -188,12 +188,13 @@ def _run_one_model(profile_key: str, idx: FunctionEmbeddingIndex, funcs: list[di
     non_discriminating_streak = 0
     rows = []
 
-    for query, gold in queries:
+    for qi, (query, gold) in enumerate(queries, 1):
         # A model that cannot discriminate on the first two queries is broken
         # (constant scores).  Stop early instead of burning minutes confirming
         # the same FAIL on every query.
         if non_discriminating_streak >= 2:
             break
+        print(f"  q{qi}/{len(queries)}: {gold[:40]!r} ...", flush=True)
         recalled = _recall(idx, query, max_candidates)
         names = [ea_to_name.get(str(r["ea"]), str(r["ea"])) for r in recalled]
         b = _metrics(names, gold)
@@ -299,7 +300,8 @@ def _model_path_for(profile_key: str) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--corpus", default=str(CORPUS))
-    ap.add_argument("--max-candidates", type=int, default=32)
+    ap.add_argument("--max-candidates", type=int, default=16,
+                    help="recall pool size the reranker re-scores (default 16)")
     ap.add_argument("--models", nargs="*", default=None,
                     help="restrict to specific rerank profiles")
     ap.add_argument("--queries", type=int, default=0,

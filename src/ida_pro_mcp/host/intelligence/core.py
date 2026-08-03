@@ -1232,7 +1232,12 @@ class BgeCodeEmbedder:
             model_size = os.path.getsize(self._model_path)
         except OSError:
             model_size = 0
-        return max(2 * 1024**3, int(model_size * 2.0) + 512 * 1024**2)
+        # The Qwen3-0.6B embed server plateaus at ~1.9 GB RSS (0.9 GB after
+        # loading + the first batch's compute graph); a 2 GB floor recycled a
+        # healthy server mid-index.  Floor at 3 GB so a batch's transient peak
+        # stays clear of the limit while the differential growth check catches
+        # real leaks.
+        return max(3 * 1024**3, int(model_size * 2.0) + 1024 * 1024**2)
 
     def _record_success_and_maybe_recycle(self) -> None:
         lease = self._read_lease()
@@ -1240,7 +1245,7 @@ class BgeCodeEmbedder:
             return
         pid = int(lease.get("pid") or 0)
         rss = _process_rss_bytes(pid)
-        baseline = int(lease.get("baseline_rss") or 0)
+        prev_rss = int(lease.get("rss") or 0)
         count = int(lease.get("request_count") or 0) + 1
         lease.update({"request_count": count, "rss": rss, "updated_at": time.time()})
         reason = ""
@@ -1248,8 +1253,17 @@ class BgeCodeEmbedder:
             reason = f"request limit reached ({count})"
         elif rss and rss > self._rss_limit_bytes():
             reason = f"RSS limit exceeded ({rss // (1024 * 1024)} MiB)"
-        elif baseline and rss - baseline > EMBED_MAX_RSS_GROWTH_MB * 1024 * 1024:
-            reason = f"RSS growth exceeded ({(rss - baseline) // (1024 * 1024)} MiB)"
+        elif prev_rss and rss - prev_rss > EMBED_MAX_RSS_GROWTH_MB * 1024 * 1024:
+            # Differential growth since the PREVIOUS request, not startup: the
+            # first batch legitimately allocates the compute graph (measured
+            # 0.9 GB -> 1.6 GB, then flat), so comparing against the startup
+            # baseline false-positives and recycles a healthy server mid-index
+            # (the benchmark indexed only 16/33 corpus functions for exactly
+            # this reason).  Catches leaks, tolerates one-time graph allocation.
+            reason = (
+                f"RSS grew {(rss - prev_rss) // (1024 * 1024)} MiB "
+                f"since last request"
+            )
         if reason:
             self._retire_lease_process(lease, reason)
             return
@@ -1318,17 +1332,27 @@ class BgeCodeEmbedder:
                 "--log-disable",
             ]
             # Offloading to a GPU is opt-in (`IDA_MCP_EMBED_GPU=1`).  A Vulkan
-            # build silently defaults to CPU otherwise, and on some iGPUs
-            # (e.g. Intel UHD 620 / gen9) the Vulkan path is fast for short
-            # inputs but pathological on real decompilations — shader
-            # compilation per sequence length can make full-function embeds
-            # hang or take minutes.  CPU on a 0.6B model is the reliable
-            # default; the env var lets users on a capable GPU opt in.
-            if os.environ.get("IDA_MCP_EMBED_GPU", "") in ("1", "true", "yes"):
+            # build AUTO-SELECTS the GPU when no --device is given, so CPU must
+            # be forced explicitly (`--device none`) rather than assumed — this
+            # is the same bug the reranker had, verified on this box: the embed
+            # server silently loaded libggml-vulkan + libvulkan_intel and ran on
+            # the iGPU.  On some iGPUs (e.g. Intel UHD 620 / gen9) the Vulkan
+            # path is fast for short inputs but pathological on real
+            # decompilations — shader compilation per sequence length can make
+            # full-function embeds hang or take minutes.  CPU on a 0.6B model is
+            # the reliable default; the env var lets users on a capable GPU opt
+            # in.
+            if os.environ.get("IDA_MCP_EMBED_GPU", "").strip().lower() in ("1", "true", "yes"):
                 gpu_device = _detect_gpu_device(self._server_bin)
                 if gpu_device:
                     cmd.append("--device")
                     cmd.append(gpu_device)
+                else:
+                    cmd.append("--device")
+                    cmd.append("none")
+            else:
+                cmd.append("--device")
+                cmd.append("none")
             try:
                 # Ensure shared libraries are findable (e.g. libllama-server-impl.so
                 # in non-standard locations like /usr/local/lib/ollama).
