@@ -1,6 +1,8 @@
 import os
+import socket
 import sys
 import threading
+import time
 import unittest
 import urllib.error
 from unittest import mock
@@ -58,6 +60,50 @@ class TestBgeCodeEmbedderFailOpen(unittest.TestCase):
             self.assertTrue(emb._use_llama)
             self.assertFalse(emb._ready)
             self.assertEqual(emb._consecutive_rpc_failures, 0)
+
+    def test_timeout_inside_activation_grace_keeps_server_alive(self):
+        """A timeout during the activation-grace window is cold-start latency,
+        not a wedged server — the process must NOT be retired."""
+        emb = BgeCodeEmbedder()
+        emb._use_llama = True
+        emb._ready = True
+        emb._port = 9
+        emb._dimension = 2
+        emb._max_rpc_failures = 2
+        emb._consecutive_rpc_failures = 0
+        emb._server_started_at = time.time()  # still inside the grace window
+
+        with mock.patch(
+            "ida_pro_mcp.host.intelligence.core.urllib.request.urlopen",
+            side_effect=socket.timeout("cold start timeout"),
+        ), mock.patch.object(
+            BgeCodeEmbedder, "_retire_lease_process"
+        ) as retire:
+            out = emb.embed("first request after cold start")
+            self.assertFalse(out.ok)
+            retire.assert_not_called()  # never killed the just-started server
+            self.assertTrue(emb._ready)  # still ready for the next attempt
+
+    def test_timeout_outside_activation_grace_retires_server(self):
+        """After the grace window, a timeout is genuine wedging and the
+        process should be retired so the next request gets a fresh start."""
+        emb = BgeCodeEmbedder()
+        emb._use_llama = True
+        emb._ready = True
+        emb._port = 9
+        emb._dimension = 2
+        emb._max_rpc_failures = 2
+        emb._consecutive_rpc_failures = 0
+        emb._server_started_at = 0.0  # long ago: grace window elapsed
+
+        with mock.patch(
+            "ida_pro_mcp.host.intelligence.core.urllib.request.urlopen",
+            side_effect=socket.timeout("stuck timeout"),
+        ), mock.patch.object(
+            BgeCodeEmbedder, "_retire_lease_process"
+        ) as retire:
+            emb.embed("request")
+            retire.assert_called_once()
 
     def test_embed_recovers_counter_on_successful_rpc(self):
         emb = BgeCodeEmbedder()

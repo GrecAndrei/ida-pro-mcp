@@ -17,6 +17,7 @@ class EmbeddingModelProfile:
     query_prefix: str = ""
     document_prefix: str = ""
     suffix: str = ""
+    pooling: str = "mean"  # llama.cpp --pooling value; "last" for decoder models
     license: str = ""
     download_url: str = ""
     download_filename: str = ""
@@ -33,6 +34,28 @@ BGE_CODE_V1 = EmbeddingModelProfile(
     filename_patterns=("bge-code-v1*.gguf",),
     dimension=1536,
     license="apache-2.0",
+)
+
+QWEN3_EMBEDDING_0_6B = EmbeddingModelProfile(
+    key="qwen3-embedding-0.6b",
+    display_name="Qwen3 Embedding 0.6B",
+    filename_patterns=("Qwen3-Embedding-0.6B*.gguf", "qwen3-embedding-0.6b*.gguf"),
+    dimension=1024,
+    # Decoder model: last-token pooling, and query-side instruction prefix
+    # ("Instruct: <task>\nQuery: <query>", documents get no prefix).  The
+    # task line follows the model's training convention; retrieval docs
+    # recommend tailoring it to the scenario.
+    pooling="last",
+    query_prefix=(
+        "Instruct: Given a code analysis task, retrieve the relevant functions.\n"
+        "Query: "
+    ),
+    license="apache-2.0",
+    download_url=(
+        "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/main/"
+        "Qwen3-Embedding-0.6B-Q8_0.gguf"
+    ),
+    download_filename="Qwen3-Embedding-0.6B-Q8_0.gguf",
 )
 
 ZEMBED_1 = EmbeddingModelProfile(
@@ -52,10 +75,12 @@ ZEMBED_1 = EmbeddingModelProfile(
     opt_in=True,
 )
 
-MODEL_PROFILES = {p.key: p for p in (BGE_CODE_V1, ZEMBED_1)}
+MODEL_PROFILES = {p.key: p for p in (BGE_CODE_V1, QWEN3_EMBEDDING_0_6B, ZEMBED_1)}
 PROFILE_ALIASES = {
     "bge": "bge-code-v1",
     "bge-code": "bge-code-v1",
+    "qwen3": "qwen3-embedding-0.6b",
+    "qwen3-embedding": "qwen3-embedding-0.6b",
     "zembed": "zembed-1",
 }
 
@@ -137,12 +162,16 @@ def profile_from_model(path: str, requested: str | None = None) -> EmbeddingMode
         return ZEMBED_1
     if "bge-code-v1" in basename:
         return BGE_CODE_V1
+    if "qwen3-embedding-0.6b" in basename:
+        return QWEN3_EMBEDDING_0_6B
     metadata = read_gguf_metadata(path)
     name = str(metadata.get("general.name") or "").lower()
     if "zembed 1" in name or "zembed-1" in name:
         return ZEMBED_1
     if "bge code v1" in name or "bge-code-v1" in name:
         return BGE_CODE_V1
+    if "qwen3 embedding 0.6b" in name or "qwen3-embedding" in name:
+        return QWEN3_EMBEDDING_0_6B
     architecture = str(metadata.get("general.architecture") or "")
     dimension = int(metadata.get(f"{architecture}.embedding_length") or 0)
     return EmbeddingModelProfile(

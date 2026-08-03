@@ -182,6 +182,43 @@ def _is_executable(path: str) -> bool:
     return os.access(path, os.X_OK)
 
 
+def _detect_gpu_device(server_bin: str) -> str:
+    """Return a llama.cpp device name to offload embeddings to, or ``""``.
+
+    ``llama-server --list-devices`` prints lines like
+    ``Vulkan0: Intel(R) UHD Graphics 620 (WHL GT2) (... MiB, ... MiB free)``.
+    We prefer the first Vulkan device — GPU prefill/encode on a modern
+    embedding model is typically an order of magnitude faster than CPU on a
+    shared-memory laptop, and frees the CPU threads.  ``""`` means "let
+    llama.cpp use its default (CPU) device" and is what callers fall back to
+    when the binary is CPU-only or the probe fails.
+
+    The probe runs the binary with ``--list-devices`` once and caches nothing:
+    it is cheap (the process exits immediately) and avoids a stale device list
+    if the GPU stack changes while the host is running.
+    """
+    if not server_bin or not _is_executable(server_bin):
+        return ""
+    try:
+        proc = subprocess.run(
+            [server_bin, "--list-devices"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except Exception:
+        return ""
+    for line in (proc.stdout or "").splitlines():
+        line = line.strip()
+        # "Vulkan0: Intel(R) UHD Graphics 620 ..."
+        if line.lower().startswith("vulkan") and ":" in line:
+            dev = line.split(":", 1)[0].strip()
+            if dev:
+                return dev
+    return ""
+
+
 EMBEDDER_STATE_FILE = "embedder.json"
 
 
@@ -267,8 +304,9 @@ def write_embedder_state(
     """Persist a manual embedder override to `<install_root>/embedder.json`.
 
     Mirrors the installer pattern used for `ida-install.json` so a user (or
-    a future installer subcommand) can pin the llama-server binary and the
-    bge-code-v1 GGUF without relying on env vars or PATH.
+    a future installer subcommand) can pin the llama-server binary and an
+    embedding GGUF (e.g. qwen3-embedding-0.6b) without relying on env vars or
+    PATH.
 
     ``backend="gemini"`` opts into the cloud Gemini embedder; the gemini_*
     fields carry model/dimension/Vertex routing only — **the API key is never
@@ -456,7 +494,7 @@ def _find_model() -> str:
     global _MODEL_PATH_CACHE
     state = _read_embedder_state()
     requested_profile = str(
-        os.environ.get("IDA_MCP_EMBED_PROFILE") or state.get("profile") or "bge-code-v1"
+        os.environ.get("IDA_MCP_EMBED_PROFILE") or state.get("profile") or "qwen3-embedding-0.6b"
     ).strip().lower()
     requested_profile = (get_model_profile(requested_profile) or BGE_CODE_V1).key
     cache_key = requested_profile
@@ -536,6 +574,24 @@ def _find_model() -> str:
                 _MODEL_PATH_CACHE = (cache_key, selected)
                 return selected
 
+    # 7) Legacy fallback: if the selected (default) profile has no model yet,
+    # accept an older bge-code-v1 install so embedding keeps working instead of
+    # silently going unavailable.  Explicitly-requested profiles still win above.
+    if requested_profile != BGE_CODE_V1.key:
+        for base in bases:
+            if not base:
+                continue
+            for pattern in BGE_CODE_V1.filename_patterns:
+                candidates.extend(glob.glob(os.path.join(base, pattern)))
+        for c in candidates:
+            try:
+                p = os.path.abspath(c)
+            except Exception:
+                continue
+            if os.path.isfile(p):
+                _MODEL_PATH_CACHE = (cache_key, p)
+                return p
+
     _MODEL_PATH_CACHE = (cache_key, "")
     return ""
 
@@ -590,7 +646,7 @@ EMBED_BATCH_THREADS = _safe_int_env(
 EMBED_PARALLEL = max(1, min(4, _safe_int_env(
     "IDA_MCP_EMBED_PARALLEL", str(max(1, _EMBED_CPU_COUNT // 4))
 )))
-EMBED_REQUEST_TIMEOUT = _safe_float_env("IDA_MCP_EMBED_REQUEST_TIMEOUT", "5.0")
+EMBED_REQUEST_TIMEOUT = _safe_float_env("IDA_MCP_EMBED_REQUEST_TIMEOUT", "15.0")
 # A batch contains full decompilations, so it can legitimately take longer
 # than the interactive single-query deadline.  Keep the two independently
 # tunable: search stays responsive while indexing can complete on CPU-only
@@ -886,6 +942,13 @@ class BgeCodeEmbedder:
         self._last_batch_timeout = False
         self._last_recycle_reason = ""
         self._identity_cache: dict[str, Any] | None = None
+        # Monotonic clock of the last server (re)start/attach.  Health reports
+        # "ok" while the model is still lazily loading, so the first embed
+        # request after start can legitimately exceed EMBED_REQUEST_TIMEOUT.
+        # Requests inside the activation-grace window get the longer grace
+        # timeout and a timeout there is treated as cold-start latency, never
+        # as evidence that the server is wedged.
+        self._server_started_at = 0.0
         self._idle_lock = threading.Lock()
         self._idle_timer: threading.Timer | None = None
         self._idle_generation = 0
@@ -1209,6 +1272,9 @@ class BgeCodeEmbedder:
                 self._ready = True
                 self._owns_proc = False
                 self._use_llama = True
+                # A server we just attached to may still be cold; grant it the
+                # same activation grace as a locally-started process.
+                self._server_started_at = time.monotonic()
                 return True
             if lease:
                 self._retire_lease_process(lease, "stale or incompatible lease")
@@ -1237,13 +1303,25 @@ class BgeCodeEmbedder:
                 "--ctx-size", str(EMBED_CTX),
                 "--batch-size", str(max(EMBED_CTX, 2048)),
                 "--ubatch-size", str(min(max(256, EMBED_CTX // 4), 512)),
-                "--pooling", "mean",
+                "--pooling", str(getattr(self._profile, "pooling", None) or "mean"),
                 "--parallel", str(min(EMBED_PARALLEL, self._max_batch_size)),
                 "--threads",  str(EMBED_THREADS),
                 "--threads-batch", str(EMBED_BATCH_THREADS),
                 "--n-predict", "0",
                 "--log-disable",
             ]
+            # Offloading to a GPU is opt-in (`IDA_MCP_EMBED_GPU=1`).  A Vulkan
+            # build silently defaults to CPU otherwise, and on some iGPUs
+            # (e.g. Intel UHD 620 / gen9) the Vulkan path is fast for short
+            # inputs but pathological on real decompilations — shader
+            # compilation per sequence length can make full-function embeds
+            # hang or take minutes.  CPU on a 0.6B model is the reliable
+            # default; the env var lets users on a capable GPU opt in.
+            if os.environ.get("IDA_MCP_EMBED_GPU", "") in ("1", "true", "yes"):
+                gpu_device = _detect_gpu_device(self._server_bin)
+                if gpu_device:
+                    cmd.append("--device")
+                    cmd.append(gpu_device)
             try:
                 # Ensure shared libraries are findable (e.g. libllama-server-impl.so
                 # in non-standard locations like /usr/local/lib/ollama).
@@ -1265,6 +1343,10 @@ class BgeCodeEmbedder:
                     env=_env,
                 )
                 self._owns_proc = True
+                # Begin the activation-grace window now: health may report ok
+                # before the model is fully ready, so the first requests need
+                # a longer deadline than EMBED_REQUEST_TIMEOUT.
+                self._server_started_at = time.monotonic()
                 if isinstance(self._proc.pid, int) and not self._stop_registered:
                     atexit.register(self.stop)
                     self._stop_registered = True
@@ -1406,6 +1488,15 @@ class BgeCodeEmbedder:
         if not self._ready:
             return None
         self._cancel_idle_shutdown()
+        # A request landing inside the activation-grace window (right after the
+        # server process started or was attached to) may still be paying for
+        # lazy model load / first-inference warmup.  Give it the longer grace
+        # deadline so a legitimately cold start is not mistaken for a hang.
+        in_activation_grace = (
+            time.monotonic() - self._server_started_at
+        ) < EMBED_ACTIVATION_GRACE_TIMEOUT
+        if in_activation_grace:
+            timeout = max(timeout, EMBED_ACTIVATION_GRACE_TIMEOUT)
         try:
             with _InterProcessLock(
                 _embed_request_lock_path(), min(EMBED_LOCK_TIMEOUT, timeout)
@@ -1463,7 +1554,18 @@ class BgeCodeEmbedder:
         except (OSError, ValueError, KeyError, json.JSONDecodeError, RuntimeError) as exc:
             if isinstance(exc, (TimeoutError, socket.timeout)):
                 self._last_batch_timeout = True
-                self._retire_lease_process(self._read_lease(), "embedding request timeout")
+                if in_activation_grace:
+                    # Cold-start latency, not a wedged server: the process was
+                    # granted the full grace deadline and still needs more time
+                    # to load.  Keep the server alive — retiring it here would
+                    # restart the warmup and turn a one-off slow first request
+                    # into a permanent failure loop.  Count a single failure so
+                    # a genuinely broken server still trips _max_rpc_failures.
+                    pass
+                else:
+                    self._retire_lease_process(
+                        self._read_lease(), "embedding request timeout"
+                    )
             self._consecutive_rpc_failures += 1
             if self._consecutive_rpc_failures >= self._max_rpc_failures:
                 # Transient failure — mark not-ready but allow retry.

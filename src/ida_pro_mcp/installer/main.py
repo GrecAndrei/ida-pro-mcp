@@ -344,11 +344,12 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
     )
 
     _backend_choices = {
+        "qwen3-embedding-0.6b (local GGUF, fast)": "qwen3-embedding-0.6b",
         "bge-code-v1 (local GGUF)": "bge-code-v1",
         "zembed-1 (local GGUF, non-commercial)": "zembed-1",
         "gemini-embedding-2 (cloud, requires API key)": "gemini",
     }
-    current_backend = opts.embed_backend if opts.embed_backend in _backend_choices.values() else "bge-code-v1"
+    current_backend = opts.embed_backend if opts.embed_backend in _backend_choices.values() else "qwen3-embedding-0.6b"
     default_backend_label = next(k for k, v in _backend_choices.items() if v == current_backend)
     opts.embed_backend = _backend_choices[
         _prompt_choice(
@@ -602,11 +603,11 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
     )
     parser.add_argument("--embed-model", default="", help="explicit path to an embedding GGUF model")
     parser.add_argument(
-        "--embed-profile", choices=["bge-code-v1", "zembed-1"], default="bge-code-v1",
-        help="embedding prompt/model profile (default: bge-code-v1)",
+        "--embed-profile", choices=["qwen3-embedding-0.6b", "bge-code-v1", "zembed-1"], default="qwen3-embedding-0.6b",
+        help="embedding prompt/model profile (default: qwen3-embedding-0.6b)",
     )
     parser.add_argument(
-        "--embed-backend", choices=["bge-code-v1", "zembed-1", "gemini"], default="bge-code-v1",
+        "--embed-backend", choices=["qwen3-embedding-0.6b", "bge-code-v1", "zembed-1", "gemini"], default="qwen3-embedding-0.6b",
         help="embedding backend: a local GGUF profile or the opt-in cloud gemini-embedding-2",
     )
     parser.add_argument(

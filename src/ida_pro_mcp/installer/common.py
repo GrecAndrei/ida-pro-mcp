@@ -19,8 +19,8 @@ class InstallerOptions:
     install_claude_skills: bool = True  # install skills for Claude Code / OpenCode
     interactive: bool | None = None
     embed_auto: bool = True
-    embed_profile: str = "bge-code-v1"
-    embed_backend: str = "bge-code-v1"  # bge-code-v1 | zembed-1 | gemini
+    embed_profile: str = "qwen3-embedding-0.6b"
+    embed_backend: str = "qwen3-embedding-0.6b"  # qwen3-embedding-0.6b | bge-code-v1 | zembed-1 | gemini
     gemini_access: str = "aistudio"  # aistudio | vertex
     gemini_api_key: str = ""
     gemini_vertex_project: str = ""

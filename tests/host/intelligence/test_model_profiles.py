@@ -8,6 +8,7 @@ from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder
 from ida_pro_mcp.host.intelligence.embeddings import FunctionEmbeddingIndex
 from ida_pro_mcp.host.intelligence.model_profiles import (
     BGE_CODE_V1,
+    QWEN3_EMBEDDING_0_6B,
     ZEMBED_1,
     model_dimension,
     profile_from_model,
@@ -53,6 +54,26 @@ def test_gguf_metadata_supplies_the_embedding_dimension(tmp_path):
 def test_profile_is_inferred_from_manual_model_name_without_a_configured_profile():
     assert profile_from_model("/models/zembed-1-Q4_K_M.gguf").key == "zembed-1"
     assert profile_from_model("/models/bge-code-v1-q8_0.gguf").key == "bge-code-v1"
+    assert (
+        profile_from_model("/models/Qwen3-Embedding-0.6B-Q8_0.gguf").key
+        == "qwen3-embedding-0.6b"
+    )
+
+
+def test_qwen3_profile_uses_last_token_pooling_and_query_instruction():
+    """The Qwen3 swap fixes two silent bugs: mean pooling on a decoder model
+    and a missing query-side instruction prefix."""
+    assert QWEN3_EMBEDDING_0_6B.pooling == "last"
+    assert QWEN3_EMBEDDING_0_6B.dimension == 1024
+    assert QWEN3_EMBEDDING_0_6B.format_text("find the decryptor", "query").startswith(
+        "Instruct: Given a code analysis task"
+    )
+    assert QWEN3_EMBEDDING_0_6B.format_text("void decrypt(void)", "document") == (
+        "void decrypt(void)"
+    )
+    assert QWEN3_EMBEDDING_0_6B.format_text("void decrypt(void)", "document").endswith(
+        "void decrypt(void)"
+    )
 
 
 def test_selected_profile_does_not_reuse_an_incompatible_persisted_model(monkeypatch, tmp_path):
@@ -81,6 +102,7 @@ def test_zembed_sends_query_and_document_prompts_to_the_embedding_server(monkeyp
     embedder._consecutive_rpc_failures = 0
     embedder._max_rpc_failures = 2
     embedder._last_batch_timeout = False
+    embedder._server_started_at = 0.0  # not in the activation-grace window
     embedder._last_recycle_reason = ""
     embedder._model_path = ""
     embedder._server_bin = ""

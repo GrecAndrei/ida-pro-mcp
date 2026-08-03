@@ -271,10 +271,10 @@ def find_embed_model(install_root: Path, profile: str = "") -> str:
 
         if requested_from_env:
             requested_from_env = (
-                get_model_profile(requested_from_env) or get_model_profile("bge-code-v1")
+                get_model_profile(requested_from_env) or get_model_profile("qwen3-embedding-0.6b")
             ).key
         if state_profile:
-            state_profile = (get_model_profile(state_profile) or get_model_profile("bge-code-v1")).key
+            state_profile = (get_model_profile(state_profile) or get_model_profile("qwen3-embedding-0.6b")).key
 
         if manual and (
             not requested_from_env
