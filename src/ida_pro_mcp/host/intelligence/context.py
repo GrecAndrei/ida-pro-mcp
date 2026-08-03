@@ -767,35 +767,20 @@ class ContextAssembler:
                         pass
                 threading.Thread(target=_persist, daemon=True).start()
 
-                # Similarity search over in-memory cache. Only surfaced in full
-                # mode, so skip the cosine scan entirely in compact mode — the
-                # embed + async persist above is the valuable indexing side-effect.
+                # Similarity search over the in-memory cache. Only surfaced in
+                # full mode, so skip the cosine scan entirely in compact mode —
+                # the embed + async persist above is the valuable indexing
+                # side-effect.  Delegates to FunctionEmbeddingIndex.similar_vec
+                # so the numpy-accelerated batch cosine is used here too.
                 if _full:
-                    cache_snap = idx.cache_snapshot()
-                    if len(cache_snap) > 1:
-                        scored = sorted(
-                            [(BgeCodeEmbedder.cosine(query_vec, v), ea)
-                             for ea, v in cache_snap if ea != addr],
-                            reverse=True,
-                        )
-                        top = [(sim, ea) for sim, ea in scored[:3] if sim >= 0.6]
-                        if top:
-                            top_eas = [ea for _, ea in top]
-                            names: dict[str, str] = {}
-                            try:
-                                with idx._conn() as conn:
-                                    ph2 = ",".join("?" * len(top_eas))
-                                    for row in conn.execute(
-                                        f"SELECT ea, name FROM func_embeddings WHERE ea IN ({ph2})",
-                                        top_eas,
-                                    ):
-                                        names[row[0]] = row[1] or row[0]
-                            except Exception:
-                                pass
-                            pack["similar_functions"] = [
-                                {"ea": ea, "name": names.get(ea, ea), "similarity": round(sim, 4)}
-                                for sim, ea in top
-                            ]
+                    similar = idx.similar_vec(
+                        query_vec, top_k=3, threshold=0.6, exclude_ea=addr
+                    )
+                    if similar:
+                        pack["similar_functions"] = [
+                            {"ea": row["ea"], "name": row["name"], "similarity": row["similarity"]}
+                            for row in similar
+                        ]
             except Exception:
                 pass
 

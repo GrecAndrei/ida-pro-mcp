@@ -43,7 +43,7 @@ from typing import Any
 
 import requests
 
-from .helpers import _EmbedResult, cosine_similarity as _cosine
+from .helpers import _EmbedResult, cosine_similarity as _cosine, decomp_document_char_budget
 
 logger = logging.getLogger(__name__)
 
@@ -596,10 +596,11 @@ class GeminiEmbedBackend:
     def decomp_document_chars(self) -> int:
         from .core import DECOMP_DOCUMENT_CHARS, DECOMP_DOCUMENT_FRACTION  # runtime import
 
-        if DECOMP_DOCUMENT_CHARS > 0:
-            return max(1024, min(self.max_input_chars, DECOMP_DOCUMENT_CHARS))
-        fraction = max(0.1, min(1.0, DECOMP_DOCUMENT_FRACTION))
-        return max(1024, min(self.max_input_chars, int(self.max_input_chars * fraction)))
+        return decomp_document_char_budget(
+            self.max_input_chars,
+            explicit_chars=DECOMP_DOCUMENT_CHARS,
+            fraction=DECOMP_DOCUMENT_FRACTION,
+        )
 
     @staticmethod
     def cosine(a: list[float], b: list[float]) -> float:

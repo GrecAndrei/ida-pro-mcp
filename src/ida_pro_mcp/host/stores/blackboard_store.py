@@ -42,7 +42,7 @@ import uuid
 from contextlib import closing
 from typing import Any
 
-from ..intelligence.helpers import dot_product, pack_floats, unpack_floats
+from ..intelligence.helpers import batch_cosine_similarity, pack_floats, unpack_floats
 
 KINDS = frozenset({"finding", "hypothesis", "question", "task", "decision", "examined"})
 STATUSES = frozenset({"open", "confirmed", "resolved", "rejected"})
@@ -1248,15 +1248,22 @@ class BlackboardStore:
         with closing(self._conn()) as conn:
             rows = conn.execute(f"SELECT * FROM blackboard {where}", params).fetchall()
 
-        scored = []
+        pairs: list[tuple[sqlite3.Row, list[float]]] = []
         for row in rows:
             blob = row["vector"]
             if not blob:
                 continue
             try:
-                sim = dot_product(q_vec, unpack_floats(blob))
+                vec = unpack_floats(blob)
             except Exception:
                 continue
+            pairs.append((row, vec))
+        if not pairs:
+            return lexical_search()
+
+        sims = batch_cosine_similarity(q_vec, [vec for _, vec in pairs])
+        scored = []
+        for sim, (row, _vec) in zip(sims, pairs, strict=True):
             if sim >= threshold:
                 d = self._row_to_dict(row)
                 d["similarity"] = round(sim, 4)

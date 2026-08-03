@@ -2,6 +2,14 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-08-03 — embedding layer overhaul
+
+- **Vectorized semantic search**: `helpers.batch_cosine_similarity` runs the k-NN scan as a single NumPy matrix multiply (~4× faster than the per-pair Python loop on a 20k×1536 index, exact agreement to float precision), with a pure-Python fallback when NumPy is absent. The function index (`similar_vec`, `similar`), the context assembler's `similar_functions` enrichment, and the blackboard's `semantic_search` all route through it.
+- **Removed duplication**: `FunctionEmbeddingIndex.similar` now embeds the query then delegates to `similar_vec` (one scoring path, one ranking rule) instead of re-implementing the scan. The context assembler's hand-rolled cosine scan was replaced with the shared `similar_vec` call. `decomp_document_chars` is a single shared `decomp_document_char_budget` helper used by both the local and cloud embedders.
+- **Fixed `verify_metadata` staleness bug**: index metadata was snapshotted from the embedder the index was *built* with, not the embedder being verified against — so a changed `embedding_format` never triggered a rebuild. The snapshot now takes the candidate embedder explicitly.
+- **Stripped dead code**: removed the unused `compact_policy_blob` / `prune_policy_store` policy-store helpers; hoisted inline helper imports; removed a redundant `socket` re-import.
+- **Test coverage**: new tests for `batch_cosine_similarity` (NumPy + fallback parity, zero-norm/dimension-mismatch edges), the `BehaviorClassifier` scoring path (previously untested), `similar_vec` / `similar` / `hybrid_search` ranking semantics, and the blackboard vector-search path.
+
 ## 2026-08-03 — opt-in Gemini cloud embedding backend
 
 - New **opt-in cloud embedder**: `gemini-embedding-2` (or `gemini-embedding-001`) through the Google API, selected only when the user sets `IDA_MCP_EMBED_BACKEND=gemini` or writes `embedder.json` `{"backend": "gemini"}` — never automatically, even when GCP/Gemini env vars are present. The local llama-server path (`bge-code-v1` / `zembed-1`) is unchanged and still the default.

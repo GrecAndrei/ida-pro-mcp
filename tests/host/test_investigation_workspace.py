@@ -7,8 +7,22 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
+import pytest
+
 from ida_pro_mcp.host.server.server_blackboard import ServerBlackboardMixin, _entry_brief
 from ida_pro_mcp.host.stores.blackboard_store import BlackboardStore
+
+
+class _KeywordEmbedder:
+    """Deterministic test embedder for blackboard vector search."""
+
+    backend = "test"
+    dim = 2
+
+    def embed_vector(self, text: str):
+        if "certificate" in str(text or ""):
+            return [1.0, 0.0]
+        return [0.0, 1.0]
 
 
 def test_repeated_observations_merge_evidence_instead_of_polluting_notebook(tmp_path):
@@ -147,6 +161,38 @@ print(json.dumps(store.semantic_search('certificate length', top_k=5, category='
     results = json.loads(result.stdout)
     assert [item["title"] for item in results] == ["TLS certificate parser"]
     assert results[0]["similarity"] == 1.0
+
+
+def test_semantic_search_uses_vectors_and_reports_semantic_match(tmp_path, monkeypatch):
+    from ida_pro_mcp.host.stores import blackboard_store
+
+    monkeypatch.setattr(blackboard_store, "_get_embedder", _KeywordEmbedder)
+    store = BlackboardStore(str(tmp_path / "workspace.db"))
+    store.write("TLS certificate parser", "validates an ASN.1 length", category="crypto", embed=True)
+    store.write("registry persistence", "autorun key manipulation", category="persistence", embed=True)
+
+    results = store.semantic_search("certificate", top_k=5, threshold=0.5, category="crypto")
+
+    assert results and results[0]["title"] == "TLS certificate parser"
+    assert results[0]["match"] == "semantic"
+    assert results[0]["similarity"] == pytest.approx(1.0, abs=1e-6)
+    # The orthogonal persistence entry is below threshold within this category.
+    assert len(results) == 1
+
+
+def test_semantic_search_returns_lexical_fallback_when_nothing_passes(tmp_path, monkeypatch):
+    from ida_pro_mcp.host.stores import blackboard_store
+
+    monkeypatch.setattr(blackboard_store, "_get_embedder", _KeywordEmbedder)
+    store = BlackboardStore(str(tmp_path / "workspace.db"))
+    store.write("TLS certificate parser", "validates an ASN.1 length", category="crypto", embed=True)
+
+    # "parser" embeds orthogonally to every stored vector, so nothing passes
+    # the semantic threshold and keyword overlap answers instead.
+    results = store.semantic_search("parser", top_k=5, threshold=0.99, category="crypto")
+
+    assert results and results[0]["title"] == "TLS certificate parser"
+    assert results[0]["match"] == "lexical"
 
 
 def test_empty_frontier_seeds_from_live_ida_function_inventory(tmp_path):

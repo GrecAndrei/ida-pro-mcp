@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from ida_pro_mcp.host.intelligence.embeddings import FunctionEmbeddingIndex
+from ida_pro_mcp.host.intelligence.helpers import _EmbedResult
 
 
 class _UnavailableEmbedder:
@@ -41,6 +44,47 @@ class _PrefixFailureEmbedder:
             _BatchResult([0.0, 0.6, 0.8]) if index < 2 else _BatchResult(None)
             for index, _text in enumerate(texts)
         ]
+
+
+class _KeywordEmbedder:
+    """Deterministic test embedder: text containing a keyword maps to a fixed
+    unit vector, so similarity relationships are fully controllable."""
+
+    backend = "test"
+    dim = 2
+
+    def _vec(self, text: str) -> list[float]:
+        if "alpha" in text:
+            return [1.0, 0.0]
+        if "gamma" in text:
+            return [-1.0, 0.0]
+        return [0.0, 1.0]  # beta and everything else
+
+    def embed_vector(self, text: str):
+        return self._vec(str(text or ""))
+
+    def embed_query_vector(self, text: str):
+        return self._vec(str(text or ""))
+
+    def embed_document(self, text: str):
+        return _EmbedResult(self._vec(str(text or "")), self.backend, True)
+
+    def embed_documents(self, texts: list[str]):
+        return [_EmbedResult(self._vec(t), self.backend, True) for t in texts]
+
+
+class _CountingEmbedder(_KeywordEmbedder):
+    def __init__(self):
+        self.embed_document_calls = 0
+        self.embed_documents_calls = 0
+
+    def embed_document(self, text: str):
+        self.embed_document_calls += 1
+        return super().embed_document(text)
+
+    def embed_documents(self, texts: list[str]):
+        self.embed_documents_calls += 1
+        return super().embed_documents(texts)
 
 
 def test_index_does_not_claim_success_when_embedding_is_unavailable(tmp_path):
@@ -166,3 +210,149 @@ def test_semantic_candidates_are_filtered_by_address_range_before_limit(tmp_path
     )
 
     assert {match["ea"] for match in matches} == {"0x3f00", "0x4100"}
+
+
+def _index_alpha_beta(tmp_path):
+    index = FunctionEmbeddingIndex(str(tmp_path / "sample.embeddings.db"), _KeywordEmbedder())
+    index.index_many(
+        [
+            ("0x1000", "alpha_fn", "alpha behavior decode", None),
+            ("0x2000", "beta_fn", "beta unrelated work", None),
+        ]
+    )
+    return index
+
+
+def test_similar_vec_ranks_by_cosine(tmp_path):
+    index = _index_alpha_beta(tmp_path)
+
+    hits = index.similar_vec([1.0, 0.0], top_k=5, threshold=0.5)
+    assert hits[0]["ea"] == "0x1000"
+    assert hits[0]["similarity"] == pytest.approx(1.0, abs=1e-6)
+
+    hits_beta = index.similar_vec([0.0, 1.0], top_k=5, threshold=0.5)
+    assert hits_beta[0]["ea"] == "0x2000"
+
+
+def test_similar_vec_excludes_ea(tmp_path):
+    index = _index_alpha_beta(tmp_path)
+
+    hits = index.similar_vec([1.0, 0.0], top_k=5, threshold=0.0, exclude_ea="0x1000")
+    assert hits and hits[0]["ea"] == "0x2000"
+
+
+def test_similar_vec_respects_address_ranges(tmp_path):
+    index = FunctionEmbeddingIndex(str(tmp_path / "sample.embeddings.db"), _KeywordEmbedder())
+    index.index_many(
+        [
+            ("0x1000", "alpha_low", "alpha one", None),
+            ("0x3000", "alpha_mid", "alpha two", None),
+            ("0x5000", "alpha_high", "alpha three", None),
+        ]
+    )
+
+    hits = index.similar_vec(
+        [1.0, 0.0], top_k=5, threshold=0.5, address_ranges=[(0x2000, 0x4000)]
+    )
+    assert [h["ea"] for h in hits] == ["0x3000"]
+
+
+def test_similar_vec_applies_threshold_and_top_k(tmp_path):
+    index = _index_alpha_beta(tmp_path)
+
+    # Threshold above 1.0: nothing passes.
+    assert index.similar_vec([1.0, 0.0], top_k=5, threshold=1.5) == []
+    # top_k=1 returns only the best.
+    hits = index.similar_vec([1.0, 0.0], top_k=1, threshold=0.0)
+    assert len(hits) == 1
+    assert hits[0]["ea"] == "0x1000"
+
+
+def test_similar_embeds_then_ranks_like_similar_vec(tmp_path):
+    index = _index_alpha_beta(tmp_path)
+
+    hits = index.similar("alpha query text", top_k=5, threshold=0.5)
+    assert hits and hits[0]["ea"] == "0x1000"
+    direct = index.similar_vec([1.0, 0.0], top_k=5, threshold=0.5)
+    assert hits[0]["similarity"] == direct[0]["similarity"]
+
+
+def test_similar_supports_address_ranges_and_exclude(tmp_path):
+    index = _index_alpha_beta(tmp_path)
+
+    hits = index.similar("alpha query", top_k=5, threshold=0.0, exclude_ea="0x1000")
+    assert hits and hits[0]["ea"] == "0x2000"
+
+    ranged = index.similar("alpha query", top_k=5, threshold=0.5, address_ranges=[(0x0000, 0x2000)])
+    assert [h["ea"] for h in ranged] == ["0x1000"]
+
+
+def test_similar_skips_embedding_when_cache_is_empty(tmp_path):
+    index = FunctionEmbeddingIndex(str(tmp_path / "empty.embeddings.db"), _CountingEmbedder())
+    assert index.similar("alpha query") == []
+    assert index.similar("") == []
+    assert index.similar("   ") == []
+    # Never touched the embedder — the cache being empty short-circuits.
+    assert index._embedder.embed_document_calls == 0
+
+
+def test_search_dispatches_vector_to_similar_vec_and_text_to_hybrid(tmp_path):
+    index = _index_alpha_beta(tmp_path)
+
+    vec_hits = index.search([1.0, 0.0], top_k=5, threshold=0.5)
+    assert vec_hits and vec_hits[0]["ea"] == "0x1000"
+
+    str_hits = index.search("alpha behavior", top_k=5, threshold=0.0)
+    assert str_hits and str_hits[0]["ea"] == "0x1000"
+    assert "score" in str_hits[0]
+
+
+def test_hybrid_search_merges_semantic_and_lexical_with_rank_reason(tmp_path):
+    index = FunctionEmbeddingIndex(str(tmp_path / "sample.embeddings.db"), _KeywordEmbedder())
+    index.index_many(
+        [
+            ("0x1000", "packet_parse", "alpha packet parse loop", None),
+            ("0x2000", "hash_round", "beta hash round mixing", None),
+        ]
+    )
+
+    hits = index.hybrid_search("alpha packet parse", top_k=5, threshold=0.0)
+    assert hits and hits[0]["ea"] == "0x1000"
+    assert hits[0]["similarity"] == pytest.approx(1.0, abs=1e-6)
+    assert set(hits[0]["rank_reason"]) == {"semantic", "lexical", "token_coverage", "exact"}
+
+
+def test_hybrid_search_empty_query_returns_empty(tmp_path):
+    index = _index_alpha_beta(tmp_path)
+    assert index.hybrid_search("") == []
+
+
+def test_verify_metadata_detects_backend_and_dimension_change(tmp_path):
+    index = _index_alpha_beta(tmp_path)
+    assert index.verify_metadata(_KeywordEmbedder())["ok"] is True
+
+    class _OtherBackend:
+        backend = "unavailable"
+        dim = 0
+
+        def embed_vector(self, text):
+            return None
+
+    check = index.verify_metadata(_OtherBackend())
+    assert check["ok"] is False
+    assert "embedding_backend" in check["mismatches"]
+
+
+def test_needs_rebuild_fires_when_embedding_format_changes(tmp_path):
+    db_path = str(tmp_path / "sample.embeddings.db")
+
+    class _FormatA(_KeywordEmbedder):
+        embedding_format = "profile-v1:a"
+
+    index = FunctionEmbeddingIndex(db_path, _FormatA())
+    assert index.needs_rebuild(_FormatA()) is False
+
+    class _FormatB(_KeywordEmbedder):
+        embedding_format = "profile-v1:b"
+
+    assert index.needs_rebuild(_FormatB()) is True

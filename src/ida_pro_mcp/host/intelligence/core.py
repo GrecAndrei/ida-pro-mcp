@@ -60,7 +60,7 @@ from typing import Any
 
 from .embeddings import NOISE_WORDS, FunctionEmbeddingIndex  # noqa: F401
 from .gemini import GEMINI_MAX_DIM, GEMINI_MIN_DIM, GeminiEmbedBackend
-from .helpers import _EmbedResult
+from .helpers import _EmbedResult, cosine_similarity, decomp_document_char_budget
 from .model_profiles import (
     BGE_CODE_V1,
     EmbeddingModelProfile,
@@ -963,7 +963,6 @@ class BgeCodeEmbedder:
         env = os.environ.get("IDA_MCP_EMBED_PORT", "")
         if env and env.isdigit():
             return int(env)
-        import socket
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
             return s.getsockname()[1]
@@ -1597,10 +1596,11 @@ class BgeCodeEmbedder:
         """Signal-dense full-decomp document budget used during indexing."""
         if self._gemini is not None:
             return self._gemini.decomp_document_chars
-        if DECOMP_DOCUMENT_CHARS > 0:
-            return max(1024, min(self.max_input_chars, DECOMP_DOCUMENT_CHARS))
-        fraction = max(0.1, min(1.0, DECOMP_DOCUMENT_FRACTION))
-        return max(1024, min(self.max_input_chars, int(self.max_input_chars * fraction)))
+        return decomp_document_char_budget(
+            self.max_input_chars,
+            explicit_chars=DECOMP_DOCUMENT_CHARS,
+            fraction=DECOMP_DOCUMENT_FRACTION,
+        )
 
     @property
     def backend(self) -> str:
@@ -1621,7 +1621,6 @@ class BgeCodeEmbedder:
 
     @staticmethod
     def cosine(a: list[float], b: list[float]) -> float:
-        from .helpers import cosine_similarity
         return cosine_similarity(a, b)
 
 

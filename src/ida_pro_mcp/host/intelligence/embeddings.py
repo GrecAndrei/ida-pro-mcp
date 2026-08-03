@@ -15,7 +15,11 @@ from contextlib import closing, suppress
 from datetime import UTC, datetime
 from typing import Any
 
-from .helpers import cosine_similarity as _cosine
+from .helpers import (
+    batch_cosine_similarity as _batch_cosine_similarity,
+    pack_floats as _pack_floats,
+    unpack_floats as _unpack_floats,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -543,13 +547,22 @@ class FunctionEmbeddingIndex:
             return hashlib.sha256(f"{src}:{st.st_size}:{st.st_mtime_ns}".encode()).hexdigest()
         return hashlib.sha256(src.encode("utf-8")).hexdigest() if src else ""
 
-    def _embedder_meta_snapshot(self) -> dict[str, str]:
-        backend = str(getattr(self._embedder, "backend", "unknown"))
-        dim = str(getattr(self._embedder, "dim", 0) or 0)
+    def _embedder_meta_snapshot(self, embedder: Any | None = None) -> dict[str, str]:
+        """Snapshot the embedder's identity for metadata persistence.
+
+        ``embedder`` defaults to the index's own embedder.  Callers that
+        verify against a *candidate* embedder (e.g. a replacement backend)
+        must pass it explicitly — otherwise the snapshot silently reflects
+        the stale embedder the index was built with and a changed
+        ``embedding_format`` would never be detected.
+        """
+        embedder = embedder if embedder is not None else self._embedder
+        backend = str(getattr(embedder, "backend", "unknown"))
+        dim = str(getattr(embedder, "dim", 0) or 0)
         model_path = ""
         server_bin = ""
         try:
-            status = getattr(self._embedder, "status", None)
+            status = getattr(embedder, "status", None)
             if callable(status):
                 st = status(probe=False)
                 model_path = str(st.get("model_path") or "")
@@ -557,15 +570,15 @@ class FunctionEmbeddingIndex:
         except Exception:
             pass
         if not model_path:
-            model_path = str(getattr(self._embedder, "_model_path", "") or "")
+            model_path = str(getattr(embedder, "_model_path", "") or "")
         if not server_bin:
-            server_bin = str(getattr(self._embedder, "_server_bin", "") or "")
+            server_bin = str(getattr(embedder, "_server_bin", "") or "")
         model_size, _ = _safe_stat(model_path)
         server_size, _ = _safe_stat(server_bin)
         return {
             "embedding_backend": backend,
             "embedding_dim": dim,
-            "embedding_format": str(getattr(self._embedder, "embedding_format", backend)),
+            "embedding_format": str(getattr(embedder, "embedding_format", backend)),
             "model_path": model_path,
             "model_size": str(model_size),
             "model_sha256_head": _safe_file_head_sha256(model_path),
@@ -686,7 +699,7 @@ class FunctionEmbeddingIndex:
             "embedding_backend": current_backend,
             "embedding_dim": current_dim,
         }
-        current_snapshot = self._embedder_meta_snapshot()
+        current_snapshot = self._embedder_meta_snapshot(current_embedder)
         mismatches: dict[str, dict[str, Any]] = {}
         try:
             stored_schema = int(stored.get("index_schema_version", 0) or 0)
@@ -731,13 +744,12 @@ class FunctionEmbeddingIndex:
 
     def _load_cache(self) -> None:
         """Load all stored embeddings into RAM for fast cosine search."""
-        from .helpers import unpack_floats
         try:
             with self._conn() as conn:
                 for row in conn.execute("SELECT ea, vec_blob FROM func_embeddings"):
                     ea, blob = row
                     with self._cache_lock:
-                        self._cache[ea] = unpack_floats(blob)
+                        self._cache[ea] = _unpack_floats(blob)
         except Exception:
             pass
 
@@ -747,12 +759,10 @@ class FunctionEmbeddingIndex:
         return self.size
 
     def _pack(self, vec: list[float]) -> bytes:
-        from .helpers import pack_floats
-        return pack_floats(vec)
+        return _pack_floats(vec)
 
     def _unpack(self, blob: bytes) -> list[float]:
-        from .helpers import unpack_floats
-        return unpack_floats(blob)
+        return _unpack_floats(blob)
 
     def _phash(self, text: str) -> str:
         return hashlib.md5(text.encode("utf-8", errors="replace")).hexdigest()[:16]
@@ -968,20 +978,19 @@ class FunctionEmbeddingIndex:
         t = threading.Thread(target=self.index, args=(func_ea, name, pseudocode, metadata), daemon=True)
         t.start()
 
-    def similar_vec(
+    def _similarity_candidates(
         self,
-        query_vec: list[float],
-        top_k: int = 5,
-        exclude_ea: str | None = None,
-        threshold: float = 0.6,
-        address_ranges: list[tuple[int, int]] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Return top-k most similar functions given a pre-computed query vector."""
+        exclude_ea: str | None,
+        address_ranges: list[tuple[int, int]] | None,
+    ) -> list[tuple[str, list[float]]]:
+        """Snapshot the cache, dropping excluded / out-of-range rows."""
         with self._cache_lock:
             if not self._cache:
                 return []
             snapshot = list(self._cache.items())
-        scored: list[tuple[float, str]] = []
+        if exclude_ea is None and not address_ranges:
+            return snapshot
+        out: list[tuple[str, list[float]]] = []
         for ea, vec in snapshot:
             if ea == exclude_ea:
                 continue
@@ -992,9 +1001,29 @@ class FunctionEmbeddingIndex:
                     continue
                 if not any(start <= ea_int < end for start, end in address_ranges):
                     continue
-            sim = _cosine(query_vec, vec)
-            if sim >= threshold:
-                scored.append((sim, ea))
+            out.append((ea, vec))
+        return out
+
+    def similar_vec(
+        self,
+        query_vec: list[float],
+        top_k: int = 5,
+        exclude_ea: str | None = None,
+        threshold: float = 0.6,
+        address_ranges: list[tuple[int, int]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return top-k most similar functions given a pre-computed query vector."""
+        candidates = self._similarity_candidates(exclude_ea, address_ranges)
+        if not candidates:
+            return []
+        eas = [ea for ea, _ in candidates]
+        vecs = [vec for _, vec in candidates]
+        sims = _batch_cosine_similarity(query_vec, vecs)
+        scored = [
+            (sim, ea)
+            for sim, ea in zip(sims, eas, strict=True)
+            if sim >= threshold
+        ]
         scored.sort(reverse=True)
         if not scored:
             return []
@@ -1016,15 +1045,19 @@ class FunctionEmbeddingIndex:
         top_k: int = 5,
         exclude_ea: str | None = None,
         threshold: float = 0.6,
+        address_ranges: list[tuple[int, int]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Return top-k most similar functions by cosine similarity."""
+        """Return top-k functions similar to *pseudocode* by cosine similarity.
+
+        Embeds the query with the index's embedder, then ranks with
+        :meth:`similar_vec` so both entry points share one scoring path.
+        """
+        if not pseudocode or not str(pseudocode).strip():
+            return []
         with self._cache_lock:
             if not self._cache:
                 return []
-            cache_items = list(self._cache.items())
-        embed_document = getattr(
-            self._embedder, "embed_document", None
-        )
+        embed_document = getattr(self._embedder, "embed_document", None)
         if callable(embed_document):
             embedded = embed_document(pseudocode)
             q = getattr(embedded, "vector", embedded)
@@ -1032,28 +1065,13 @@ class FunctionEmbeddingIndex:
             q = self._embedder.embed_vector(pseudocode)
         if q is None:
             return []
-        scored: list[tuple[float, str]] = []
-        for ea, vec in cache_items:
-            if ea == exclude_ea:
-                continue
-            sim = _cosine(q, vec)
-            if sim >= threshold:
-                scored.append((sim, ea))
-        scored.sort(reverse=True)
-        if not scored:
-            return []
-        # Fetch names for top results
-        top_eas = [ea for _, ea in scored[:top_k]]
-        meta = self._row_meta_for_eas(top_eas)
-        return [
-            {
-                "ea": ea,
-                "name": meta.get(ea, {}).get("name", ea),
-                "similarity": round(sim, 4),
-                "signature": _clip_signature(str(meta.get(ea, {}).get("signature_text") or "")),
-            }
-            for sim, ea in scored[:top_k]
-        ]
+        return self.similar_vec(
+            q,
+            top_k=top_k,
+            exclude_ea=exclude_ea,
+            threshold=threshold,
+            address_ranges=address_ranges,
+        )
 
     def search_text(
         self,

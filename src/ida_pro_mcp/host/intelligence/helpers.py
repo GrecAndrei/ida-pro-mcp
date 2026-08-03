@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import contextlib
 import difflib
 import math
 import struct
-import time
 from collections.abc import Sequence
-from typing import Any
 
 
 def _q(vals: list[float], q: float, default: float = 0.0) -> float:
@@ -171,79 +168,67 @@ def parse_str_list(value, sep: str = ",") -> list[str]:
     return [p.strip() for p in s.split(sep) if p.strip()]
 
 
-def compact_policy_blob(sess_blob: dict[str, Any]) -> dict[str, Any]:
-    """Bound policy size by pruning low-value/high-cardinality history."""
-    out = dict(sess_blob or {})
-    rm = dict(out.get("retrieval_metrics") or {})
-    ff = dict(out.get("focus_feedback") or {})
+def batch_cosine_similarity(
+    query: Sequence[float],
+    vectors: Sequence[Sequence[float]],
+) -> list[float]:
+    """Cosine similarity of *query* against every row in *vectors*.
 
-    keep_rm: dict[str, int] = {}
-    for src in ("address_linked", "relation_linked", "api_linked", "semantic_linked"):
-        for key in ("total", "accepted", "kept"):
-            k = f"{src}.{key}"
-            if k in rm:
-                with contextlib.suppress(Exception):
-                    keep_rm[k] = int(rm[k])
-    out["retrieval_metrics"] = keep_rm
-
-    keep_ff: dict[str, int] = {}
-    for k in ("suggested", "followed", "successful", "failed"):
-        if k in ff:
-            with contextlib.suppress(Exception):
-                keep_ff[k] = int(ff[k])
-    action_totals: dict[str, int] = {}
-    for k, v in ff.items():
-        if not str(k).startswith("action."):
-            continue
-        parts = str(k).split(".")
-        if len(parts) != 3:
-            continue
-        ta = parts[1]
-        with contextlib.suppress(Exception):
-            action_totals[ta] = action_totals.get(ta, 0) + int(v)
-    top_actions = sorted(action_totals.items(), key=lambda kv: kv[1], reverse=True)[:24]
-    top_set = {ta for ta, _ in top_actions}
-    for k, v in ff.items():
-        if not str(k).startswith("action."):
-            continue
-        parts = str(k).split(".")
-        if len(parts) != 3:
-            continue
-        ta = parts[1]
-        if ta in top_set:
-            with contextlib.suppress(Exception):
-                keep_ff[k] = int(v)
-    out["focus_feedback"] = keep_ff
-
+    Prefers a vectorized NumPy path (one matrix multiply) when NumPy is
+    importable, and falls back to a per-row pure-Python loop otherwise.
+    Conventions match :func:`cosine_similarity`: a zero-norm query or row
+    scores 0.0, so the two paths agree exactly on edge inputs.
+    """
+    if not vectors:
+        return []
     try:
-        thr = float(out.get("semantic_threshold") or 0.5)
-    except Exception:
-        thr = 0.5
-    out["semantic_threshold"] = max(0.35, min(0.75, thr))
-    out["schema_version"] = 2
-    return out
+        import numpy as _np
+    except ImportError:
+        _np = None
+    if _np is not None:
+        try:
+            return _batch_cosine_numpy(_np, query, vectors)
+        except Exception:
+            pass  # unexpected shapes/types fall back to the per-row loop
+    return [cosine_similarity(query, v) for v in vectors]
 
 
-def prune_policy_store(data: dict[str, Any], max_sessions: int = 24) -> dict[str, Any]:
-    """Prune policy store to bounded session count and compact blobs."""
-    if not isinstance(data, dict):
-        return {"schema_version": 2, "sessions": {}}
-    sessions = data.get("sessions")
-    if not isinstance(sessions, dict):
-        sessions = {}
-    compacted: dict[str, dict[str, Any]] = {}
-    for sid, blob in sessions.items():
-        if not isinstance(blob, dict):
-            continue
-        compacted[str(sid)] = compact_policy_blob(blob)
-    ordered = sorted(
-        compacted.items(),
-        key=lambda kv: float((kv[1] or {}).get("saved_at") or 0.0),
-        reverse=True,
-    )[:max(1, max_sessions)]
-    return {
-        "schema_version": 2,
-        "updated_at": time.time(),
-        "sessions": dict(ordered),
-    }
+def _batch_cosine_numpy(
+    np, query: Sequence[float], vectors: Sequence[Sequence[float]]
+) -> list[float]:
+    """NumPy implementation of :func:`batch_cosine_similarity`."""
+    q = np.asarray(list(query), dtype=np.float64)
+    matrix = np.asarray([list(v) for v in vectors], dtype=np.float64)
+    if q.ndim != 1 or matrix.ndim != 2 or matrix.shape[0] == 0:
+        raise ValueError("unexpected array shape")
+    if matrix.shape[1] != q.shape[0]:
+        raise ValueError("dimension mismatch")
+    q_norm = float(np.linalg.norm(q))
+    if q_norm <= 1e-9:
+        return [0.0] * matrix.shape[0]
+    row_norms = np.linalg.norm(matrix, axis=1)
+    tiny = row_norms <= 1e-9
+    unit = matrix / np.where(tiny, 1.0, row_norms)[:, None]
+    sims = unit @ (q / q_norm)
+    sims = np.where(tiny, 0.0, sims)
+    return [float(x) for x in sims]
+
+
+def decomp_document_char_budget(
+    max_input_chars: int,
+    *,
+    explicit_chars: int = 0,
+    fraction: float = 0.20,
+) -> int:
+    """Full-decomp document budget shared by the local and cloud embedders.
+
+    Both backends index long decompilations with the same cap: an explicit
+    character override wins when set, otherwise a clamped fraction of the
+    embedder's input window.  Kept here so the two backends cannot drift.
+    """
+    window = max(1024, int(max_input_chars) if max_input_chars else 1024)
+    if explicit_chars and explicit_chars > 0:
+        return max(1024, min(window, int(explicit_chars)))
+    frac = max(0.1, min(1.0, float(fraction)))
+    return max(1024, min(window, int(window * frac)))
 
