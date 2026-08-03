@@ -23,6 +23,14 @@ from .core import (
 )
 
 
+# Absolute confidence floor for behavior-driven query expansion.  Expansion
+# only fires when the classifier clears this AND the relative median/quartile
+# margin gate, so an unrelated behavior label never becomes a search query.
+EXPANSION_MIN_CONFIDENCE = float(
+    os.environ.get("IDA_MCP_EXPANSION_MIN_CONFIDENCE", "0.50") or 0.50
+)
+
+
 # ---------------------------------------------------------------------------
 # Backend resolution
 # ---------------------------------------------------------------------------
@@ -174,12 +182,31 @@ def search_nl(
     if mode == "expand":
         try:
             hits = classifier.classify(query[:600], threshold=classifier_threshold, top_k=4, block=False)
-            expansion_queries = [
-                str(h.get("behavior") or "").strip().replace("_", " ")
-                for h in (hits or [])
-                if h.get("behavior")
-            ]
-            expansion_queries = [q for q in expansion_queries if q]
+            if hits:
+                # The zero-shot classifier is cosine between a natural-language
+                # query and pseudocode anchors — that similarity is inherently
+                # mushy.  A low floor (0.25-0.30) lets unrelated behaviors
+                # (e.g. "crypto symmetric" for a GPU-allocation query) leak in
+                # and pollute the merged ranking, so expansion must clear a
+                # real bar: an absolute floor plus a relative margin over the
+                # tail (same median/quartile rule search_behavior uses).
+                confs = sorted(
+                    float(h.get("confidence") or 0.0) for h in hits
+                )
+                q50 = confs[len(confs) // 2]
+                q75 = confs[min(len(confs) - 1, int(round((len(confs) - 1) * 0.75)))]
+                gate = max(
+                    float(classifier_threshold or 0.0),
+                    EXPANSION_MIN_CONFIDENCE,
+                    q50 + max(0.0, q75 - q50),
+                )
+                expansion_queries = [
+                    str(h.get("behavior") or "").strip().replace("_", " ")
+                    for h in hits
+                    if h.get("behavior")
+                    and float(h.get("confidence") or 0.0) >= gate
+                ]
+                expansion_queries = [q for q in expansion_queries if q]
         except Exception:
             pass
 
