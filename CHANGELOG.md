@@ -2,6 +2,21 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-08-02 — agent SSO for subagents
+
+- New `session` actions `sso_activate`, `agent_login`, `agent_logout` give subagents a **per-agent identity** over a shared MCP connection. Previously every subagent was indistinguishable: one shared active session, shared ownership, and a connection close that tore down *everyone's* runtimes. The orchestrator activates a one-shot realm with an allowlist of agent names, each subagent logs on with an HMAC-signed ticket (`mint_agent_ticket` in `host/server/server_client_state.py`), and every session-scoped call carries an `agent=<name>` tag.
+- **Per-agent active session**: `current_session` resolves to the bound agent's own session, so agent A creating a binary never clobbers agent B's active target on the same connection.
+- **Agent-scoped ownership**: while an agent is actively running a session, a sibling agent gets `FILE_LOCKED` if it tries to grab it. Ownership is recorded under the agent, not the raw connection.
+- **Per-agent teardown**: `agent_logout` (and connection close) releases only that agent's runtimes and leases — a dead subagent can no longer orphan its idat fleet or hold another agent's IDB locks.
+- Truncation tokens are scoped `connection:agent`; the `agent` tag is validated against the logged-in identity on the current connection and never forwarded to IDA. Calls without an `agent` tag behave exactly as before.
+- The `agent` tag is accepted on all tools (popped at the protocol layer before policy/RPC schema validation).
+
+## 2026-08-02 — session targeting for arbitrary code execution
+
+- `ida_python` now accepts `idb=<session_id>` (or an IDB/binary path) to target a specific session on a shared MCP connection. Previously it always executed against the connection-wide active session, so on a connection shared by several agents, Python ran in whichever binary opened last — mixing analyses from different binaries (e.g. the same function name resolving to a different base).
+- The safe-mode gate now tests the session a call is aimed at (via `idb`), not the shared active default. Targeting a completed session no longer gets spuriously blocked because another session on the same connection is still analyzing, and a still-analyzing target is blocked regardless of which session happens to be active.
+- Every `ida_python`/`misc` code-execution response now carries a `_executed_in` block (`session_id`, `idb_path`, `image_base`), so a call that ran in the wrong session is visible instead of silently returning addresses from another binary. The image base comes from the runtime cache or a fast lookup; it is never fabricated.
+
 ## 2026-08-01 — relocation handling and session lifecycle fixes
 
 ### Relocations

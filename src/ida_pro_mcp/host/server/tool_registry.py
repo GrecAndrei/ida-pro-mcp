@@ -114,6 +114,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "tag", "untag", "add_note", "clear_notes",
         "search_notes", "snapshot", "restore_snapshot",
         "kill", "state", "logs",
+        "sso_activate", "agent_login", "agent_logout",
     ],
     "stack_analysis": ["frame", "buffers", "canary", "alignment", "spills", "usage", "variables", "arrays", "uninitialized", "summary"],
     "symbols": ["load_pdb", "load_dwarf", "status", "apply", "export"],

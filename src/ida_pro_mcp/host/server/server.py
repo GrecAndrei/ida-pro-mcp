@@ -606,6 +606,13 @@ class IDAMCPServer(
                 call_args = args
                 response_opts = self._default_response_options()
 
+            # Agent SSO: a per-call ``agent`` tag is host-level identity, not
+            # an IDA argument. Pop it before operation validation / policy so
+            # it never reaches the backend, and validate it against the realm.
+            agent_tag = None
+            if isinstance(call_args, dict):
+                agent_tag = str(call_args.pop("agent", "") or "").strip() or None
+
             precomputed_result = None
             if operation is not None:
                 validation_error = operation.validate(call_args)
@@ -629,35 +636,56 @@ class IDAMCPServer(
                     )
                 elif operation is not None and operation.name == "ida_batch":
                     call_args, batch_error = translate_public_batch_arguments(call_args)
-                    res = batch_error if batch_error else self._handle_batch(call_args)
+                    res = (
+                        batch_error
+                        if batch_error
+                        else self._call_as_agent(
+                            agent_tag, lambda: self._handle_batch(call_args)
+                        )
+                    )
                 else:
-                    res = self._handle_batch(call_args)
+                    res = self._call_as_agent(
+                        agent_tag, lambda: self._handle_batch(call_args)
+                    )
             else:
-                sid_hint = None
-                if isinstance(call_args, dict):
-                    sid_hint = _normalize_session_id(call_args.get("session_id"))
-                if not sid_hint and self.current_session:
-                    sid_hint = getattr(self.current_session, "session_id", None)
-                sid_hint_text = str(sid_hint) if sid_hint else ""
-                if sid_hint_text:
-                    with self._runtime_lock:
-                        self._session_last_activity[sid_hint_text] = time.time()
-                        self._session_inflight_calls[sid_hint_text] = int(
-                            self._session_inflight_calls.get(sid_hint_text, 0) or 0
-                        ) + 1
-                try:
-                    res = self._execute_tool(tn, call_args)
-                finally:
-                    if sid_hint_text:
-                        with self._runtime_lock:
-                            remaining = int(
-                                self._session_inflight_calls.get(sid_hint_text, 0) or 0
-                            ) - 1
-                            if remaining > 0:
-                                self._session_inflight_calls[sid_hint_text] = remaining
-                            else:
-                                self._session_inflight_calls.pop(sid_hint_text, None)
-                            self._session_last_activity[sid_hint_text] = time.time()
+                bind_err = (
+                    self._bind_agent_call(agent_tag)
+                    if agent_tag is not None
+                    else None
+                )
+                if bind_err is not None:
+                    res = bind_err
+                else:
+                    sid_hint_text = ""
+                    try:
+                        sid_hint = None
+                        if isinstance(call_args, dict):
+                            sid_hint = _normalize_session_id(
+                                call_args.get("session_id")
+                            )
+                        if not sid_hint and self.current_session:
+                            sid_hint = getattr(self.current_session, "session_id", None)
+                        sid_hint_text = str(sid_hint) if sid_hint else ""
+                        if sid_hint_text:
+                            with self._runtime_lock:
+                                self._session_last_activity[sid_hint_text] = time.time()
+                                self._session_inflight_calls[sid_hint_text] = int(
+                                    self._session_inflight_calls.get(sid_hint_text, 0) or 0
+                                ) + 1
+                        res = self._execute_tool(tn, call_args)
+                    finally:
+                        if sid_hint_text:
+                            with self._runtime_lock:
+                                remaining = int(
+                                    self._session_inflight_calls.get(sid_hint_text, 0) or 0
+                                ) - 1
+                                if remaining > 0:
+                                    self._session_inflight_calls[sid_hint_text] = remaining
+                                else:
+                                    self._session_inflight_calls.pop(sid_hint_text, None)
+                                self._session_last_activity[sid_hint_text] = time.time()
+                        if agent_tag is not None:
+                            self._unbind_agent_call()
                 if isinstance(call_args, dict):
                     res = self._cache_next_page(resolved_tn or "", call_args, res)
                     self._record_activity(resolved_tn or "", call_args, res)

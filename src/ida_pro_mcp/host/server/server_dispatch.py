@@ -485,6 +485,27 @@ class ServerDispatchMixin(ServerClientStateMixin):
                 _elapsed = time.time() - _t0
                 if isinstance(res, dict) and "error" not in res and "ok" not in res:
                     res = {"ok": True, **res}
+                # Stamp arbitrary-code responses with the session they actually
+                # ran in. On a shared MCP connection a call aimed at the wrong
+                # session previously returned cleanly — the response now
+                # self-identifies so a wrong image base is visible instead of
+                # silently attributing code to the shared active session.
+                # Applies to success and error responses alike (the error still
+                # tells you where it ran).
+                if (
+                    isinstance(res, dict)
+                    and tool_name == "misc"
+                    and str(rpc_args.get("action") or "") in {"python", "idc", "plugin_run"}
+                ):
+                    try:
+                        _img_base = self._get_session_imagebase(session.session_id)
+                    except Exception:
+                        _img_base = None
+                    res["_executed_in"] = {
+                        "session_id": session.session_id,
+                        "idb_path": getattr(session, "idb_path", None),
+                        "image_base": hex(_img_base) if _img_base else None,
+                    }
                 # Apply truncation with per-call overrides
                 _tc = getattr(self, "_pending_truncation", None) or {}
                 if _tc.get("no_truncate"):
@@ -1179,6 +1200,12 @@ class ServerDispatchMixin(ServerClientStateMixin):
                 return make_error(MCPError.INVALID_ARGS, "arguments must be an object")
             args = self._normalize_tool_call_args(tool_name, args)
 
+            # Agent SSO: ``agent`` is a host-level identity tag, never an IDA
+            # argument. It is normally popped in the tools/call dispatcher;
+            # this is a defensive strip for any non-protocol path that feeds
+            # args straight into dispatch.
+            args.pop("agent", None)
+
             # ---- Post-processing filter extraction ----
             # Extract PP params before they reach IDA or policy checks.
             # Skip PP extraction for the truncation tool — it has its own
@@ -1281,8 +1308,21 @@ class ServerDispatchMixin(ServerClientStateMixin):
             # keeps manual small-area operations (disassembly, reads,
             # strings, xrefs, per-function decompilation) until safe mode
             # lifts automatically once analysis completes.
+            #
+            # Gate on the session actually being targeted. On a shared
+            # connection the idb-targeted session can differ from the shared
+            # active default — blocking against the active session would
+            # wrongly stop python/analysis against a completed target (or
+            # wrongly allow a still-analyzing target). Ownership is still
+            # enforced downstream in call_tool.
+            _gate_sid = sid
+            _idb_ref = args.get("idb")
+            if _idb_ref:
+                _gate_target = self._resolve_session_from_idb_ref(_idb_ref)
+                if _gate_target is not None:
+                    _gate_sid = _gate_target.session_id
             safe_gate = self._safe_mode_gate(
-                sid, tool_name, str(args.get("action") or "")
+                _gate_sid, tool_name, str(args.get("action") or "")
             )
             if safe_gate is not None:
                 return safe_gate

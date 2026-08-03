@@ -365,6 +365,23 @@ def test_python_exposes_scoped_code_execution_with_policy_acknowledgement():
     assert operation.validate({"expr": "1 + 1"})
 
 
+def test_python_accepts_idb_and_routes_it_to_session_selection():
+    operation = get_agent_operation("ida_python")
+    arguments = {
+        "code": "print(idaapi.get_imagebase())",
+        "risk_ack": True,
+        "idb": "SID_ABC123",
+    }
+    assert not operation.validate(arguments)
+    assert "idb" in operation.input_schema["properties"]
+    backend_tool, backend_args = operation.to_backend_call(arguments)
+    assert backend_tool == "misc"
+    # idb is carried through untouched so the dispatcher can pop it and
+    # resolve the named session instead of the shared active one.
+    assert backend_args["idb"] == "SID_ABC123"
+    assert backend_args["action"] == "python"
+
+
 def test_public_errors_do_not_return_legacy_recovery_syntax():
     payload = {
         "error": True,

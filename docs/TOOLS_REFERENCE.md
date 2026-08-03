@@ -2350,7 +2350,7 @@ Example:
 
 ## `ida_python`
 
-Execute a Python expression or script in the active IDA process.
+Execute a Python expression or script in the active IDA process. When several agents share one MCP connection, pass idb=<session_id> to target a specific session instead of the shared active one.
 
 Input schema:
 ```json
@@ -2364,6 +2364,10 @@ Input schema:
     "risk_ack": {
       "type": "boolean",
       "description": "Set true only after verifying this code execution is authorized and intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
     }
   },
   "required": [

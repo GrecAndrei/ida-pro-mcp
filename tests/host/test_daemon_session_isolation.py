@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 
+from ida_pro_mcp.host.errors import MCPError
 from ida_pro_mcp.host.server.server import IDAMCPServer
 
 
@@ -561,6 +562,165 @@ def test_status_and_state_can_target_a_specific_session_explicitly(
             assert denied.get("code") in {"FILE_LOCKED", "INVALID_ARGS"}
         finally:
             server._end_client_connection(token_peer)
+    finally:
+        server._end_client_connection(token)
+        server.shutdown()
+
+
+def test_python_targets_a_specific_session_explicitly(tmp_path, monkeypatch):
+    """ida_python must execute in the session named by idb, not the shared
+    active one, when several agents multiplex one MCP connection."""
+    monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
+    monkeypatch.setattr(IDAMCPServer, "_detect_ida_dir", lambda self: "")
+    monkeypatch.setattr(IDAMCPServer, "_find_idat", lambda self: "")
+
+    binary_a = tmp_path / "alpha.bin"
+    binary_b = tmp_path / "bravo.bin"
+    binary_a.write_bytes(b"alpha")
+    binary_b.write_bytes(b"bravo")
+
+    server = IDAMCPServer()
+    monkeypatch.setattr(server, "_ensure_runtime_and_idb", lambda session: None)
+
+    routed: list[str] = []
+
+    def _record_call_tool(tool_name, idb_path, **kwargs):
+        # No live runtime in this contract test; capture the session that
+        # python would have run inside, then stop short of an RPC attempt.
+        routed.append(idb_path)
+        return {
+            "error": True,
+            "code": "IDA_CRASHED",
+            "message": "no live runtime in contract test",
+        }
+
+    monkeypatch.setattr(server, "call_tool", _record_call_tool)
+
+    token = server._begin_client_connection()
+    try:
+        opened_a = _open_owned_session(server, str(binary_a), request_id=1)
+        opened_b = _open_owned_session(server, str(binary_b), request_id=2)
+        sid_a = opened_a["session_id"]
+        sid_b = opened_b["session_id"]
+        # Background-opened sessions are in safe mode; lift it for both so
+        # python is allowed once targeting works.
+        server._mark_analysis_complete(server._resolve_session_from_idb_ref(sid_a))
+        server._mark_analysis_complete(server._resolve_session_from_idb_ref(sid_b))
+
+        # Unscoped python routes to whoever opened last (the shared active).
+        _tool_call(server, 3, "ida_python", {"code": "1", "risk_ack": True})
+        assert server.current_session.session_id == sid_b
+        assert routed[-1] == server.current_session.idb_path
+
+        # Explicit idb steers python at session A even though B is active.
+        _tool_call(
+            server,
+            4,
+            "ida_python",
+            {"code": "1", "risk_ack": True, "idb": sid_a},
+        )
+        assert routed[-1] == sid_a
+
+        # session_id-style targeting works through the same idb argument.
+        _tool_call(
+            server,
+            5,
+            "ida_python",
+            {"code": "1", "risk_ack": True, "idb": sid_b},
+        )
+        assert routed[-1] == sid_b
+
+        # Safe mode gates on the *target*, not the shared active default: with
+        # the active session B back in safe mode, python still runs against the
+        # completed session A, and is blocked when aimed back at pending B.
+        server._pending_analysis.add(sid_b)
+        blocked = _tool_call(
+            server, 6, "ida_python", {"code": "1", "risk_ack": True}
+        )
+        assert blocked.get("code") == MCPError.SAFE_MODE
+        assert routed[-1] == sid_b  # blocked before routing; list unchanged
+
+        _tool_call(
+            server,
+            7,
+            "ida_python",
+            {"code": "1", "risk_ack": True, "idb": sid_a},
+        )
+        assert routed[-1] == sid_a
+
+        denied = _tool_call(
+            server,
+            8,
+            "ida_python",
+            {"code": "1", "risk_ack": True, "idb": sid_b},
+        )
+        assert denied.get("code") == MCPError.SAFE_MODE
+        assert routed[-1] == sid_a  # target blocked; no routing happened
+    finally:
+        server._end_client_connection(token)
+        server.shutdown()
+
+
+def test_python_response_stamps_the_session_it_executed_in(tmp_path, monkeypatch):
+    """ida_python responses must self-identify the session (and image base)
+    they actually ran in, so a call aimed at the wrong session on a shared
+    connection is visible instead of silently returning foreign addresses."""
+    monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
+    monkeypatch.setattr(IDAMCPServer, "_detect_ida_dir", lambda self: "")
+    monkeypatch.setattr(IDAMCPServer, "_find_idat", lambda self: "")
+
+    binary_a = tmp_path / "alpha.bin"
+    binary_b = tmp_path / "bravo.bin"
+    binary_a.write_bytes(b"alpha")
+    binary_b.write_bytes(b"bravo")
+
+    server = IDAMCPServer()
+    monkeypatch.setattr(server, "_ensure_runtime_and_idb", lambda session: None)
+
+    token = server._begin_client_connection()
+    try:
+        opened_a = _open_owned_session(server, str(binary_a), request_id=1)
+        opened_b = _open_owned_session(server, str(binary_b), request_id=2)
+        sid_a = opened_a["session_id"]
+        sid_b = opened_b["session_id"]
+        server._mark_analysis_complete(server._resolve_session_from_idb_ref(sid_a))
+        server._mark_analysis_complete(server._resolve_session_from_idb_ref(sid_b))
+
+        # Give both sessions a live runtime with a distinct known image base so
+        # call_tool runs its full path (and the stamp resolves a real base
+        # from the runtime cache instead of a live RPC).
+        for sid, base in ((sid_a, 0xC000), (sid_b, 0x8000)):
+            server.session_runtimes[sid] = {
+                "process": _FakeIdaProcess(),
+                "port": 9999,
+                "auth_token": "t",
+                "imagebase": base,
+            }
+
+        def _fake_send(payload, port, **kwargs):
+            return {"output": "ran\n", "result": None}
+
+        monkeypatch.setattr(server, "_send_rpc_with_retry", _fake_send)
+
+        # Unscoped python runs in the shared active (B, base 0x8000) — the
+        # stamp must say so, making that default visible.
+        res = _tool_call(server, 3, "ida_python", {"code": "1", "risk_ack": True})
+        assert res["_executed_in"]["session_id"] == sid_b
+        assert res["_executed_in"]["image_base"] == "0x8000"
+        assert res["_executed_in"]["idb_path"] == server.current_session.idb_path
+
+        # Targeted python runs in A (base 0xc000) — the stamp must say so.
+        res = _tool_call(
+            server,
+            4,
+            "ida_python",
+            {"code": "1", "risk_ack": True, "idb": sid_a},
+        )
+        assert res["_executed_in"]["session_id"] == sid_a
+        assert res["_executed_in"]["image_base"] == "0xc000"
+        assert res["_executed_in"]["idb_path"] != server.current_session.idb_path
     finally:
         server._end_client_connection(token)
         server.shutdown()

@@ -381,6 +381,23 @@ TOOL_ARG_SCHEMAS = {
             "items": {"type": "object"},
             "description": "List of mapping objects to apply, where each object contains addr, name (optional), and comment (optional).",
         },
+        "agents": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Allowed agent names for the sso_activate action. The orchestrator pre-registers which subagent identities may log on.",
+        },
+        "secret": {
+            "type": "string",
+            "description": "Realm secret for sso_activate. Optional — falls back to IDA_MCP_SSO_SECRET env, else a generated secret is returned once.",
+        },
+        "ticket": {
+            "type": "string",
+            "description": "Signed ticket for the agent_login action: <name>.<base64url(payload)>.<hmac-sha256(secret, payload)>, minted by the orchestrator.",
+        },
+        "agent": {
+            "type": "string",
+            "description": "Per-call agent identity tag (host-level, accepted on all tools, never forwarded to IDA). Validated against the identity established by agent_login on this connection. Defaults to the connection's unbound behavior when omitted.",
+        },
     },
     "truncation": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["truncation"]},

@@ -222,6 +222,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         "kill": "_session_action_kill",
         "state": "_session_action_state",
         "logs": "_session_action_logs",
+        "sso_activate": "_session_action_sso_activate",
+        "agent_login": "_session_action_agent_login",
+        "agent_logout": "_session_action_agent_logout",
     }
 
     def _handle_session(self, args: dict) -> dict:
@@ -323,6 +326,31 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
 
     def _session_action_health(self, args: dict) -> dict:
         return self._handle_session_health(args)
+
+    def _session_action_sso_activate(self, args: dict) -> dict:
+        """Enable the agent SSO realm and pre-register the allowed agents.
+
+        Orchestrator-only bootstrap: no session is targeted, so this never
+        touches ``current_session``. Existing connection-level sessions stay
+        unbound (legacy) — new subagents log in and get isolated after this."""
+        ok, err = self._sso_activate_realm(args.get("agents"), args.get("secret"))
+        if err is not None:
+            return err
+        return ok
+
+    def _session_action_agent_login(self, args: dict) -> dict:
+        """Validate a signed ticket and log the subagent in on this connection."""
+        ok, err = self._sso_agent_login(args.get("name"), args.get("ticket"))
+        if err is not None:
+            return err
+        return ok
+
+    def _session_action_agent_logout(self, args: dict) -> dict:
+        """Log a subagent out and tear down only its runtimes/leases."""
+        ok, err = self._sso_agent_logout(args.get("name"))
+        if err is not None:
+            return err
+        return ok
 
     def _session_action_create(self, args: dict) -> dict:
         binary_path, analysis_options, arch_meta, force_new, ida_args, prep_error = (

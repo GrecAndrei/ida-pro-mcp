@@ -1069,7 +1069,11 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     ),
     AgentOperation(
         name="ida_python",
-        description="Execute a Python expression or script in the active IDA process.",
+        description=(
+            "Execute a Python expression or script in the active IDA process. "
+            "When several agents share one MCP connection, pass idb=<session_id> "
+            "to target a specific session instead of the shared active one."
+        ),
         category="support",
         input_schema=_schema(
             {
@@ -1078,6 +1082,7 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
                     "description": "Python expression or script to execute in IDA context.",
                 },
                 "risk_ack": CODE_EXEC_ACK,
+                "idb": IDB,
             },
             ["code", "risk_ack"],
         ),
