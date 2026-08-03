@@ -28,11 +28,15 @@ ctree control points, and local data-flow. `ida_disassemble` returns the CFG and
 call-target portion without starting Hex-Rays. A model reasoning about a function
 gets the graph, not only the listing.
 
-**Semantic search runs locally or says it can't.** Function embeddings use a local
-GGUF model through `llama-server`. If the model or server is unavailable, semantic
-operations return an explicit unavailable result — they never fall back to a
-different vector space, and never hand back a zero vector dressed as a score. The
-index records model, dimension, and prompt format, and rebuilds when any changes.
+**Semantic search runs locally (or against an opt-in cloud model) or says it
+can't.** Function embeddings use a local GGUF model through `llama-server` by
+default. When you opt in (`--embed-backend gemini`), a Google `gemini-embedding-2`
+cloud backend is used instead — it uploads only the compact behavioral signature of
+each function, never the full decompilation. If the model, server, or cloud
+credentials are unavailable, semantic operations return an explicit unavailable
+result — they never fall back to a different vector space, and never hand back a
+zero vector dressed as a score. The index records model, dimension, and prompt
+format, and rebuilds when any changes.
 
 **The workspace remembers, and comes back on its own.** `ida_write_finding`
 records a claim with confidence and evidence into a per-session SQLite workspace
@@ -215,6 +219,54 @@ resumable cursor to pass back to `ida_index_functions`.
 | `IDA_MCP_EMBED_MAX_REQUESTS` | `512` | Recycle a server after this many requests |
 | `IDA_MCP_EMBED_MAX_RSS_MB` | adaptive | RSS recycle limit; `0` derives one from model size |
 | `IDA_MCP_EMBED_IDLE_TIMEOUT` | `15` | Seconds to keep the server after its last request; `0` disables |
+
+### Cloud embeddings (Gemini, opt-in)
+
+An alternative backend that calls Google's `gemini-embedding-2` (or
+`gemini-embedding-001`) instead of running a local GGUF. **Opt in explicitly** —
+selection is never automatic, so a stray `GOOGLE_CLOUD_PROJECT` in your
+environment cannot silently switch you to a cloud model.
+
+> **Privacy:** the cloud backend uploads the *compact behavioral signature* of each
+> function (calls, constants, string literals, control-flow profile) — never the
+> full decompilation. If you cannot send any code to Google, keep the local backend.
+
+```bash
+# AI Studio (API key from https://aistudio.google.com/apikey)
+export GEMINI_API_KEY="..."
+
+# Vertex AI (GCP) — project + region; ADC via GOOGLE_APPLICATION_CREDENTIALS
+export GOOGLE_CLOUD_PROJECT="my-project"
+export VERTEX_AI_LOCATION="us-central1"
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
+
+# pick the cloud backend for a new install (interactive wizard asks too)
+python install.py --embed-backend gemini --gemini-access aistudio --gemini-api-key "$GEMINI_API_KEY"
+python install.py --embed-backend gemini --gemini-access vertex \
+  --gemini-vertex-project "$GOOGLE_CLOUD_PROJECT" --gemini-vertex-location us-central1 --gemini-install-auth
+
+# check your setup without opening IDA
+python install.py --embedder-doctor --embed-backend gemini
+```
+
+The installer writes `embedder.json` with `{"backend": "gemini", ...}` so the
+server picks the cloud backend, and (when you provide it) persists the AI Studio
+key into the generated MCP client config env block. The key is **never** written
+to `embedder.json`.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `IDA_MCP_EMBED_BACKEND` | `local` | `gemini` selects the cloud backend |
+| `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | Google AI Studio API key |
+| `VERTEX_AI_ACCESS_TOKEN` / `GOOGLE_ACCESS_TOKEN` | — | Already-obtained Vertex bearer token |
+| `GOOGLE_APPLICATION_CREDENTIALS` | — | Service-account JSON for Vertex ADC (needs `google-auth`) |
+| `GOOGLE_CLOUD_PROJECT` / `VERTEX_AI_PROJECT` | — | Vertex project (from env or `embedder.json`) |
+| `VERTEX_AI_LOCATION` / `GOOGLE_CLOUD_REGION` | `us-central1` | Vertex region |
+| `IDA_MCP_GEMINI_MODEL` | `gemini-embedding-2` | Embedding model name |
+| `IDA_MCP_GEMINI_DIM` | `768` | Output dimensionality (128–3072) |
+| `IDA_MCP_GEMINI_TASK_TYPE` | auto | `none` omits `taskType`; else a value like `retrieval_document` |
+| `IDA_MCP_GEMINI_BATCH` | `16` | Requests per batch call |
+| `IDA_MCP_GEMINI_TIMEOUT` / `_BATCH_TIMEOUT` | `30` / `120` | Seconds per request |
 
 ---
 

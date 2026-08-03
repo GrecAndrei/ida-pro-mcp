@@ -46,6 +46,30 @@ def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
     return dot / (na * nb)
 
 
+class _EmbedResult:
+    """Result of an embedding call.
+
+    Production invariant: ``vector`` is *always* from the declared
+    ``backend``.  When ``ok`` is False, ``vector`` is None and callers
+    MUST surface the failure rather than proceed as if nothing happened.
+    The old TF-IDF fallback violated this by returning garbage vectors
+    whenever the model was unavailable.
+
+    Shared by the local llama-server backend (``intelligence/core.py``) and
+    the opt-in cloud Gemini backend (``intelligence/gemini.py``).
+    """
+
+    __slots__ = ("vector", "backend", "ok")
+
+    def __init__(self, vector: list[float] | None, backend: str, ok: bool):
+        self.vector = vector
+        self.backend = backend
+        self.ok = ok
+
+    def __repr__(self) -> str:
+        return f"_EmbedResult(backend={self.backend!r}, ok={self.ok})"
+
+
 def pack_floats(vec: Sequence[float]) -> bytes:
     """Pack a list of floats into a raw little-endian float32 blob."""
     return struct.pack(f"{len(vec)}f", *vec)

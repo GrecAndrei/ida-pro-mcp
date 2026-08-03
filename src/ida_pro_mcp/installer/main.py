@@ -27,6 +27,7 @@ from .runtime import (
     find_embed_model,
     find_llama_server_bin,
     get_install_root,
+    install_optional_packages,
     kill_ida_processes,
     setup_runtime_environment,
 )
@@ -67,26 +68,37 @@ def _sha256_file(path: str) -> str:
 
 def run_embedder_doctor(opts: InstallerOptions, ui: UI) -> int:
     install_root = opts.install_root or get_install_root()
-    profile = opts.embed_profile
-    embed_model = opts.embed_model_path or (
+    gemini_mode = opts.embed_backend == "gemini"
+    profile = "" if gemini_mode else opts.embed_profile
+    embed_model = "" if gemini_mode else (opts.embed_model_path or (
         find_embed_model(install_root, profile) if opts.embed_auto else ""
-    )
-    embed_server = opts.embed_server_bin or (find_llama_server_bin(install_root) if opts.embed_auto else "")
+    ))
+    embed_server = "" if gemini_mode else (opts.embed_server_bin or (find_llama_server_bin(install_root) if opts.embed_auto else ""))
 
     ui.info("Embedder doctor")
     ui.info("---------------")
     ui.info(f"install_root: {install_root}")
-    ui.info(f"llama-server: {'found ' + embed_server if embed_server else 'not found'}")
-    ui.info(f"model: {'found ' + embed_model if embed_model else 'not found'}")
+    if gemini_mode:
+        ui.info("backend: gemini-embedding-2 (cloud — credentials come from the environment)")
+        ui.info("llama-server: n/a (cloud backend)")
+        ui.info("model: n/a (cloud backend)")
+    else:
+        ui.info(f"llama-server: {'found ' + embed_server if embed_server else 'not found'}")
+        ui.info(f"model: {'found ' + embed_model if embed_model else 'not found'}")
 
     from ida_pro_mcp.host.intelligence import core as intel_core
 
     # Recreate singleton under doctor-selected env so status/probe reflect this setup.
+    prev_backend = os.environ.get("IDA_MCP_EMBED_BACKEND", "")
     prev_server = os.environ.get("IDA_MCP_EMBED_SERVER_BIN", "")
     prev_model = os.environ.get("IDA_MCP_EMBED_MODEL", "")
     prev_profile = os.environ.get("IDA_MCP_EMBED_PROFILE", "")
     prev_instance = intel_core.BgeCodeEmbedder._instance
     try:
+        if gemini_mode:
+            os.environ["IDA_MCP_EMBED_BACKEND"] = "gemini"
+        elif "IDA_MCP_EMBED_BACKEND" in os.environ:
+            del os.environ["IDA_MCP_EMBED_BACKEND"]
         if embed_server:
             os.environ["IDA_MCP_EMBED_SERVER_BIN"] = embed_server
         if embed_model:
@@ -110,16 +122,22 @@ def run_embedder_doctor(opts: InstallerOptions, ui: UI) -> int:
             status["embed_test_error"] = str(exc)
 
         if status.get("ready"):
-            ui.ok("health endpoint: ok")
+            ui.ok("embedder ready")
         else:
-            ui.warn("health endpoint: not ready")
+            ui.warn("embedder not ready")
         ui.info(f"backend: {status.get('backend')}")
         ui.info(f"embed test: {'ok' if status.get('embed_test_ok') else 'failed'}")
+        if gemini_mode and status.get("error"):
+            ui.warn(f"gemini: {status.get('error')}")
         ui.info("fallback: unavailable (semantic features fail explicitly)")
         print(json.dumps(status, indent=2))
         return 0
     finally:
         intel_core.BgeCodeEmbedder._instance = prev_instance
+        if prev_backend:
+            os.environ["IDA_MCP_EMBED_BACKEND"] = prev_backend
+        elif "IDA_MCP_EMBED_BACKEND" in os.environ:
+            del os.environ["IDA_MCP_EMBED_BACKEND"]
         if prev_server:
             os.environ["IDA_MCP_EMBED_SERVER_BIN"] = prev_server
         elif "IDA_MCP_EMBED_SERVER_BIN" in os.environ:
@@ -173,6 +191,20 @@ def _format_install_table(installs: list[IdaInstall]) -> str:
     for i, inst in enumerate(installs, start=1):
         lines.append(f"  {i}) {inst.display}")
     return "\n".join(lines)
+
+
+def _prompt_text(question: str, default: str = "") -> str:
+    """Ask a free-form question with an optional default value."""
+    suffix = f" (default: {default})" if default else ""
+    ans = input(f"{question}{suffix}: ").strip().strip("\"'")
+    return ans or default
+
+
+def _prompt_secret(question: str) -> str:
+    """Ask for a secret (API key). Terminal echo is left as-is; the value is
+    only ever persisted into the MCP client config env block on explicit
+    consent."""
+    return input(f"{question}: ").strip()
 
 
 def _prompt_model_path(profile: str) -> str:
@@ -311,16 +343,79 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
         default=opts.install_claude_skills,
     )
 
-    opts.embed_profile = _prompt_choice(
-        "Embedding profile",
-        ["bge-code-v1", "zembed-1"],
-        opts.embed_profile,
-    )
-    if opts.embed_profile == "zembed-1":
-        ui.info("Zembed 1 is opt-in and licensed CC-BY-NC-4.0 (non-commercial).")
+    _backend_choices = {
+        "bge-code-v1 (local GGUF)": "bge-code-v1",
+        "zembed-1 (local GGUF, non-commercial)": "zembed-1",
+        "gemini-embedding-2 (cloud, requires API key)": "gemini",
+    }
+    current_backend = opts.embed_backend if opts.embed_backend in _backend_choices.values() else "bge-code-v1"
+    default_backend_label = next(k for k, v in _backend_choices.items() if v == current_backend)
+    opts.embed_backend = _backend_choices[
+        _prompt_choice(
+            "Embedding backend",
+            list(_backend_choices.keys()),
+            default_backend_label,
+        )
+    ]
+    if opts.embed_backend == "gemini":
+        opts.embed_auto = False
+        _access_choices = {
+            "Google AI Studio (API key)": "aistudio",
+            "Vertex AI (GCP)": "vertex",
+        }
+        current_access = opts.gemini_access if opts.gemini_access in _access_choices.values() else "aistudio"
+        default_access_label = next(k for k, v in _access_choices.items() if v == current_access)
+        opts.gemini_access = _access_choices[
+            _prompt_choice(
+                "Gemini access",
+                list(_access_choices.keys()),
+                default_access_label,
+            )
+        ]
+        if opts.gemini_access == "aistudio":
+            existing_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+            if existing_key:
+                ui.ok("GEMINI_API_KEY detected in your environment; the server will use it.")
+                opts.gemini_api_key = ""
+            else:
+                ui.info("Get a free key at https://aistudio.google.com/apikey")
+                key = _prompt_secret(
+                    "Gemini API key (or leave empty to rely on the GEMINI_API_KEY env var)"
+                )
+                opts.gemini_api_key = key.strip().strip("'\"")
+                if opts.gemini_api_key:
+                    ui.ok(
+                        "Key recorded; it will be written into the MCP client config env block."
+                    )
+                else:
+                    ui.warn(
+                        "No key entered. Set GEMINI_API_KEY in your environment before "
+                        "using semantic features."
+                    )
+        else:
+            default_project = os.environ.get("GOOGLE_CLOUD_PROJECT") or ""
+            opts.gemini_vertex_project = _prompt_text(
+                "Google Cloud project ID (Vertex AI)", default=default_project
+            ) or default_project
+            opts.gemini_vertex_location = _prompt_text(
+                "Vertex AI region (location)", default="us-central1"
+            ) or "us-central1"
+            opts.gemini_install_auth = _prompt_yes_no(
+                "Install google-auth so Application Default Credentials "
+                "(GOOGLE_APPLICATION_CREDENTIALS) work with Vertex AI?",
+                default=True,
+            )
+            ui.info(
+                "Vertex AI also needs the aiplatform.googleapis.com API enabled and "
+                "the Vertex AI User role (roles/aiplatform.user)."
+            )
+    else:
+        opts.embed_profile = opts.embed_backend
+        if opts.embed_profile == "zembed-1":
+            ui.info("Zembed 1 is opt-in and licensed CC-BY-NC-4.0 (non-commercial).")
     auto_embed_model = find_embed_model(opts.install_root or get_install_root(), opts.embed_profile)
     auto_embed_server = find_llama_server_bin(opts.install_root or get_install_root())
-    if auto_embed_model:
+    if opts.embed_backend != "gemini" and auto_embed_model:
         ui.ok(f"Detected embedding model: {auto_embed_model}")
         opts.embed_auto = _prompt_yes_no("Enable semantic embedding model for MCP clients?", default=True)
         if opts.embed_auto:
@@ -334,7 +429,7 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
                     "Download and install llama-server automatically?",
                     default=True,
                 )
-    else:
+    elif opts.embed_backend != "gemini":
         ui.warn(f"No {opts.embed_profile} model auto-detected.")
         if opts.interactive:
             if opts.embed_profile == "zembed-1" and _prompt_yes_no(
@@ -511,6 +606,23 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         help="embedding prompt/model profile (default: bge-code-v1)",
     )
     parser.add_argument(
+        "--embed-backend", choices=["bge-code-v1", "zembed-1", "gemini"], default="bge-code-v1",
+        help="embedding backend: a local GGUF profile or the opt-in cloud gemini-embedding-2",
+    )
+    parser.add_argument(
+        "--gemini-access", choices=["aistudio", "vertex"], default="aistudio",
+        help="Gemini credential route: Google AI Studio API key or Vertex AI (GCP)",
+    )
+    parser.add_argument("--gemini-api-key", default="", help="Gemini API key (Google AI Studio)")
+    parser.add_argument("--gemini-vertex-project", default="", help="Google Cloud project ID for Vertex AI")
+    parser.add_argument("--gemini-vertex-location", default="us-central1", help="Vertex AI region/location")
+    parser.add_argument("--gemini-model", default="gemini-embedding-2", help="Gemini embedding model name")
+    parser.add_argument("--gemini-dim", type=int, default=768, help="Gemini embedding output dimensionality")
+    parser.add_argument(
+        "--gemini-install-auth", action="store_true",
+        help="install google-auth into the runtime venv for Vertex AI ADC",
+    )
+    parser.add_argument(
         "--download-embed-model", action="store_true",
         help="download the selected managed embedding model",
     )
@@ -561,6 +673,14 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         interactive=True if args.interactive else (False if args.no_interactive else None),
         embed_auto=not args.no_embed_auto,
         embed_profile=args.embed_profile,
+        embed_backend=args.embed_backend,
+        gemini_access=args.gemini_access,
+        gemini_api_key=args.gemini_api_key,
+        gemini_vertex_project=args.gemini_vertex_project,
+        gemini_vertex_location=args.gemini_vertex_location,
+        gemini_install_auth=args.gemini_install_auth,
+        gemini_dim=args.gemini_dim,
+        gemini_model=args.gemini_model,
         embed_model_path=args.embed_model,
         embed_server_bin=args.embed_server_bin,
         install_llama_server=args.install_llama_server,
@@ -711,78 +831,130 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
 
         if _phase_enabled(opts, "clients"):
             ui.info("Configuring MCP clients")
-            embed_model = opts.embed_model_path
-            embed_server = opts.embed_server_bin
-            if opts.download_embed_model and not embed_model:
-                from ida_pro_mcp.host.intelligence.model_profiles import get_model_profile
-
-                selected_profile = get_model_profile(opts.embed_profile)
-                if selected_profile is None:
-                    raise RuntimeError(f"Unknown embedding profile: {opts.embed_profile}")
-                if selected_profile.opt_in and not opts.accept_model_license:
-                    raise RuntimeError(
-                        f"{selected_profile.display_name} is {selected_profile.license}; "
-                        "rerun with --accept-model-license to download it"
+            if opts.embed_backend == "gemini":
+                if not opts.dry_run:
+                    try:
+                        from ida_pro_mcp.host.intelligence.core import write_embedder_state
+                        state_path = write_embedder_state(
+                            install_root,
+                            backend="gemini",
+                            gemini_model=opts.gemini_model,
+                            gemini_dimension=opts.gemini_dim,
+                            gemini_vertex_project=opts.gemini_vertex_project,
+                            gemini_vertex_location=opts.gemini_vertex_location,
+                        )
+                        report.metadata["embedder_state"] = str(state_path)
+                    except Exception as exc:
+                        ui.warn(f"Could not persist embedder.json: {exc}")
+                if opts.gemini_access == "vertex" and opts.gemini_install_auth and not opts.dry_run:
+                    ui.info("Installing google-auth for Vertex AI Application Default Credentials")
+                    if install_optional_packages(python_exe, ["google-auth"]):
+                        ui.ok("google-auth installed for Vertex AI")
+                        report.add_step("gemini-auth", "ok", "google-auth installed")
+                    else:
+                        ui.warn(
+                            "google-auth install failed; the server will fall back to "
+                            "VERTEX_AI_ACCESS_TOKEN"
+                        )
+                        report.add_step("gemini-auth", "warn", "google-auth install failed")
+                ui.ok("Gemini embedding backend configured for MCP clients")
+                if opts.gemini_access == "vertex":
+                    ui.info(
+                        f"Vertex AI: project={opts.gemini_vertex_project} "
+                        f"location={opts.gemini_vertex_location}"
                     )
-                if opts.dry_run:
-                    ui.info(f"Would download {selected_profile.display_name} embedding model")
-                    report.add_step("embed_model", "dry-run", selected_profile.key)
-                else:
-                    ui.info(f"Downloading {selected_profile.display_name} embedding model")
-                    embed_model = download_embed_model(install_root, selected_profile.key)
-            if opts.embed_auto and not embed_model:
-                embed_model = find_embed_model(install_root, opts.embed_profile)
-            if opts.embed_auto and not embed_server:
-                embed_server = find_llama_server_bin(install_root)
-            if (
-                opts.install_llama_server
-                and opts.embed_auto
-                and embed_model
-                and not embed_server
-            ):
-                ui.info("Downloading and installing llama-server")
-                embed_server = download_and_install_llama_server(
-                    install_root=install_root,
-                    dry_run=opts.dry_run,
-                    report=report,
+                server_cfg = build_stdio_config(
+                    python_exe,
+                    install_root,
+                    embed_backend="gemini",
+                    gemini_api_key=opts.gemini_api_key,
+                    gemini_vertex_project=opts.gemini_vertex_project,
+                    gemini_vertex_location=opts.gemini_vertex_location,
+                    ida_install=getattr(opts, "_ida_install", None),
+                    disable_policy=opts.disable_policy,
                 )
-            if embed_model:
-                ui.ok("Embedding model configured for MCP clients")
-                report.metadata["embed_model"] = embed_model
-            elif opts.embed_auto:
-                ui.warn("No embedding model detected; semantic embedding features remain disabled")
-            if embed_server:
-                report.metadata["embed_server_bin"] = embed_server
-            if (embed_model or embed_server) and not opts.dry_run:
-                try:
-                    from ida_pro_mcp.host.intelligence.core import write_embedder_state
-                    state_path = write_embedder_state(
-                        install_root,
-                        model_path=embed_model,
-                        server_bin=embed_server,
-                        profile=opts.embed_profile,
+                configured = configure_clients(
+                    source_root=source_root,
+                    server_cfg=server_cfg,
+                    report=report,
+                    dry_run=opts.dry_run,
+                )
+                report.metadata["configured_clients"] = configured
+                report.add_step("clients", "ok", f"configured {len(configured)} clients")
+                ui.ok(f"Configured {len(configured)} clients")
+            else:
+                embed_model = opts.embed_model_path
+                embed_server = opts.embed_server_bin
+                if opts.download_embed_model and not embed_model:
+                    from ida_pro_mcp.host.intelligence.model_profiles import get_model_profile
+
+                    selected_profile = get_model_profile(opts.embed_profile)
+                    if selected_profile is None:
+                        raise RuntimeError(f"Unknown embedding profile: {opts.embed_profile}")
+                    if selected_profile.opt_in and not opts.accept_model_license:
+                        raise RuntimeError(
+                            f"{selected_profile.display_name} is {selected_profile.license}; "
+                            "rerun with --accept-model-license to download it"
+                        )
+                    if opts.dry_run:
+                        ui.info(f"Would download {selected_profile.display_name} embedding model")
+                        report.add_step("embed_model", "dry-run", selected_profile.key)
+                    else:
+                        ui.info(f"Downloading {selected_profile.display_name} embedding model")
+                        embed_model = download_embed_model(install_root, selected_profile.key)
+                if opts.embed_auto and not embed_model:
+                    embed_model = find_embed_model(install_root, opts.embed_profile)
+                if opts.embed_auto and not embed_server:
+                    embed_server = find_llama_server_bin(install_root)
+                if (
+                    opts.install_llama_server
+                    and opts.embed_auto
+                    and embed_model
+                    and not embed_server
+                ):
+                    ui.info("Downloading and installing llama-server")
+                    embed_server = download_and_install_llama_server(
+                        install_root=install_root,
+                        dry_run=opts.dry_run,
+                        report=report,
                     )
-                    report.metadata["embedder_state"] = str(state_path)
-                except Exception as exc:
-                    ui.warn(f"Could not persist embedder.json: {exc}")
-            server_cfg = build_stdio_config(
-                python_exe,
-                install_root,
-                embed_model=embed_model,
-                embed_server_bin=embed_server,
-                embed_profile=opts.embed_profile,
-                ida_install=getattr(opts, "_ida_install", None),
-                disable_policy=opts.disable_policy,
-            )
-            configured = configure_clients(
-                source_root=source_root,
-                server_cfg=server_cfg,
-                report=report,
-                dry_run=opts.dry_run,
-            )
-            report.metadata["configured_clients"] = configured
-            report.add_step("clients", "ok", f"configured {len(configured)} clients")
-            ui.ok(f"Configured {len(configured)} clients")
+                if embed_model:
+                    ui.ok("Embedding model configured for MCP clients")
+                    report.metadata["embed_model"] = embed_model
+                elif opts.embed_auto:
+                    ui.warn("No embedding model detected; semantic embedding features remain disabled")
+                if embed_server:
+                    report.metadata["embed_server_bin"] = embed_server
+                if (embed_model or embed_server) and not opts.dry_run:
+                    try:
+                        from ida_pro_mcp.host.intelligence.core import write_embedder_state
+                        state_path = write_embedder_state(
+                            install_root,
+                            model_path=embed_model,
+                            server_bin=embed_server,
+                            profile=opts.embed_profile,
+                        )
+                        report.metadata["embedder_state"] = str(state_path)
+                    except Exception as exc:
+                        ui.warn(f"Could not persist embedder.json: {exc}")
+                server_cfg = build_stdio_config(
+                    python_exe,
+                    install_root,
+                    embed_model=embed_model,
+                    embed_server_bin=embed_server,
+                    embed_profile=opts.embed_profile,
+                    ida_install=getattr(opts, "_ida_install", None),
+                    disable_policy=opts.disable_policy,
+                )
+                configured = configure_clients(
+                    source_root=source_root,
+                    server_cfg=server_cfg,
+                    report=report,
+                    dry_run=opts.dry_run,
+                )
+                report.metadata["configured_clients"] = configured
+                report.add_step("clients", "ok", f"configured {len(configured)} clients")
+                ui.ok(f"Configured {len(configured)} clients")
         else:
             report.add_step("clients", "skipped", "filtered by --only")
 

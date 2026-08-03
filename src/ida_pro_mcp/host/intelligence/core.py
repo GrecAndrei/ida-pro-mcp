@@ -59,6 +59,8 @@ from pathlib import Path
 from typing import Any
 
 from .embeddings import NOISE_WORDS, FunctionEmbeddingIndex  # noqa: F401
+from .gemini import GEMINI_MAX_DIM, GEMINI_MIN_DIM, GeminiEmbedBackend
+from .helpers import _EmbedResult
 from .model_profiles import (
     BGE_CODE_V1,
     EmbeddingModelProfile,
@@ -255,6 +257,11 @@ def write_embedder_state(
     model_path: str = "",
     server_bin: str = "",
     profile: str = "",
+    backend: str = "",
+    gemini_model: str = "",
+    gemini_dimension: int = 0,
+    gemini_vertex_project: str = "",
+    gemini_vertex_location: str = "",
     disabled: bool | None = None,
 ) -> str:
     """Persist a manual embedder override to `<install_root>/embedder.json`.
@@ -262,6 +269,11 @@ def write_embedder_state(
     Mirrors the installer pattern used for `ida-install.json` so a user (or
     a future installer subcommand) can pin the llama-server binary and the
     bge-code-v1 GGUF without relying on env vars or PATH.
+
+    ``backend="gemini"`` opts into the cloud Gemini embedder; the gemini_*
+    fields carry model/dimension/Vertex routing only — **the API key is never
+    written to this file** (it lives in the environment or the MCP client
+    config env block).
 
     Returns the path of the written file.
     """
@@ -282,6 +294,19 @@ def write_embedder_state(
         if selected is None and profile != "custom":
             raise ValueError(f"unknown embedding model profile: {profile}")
         payload["profile"] = profile
+    if backend:
+        backend_key = str(backend).strip().lower()
+        if backend_key not in ("local", "gemini", "cloud"):
+            raise ValueError(f"unknown embedding backend: {backend}")
+        payload["backend"] = "gemini" if backend_key == "cloud" else backend_key
+    if gemini_model:
+        payload["gemini_model"] = str(gemini_model)
+    if gemini_dimension:
+        payload["gemini_dimension"] = max(GEMINI_MIN_DIM, min(GEMINI_MAX_DIM, int(gemini_dimension)))
+    if gemini_vertex_project:
+        payload["gemini_vertex_project"] = str(gemini_vertex_project)
+    if gemini_vertex_location:
+        payload["gemini_vertex_location"] = str(gemini_vertex_location)
     if disabled is not None:
         payload["disabled"] = bool(disabled)
     with open(state_path, "w", encoding="utf-8") as f:
@@ -742,28 +767,31 @@ def _extract_signature(pseudocode: str, max_idents: int = 40) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Explicit unavailable result when llama-server or the model is absent
+# Embedding result + backend selection
 # ─────────────────────────────────────────────────────────────────────────────
+# ``_EmbedResult`` lives in ``helpers.py`` (shared with the opt-in Gemini
+# cloud backend in ``gemini.py``).  The production invariant is unchanged:
+# when ``ok`` is False, ``vector`` is None and callers MUST surface the
+# failure rather than proceed as if nothing happened.
 
-class _EmbedResult:
-    """Result of an embedding call.
 
-    Production invariant: ``vector`` is *always* from the declared
-    ``backend``.  When ``ok`` is False, ``vector`` is None and callers
-    MUST surface the failure rather than proceed as if nothing happened.
-    The old TF-IDF fallback violated this by returning garbage vectors
-    whenever the model was unavailable.
+def _resolve_backend() -> str:
+    """Return the requested embedding backend.
+
+    ``"gemini"`` when the user explicitly opts in via ``IDA_MCP_EMBED_BACKEND``
+    or ``embedder.json`` ``{"backend": "gemini"}``; otherwise ``"local"`` (the
+    profile-aware llama-server path).  Never selected automatically, and never
+    selected when ``IDA_MCP_EMBED_DISABLED`` is set.
     """
-
-    __slots__ = ("vector", "backend", "ok")
-
-    def __init__(self, vector: list[float] | None, backend: str, ok: bool):
-        self.vector = vector
-        self.backend = backend
-        self.ok = ok
-
-    def __repr__(self) -> str:
-        return f"_EmbedResult(backend={self.backend!r}, ok={self.ok})"
+    if EMBED_DISABLED:
+        return "local"
+    state = _read_embedder_state()
+    requested = str(
+        os.environ.get("IDA_MCP_EMBED_BACKEND") or state.get("backend") or ""
+    ).strip().lower()
+    if requested in ("gemini", "cloud", "google"):
+        return "gemini"
+    return "local"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -783,6 +811,9 @@ class BgeCodeEmbedder:
 
     _instance: BgeCodeEmbedder | None = None
     _lock = threading.Lock()
+    # Set explicitly in ``_init``; the class default keeps ``__new__``-constructed
+    # instances (used by tests that stub attributes directly) on the local path.
+    _gemini: GeminiEmbedBackend | None = None
 
     def __new__(cls) -> BgeCodeEmbedder:
         with cls._lock:
@@ -793,6 +824,27 @@ class BgeCodeEmbedder:
         return cls._instance
 
     def _init(self) -> None:
+        # Opt-in cloud backend (Gemini).  Routed first so the local llama-server
+        # machinery below is never touched when the user selected a cloud model.
+        if _resolve_backend() == "gemini":
+            gem = GeminiEmbedBackend(state=_read_embedder_state())
+            self._gemini: GeminiEmbedBackend | None = gem
+            self._use_llama = False
+            self._profile = None
+            self._dimension = gem.dim
+            self._server_bin = ""
+            self._model_path = ""
+            self._port: int | None = None
+            self._proc = None
+            self._ready = gem.ready
+            self._owns_proc = False
+            self._batch_size = gem.batch_size
+            self._max_batch_size = gem.max_batch_size
+            self._batch_lock = threading.Lock()
+            self._anchor_cache: dict[str, list[float]] = {}
+            return
+
+        self._gemini: GeminiEmbedBackend | None = None
         self._server_bin   = _find_llama_server()
         self._model_path   = _find_model()
         state = _read_embedder_state()
@@ -839,6 +891,8 @@ class BgeCodeEmbedder:
         self._idle_generation = 0
 
     def status(self, probe: bool = False, deep_hash: bool = False) -> dict:
+        if self._gemini is not None:
+            return self._gemini.status(probe=probe, deep_hash=deep_hash)
         server_ready = bool(self._ready)
         probe_error = ""
         if probe:
@@ -1257,6 +1311,9 @@ class BgeCodeEmbedder:
             return False
 
     def stop(self) -> None:
+        if self._gemini is not None:
+            self._gemini.stop()
+            return
         self._cancel_idle_shutdown()
         owned_pid = self._proc.pid if self._owns_proc and self._proc else None
         try:
@@ -1306,6 +1363,8 @@ class BgeCodeEmbedder:
         that genuinely need semantic work (indexing or semantic search) use
         this entry point first; the server then retires if no request arrives.
         """
+        if self._gemini is not None:
+            return self._gemini.ensure_ready()
         self._cancel_idle_shutdown()
         ready = bool(self._start_server())
         if ready:
@@ -1443,6 +1502,8 @@ class BgeCodeEmbedder:
         ``result.vector`` is None — callers MUST check this.  There is
         no silent fallback to a weaker backend.
         """
+        if self._gemini is not None:
+            return self._gemini.embed(text, purpose=purpose)
         if self._use_llama:
             vec = self._llama_embed(text, purpose=purpose)
             if vec is not None:
@@ -1477,6 +1538,8 @@ class BgeCodeEmbedder:
         object so callers can identify exactly which items failed."""
         if not texts:
             return []
+        if self._gemini is not None:
+            return self._gemini.embed_batch(texts, purpose=purpose)
         if not self._use_llama:
             return [_EmbedResult(None, "unavailable", False) for _ in texts]
         out: list[_EmbedResult] = []
@@ -1517,17 +1580,23 @@ class BgeCodeEmbedder:
 
     @property
     def dim(self) -> int:
+        if self._gemini is not None:
+            return self._gemini.dim
         return int(getattr(self, "_dimension", 0) or 0)
 
     @property
     def max_input_chars(self) -> int:
         """Conservative character budget derived from the configured context."""
+        if self._gemini is not None:
+            return self._gemini.max_input_chars
         usable_tokens = max(512, EMBED_CTX - 128)
         return max(1024, min(32768, int(usable_tokens * max(1.0, EMBED_CHARS_PER_TOKEN))))
 
     @property
     def decomp_document_chars(self) -> int:
         """Signal-dense full-decomp document budget used during indexing."""
+        if self._gemini is not None:
+            return self._gemini.decomp_document_chars
         if DECOMP_DOCUMENT_CHARS > 0:
             return max(1024, min(self.max_input_chars, DECOMP_DOCUMENT_CHARS))
         fraction = max(0.1, min(1.0, DECOMP_DOCUMENT_FRACTION))
@@ -1535,11 +1604,15 @@ class BgeCodeEmbedder:
 
     @property
     def backend(self) -> str:
+        if self._gemini is not None:
+            return self._gemini.backend
         profile = getattr(self, "_profile", BGE_CODE_V1)
         return profile.key if self._use_llama else "unavailable"
 
     @property
     def embedding_format(self) -> str:
+        if self._gemini is not None:
+            return self._gemini.embedding_format
         profile = getattr(self, "_profile", BGE_CODE_V1)
         prompt_hash = hashlib.sha256(
             f"{profile.query_prefix}\0{profile.document_prefix}\0{profile.suffix}".encode()

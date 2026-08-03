@@ -20,6 +20,14 @@ class InstallerOptions:
     interactive: bool | None = None
     embed_auto: bool = True
     embed_profile: str = "bge-code-v1"
+    embed_backend: str = "bge-code-v1"  # bge-code-v1 | zembed-1 | gemini
+    gemini_access: str = "aistudio"  # aistudio | vertex
+    gemini_api_key: str = ""
+    gemini_vertex_project: str = ""
+    gemini_vertex_location: str = "us-central1"
+    gemini_install_auth: bool = False
+    gemini_dim: int = 768
+    gemini_model: str = "gemini-embedding-2"
     embed_model_path: str = ""
     embed_server_bin: str = ""
     install_llama_server: bool = False

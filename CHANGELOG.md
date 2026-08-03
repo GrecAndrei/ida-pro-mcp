@@ -2,6 +2,14 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-08-03 — opt-in Gemini cloud embedding backend
+
+- New **opt-in cloud embedder**: `gemini-embedding-2` (or `gemini-embedding-001`) through the Google API, selected only when the user sets `IDA_MCP_EMBED_BACKEND=gemini` or writes `embedder.json` `{"backend": "gemini"}` — never automatically, even when GCP/Gemini env vars are present. The local llama-server path (`bge-code-v1` / `zembed-1`) is unchanged and still the default.
+- `GeminiEmbedBackend` (`host/intelligence/gemini.py`) implements the same duck-typed interface as `BgeCodeEmbedder`, so the function index, context assembler, semantic server, and behavior classifier work against it unchanged. Supports Google AI Studio (`GEMINI_API_KEY` / `GOOGLE_API_KEY`) and Vertex AI (bearer token, or ADC via the optional `google-auth` package), batched `batchEmbedContents`, `outputDimensionality`, per-purpose `taskType`, retry on transient errors, and a one-shot degradation when the API rejects `task_type`.
+- **Privacy:** the cloud backend uploads the *compact behavioral signature* of each function — never the full decompilation. It is opt-in and network-facing by design.
+- Index persistence stays stable: `embedding_format` for Gemini is `gemini:v1:<model>:<dim>:<task_mode>`, so restarting the server does not force a semantic-index rebuild. The API key is never written to `embedder.json`.
+- Installer: interactive wizard now asks for the **embedding backend** (local / local / cloud), then the Gemini route (AI Studio key or Vertex project+region), and offers to install `google-auth` for Vertex ADC. New CLI flags: `--embed-backend`, `--gemini-access`, `--gemini-api-key`, `--gemini-vertex-project`, `--gemini-vertex-location`, `--gemini-model`, `--gemini-dim`, `--gemini-install-auth`. `--embedder-doctor --embed-backend gemini` verifies a cloud setup without opening IDA.
+
 ## 2026-08-02 — agent SSO for subagents
 
 - New `session` actions `sso_activate`, `agent_login`, `agent_logout` give subagents a **per-agent identity** over a shared MCP connection. Previously every subagent was indistinguishable: one shared active session, shared ownership, and a connection close that tore down *everyone's* runtimes. The orchestrator activates a one-shot realm with an allowlist of agent names, each subagent logs on with an HMAC-signed ticket (`mint_agent_ticket` in `host/server/server_client_state.py`), and every session-scoped call carries an `agent=<name>` tag.

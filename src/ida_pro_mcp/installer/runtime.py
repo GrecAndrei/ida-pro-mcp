@@ -907,6 +907,10 @@ def build_stdio_config(
     embed_model: str = "",
     embed_server_bin: str = "",
     embed_profile: str = "",
+    embed_backend: str = "",
+    gemini_api_key: str = "",
+    gemini_vertex_project: str = "",
+    gemini_vertex_location: str = "",
     ida_install: object | None = None,
     disable_policy: bool = False,
 ) -> dict:
@@ -916,6 +920,12 @@ def build_stdio_config(
       1. `ida_install` (IdaInstall from installer/discovery.py)
       2. IDADIR / IDA_DIR env
       3. `detect_ida_install_dir()` (legacy single-install path)
+
+    ``embed_backend == "gemini"`` selects the opt-in cloud embedder: the
+    client env carries ``IDA_MCP_EMBED_BACKEND=gemini`` plus the chosen
+    credential (AI Studio API key or Vertex project/location).  The API key
+    is written into the generated client config only when the user provided
+    it; the server also honours the process environment if it is unset here.
     """
     idadir = ""
     if ida_install is not None:
@@ -950,9 +960,37 @@ def build_stdio_config(
         env["IDA_MCP_EMBED_SERVER_BIN"] = embed_server_bin
     if embed_profile:
         env["IDA_MCP_EMBED_PROFILE"] = embed_profile
+    if str(embed_backend or "").lower() == "gemini":
+        env["IDA_MCP_EMBED_BACKEND"] = "gemini"
+        if gemini_api_key:
+            env["GEMINI_API_KEY"] = gemini_api_key
+        if gemini_vertex_project:
+            env["GOOGLE_CLOUD_PROJECT"] = gemini_vertex_project
+        if gemini_vertex_location:
+            env["VERTEX_AI_LOCATION"] = gemini_vertex_location
 
     return {
         "command": str(python_exe),
         "args": ["-u", "-m", "ida_pro_mcp.host.server"],
         "env": env,
     }
+
+
+def install_optional_packages(
+    python_exe: Path | None,
+    packages: list[str],
+) -> bool:
+    """Best-effort ``pip install`` of optional runtime packages (e.g. google-auth).
+
+    Failures are non-fatal by design: the Gemini backend reports a clear
+    error and the user can install the package later.  Returns True on
+    success, False when the venv python is unknown or the install failed.
+    """
+    if not python_exe or not packages:
+        return False
+    cmd = [str(python_exe), "-m", "pip", "install", *packages]
+    try:
+        run_checked(cmd, timeout=300.0)
+        return True
+    except Exception:
+        return False

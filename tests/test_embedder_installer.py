@@ -59,6 +59,53 @@ def test_client_config_carries_the_selected_embedding_profile(tmp_path):
     assert config["env"]["IDA_MCP_EMBED_MODEL"].endswith("zembed-1-Q4_K_M.gguf")
 
 
+def test_gemini_backend_cli_args_parse():
+    opts = parse_args(
+        [
+            "--embed-backend", "gemini",
+            "--gemini-access", "vertex",
+            "--gemini-vertex-project", "proj-x",
+            "--gemini-vertex-location", "europe-west1",
+            "--gemini-install-auth",
+            "--no-interactive",
+        ]
+    )
+    assert opts.embed_backend == "gemini"
+    assert opts.gemini_access == "vertex"
+    assert opts.gemini_vertex_project == "proj-x"
+    assert opts.gemini_vertex_location == "europe-west1"
+    assert opts.gemini_install_auth is True
+    assert opts.gemini_model == "gemini-embedding-2"
+    assert opts.gemini_dim == 768
+
+
+def test_client_config_carries_gemini_backend_env(tmp_path):
+    config = build_stdio_config(
+        tmp_path / "python",
+        tmp_path,
+        embed_backend="gemini",
+        gemini_api_key="sekrit-key",
+        gemini_vertex_project="proj-x",
+        gemini_vertex_location="us-central1",
+    )
+    env = config["env"]
+    assert env["IDA_MCP_EMBED_BACKEND"] == "gemini"
+    assert env["GEMINI_API_KEY"] == "sekrit-key"
+    assert env["GOOGLE_CLOUD_PROJECT"] == "proj-x"
+    assert env["VERTEX_AI_LOCATION"] == "us-central1"
+
+
+def test_client_config_gemini_vertex_without_key_omits_it(tmp_path):
+    config = build_stdio_config(
+        tmp_path / "python",
+        tmp_path,
+        embed_backend="gemini",
+        gemini_vertex_project="proj-x",
+    )
+    assert config["env"]["IDA_MCP_EMBED_BACKEND"] == "gemini"
+    assert "GEMINI_API_KEY" not in config["env"]
+
+
 def test_normal_runtime_install_removes_an_old_live_source_pointer(monkeypatch, tmp_path):
     install_root = tmp_path / "install"
     venv_python = install_root / ".venv" / "bin" / "python"
