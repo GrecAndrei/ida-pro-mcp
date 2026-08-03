@@ -1,0 +1,95 @@
+{
+ "speed": {
+  "backend": "gemini",
+  "dim": 768,
+  "cold_start_sec": 0.0,
+  "first_embed_sec": 2.618,
+  "single_ms_median": 2616.0,
+  "batches": {
+   "8": {
+    "wall_sec": 40.805,
+    "docs_per_sec": 0.8,
+    "ok": 33,
+    "total": 33
+   },
+   "16": {
+    "wall_sec": 26.885,
+    "docs_per_sec": 1.2,
+    "ok": 33,
+    "total": 33
+   }
+  }
+ },
+ "accuracy": {
+  "corpus_size": 33,
+  "self_recall_at1": 1.0,
+  "query_recall_at1": 0.625,
+  "query_recall_at5": 1.0,
+  "query_mrr_at5": 0.7604,
+  "num_queries": 8,
+  "offdiag_cos": {
+   "min": 0.6798,
+   "p10": 0.7596,
+   "median": 0.8136,
+   "max": 0.9665
+  },
+  "query_rows": [
+   {
+    "query": "allocates a GPUAUXContext with operator new of size 0x50 and calls its constructor with two integer arguments then returns the new object",
+    "target": "0xb0b0",
+    "top1": "GpuAuxCreateContext",
+    "top1_sim": 0.869,
+    "rank": 1
+   },
+   {
+    "query": "reads width and height fields from an ANativeWindowBuffer, stores them into the context aux info, and prepares the GPU aux buffer for the given window buffer",
+    "target": "0xb200",
+    "top1": "GuiExtAuxKickConversion",
+    "top1_sim": 0.7439,
+    "rank": 3
+   },
+   {
+    "query": "checks whether the source buffer is dirty by reading a dirty flag field and returns whether a conversion must run",
+    "target": "0xdc60",
+    "top1": "_AUXCheckIfSrcDirty",
+    "top1_sim": 0.7637,
+    "rank": 1
+   },
+   {
+    "query": "queues a buffer into the buffer queue, records the current queue index, and triggers the hardware composer queueBuffer path",
+    "target": "0xfd50",
+    "top1": "GuiExtAuxQueueBuffer",
+    "top1_sim": 0.7284,
+    "rank": 1
+   },
+   {
+    "query": "performs color space conversion on the aux source buffer into the destination when the pixel format requires it, handling the rgb to yuv path",
+    "target": "0xf080",
+    "top1": "GPUAUXContext::prepare(ANativeWindowBuffer*)",
+    "top1_sim": 0.7268,
+    "rank": 2
+   },
+   {
+    "query": "fills the source image info structure with width height and format taken from the native window buffer and stores the buffer handle",
+    "target": "0xcbf0",
+    "top1": "_AUXGetBufferInfo",
+    "top1_sim": 0.7407,
+    "rank": 4
+   },
+   {
+    "query": "acquires a buffer slot from the buffer queue, waits on the acquire fence, and returns the dequeued native window buffer",
+    "target": "0xfa00",
+    "top1": "GuiExtAuxAcquireBuffer",
+    "top1_sim": 0.7047,
+    "rank": 1
+   },
+   {
+    "query": "checks whether picture quality enhancement is enabled for this format by consulting a pq white list and returns the enable flag",
+    "target": "0xde30",
+    "top1": "_AUXCheckIfPQEnable",
+    "top1_sim": 0.7018,
+    "rank": 1
+   }
+  ]
+ }
+}

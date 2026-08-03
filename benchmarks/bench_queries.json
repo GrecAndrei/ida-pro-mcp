@@ -1,0 +1,36 @@
+{
+  "libgpu_aux.so": [
+    {
+      "query": "allocates a GPUAUXContext with operator new of size 0x50 and calls its constructor with two integer arguments then returns the new object",
+      "target": "0xb0b0"
+    },
+    {
+      "query": "reads width and height fields from an ANativeWindowBuffer, stores them into the context aux info, and prepares the GPU aux buffer for the given window buffer",
+      "target": "0xb200"
+    },
+    {
+      "query": "checks whether the source buffer is dirty by reading a dirty flag field and returns whether a conversion must run",
+      "target": "0xdc60"
+    },
+    {
+      "query": "queues a buffer into the buffer queue, records the current queue index, and triggers the hardware composer queueBuffer path",
+      "target": "0xfd50"
+    },
+    {
+      "query": "performs color space conversion on the aux source buffer into the destination when the pixel format requires it, handling the rgb to yuv path",
+      "target": "0xf080"
+    },
+    {
+      "query": "fills the source image info structure with width height and format taken from the native window buffer and stores the buffer handle",
+      "target": "0xcbf0"
+    },
+    {
+      "query": "acquires a buffer slot from the buffer queue, waits on the acquire fence, and returns the dequeued native window buffer",
+      "target": "0xfa00"
+    },
+    {
+      "query": "checks whether picture quality enhancement is enabled for this format by consulting a pq white list and returns the enable flag",
+      "target": "0xde30"
+    }
+  ]
+}
