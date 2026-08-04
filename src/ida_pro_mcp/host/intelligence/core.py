@@ -487,6 +487,36 @@ def _find_llama_server() -> str:
     return ""  # semantic embeddings remain unavailable
 
 
+def _prefer_q4() -> bool:
+    """Prefer Q4_K_M weight files over Q8_0 when both are installed.
+
+    Q4_K_M is ~1.6x smaller than Q8_0 for the 0.6B embed/rerank models, so on
+    the bandwidth-bound CPU decode path it streams ~1.6x fewer weight bytes —
+    at a small retrieval-quality cost.  Set ``IDA_MCP_Q4=0`` to force the
+    higher-precision Q8_0 files instead.  Explicit ``IDA_MCP_*_MODEL`` and
+    state-file model paths are always honored as-is (this only ranks the
+    glob-discovered candidates).
+    """
+    return os.environ.get("IDA_MCP_Q4", "1").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
+
+
+def _model_quant_rank(path: str) -> int:
+    """Sort key for glob-discovered GGUF candidates: preferred quant first.
+
+    Returns 0 for the preferred quant (Q4_K_M by default, Q8_0 when
+    ``_prefer_q4()`` is off), 1 for the other known quant, 2 for anything
+    else.  Keeps model selection deterministic regardless of glob order.
+    """
+    low = path.lower()
+    q4 = "q4_k_m" in low or "q4km" in low
+    q8 = "q8_0" in low or "q8" in low
+    if _prefer_q4():
+        return 0 if q4 else (1 if q8 else 2)
+    return 0 if q8 else (1 if q4 else 2)
+
+
 def _find_model() -> str:
     """Locate the embedding GGUF model.
 
@@ -497,6 +527,9 @@ def _find_model() -> str:
       4. Install-root model files matching the selected profile
       5. User home: `~/models`, `~/Downloads`, `~/Documents`
       6. Hugging Face cache snapshots matching the selected profile
+
+    Glob-discovered candidates prefer the Q4_K_M quant when both it and Q8_0
+    are present (see ``_prefer_q4``).
     """
     global _MODEL_PATH_CACHE
     state = _read_embedder_state()
@@ -504,7 +537,9 @@ def _find_model() -> str:
         os.environ.get("IDA_MCP_EMBED_PROFILE") or state.get("profile") or "qwen3-embedding-0.6b"
     ).strip().lower()
     requested_profile = (get_model_profile(requested_profile) or BGE_CODE_V1).key
-    cache_key = requested_profile
+    # Quant preference is part of the identity: a Q8 path cached before the
+    # user enables Q4 must not be served.
+    cache_key = f"{requested_profile}:q4={int(_prefer_q4())}"
     if _MODEL_PATH_CACHE is not None and _MODEL_PATH_CACHE[0] == cache_key:
         return _MODEL_PATH_CACHE[1]
 
@@ -556,6 +591,7 @@ def _find_model() -> str:
             continue
         for pattern in model_filenames:
             candidates.extend(glob.glob(os.path.join(base, pattern)))
+    candidates.sort(key=_model_quant_rank)
 
     seen: set[str] = set()
     for c in candidates:
@@ -590,6 +626,7 @@ def _find_model() -> str:
                 continue
             for pattern in BGE_CODE_V1.filename_patterns:
                 candidates.extend(glob.glob(os.path.join(base, pattern)))
+        candidates.sort(key=_model_quant_rank)
         for c in candidates:
             try:
                 p = os.path.abspath(c)

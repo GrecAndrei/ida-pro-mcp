@@ -2,6 +2,39 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-08-04 — batched native decode + Q4_K_M models (retrieval speed)
+
+Native-backend decode is now **batched across sequences** and the models are
+**Q4_K_M** — the two big levers for CPU retrieval speed.
+
+- **True batched decode** (`mcp_llama.cpp` `encode_batched`): instead of one
+  sequence per `llama_decode` (KV cache cleared, weights streamed, per call),
+  sequences are packed into greedy batches of distinct `seq_id`s — up to
+  `n_seq_max` (16) per decode, each with its own KV stream — and the KV is
+  cleared once per batch.  Pooled embeddings are read per-sequence after the
+  decode via `llama_get_embeddings_seq`.  Because the decode graph runs over
+  n_ubatch-token slices, packing several short documents into one decode
+  fills the ubatch (weights streamed once for ~512 slots instead of ~150
+  useful ones) — the dominant cost for a bandwidth-bound 0.6B Q8/Q4 model.
+  Long documents see the win through fewer per-call overheads.
+- **Quantized KV cache** (`type_k/type_v = Q8_0`): halves the ~28 KiB/token KV
+  a 0.6B Qwen3 needs in f16, so a 16 × 2048-token batch fits in ~0.5 GiB.
+- **Head-first truncation**: over-long sequences now keep the **head** (query
+  + document prefix) instead of the tail — the old tail-keeping could drop
+  the query for long rerank pairs.  Matches the HTTP server's truncation.
+- **Q4_K_M models** (`mcp_quantize`): a minimal `llama_model_quantize` driver
+  built against the same static libs (no llama-common), so the embed and
+  rerank GGUFs drop from ~639 MiB to ~396 MiB (~1.6×) — ~1.6× fewer weight
+  bytes to stream on the bandwidth-bound decode.  Model discovery now prefers
+  `Q4_K_M` over `Q8_0` when both exist (`IDA_MCP_Q4=0` to force Q8), and the
+  installed state now points the embedder at the Q4 file (backup saved).
+- **`benchmarks/ab_interleave.py`** — interleaved n_seq=1 vs n_seq=N
+  benchmark in one process (two contexts, env flipped between creations) that
+  cancels CPU contention and asserts batched scores == single-seq scores.
+- Correctness verified under load: batched rerank scores (relevant 0.8909 vs
+  noise 0.0005, deterministic) and batched embed vectors (distinct, nonzero
+  per document) match the single-sequence path; 126 intelligence tests pass.
+
 ## 2026-08-04 — in-process native llama.cpp retrieval backend (embed + rerank)
 
 Replaces the two full `llama-server` HTTP subprocesses with **one in-process

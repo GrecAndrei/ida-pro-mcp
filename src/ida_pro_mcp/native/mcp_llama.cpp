@@ -16,13 +16,16 @@
 //                           classifier (same as the server's send_rerank).
 //
 // Everything lives in the calling process: no HTTP, no JSON, no per-request
-// graph allocation.  Each handle owns one llama_context; llama_encode splits
-// large batches into ubatches internally against that context's compute
-// graph, which is allocated once and reused.
+// graph allocation.  Each handle owns one llama_context split into n_seq_max
+// per-sequence KV streams; sequences are decoded in greedy batches (one
+// llama_decode per batch, distinct seq_ids) against a compute graph allocated
+// once and reused.  The KV cache is q8_0-quantized so a batch of 16 x 2048
+// tokens fits in ~0.5 GiB.
 
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
 #include <functional>
 #include <new>
 #include <string>
@@ -70,7 +73,17 @@ struct mcp_llama_common {
     llama_model *  model = nullptr;
     llama_context *ctx  = nullptr;
     int            n_threads = 1;
-    int            n_ctx = 2048;
+    int            n_ctx = 2048;        // total KV cells
+    int            n_ctx_seq = 2048;    // per-sequence token budget
+    int            n_seq_max = 1;       // max sequences in one decode
+
+    // Decode batch capacity.  We default to 16 sequences; each gets its own
+    // KV stream (kv_unified=false), so n_ctx = n_ctx_seq * n_seq_max.  The KV
+    // cache is quantized (q8_0) to halve the ~28 KiB/token a 0.6B Qwen3 model
+    // would otherwise need in f16, letting a batch of 16 x 2048-token
+    // sequences fit in ~0.5 GiB.
+    static constexpr int   kSeqMaxDefault = 16;
+    static constexpr int   kCtxSeqDefault = 2048;
 
     bool load(const char * model_path, int threads, int ctx_size) {
         n_threads = threads > 0 ? threads : 1;
@@ -78,13 +91,35 @@ struct mcp_llama_common {
         mparams.n_gpu_layers = 0;  // CPU only in this pass
         model = llama_model_load_from_file(model_path, mparams);
         if (!model) return false;
-        n_ctx = ctx_size > 0 ? ctx_size
-                             : static_cast<int>(llama_model_n_ctx_train(model));
-        if (n_ctx <= 0) n_ctx = 2048;
+        const int train_ctx = static_cast<int>(llama_model_n_ctx_train(model));
+        n_ctx = ctx_size > 0 ? ctx_size : train_ctx;
+        if (n_ctx <= 0) n_ctx = kCtxSeqDefault * kSeqMaxDefault;
+
+        // Split the context into per-sequence streams: with kv_unified=false
+        // the context rounds n_ctx down to n_ctx_seq * n_seq_max, so derive
+        // the per-sequence budget from whatever n_ctx was asked for.
+        // MCP_NSEQ overrides the batch width (diagnostic / tuning knob).
+        n_seq_max = kSeqMaxDefault;
+        if (const char * e = getenv("MCP_NSEQ")) {
+            const int v = atoi(e);
+            if (v >= 1 && v <= 64) n_seq_max = v;
+        }
+        n_ctx_seq = n_ctx / n_seq_max;
+        if (n_ctx_seq < 64) n_ctx_seq = 64;          // never starve a sequence
+        if (n_ctx_seq > kCtxSeqDefault) n_ctx_seq = kCtxSeqDefault;
+        n_ctx = n_ctx_seq * n_seq_max;               // exact, no rounding
+
         llama_context_params cparams = llama_context_default_params();
         cparams.n_ctx = static_cast<uint32_t>(n_ctx);
+        cparams.n_seq_max = static_cast<uint32_t>(n_seq_max);
         cparams.n_threads = n_threads;
         cparams.n_threads_batch = n_threads;
+        // Quantized KV halves the per-token KV footprint, the binding
+        // constraint for batching many sequences into one decode on a
+        // memory-tight box.  Scores are stable: KV quantization only rounds
+        // the cache, the classifier head reads the pooled hidden state.
+        cparams.type_k = GGML_TYPE_Q8_0;
+        cparams.type_v = GGML_TYPE_Q8_0;
         // Must be set at context creation (not just llama_set_embeddings):
         // the server does the same and the graph/KV setup differs when it's
         // known up front.  Without it, encoding a Qwen3 embedding model
@@ -111,81 +146,144 @@ struct mcp_llama_common {
 
 // ── tokenize helpers ───────────────────────────────────────────────────────
 
-// Encode `seqs` (already tokenized) one sequence at a time through the KV
-// cache and write each pooled embedding via `write(i, emb)`.
+// Encode `seqs` (already tokenized) in greedy batches through the KV cache,
+// writing each pooled embedding via `write(i, emb)`.
 //
 // Note on llama_encode vs llama_decode: llama_encode passes a null memory
 // context into the graph builder, and decoder architectures (Qwen3) build
 // attention-KV unconditionally — dereferencing it segfaults (verified).  The
 // HTTP server avoids this by using llama_decode with the KV cache, so we do
-// the same: one sequence per decode call, KV cache cleared first (public
-// llama_memory_clear), giving each sequence the full n_ctx and no cross-seq
-// interference.  This is the server's proven embedding path.
-static int encode_one_shot(mcp_llama_common & h,
-                           const std::vector<std::vector<llama_token>> & seqs,
-                           int n,
-                           const std::function<void(int, const float *)> & write) {
+// the same.  Where the previous driver decoded ONE sequence per llama_decode
+// (clearing the whole KV first), this version packs many sequences into one
+// decode with distinct seq_ids — each gets its own KV stream (n_ctx_seq
+// tokens) — clearing the KV once per batch.
+//
+// Why batching wins: the decode graph is built over an ubatch of up to
+// n_ubatch tokens, so a short sequence alone wastes most of a 512-token
+// ubatch (weights streamed for 512 slots, ~150 computed).  Packing several
+// sequences fills the ubatch and streams the weights far fewer times per
+// useful token — the dominant CPU cost for a bandwidth-bound 0.6B Q8 model.
+//
+// Pooled embeddings are read per-sequence (llama_get_embeddings_seq) after
+// the decode; llama.cpp fills embd_seq per ubatch and the last ubatch a
+// sequence appears in wins, so a sequence spanning ubatches still yields its
+// final pooled vector.  For Qwen3 the RANK pool is a LAST-token pool, and the
+// hidden state of a sequence's last token is identical batched vs alone
+// (attention is masked per KV stream), so scores match the HTTP path.
+static int encode_batched(mcp_llama_common & h,
+                          const std::vector<std::vector<llama_token>> & seqs,
+                          int n,
+                          const std::function<void(int, const float *)> & write) {
     llama_memory_t mem = llama_get_memory(h.ctx);
+
+    // Cap every sequence to its KV stream budget, keeping the HEAD (query and
+    // document prefix carry the rerank/embedding signal; the previous tail
+    // truncation could drop the query for long docs).  The HTTP server also
+    // keeps the head when a prompt overflows its slot.
+    std::vector<std::vector<llama_token>> capped(static_cast<size_t>(n));
+    std::vector<int> order;  // origin indices, longest first
+    order.reserve(n);
     for (int i = 0; i < n; ++i) {
-        // Truncate over-long sequences to n_ctx instead of failing, matching
-        // the HTTP server (it truncates each prompt to fit the context).
-        // Keeping the LAST n_ctx tokens preserves the pooled output position.
         const auto & full = seqs[static_cast<size_t>(i)];
         if (full.empty()) return MCP_ERR_TOKENIZE;
-        size_t start = full.size() > static_cast<size_t>(h.n_ctx)
-                       ? full.size() - static_cast<size_t>(h.n_ctx) : 0;
-        const std::vector<llama_token> toks(full.begin() + start, full.end());
+        const size_t budget = std::min(full.size(), static_cast<size_t>(h.n_ctx_seq));
+        capped[static_cast<size_t>(i)].assign(full.begin(), full.begin() + budget);
+        order.push_back(i);
+    }
+    // Longest-first packing keeps big sequences in the same batch and leaves
+    // stragglers of similar small size to share a final decode.
+    std::sort(order.begin(), order.end(), [&](int a, int b) {
+        return capped[static_cast<size_t>(a)].size() > capped[static_cast<size_t>(b)].size();
+    });
+
+    std::vector<int> batch;  // origin indices in the current chunk
+
+    auto flush_batch = [&]() -> int {
+        if (batch.empty()) return MCP_OK;
+        int32_t total = 0;
+        for (int idx : batch) total += static_cast<int32_t>(capped[static_cast<size_t>(idx)].size());
+
         if (mem) llama_memory_clear(mem, true);
+        llama_batch lb = llama_batch_init(total, 0, 1);
+        if (lb.token == nullptr) return MCP_ERR_ALLOC;
 
-        llama_batch batch = llama_batch_init(static_cast<int32_t>(toks.size()), 0, 1);
-        if (batch.token == nullptr) return MCP_ERR_ALLOC;
-        for (size_t j = 0; j < toks.size(); ++j) {
-            batch.token[j] = toks[j];
-            batch.pos[j] = static_cast<llama_pos>(j);
-            batch.n_seq_id[j] = 1;
-            batch.seq_id[j][0] = 0;
-            batch.logits[j] = (j == toks.size() - 1) ? 1 : 0;
+        int32_t slot = 0;
+        for (size_t k = 0; k < batch.size(); ++k) {
+            const int        idx = batch[k];
+            const auto &     toks = capped[static_cast<size_t>(idx)];
+            const llama_seq_id sid = static_cast<llama_seq_id>(k);
+            for (size_t j = 0; j < toks.size(); ++j, ++slot) {
+                lb.token[slot] = toks[j];
+                lb.pos[slot] = static_cast<llama_pos>(j);   // 0-based per stream
+                lb.n_seq_id[slot] = 1;
+                lb.seq_id[slot][0] = sid;
+                lb.logits[slot] = (j == toks.size() - 1) ? 1 : 0;
+            }
         }
-        batch.n_tokens = static_cast<int32_t>(toks.size());
+        lb.n_tokens = total;
 
-        const int rc = llama_decode(h.ctx, batch);
-        llama_batch_free(batch);
+        int rc = llama_decode(h.ctx, lb);
         if (rc != 0) {
             if (rc == 1) {  // could not find a KV slot — retry once after clear
                 if (mem) llama_memory_clear(mem, true);
-                llama_batch retry = llama_batch_init(static_cast<int32_t>(toks.size()), 0, 1);
-                if (retry.token == nullptr) return MCP_ERR_ALLOC;
-                for (size_t j = 0; j < toks.size(); ++j) {
-                    retry.token[j] = toks[j];
-                    retry.pos[j] = static_cast<llama_pos>(j);
-                    retry.n_seq_id[j] = 1;
-                    retry.seq_id[j][0] = 0;
-                    retry.logits[j] = (j == toks.size() - 1) ? 1 : 0;
+                int32_t retry_total = 0;
+                for (int idx : batch) retry_total += static_cast<int32_t>(capped[static_cast<size_t>(idx)].size());
+                llama_batch rb = llama_batch_init(retry_total, 0, 1);
+                if (rb.token == nullptr) {
+                    llama_batch_free(lb);
+                    return MCP_ERR_ALLOC;
                 }
-                retry.n_tokens = static_cast<int32_t>(toks.size());
-                const int rc2 = llama_decode(h.ctx, retry);
-                llama_batch_free(retry);
+                slot = 0;
+                for (size_t k = 0; k < batch.size(); ++k) {
+                    const int    idx = batch[k];
+                    const auto & toks = capped[static_cast<size_t>(idx)];
+                    const llama_seq_id sid = static_cast<llama_seq_id>(k);
+                    for (size_t j = 0; j < toks.size(); ++j, ++slot) {
+                        rb.token[slot] = toks[j];
+                        rb.pos[slot] = static_cast<llama_pos>(j);
+                        rb.n_seq_id[slot] = 1;
+                        rb.seq_id[slot][0] = sid;
+                        rb.logits[slot] = (j == toks.size() - 1) ? 1 : 0;
+                    }
+                }
+                rb.n_tokens = retry_total;
+                const int rc2 = llama_decode(h.ctx, rb);
+                llama_batch_free(rb);
+                llama_batch_free(lb);
                 if (rc2 != 0) return MCP_ERR_ENCODE;
             } else {
+                llama_batch_free(lb);
                 return MCP_ERR_ENCODE;
             }
+        } else {
+            llama_batch_free(lb);
         }
-        // Read the pooled embedding BY SEQUENCE (not by token index): the
-        // server reads llama_get_embeddings_seq first, and llama_get_embeddings_ith
-        // returns the raw 1024-dim per-token hidden state, NOT the pooled
-        // classifier output.  For a RANK-pooled reranker the seq embedding is
-        // the 2-class softmax — score = seq[0]; for a LAST/MEAN-pooled embedder
-        // it is the pooled vector.  Verified: ith[0] gives garbage (0.0 / raw
-        // logits) while seq gives the server-matching scores (0.983 for a
-        // relevant doc).
-        const float * emb = llama_get_embeddings_seq(h.ctx, 0);
-        if (!emb) {
-            emb = llama_get_embeddings_ith(h.ctx, 0);
+
+        // Read the pooled embedding per sequence.  The server reads
+        // llama_get_embeddings_seq (pooled classifier / pooled vector); the
+        // ith variant returns the raw per-token hidden state (garbage for
+        // scoring).  Verified: ith[0] gave 0.0/raw logits, seq gave the
+        // server-matching scores (0.983 for a relevant doc).
+        for (size_t k = 0; k < batch.size(); ++k) {
+            const float * emb = llama_get_embeddings_seq(h.ctx, static_cast<llama_seq_id>(k));
+            if (!emb) return MCP_ERR_NOMEMB;
+            write(batch[k], emb);
         }
-        if (!emb) return MCP_ERR_NOMEMB;
-        write(i, emb);
+        batch.clear();
+        return MCP_OK;
+    };
+
+    for (int idx : order) {
+        const int32_t len = static_cast<int32_t>(capped[static_cast<size_t>(idx)].size());
+        if (!batch.empty() &&
+            (static_cast<int>(batch.size()) >= h.n_seq_max ||
+             len > h.n_ctx_seq)) {
+            const int rc = flush_batch();
+            if (rc != MCP_OK) return rc;
+        }
+        batch.push_back(idx);
     }
-    return MCP_OK;
+    return flush_batch();
 }
 
 static int mcp_tokenize(const llama_vocab * vocab, const std::string & text,
@@ -276,7 +374,7 @@ MCP_EXPORT int mcp_embed_encode(mcp_embed_handle * h,
         if (seqs[static_cast<size_t>(i)].empty()) return MCP_ERR_TOKENIZE;
     }
 
-    return encode_one_shot(h->base, seqs, n, [&](int i, const float * emb) {
+    return encode_batched(h->base, seqs, n, [&](int i, const float * emb) {
         std::memcpy(out + static_cast<size_t>(i) * h->dim, emb,
                     static_cast<size_t>(h->dim) * sizeof(float));
     });
@@ -377,7 +475,7 @@ MCP_EXPORT int mcp_rerank_score(mcp_rerank_handle * h,
         if (seqs[static_cast<size_t>(i)].empty()) return MCP_ERR_TOKENIZE;
     }
 
-    return encode_one_shot(h->base, seqs, n, [&](int i, const float * emb) {
+    return encode_batched(h->base, seqs, n, [&](int i, const float * emb) {
         out[i] = emb[0];
     });
 }

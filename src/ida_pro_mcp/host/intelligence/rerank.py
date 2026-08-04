@@ -250,6 +250,13 @@ def _scan_bases(bases: list[str], patterns: tuple[str, ...]) -> str:
             continue
         for pattern in patterns:
             candidates.extend(glob.glob(os.path.join(base, pattern)))
+    # Prefer Q4_K_M over Q8_0 when both exist (see core._prefer_q4).
+    try:
+        from .core import _model_quant_rank
+
+        candidates.sort(key=_model_quant_rank)
+    except Exception:
+        pass
     seen: set[str] = set()
     for c in candidates:
         try:

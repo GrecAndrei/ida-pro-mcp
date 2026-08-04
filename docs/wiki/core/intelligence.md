@@ -124,8 +124,20 @@ reports `backend: native-llama` when active.
   otherwise the host sets `IDA_MCP_NATIVE=1` at startup when the lib is found.
 - **Wins**: no subprocess startup, no HTTP/JSON, no per-request graph
   allocation (RSS plateaus — the 5 GiB floor and recycle machinery are
-  bypassed), no chunk-of-8 round trips (one `llama_decode` per document), all
-  CPU threads during a batch.  Rerank scores and embed vectors match the HTTP
-  path (verified to float noise).
+  bypassed), no chunk-of-8 round trips, all CPU threads during a batch.
+  Rerank scores and embed vectors match the HTTP path (verified to float
+  noise).
+- **Batched decode**: `encode_batched` packs up to `n_seq_max` (16) sequences
+  into one `llama_decode` with distinct `seq_id`s (each its own KV stream,
+  KV cleared once per batch), so short documents share a ubatch instead of
+  streaming the weights once each.  The KV cache is `Q8_0`-quantized to fit a
+  16 × 2048-token batch in ~0.5 GiB.  Over-long sequences are truncated
+  head-first (query + document prefix preserved).  `MCP_NSEQ=<1..64>` env
+  overrides the batch width for diagnostics.
+- **Q4_K_M models**: `mcp_quantize` (built by the same script) produces
+  ~1.6× smaller weights; model discovery prefers `Q4_K_M` over `Q8_0` when
+  both are installed (`IDA_MCP_Q4=0` forces Q8; explicit
+  `IDA_MCP_EMBED_MODEL`/state paths are always honored).  On the
+  bandwidth-bound CPU decode this is the biggest single lever after batching.
 - **Install**: `INSTALL_BIN=<install_root>/bin ./scripts/build_native_llama.sh`
-  copies the `.so` into the install layout.
+  copies the `.so` and `mcp_quantize` into the install layout.

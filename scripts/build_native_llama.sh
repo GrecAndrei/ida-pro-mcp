@@ -71,9 +71,23 @@ g++ -std=c++17 -O3 -fPIC -shared -fvisibility=hidden \
     -Wl,--end-group \
     -fopenmp -lpthread -ldl -lrt -lm
 
+# Build the minimal GGUF quantizer (Q8_0 -> Q4_K_M for faster CPU streaming).
+echo "building mcp_quantize ..."
+g++ -std=c++17 -O2 -o "$BUILD/mcp_quantize" "$DRIVER/mcp_quantize.cpp" \
+    -I"$SRC/include" -I"$SRC/ggml/include" \
+    -Wl,--start-group \
+    "$BUILD/src/libllama.a" \
+    "$BUILD/ggml/src/libggml-cpu.a" \
+    "$BUILD/ggml/src/libggml.a" \
+    "$BUILD/ggml/src/libggml-base.a" \
+    -Wl,--end-group \
+    -fopenmp -lpthread -ldl -lrt -lm
+
 if [ -n "$INSTALL_BIN" ]; then
     mkdir -p "$INSTALL_BIN"
     cp "$BUILD/libmcp_llama.so" "$INSTALL_BIN/"
-    echo "installed: $INSTALL_BIN/libmcp_llama.so"
+    cp "$BUILD/mcp_quantize" "$INSTALL_BIN/"
+    echo "installed: $INSTALL_BIN/libmcp_llama.so $INSTALL_BIN/mcp_quantize"
 fi
 echo "driver ready: $BUILD/libmcp_llama.so"
+echo "quantizer ready: $BUILD/mcp_quantize  (usage: mcp_quantize in.gguf out.gguf Q4_K_M [threads])"
