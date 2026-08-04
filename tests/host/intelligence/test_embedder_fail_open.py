@@ -75,7 +75,7 @@ class TestBgeCodeEmbedderFailOpen(unittest.TestCase):
 
         with mock.patch(
             "ida_pro_mcp.host.intelligence.core.urllib.request.urlopen",
-            side_effect=socket.timeout("cold start timeout"),
+            side_effect=TimeoutError("cold start timeout"),
         ), mock.patch.object(
             BgeCodeEmbedder, "_retire_lease_process"
         ) as retire:
@@ -98,7 +98,7 @@ class TestBgeCodeEmbedderFailOpen(unittest.TestCase):
 
         with mock.patch(
             "ida_pro_mcp.host.intelligence.core.urllib.request.urlopen",
-            side_effect=socket.timeout("stuck timeout"),
+            side_effect=TimeoutError("stuck timeout"),
         ), mock.patch.object(
             BgeCodeEmbedder, "_retire_lease_process"
         ) as retire:

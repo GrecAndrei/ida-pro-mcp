@@ -11,7 +11,7 @@ class _FakeIndex:
     def __init__(self, cache, meta, docs=None):
         self._cache = cache  # {ea: [float, ...]}
         self._meta = meta    # {ea: {"name": str, "signature_text": str}}
-        self._docs = docs or {ea: "" for ea in cache}
+        self._docs = docs or dict.fromkeys(cache, "")
 
     def _similarity_candidates(self, exclude_ea, address_ranges):
         out = []

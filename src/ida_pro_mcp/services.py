@@ -36,7 +36,6 @@ from ida_pro_mcp.host.intelligence.core import (
     FunctionEmbeddingIndex,
     _extract_signature,
 )
-from ida_pro_mcp.host.intelligence.rerank import Reranker
 
 # AgentMacroCrystallizer removed (cleanup cut)
 # FederationBridge removed (cleanup cut)
@@ -47,6 +46,7 @@ from ida_pro_mcp.host.intelligence.helpers import (
     parse_str_list,
     quantile,
 )
+from ida_pro_mcp.host.intelligence.rerank import Reranker
 from ida_pro_mcp.host.intelligence.usage import UsageIntelligence
 from ida_pro_mcp.host.policy import (
     PolicyDecision,

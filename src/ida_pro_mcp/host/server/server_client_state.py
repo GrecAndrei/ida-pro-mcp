@@ -314,7 +314,7 @@ class ServerClientStateMixin:
             idat_pid = report.get("idat_pid")
             age = report.get("lease_age_seconds")
             if holder == "foreign-lease":
-                who = f"another MCP host process"
+                who = "another MCP host process"
                 if owner_pid:
                     who += f" (pid {owner_pid})"
                 if owner_id:

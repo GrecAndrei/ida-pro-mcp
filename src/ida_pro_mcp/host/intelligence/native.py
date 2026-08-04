@@ -29,18 +29,15 @@ The library must be found at:
 
 from __future__ import annotations
 
-import atexit
 import ctypes
 import ctypes.util
 import hashlib
 import math
 import os
-import sys
 import threading
 from typing import Any
 
 from .core import (
-    EMBED_ACTIVATION_GRACE_TIMEOUT,
     EMBED_CHARS_PER_TOKEN,
     EMBED_CTX,
     _find_llama_server,
@@ -176,10 +173,10 @@ def _find_native_lib() -> str:
 class _NativeLib:
     """ctypes wrapper for ``libmcp_llama.so`` — process-wide singleton."""
 
-    _instance: "_NativeLib | None" = None
+    _instance: _NativeLib | None = None
     _lock = threading.Lock()
 
-    def __new__(cls) -> "_NativeLib":
+    def __new__(cls) -> _NativeLib:
         with cls._lock:
             if cls._instance is None:
                 obj = super().__new__(cls)
@@ -188,7 +185,7 @@ class _NativeLib:
         return cls._instance
 
     @classmethod
-    def reset(cls) -> "_NativeLib":
+    def reset(cls) -> _NativeLib:
         with cls._lock:
             cls._instance = None
         return cls()
@@ -260,10 +257,10 @@ def native_reranker_available() -> bool:
 class NativeEmbedder:
     """In-process embedding backend — drop-in for ``core.BgeCodeEmbedder``."""
 
-    _instance: "NativeEmbedder | None" = None
+    _instance: NativeEmbedder | None = None
     _lock = threading.Lock()
 
-    def __new__(cls) -> "NativeEmbedder":
+    def __new__(cls) -> NativeEmbedder:
         with cls._lock:
             if cls._instance is None:
                 obj = super().__new__(cls)
@@ -272,7 +269,7 @@ class NativeEmbedder:
         return cls._instance
 
     @classmethod
-    def reset(cls, model_path: str = "") -> "NativeEmbedder":
+    def reset(cls, model_path: str = "") -> NativeEmbedder:
         """Replace the singleton, optionally pinned to a specific model path."""
         with cls._lock:
             if cls._instance is not None:
@@ -482,10 +479,10 @@ class NativeEmbedder:
 class NativeReranker:
     """In-process cross-encoder reranker — drop-in for ``rerank.Reranker``."""
 
-    _instance: "NativeReranker | None" = None
+    _instance: NativeReranker | None = None
     _lock = threading.Lock()
 
-    def __new__(cls) -> "NativeReranker":
+    def __new__(cls) -> NativeReranker:
         with cls._lock:
             if cls._instance is None:
                 obj = super().__new__(cls)
@@ -494,7 +491,7 @@ class NativeReranker:
         return cls._instance
 
     @classmethod
-    def reset(cls, model_path: str = "") -> "NativeReranker":
+    def reset(cls, model_path: str = "") -> NativeReranker:
         with cls._lock:
             if cls._instance is not None:
                 previous = cls._instance

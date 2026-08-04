@@ -159,6 +159,7 @@ def _install_ida_stubs():
     import cleanly outside IDA.  Reuses the repo's own stub installer, plus
     `ida_fixup` which the tools import but the shared stub omits."""
     import os as _os
+
     from tests._isolated_repo_loader import install_common_stub
 
     # `tools/_common` re-exports os via `from _common import *`; the synthetic
@@ -169,8 +170,8 @@ def _install_ida_stubs():
 
 def _run_search_nl(index, query, scripted):
     """Call semantic.search_nl with the fake index and scripted reranker."""
-    import ida_pro_mcp.ida_mcp.tools.search.semantic as sem
     import ida_pro_mcp.host.intelligence.rerank as rerank_mod
+    import ida_pro_mcp.ida_mcp.tools.search.semantic as sem
 
     # Pin the backend so no real assembler/embedder is constructed.
     sem.get_backend = lambda: (index, _FakeClassifier(), "test.idb")

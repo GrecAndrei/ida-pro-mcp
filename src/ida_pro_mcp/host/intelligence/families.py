@@ -171,7 +171,7 @@ def compute_function_families(
 
         # Shared signature tokens = the family fingerprint.
         token_counts: dict[str, int] = defaultdict(int)
-        for ea, name, vec in rows:
+        for ea, _name, _vec in rows:
             if ea in {member_rows[k]["ea"] for k in range(len(member_rows))}:
                 text = doc_text.get(ea, meta.get(ea, {}).get("signature_text", ""))
                 for tok in _tokenize(text):

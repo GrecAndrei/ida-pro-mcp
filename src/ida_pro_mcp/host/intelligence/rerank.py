@@ -48,7 +48,6 @@ import os
 import re
 import socket
 import subprocess
-import sys
 import threading
 import time
 import urllib.request
@@ -58,11 +57,10 @@ from typing import Any
 from .core import (
     CACHE_DIR,
     EMBED_ACTIVATION_GRACE_TIMEOUT,
-    _InterProcessLock,
     _detect_gpu_device,
     _find_llama_server,
     _install_root,
-    _is_executable,
+    _InterProcessLock,
     _pid_alive,
     _process_command,
     _process_rss_bytes,
@@ -142,7 +140,7 @@ def _read_rerank_state() -> dict:
     state = _read_embedder_state()
     sub = state.get("rerank")
     if isinstance(sub, dict):
-        return {k: v for k, v in sub.items()}
+        return dict(sub)
     return {}
 
 
@@ -292,10 +290,10 @@ class Reranker:
     window is never mistaken for a wedged server.
     """
 
-    _instance: "Reranker | None" = None
+    _instance: Reranker | None = None
     _lock = threading.Lock()
 
-    def __new__(cls) -> "Reranker":
+    def __new__(cls) -> Reranker:
         # Native in-process backend (see core.BgeCodeEmbedder.__new__ for the
         # same routing rationale).  Every ``Reranker()`` call site — semantic
         # search, reranker_status, function families — transparently uses the
@@ -316,7 +314,7 @@ class Reranker:
         return cls._instance
 
     @classmethod
-    def reset(cls, model_path: str = "") -> "Reranker":
+    def reset(cls, model_path: str = "") -> Reranker:
         """Replace the singleton, optionally pinned to a specific model path.
 
         Lets callers switch rerank models at runtime (benchmarks, A/B tests,

@@ -43,7 +43,7 @@ def load_corpus(path: str) -> dict:
 
 
 def cosine(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(x * x for x in b))
     return dot / (na * nb or 1.0)
@@ -55,8 +55,8 @@ def make_embedder(backend: str):
     from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder
     if backend == "local":
         return BgeCodeEmbedder()
-    from ida_pro_mcp.host.intelligence.gemini import GeminiEmbedBackend
     from ida_pro_mcp.host.intelligence.core import _read_embedder_state
+    from ida_pro_mcp.host.intelligence.gemini import GeminiEmbedBackend
     return GeminiEmbedBackend(state=_read_embedder_state())
 
 
@@ -73,7 +73,7 @@ def bench_speed(embedder, docs: list[str], batch_sizes=(1, 8, 16), gap: float = 
     core.EMBED_BATCH_REQUEST_TIMEOUT = 180.0
 
     t0 = time.perf_counter()
-    ready = embedder.ensure_ready()
+    embedder.ensure_ready()
     cold_start = time.perf_counter() - t0
     status = embedder.status(probe=False)
     dim = int(status.get("dim") or embedder.dim or 0)
@@ -159,14 +159,14 @@ def bench_accuracy(embedder, corpus: dict, gap: float = 0.0) -> dict:
     qpath = os.path.join(os.path.dirname(__file__), "bench_queries.json")
     queries: dict[str, list[dict]] = {}
     if os.path.exists(qpath):
-        queries = json.load(open(qpath, encoding="utf-8"))
+        with open(qpath, encoding="utf-8") as qfh:
+            queries = json.load(qfh)
     qa = queries.get(corpus.get("source") or corpus.get("session") or "", [])
     if not qa:
         # fall back to generic queries keyed by function name
         qa = _auto_queries(funcs)
 
     # Query text is a short behavioral description; embed as a *query*.
-    import re
     def embed_query_text(text: str):
         r = embedder.embed_query(text)
         return r.vector if getattr(r, "ok", True) else None

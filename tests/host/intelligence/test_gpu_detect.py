@@ -1,10 +1,10 @@
 """Tests for GPU device auto-detection in the embedding server launch."""
 from __future__ import annotations
 
+import sys
 from unittest import mock
 
 from ida_pro_mcp.host.intelligence import core
-import sys
 
 
 def _EXE():

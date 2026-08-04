@@ -32,7 +32,7 @@ def make_doc(chars: int, seed: int) -> str:
         "        total += buf[i] & 0xff\n"
         "        if total > 1024:\n"
         "            break\n"
-        "    return total + %d\n" % (seed % 100)
+        f"    return total + {seed % 100}\n"
     )
     reps = max(1, chars // len(base))
     return (base * (reps + 1))[:chars]
@@ -77,12 +77,12 @@ def main():
     # correctness: batched vs single scores on same docs
     _, s1 = score(lib, h1, q, docs)
     _, s16 = score(lib, h16, q, docs)
-    maxdiff = max(abs(a - b) for a, b in zip(s1, s16))
+    maxdiff = max(abs(a - b) for a, b in zip(s1, s16, strict=True))
     print(f"SCOREDIFF n={n} max|batched-single|={maxdiff:.6f}")
 
     # interleaved timing
     t1 = t16 = 0.0
-    for i in range(iters):
+    for _i in range(iters):
         d, _ = score(lib, h1, q, docs)
         t1 += d
         d, _ = score(lib, h16, q, docs)

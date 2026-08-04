@@ -36,16 +36,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 os.environ.setdefault("IDA_MCP_RERANK_TIMEOUT", "300")
 os.environ.setdefault("IDA_MCP_RERANK_BATCH_TIMEOUT", "600")
 
-from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder  # noqa: E402
-from ida_pro_mcp.host.intelligence.embeddings import FunctionEmbeddingIndex  # noqa: E402
-from ida_pro_mcp.host.intelligence.rerank import Reranker  # noqa: E402
-
 from rerank_bench import (  # noqa: E402
     GOLD_QUERIES,
-    _embed_corpus,
     _metrics,
     _recall,
 )
+
+from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder  # noqa: E402
+from ida_pro_mcp.host.intelligence.embeddings import FunctionEmbeddingIndex  # noqa: E402
+from ida_pro_mcp.host.intelligence.rerank import Reranker  # noqa: E402
 
 CORPUS = Path(__file__).resolve().parent / "corpus_libgpu_aux.json"
 
@@ -123,7 +122,7 @@ def run_backend(idx: FunctionEmbeddingIndex, funcs: list[dict],
         "rerank": {"mrr@10": _mean(rerank_mrr), "recall@1": _mean(rerank_r1)},
         "latency_ms": {
             "per_pair": _mean(per_pair_ms),
-            "pool_%d" % max_candidates: _mean(pool_ms),
+            f"pool_{max_candidates}": _mean(pool_ms),
         },
         "pool_latency_rows": len(pool_ms),
     }
@@ -137,7 +136,8 @@ def main() -> None:
     ap.add_argument("--both", action="store_true", help="A/B native vs HTTP")
     args = ap.parse_args()
 
-    corpus = json.load(open(args.corpus, encoding="utf-8"))
+    with open(args.corpus, encoding="utf-8") as cfh:
+        corpus = json.load(cfh)
     queries = GOLD_QUERIES[: args.queries] if args.queries > 0 else GOLD_QUERIES
     print(f"corpus: {corpus['source']} ({corpus['count']} functions), "
           f"{len(queries)} gold queries, pool={args.max_candidates}")
@@ -190,7 +190,7 @@ def main() -> None:
         print(f"  recall   mrr={r['recall']['mrr@10']} r@1={r['recall']['recall@1']}")
         if r["rerank_used"]:
             print(f"  rerank   mrr={r['rerank']['mrr@10']} r@1={r['rerank']['recall@1']} "
-                  f"pool-{args.max_candidates}={r['latency_ms']['pool_%d' % args.max_candidates]:.0f}ms")
+                  f"pool-{args.max_candidates}={r['latency_ms'][f'pool_{args.max_candidates}']:.0f}ms")
         emb.stop()
 
     print("\n=== comparison ===")

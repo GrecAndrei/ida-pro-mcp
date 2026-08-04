@@ -66,7 +66,6 @@ GOLD_QUERIES: list[tuple[str, str]] = [
 
 def _available_rerank_models() -> list[str]:
     """Return profile keys whose GGUF is present in Downloads/install dirs."""
-    import glob
 
     from ida_pro_mcp.host.intelligence.rerank import _find_rerank_model
 
@@ -83,7 +82,6 @@ def _available_rerank_models() -> list[str]:
 def _model_present(profile_key: str) -> bool:
     import glob
 
-    from ida_pro_mcp.host.intelligence.rerank import _find_rerank_model
 
     profile = get_rerank_model_profile(profile_key)
     if profile is None or not profile.filename_patterns:
@@ -271,13 +269,13 @@ def _run_one_model(profile_key: str, idx: FunctionEmbeddingIndex, funcs: list[di
         },
         "latency_ms": {
             "per_pair": _mean(per_pair_ms),
-            "pool_%d" % max_candidates: _mean(pool_ms),
+            f"pool_{max_candidates}": _mean(pool_ms),
         },
         "rows": rows,
     }
     print(f"  baseline  mrr={summary['baseline']['mrr@10']} r@1={summary['baseline']['recall@1']} r@5={summary['baseline']['recall@5']}")
     print(f"  rerank    mrr={summary['rerank']['mrr@10']} r@1={summary['rerank']['recall@1']} r@5={summary['rerank']['recall@5']}")
-    print(f"  latency   per-pair={summary['latency_ms']['per_pair']:.0f}ms  pool={summary['latency_ms']['pool_%d' % max_candidates]:.0f}ms  discriminating={discriminating_total}/{len(queries)}")
+    print(f"  latency   per-pair={summary['latency_ms']['per_pair']:.0f}ms  pool={summary['latency_ms'][f'pool_{max_candidates}']:.0f}ms  discriminating={discriminating_total}/{len(queries)}")
     return summary
 
 
@@ -309,7 +307,8 @@ def main() -> None:
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
-    corpus = json.load(open(args.corpus, encoding="utf-8"))
+    with open(args.corpus, encoding="utf-8") as cfh:
+        corpus = json.load(cfh)
     models = args.models or _available_rerank_models()
     queries = GOLD_QUERIES[: args.queries] if args.queries > 0 else GOLD_QUERIES
     if not models:
