@@ -24,7 +24,7 @@ dependencies = [
     "tomli-w>=1.0.0",
     "yara-python>=4.5.0",
     "requests>=2.31.0",
-    "numpy>=1.26.0",
+    "numpy>=2.4.6",
 ]
 
 [project.optional-dependencies]
