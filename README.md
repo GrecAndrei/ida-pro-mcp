@@ -28,15 +28,19 @@ ctree control points, and local data-flow. `ida_disassemble` returns the CFG and
 call-target portion without starting Hex-Rays. A model reasoning about a function
 gets the graph, not only the listing.
 
-**Semantic search runs locally (or against an opt-in cloud model) or says it
-can't.** Function embeddings use a local GGUF model through `llama-server` by
-default. When you opt in (`--embed-backend gemini`), a Google `gemini-embedding-2`
-cloud backend is used instead — it uploads only the compact behavioral signature of
-each function, never the full decompilation. If the model, server, or cloud
-credentials are unavailable, semantic operations return an explicit unavailable
-result — they never fall back to a different vector space, and never hand back a
-zero vector dressed as a score. The index records model, dimension, and prompt
-format, and rebuilds when any changes.
+**Semantic search runs locally — in process by default — or against an opt-in
+cloud model, and it says so when it can't.** Function embeddings and
+cross-encoder reranking run inside the server through a native llama.cpp library
+(`libmcp_llama.so`, loaded via `ctypes`): no subprocess, no HTTP server, no JSON
+round trips. The two `llama-server` subprocesses remain as the fallback when the
+library isn't built. When you opt in (`--embed-backend gemini`), a Google
+`gemini-embedding-2` cloud backend is used instead — it uploads only the compact
+behavioral signature of each function, never the full decompilation. If the
+model, library, server, or cloud credentials are unavailable, semantic
+operations return an explicit unavailable result — they never fall back to a
+different vector space, and never hand back a zero vector dressed as a score.
+The index records model, dimension, and prompt format, and rebuilds when any
+changes.
 
 **The workspace remembers, and comes back on its own.** `ida_write_finding`
 records a claim with confidence and evidence into a per-session SQLite workspace
@@ -103,6 +107,31 @@ cd ida-pro-mcp
 pip install -e .
 python -u -m ida_pro_mcp.host.server
 ```
+
+### Build the fast in-process retrieval backend (optional, recommended)
+
+Embedding and reranking work out of the box via `llama-server` subprocesses. To
+get the much faster in-process native backend instead, build it once against a
+llama.cpp checkout:
+
+```bash
+# clone llama.cpp once
+git clone https://github.com/ggml-org/llama.cpp /tmp/llama.cpp
+
+# build the trimmed library + quantizer, then install into the layout
+LLAMA_CPP_SRC=/tmp/llama.cpp \
+INSTALL_BIN="$HOME/.local/share/ida-pro-mcp/bin" \
+  ./scripts/build_native_llama.sh
+```
+
+That compiles a minimal llama.cpp (CPU + OpenMP only — no server, UI, tools,
+vision, or GPU backends) and the C-ABI driver into one self-contained
+`libmcp_llama.so`, plus `mcp_quantize` for producing Q4_K_M models (see below).
+The install root is `~/.local/share/ida-pro-mcp` (Linux), `%LOCALAPPDATA%\ida-pro-mcp`
+(Windows), or wherever `IDA_PRO_MCP_HOME` points.
+
+The server auto-enables the native backend when the library is present; HTTP
+remains the fallback. `IDA_MCP_BACKEND=native` pins it explicitly.
 
 ---
 
@@ -181,33 +210,76 @@ supported contract.
 | `IDA_MCP_RESPONSE_MODE` | `compact` | `full` for unabridged payloads |
 | `IDA_MCP_POLICY_MODE` | `assist` | `off`, `permissive`, `assist`, `enforce` — operator baseline |
 
-### Local embeddings and reranking
+---
 
-Semantic search and full indexing are optional. The default recall profile is
-Qwen3-Embedding-0.6B (last-token pooling, 1024 dims); bge-code-v1 remains as a
-legacy fallback and Zembed 1 is opt-in and non-commercial.
+## Local retrieval (embed + rerank)
 
-| Profile | Dims | License | Notes |
-| --- | ---: | --- | --- |
-| `qwen3-embedding-0.6b` | 1024 | Apache-2.0 | Default. 0.6B, fast on CPU. |
-| `bge-code-v1` | 1536 | Apache-2.0 | Legacy fallback. |
-| `zembed-1` | 2560 | CC-BY-NC-4.0 | ~2.5 GB at Q4_K_M; slower on CPU. |
+Semantic search and full indexing are optional. Both stages — the bi-encoder
+embedding index and the cross-encoder reranker — run on one of two local
+backends with the same public contract:
+
+- **Native (default when built).** A single in-process shared library
+  (`libmcp_llama.so`) drives llama.cpp through `ctypes`. No subprocess, no HTTP,
+  no JSON, no lease/lock files, no per-request graph allocation — RSS plateaus,
+  and the recycle machinery that the HTTP path needs is bypassed. Rerank scores
+  and embed vectors match the HTTP path to float noise.
+- **HTTP (fallback).** The two full `llama-server` subprocesses
+  (`--embedding` and `--rerank`), with the lifecycle, recycling, and chunking
+  machinery described under HTTP knobs below.
+
+Selection: the server sets `IDA_MCP_NATIVE=1` at startup when `libmcp_llama.so`
+is found and no backend is pinned. `IDA_MCP_BACKEND=native|http` overrides
+either way.
+
+### Why the native path is faster
+
+- **Batched decode.** Instead of one sequence per `llama_decode` (KV cache
+  cleared, weights streamed, per call), `encode_batched` packs up to 16
+  sequences into one decode with distinct `seq_id`s, each with its own KV
+  stream, clearing the KV once per batch. The decode graph runs over fixed
+  512-token ubatch slices, so several short documents packed into one decode
+  fill the slice — the weights stream once for a full batch instead of once per
+  document. That is the dominant cost for a bandwidth-bound 0.6B model.
+- **Quantized KV cache.** `Q8_0` KV halves the ~28 KiB/token a 0.6B Qwen3 needs
+  in f16, so a 16 × 2048-token batch fits in ~0.5 GiB.
+- **Q4_K_M weights.** `mcp_quantize` (built alongside the library) converts any
+  Q8_0 GGUF to Q4_K_M — ~1.6× fewer weight bytes to stream. Model discovery
+  prefers `Q4_K_M` over `Q8_0` when both are installed (`IDA_MCP_Q4=0` forces
+  Q8; an explicit `IDA_MCP_EMBED_MODEL` / state path always wins).
+
+```bash
+# convert your Q8_0 model to Q4_K_M for the fast path
+mcp_quantize ~/Downloads/qwen3-embedding-0.6b-q8_0.gguf ~/Downloads/qwen3-embedding-0.6b-Q4_K_M.gguf Q4_K_M
+mcp_quantize ~/Downloads/qwen3-reranker-0.6b-q8_0.gguf  ~/Downloads/qwen3-reranker-0.6b-Q4_K_M.gguf  Q4_K_M
+```
+
+### Model profiles
+
+The default recall profile is Qwen3-Embedding-0.6B (last-token pooling, 1024
+dims); bge-code-v1 remains as a legacy fallback and Zembed 1 is opt-in and
+non-commercial.
+
+| Profile | Dims | Size | License | Notes |
+| --- | ---: | --- | --- | --- |
+| `qwen3-embedding-0.6b` | 1024 | ~396 MiB Q4 | Apache-2.0 | **Default.** 0.6B, fast on CPU. |
+| `bge-code-v1` | 1536 | ~1.6 GB Q8 | Apache-2.0 | Legacy fallback. |
+| `zembed-1` | 2560 | ~2.5 GB Q4 | CC-BY-NC-4.0 | Opt-in; slower on CPU. |
 
 Semantic search is two-stage. Stage 1 recalls a wide candidate pool with the
 embedding index (bi-encoder); Stage 2 re-scores it with a cross-encoder
 reranker so the top of the list is the genuinely most relevant functions. The
-reranker starts on its own llama-server `--rerank` process and is a no-op
-(recall order preserved) when no rerank model is installed.
+reranker is a no-op (recall order preserved, `rerank: {applied: false}`) when no
+rerank model is installed.
 
 | Reranker profile | Size | Family | Notes |
 | --- | ---: | --- | --- |
-| `qwen3-reranker-0.6b` | ~0.6 GB Q8 | Qwen3 | Default; speed tier. |
+| `qwen3-reranker-0.6b` | ~396 MiB Q4 | Qwen3 | **Default.** Speed tier. |
 | `qwen3-reranker-4b` | ~2.5 GB Q4 | Qwen3 | Opt-in; precision tier for deep dives. |
 | `bge-reranker-v2-gemma` | ~1.6 GB Q4 | BGE | Middle tier; the public conversion is headless (constant scores) — verify before relying on it. |
 | `bge-reranker-v2-m3` | ~0.6 GB Q8 | BGE | Opt-in compatibility. |
 
 ```bash
-# managed download, explicit opt-in
+# managed download, explicit opt-in (HTTP backend path)
 python install.py --embed-profile qwen3-embedding-0.6b --download-embed-model \
   --install-llama-server
 python install.py --rerank-profile qwen3-reranker-0.6b --download-rerank-model
@@ -222,21 +294,62 @@ python install.py --embedder-doctor
 
 The embed model starts only for explicit indexing, semantic search, or anchor
 refresh; the reranker starts only for the rerank stage of semantic search.
-Ordinary tool calls never spin them up. One request in flight per server; a
-timed-out request recycles that server rather than queueing behind it, and
-indexing returns a resumable cursor to pass back to `ida_index_functions`.
+Ordinary tool calls never spin them up. Indexing is interruptible and resumable:
+a background job returns a cursor to pass back to `ida_index_functions`, and a
+partial index is preserved if a batch fails.
+
+### Native backend knobs
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `IDA_MCP_EMBED_PROFILE` | `bge-code-v1` | Selects prompts and expected model profile |
+| `IDA_MCP_BACKEND` | auto | `native` pins the in-process backend; `http`/`llama` forces the subprocess path |
+| `IDA_MCP_NATIVE` | set at startup | `1` when the library is found and the backend is unpinned |
+| `IDA_MCP_NATIVE_LIB` | auto-detect | explicit path to `libmcp_llama.so` |
+| `IDA_MCP_NATIVE_CTX` | `2048` | per-sequence context (max tokens a doc can occupy) |
+| `IDA_MCP_NATIVE_THREADS` | CPU count | threads for the decode |
+| `IDA_MCP_NATIVE_DOC_CHARS` | `6000` | rerank document cap in chars (truncated head-first) |
+| `MCP_NSEQ` | `16` | max sequences packed per `llama_decode` batch (`1`–`64`) |
+| `IDA_MCP_Q4` | `1` | prefer `Q4_K_M` over `Q8_0` when both are installed; `0` forces Q8 |
+
+### HTTP backend knobs
+
+Used only when the native library is absent or `IDA_MCP_BACKEND=http`. The
+embed server starts for indexing / semantic search / anchor refresh; the rerank
+server starts for the rerank stage. One request in flight per server; a
+timed-out request recycles that server rather than queueing behind it, and the
+RSS/recycle machinery bounds memory (embed floor ~3 GiB, rerank ~5 GiB, with
+differential growth checks that only recycle on real leaks).
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `IDA_MCP_EMBED_PROFILE` | `qwen3-embedding-0.6b` | Selects prompts and expected model profile |
 | `IDA_MCP_EMBED_MODEL` | auto-detect | Path to the GGUF model |
 | `IDA_MCP_EMBED_SERVER_BIN` | auto-detect | Path to `llama-server` |
 | `IDA_MCP_EMBED_THREADS` | adaptive | CPU threads, from available affinity |
-| `IDA_MCP_EMBED_BATCH` | `1` | Initial indexing batch size; grows on success |
-| `IDA_MCP_EMBED_MAX_BATCH` | adaptive | Ceiling for automatic batch growth |
-| `IDA_MCP_EMBED_MAX_REQUESTS` | `512` | Recycle a server after this many requests |
+| `IDA_MCP_EMBED_BATCH` / `_MAX_BATCH` | `1` / adaptive | Indexing batch size; grows on success up to the ceiling |
+| `IDA_MCP_EMBED_GPU` | `0` | `1` offloads to a GPU backend (CPU is forced otherwise) |
 | `IDA_MCP_EMBED_MAX_RSS_MB` | adaptive | RSS recycle limit; `0` derives one from model size |
 | `IDA_MCP_EMBED_IDLE_TIMEOUT` | `15` | Seconds to keep the server after its last request; `0` disables |
+| `IDA_MCP_RERANK_PROFILE` | `qwen3-reranker-0.6b` | Selects the rerank model profile |
+| `IDA_MCP_RERANK_MODEL` | auto-detect | Path to the rerank GGUF |
+| `IDA_MCP_RERANK_DOC_CHARS` | `6000` | Document cap per rerank pair |
+| `IDA_MCP_RERANK_CHUNK` | `8` | Documents scored per request, so peak memory tracks the chunk not the pool |
+| `IDA_MCP_RERANK_CTX` | `2048` | Rerank context size |
+
+The full set of knobs for both backends lives in
+[docs/wiki/core/intelligence.md](docs/wiki/core/intelligence.md).
+
+### Measured performance (honest numbers)
+
+On a real corpus (an IDA database, i7-8665U, CPU-only), the native backend
+measured: **cold-start first embed ~1.8 s vs 10–25 s** for the HTTP server,
+**indexing ~1.5× faster**, and **peak RSS ~1.9 GiB vs 3.5+ GiB** (no subprocess,
+no per-request graph allocation). Rerank latency is **model-bound and equal**
+across backends (~7.7 s per 16-doc pool on the 0.6B model); scores and vectors
+match the HTTP path to float noise. Batched decode + Q4_K_M weights are expected
+to push indexing to roughly 3–4× and rerank to roughly 1.5–3× — the clean A/B
+numbers are captured by `benchmarks/ab_interleave.py` (interleaves single-seq vs
+batched in one process, so CPU contention cancels).
 
 ### Cloud embeddings (Gemini, opt-in)
 
