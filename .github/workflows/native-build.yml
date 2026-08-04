@@ -1,0 +1,77 @@
+name: Native Backend Build
+
+# Build the in-process llama.cpp retrieval backend (libmcp_llama.so +
+# mcp_quantize) and smoke-test the artifacts.  This is the fast path the
+# whole embedding/rerank pipeline uses by default, so a C++ break here is a
+# retrieval outage — even though the Python suite still passes (it falls back
+# to the HTTP backend).
+#
+# The llama.cpp source is pinned to the exact commit the current driver is
+# built and tested against — see src/ida_pro_mcp/native/mcp_llama.cpp.  Bump
+# this hash together with any driver change that needs a newer llama.cpp.
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "src/ida_pro_mcp/native/**"
+      - "scripts/build_native_llama.sh"
+  pull_request:
+    paths:
+      - "src/ida_pro_mcp/native/**"
+      - "scripts/build_native_llama.sh"
+  workflow_dispatch:
+
+concurrency:
+  group: native-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  LLAMA_CPP_COMMIT: "99111b19ce482f081e92ec6c6cdbe6a4c815c515"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake g++ libgomp1
+
+      - name: Clone llama.cpp (pinned)
+        run: |
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp /tmp/llama.cpp
+          git -C /tmp/llama.cpp fetch --depth 1 origin "$LLAMA_CPP_COMMIT"
+          git -C /tmp/llama.cpp checkout "$LLAMA_CPP_COMMIT"
+
+      - name: Build trimmed library + quantizer
+        run: |
+          JOBS="$(nproc)" LLAMA_CPP_SRC=/tmp/llama.cpp \
+            ./scripts/build_native_llama.sh
+
+      - name: Smoke-test libmcp_llama.so loads
+        run: |
+          python - <<'PY'
+          import ctypes, glob, sys
+          candidates = glob.glob('/tmp/llama.cpp/build-mcp/libmcp_llama.so') \
+              + glob.glob('src/ida_pro_mcp/native/build/libmcp_llama.so')
+          assert candidates, 'libmcp_llama.so not produced'
+          lib = ctypes.CDLL(candidates[0])
+          fn = lib.mcp_llama_version
+          fn.restype = ctypes.c_char_p
+          ver = fn().decode()
+          assert ver, 'mcp_llama_version returned empty'
+          print(f'OK: libmcp_llama.so loaded, version={ver!r}')
+          PY
+
+      - name: Smoke-test mcp_quantize
+        run: |
+          test -x /tmp/llama.cpp/build-mcp/mcp_quantize
+          /tmp/llama.cpp/build-mcp/mcp_quantize 2>&1 | head -1

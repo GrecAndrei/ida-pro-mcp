@@ -1,0 +1,71 @@
+name: Bug report
+description: Something is broken or behaves unexpectedly.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please fill in the fields below — every detail
+        (IDA version, backend, model) helps reproduce the issue.
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: e.g. `git rev-parse --short HEAD`, or the pip/installer version.
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - WSL
+    validations:
+      required: true
+  - type: input
+    id: ida-version
+    attributes:
+      label: IDA version
+      description: e.g. IDA Pro 9.2, 9.3
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Retrieval backend (if relevant)
+      description: Native is the default when libmcp_llama.so is built; HTTP is the fallback.
+      options:
+        - Native (in-process libmcp_llama.so)
+        - HTTP (llama-server)
+        - Cloud (Gemini)
+        - Not retrieval-related
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Describe the bug and what you expected instead. Paste the tool call and the exact error/response.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal sequence of `ida_*` calls (or config) that triggers it.
+      placeholder: |
+        1. ida_open_binary ...
+        2. ida_semantic_search {"query": "..."}
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Relevant environment
+      description: IDA_MCP_* env vars you set, model paths, `IDA_MCP_BACKEND`, etc.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / output
+      description: Server log lines or the full MCP response. Trim anything sensitive.

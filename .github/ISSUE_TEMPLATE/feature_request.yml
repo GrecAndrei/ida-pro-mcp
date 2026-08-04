@@ -1,0 +1,45 @@
+name: Feature request
+description: Suggest an improvement or a new operation.
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ideas are welcome. The tool surface is generated from
+        `src/ida_pro_mcp/host/agent_operations.py`, so describe the behavior,
+        not the plumbing.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's the problem you're solving?
+      description: What can't you do today (or what's too slow / too noisy)?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Sketch the `ida_*` operation (or config knob) and what it should return.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - New operation / tool surface
+        - Retrieval (embed / rerank / semantic search)
+        - Investigation workspace (findings)
+        - Session lifecycle / IDA integration
+        - Installer / config
+        - Performance
+        - Docs
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Examples, links, or related issues.
