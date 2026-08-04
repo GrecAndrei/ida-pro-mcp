@@ -172,3 +172,147 @@ def test_matching_binary_rejects_conflicting_load_addresses(tmp_path):
 
     assert reused["reused"] is False
     assert reused["reason"] == "no_compatible_index"
+
+
+def test_partial_index_survives_a_totally_failed_final_pass(tmp_path):
+    """Regression: a pass whose first batch fails entirely (count == 0) must not
+    report 'No embeddings were created' and abort the job when earlier passes
+    already indexed functions. It should surface as a resumable, incomplete job
+    that keeps the accumulated count and the resume cursor."""
+    session = _session(tmp_path, "CCCCCCCC")
+    responses = [
+        # pass 1: two functions indexed, cursor advances
+        {
+            "ok": True,
+            "indexed": 2,
+            "attempted": 2,
+            "failed": 0,
+            "eligible": 4,
+            "complete": False,
+            "next_cursor": "0x2000",
+            "index": {"size": 2},
+        },
+        # pass 2: first batch of the pass fails entirely -> retry_required with
+        # the same resume cursor (embedder timeout). count==0 for this pass.
+        {
+            "ok": True,
+            "indexed": 0,
+            "attempted": 2,
+            "failed": 2,
+            "eligible": 4,
+            "complete": False,
+            "retry_required": True,
+            "next_cursor": "0x2000",
+            "index": {"size": 2},
+        },
+        # pass 3: embedder recovered, remaining functions indexed, done.
+        {
+            "ok": True,
+            "indexed": 2,
+            "attempted": 2,
+            "failed": 0,
+            "eligible": 4,
+            "complete": True,
+            "next_cursor": None,
+            "fully_indexed": True,
+            "index": {"size": 4},
+        },
+    ]
+    harness = _IndexHarness([session], responses)
+    submitted = harness._submit_semantic_index(
+        {
+            "action": "index_fast",
+            "mode": "full",
+            "_background": True,
+            "_index_slice_size": 2,
+            "start": "0x1000",
+            "end": "0x5000",
+        },
+        session.session_id,
+    )
+    result = harness._batch_manager.wait(submitted["task_id"], timeout=5)
+    harness._batch_manager.shutdown()
+
+    assert result["state"] == "done"
+    assert result["result"]["ok"] is True
+    assert result["result"]["indexed"] == 4
+    assert result["result"]["complete"] is True
+    # The fatal 'No embeddings were created' error must never have surfaced.
+    assert all("error" not in (call[2] or {}) for call in harness.calls)
+    assert [call[2].get("start_after") for call in harness.calls] == [None, "0x2000", "0x2000"]
+
+
+def test_index_stalls_instead_of_spinning_when_embedder_never_recovers(tmp_path):
+    """Regression: when the embedder keeps failing at the same resume cursor, the
+    background job must terminate with a bounded 'stalled' result (resumable,
+    preserving accumulated progress) instead of looping forever or aborting."""
+    session = _session(tmp_path, "DDDDDDDD")
+    responses = [
+        {
+            "ok": True,
+            "indexed": 2,
+            "attempted": 2,
+            "failed": 0,
+            "eligible": 4,
+            "complete": False,
+            "next_cursor": "0x2000",
+            "index": {"size": 2},
+        },
+        # 3 consecutive passes fail entirely at the same cursor -> stall.
+        {
+            "ok": True,
+            "indexed": 0,
+            "attempted": 2,
+            "failed": 2,
+            "eligible": 4,
+            "complete": False,
+            "retry_required": True,
+            "next_cursor": "0x2000",
+            "index": {"size": 2},
+        },
+        {
+            "ok": True,
+            "indexed": 0,
+            "attempted": 2,
+            "failed": 2,
+            "eligible": 4,
+            "complete": False,
+            "retry_required": True,
+            "next_cursor": "0x2000",
+            "index": {"size": 2},
+        },
+        {
+            "ok": True,
+            "indexed": 0,
+            "attempted": 2,
+            "failed": 2,
+            "eligible": 4,
+            "complete": False,
+            "retry_required": True,
+            "next_cursor": "0x2000",
+            "index": {"size": 2},
+        },
+    ]
+    harness = _IndexHarness([session], responses)
+    submitted = harness._submit_semantic_index(
+        {
+            "action": "index_fast",
+            "mode": "full",
+            "_background": True,
+            "_index_slice_size": 2,
+            "start": "0x1000",
+            "end": "0x5000",
+        },
+        session.session_id,
+    )
+    result = harness._batch_manager.wait(submitted["task_id"], timeout=5)
+    harness._batch_manager.shutdown()
+
+    assert result["state"] == "done"
+    assert result["result"]["ok"] is True
+    assert result["result"]["stalled"] is True
+    assert result["result"]["complete"] is False
+    # Accumulated progress is preserved; the job is resumable at the cursor.
+    assert result["result"]["indexed"] == 2
+    assert result["result"]["next_cursor"] == "0x2000"
+    assert len(harness.calls) == 4  # 1 success + 3 stalled retries, then stop

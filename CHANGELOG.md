@@ -2,6 +2,14 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-08-04 — semantic-index false-failure fix (partial index preserved on batch failure)
+
+Found while working a real session: a background semantic-index job over libgpu_aux.so reported **`IDA_ERROR "No embeddings were created; semantic search is unavailable"` and aborted even though it had already indexed 30 of 40 functions.** Root cause: when a pass's *first* batch failed entirely (embedder timeout → `index_many` returns `{indexed: 0, failed: N, resume_after_ea: None}`), the handler's `if count == 0:` check fired before considering the `retry_required` flag, converting a resumable partial index into a total failure.
+
+- **`intelligence.py`**: the fatal `count == 0` error now only fires when `not retry_required`. On a failed first batch, the handler falls through and returns the normal result carrying `retry_required=True` and the resume cursor, so the background orchestrator resumes from before the failed batch instead of aborting — the 30 already-indexed functions are kept.
+- **`server_batch.py` (host)**: the resume loop previously had no bound — an embedder that kept failing at the same cursor would spin forever (the existing `pass_attempted == 0` guard is skipped when a batch was attempted but all candidates failed). Now the loop counts consecutive no-forward-progress passes and, after 3, returns a `stalled: true` result with `complete: false` and the resume cursor — preserving accumulated progress and leaving the job resumable via `start_after` instead of spinning.
+- New regression tests in `tests/host/test_semantic_index_jobs.py` cover both: a partial index surviving a totally-failed final pass, and the stall bound terminating a never-recovering embedder.
+
 ## 2026-08-04 — rerank RSS floor correction + live-reload dev loop
 
 - **Rerank RSS floor 4 GiB → 5 GiB.** The 12-query full rerank benchmark exposed a wrong floor assumption: with `--parallel 2` + `ubatch 2048` + 8-doc chunks, RSS *ratchets* with request size (llama.cpp allocates a fresh compute buffer per distinct larger batch and never frees the old one), climbing to ~4.15 GiB on the varied corpus — over the old 4 GiB floor, recycling a healthy server mid-run. Verified with a fixed-size control (12 identical requests → flat 1752 MiB plateau, zero recycles). `_rss_limit_bytes` is now `max(5 GiB, model_size*5 + 1 GiB)`, giving ~0.85 GiB of headroom over the measured peak while the differential growth check still catches true leaks. Comment rewritten to record the measurement, not the old assumption.

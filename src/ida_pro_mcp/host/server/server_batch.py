@@ -318,6 +318,8 @@ class BackgroundMixin(ServerClientStateMixin):
                 fully_indexed = False
                 pseudocode_chars = 0
                 document_chars = 0
+                stall_count = 0
+                stalled = False
                 self._update_session_indexing_metadata(
                     session_id,
                     indexing_mode=f"semantic_{quality}",
@@ -379,6 +381,19 @@ class BackgroundMixin(ServerClientStateMixin):
                             break
                         if next_cursor == cursor and pass_attempted == 0:
                             raise RuntimeError("semantic index made no progress at the resume cursor")
+                        if next_cursor == cursor:
+                            # The embedder failed every candidate in this pass
+                            # and returned the same resume cursor. Give the
+                            # backend a bounded number of recovery passes (it
+                            # recycles a timed-out llama-server) before
+                            # abandoning the job as a partial, resumable
+                            # result instead of spinning forever.
+                            stall_count += 1
+                            if stall_count >= 3:
+                                stalled = True
+                                break
+                        else:
+                            stall_count = 0
                         cursor = str(next_cursor)
                         # Release the per-runtime RPC lane between slices and
                         # give interactive calls a chance to acquire it.
@@ -393,6 +408,45 @@ class BackgroundMixin(ServerClientStateMixin):
                             semantic_index_progress=task.progress,
                         )
                         return {"ok": True, "cancelled": True, "next_cursor": cursor}
+                    if stalled:
+                        # The embedder could not make forward progress at a
+                        # stable resume cursor. Do not report this as a total
+                        # failure (earlier passes may have indexed functions)
+                        # and do not claim completion. Surface the resume
+                        # cursor and mark the job so the caller can retry.
+                        self._update_session_indexing_metadata(
+                            session_id,
+                            indexing_state="stalled",
+                            indexing_complete=False,
+                            semantic_indexed_count=indexed,
+                            semantic_index_progress=task.progress,
+                        )
+                        return {
+                            "ok": True,
+                            "stalled": True,
+                            "quality": quality,
+                            "passes": passes,
+                            "indexed": indexed,
+                            "attempted": attempted,
+                            "failed": failed,
+                            "eligible": eligible,
+                            "complete": False,
+                            "fully_indexed": False,
+                            "limit_reached": False,
+                            "next_cursor": cursor,
+                            "scope": scope,
+                            "binary_match": reuse,
+                            "index": last_index,
+                            "input": {
+                                "pseudocode_chars": pseudocode_chars,
+                                "document_chars": document_chars,
+                            },
+                            "message": (
+                                "Semantic indexing stalled: the embedding backend made no "
+                                "forward progress for 3 consecutive passes. Resume with "
+                                f"start_after={cursor!r} once the embedder recovers."
+                            ),
+                        }
                     result = {
                         "ok": True,
                         "quality": quality,

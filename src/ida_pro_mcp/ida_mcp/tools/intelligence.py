@@ -1161,7 +1161,7 @@ def intelligence(
                                 break
                     retry_remaining = len(selected) - resume_index
                     break
-            if count == 0:
+            if count == 0 and not retry_required:
                 return make_error(
                     MCPError.IDA_ERROR,
                     "No embeddings were created; semantic search is unavailable.",
@@ -1174,6 +1174,11 @@ def intelligence(
                         "next_cursor": retry_cursor,
                     },
                 )
+            # count == 0 AND retry_required: the first batch of this pass
+            # failed entirely, but earlier passes may have already indexed
+            # functions (e.g. 30/40 done). Report the retry cursor so the
+            # background orchestrator resumes from before the failed batch
+            # instead of treating a partial index as a total failure.
             _persist_embedder_state(idx, action_label)
             quality_counts = idx.quality_counts()
             if use_decompile:
