@@ -21,7 +21,7 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
 ]
 dependencies = [
-    "tomli-w>=1.0.0",
+    "tomli-w>=1.2.0",
     "yara-python>=4.5.0",
     "requests>=2.31.0",
     "numpy>=2.4.6",
