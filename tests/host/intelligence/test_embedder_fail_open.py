@@ -71,7 +71,7 @@ class TestBgeCodeEmbedderFailOpen(unittest.TestCase):
         emb._dimension = 2
         emb._max_rpc_failures = 2
         emb._consecutive_rpc_failures = 0
-        emb._server_started_at = time.time()  # still inside the grace window
+        emb._server_started_at = time.monotonic()  # just started: inside the grace window
 
         with mock.patch(
             "ida_pro_mcp.host.intelligence.core.urllib.request.urlopen",
@@ -94,7 +94,7 @@ class TestBgeCodeEmbedderFailOpen(unittest.TestCase):
         emb._dimension = 2
         emb._max_rpc_failures = 2
         emb._consecutive_rpc_failures = 0
-        emb._server_started_at = 0.0  # long ago: grace window elapsed
+        emb._server_started_at = time.monotonic() - 3600.0  # an hour ago: grace window elapsed
 
         with mock.patch(
             "ida_pro_mcp.host.intelligence.core.urllib.request.urlopen",
