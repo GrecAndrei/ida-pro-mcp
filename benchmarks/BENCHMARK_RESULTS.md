@@ -111,28 +111,42 @@ Raw reports: `corpus_libgpu_aux.gemini.report.json` (+ `local` when runnable).
 Harness: `benchmarks/rerank_bench.py`. Same `libgpu_aux.so` corpus. Stage 1
 recall is the Qwen3-0.6B embedding index; Stage 2 re-scores the recalled pool
 with the cross-encoder reranker. Gold = hand-authored queries mapped to the
-function the query describes. Pool of 16, 9 queries run (early-exit).
+function the query describes. Pool of 16, 12 queries (full run).
 
 | metric | baseline (Qwen3 recall) | qwen3-reranker-0.6b (rerank) |
 |---|---|---|
-| MRR@10 | 0.9444 | **1.0** |
-| recall@1 | 0.8889 | **1.0** |
+| MRR@10 | 0.9583 | **1.0** |
+| recall@1 | 0.9167 | **1.0** |
 | recall@5 | 1.0 | 1.0 |
-| per-pair latency | — | 5.5 s |
-| pool-of-16 latency | — | 101 s |
-| rerank applied | — | 7/9 discriminating queries |
+| per-pair latency | — | 6.4 s |
+| pool-of-16 latency | — | 115 s |
+| rerank applied | — | 12/12 discriminating queries |
 
 **Qwen3-Reranker-0.6B is the correct Stage-2 model.** It is a real
 cross-encoder (311 tensors, `cls.output.weight` classification head — the
 opposite of the headless Gemma below) and it **improves** retrieval: on the
 one query where recall ranked the gold function 2nd, the reranker moved it to
-rank 1, lifting MRR 0.9444 → 1.0 and recall@1 0.8889 → 1.0. It never moved a
-correct answer down. Latency is real CPU cost (~5.5 s/pair on 4 threads) —
+rank 1, lifting MRR 0.9583 → 1.0 and recall@1 0.9167 → 1.0. It never moved a
+correct answer down. Latency is real CPU cost (~6.4 s/pair on 4 threads) —
 expected for a cross-encoder on a laptop, and why the pipeline only re-scores
-the recalled pool rather than the whole binary. Two of nine pool calls failed
-(RSS ceiling recycled the server mid-benchmark); the pipeline fell back to
-recall order with no accuracy loss, and `rerank()` now auto-recovers by
-restarting the server.
+the recalled pool rather than the whole binary. All 12/12 pool calls
+discriminated (the two pool failures from the earlier 9-query run are gone);
+the single mid-run RSS recycle auto-recovered and cost no accuracy.
+
+### RSS floor correction (2026-08-04, full-run benchmark)
+
+The 12-query full run exposed a wrong assumption in the rerank RSS floor. The
+old comment claimed a chunked 0.6B pool measures ~3 GB RSS at ctx 2048 and
+that a 4 GiB floor "leaves headroom." Measured reality with `--parallel 2` +
+`ubatch 2048` + 8-doc chunks on the varied corpus: RSS **ratchets** with
+request size — llama.cpp allocates a fresh compute buffer for each distinct
+larger batch and never frees the old one. Verified with a fixed-size control
+(12 identical requests → flat 1752 MiB plateau, no recycle) vs the varied
+corpus (climbed to ~4.15 GiB, crossing the 4 GiB floor and recycling a healthy
+server mid-run). The floor is now 5 GiB (`model_size * 5 + 1 GiB`), leaving
+~0.85 GiB of headroom over the measured peak. The differential growth check
+still catches genuine leaks; the absolute floor now only trips on real
+runaway, not legitimate worst-case pools.
 
 ### Historical: bge-reranker-v2-gemma (deleted — not viable)
 
@@ -158,7 +172,8 @@ The benchmark exposed three real bugs in the embed/rerank servers, now fixed:
    allocation (0.9 → 1.6 GB, then flat) tripped it — the benchmark indexed
    only 16/33 corpus functions. Growth is now measured differentially (since
    the previous request); absolute floors raised to match the real plateaus
-   (embed 3 GB, rerank 4 GB).
+   (embed 3 GB, rerank 5 GB — raised again 2026-08-04, see the RSS floor
+   correction above).
 3. **Rerank memory scaled with the whole pool.** llama.cpp sizes buffers for
    the request batch, so a 64-doc pool ballooned to ~5.4 GB RSS (OOM on this
    15 GB / 5.6 GB-available box). `rerank()` now scores in chunks of 8

@@ -582,10 +582,17 @@ class Reranker:
             model_size = 0
         # Context-sized KV + batch buffers on top of the model file: give the
         # reranker 4x the model size plus a floor, not the embedder's 2x+512.
-        # A chunked pool of a 0.6B model measures ~3 GB RSS at ctx 2048, so a
-        # 3 GB floor recycles a healthy server right at the edge; 4 GB leaves
-        # headroom while the differential growth check still catches leaks.
-        return max(4 * 1024**3, int(model_size * 4.0) + 1024 * 1024**2)
+        # Measured on this box with the real benchmark (12 queries, 16-candidate
+        # pools, 8-doc chunks at ctx 2048, --parallel 2): RSS *ratchets* with
+        # request size (llama.cpp allocates a fresh compute buffer per distinct
+        # larger batch and never frees the old one — verified flat-plateau at
+        # 1752 MiB over 12 identical requests, but climbing to 4.15 GiB on the
+        # varied benchmark corpus). The differential growth check catches real
+        # leaks; this absolute floor just has to clear the worst legitimate
+        # peak. 4 GiB sat ~150 MiB under the measured peak and recycled a
+        # healthy server mid-benchmark; 5 GiB leaves ~0.85 GiB of headroom
+        # without ever approaching this box's RAM ceiling.
+        return max(5 * 1024**3, int(model_size * 5.0) + 1024 * 1024**2)
 
     def _record_success_and_maybe_recycle(self) -> None:
         lease = self._read_lease()

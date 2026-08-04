@@ -2,6 +2,12 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-08-04 — rerank RSS floor correction + live-reload dev loop
+
+- **Rerank RSS floor 4 GiB → 5 GiB.** The 12-query full rerank benchmark exposed a wrong floor assumption: with `--parallel 2` + `ubatch 2048` + 8-doc chunks, RSS *ratchets* with request size (llama.cpp allocates a fresh compute buffer per distinct larger batch and never frees the old one), climbing to ~4.15 GiB on the varied corpus — over the old 4 GiB floor, recycling a healthy server mid-run. Verified with a fixed-size control (12 identical requests → flat 1752 MiB plateau, zero recycles). `_rss_limit_bytes` is now `max(5 GiB, model_size*5 + 1 GiB)`, giving ~0.85 GiB of headroom over the measured peak while the differential growth check still catches true leaks. Comment rewritten to record the measurement, not the old assumption.
+- **Live-reload dev loop (no reinstall / no restart).** The venv is now an editable install with `site-packages/ida_pro_mcp` symlinked to `src/ida_pro_mcp`. Because the host server imports intelligence modules lazily inside handler bodies, editing `src/` is picked up by the *already-running* MCP server on its next lazy import — no `install.py` refresh, no user restart. Verified against the running server. (Non-lazy-imported modules like `host/server.py` still need a restart.)
+- **Full-run rerank benchmark recorded** (12 queries, 16-candidate pools): MRR@10 0.9583 → 1.0, recall@1 0.9167 → 1.0, 12/12 discriminating queries, ~6.4 s/pair.
+
 ## 2026-08-03 — embedding/rerank hardening (CPU default, memory bounds)
 
 - **CPU is now forced, not assumed.** A Vulkan-enabled llama.cpp build auto-selects the GPU when no `--device` is given, so on this box the embed server silently loaded `libggml-vulkan` + `libvulkan_intel` and ran on the pathological Intel UHD 620 iGPU even though offload is opt-in (`IDA_MCP_EMBED_GPU=1`). Both the embedder and reranker now pass `--device none` unless the GPU env var is set — the same fix the reranker already had, now applied to the embedder.
