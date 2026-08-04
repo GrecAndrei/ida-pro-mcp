@@ -879,6 +879,19 @@ class BgeCodeEmbedder:
     _gemini: GeminiEmbedBackend | None = None
 
     def __new__(cls) -> BgeCodeEmbedder:
+        # Native in-process backend (host bootstrap sets IDA_MCP_NATIVE=1 when
+        # libmcp_llama.so is present).  Routing here means every existing
+        # ``BgeCodeEmbedder()`` call site transparently uses native; the HTTP
+        # llama-server machinery below is the fallback.  Tests never set the
+        # flag, so they keep exercising the HTTP path.
+        if cls is BgeCodeEmbedder:
+            try:
+                from .native import NativeEmbedder, prefer_native_embed
+
+                if prefer_native_embed():
+                    return NativeEmbedder()
+            except Exception:
+                pass
         with cls._lock:
             if cls._instance is None:
                 obj = super().__new__(cls)

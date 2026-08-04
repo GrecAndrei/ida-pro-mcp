@@ -184,3 +184,35 @@ The benchmark exposed three real bugs in the embed/rerank servers, now fixed:
 Two llama.cpp build quirks remain documented: `--parallel 1` collapses `/rerank`
 to one identical score per document, and a `top_k` field in the request body
 shifts the returned indices by one. Neither is sent.
+
+## In-process native backend (2026-08-04)
+
+`benchmarks/native_bench.py` / A/B harness, same `libgpu_aux.so` corpus (real
+decompilations), same 8-thread i7-8665U host.  Native runs both models in one
+process via `libmcp_llama.so` (ctypes); HTTP runs two `llama-server`
+subprocesses.
+
+| metric | native | HTTP |
+|---|---|---|
+| cold → first embed | **1.8 s** | ~10–25 s (server spawn) |
+| index 6 full decompilations | **21.9 s** (0.27 docs/s) | 32.7 s (0.18 docs/s) |
+| rerank pool of 6 (full docs) | 46.4 s | 44.9 s |
+| rerank scores (per index) | identical to HTTP | — |
+| peak RSS, both models | **~1.9 GiB** (one process) | ~3.5+ GiB (two servers, ratchets) |
+| subprocess / lease / recycle machinery | none | full |
+
+**Correctness is bit-for-bit.** Rerank scores on the real corpus match HTTP to
+the 4th decimal (e.g. `0.9814, 0.9281, 0.0211, ...` for an "acquire a buffer"
+query — the relevant `AcquireBuffer`/`ReleaseBuffer` docs ranked 1st/2nd, all
+others ~0.02).  Embed vectors are the same direction (L2-normalized like HTTP).
+
+**Where native wins:** cold start (~10×), indexing throughput (~1.5×), memory
+(~half, no 5 GiB rerank floor / recycle needed), and operational simplicity
+(no leases, no chunk-of-8 HTTP round trips, no RSS ratchet).
+
+**Where it does not:** rerank latency is **model-bound** (~7.7 s per full-decomp
+pair on 8 threads) — native's `llama_decode` is not faster than the server's
+for the same GEMM work.  The win there is not chunking, not recycling, and
+one context instead of two.  A full 12-query × 16-doc rerank sweep exceeds 30
+minutes on this host for *both* backends; the numbers above are the
+representative subset.

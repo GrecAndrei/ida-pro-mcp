@@ -289,6 +289,18 @@ class Reranker:
     _lock = threading.Lock()
 
     def __new__(cls) -> "Reranker":
+        # Native in-process backend (see core.BgeCodeEmbedder.__new__ for the
+        # same routing rationale).  Every ``Reranker()`` call site — semantic
+        # search, reranker_status, function families — transparently uses the
+        # native library when the host bootstrap enabled it; HTTP is fallback.
+        if cls is Reranker:
+            try:
+                from .native import NativeReranker, prefer_native_rerank
+
+                if prefer_native_rerank():
+                    return NativeReranker()
+            except Exception:
+                pass
         with cls._lock:
             if cls._instance is None:
                 obj = super().__new__(cls)
@@ -304,6 +316,14 @@ class Reranker:
         `ida_python` exploration) without restarting the process.  The old
         singleton is stopped and its lease torn down first.
         """
+        if cls is Reranker:
+            try:
+                from .native import NativeReranker, prefer_native_rerank
+
+                if prefer_native_rerank():
+                    return NativeReranker.reset(model_path)
+            except Exception:
+                pass
         with cls._lock:
             if cls._instance is not None:
                 previous = cls._instance

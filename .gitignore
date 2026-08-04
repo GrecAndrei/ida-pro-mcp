@@ -99,3 +99,7 @@ embedder.json
 ida-install.json
 ORIGINAL_REQUEST.md
 uv.lock
+
+# Native llama.cpp build artifact (machine-specific, built by scripts/build_native_llama.sh)
+src/ida_pro_mcp/native/build/
+*.so

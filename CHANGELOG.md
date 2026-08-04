@@ -2,6 +2,43 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-08-04 — in-process native llama.cpp retrieval backend (embed + rerank)
+
+Replaces the two full `llama-server` HTTP subprocesses with **one in-process
+native library** (`libmcp_llama.so`) built from a trimmed llama.cpp and loaded
+by Python via **ctypes** — no subprocess, no HTTP, no JSON, no lease/lock
+files, one `llama_decode` per document instead of per-chunk round trips.
+
+- **`src/ida_pro_mcp/native/mcp_llama.cpp`** — minimal C-ABI driver over the
+  public `llama.h`: `mcp_embed_encode` (pooled embeddings, query prefix
+  applied Python-side via the model profile) and `mcp_rerank_score`
+  (cross-encoder relevance via the model's `rerank` chat template).  Two
+  correctness lessons from matching the HTTP server byte-for-byte:
+  - `llama_encode` passes a **null memory context** and Qwen3's decoder graph
+    builds attention-KV unconditionally → segfault.  The server uses
+    `llama_decode` with the KV cache (`llama_memory_clear` per sequence); the
+    driver does the same.
+  - Embeddings must be read via `llama_get_embeddings_seq` (the **pooled**
+    classifier output — for RANK that's the 2-class softmax), not
+    `llama_get_embeddings_ith` (raw 1024-dim hidden state).  Rerank scores
+    now match the HTTP server to within float noise.
+- **`src/ida_pro_mcp/host/intelligence/native.py`** — `NativeEmbedder` and
+  `NativeReranker`, drop-in for `BgeCodeEmbedder` / `Reranker`, loaded via
+  `ctypes` (stdlib, no build against Python headers).  Embeds are
+  L2-normalized like the HTTP path.
+- **Routing** — `BgeCodeEmbedder()` and `Reranker()` resolve to native when
+  the library is present (host bootstrap sets `IDA_MCP_NATIVE=1`); HTTP is
+  the fallback.  `IDA_MCP_BACKEND=native|http` pins explicitly.  Every
+  existing call site works unchanged; `reranker_status` reports
+  `backend: native-llama`.
+- **`scripts/build_native_llama.sh`** — builds the trimmed llama.cpp (server /
+  UI / tools / mtmd / SSL off, CPU + OpenMP + llamafile on, `-fPIC`) then
+  compiles the driver into one self-contained `libmcp_llama.so`.
+- **`benchmarks/native_bench.py`** — A/B native vs HTTP: index throughput,
+  cold start, pool latency, peak RSS, and the same MRR / recall@1 accuracy.
+- HTTP backend and its 800+ tests are untouched; tests never set
+  `IDA_MCP_NATIVE`, so they keep exercising the HTTP path.
+
 ## 2026-08-04 — semantic-index false-failure fix (partial index preserved on batch failure)
 
 Found while working a real session: a background semantic-index job over libgpu_aux.so reported **`IDA_ERROR "No embeddings were created; semantic search is unavailable"` and aborted even though it had already indexed 30 of 40 functions.** Root cause: when a pass's *first* batch failed entirely (embedder timeout → `index_many` returns `{indexed: 0, failed: N, resume_after_ea: None}`), the handler's `if count == 0:` check fired before considering the `retry_required` flag, converting a resumable partial index into a total failure.

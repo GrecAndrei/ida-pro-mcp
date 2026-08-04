@@ -106,3 +106,26 @@ can persist an AI Studio key into the MCP client config env block.
 
 Run `python install.py --embedder-doctor --embed-backend gemini` to verify a
 setup without opening IDA.
+
+### In-process native backend (`libmcp_llama.so`)
+
+When `libmcp_llama.so` is present, the embedder and reranker can run **in
+process** via `ctypes` instead of shelling out to two full `llama-server` HTTP
+subprocesses.  `BgeCodeEmbedder()` and `Reranker()` transparently resolve to
+`NativeEmbedder` / `NativeReranker` when the host bootstrap enables it; the
+HTTP path remains the fallback when the library is absent.  `ida_reranker_status`
+reports `backend: native-llama` when active.
+
+- **Build** (`scripts/build_native_llama.sh`): a trimmed llama.cpp (server /
+  UI / tools / mtmd / SSL off, CPU + OpenMP + llamafile on, `-fPIC`) plus a
+  minimal C-ABI driver (`src/ida_pro_mcp/native/mcp_llama.cpp`) → one
+  self-contained `libmcp_llama.so`.
+- **Selection**: `IDA_MCP_BACKEND=native` pins native; `=http` forces HTTP;
+  otherwise the host sets `IDA_MCP_NATIVE=1` at startup when the lib is found.
+- **Wins**: no subprocess startup, no HTTP/JSON, no per-request graph
+  allocation (RSS plateaus — the 5 GiB floor and recycle machinery are
+  bypassed), no chunk-of-8 round trips (one `llama_decode` per document), all
+  CPU threads during a batch.  Rerank scores and embed vectors match the HTTP
+  path (verified to float noise).
+- **Install**: `INSTALL_BIN=<install_root>/bin ./scripts/build_native_llama.sh`
+  copies the `.so` into the install layout.

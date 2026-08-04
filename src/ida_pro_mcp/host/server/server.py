@@ -997,6 +997,18 @@ def main():
 
     daemon_mode = "--daemon" in sys.argv
     try:
+        # Auto-enable the in-process native retrieval backend when
+        # libmcp_llama.so is present and no backend is pinned.  The HTTP
+        # llama-server path remains the fallback.  This runs only here, never
+        # in tests (which construct IDAMCPServer directly).
+        try:
+            from ida_pro_mcp.host.intelligence.native import bootstrap_native_backend
+
+            _native_report = bootstrap_native_backend()
+            if _native_report.get("enabled"):
+                sys.stderr.write(f"native retrieval backend: {_native_report.get('lib')}\n")
+        except Exception as _native_exc:
+            sys.stderr.write(f"native backend bootstrap skipped: {_native_exc}\n")
         server = IDAMCPServer()
         if daemon_mode:
             if os.path.exists(DAEMON_SOCKET):
