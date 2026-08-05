@@ -237,6 +237,11 @@ def apply_post_processing(
     if pp_params.get("grep"):
         items = apply_grep(items, pp_params)
 
+    # Pre-slice total: the number of items before head/tail/offset slicing.
+    # Used by pagination continuation to decide whether more pages exist
+    # without misreading the post-slice `_count` as the whole result.
+    pre_slice_total = len(items)
+
     # 2. Head/tail + offset
     items, offset = apply_head_tail(items, pp_params)
 
@@ -249,6 +254,7 @@ def apply_post_processing(
             projected["_post_processed"] = True
             projected["_field"] = used_field
             projected["_count"] = len(items)
+            projected["_total"] = pre_slice_total
             return projected
 
     # 4. Build standard envelope
@@ -257,5 +263,6 @@ def apply_post_processing(
     result["_post_processed"] = True
     result["_field"] = used_field
     result["_count"] = len(items)
+    result["_total"] = pre_slice_total
     result["_text"] = "\n".join(_lineify(it) for it in items)
     return result

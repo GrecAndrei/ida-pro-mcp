@@ -1070,10 +1070,17 @@ class ServerDispatchMixin(ServerClientStateMixin):
             return result
 
         count = result.get("_count", 0)
+        # `_total` is the pre-slice item count (after grep, before
+        # head/tail/offset); `_count` alone is the post-slice length and would
+        # falsely signal "more" whenever the slice came back exactly full.
+        total = result.get("_total", count)
         source_truncated = _coerce_bool(result.get("truncated"), False)
         page_size = pp_params.get("head") or pp_params.get("limit")
+        current_offset = _bounded_int(
+            pp_params.get("offset"), 0, min_value=0, max_value=500_000
+        )
         has_more = source_truncated or (
-            page_size is not None and count >= int(page_size)
+            page_size is not None and total > (current_offset + count)
         )
 
         if not has_more:
@@ -1081,9 +1088,6 @@ class ServerDispatchMixin(ServerClientStateMixin):
 
         self._prune_next_cache()
         token = uuid.uuid4().hex[:12].upper()
-        current_offset = _bounded_int(
-            pp_params.get("offset"), 0, min_value=0, max_value=500_000
-        )
         effective_page = int(page_size) if page_size else count
 
         self._next_cache[token] = {
@@ -1115,8 +1119,9 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     error=f"rate_limited: {reason}",
                 )
                 return make_error(
-                    MCPError.INVALID_ARGS,
+                    MCPError.RATE_LIMIT,
                     f"Rate limit exceeded: {reason}",
+                    recoverable=True,
                     hint="Reduce call frequency or increase limits via IDA_MCP_RATE_LIMIT_* env vars.",
                 )
 
@@ -1433,15 +1438,18 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     # Only block on LOOP — other signals are warnings, not blockers
                     for sig in signals:
                         if sig.get("type") == "LOOP" and sig.get("severity") == "warning":
-                            return {
-                                "ok": False,
-                                "error": {"code": "STUCK_LOOP", "message": sig["message"]},
-                                "_nudge": {
-                                    "type": "stuck",
-                                    "signal": sig["type"],
-                                    "suggestion": "Try a different approach. Read ida://state for orientation.",
-                                },
+                            err = make_error(
+                                MCPError.STUCK_LOOP,
+                                sig.get("message") or "Repeated identical analysis steps detected.",
+                                recoverable=True,
+                                hint="Change approach. Read ida_session_state for orientation.",
+                            )
+                            err["_nudge"] = {
+                                "type": "stuck",
+                                "signal": sig.get("type"),
+                                "suggestion": "Try a different approach. Read ida_session_state for orientation.",
                             }
+                            return err
             except Exception:
                 pass
 

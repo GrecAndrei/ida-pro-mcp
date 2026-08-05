@@ -37,10 +37,13 @@ from .tool_registry import register_tool_actions
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# TTL cache for the `ida_session_state` coverage block (expensive: calls data/functions).
+_SESSION_STATE_CACHE: dict[str, Any] = {}
+_SESSION_STATE_CACHE_TTL = 30.0  # seconds
+
 # Keys that count as an architecture/loader preload request when opening a
 # binary; shared by the reuse-decision logic in create/create_background.
 _OPEN_PRELOAD_KEYS = ("processor", "bitness", "endian", "loader", "flags", "loader_options", "value")
-
 
 # ---------------------------------------------------------------------------
 # Declarative session-action dispatch.
@@ -60,13 +63,11 @@ _OPEN_PRELOAD_KEYS = ("processor", "bitness", "endian", "loader", "flags", "load
 def _sess_coerce_none(args):
     return {}, None
 
-
 def _sess_coerce_rename(args):
     name = args.get("name") or args.get("new_name")
     if not name:
         return None, make_error(MCPError.INVALID_ARGS, "name required")
     return {"new_name": str(name).strip()[:MAX_NAME_LEN]}, None
-
 
 def _sess_coerce_tag(args):
     tag = args.get("tag")
@@ -77,13 +78,11 @@ def _sess_coerce_tag(args):
         return None, make_error(MCPError.INVALID_ARGS, "tag required")
     return {"tag": tag}, None
 
-
 def _sess_coerce_untag(args):
     tag = args.get("tag")
     if not tag:
         return None, make_error(MCPError.INVALID_ARGS, "tag required")
     return {"tag": tag}, None
-
 
 def _sess_coerce_note(args):
     note = args.get("note", "")
@@ -91,65 +90,11 @@ def _sess_coerce_note(args):
         return None, make_error(MCPError.INVALID_ARGS, "note required")
     return {"note": str(note)[:MAX_NOTE_LEN]}, None
 
-
-def _sess_coerce_find_tag(args):
-    tag = args.get("tag")
-    if not tag:
-        return None, make_error(MCPError.INVALID_ARGS, "tag required")
-    return {"tag": tag}, None
-
-
 def _sess_coerce_query(args):
     query = args.get("query", "")
     if not query:
         return None, make_error(MCPError.INVALID_ARGS, "query required")
     return {"query": query}, None
-
-
-def _sess_coerce_n_default5(args):
-    return {"n": _bounded_int(args.get("n", 5), 5, min_value=1, max_value=MAX_LIST_LIMIT)}, None
-
-
-def _sess_coerce_link(args):
-    other = _normalize_session_id(
-        args.get("other_session_id") or args.get("other_sid") or args.get("target_session_id")
-    )
-    if not other:
-        return None, make_error(MCPError.INVALID_ARGS, "other_session_id required")
-    return {"other_sid": other}, None
-
-
-def _sess_coerce_nb_append(args):
-    entry = str(args.get("note") or args.get("entry") or "").strip()
-    if not entry:
-        return None, make_error(MCPError.INVALID_ARGS, "entry (or note) required")
-    section = str(args.get("section") or "").strip() or None
-    return {"entry": entry, "section": section}, None
-
-
-def _sess_coerce_nb_read(args):
-    lines = args.get("lines")
-    return {"lines": str(lines).strip() if lines is not None else None}, None
-
-
-def _sess_coerce_nb_section(args):
-    name = str(args.get("section") or args.get("name") or "").strip()
-    if not name:
-        return None, make_error(MCPError.INVALID_ARGS, "section required")
-    return {"section_name": name}, None
-
-
-def _sess_coerce_strategy(args):
-    return {"context": str(args.get("context") or "")}, None
-
-
-def _sess_coerce_activity_limit(args):
-    return {"limit": _bounded_int(args.get("limit", 20), 20, min_value=1, max_value=500)}, None
-
-
-def _sess_coerce_hyp_status(args):
-    return {"status": str(args.get("status") or "").strip() or None}, None
-
 
 def _substitute_params(obj, params: dict):
     """Recursively substitute $param placeholders in a value.
@@ -168,7 +113,6 @@ def _substitute_params(obj, params: dict):
     if isinstance(obj, list):
         return [_substitute_params(item, params) for item in obj]
     return obj
-
 
 class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
     @staticmethod
@@ -191,11 +135,10 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                     if not matches:
                         new_only.append(ea)
                 if new_only:
-                    print(f"[session-diff] {len(new_only)} new functions in rebuilt IDB")
+                    log_rpc(f"[session-diff] {len(new_only)} new functions in rebuilt IDB")
             except Exception:
                 pass
         threading.Thread(target=_diff, daemon=True).start()
-
 
     _SESSION_ACTIONS: dict[str, Any] = {
         "health": "_session_action_health",
@@ -1575,30 +1518,14 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         return session, None
 
     def _session_action_state(self, args: dict) -> dict:
-        """Return the analysis state — same data as the ida://state resource."""
+        """Return the analysis state — binary identity, coverage, blackboard,
+        knowledge graph, and next-action guidance (the `ida_session_state`
+        operation)."""
         session, target_error = self._session_target(args)
         if target_error:
             return target_error
         try:
-            import json as _json
-
-            from .resources import ResourceResolver
-            resolver = ResourceResolver(
-                self._execute_tool,
-                session_mgr=getattr(self, "session_mgr", None),
-                bb_path=self._session_blackboard_path(session_obj=self.current_session)
-                    if hasattr(self, "_session_blackboard_path") else None,
-            )
-            resource = resolver.read("ida://state")
-            if resource is None:
-                return make_error(MCPError.IDA_ERROR, "state resource unavailable")
-            content = resource.get("text") or resource.get("blob") or ""
-            state_value: object = content
-            if isinstance(content, str):
-                try:
-                    state_value = _json.loads(content)
-                except Exception:
-                    state_value = content
+            state_value = self._build_state_payload()
             # Always wrap in a uniform envelope so callers can reliably
             # check `ok` and find the state under a known key.
             if isinstance(state_value, dict):
@@ -1619,6 +1546,248 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             return {"ok": True, "state": state_value}
         except Exception as e:
             return make_error(MCPError.IDA_ERROR, f"state failed: {e}")
+
+    def _build_state_payload(self):
+        """Build the analysis-state payload for `ida_session_state`.
+
+        Returns the state dict, or a narrative text string when a long
+        blackboard narrative is available.
+        """
+        state: dict[str, Any] = {}
+
+        # 1. Binary identity
+        try:
+            overview = self._execute_tool("idb", {"action": "overview"})
+            meta = overview.get("meta", {}) if isinstance(overview, dict) else {}
+            summary = overview.get("summary", {}) if isinstance(overview, dict) else {}
+            arch_profile = overview.get("architecture_profile", {}) if isinstance(overview, dict) else {}
+            is_firmware = bool(
+                (overview.get("firmware_detected") if isinstance(overview, dict) else False)
+                or (arch_profile.get("raw_binary_mode") if isinstance(arch_profile, dict) else False)
+            )
+            if not is_firmware:
+                # Fallback heuristic for older/partial IDB metadata payloads.
+                ft_info = meta.get("file_type_info") if isinstance(meta.get("file_type_info"), dict) else {}
+                ft_name = str(meta.get("file_type_effective") or ft_info.get("effective") or meta.get("file_type") or "").strip().lower()
+                ft_id = meta.get("file_type_id")
+                try:
+                    ft_num = int(ft_id) if ft_id is not None else None
+                except Exception:
+                    ft_num = None
+                proc = str(meta.get("processor") or meta.get("arch") or "").strip().lower()
+                imports = (
+                    summary.get("imports")
+                    if isinstance(summary, dict) and summary.get("imports") is not None
+                    else meta.get("import_count", 0)
+                )
+                try:
+                    imports = int(imports or 0)
+                except Exception:
+                    imports = 0
+                is_firmware = bool(
+                    ft_name in {"", "raw", "unknown", "bin", "binary", "obj"}
+                    or ft_num in {0, 2, 17}
+                    or (proc in ("arm", "mips", "ppc", "msp430", "avr", "xtensa") and imports == 0)
+                )
+            state["binary"] = {
+                "name": meta.get("binary_path") or meta.get("filename") or meta.get("input_file", ""),
+                "arch": meta.get("processor") or meta.get("arch", ""),
+                "bits": meta.get("bitness") or meta.get("bits", 0),
+                "size": meta.get("image_size") or meta.get("file_size", 0),
+                "imports": summary.get("imports", 0),
+                "is_firmware": is_firmware,
+            }
+            if is_firmware:
+                state["binary"]["firmware"] = True
+        except Exception:
+            state["binary"] = {}
+            is_firmware = False
+
+        # 2. Coverage (cached with 30s TTL — expensive on large binaries)
+        cache_key = f"coverage_{id(self._execute_tool)}"
+        cached = _SESSION_STATE_CACHE.get(cache_key)
+        if cached and time.time() - cached["_ts"] < _SESSION_STATE_CACHE_TTL:
+            state["coverage"] = cached["coverage"]
+        else:
+            try:
+                funcs = self._execute_tool("data", {"action": "functions", "count": 5000})
+                func_list = funcs.get("functions", []) if isinstance(funcs, dict) else []
+                total = len(func_list)
+                named = sum(1 for f in func_list
+                            if not (f.get("name", "").startswith("sub_")
+                                    or f.get("name", "").startswith("j_")))
+                coverage = {
+                    "total_functions": total,
+                    "named_functions": named,
+                    "unnamed_functions": total - named,
+                    "pct_named": round(named / total * 100, 1) if total else 0,
+                }
+                state["coverage"] = coverage
+                _SESSION_STATE_CACHE[cache_key] = {"coverage": coverage, "_ts": time.time()}
+            except Exception:
+                state["coverage"] = {}
+
+        # 3. Blackboard summary
+        try:
+            bb = self._bb_store()
+            if bb:
+                stats = bb.stats()
+                targets = bb.next_target(limit=5)
+                hypotheses = bb.list(category="hypothesis", limit=5,
+                                     include_resolved=False, include_contradicted=False)
+                iocs = bb.list(category="ioc", limit=10, include_resolved=True)
+                vulns = bb.list(category="vuln", limit=5, include_resolved=False)
+                state["blackboard"] = {
+                    "stats": stats,
+                    "next_targets": targets,
+                    "top_hypotheses": [
+                        {"title": h["title"], "addr": h.get("addr"),
+                         "confidence": h.get("confidence")}
+                        for h in hypotheses
+                    ],
+                    "iocs": [
+                        {"type": i.get("ioc_type"), "value": i.get("ioc_value"),
+                         "addr": i.get("addr")}
+                        for i in iocs
+                    ],
+                    "vulns": [
+                        {"title": v["title"], "addr": v.get("addr"),
+                         "confidence": v.get("confidence")}
+                        for v in vulns
+                    ],
+                }
+        except Exception:
+            state["blackboard"] = {}
+
+        # 4. Session info
+        try:
+            if self.session_mgr:
+                active = getattr(self.session_mgr, "active_session_id", None)
+                state["session"] = {"active_session_id": active}
+        except Exception:
+            state["session"] = {}
+
+        # 5. KnowledgeGraph summary
+        try:
+            import importlib.util as _ilu
+            _kg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "..", "stores", "knowledge_graph.py")
+            _spec = _ilu.spec_from_file_location("_state_kg", _kg_path)
+            _kgmod = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_kgmod)
+            bb_path = self._session_blackboard_path(session_obj=self.current_session) \
+                if hasattr(self, "_session_blackboard_path") else None
+            kg = _kgmod.KnowledgeGraph(bb_path) if bb_path else None
+            if kg:
+                state["knowledge_graph"] = kg.summary()
+                # Open gaps
+                gaps = kg.list_gaps(resolved=False)
+                if gaps:
+                    state["knowledge_graph"]["top_gaps"] = [
+                        {"expected": g["expected"],
+                         "candidates": g.get("candidates", [])[:2],
+                         "priority": g.get("priority")}
+                        for g in gaps[:5]
+                    ]
+                # Systems
+                systems = kg.list_systems()
+                if systems:
+                    state["knowledge_graph"]["systems"] = [
+                        {"name": s["name"],
+                         "members": len(s.get("members", [])),
+                         "coverage_pct": s.get("coverage_pct", 0)}
+                        for s in systems[:8]
+                    ]
+        except Exception:
+            pass
+
+        # 6. Narrative — if a long blackboard narrative exists, return it as
+        # plain text (with a compact JSON header) instead of the JSON dict.
+        try:
+            bb = self._bb_store()
+            if bb:
+                narratives = bb.list(category="narrative", limit=1,
+                                     include_resolved=True)
+                if narratives:
+                    narrative_text = narratives[0].get("content", "")
+                    if narrative_text and len(narrative_text) > 50:
+                        import json as _json
+                        header = _json.dumps({
+                            "binary": state.get("binary", {}),
+                            "coverage": state.get("coverage", {}),
+                            "knowledge_graph": state.get("knowledge_graph", {}),
+                        }, separators=(",", ":"))
+                        return f"<!-- state:{header} -->\n\n{narrative_text}"
+        except Exception:
+            pass
+
+        # 7. Actionable guidance based on current state
+        actions = []
+        bb_state = state.get("blackboard", {})
+        cov = state.get("coverage", {})
+        binary = state.get("binary", {})
+
+        if binary.get("is_firmware"):
+            actions.append("firmware_view(action='triage_snapshot')")
+
+        next_targets = bb_state.get("next_targets", [])
+        if next_targets:
+            top = next_targets[0]
+            top_addr = top.get("addr", "")
+            top_title = top.get("title", top_addr)[:50]
+            actions.append(f"code(action='smart_decompile', addrs='{top_addr}') — {top_title}")
+
+        vulns = bb_state.get("vulns", [])
+        if vulns:
+            v_addr = vulns[0].get("addr", "")
+            actions.append(f"llm_helpers(action='dangerous_pattern_explainer', addr='{v_addr}')")
+
+        pct = cov.get("pct_named", 100)
+        total = cov.get("total_functions", 0)
+        if total > 20 and pct < 40:
+            actions.append(f"blackboard(action='frontier', limit=10) — {pct}% named, {total} functions")
+
+        if not actions:
+            actions.append("idb(action='summary')")
+            actions.append("data(action='imports')")
+
+        state["_next_actions"] = actions
+        return state
+
+    def _bb_store(self):
+        """Load BlackboardStore without IDA deps (stubbed IDA modules)."""
+        try:
+            import importlib.util
+            import sys as _sys
+            import types as _types
+            path = os.path.join(SCRIPT_DIR, "..", "..", "ida_mcp", "tools", "blackboard.py")
+            path = os.path.abspath(path)
+            spec = importlib.util.spec_from_file_location("_res_bb", path)
+            mod = importlib.util.module_from_spec(spec)
+            mod.__dict__.update({"tool": lambda f: f, "idaread": lambda f: f,
+                                  "idawrite": lambda f: f, "IDAError": Exception})
+            _stubs = ["idaapi","idc","idautils","ida_funcs","ida_bytes","ida_segment",
+                      "ida_name","ida_typeinf","ida_nalt","ida_hexrays","ida_frame",
+                      "ida_struct","ida_lines"]
+            _saved = {m: _sys.modules.get(m) for m in _stubs}
+            for m in _stubs:
+                if m not in _sys.modules:
+                    _sys.modules[m] = _types.ModuleType(m)
+            if not hasattr(_sys.modules["idaapi"], "BADADDR"):
+                _sys.modules["idaapi"].BADADDR = 0xFFFFFFFFFFFFFFFF
+            try:
+                spec.loader.exec_module(mod)
+            finally:
+                for m, orig in _saved.items():
+                    if orig is None:
+                        _sys.modules.pop(m, None)
+                    else:
+                        _sys.modules[m] = orig
+            bb_path = self._session_blackboard_path(session_obj=self.current_session) \
+                if hasattr(self, "_session_blackboard_path") else None
+            return mod.BlackboardStore(db_path=bb_path)
+        except Exception:
+            return None
 
     def _session_action_logs(self, args: dict) -> dict:
         """Return recent IDA log lines — reads the -L log file directly, no IDA RPC."""
@@ -2767,7 +2936,6 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             include_bookmarks=include_bookmarks,
             include_items=include_items,
         )
-
 
 # Register session actions so the tool registry can derive TOOL_ACTIONS
 # without duplicating the literal in schemas_data.py.

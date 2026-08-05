@@ -655,52 +655,6 @@ def resolve_target(
 
 
 # ============================================================================
-# Vulnerability Derivation Helper
-# ============================================================================
-
-
-def derive_vuln_type(api_name: str) -> str:
-    """Derive vulnerability category from API name (dynamic, no hardcoded dicts)."""
-    lname = api_name.lower()
-
-    # Buffer overflow / unsafe copy
-    if any(s in lname for s in ("strcpy", "strcat", "sprintf", "gets", "scanf", "wcscpy", "wcscat", "lstrcpy", "lstrcat", "rtlcopymemory")):
-        return "buffer_overflow"
-    if lname in ("memcpy", "memmove"):
-        return "buffer_overflow"
-
-    # Format string
-    if any(s in lname for s in ("printf", "fprintf", "sprintf", "snprintf", "vprintf", "vsprintf", "vsnprintf", "syslog")):
-        return "format_string"
-
-    # Command injection
-    if any(s in lname for s in ("system", "popen", "execl", "execv", "execve", "shellexecute", "winexec", "createprocess")):
-        return "command_injection"
-
-    # Injection / RWX
-    if any(s in lname for s in ("createremotethread", "writeprocessmemory", "ntwritevirtualmemory", "virtualalloc", "virtualprotect", "rtlcreateuserthread", "ntcreatethreadex")):
-        return "injection"
-
-    # Privilege escalation
-    if any(s in lname for s in ("adjusttokenprivileges", "impersonateloggedonuser")):
-        return "privilege_escalation"
-
-    # Persistence
-    if any(s in lname for s in ("regsetvalueex", "createservice", "setwindowshookex")):
-        return "persistence"
-
-    # Evasion / dynamic loading
-    if any(s in lname for s in ("loadlibrary", "getprocaddress", "urldownloadtofile")):
-        return "evasion"
-
-    # Memory management
-    if any(s in lname for s in ("malloc", "calloc", "realloc", "free", "heapalloc", "heapfree", "virtualfree")):
-        return "memory_issue"
-
-    return "dangerous"
-
-
-# ============================================================================
 # Constant Database Builder
 # ============================================================================
 

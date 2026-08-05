@@ -209,7 +209,14 @@ def test_kill_mid_build_keeps_safe_mode_and_surfaces_error(tmp_path, server):
     # The background spawn is stubbed, so simulate the live runtime the
     # watcher would see before the kill.
     server.session_runtimes[sid] = {"process": _FakeIdaProcess()}
-    killed = _open(server, "session", {"action": "kill", "session_id": sid}, request_id=2)
+    # session/kill is now classified DESTRUCTIVE (it tears down the runtime),
+    # so it requires explicit ack even in the test's policy mode.
+    killed = _open(
+        server,
+        "session",
+        {"action": "kill", "session_id": sid, "_risk_ack": True},
+        request_id=2,
+    )
     assert killed.get("error") is not True
 
     # The watcher notices the dead runtime and records the interruption

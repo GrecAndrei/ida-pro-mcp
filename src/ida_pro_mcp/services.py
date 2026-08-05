@@ -16,11 +16,6 @@ from ida_pro_mcp.host.analysis.context_density import ContextDensityOptimizer
 from ida_pro_mcp.host.analysis.patterns import compile_smart_pattern, smart_match
 from ida_pro_mcp.host.auto_nudge import get_reroute
 from ida_pro_mcp.host.batch_manager import BatchManager, BatchTask
-from ida_pro_mcp.host.casefile_helpers import (
-    build_chain_of_custody,
-    build_risk_summary,
-    to_markdown_casefile,
-)
 from ida_pro_mcp.host.config import CACHE_DIR
 from ida_pro_mcp.host.errors import MCPError, make_error
 
@@ -64,7 +59,6 @@ from ida_pro_mcp.host.schemas import (
     TOOL_DESCRIPTIONS,
     TOOLS,
 )
-from ida_pro_mcp.host.server.resources import ResourceResolver, list_resources
 from ida_pro_mcp.host.server.server import IDAMCPServer
 from ida_pro_mcp.host.server.server_session import ServerSessionMixin
 from ida_pro_mcp.host.server.session import Session, SessionManager
@@ -96,9 +90,6 @@ __all__ = [
     "normalize_arch_options",
     "BlackboardStore",
     "_resolve_db_path",
-    "build_chain_of_custody",
-    "build_risk_summary",
-    "to_markdown_casefile",
     "MCPError",
     "make_error",
     "PolicyDecision",
@@ -124,8 +115,6 @@ __all__ = [
     "ServerSessionMixin",
     "Session",
     "SessionManager",
-    "list_resources",
-    "ResourceResolver",
     "ADVERTISED_TOOLS",
     "HIDDEN_TOOLS_IN_LIST",
     "TOOLS",

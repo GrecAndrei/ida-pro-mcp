@@ -59,6 +59,8 @@ class MCPError:
     NO_RESULTS = "NO_RESULTS"
     ADDRESS_INVALID = "ADDRESS_INVALID"
     SIZE_LIMIT_EXCEEDED = "SIZE_LIMIT_EXCEEDED"
+    RATE_LIMIT = "RATE_LIMIT"
+    STUCK_LOOP = "STUCK_LOOP"
 
 
 # Code → category. Codes absent from this map fall back to "internal".
@@ -95,6 +97,8 @@ _ERROR_CATEGORIES: dict[str, str] = {
     MCPError.NO_RESULTS: ErrorCategory.USER,
     MCPError.ADDRESS_INVALID: ErrorCategory.USER,
     MCPError.SIZE_LIMIT_EXCEEDED: ErrorCategory.USER,
+    MCPError.RATE_LIMIT: ErrorCategory.RUNTIME,
+    MCPError.STUCK_LOOP: ErrorCategory.RUNTIME,
 }
 
 
@@ -129,6 +133,8 @@ _HOST_ERROR_HINTS = {
     MCPError.NO_RESULTS: "No results found for this query.",
     MCPError.ADDRESS_INVALID: "The address format is invalid. Use hex (0x401000) or a symbol name.",
     MCPError.SIZE_LIMIT_EXCEEDED: "The requested size exceeds the limit. Use a smaller range or pagination.",
+    MCPError.RATE_LIMIT: "Rate limit exceeded. Reduce call frequency or wait a moment before retrying.",
+    MCPError.STUCK_LOOP: "Repeated identical analysis steps detected. Change approach before continuing.",
 }
 
 # Recovery actions: suggested public operations the LLM can auto-execute when this error occurs.

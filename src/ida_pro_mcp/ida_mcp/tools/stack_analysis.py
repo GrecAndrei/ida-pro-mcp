@@ -120,12 +120,6 @@ def _get_arch_info():
     }
 
 
-def _is_arm(arch):
-    """Check if architecture is ARM/AArch64."""
-    p = arch["proc"]
-    return "ARM" in p or "AARCH" in p
-
-
 def _frame_size(frame) -> int:
     """Compute frame size with compatibility fallbacks across IDA builds."""
     if not frame:

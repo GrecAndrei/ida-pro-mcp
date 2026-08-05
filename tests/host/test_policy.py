@@ -120,6 +120,31 @@ def test_classify_tool_action_handles_destructive_actions():
     assert classify_tool_action("bookmarks", "delete") == RiskTier.DESTRUCTIVE
 
 
+def test_session_destructive_actions_require_ack():
+    """Session is READ_ONLY_TOOLS, but close/kill/rebuild/etc. delete real
+    state (rebuild does os.remove(idb_path)) — they must require ack in
+    ENFORCE mode, not classify as plain READ."""
+    for action in (
+        "close",
+        "kill",
+        "rebuild",
+        "bulk_delete",
+        "cleanup_stale",
+        "idle_purge",
+        "restore_snapshot",
+    ):
+        result = evaluate_policy("session", action, mode=PolicyMode.ENFORCE)
+        assert result.risk == RiskTier.DESTRUCTIVE, f"session/{action} risk was {result.risk}"
+        assert result.requires_ack is True, f"session/{action} ack was {result.requires_ack}"
+
+
+def test_session_read_actions_stay_read():
+    for action in ("health", "list", "get", "status", "state", "logs"):
+        result = evaluate_policy("session", action, purpose="oss_audit")
+        assert result.risk == RiskTier.READ, f"session/{action} risk was {result.risk}"
+        assert result.decision == PolicyDecision.ALLOW
+
+
 def test_action_level_read_override_for_session_health():
     result = evaluate_policy("session", "health", purpose="oss_audit")
 

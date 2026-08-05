@@ -480,40 +480,6 @@ def search_bool(expr: str, case_sensitive: bool, offset: int, limit: int) -> dic
 # search_neighborhood - 360 degree context around a function
 # ============================================================================
 
-def _func_complexity(ea: int) -> int:
-    """Approximate cyclomatic complexity via edge count."""
-    try:
-        import ida_gdl
-        g = ida_gdl.FlowChart(idaapi.get_func(ea))
-        edges = 0
-        nodes = 0
-        for block in g:
-            nodes += 1
-            succs = list(block.succs())
-            if len(succs) > 1:
-                edges += len(succs)
-            elif succs:
-                edges += 1
-        return max(1, edges - nodes + 2)
-    except Exception:
-        return 0
-
-
-def _func_metrics(ea: int) -> dict:
-    """Return basic structural metrics for a function."""
-    f = idaapi.get_func(ea)
-    if not f:
-        return {"size": 0, "complexity": 0, "bb_count": 0}
-    size = f.end_ea - f.start_ea
-    bb_count = 0
-    try:
-        import ida_gdl
-        bb_count = sum(1 for _ in ida_gdl.FlowChart(f))
-    except Exception:
-        pass
-    return {"size": size, "bb_count": bb_count, "complexity": _func_complexity(ea)}
-
-
 def search_neighborhood(addr: str, radius: int, offset: int, limit: int) -> dict:
     """360-degree context around a function. Delegates to search_analyze."""
     return search_analyze(addr=addr, scope="neighborhood", radius=radius, offset=offset, limit=limit)

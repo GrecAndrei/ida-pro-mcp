@@ -778,11 +778,18 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                     )
 
         # ---- Context Density Auto-Compaction Middleware ----
-        # Skip if the caller explicitly requests raw output.
+        # Skip if the caller explicitly requests raw output, or in "full"
+        # response mode (where _extract_response_options sets char_budget=0 as
+        # a "no budget" sentinel — passing that 0 would degenerate-truncate
+        # what the caller asked to be complete).
         raw_requested = False
         if isinstance(call_args, dict):
             raw_requested = _coerce_bool(call_args.get("raw"), False)
-        if not raw_requested and compacted is not None:
+        if (
+            not raw_requested
+            and opts.get("mode") == "compact"
+            and compacted is not None
+        ):
             try:
                 serialized_size = len(
                     json.dumps(compacted, ensure_ascii=False, separators=(",", ":"))
@@ -791,8 +798,8 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                     compacted = self._context_density_optimizer.compact_response(
                         compacted,
                         budget_tokens=opts.get(
-                            "char_budget", CONTEXT_DENSITY_DEFAULT_BUDGET
-                        ),
+                            "char_budget"
+                        ) or CONTEXT_DENSITY_DEFAULT_BUDGET,
                     )
             except Exception:
                 # Fail-safe: never let compaction break the response path
@@ -875,17 +882,21 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             # ---- Session Resume: first 2 calls only ----
             # Also skipped in safe mode: resume summarizes prior analysis,
             # which is exactly what must not be auto-trusted mid-analysis.
+            # The gate is a real per-session counter (previously it read a
+            # `_call_seq` arg that was never set, so the resume fired on every
+            # enriched response).
             if self.enable_response_enrichment and not _safe_mode_active:
                 try:
                     if hasattr(self, 'session_mgr') and self.current_session:
                         from .response_enrichment import build_session_resume
                         sid = self.current_session.session_id
-                        if call_args and isinstance(call_args, dict):
-                            call_count = call_args.get("_call_seq", 0)
-                            if not isinstance(call_count, int) or call_count <= 2:
-                                resume = build_session_resume(self.session_mgr, sid)
-                                if resume:
-                                    compacted["_session_resume"] = resume
+                        with self._session_resume_calls_lock:
+                            call_count = self._session_resume_calls.get(sid, 0)
+                            self._session_resume_calls[sid] = call_count + 1
+                        if call_count < 2:
+                            resume = build_session_resume(self.session_mgr, sid)
+                            if resume:
+                                compacted["_session_resume"] = resume
                 except Exception:
                     pass
 

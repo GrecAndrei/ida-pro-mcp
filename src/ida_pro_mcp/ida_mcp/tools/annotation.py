@@ -55,24 +55,6 @@ def _get_func_callees_with_addr(func_ea):
     return callees
 
 
-def _get_func_strings(func_ea):
-    """Return list of strings referenced by the function."""
-    fn = ida_funcs.get_func(func_ea)
-    if not fn:
-        return []
-    strings = []
-    for head in idautils.Heads(fn.start_ea, fn.end_ea):
-        for dref in idautils.DataRefsFrom(head):
-            stype = idc.get_str_type(dref)
-            if stype is not None and stype >= 0:
-                s = idc.get_strlit_contents(dref, -1, stype)
-                if s:
-                    s = s.decode("utf-8", errors="replace") if isinstance(s, bytes) else s
-                    if s not in strings:
-                        strings.append(s)
-    return strings
-
-
 def _strip_api_suffix(name):
     """Strip common API suffixes (A/W, @plt) for matching."""
     for suffix in ("A", "W", "@plt", "@PLT"):

@@ -11,15 +11,6 @@ anti-debug APIs, game anti-cheat, API hashing).
 
 from __future__ import annotations
 
-from ...findcrypt import findcrypt_rules_dir
-
-# ── FINDCRYPT YARA RULES PATH ──────────────────────────────────────────────
-
-def findcrypt_available() -> bool:
-    """Check if FindCrypt YARA rules are available locally."""
-    return findcrypt_rules_dir() is not None
-
-
 # ── API HASHING CONSTANTS ──────────────────────────────────────────────────
 
 KNOWN_HASH_CONSTANTS: dict[str, int] = {

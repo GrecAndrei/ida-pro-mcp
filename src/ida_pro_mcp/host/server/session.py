@@ -155,7 +155,7 @@ class Session:
                     return True
         # Legacy component-file layout
         idb_dir = os.path.dirname(self.idb_path or ".")
-        sid_prefix = f"SID_{self.idb_path_basename()}"
+        sid_prefix = f"SID_{self.session_id}"
         try:
             for name in os.listdir(idb_dir):
                 if name.startswith(sid_prefix) and (

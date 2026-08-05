@@ -2,6 +2,15 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-08-05 — removed the deprecated `ida://` MCP resource surface
+
+The `ida://` MCP resources (`resources/list`, `resources/read`, and
+`resources.py` / `ResourceResolver`) are removed. They were application-driven
+— the client UI had to attach them, so agents could not read them
+autonomously. The state they exposed is now produced by the real tool
+`ida_session_state` (its payload-building logic moved into the session mixin);
+hints that pointed at resources now point at `ida_session_state`.
+
 ## 2026-08-04 — batched native decode + Q4_K_M models (retrieval speed)
 
 Native-backend decode is now **batched across sequences** and the models are
@@ -218,7 +227,7 @@ Found while working a real session: a background semantic-index job over libgpu_
 - Removed tools: `abi`, `binary_info`, `bindiff`, `bulk`, `cfg_analysis`, `classify`, `compare`, `coverage`, `data_ops`, `debug`, `emulate`, `export`, `fixups`, `history`, `lumina`, `microcode`, `nav`, `patterns`, `project`, `security`, `string_ops`, `struct_recover`, `summarize`, `trace_analysis`, `xref_analysis`.
 - Registry now holds 32 legacy tools (was 57); the 47 public `ida_*` operations are unchanged.
 - Cleaned all references: `tool_registry.py`, `schemas_data.py` (TOOLS, descriptions, arg schemas, alias and threat-route tables), `policy.py` risk tiers, `schemas.py` tool categories, usage-intel tool sets, `server_workflow.py` step plans and category maps, session skill suggestions, legacy `prompts.py`, and batch templates.
-- Kept six tools that initially looked dead but have live call sites: `annotation` (blackboard rename proposals), `ctree`/`stack_analysis`/`imports_deep` (`ida://` resource handlers, multi-session linking), `knowledge`/`firmware_view` (session bootstrap).
+- Kept six tools that initially looked dead but have live call sites: `annotation` (blackboard rename proposals), `ctree`/`stack_analysis`/`imports_deep` (multi-session linking), `knowledge`/`firmware_view` (session bootstrap).
 - `shannon_entropy` moved from `string_ops` into `_common.py` (used by `memory` and `intelligence`).
 - Deleted `tests/test_bindiff_export_helpers.py` and the `security`/`summarize` source-scan tests in `test_taint_consolidation.py`.
 
@@ -286,7 +295,7 @@ The store was write-only in practice. A model recorded findings and then had to 
 
 ### Cuts
 Roughly 6.9K lines removed. None of it was reachable from any client.
-- **Removed the analysis-engine cluster** (`analysis_engine.py`, `analysis_engine_kg.py`, `gap_engine.py`, `narrative_engine.py`, `analysis_proposal_store.py`). `AnalysisEngine` was never instantiated — `_analysis_engines` was declared and never written to. With it go the `ida://proposals` resource and the `blackboard` `accept_proposal`/`reject_proposal` actions, which could only ever return "no analysis engine running". `accept_proposal` also called `_apply_proposal`, which is not defined anywhere.
+- **Removed the analysis-engine cluster** (`analysis_engine.py`, `analysis_engine_kg.py`, `gap_engine.py`, `narrative_engine.py`, `analysis_proposal_store.py`). `AnalysisEngine` was never instantiated — `_analysis_engines` was declared and never written to. With it go the `proposals` resource and the `blackboard` `accept_proposal`/`reject_proposal` actions, which could only ever return "no analysis engine running". `accept_proposal` also called `_apply_proposal`, which is not defined anywhere.
 - **Removed `server_threat_hunt.py` and `yara_hunt.py`** — no importers, absent from `TOOLS`, `_TOOL_ACTIONS`, and `schemas_data.py`, so no client could reach them. `threat_corpus` and `intelligence/sources/` are kept: the installer populates them for FindCrypt and the taint signatures.
 - **Removed `mbagcn_engine.py`** — re-exported by `services.py`, imported from there by nothing. It also contained no GCN: no message passing, no learned weights, and a "Johnson-Lindenstrauss projection" that mapped 96 dimensions up to 4096.
 - **Removed `.test-registry.json` and `scripts/test_registry_check.py`** — the magic-header test ceremony `AGENTS.md` forbids. No test carried the header and nothing ran the checker.

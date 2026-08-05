@@ -29,13 +29,11 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
-import io
 import json
 import os
 import re
 import urllib.request
 import xml.etree.ElementTree as ET
-import zipfile
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from typing import Any
@@ -135,7 +133,6 @@ _ATTACK_OBJECT_TYPES = (
     "course-of-action",
 )
 
-
 def _clip(value: Any, max_len: int = _MAX_FIELD_LEN) -> str:
     if value is None:
         return ""
@@ -145,7 +142,6 @@ def _clip(value: Any, max_len: int = _MAX_FIELD_LEN) -> str:
     if len(value) <= max_len:
         return value
     return value[: max_len - len(_TRUNC_SUFFIX)] + _TRUNC_SUFFIX
-
 
 def _coerce_str_list(value: Any, max_items: int = 32, item_max: int = 200) -> list[str]:
     if not value:
@@ -170,12 +166,10 @@ def _coerce_str_list(value: Any, max_items: int = 32, item_max: int = 200) -> li
             break
     return out
 
-
 def _local_name(tag: str) -> str:
     if "}" in tag:
         return tag.split("}", 1)[1]
     return tag
-
 
 def parse_cwe_xml(path: str) -> list[dict[str, Any]]:
     """Parse a CWE catalog XML file and return a list of normalized CWE entries."""
@@ -264,7 +258,6 @@ def parse_cwe_xml(path: str) -> list[dict[str, Any]]:
         out.append(entry)
     return out
 
-
 def _attack_external_id(obj: dict[str, Any]) -> str:
     for ref in obj.get("external_references") or []:
         if not isinstance(ref, dict):
@@ -275,7 +268,6 @@ def _attack_external_id(obj: dict[str, Any]) -> str:
                 return str(eid)
     return ""
 
-
 def _attack_phases(obj: dict[str, Any]) -> list[str]:
     phases = obj.get("kill_chain_phases") or []
     out: list[str] = []
@@ -285,8 +277,6 @@ def _attack_phases(obj: dict[str, Any]) -> list[str]:
             if name:
                 out.append(str(name))
     return out
-
-
 
 def parse_attack_stix(path: str) -> dict[str, list[dict[str, Any]]]:
     """Parse a MITRE ATT&CK STIX bundle and return normalized entries by type.
@@ -363,7 +353,6 @@ def parse_attack_stix(path: str) -> dict[str, list[dict[str, Any]]]:
             out["course_of_action"].append(entry)
     return out
 
-
 def _parse_yara_rule_text(text: str, source_path: str) -> dict[str, Any] | None:
     rule_match = _YARA_RULE_RE.search(text)
     if not rule_match:
@@ -406,7 +395,6 @@ def _parse_yara_rule_text(text: str, source_path: str) -> dict[str, Any] | None:
         "source": "signature_base",
         "file": os.path.relpath(source_path, start=os.path.dirname(source_path)) if source_path else "",
     }
-
 
 def parse_yara_dir(yara_dir: str) -> list[dict[str, Any]]:
     """Parse all .yar/.yara files under a directory and return a list of rules.
@@ -468,7 +456,6 @@ def parse_yara_dir(yara_dir: str) -> list[dict[str, Any]]:
                 out.append(parsed)
     return out
 
-
 def compute_source_fingerprint(
     cwe_path: str | None,
     attack_paths: Iterable[str],
@@ -522,7 +509,6 @@ def compute_source_fingerprint(
     else:
         h.update(b"YARA-MISSING")
     return h.hexdigest()[:32]
-
 
 class ThreatCorpus:
     """In-memory holder for the parsed threat corpus — modular edition.
@@ -749,21 +735,17 @@ class ThreatCorpus:
     def available_sources(self) -> list[str]:
         return sorted(self.entries.keys())
 
-
 # ── Cache: per-source files + manifest ─────────────────────────────────────
 
 CORPUS_CACHE_DIR = os.path.join(CACHE_DIR, "corpus")
 MANIFEST_PATH = os.path.join(CORPUS_CACHE_DIR, "manifest.json")
 
-
 def _source_cache_path(source_name: str) -> str:
     return os.path.join(CORPUS_CACHE_DIR, f"{source_name}.json")
-
 
 def corpus_cache_path() -> str:
     """Return the legacy per-user cache path. Kept for backward compat."""
     return os.path.join(CACHE_DIR, CORPUS_CACHE_FILENAME)
-
 
 def _atomic_write_json(path: str, data: dict[str, Any]) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -773,7 +755,6 @@ def _atomic_write_json(path: str, data: dict[str, Any]) -> None:
         f.write(payload)
     os.replace(tmp, path)
 
-
 def _load_manifest() -> dict[str, Any] | None:
     if not os.path.isfile(MANIFEST_PATH):
         return None
@@ -782,7 +763,6 @@ def _load_manifest() -> dict[str, Any] | None:
             return json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
-
 
 def _load_modular_corpus(manifest: dict[str, Any]) -> ThreatCorpus | None:
     entries: dict[str, list[dict[str, Any]]] = {}
@@ -805,7 +785,6 @@ def _load_modular_corpus(manifest: dict[str, Any]) -> ThreatCorpus | None:
         return None
     return ThreatCorpus(entries=entries, source_fingerprints=fingerprints, built_at=built_at)
 
-
 def _load_v1_corpus() -> ThreatCorpus | None:
     path = os.path.join(CACHE_DIR, CORPUS_CACHE_FILENAME)
     if not os.path.isfile(path):
@@ -822,7 +801,6 @@ def _load_v1_corpus() -> ThreatCorpus | None:
         return None
     return ThreatCorpus.from_dict(data)
 
-
 def load_corpus() -> ThreatCorpus | None:
     """Load from modular cache. Falls back to V1 monolithic file."""
     manifest = _load_manifest()
@@ -831,7 +809,6 @@ def load_corpus() -> ThreatCorpus | None:
         if corpus is not None:
             return corpus
     return _load_v1_corpus()
-
 
 def save_corpus(corpus: ThreatCorpus) -> str:
     """Save to per-source cache files + manifest. Returns manifest path."""
@@ -866,7 +843,6 @@ def save_corpus(corpus: ThreatCorpus) -> str:
             os.rename(legacy, legacy + ".v1_backup")
     return MANIFEST_PATH
 
-
 def delete_corpus_cache() -> bool:
     """Remove all corpus cache files. Returns True if files were removed."""
     removed = False
@@ -885,7 +861,6 @@ def delete_corpus_cache() -> bool:
         pass
     return removed
 
-
 # ── Download pipeline (registry-based) ─────────────────────────────────────
 
 def _download_url(url: str) -> bytes:
@@ -895,15 +870,6 @@ def _download_url(url: str) -> bytes:
         if len(data) > _MAX_DOWNLOAD_BYTES:
             raise ValueError(f"Download exceeds {_MAX_DOWNLOAD_BYTES} bytes")
         return data
-
-
-def _extract_zip(data: bytes, dest: str, pattern: str | None = None) -> None:
-    with zipfile.ZipFile(io.BytesIO(data)) as zf:
-        members = zf.namelist()
-        if pattern:
-            members = [m for m in members if pattern in m]
-        zf.extractall(dest, members=members)
-
 
 def download_corpus_sources(
     dest_dir: str | None = None,
@@ -947,7 +913,6 @@ def download_corpus_sources(
 
     return result
 
-
 def _build_from_sources(download_result: dict[str, Any]) -> ThreatCorpus | None:
     """Build corpus from downloaded sources using the SOURCES registry."""
     from .sources import SOURCES as _SOURCES
@@ -986,7 +951,6 @@ def _build_from_sources(download_result: dict[str, Any]) -> ThreatCorpus | None:
         return None
     return ThreatCorpus(entries=entries, source_fingerprints=fingerprints)
 
-
 def build_corpus_from_sources(
     cwe_path: str | None = None,
     attack_paths: Iterable[str] | None = None,
@@ -1022,12 +986,10 @@ def build_corpus_from_sources(
     fp = compute_source_fingerprint(cwe_path, attack_paths_list, yara_dir)
     return ThreatCorpus(entries=entries, source_fingerprints={"combined": fp})
 
-
 # ── Singleton ──────────────────────────────────────────────────────────────
 
 _corpus_singleton: ThreatCorpus | None = None
 _corpus_lock = __import__("threading").Lock()
-
 
 def ensure_corpus_loaded(
     rebuild: bool = False,
@@ -1114,7 +1076,6 @@ def ensure_corpus_loaded(
             "rebuilt": False,
             "reason": "no sources provided and no cache available",
         }
-
 
 def invalidate_corpus_cache() -> None:
     """Clear the singleton and delete all cache files."""

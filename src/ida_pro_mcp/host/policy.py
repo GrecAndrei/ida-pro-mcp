@@ -93,6 +93,22 @@ DESTRUCTIVE_ACTIONS = {
     "truncate",
 }
 
+# (tool, action) pairs that delete or destroy state but whose action name is
+# not distinctive enough for DESTRUCTIVE_ACTIONS (e.g. generic `close`/`kill`).
+# `session` is otherwise READ_ONLY_TOOLS, so these would sail through without
+# ack — yet they genuinely delete data (close/kill tear down a runtime,
+# rebuild does `os.remove(idb_path)`, bulk_delete/cleanup_stale/idle_purge
+# delete sessions, restore_snapshot replaces the live DB).
+DESTRUCTIVE_TOOL_ACTIONS: set[tuple[str, str]] = {
+    ("session", "close"),
+    ("session", "kill"),
+    ("session", "rebuild"),
+    ("session", "bulk_delete"),
+    ("session", "cleanup_stale"),
+    ("session", "idle_purge"),
+    ("session", "restore_snapshot"),
+}
+
 WRITE_ACTIONS = {
     "add",
     "annotate",
@@ -263,6 +279,8 @@ def classify_tool_action(tool: Any, action: Any) -> RiskTier:
     if pair in FILESYSTEM_READ_ACTIONS:
         return RiskTier.FILESYSTEM_READ
     if action_name in DESTRUCTIVE_ACTIONS:
+        return RiskTier.DESTRUCTIVE
+    if pair in DESTRUCTIVE_TOOL_ACTIONS:
         return RiskTier.DESTRUCTIVE
     if pair in READ_ONLY_ACTIONS:
         return RiskTier.READ

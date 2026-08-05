@@ -60,19 +60,6 @@ def handle_enabled_tools(registry: McpRpcRegistry, config_key: str):
 DEFAULT_CORS_POLICY = "local"
 
 
-def get_cors_policy(port: int) -> str:
-    """Retrieve the current CORS policy from configuration."""
-    match config_json_get("cors_policy", DEFAULT_CORS_POLICY):
-        case "unrestricted":
-            return "*"
-        case "local":
-            return "127.0.0.1 localhost"
-        case "direct":
-            return f"http://127.0.0.1:{port} http://localhost:{port}"
-        case _:
-            return "*"
-
-
 ORIGINAL_TOOLS = handle_enabled_tools(MCP_SERVER.tools, "enabled_tools")
 
 

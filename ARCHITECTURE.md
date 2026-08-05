@@ -31,7 +31,6 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
   - `server_client_state.py` — per-connection state and the session ownership guard
   - `server_workflow.py` / `server_workflow_batch.py` — workflow orchestration
   - `server_wiki.py` — wiki tool integration
-  - `resources.py` — `ida://` MCP resource definitions and `ResourceResolver`
   - `tool_registry.py` — canonical action lists and argument schemas
   - `session_skills.py` / `session_skills_bootstrap.py` — session-level skills and bootstrap mixin
 
@@ -58,12 +57,6 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
 - `src/ida_pro_mcp/installer/`
   - `main.py` — installer entry point (`ida-pro-mcp-install` / `python install.py`)
   - `skills/__init__.py` — auto-generates Claude Code / OpenCode skills from TOOL_DESCRIPTIONS
-
-## MCP Resources
-
-`ida://` resources are defined in `resources.py` and served via `resources/read`. They are **application-driven** — the LLM cannot read them autonomously; the client UI must explicitly attach them.
-
-The most important resource (`ida://state`) is also accessible as `ida_session_state` — a real tool call the LLM can use directly.
 
 ## Tool Call Dispatch Pipeline
 

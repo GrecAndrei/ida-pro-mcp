@@ -26,18 +26,11 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
-try:
-    from ._common import shannon_entropy as _shannon_entropy
-except ImportError:
-    from _common import shannon_entropy as _shannon_entropy  # type: ignore[import-not-found]
-
 import contextlib
 import re
-from collections import Counter
 from typing import Any
 
 # Known crypto constant values — imported from central registry
-from ida_pro_mcp.ida_mcp.support.crypto_registry import CRYPTO_CONSTANT_NAMES as _CRYPTO_CONSTS
 
 try:
     from ida_pro_mcp.host.intelligence.embeddings import build_decomp_document as _build_decomp_document
@@ -48,7 +41,6 @@ try:
     from .code_helpers import _build_function_structure_summary
 except ImportError:
     from code_helpers import _build_function_structure_summary  # type: ignore[import-not-found]
-
 
 def _parse_register_offset(op_str: str) -> Optional[tuple[str, int]]:
     op_str = op_str.lower()
@@ -98,7 +90,6 @@ def _parse_register_offset(op_str: str) -> Optional[tuple[str, int]]:
     if base_reg:
         return base_reg, offset
     return None
-
 
 def _build_fast_signature(fea: int, func=None) -> str:
     """Build a fast signature string from disassembly + metadata (no decompile).
@@ -161,7 +152,6 @@ def _build_fast_signature(fea: int, func=None) -> str:
         pass
     return " | ".join(parts)[:768]
 
-
 def _build_full_index_document(fea: int, name: str, pseudocode: str, func, embedder, cfunc=None) -> str:
     """Combine Hex-Rays pseudocode with compact IDA xref evidence."""
     max_chars = int(getattr(embedder, "decomp_document_chars", 1152) or 1152)
@@ -209,197 +199,6 @@ def _build_full_index_document(fea: int, name: str, pseudocode: str, func, embed
         return suffix[-max_chars:]
     return document[: max_chars - len(suffix)] + suffix
 
-
-def _extract_function_attributes(func_ea: int) -> dict[str, Any]:
-    """Extract deterministic attributes for a single function using only IDA APIs.
-
-    Avoids Hex-Rays decompilation to maximize performance.
-    """
-    func = ida_funcs.get_func(func_ea)
-    if not func:
-        return {}
-
-    start = func.start_ea
-    end = func.end_ea
-    size = end - start
-    name = idc.get_func_name(start) or f"sub_{start:X}"
-    seg = idaapi.getseg(start)
-    seg_name = ida_segment.get_segm_name(seg) if seg else ""
-
-    # Flags
-    flags = func.flags
-    is_thunk = 1 if (flags & idaapi.FUNC_THUNK) else 0
-    is_library = 1 if (flags & idaapi.FUNC_LIB) else 0
-
-    # Instruction counts
-    mnem_counts: Counter = Counter()
-    bb_count = 0
-    has_loops = 0
-    max_loop_depth = 0
-    apis: set[str] = set()
-    strings: list[tuple[str, int]] = []
-    data_refs = 0
-    crypto_constants: list[tuple[int, int]] = []  # (value, ea)
-    struct_accesses: dict[str, dict[int, list[str]]] = {}
-
-    # Walk basic blocks
-    import ida_ua
-    flow = idaapi.FlowChart(func)
-    block_descriptors = []
-    for block in flow:
-        bb_count += 1
-        inst_count = sum(1 for _ in idautils.Heads(block.start_ea, block.end_ea))
-        in_degree = sum(1 for _ in block.preds()) if hasattr(block, "preds") else 0
-        out_degree = sum(1 for _ in block.succs()) if hasattr(block, "succs") else 0
-        block_descriptors.append(f"{in_degree}:{out_degree}:{inst_count}")
-
-        for ea in idautils.Heads(block.start_ea, block.end_ea):
-            mnem = idc.print_insn_mnem(ea)
-            if not mnem:
-                continue
-            mnem_l = mnem.lower()
-            mnem_counts[mnem_l] += 1
-
-            # API calls via xrefs
-            if mnem_l in ("call", "jmp"):
-                for xref in idautils.XrefsFrom(ea, 0):
-                    if xref.type in (idaapi.fl_CN, idaapi.fl_CF):
-                        tgt_name = idc.get_name(xref.to)
-                        if tgt_name:
-                            apis.add(tgt_name)
-
-            # String refs via operand xrefs
-            for i in range(idaapi.UA_MAXOP):
-                op_type = idc.get_operand_type(ea, i)
-                if op_type == idc.o_imm:
-                    val = idc.get_operand_value(ea, i)
-                    s = idc.get_strlit_contents(val)
-                    if s:
-                        txt = s.decode("utf-8", errors="replace") if isinstance(s, bytes) else str(s)
-                        if len(txt) >= 4:
-                            strings.append((txt[:256], val))
-                    # Check for crypto constants in immediates
-                    if val in _CRYPTO_CONSTS:
-                        crypto_constants.append((val, ea))
-
-            # Decode instruction to check operands for crypto constants and register offsets
-            insn = ida_ua.insn_t()
-            if ida_ua.decode_insn(insn, ea) > 0:
-                for op in insn.ops:
-                    if op.type == ida_ua.o_imm:
-                        val = op.value
-                        if val in _CRYPTO_CONSTS and (val, ea) not in crypto_constants:
-                            crypto_constants.append((val, ea))
-
-                # Process register offset accesses for struct reconstruction
-                for i in range(idaapi.UA_MAXOP):
-                    op_type = idc.get_operand_type(ea, i)
-                    if op_type in (idc.o_displ, idc.o_phrase):
-                        op_str = idc.print_operand(ea, i)
-                        parsed = _parse_register_offset(op_str)
-                        if parsed:
-                            base_reg, offset = parsed
-                            if base_reg not in ('rsp', 'esp', 'rbp', 'ebp'):
-                                dtype = insn.ops[i].dtype
-                                dtype_sizes = {0: 1, 1: 2, 2: 4, 7: 8}
-                                size = dtype_sizes.get(dtype, 4)
-                                type_guesses = {1: "char", 2: "short", 4: "int", 8: "void*"}
-                                t_guess = type_guesses.get(size, "int")
-
-                                struct_accesses.setdefault(base_reg, {})
-                                struct_accesses[base_reg].setdefault(offset, []).append(t_guess)
-
-            # Data refs
-            for xref in idautils.XrefsFrom(ea, 0):
-                if xref.iscode == 0:
-                    data_refs += 1
-
-    # Check for loops via back-edges in flow chart
-    for block in flow:
-        loop_depth = 0
-        for succ in block.succs():
-            if succ.start_ea <= block.start_ea:
-                has_loops = 1
-                loop_depth += 1
-        max_loop_depth = max(max_loop_depth, loop_depth)
-
-    # Cyclomatic complexity: E - N + 2P
-    edges = sum(len(list(b.succs())) for b in flow)
-    cyclomatic = edges - bb_count + 2
-
-    # Xref counts
-    incoming = sum(1 for _ in idautils.XrefsTo(start, 0))
-    outgoing = sum(1 for _ in idautils.XrefsFrom(start, 0))
-
-    # Entropy
-    func_bytes = ida_bytes.get_bytes(start, min(size, 4096))
-    entropy = _shannon_entropy(func_bytes) if func_bytes else 0.0
-
-    # Derived metrics
-    total_insns = sum(mnem_counts.values())
-    xor_ratio = round(mnem_counts.get("xor", 0) / max(1, total_insns), 4)
-    has_crypto_constants = 1 if crypto_constants else 0
-
-    # Hash of CFG
-    block_descriptors.sort()
-    cfg_desc_str = ",".join(block_descriptors)
-    cfg_hash = hashlib.sha256(cfg_desc_str.encode("utf-8")).hexdigest()[:16] if block_descriptors else None
-
-    # Format reconstructed structs
-    reconstructed_structs = []
-    for reg, offsets in struct_accesses.items():
-        fields = []
-        for offset in sorted(offsets.keys()):
-            guesses = offsets[offset]
-            best_type = Counter(guesses).most_common(1)[0][0]
-            fields.append({
-                "offset": offset,
-                "offset_hex": f"0x{offset:x}",
-                "type": best_type
-            })
-        if fields:
-            reconstructed_structs.append({
-                "base_register": reg,
-                "fields": fields
-            })
-
-    return {
-        "ea": start,
-        "name": name,
-        "size": size,
-        "segment": seg_name,
-        "is_thunk": is_thunk,
-        "is_library": is_library,
-        "bb_count": bb_count,
-        "cyclomatic_complexity": max(1, cyclomatic),
-        "incoming_xrefs": incoming,
-        "outgoing_xrefs": outgoing,
-        "entropy": entropy,
-        "call_count": mnem_counts.get("call", 0),
-        "xor_count": mnem_counts.get("xor", 0),
-        "mov_count": mnem_counts.get("mov", 0) + mnem_counts.get("movzx", 0) + mnem_counts.get("movsx", 0),
-        "cmp_count": mnem_counts.get("cmp", 0),
-        "jmp_count": mnem_counts.get("jmp", 0) + mnem_counts.get("je", 0) + mnem_counts.get("jne", 0) + mnem_counts.get("jz", 0) + mnem_counts.get("jnz", 0),
-        "ret_count": mnem_counts.get("ret", 0) + mnem_counts.get("retn", 0),
-        "push_count": mnem_counts.get("push", 0),
-        "pop_count": mnem_counts.get("pop", 0),
-        "lea_count": mnem_counts.get("lea", 0),
-        "test_count": mnem_counts.get("test", 0),
-        "api_count": len(apis),
-        "string_count": len(strings),
-        "data_ref_count": data_refs,
-        "has_loops": has_loops,
-        "max_loop_depth": max_loop_depth,
-        "has_crypto_constants": has_crypto_constants,
-        "xor_ratio": xor_ratio,
-        "apis": sorted(apis),
-        "strings": strings,
-        "crypto_constants": crypto_constants,
-        "cfg_hash": cfg_hash,
-        "reconstructed_structs": reconstructed_structs,
-    }
-
-
 def _safe_decompile(ea, **kwargs):
     """Wrap ``ida_hexrays.decompile`` with an explicit plugin check.
 
@@ -415,7 +214,6 @@ def _safe_decompile(ea, **kwargs):
     if not ida_hexrays.init_hexrays_plugin():
         raise RuntimeError("hexrays decompiler is not available in this IDA")
     return ida_hexrays.decompile(ea, **kwargs)
-
 
 def _function_index_metadata(func) -> dict[str, Any]:
     """Collect search filters in one function walk."""
@@ -449,7 +247,6 @@ def _function_index_metadata(func) -> dict[str, Any]:
         "is_thunk": 1 if (func.flags & idaapi.FUNC_THUNK) else 0,
         "cyclomatic": cyclomatic,
     }
-
 
 def suggest_next_steps(kwargs: dict, default_addr: Any = None) -> dict:
     """Return up to 3 concrete tool calls the LLM should fire next.
@@ -659,7 +456,6 @@ def suggest_next_steps(kwargs: dict, default_addr: Any = None) -> dict:
         },
         "suggestions": suggestions[:3],
     }
-
 
 @tool
 @idaread

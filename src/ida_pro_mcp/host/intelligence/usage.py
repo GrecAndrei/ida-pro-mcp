@@ -165,7 +165,7 @@ class DriftDetector:
                     signals.append({
                         "type": "LOOP",
                         "message": f"Repeating {set(tail)} in last {loop_tail_len} calls. "
-                                   "Try a different approach or read ida://state.",
+                                   "Try a different approach or read ida_session_state.",
                         "severity": "warning",
                         "states": [f"{t}.{a}" for t, a in set(tail)],
                     })

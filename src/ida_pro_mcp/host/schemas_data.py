@@ -186,30 +186,6 @@ _EXTRA_TOOL_ALIASES = {
     "policy": "governance",
 }
 
-# Canonical legacy threat-route contract used by host dispatchers.
-THREAT_LEGACY_REDIRECT_TOOLS = {}
-
-THREAT_LEGACY_TRACING_TOOLS = {
-    "trace",
-    "taint",
-}
-
-THREAT_LEGACY_VULN_TOOLS = {
-    "gadgets",
-    "search",
-}
-
-THREAT_LEGACY_MALWARE_PASSTHROUGH_TOOLS = {
-    "deobfuscate",
-    "crypto_id",
-}
-
-# Tool->optional action allowlist for legacy passthrough flows.
-# `None` means any action is accepted.
-THREAT_LEGACY_CONDITIONAL_PASSTHROUGH = {
-    "protocol": None,
-}
-
 TOOL_DESCRIPTIONS = {
 
     "analysis": "Controls IDA analysis engine settings and triggers reanalysis, and runs IDA plugins. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze, run, analyze, state. Note: analysis(action='plugin_run', name='...') is a host-level alias that forwards to misc(action='plugin_run').",

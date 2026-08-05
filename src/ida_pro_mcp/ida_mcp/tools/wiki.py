@@ -64,14 +64,6 @@ def _fuzzy_find_topic(query, topics_dict, cutoff=0.6):
     return best_match, best_score
 
 
-def protocol_resource() -> str:
-    """The QuickStart page — operational guide for AI agents."""
-    path = os.path.join(_get_wiki_root(), "QuickStart.md")
-    try:
-        return _read_wiki_file(path)
-    except Exception:
-        return "Use wiki(action='read', topic='QuickStart') for the quickstart guide."
-
 @tool
 def wiki(
     action: Annotated[Literal["list_topics", "read", "search", "semantic_search", "index", "sections", "suggest"],

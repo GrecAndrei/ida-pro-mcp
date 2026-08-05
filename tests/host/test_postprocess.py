@@ -316,7 +316,7 @@ class TestNextContinuation:
         # Simulate caching a page
         base_args = {"action": "find", "pattern": "recv"}
         pp = {"head": 3, "offset": 0}
-        result = {"ok": True, "matches": list(range(10)), "_count": 3, "_post_processed": True}
+        result = {"ok": True, "matches": list(range(10)), "_count": 3, "_total": 10, "_post_processed": True}
         h._cache_post_process_next("search", base_args, pp, result)
         token = result.get("next_token")
         assert token

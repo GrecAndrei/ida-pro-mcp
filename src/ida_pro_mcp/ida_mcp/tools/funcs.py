@@ -17,13 +17,6 @@ except ImportError:
 # ============================================================================
 
 
-def _clip_text(value: Any, max_len: int = 240) -> str:
-    text = "" if value is None else str(value)
-    if len(text) <= max_len:
-        return text
-    return text[: max_len - 3] + "..."
-
-
 def _iter_overlapping_functions(start_ea: int, end_ea: int):
     """Yield functions whose ranges overlap [start_ea, end_ea)."""
     for fn_start in idautils.Functions():

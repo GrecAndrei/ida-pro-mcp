@@ -39,9 +39,8 @@ ida_find(query="recv")
 ida_decompile(address="0x401000")
 ```
 
-Use `ida_help(topic="ida_decompile")` for an in-band schema and example. MCP
-resources are application-driven in OpenCode, so use `ida_session_state()`
-instead of expecting `ida://state` to be injected automatically.
+Use `ida_help(topic="ida_decompile")` for an in-band schema and example. Call
+`ida_session_state()` explicitly to orient before analysis.
 
 Set `IDA_MCP_TOOL_SURFACE=legacy` only for existing scripts that still call
 the older broad `tool(action=...)` APIs.

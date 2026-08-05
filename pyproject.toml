@@ -17,6 +17,7 @@ classifiers = [
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
 ]
@@ -27,16 +28,11 @@ dependencies = [
     "numpy>=2.4.6",
 ]
 
-[project.optional-dependencies]
-dev = [
-    "pytest>=9.1.1",
-    "pytest-timeout>=2.4.0",
-]
-
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
     "pytest-timeout>=2.4.0",
+    "ruff>=0.15.0",
 ]
 
 [project.urls]
@@ -66,8 +62,9 @@ line-length = 200
 # breaking the IDA runtime, and ruff cannot statically resolve names through
 # `import *` even when `__all__` is declared in the source module.
 # RET (504/505/507/508/503) disabled: this project uses `elif action == "..."`
-# chains as static contract markers; tests/integration/test_goal_v3_contract_static.py
-# greps for those literal strings. Auto-fixing elif→if breaks those tests.
+# chains as static contract markers in the IDA-side tool dispatch code.
+# Auto-fixing elif→if would be a semantics-preserving but review-heavy refactor
+# across ~240 sites; the chains are intentional, not a style slip.
 ignore = [
     "UP006", "UP035",  # typing.Dict/List/Optional — codebase uses typing.* consistently; switching to built-ins is bikeshedding.
     "RET504", "RET505", "RET507", "RET508", "RET503",
@@ -209,7 +206,6 @@ pythonpath = ["."]
 timeout = 30
 timeout_method = "thread"
 testpaths = ["tests"]
-addopts = "--ignore=tests/probes --ignore=tests/benchmarks"
 markers = [
     "live_ida: starts a licensed IDA instance and performs real MCP integration testing",
 ]

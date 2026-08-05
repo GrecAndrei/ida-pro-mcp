@@ -12,11 +12,10 @@ import struct
 from ida_pro_mcp.services import parse_str_list
 
 try:
-    from ..support.semantic_matching import semantic_score, semantic_tokens  # noqa: F401
+    from ..support.semantic_matching import semantic_score  # noqa: F401
 except ImportError:
     from support.semantic_matching import (  # type: ignore[import-not-found]
         semantic_score,
-        semantic_tokens,
     )
 
 
@@ -55,11 +54,6 @@ _CALC_ACTION_ALIASES = {
 
 
 _INT_SUFFIX_RE = re.compile(r"^\s*([+-]?(?:0x[0-9a-fA-F_]+|\d[\d_]*))(?:\s*([kKmMgGtT]))?\s*$")
-
-
-def _semantic_tokens(text: str) -> list[str]:
-    """Extract lowercase alphanumeric semantic tokens (length >= 2)."""
-    return semantic_tokens(text)
 
 
 def _semantic_score(query: str, candidate: str) -> float:

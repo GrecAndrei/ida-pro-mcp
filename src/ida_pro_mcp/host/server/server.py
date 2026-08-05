@@ -56,7 +56,6 @@ from ..stores.insight_index import InsightIndex  # noqa: E402
 from ..stores.truncation import continue_truncated, peek_truncated, search_truncated, summary_truncated, truncate_response  # noqa: F401,E402
 from .audit import AuditLogger  # noqa: E402
 from .rate_limit import RateLimiter  # noqa: E402
-from .resources import ResourceResolver, list_resources  # noqa: E402
 from .server_args import ServerArgsMixin  # noqa: E402
 from .server_batch import BackgroundMixin  # noqa: E402
 from .server_blackboard import ServerBlackboardMixin  # noqa: E402
@@ -393,6 +392,10 @@ class IDAMCPServer(
         self._last_injected_entries: list[dict[str, Any]] = []
         self._last_query_bridges: list[str] = []
         self._call_counter = 0
+        # Per-session count of enriched responses already served, used to
+        # honor the "session resume context: first 2 calls only" gate.
+        self._session_resume_calls: dict[str, int] = {}
+        self._session_resume_calls_lock = threading.Lock()
         # Runtime leases are shared by independently launched MCP hosts that
         # use the same durable cache.  This identity prevents one live host
         # from cleaning up another live host's IDA process.
@@ -720,44 +723,6 @@ class IDAMCPServer(
                 "jsonrpc": "2.0",
                 "id": rid,
                 "result": result,
-            }
-        if m == "resources/list":
-            return {
-                "jsonrpc": "2.0",
-                "id": rid,
-                "result": {
-                    "resources": list_resources(),
-                },
-            }
-        if m == "resources/read":
-            uri = p.get("uri", "")
-            resolver = ResourceResolver(
-                self._execute_tool,
-                insight_index=self._insight_index,
-                global_facts=self._global_facts,
-                session_mgr=self.session_mgr,
-                bb_path=self._session_blackboard_path(session_obj=self.current_session),
-                usage_intel=getattr(self, "_usage_intel", None),
-            )
-            resource = resolver.read(uri)
-            if resource is None:
-                return {
-                    "jsonrpc": "2.0",
-                    "id": rid,
-                    "error": {"code": -32602, "message": f"Resource not found: {uri}"},
-                }
-            return {
-                "jsonrpc": "2.0",
-                "id": rid,
-                "result": {
-                    "contents": [
-                        {
-                            "uri": uri,
-                            "mimeType": resource.get("mimeType", "application/json"),
-                            "text": resource.get("text", ""),
-                        }
-                    ],
-                },
             }
         return {
             "jsonrpc": "2.0",

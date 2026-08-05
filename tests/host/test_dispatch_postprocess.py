@@ -218,20 +218,29 @@ class TestDispatchIntegration:
 class TestCachePostProcessNext:
     def test_caches_when_limit_set(self):
         h = _Harness()
-        result = {"ok": True, "_count": 3, "_post_processed": True}
+        result = {"ok": True, "_count": 3, "_total": 5, "_post_processed": True}
         h._cache_post_process_next("search", {"action": "find"}, {"limit": 3}, result)
         assert "next_token" in result
 
     def test_caches_when_head_set(self):
         h = _Harness()
-        result = {"ok": True, "_count": 5, "_post_processed": True}
+        result = {"ok": True, "_count": 5, "_total": 6, "_post_processed": True}
         h._cache_post_process_next("search", {"action": "find"}, {"head": 5}, result)
         assert "next_token" in result
 
     def test_no_cache_when_not_full_page(self):
         h = _Harness()
-        result = {"ok": True, "_count": 2, "_post_processed": True}
+        result = {"ok": True, "_count": 2, "_total": 2, "_post_processed": True}
         h._cache_post_process_next("search", {"action": "find"}, {"limit": 10}, result)
+        assert "next_token" not in result
+
+    def test_no_cache_when_exactly_full_page(self):
+        """Regression: a tool returning exactly page_size items (so the slice
+        came back full) must NOT advertise more pages — previously `_count >=
+        page_size` misread the post-slice length as the whole result."""
+        h = _Harness()
+        result = {"ok": True, "_count": 5, "_total": 5, "_post_processed": True}
+        h._cache_post_process_next("search", {"action": "find"}, {"head": 5}, result)
         assert "next_token" not in result
 
     def test_no_cache_for_errors(self):
@@ -242,7 +251,7 @@ class TestCachePostProcessNext:
 
     def test_cache_stores_correct_action(self):
         h = _Harness()
-        result = {"ok": True, "_count": 3, "_post_processed": True}
+        result = {"ok": True, "_count": 3, "_total": 5, "_post_processed": True}
         h._cache_post_process_next("search", {"action": "find", "pattern": "x"}, {"limit": 3}, result)
         token = result["next_token"]
         entry = h._next_cache[token]
@@ -252,7 +261,7 @@ class TestCachePostProcessNext:
 
     def test_cache_advances_offset(self):
         h = _Harness()
-        result = {"ok": True, "_count": 5, "_post_processed": True}
+        result = {"ok": True, "_count": 5, "_total": 20, "_post_processed": True}
         h._cache_post_process_next("search", {"action": "find"}, {"limit": 5, "offset": 10}, result)
         token = result["next_token"]
         assert h._next_cache[token]["next_offset"] == 15
@@ -273,7 +282,7 @@ class TestNextContinuation:
         h = _Harness()
         h._source_payload = _search_payload(10)
         # Cache a page first
-        result = {"ok": True, "_count": 3, "_post_processed": True}
+        result = {"ok": True, "_count": 3, "_total": 5, "_post_processed": True}
         h._cache_post_process_next("search", {"action": "find", "pattern": "x"}, {"limit": 3}, result)
         token = result["next_token"]
 
@@ -301,7 +310,7 @@ class TestNextContinuation:
     def test_continuation_merges_pp_overrides(self):
         h = _Harness()
         h._source_payload = _search_payload(10)
-        result = {"ok": True, "_count": 3, "_post_processed": True}
+        result = {"ok": True, "_count": 3, "_total": 5, "_post_processed": True}
         h._cache_post_process_next("search", {"action": "find"}, {"limit": 3}, result)
         token = result["next_token"]
 

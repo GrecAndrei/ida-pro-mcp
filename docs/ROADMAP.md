@@ -15,6 +15,23 @@ The previous broad `tool(action=...)` backend remains behind
 `IDA_MCP_TOOL_SURFACE=legacy` for compatibility, but is no longer the agent
 surface or documentation source.
 
+## Product surface tiers
+
+The exposed tool surface is split into tiers so agents get a focused
+`tools/list` while every capability stays callable by exact name:
+
+- **Tier A** — the default `tools/list` surface (`ADVERTISED_TOOLS` in
+  `host/schemas_data.py`, ~17 tools). This is what a fresh agent sees.
+- **Tier B** — the full legacy `TOOLS` registry. Every Tier B tool remains
+  callable by its exact name (backward compatible) but is hidden from the
+  default `tools/list`.
+- **Tier C** — compact action enums (`ADVERTISED_ACTIONS`). High-cardinality
+  tools advertise a reduced action set in lean/ultra schema mode; the full
+  `TOOL_ACTIONS` enum is still accepted for exact-name calls.
+
+Promotion rule: a capability moves into a higher tier only once it has an
+operation schema, a valid example, an `ida_help` entry, and a behavioral test.
+
 ## Current focus
 
 - Expand the action-specific catalog only when a workflow needs another exact
