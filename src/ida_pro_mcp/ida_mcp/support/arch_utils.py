@@ -756,6 +756,97 @@ def get_tail_call_mnemonics(arch=None):
     return _map.get(arch, {"jmp", "b", "j"})
 
 
+def _apply_riscv_gp(gp_val: int):
+    """Set GP in the RISC-V processor plugin and queue reanalysis.
+
+    Returns (applied: bool, apply_error: str|None, reanalysis_queued: bool).
+
+    The correct API is idc.set_processor_options("gp=0x...") — this tells the
+    RISC-V processor plugin the GP base so it can resolve gp-relative operands
+    into real data xrefs.  idc.set_reg_value() only sets a hint at a specific
+    address and is NOT read by the processor plugin for xref resolution.
+    """
+    try:
+        import idc as _idc
+    except ImportError:
+        return False, "IDA not available", False
+
+    applied = False
+    apply_error = None
+    reanalysis_queued = False
+
+    # Primary: processor options string — what the RISC-V plugin actually reads
+    try:
+        _idc.set_processor_options(f"gp=0x{gp_val:x}")
+        applied = True
+    except Exception as _e:
+        apply_error = str(_e)
+
+    # Also persist via netnode so it survives IDB reload
+    if applied:
+        try:
+            import idaapi as _idaapi
+            nn = _idaapi.netnode("$ risc-v", 0, True)
+            nn.altset(1, gp_val)
+        except Exception:
+            pass
+
+    # Queue reanalysis over the full address space with AU_FINAL so IDA
+    # re-evaluates every gp-relative load/store and creates data xrefs
+    if applied:
+        try:
+            import ida_auto as _ida_auto
+            import idc as _idc2
+            min_ea = _idc2.get_inf_attr(_idc2.INF_MIN_EA)
+            max_ea = _idc2.get_inf_attr(_idc2.INF_MAX_EA)
+            if hasattr(_ida_auto, "plan_range"):
+                _ida_auto.plan_range(min_ea, max_ea)
+            elif hasattr(_ida_auto, "auto_mark_range"):
+                _ida_auto.auto_mark_range(min_ea, max_ea, _ida_auto.AU_FINAL)
+            _ida_auto.auto_wait()
+            reanalysis_queued = True
+        except Exception:
+            pass
+
+    return applied, apply_error, reanalysis_queued
+
+
+def _riscv_gp_note(gp_val: int, detected_at: int, applied: bool, apply_error, reanalysis_queued: bool) -> str:
+    gp_hex = hex(gp_val)
+    at_hex = hex(detected_at)
+    if applied and reanalysis_queued:
+        return (
+            f"RISC-V: GP (x3) = {gp_hex} detected at {at_hex}, applied via "
+            f"set_processor_options and reanalysis complete — GP-relative xrefs now resolved."
+        )
+    if applied:
+        return (
+            f"RISC-V: GP (x3) = {gp_hex} detected at {at_hex}, applied via "
+            f"set_processor_options (reanalysis did not complete — "
+            f'run analysis(action="reanalyze") to create GP-relative xrefs).'
+        )
+    return (
+        f"RISC-V: GP (x3) = {gp_hex} detected at {at_hex} but auto-apply failed "
+        f"({apply_error}). Run manually: idc.set_processor_options('gp=0x{gp_val:x}')"
+    )
+
+
+def set_riscv_gp(gp_val: int) -> dict:
+    """Set GP explicitly (e.g. when the agent already knows the value from
+    context) and queue reanalysis.  Returns a result dict suitable for
+    returning directly from an MCP tool action.
+    """
+    applied, apply_error, reanalysis_queued = _apply_riscv_gp(gp_val)
+    return {
+        "ok": applied,
+        "gp": gp_val,
+        "gp_hex": hex(gp_val),
+        "applied": applied,
+        "reanalysis_queued": reanalysis_queued,
+        "note": _riscv_gp_note(gp_val, 0, applied, apply_error, reanalysis_queued),
+    }
+
+
 def detect_riscv_gp():
     """Scan the binary entrypoint for the GP-initialization sequence.
 
@@ -828,48 +919,8 @@ def detect_riscv_gp():
                     if raw & 0x800:
                         raw -= 0x1000
                     gp_val = (prev_auipc_val + raw) & 0xFFFFFFFFFFFFFFFF
-                    # Auto-apply: set GP in IDA so GP-relative xrefs resolve
-                    applied = False
-                    apply_error = None
-                    reanalysis_queued = False
-                    try:
-                        idc.set_reg_value(gp_val, "gp", idc.BADADDR)
-                        applied = True
-                    except Exception as _e:
-                        apply_error = str(_e)
-                    # Queue a full reanalysis so IDA revisits all GP-relative
-                    # load/store instructions now that GP is known.  Without
-                    # this, previously disassembled auipc+load/store sequences
-                    # have no xref because IDA evaluated them with GP=0.
-                    if applied:
-                        try:
-                            import ida_auto
-                            import ida_ida
-                            # Reanalyze the entire address space
-                            ida_auto.plan_and_wait(
-                                idc.get_inf_attr(idc.INF_MIN_EA),
-                                idc.get_inf_attr(idc.INF_MAX_EA),
-                            )
-                            reanalysis_queued = True
-                        except Exception:
-                            try:
-                                # Fallback: queue reanalysis for just the
-                                # code segment (cheaper, usually sufficient)
-                                idc.plan_to_apply_idasgn("")  # no-op trigger
-                                ida_auto.auto_wait()
-                                reanalysis_queued = True
-                            except Exception:
-                                pass
-                    note = (
-                        f"RISC-V: GP (x3) = {hex(gp_val)} — "
-                        f"detected from auipc/addi at {hex(start_ea)}, "
-                        + ("applied and full reanalysis queued — GP-relative xrefs will be created."
-                           if (applied and reanalysis_queued) else
-                           "applied (reanalysis not queued — run Analysis > Reanalyze to create GP-relative xrefs)."
-                           if applied else
-                           f"auto-apply failed ({apply_error}); run: "
-                           f'idc.set_reg_value({hex(gp_val)}, "gp", idc.BADADDR)')
-                    )
+                    applied, apply_error, reanalysis_queued = _apply_riscv_gp(gp_val)
+                    note = _riscv_gp_note(gp_val, start_ea, applied, apply_error, reanalysis_queued)
                     return {
                         "found": True,
                         "gp": gp_val,
@@ -892,8 +943,8 @@ def detect_riscv_gp():
         "note": (
             "RISC-V GP (x3) initialization pattern not found near entry points. "
             "GP-relative xrefs (lw/sw via gp) will be unresolved. "
-            "If the binary uses GP-relative addressing, locate the __global_pointer$ "
-            "symbol or the auipc gp / addi gp sequence manually and set it with: "
-            "idc.set_reg_value(\"gp\", <value>, idc.BADADDR)"
+            "If you know the GP value, set it with: "
+            "analysis(action='set_gp', gp='0x<value>') "
+            "or manually: idc.set_processor_options('gp=0x<value>')"
         ),
     }

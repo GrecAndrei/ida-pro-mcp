@@ -44,8 +44,8 @@ def _safe_infer_arch(binary_path: str) -> dict:
 @tool
 @idawrite
 def analysis(
-    action: Annotated[Literal["get_options", "set_options", "set_processor", "set_loader_options", "set_architecture", "reanalyze", "run", "analyze", "state"],
-                      "Action: get_options|set_options|set_processor|set_loader_options|set_architecture|reanalyze|analyze|state"],
+    action: Annotated[Literal["get_options", "set_options", "set_processor", "set_loader_options", "set_architecture", "reanalyze", "run", "analyze", "state", "set_gp"],
+                      "Action: get_options|set_options|set_processor|set_loader_options|set_architecture|reanalyze|analyze|state|set_gp"],
     options: Annotated[Optional[dict], "Options dict for set_options"] = None,
     processor: Annotated[Optional[str], "Processor name for set_processor"] = None,
     flags: Annotated[Optional[int], "Processor flags (idaapi.SETPROC_*)"] = None,
@@ -55,6 +55,7 @@ def analysis(
     endian: Annotated[Optional[str], "Target endian: le|be for set_architecture"] = None,
     start: Annotated[Optional[str], "Start address for reanalysis"] = None,
     end: Annotated[Optional[str], "End address for reanalysis"] = None,
+    gp: Annotated[Optional[str], "RISC-V global pointer value as hex string (for set_gp action), e.g. '0x2556f0'"] = None,
     **kwargs
 ) -> dict:
     """
@@ -67,6 +68,13 @@ def analysis(
     - set_loader_options: Apply loader-specific options string.
     - set_architecture: Update processor/bitness/endian settings.
     - reanalyze: Re-run auto-analysis over a range.
+    - set_gp: RISC-V only. Set the global pointer (GP / x3) value so the processor
+        plugin resolves GP-relative data references and creates correct xrefs.
+        Use when you know GP from context (e.g. "jr gp" target, __global_pointer$
+        symbol, or boot stub disassembly) and auto-detection did not run or failed.
+        Params: gp (REQUIRED, hex string e.g. "0x2556f0")
+        Triggers full reanalysis automatically.
+        Example: analysis(action="set_gp", gp="0x2556f0")
     """
     try:
         inf = None
@@ -313,6 +321,26 @@ def analysis(
                     details={"processor": processor, "flags": proc_flags, "previous": prev},
                 )
             return {"ok": True, "processor": processor, "previous": prev, "result": ok}
+
+        if action == "set_gp":
+            if not gp:
+                return make_error(MCPError.INVALID_ARGS, "gp parameter required (e.g. gp='0x2556f0')")
+            if not is_riscv_family():
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "set_gp is only valid for RISC-V targets",
+                    details={"processor": _inf_procname()},
+                    hint="Check the current processor with analysis(action='get_options').",
+                )
+            try:
+                gp_int = int(str(gp).strip(), 16) if str(gp).startswith("0x") else int(str(gp).strip(), 0)
+            except ValueError:
+                return make_error(MCPError.INVALID_ARGS, f"invalid gp value: {gp!r} — expected hex string like '0x2556f0'")
+            try:
+                from ida_pro_mcp.ida_mcp.support.arch_utils import set_riscv_gp
+            except ImportError:
+                from arch_utils import set_riscv_gp  # type: ignore[import-not-found]
+            return set_riscv_gp(gp_int)
 
         if action == "set_loader_options":
             if value is None:

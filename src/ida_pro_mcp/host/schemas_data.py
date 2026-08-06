@@ -188,7 +188,7 @@ _EXTRA_TOOL_ALIASES = {
 
 TOOL_DESCRIPTIONS = {
 
-    "analysis": "Controls IDA analysis engine settings and triggers reanalysis, and runs IDA plugins. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze, run, analyze, state. Note: analysis(action='plugin_run', name='...') is a host-level alias that forwards to misc(action='plugin_run').",
+    "analysis": "Controls IDA analysis engine settings and triggers reanalysis, and runs IDA plugins. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze, run, analyze, state, set_gp. Note: analysis(action='plugin_run', name='...') is a host-level alias that forwards to misc(action='plugin_run'). Use set_gp on RISC-V targets to set the global pointer register so GP-relative xrefs resolve.",
     "annotation": "Automatically generates and manages comments, labels, and documentation across functions. Actions: auto_comment, auto_comment_function, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, propagate_names, cleanup, validate, get_context, set_structured, bulk_set, export_md, import_md, summary.",
     "background": "Background batch execution for long-running analysis tasks and IDAPython scripts. Submit scripts or tool calls to run in background threads without interrupting IDA. Actions: submit, status, cancel, result, list, wait.",
     "batch": "Executes multiple tool calls in a single request to reduce round trips. Pass a calls array of tool invocations.",
@@ -527,6 +527,7 @@ TOOL_ARG_SCHEMAS = {
         "wait": {"type": "boolean"},
         "pump": {"type": "boolean"},
         "poll_timeout": {"type": "number"},
+        "gp": {"type": "string", "description": "RISC-V GP value as hex string for set_gp action (e.g. '0x2556f0')"},
     },
     "data": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["data"]},
