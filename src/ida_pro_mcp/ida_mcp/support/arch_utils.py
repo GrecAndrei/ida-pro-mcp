@@ -718,3 +718,105 @@ def get_tail_call_mnemonics(arch=None):
         "sparc64": {"ba", "jmp"},
     }
     return _map.get(arch, {"jmp", "b", "j"})
+
+
+def detect_riscv_gp():
+    """Scan the binary entrypoint for the GP-initialization sequence.
+
+    On bare-metal/RTOS RISC-V targets the linker inserts a two-instruction
+    prologue near _start that loads the GP register (x3):
+
+        auipc  gp, %pcrel_hi(__global_pointer$)
+        addi   gp, gp, %pcrel_lo(__global_pointer$)
+
+    Without GP set, IDA cannot resolve GP-relative data xrefs (lw/sw with gp
+    base).  This function tries to recover the GP value by simulating those two
+    instructions from the disassembly bytes at the binary's entry point.
+
+    Returns a dict with:
+      {"found": True,  "gp": <int>, "at": <hex str>, "note": "..."}  on success
+      {"found": False, "note": "..."} if the pattern was not located
+    """
+    try:
+        import idc
+        import idautils
+        import idaapi as _idaapi
+    except ImportError:
+        return {"found": False, "note": "IDA APIs not available"}
+
+    # Collect candidate start addresses: entry points, then _start symbol
+    candidates = []
+    try:
+        for ep in idautils.Entries():
+            # ep is (ordinal, ea, name, fwd)
+            if len(ep) >= 2:
+                candidates.append(ep[1])
+    except Exception:
+        pass
+    try:
+        start_ea = idc.get_name_ea_simple("_start")
+        if start_ea != idc.BADADDR:
+            candidates.insert(0, start_ea)
+    except Exception:
+        pass
+
+    # Also try __reset_vector, reset_handler common in embedded RISC-V
+    for sym in ("__reset_vector", "reset_handler", "Reset_Handler", "entry"):
+        try:
+            ea = idc.get_name_ea_simple(sym)
+            if ea != idc.BADADDR:
+                candidates.append(ea)
+        except Exception:
+            pass
+
+    seen = set()
+    for start_ea in candidates:
+        if start_ea in seen:
+            continue
+        seen.add(start_ea)
+        # Scan up to 32 instructions from each candidate
+        ea = start_ea
+        prev_auipc_val = None  # accumulated upper bits after auipc gp
+        for _ in range(32):
+            try:
+                mnem = idc.print_insn_mnem(ea).lower()
+                op0 = idc.print_operand(ea, 0).lower()
+                if mnem == "auipc" and op0 in ("gp", "x3"):
+                    # auipc gp, imm  =>  gp = PC + (imm << 12)
+                    imm = idc.get_operand_value(ea, 1)
+                    prev_auipc_val = ea + (imm << 12)
+                elif mnem == "addi" and op0 in ("gp", "x3") and prev_auipc_val is not None:
+                    # addi gp, gp, imm  =>  gp = prev + sign_extend(imm, 12)
+                    raw = idc.get_operand_value(ea, 2)
+                    # sign-extend 12-bit immediate
+                    if raw & 0x800:
+                        raw -= 0x1000
+                    gp_val = (prev_auipc_val + raw) & 0xFFFFFFFFFFFFFFFF
+                    return {
+                        "found": True,
+                        "gp": gp_val,
+                        "gp_hex": hex(gp_val),
+                        "at": hex(start_ea),
+                        "note": (
+                            f"GP (x3) = {hex(gp_val)} detected from auipc/addi pair at {hex(start_ea)}. "
+                            "Set it in IDA with: idc.set_reg_value(\"gp\", 0x{:x}, idc.BADADDR)".format(gp_val)
+                        ),
+                    }
+                else:
+                    prev_auipc_val = None
+                ea = idc.next_head(ea, idc.BADADDR)
+                if ea == idc.BADADDR:
+                    break
+            except Exception:
+                break
+
+    return {
+        "found": False,
+        "note": (
+            "RISC-V GP (x3) initialization pattern not found near entry points. "
+            "GP-relative xrefs (lw/sw via gp) will be unresolved. "
+            "If the binary uses GP-relative addressing, locate the __global_pointer$ "
+            "symbol or the auipc gp / addi gp sequence manually and set it with: "
+            "idc.set_reg_value(\"gp\", <value>, idc.BADADDR)"
+        ),
+    }

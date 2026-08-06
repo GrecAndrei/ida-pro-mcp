@@ -530,17 +530,6 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     )
                 except Exception:
                     _slow_threshold = 5.0
-                if _elapsed >= _slow_threshold and isinstance(res, dict):
-                    snapshot = self._collect_ida_state_snapshot(
-                        runtime=runtime,
-                        current_tool=tool_name,
-                        current_args=rpc_args,
-                        call_started_at=_t0,
-                    )
-                    snapshot["elapsed_sec"] = round(_elapsed, 2)
-                    res.setdefault("_meta", {})
-                    res["_meta"]["slow_call"] = True
-                    res["_meta"]["ida_state"] = snapshot
                 return res
             except Exception as e:
                 proc = runtime.get("process")

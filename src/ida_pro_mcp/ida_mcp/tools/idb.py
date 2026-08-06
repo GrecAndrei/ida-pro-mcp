@@ -17,6 +17,14 @@ try:
 except Exception:
     infer_binary_arch_profile = None  # type: ignore
 
+try:
+    from ida_pro_mcp.ida_mcp.support.arch_utils import detect_riscv_gp
+except Exception:
+    try:
+        from arch_utils import detect_riscv_gp  # type: ignore[import-not-found]
+    except Exception:
+        detect_riscv_gp = None  # type: ignore
+
 def _get_path(module, names):
     for name in names:
         if hasattr(module, name):
@@ -456,12 +464,30 @@ def idb_architecture_profile(meta=None, summary=None):
         recs.append("workflow(action='triage_fast')")
         recs.append("firmware_view(action='triage_snapshot')")
         recs.append("analysis(action='set_architecture', processor='<candidate>', bitness=<16|32|64>, endian='<little|big>')")
-    return {
+
+    # RISC-V: detect GP (x3) value for GP-relative xref resolution
+    gp_info = None
+    if is_riscv_family() and callable(detect_riscv_gp):
+        try:
+            gp_info = detect_riscv_gp()
+            if gp_info.get("found"):
+                recs.append(
+                    "misc(action='idc', expr='idc.set_reg_value(\"gp\", {}, idc.BADADDR)'.format({})".format(
+                        gp_info["gp"], gp_info["gp"]
+                    )
+                )
+        except Exception:
+            gp_info = None
+
+    result = {
         "current": current,
         "inferred_from_binary": inferred,
         "raw_binary_mode": raw_mode,
         "recommendations": recs,
     }
+    if gp_info is not None:
+        result["riscv_gp"] = gp_info
+    return result
 
 
 _AUTO_STATE_NAMES = {

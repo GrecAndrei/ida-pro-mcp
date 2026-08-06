@@ -440,7 +440,10 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         return found[:max_items]
 
     def _guardrail_mode_from_args(self, call_args: Any) -> str:
-        """Resolve per-call guardrail mode: assist|enforce|off."""
+        """Resolve per-call guardrail mode: assist|enforce|off.
+
+        Used internally for strict-write gating; not included in LLM responses.
+        """
         mode = ""
         if isinstance(call_args, dict):
             mode = str(call_args.get("_guardrail_mode") or "").strip().lower()
@@ -449,24 +452,6 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         if mode in {"enforce", "strict", "block"}:
             return "enforce"
         return "assist"
-
-    def _guardrail_reason_tags(self, tool_name: str, call_args: Any, payload: Any) -> list[str]:
-        tags: list[str] = []
-        tn = str(tool_name or "").lower()
-        if tn in {"code", "graph", "ctree", "static_trace", "memory", "calc"}:
-            tags.append("address-heavy-tool")
-        if isinstance(call_args, dict):
-            keys = {str(k).lower() for k in call_args}
-            if {"addr", "address", "target"} & keys:
-                tags.append("explicit-address-arg")
-            if {"offset", "offsets", "base", "size"} & keys:
-                tags.append("offset-arithmetic")
-        addrs = self._collect_hex_addresses(call_args)
-        if len(addrs) < 2:
-            addrs.extend([a for a in self._collect_hex_addresses(payload) if a not in addrs])
-        if len(addrs) >= 2:
-            tags.append("multiple-hex-addresses")
-        return tags
 
     def _apply_output_filters(self, payload: Any, opts: dict) -> Any:
         """Apply universal output filtering (grep, head, tail, skip, path, pluck)."""
@@ -739,10 +724,6 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             if isinstance(payload, dict):
                 payload = dict(payload)
                 if include_pointer_note:
-                    reason_tags = self._guardrail_reason_tags(tool_name, call_args, payload)
-                    guardrail_mode = self._guardrail_mode_from_args(call_args)
-                    payload.setdefault("llm_guardrail_mode", guardrail_mode)
-                    payload.setdefault("llm_guardrail_reason_tags", reason_tags)
                     # Address lockstep: warn about unseen addresses
                     lockstep_warnings = self._validate_address_lockstep(call_args, payload)
                     if lockstep_warnings:
@@ -808,11 +789,6 @@ class ServerResponseMixin(ServerResponseCompactMixin):
 
         if isinstance(compacted, dict):
             compacted = dict(compacted)
-            if include_pointer_note:
-                reason_tags = self._guardrail_reason_tags(tool_name, call_args, compacted)
-                guardrail_mode = self._guardrail_mode_from_args(call_args)
-                compacted.setdefault("llm_guardrail_mode", guardrail_mode)
-                compacted.setdefault("llm_guardrail_reason_tags", reason_tags)
 
             # ---- Real gating: blackboard policy + phase + must_call ----
             # (Only fires when the blackboard has a strict policy or a phase

@@ -46,12 +46,12 @@ def _load_core_helpers():
     return ns
 
 
-def test_build_response_has_results_and_matches():
+def test_build_response_has_results_not_matches():
     h = _load_core_helpers()
     r = h["build_response"](["a", "b"], 0, 10, 2, False, query="x")
     assert r["ok"] is True
     assert r["results"] == "a\nb"
-    assert r["matches"] == "a\nb"
+    assert "matches" not in r, "duplicate 'matches' field was removed; only 'results' should be present"
     assert r["count"] == 2
     assert r["query"] == "x"
 

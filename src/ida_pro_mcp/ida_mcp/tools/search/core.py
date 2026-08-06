@@ -332,15 +332,10 @@ def iter_code(seg_start, seg_end):
 
 
 def build_response(matches, offset: int, limit: int, total_matches: int, truncated: bool, **extra):
-    """Unified response builder for all search actions.
-
-    Always provides both ``matches`` (legacy) and ``results`` (agent-preferred)
-    as the same compact text block.
-    """
+    """Unified response builder for all search actions."""
     text = "\n".join(str(m) for m in matches)
     response = {
         "ok": True,
-        "matches": text,
         "results": text,
         "count": len(matches),
         "total": total_matches,
