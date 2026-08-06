@@ -79,6 +79,52 @@ TOOLS_REFERENCE, SKILL.md, the README table, or the README count are stale.
 6. If host-side only: add `tool_name == "<name>"` branch in `server_dispatch.py`
 7. Add tests for any host-side logic (embeddings, config parsing, etc.)
 
+## Installer Touchpoints
+
+The installer (`installer/main.py`) has an interactive wizard that configures
+the server for users. When you add something that has a user-facing setup step,
+check whether the wizard needs updating.
+
+**Things that require installer changes:**
+
+- **New env var that controls a feature** — add it to the wizard or at minimum
+  emit an `ui.info()` line so users know it exists. Env vars silently ignored
+  are invisible to users who ran the installer.
+
+- **New model or backend** — both the embed model and the reranker must be
+  surfaced in the interactive wizard. The wizard must prompt for each model;
+  auto-detect it via a `find_*` helper in `installer/runtime.py`; offer a
+  managed download; and write the path into `embedder.json` via
+  `write_embedder_state`. Two models are needed for full semantic search:
+  an embedding model and a reranker (cross-encoder). Don't add one without the
+  other — a missing reranker silently degrades search quality.
+
+- **New backend binary** (like `llama-server` or `libmcp_llama.so`) — add
+  detection in `installer/runtime.py`, show the user whether it was found, and
+  explain what to do if it wasn't (build command, download URL, etc.). The
+  wizard is the user's only visibility into which backend will run.
+
+- **New MCP client config env var** — add it to `build_stdio_config()` in
+  `installer/clients.py` so it gets written to Claude Desktop, Cursor, VS Code,
+  etc. Vars not written to the client config block are silently absent at
+  runtime.
+
+**What the installer does NOT need:**
+
+- New `AgentOperation` fields that are pure schema additions — no user action
+  required.
+- Changes to response enrichment or analysis heuristics — runtime-only.
+- New IDA-side tool actions — no install step needed.
+
+**Wizard sections in order** (for orientation when adding to the right place):
+1. Runtime source (snapshot/pypi/local)
+2. CLI shim
+3. Skills mode
+4. Embedding backend choice + native lib detection + model auto-detect/download
+5. **Reranker model** auto-detect/download ← right after embed, both are required
+6. Rollback preference
+7. Policy gates
+
 ## Removing a Tool or Operation
 
 1. `grep -rn '"<name>"' src/ docs/ tests/ .agents/ --include="*.py" --include="*.md"`
