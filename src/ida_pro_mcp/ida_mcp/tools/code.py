@@ -6,6 +6,14 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 try:
+    from ida_pro_mcp.ida_mcp.support.arch_utils import detect_riscv_gp as _detect_riscv_gp
+except Exception:
+    try:
+        from arch_utils import detect_riscv_gp as _detect_riscv_gp  # type: ignore[import-not-found]
+    except Exception:
+        _detect_riscv_gp = None  # type: ignore
+
+try:
     from .code_helpers import *
     # ``import *`` intentionally omits private helper names. This dispatcher
     # uses them directly, so import the implementation helpers explicitly.
@@ -240,6 +248,16 @@ def code(
             # Clamp disasm rows even when caller uses max_items directly.
             max_items = min(max(disasm_max, 1), DISASM_MAX_LINES)
         addrs = normalize_list_input(addrs)
+
+        # For RISC-V disasm: probe GP (x3) once per call so every result entry
+        # carries a note if GP-relative xrefs may be unresolved.
+        _riscv_gp_info = None
+        if action == "disasm" and is_riscv_family() and callable(_detect_riscv_gp):
+            try:
+                _riscv_gp_info = _detect_riscv_gp()
+            except Exception:
+                pass
+
         results = []
 
         for addr in addrs:
@@ -1265,6 +1283,13 @@ def code(
 
             else:
                 return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
+
+        # Attach GP note to every disasm result on RISC-V so agents know
+        # GP-relative xrefs may be unresolved without the GP value set.
+        if _riscv_gp_info is not None:
+            for r in results:
+                if isinstance(r, dict) and ("disasm" in r or "instructions" in r):
+                    r["riscv_gp"] = _riscv_gp_info
 
         return results[0] if len(results) == 1 else results
     except Exception as e:
