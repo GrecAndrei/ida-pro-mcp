@@ -236,6 +236,50 @@ Input schema:
       "type": "string",
       "description": "Raw loader options (shorthand for architecture.loader_options)."
     },
+    "baseaddr": {
+      "type": "string",
+      "description": "Load base address, e.g. 0x400000."
+    },
+    "start_ea": {
+      "type": "string",
+      "description": "Start EA for analysis range."
+    },
+    "min_ea": {
+      "type": "string",
+      "description": "Minimum EA for analysis range."
+    },
+    "max_ea": {
+      "type": "string",
+      "description": "Maximum EA for analysis range."
+    },
+    "reanalyze": {
+      "type": "boolean",
+      "description": "Force reanalysis even if IDB exists."
+    },
+    "input_format": {
+      "type": "string",
+      "description": "Force a specific file format parser, e.g. bin, elf, pe, macho, ihex, srec."
+    },
+    "processor_options": {
+      "type": "string",
+      "description": "Processor-specific options string, e.g. ARM CPU type or MIPS ISA variant."
+    },
+    "rebase_to": {
+      "type": "string",
+      "description": "Rebase the database to this address (hex or decimal), e.g. 0x400000."
+    },
+    "entry_point": {
+      "type": "string",
+      "description": "Override the entry point address (hex or decimal)."
+    },
+    "stack_size": {
+      "type": "integer",
+      "description": "Stack size in bytes for stack analysis."
+    },
+    "memory_model": {
+      "type": "integer",
+      "description": "Memory model: 0=flat, 1=16-bit segmented, 2=32-bit segmented."
+    },
     "ida_args": {
       "type": "array",
       "description": "Extra raw IDA CLI args (e.g. -A -Sscript -Llog).",
@@ -2456,6 +2500,620 @@ Example:
   "arguments": {
     "strategy": "coverage",
     "limit": 10
+  }
+}
+```
+
+## `ida_read_bytes`
+
+Read raw bytes at an address. Returns hex dump and ASCII preview.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "size": {
+      "type": "integer",
+      "description": "Number of bytes to read (max 4096)."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "address",
+    "size"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_read_bytes",
+  "arguments": {
+    "address": "0x1000",
+    "size": 64
+  }
+}
+```
+
+## `ida_patch_bytes`
+
+Patch raw bytes at an address in the IDB. Pass hex_bytes (e.g. '9090') to write arbitrary bytes, or nop=true to nop-out the instruction(s) at the address.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "hex_bytes": {
+      "type": "string",
+      "description": "Hex string of bytes to write, e.g. '9090'."
+    },
+    "nop": {
+      "type": "boolean",
+      "description": "If true, overwrite instruction(s) at address with NOPs."
+    },
+    "count": {
+      "type": "integer",
+      "description": "Number of bytes to NOP (default: size of instruction at address)."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "address",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_patch_bytes",
+  "arguments": {
+    "address": "0x1234",
+    "hex_bytes": "9090",
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_rename_local`
+
+Rename a local variable inside a decompiled function. address is the function address; var_name is the current name (e.g. v3); new_name is the desired name.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "var_name": {
+      "type": "string",
+      "description": "Current local variable name as shown in decompiler (e.g. v3, a1)."
+    },
+    "new_name": {
+      "type": "string",
+      "description": "New name for the local variable."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "address",
+    "var_name",
+    "new_name",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_rename_local",
+  "arguments": {
+    "address": "0x401000",
+    "var_name": "v3",
+    "new_name": "packet_len",
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_get_type`
+
+Get a struct, enum, or typedef from the type library. Shows members, offsets, and sizes.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Type name to look up."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_get_type",
+  "arguments": {
+    "name": "SOME_STRUCT"
+  }
+}
+```
+
+## `ida_declare_type`
+
+Define a new struct, enum, or typedef in the local type library from a C declaration. E.g. 'struct pkt_hdr { uint32_t magic; uint16_t len; uint16_t flags; };'
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "declaration": {
+      "type": "string",
+      "description": "C declaration string, e.g. 'struct foo { int x; int y; };'"
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "declaration",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_declare_type",
+  "arguments": {
+    "declaration": "struct pkt_hdr { uint32_t magic; uint16_t len; };",
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_apply_type`
+
+Apply a type to an address. kind=function sets a function prototype; kind=global sets a data variable type; kind=local sets a local variable type inside a decompiled function (requires var_name).
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "type_str": {
+      "type": "string",
+      "description": "C type declaration or prototype to apply."
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "function",
+        "global",
+        "local"
+      ],
+      "description": "What to type: function prototype, global variable, or local variable."
+    },
+    "var_name": {
+      "type": "string",
+      "description": "Local variable name (required when kind=local)."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "address",
+    "type_str",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_apply_type",
+  "arguments": {
+    "address": "0x401000",
+    "type_str": "int __fastcall foo(int a, int b)",
+    "kind": "function",
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_list_types`
+
+List structs, enums, and typedefs in the type library, optionally filtered by name.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "Optional name filter."
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "struct",
+        "enum",
+        "typedef",
+        "all"
+      ],
+      "description": "Filter by kind (default: all)."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Maximum result items to return."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_list_types",
+  "arguments": {
+    "kind": "struct",
+    "limit": 20
+  }
+}
+```
+
+## `ida_list_segments`
+
+List all segments in the binary with name, address range, permissions, and class.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_list_segments",
+  "arguments": {}
+}
+```
+
+## `ida_add_segment`
+
+Create a new segment in the IDB.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "start": {
+      "type": "string",
+      "description": "Start address (hex)."
+    },
+    "end": {
+      "type": "string",
+      "description": "End address (hex, exclusive)."
+    },
+    "name": {
+      "type": "string",
+      "description": "Segment name, e.g. .mmio or ROM."
+    },
+    "sclass": {
+      "type": "string",
+      "description": "Segment class: CODE, DATA, BSS, CONST, STACK, XTRN, etc."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "start",
+    "end",
+    "name",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_add_segment",
+  "arguments": {
+    "start": "0x40000000",
+    "end": "0x40001000",
+    "name": ".mmio",
+    "sclass": "DATA",
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_set_segment_attrs`
+
+Update a segment's name, permissions (rwx), class, bitness, or type.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "name": {
+      "type": "string",
+      "description": "New segment name."
+    },
+    "perms": {
+      "type": "string",
+      "description": "Permission string, e.g. 'rwx', 'r-x', 'rw-'."
+    },
+    "sclass": {
+      "type": "string",
+      "description": "Segment class: CODE, DATA, BSS, etc."
+    },
+    "bitness": {
+      "type": "integer",
+      "description": "0=16-bit, 1=32-bit, 2=64-bit."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "address",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_set_segment_attrs",
+  "arguments": {
+    "address": "0x40000000",
+    "perms": "rwx",
+    "sclass": "CODE",
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_callgraph`
+
+Export a call graph rooted at a function. direction=down follows callees, up follows callers, both follows both. format=mermaid is best for rendering; json for programmatic use.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "depth": {
+      "type": "integer",
+      "description": "Max traversal depth (default 5)."
+    },
+    "direction": {
+      "type": "string",
+      "enum": [
+        "down",
+        "up",
+        "both"
+      ],
+      "description": "Traversal direction."
+    },
+    "format": {
+      "type": "string",
+      "enum": [
+        "json",
+        "dot",
+        "mermaid"
+      ],
+      "description": "Output format."
+    },
+    "max_nodes": {
+      "type": "integer",
+      "description": "Max nodes to collect (default 500)."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "address"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_callgraph",
+  "arguments": {
+    "address": "0x401000",
+    "depth": 3,
+    "format": "mermaid"
+  }
+}
+```
+
+## `ida_apply_sig`
+
+Apply a FLIRT signature file to the current IDB to rename known library functions. Use ida_list_sigs to see available signature files.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Signature name (without .sig extension), e.g. 'android_arm', 'gnu'."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "name",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_apply_sig",
+  "arguments": {
+    "name": "android_arm",
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_list_sigs`
+
+List available FLIRT signature files that can be applied with ida_apply_sig.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "Optional name filter."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_list_sigs",
+  "arguments": {
+    "query": "arm"
   }
 }
 ```

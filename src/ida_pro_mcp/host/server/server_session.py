@@ -11,7 +11,7 @@ import time
 from datetime import datetime
 from typing import Any
 
-from ..analysis.arch_profile import normalize_arch_options
+from ..analysis.arch_profile import infer_binary_arch_profile, normalize_arch_options
 from ..config import (
     LARGE_BINARY_THRESHOLD_BYTES,
     MAX_BATCH_CALLS,
@@ -717,7 +717,8 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                     ),
                 )
             arch_meta = dict(arch_meta or {})
-            arch_meta["inference_applied"] = False
+            arch_meta["inferred_profile"] = infer_binary_arch_profile(binary_path)
+            arch_meta["inference_applied"] = True
 
         if not binary_path:
             return (
@@ -772,6 +773,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         if not binary_path:
             return False
         try:
+            with open(binary_path, "rb") as _fh:
+                if _fh.read(4) == b"IDA2":
+                    return False  # packed IDB — already analyzed, never background
             return os.path.getsize(binary_path) >= LARGE_BINARY_THRESHOLD_BYTES
         except OSError:
             return False

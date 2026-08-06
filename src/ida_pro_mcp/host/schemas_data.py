@@ -540,6 +540,9 @@ TOOL_ARG_SCHEMAS = {
         "items": {"type": "array", "items": {"type": "object"}},
         # `queries` is the alias bulk_query reads alongside `items`.
         "queries": {"type": "array", "items": {"type": "object"}},
+        # read_bytes action
+        "addr": {"type": "string"},
+        "size": {"type": "integer"},
     },
     "search": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["search"]},

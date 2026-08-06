@@ -200,3 +200,42 @@ def test_off_mode_bypasses_unknown_purpose_flag():
     )
     assert result.decision == PolicyDecision.ALLOW
     assert "unknown_purpose" not in result.flags
+
+
+def test_segments_list_and_read_only_new_actions_are_read_tier():
+    """segments/list, misc/list_sigs, misc/health, data/read_bytes must be READ tier."""
+    read_pairs = [
+        ("segments", "list"),
+        ("segments", "info"),
+        ("segments", "find_code"),
+        ("segments", "find_data"),
+        ("segments", "analyze"),
+        ("misc", "list_sigs"),
+        ("misc", "cache_stats"),
+        ("misc", "health"),
+        ("data", "read_bytes"),
+    ]
+    for tool, action in read_pairs:
+        tier = classify_tool_action(tool, action)
+        assert tier == RiskTier.READ, (
+            f"{tool}/{action} classified as {tier}, expected READ"
+        )
+
+
+def test_segments_write_actions_remain_write_idb_tier():
+    """segments/add, set_attr, set_perms, move, merge must still require write ack."""
+    write_pairs = [
+        ("segments", "add"),
+        ("segments", "set_attr"),
+        ("segments", "set_perms"),
+        ("segments", "move"),
+        ("segments", "merge"),
+    ]
+    for tool, action in write_pairs:
+        tier = classify_tool_action(tool, action)
+        assert tier == RiskTier.WRITE_IDB, (
+            f"{tool}/{action} classified as {tier}, expected WRITE_IDB"
+        )
+
+    # delete/erase/patch/reset are DESTRUCTIVE (supersedes WRITE_IDB)
+    assert classify_tool_action("segments", "delete") == RiskTier.DESTRUCTIVE

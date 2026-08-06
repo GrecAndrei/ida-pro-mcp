@@ -284,6 +284,17 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
                 "loader": {"type": "string", "description": "IDA loader name (shorthand for architecture.loader)."},
                 "flags": {"type": "integer", "description": "IDA loader flags (shorthand for architecture.flags)."},
                 "loader_options": {"type": "string", "description": "Raw loader options (shorthand for architecture.loader_options)."},
+                "baseaddr": {"type": "string", "description": "Load base address, e.g. 0x400000."},
+                "start_ea": {"type": "string", "description": "Start EA for analysis range."},
+                "min_ea": {"type": "string", "description": "Minimum EA for analysis range."},
+                "max_ea": {"type": "string", "description": "Maximum EA for analysis range."},
+                "reanalyze": {"type": "boolean", "description": "Force reanalysis even if IDB exists."},
+                "input_format": {"type": "string", "description": "Force a specific file format parser, e.g. bin, elf, pe, macho, ihex, srec."},
+                "processor_options": {"type": "string", "description": "Processor-specific options string, e.g. ARM CPU type or MIPS ISA variant."},
+                "rebase_to": {"type": "string", "description": "Rebase the database to this address (hex or decimal), e.g. 0x400000."},
+                "entry_point": {"type": "string", "description": "Override the entry point address (hex or decimal)."},
+                "stack_size": {"type": "integer", "description": "Stack size in bytes for stack analysis."},
+                "memory_model": {"type": "integer", "description": "Memory model: 0=flat, 1=16-bit segmented, 2=32-bit segmented."},
                 "ida_args": {
                     "type": "array",
                     "description": "Extra raw IDA CLI args (e.g. -A -Sscript -Llog).",
@@ -596,6 +607,7 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
             "address": "addr",
             "background": "_background",
             "slice_size": "_index_slice_size",
+            "limit": "_index_total_limit",
         },
         backend_defaults={"_background": True},
     ),
@@ -1124,6 +1136,290 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         example={"strategy": "coverage", "limit": 10},
         backend_tool="blackboard",
         backend_action="next_target",
+    ),
+    # ------------------------------------------------------------------ #
+    # Hex / bytes view                                                    #
+    # ------------------------------------------------------------------ #
+    AgentOperation(
+        name="ida_read_bytes",
+        description="Read raw bytes at an address. Returns hex dump and ASCII preview.",
+        category="code",
+        input_schema=_schema(
+            {
+                "address": ADDRESS,
+                "size": {"type": "integer", "description": "Number of bytes to read (max 4096)."},
+                "idb": IDB,
+            },
+            ["address", "size"],
+        ),
+        example={"address": "0x1000", "size": 64},
+        backend_tool="data",
+        backend_action="read_bytes",
+        argument_map={"address": "addr"},
+    ),
+    # ------------------------------------------------------------------ #
+    # Patch bytes / nop                                                   #
+    # ------------------------------------------------------------------ #
+    AgentOperation(
+        name="ida_patch_bytes",
+        description=(
+            "Patch raw bytes at an address in the IDB. "
+            "Pass hex_bytes (e.g. '9090') to write arbitrary bytes, "
+            "or nop=true to nop-out the instruction(s) at the address."
+        ),
+        category="edit",
+        input_schema=_schema(
+            {
+                "address": ADDRESS,
+                "hex_bytes": {"type": "string", "description": "Hex string of bytes to write, e.g. '9090'."},
+                "nop": {"type": "boolean", "description": "If true, overwrite instruction(s) at address with NOPs."},
+                "count": {"type": "integer", "description": "Number of bytes to NOP (default: size of instruction at address)."},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["address", "risk_ack"],
+        ),
+        example={"address": "0x1234", "hex_bytes": "9090", "risk_ack": True},
+        backend_tool="modify",
+        backend_action="patch_bytes",
+        argument_map={"address": "addr", "risk_ack": "_risk_ack"},
+    ),
+    # ------------------------------------------------------------------ #
+    # Local variable rename                                               #
+    # ------------------------------------------------------------------ #
+    AgentOperation(
+        name="ida_rename_local",
+        description=(
+            "Rename a local variable inside a decompiled function. "
+            "address is the function address; var_name is the current name (e.g. v3); "
+            "new_name is the desired name."
+        ),
+        category="edit",
+        input_schema=_schema(
+            {
+                "address": ADDRESS,
+                "var_name": {"type": "string", "description": "Current local variable name as shown in decompiler (e.g. v3, a1)."},
+                "new_name": {"type": "string", "description": "New name for the local variable."},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["address", "var_name", "new_name", "risk_ack"],
+        ),
+        example={"address": "0x401000", "var_name": "v3", "new_name": "packet_len", "risk_ack": True},
+        backend_tool="modify",
+        backend_action="rename_local",
+        argument_map={"address": "addr", "risk_ack": "_risk_ack"},
+    ),
+    # ------------------------------------------------------------------ #
+    # Struct / type editor                                                #
+    # ------------------------------------------------------------------ #
+    AgentOperation(
+        name="ida_get_type",
+        description="Get a struct, enum, or typedef from the type library. Shows members, offsets, and sizes.",
+        category="code",
+        input_schema=_schema(
+            {"name": {"type": "string", "description": "Type name to look up."}, "idb": IDB},
+            ["name"],
+        ),
+        example={"name": "SOME_STRUCT"},
+        backend_tool="types",
+        backend_action="get",
+    ),
+    AgentOperation(
+        name="ida_declare_type",
+        description=(
+            "Define a new struct, enum, or typedef in the local type library from a C declaration. "
+            "E.g. 'struct pkt_hdr { uint32_t magic; uint16_t len; uint16_t flags; };'"
+        ),
+        category="edit",
+        input_schema=_schema(
+            {
+                "declaration": {"type": "string", "description": "C declaration string, e.g. 'struct foo { int x; int y; };'"},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["declaration", "risk_ack"],
+        ),
+        example={"declaration": "struct pkt_hdr { uint32_t magic; uint16_t len; };", "risk_ack": True},
+        backend_tool="types",
+        backend_action="declare",
+        argument_map={"declaration": "decl", "risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_apply_type",
+        description=(
+            "Apply a type to an address. kind=function sets a function prototype; "
+            "kind=global sets a data variable type; kind=local sets a local variable type "
+            "inside a decompiled function (requires var_name)."
+        ),
+        category="edit",
+        input_schema=_schema(
+            {
+                "address": ADDRESS,
+                "type_str": {"type": "string", "description": "C type declaration or prototype to apply."},
+                "kind": {
+                    "type": "string",
+                    "enum": ["function", "global", "local"],
+                    "description": "What to type: function prototype, global variable, or local variable.",
+                },
+                "var_name": {"type": "string", "description": "Local variable name (required when kind=local)."},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["address", "type_str", "risk_ack"],
+        ),
+        example={"address": "0x401000", "type_str": "int __fastcall foo(int a, int b)", "kind": "function", "risk_ack": True},
+        backend_tool="types",
+        backend_action="apply",
+        argument_map={"address": "addr", "type_str": "decl", "risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_list_types",
+        description="List structs, enums, and typedefs in the type library, optionally filtered by name.",
+        category="discovery",
+        input_schema=_schema(
+            {
+                "query": {"type": "string", "description": "Optional name filter."},
+                "kind": {
+                    "type": "string",
+                    "enum": ["struct", "enum", "typedef", "all"],
+                    "description": "Filter by kind (default: all).",
+                },
+                "limit": LIMIT,
+                "idb": IDB,
+            },
+        ),
+        example={"kind": "struct", "limit": 20},
+        backend_tool="types",
+        backend_action="list",
+    ),
+    # ------------------------------------------------------------------ #
+    # Segment management                                                  #
+    # ------------------------------------------------------------------ #
+    AgentOperation(
+        name="ida_list_segments",
+        description="List all segments in the binary with name, address range, permissions, and class.",
+        category="discovery",
+        input_schema=_schema({"idb": IDB}),
+        example={},
+        backend_tool="segments",
+        backend_action="list",
+    ),
+    AgentOperation(
+        name="ida_add_segment",
+        description="Create a new segment in the IDB.",
+        category="edit",
+        input_schema=_schema(
+            {
+                "start": {"type": "string", "description": "Start address (hex)."},
+                "end": {"type": "string", "description": "End address (hex, exclusive)."},
+                "name": {"type": "string", "description": "Segment name, e.g. .mmio or ROM."},
+                "sclass": {
+                    "type": "string",
+                    "description": "Segment class: CODE, DATA, BSS, CONST, STACK, XTRN, etc.",
+                },
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["start", "end", "name", "risk_ack"],
+        ),
+        example={"start": "0x40000000", "end": "0x40001000", "name": ".mmio", "sclass": "DATA", "risk_ack": True},
+        backend_tool="segments",
+        backend_action="add",
+        argument_map={"risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_set_segment_attrs",
+        description="Update a segment's name, permissions (rwx), class, bitness, or type.",
+        category="edit",
+        input_schema=_schema(
+            {
+                "address": ADDRESS,
+                "name": {"type": "string", "description": "New segment name."},
+                "perms": {"type": "string", "description": "Permission string, e.g. 'rwx', 'r-x', 'rw-'."},
+                "sclass": {"type": "string", "description": "Segment class: CODE, DATA, BSS, etc."},
+                "bitness": {"type": "integer", "description": "0=16-bit, 1=32-bit, 2=64-bit."},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["address", "risk_ack"],
+        ),
+        example={"address": "0x40000000", "perms": "rwx", "sclass": "CODE", "risk_ack": True},
+        backend_tool="segments",
+        backend_action="set_attr",
+        argument_map={"address": "addr", "risk_ack": "_risk_ack"},
+    ),
+    # ------------------------------------------------------------------ #
+    # Call graph export                                                   #
+    # ------------------------------------------------------------------ #
+    AgentOperation(
+        name="ida_callgraph",
+        description=(
+            "Export a call graph rooted at a function. "
+            "direction=down follows callees, up follows callers, both follows both. "
+            "format=mermaid is best for rendering; json for programmatic use."
+        ),
+        category="code",
+        input_schema=_schema(
+            {
+                "address": ADDRESS,
+                "depth": {"type": "integer", "description": "Max traversal depth (default 5)."},
+                "direction": {
+                    "type": "string",
+                    "enum": ["down", "up", "both"],
+                    "description": "Traversal direction.",
+                },
+                "format": {
+                    "type": "string",
+                    "enum": ["json", "dot", "mermaid"],
+                    "description": "Output format.",
+                },
+                "max_nodes": {"type": "integer", "description": "Max nodes to collect (default 500)."},
+                "idb": IDB,
+            },
+            ["address"],
+        ),
+        example={"address": "0x401000", "depth": 3, "format": "mermaid"},
+        backend_tool="graph",
+        backend_action="callgraph",
+        argument_map={"address": "addr", "max_nodes": "max_items"},
+    ),
+    # ------------------------------------------------------------------ #
+    # FLIRT signature application                                         #
+    # ------------------------------------------------------------------ #
+    AgentOperation(
+        name="ida_apply_sig",
+        description=(
+            "Apply a FLIRT signature file to the current IDB to rename known library functions. "
+            "Use ida_list_sigs to see available signature files."
+        ),
+        category="edit",
+        input_schema=_schema(
+            {
+                "name": {"type": "string", "description": "Signature name (without .sig extension), e.g. 'android_arm', 'gnu'."},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["name", "risk_ack"],
+        ),
+        example={"name": "android_arm", "risk_ack": True},
+        backend_tool="misc",
+        backend_action="load_sig",
+        argument_map={"risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_list_sigs",
+        description="List available FLIRT signature files that can be applied with ida_apply_sig.",
+        category="discovery",
+        input_schema=_schema(
+            {
+                "query": {"type": "string", "description": "Optional name filter."},
+                "idb": IDB,
+            },
+        ),
+        example={"query": "arm"},
+        backend_tool="misc",
+        backend_action="list_sigs",
     ),
     AgentOperation(
         name="ida_python",

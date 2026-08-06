@@ -67,7 +67,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "code": ["smart_decompile", "decompile", "decompile_all", "disasm", "detect", "decompile_chain", "semantic_decompile", "diff_functions", "xrefs_to", "xrefs_from", "xrefs_to_field", "callees", "callers", "blocks", "callgraph", "find_paths", "strings_in_func", "decomp_dataflow", "export", "explain"],
 
     "ctree": ["get", "traverse", "find_calls", "find_vars", "find_strings", "find_conditions", "get_logic_flow", "dominance_map", "var_dependency_graph"],
-    "data": ["functions", "annotations", "globals", "strings", "imports", "exports", "lookup", "bulk_query", "capability_matrix", "string_xrefs"],
+    "data": ["functions", "annotations", "globals", "strings", "imports", "exports", "lookup", "bulk_query", "capability_matrix", "string_xrefs", "read_bytes"],
 
 
     "firmware_view": ["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign", "detect_load_address", "detect_vector_table", "detect_mmio", "rtos_scan", "triage_snapshot", "bootstrap"],
@@ -88,7 +88,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "knowledge": ["chip_identify", "symbol_lookup", "import_symbols", "export_session", "chip_families"],
 
     "memory": ["read", "write", "hexdump", "search", "compare", "pointers", "entropy", "strings", "struct_walk", "histogram", "read_file", "write_file"],
-    "misc": ["python", "idc", "load_sig", "cache_stats", "plugin_list", "plugin_run", "read_file", "write_file", "health", "reload"],
+    "misc": ["python", "idc", "load_sig", "list_sigs", "cache_stats", "plugin_list", "plugin_run", "read_file", "write_file", "health", "reload"],
     "modify": ["rename", "comment", "set_type", "patch_asm"],
 
 

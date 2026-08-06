@@ -78,7 +78,7 @@ def write_file_impl(path: str, content: str, encoding: Optional[str] = None) -> 
 
 @tool
 def misc(
-    action: Literal["python", "idc", "load_sig", "cache_stats", "read_file", "write_file", "plugin_list", "plugin_run", "health", "reload"] = "python",
+    action: Literal["python", "idc", "load_sig", "list_sigs", "cache_stats", "read_file", "write_file", "plugin_list", "plugin_run", "health", "reload"] = "python",
     expr: Optional[str] = None,
     code: Optional[str] = None,
     name: Optional[str] = None,
@@ -161,6 +161,22 @@ def misc(
                     "note": "Signature applied immediately" if applied else "Signature queued for auto-analysis. Run analysis(reanalyze) to apply."}
         except Exception as e:
             return handle_error(e, context="load_sig")
+    if action == "list_sigs":
+        try:
+            import os, glob
+            sig_dir = os.path.join(idaapi.idadir(""), "sig")
+            pattern = (name or "").lower()
+            sigs = []
+            for path in sorted(glob.glob(os.path.join(sig_dir, "**", "*.sig"), recursive=True)):
+                basename = os.path.splitext(os.path.basename(path))[0]
+                if not pattern or pattern in basename.lower():
+                    sigs.append({"name": basename, "path": path})
+            # Also list currently applied signatures
+            applied = [idaapi.get_idasgn_desc(i) for i in range(idaapi.get_idasgn_qty())]
+            return {"ok": True, "available": sigs, "applied": applied,
+                    "total": len(sigs), "total_applied": len(applied)}
+        except Exception as e:
+            return handle_error(e, context="list_sigs")
     if action == "cache_stats":
         try:
             from ida_mcp.cache import TOOL_CACHE

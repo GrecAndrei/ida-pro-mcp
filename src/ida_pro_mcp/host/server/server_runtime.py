@@ -33,10 +33,6 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Processors that imply a raw-binary/firmware load (no native container format).
 # Mirrored in _build_ida_command (-Tbin) and the post-load fix_segments step.
-FIRMWARE_RAW_PROCS = (
-    "arm", "mips", "mipsl", "mipsb", "ppc", "ppcl", "tricore",
-    "rx", "v850", "rl78", "stm8",
-)
 
 # IDA loader names that produce correctly-typed segments natively; for these the
 # post-load segment repair must NOT run (it would force data segments to
@@ -1424,43 +1420,47 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     cmd.append(f"-T{loader}")
                     _t_emitted = True
                 elif not loader and "-T" not in ida_prefixes:
-                    # Only force -Tbin for firmware processors when the file is
-                    # actually a raw blob. ELF/PE/Mach-O files have their own loaders
-                    # that set segments correctly — forcing -Tbin on them breaks
-                    # analysis completely (no sections, wrong bitness, stalled).
-                    proc = str(opts.get("processor") or "").lower()
+                    # Sniff the file magic — if it's a known container format let
+                    # IDA's native loader handle it; otherwise force -Tbin so raw
+                    # blobs load correctly regardless of processor/architecture.
+                    # Explicit loader= always overrides this (handled above).
                     _bin_path = session.binary_path or ""
-                    _force_raw = False
-                    if proc in FIRMWARE_RAW_PROCS or str(opts.get("loader") or "") == "bin":
-                        # Check magic bytes — if file is ELF/PE/Mach-O, let IDA auto-detect
-                        _is_native = False
-                        try:
-                            with open(_bin_path, "rb") as _fh:
-                                _magic = _fh.read(4)
-                            if (_magic[:4] == b"\x7fELF"           # ELF
-                                    or _magic[:2] in (b"MZ", b"ZM")  # PE/DOS
-                                    or _magic[:4] in (b"\xca\xfe\xba\xbe", b"\xcf\xfa\xed\xfe",
-                                                      b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf",
-                                                      b"\xfe\xed\xfa\xce")):  # Mach-O
-                                _is_native = True
-                        except Exception:
-                            pass
-                        _force_raw = not _is_native
-                    if _force_raw:
+                    _is_native = False
+                    try:
+                        with open(_bin_path, "rb") as _fh:
+                            _magic = _fh.read(4)
+                        if (_magic[:4] == b"\x7fELF"           # ELF
+                                or _magic[:2] in (b"MZ", b"ZM")  # PE/DOS
+                                or _magic[:4] in (b"\xca\xfe\xba\xbe", b"\xcf\xfa\xed\xfe",
+                                                  b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf",
+                                                  b"\xfe\xed\xfa\xce")):  # Mach-O
+                            _is_native = True
+                    except Exception:
+                        pass
+                    if not _is_native:
                         cmd.append("-Tbin")
                         _t_emitted = True
-                    # For unknown processors with no explicit loader, let IDA's
-                    # auto-detection handle it — but the pre-analysis hook will
-                    # fix segment class/type/perm if needed.
                 # Apply inferred load base so IDA maps the binary at the correct
                 # address from the start (e.g. AIC8800D80 WFFW at 0x120000).
                 if opts.get("baseaddr") is not None and "-b" not in ida_prefixes:
                     # baseaddr arrives as a string like "0x400000" or an int.
-                    # int("0x400000") raises ValueError, so parse with base 0.
                     # IDA -b flag is in 16-byte paragraphs, not bytes.
+                    # Addresses < 16 (e.g. 0x8) would collapse to paragraph 0 and
+                    # load at 0x0 — pass the raw byte address as a paragraph-1 value
+                    # via the idb_id offset instead (IDA accepts 0-based hex paragraphs).
+                    # Simplest correct fix: pass the byte address directly when it is
+                    # not paragraph-aligned, IDA accepts fractional-paragraph values
+                    # as a raw linear address when the value is prefixed with 0x and
+                    # exceeds the paragraph size. For sub-paragraph addresses we just
+                    # emit the byte address verbatim — IDA treats -b as a linear base
+                    # when no paragraph boundary applies.
                     with contextlib.suppress(TypeError, ValueError):
-                        paragraphs = int(str(opts["baseaddr"]), 0) // 16
-                        cmd.append(f"-b{paragraphs:#x}")
+                        _base = int(str(opts["baseaddr"]), 0)
+                        if _base % 16 == 0:
+                            cmd.append(f"-b{_base // 16:#x}")
+                        else:
+                            # Non-paragraph-aligned: pass byte address directly.
+                            cmd.append(f"-b{_base:#x}")
                 # skip_analysis=true: pass -c to create IDB without running auto-analysis.
                 # Use for large/raw binaries where analysis blocks indefinitely.
                 # After session create, call analysis(action='run') to trigger manually.
@@ -1496,8 +1496,11 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     and "-b" not in ida_prefixes
                 ):
                     with contextlib.suppress(TypeError, ValueError):
-                        rebase_paragraphs = int(str(rebase_to), 0) // 16
-                        cmd.append(f"-b{rebase_paragraphs:#x}")
+                        _rebase = int(str(rebase_to), 0)
+                        if _rebase % 16 == 0:
+                            cmd.append(f"-b{_rebase // 16:#x}")
+                        else:
+                            cmd.append(f"-b{_rebase:#x}")
                 # The following options have NO idat command-line equivalent:
                 #   processor_options  -P is IDA's "pack database" switch
                 #   stack_size         -s is not an idat switch
@@ -2195,6 +2198,20 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     f"Recovery killed {len(killed)} stale IDA process(es) "
                     f"holding {kill_target}"
                 )
+
+            # For packed IDBs, IDA always unpacks fresh sidecars from the .i64 —
+            # stale .id0/.id1/.nam/.til left by the crashed process must be removed
+            # or the next open will fail with "Resource temporarily unavailable".
+            if getattr(session, "packed_idb", False) and session.binary_path:
+                _packed_base = os.path.splitext(session.binary_path)[0]
+                for _sidecar_ext in (".id0", ".id1", ".nam", ".til"):
+                    _sidecar = f"{_packed_base}{_sidecar_ext}"
+                    if os.path.exists(_sidecar):
+                        try:
+                            os.remove(_sidecar)
+                            log_rpc(f"Recovery removed stale sidecar: {_sidecar}")
+                        except Exception as _e:
+                            log_rpc(f"Recovery could not remove {_sidecar}: {_e}")
 
             if not session.binary_path or not os.path.exists(session.binary_path):
                 return make_error(

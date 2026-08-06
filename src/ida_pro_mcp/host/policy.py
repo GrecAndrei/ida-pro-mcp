@@ -167,6 +167,17 @@ READ_ONLY_ACTIONS = {
     ("governance", "check"),
     ("funcs", "metrics"),
     ("funcs", "suggest_names"),
+    ("segments", "list"),
+    ("segments", "info"),
+    ("segments", "find_code"),
+    ("segments", "find_data"),
+    ("segments", "compare"),
+    ("segments", "analyze"),
+    ("misc", "list_sigs"),
+    ("misc", "cache_stats"),
+    ("misc", "plugin_list"),
+    ("misc", "health"),
+    ("data", "read_bytes"),
 }
 
 

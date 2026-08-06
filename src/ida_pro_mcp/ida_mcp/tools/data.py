@@ -709,6 +709,33 @@ def data(
                 "count": len(top_entries),
             }
 
+        elif action == "read_bytes":
+            addr_val = kwargs.get("addr") or query
+            if not addr_val:
+                return make_error(MCPError.INVALID_ARGS, "addr required for read_bytes")
+            ea, err = validate_addr(addr_val)
+            if err:
+                return err
+            size = max(1, min(4096, int(kwargs.get("size") or count or 64)))
+            raw = ida_bytes.get_bytes(ea, size)
+            if raw is None:
+                return make_error(MCPError.IDA_ERROR, f"Could not read {size} bytes at {hex(ea)}")
+            hex_str = raw.hex()
+            # Format as hex dump: 16 bytes per row with ASCII preview
+            rows = []
+            for i in range(0, len(raw), 16):
+                chunk = raw[i:i+16]
+                hex_part = " ".join(f"{b:02x}" for b in chunk).ljust(47)
+                ascii_part = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+                rows.append(f"{hex(ea + i):>10}:  {hex_part}  |{ascii_part}|")
+            return {
+                "ok": True,
+                "addr": hex(ea),
+                "size": size,
+                "hex": hex_str,
+                "dump": "\n".join(rows),
+            }
+
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:

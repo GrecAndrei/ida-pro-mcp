@@ -32,13 +32,42 @@ Test behavior through stable interfaces, not implementation details.
 
 ## Adding an Agent Operation
 
-1. Add an `AgentOperation` to `host/agent_operations.py` with a strict schema,
-   valid example, concise description, and backend mapping.
-2. Add a behavior-focused public-contract test.
-3. Run `python scripts/generate_tool_skills.py`.
+1. **`host/agent_operations.py`** — add an `AgentOperation` with strict schema,
+   valid example, concise description, and backend mapping (`backend_tool`,
+   `backend_action`, `argument_map`).
 
-The operation registry generates `tools/list`, `ida_help`, installed skill
-references, and `docs/TOOLS_REFERENCE.md`.
+2. **`host/server/tool_registry.py`** — add the new `backend_action` to
+   `_TOOL_ACTIONS[backend_tool]` so it is a recognized action for that tool.
+
+3. **`host/schemas_data.py`** — add any new argument keys the action accepts to
+   `TOOL_ARG_SCHEMAS[backend_tool]`. Unknown keys are rejected before dispatch.
+
+4. **`host/policy.py`** — classify the new action:
+   - Read-only → add `(tool, action)` to `READ_ONLY_ACTIONS`
+   - IDB write → ensure `tool` is in `WRITE_IDB_TOOLS` or `action` is in `WRITE_ACTIONS`
+   - Destructive → add `action` to `DESTRUCTIVE_ACTIONS` or pair to `DESTRUCTIVE_TOOL_ACTIONS`
+   - Failing to classify lands in `UNKNOWN`, which blocks in `assist` mode.
+
+5. **IDA-side tool** — implement the action in `ida_mcp/tools/<tool>.py`:
+   - Add the action name to the `Literal[...]` type annotation on the `action` param
+   - Add the `elif action == "<name>":` branch
+
+6. **Tests** — add tests in `tests/`:
+   - `test_agent_operations.py` — schema validity, routing, argument mapping
+   - `test_agent_risk_ack.py` — mutating ops in the risk_ack list; read-only ops not there
+   - `tests/host/test_policy.py` — correct risk tier for the new `(tool, action)` pair
+
+7. **Generated docs** — run `python scripts/generate_tool_skills.py` to
+   regenerate `docs/TOOLS_REFERENCE.md` and `.agents/skills/ida-pro-mcp/SKILL.md`.
+
+8. **README.md** — update the operations table (add the new op to its group row)
+   and the `N exact-schema operations` count in the intro paragraph.
+
+9. **Wiki** — update the relevant page in `docs/wiki/tools/` (or create a new
+   page). Update `docs/wiki/INDEX.md` if a new page was added.
+
+The full test suite enforces steps 7–9: `test_docs_sync.py` will fail if
+TOOLS_REFERENCE, SKILL.md, the README table, or the README count are stale.
 
 ## Adding a Legacy Backend Tool
 
@@ -50,10 +79,12 @@ references, and `docs/TOOLS_REFERENCE.md`.
 6. If host-side only: add `tool_name == "<name>"` branch in `server_dispatch.py`
 7. Add tests for any host-side logic (embeddings, config parsing, etc.)
 
-## Removing a Tool
+## Removing a Tool or Operation
 
 1. `grep -rn '"<name>"' src/ docs/ tests/ .agents/ --include="*.py" --include="*.md"`
-2. Delete tool file, remove from all registry files, remove tests
+2. Delete/remove from: tool file, `_TOOL_ACTIONS`, `TOOL_ARG_SCHEMAS`, `TOOL_DESCRIPTIONS`,
+   `agent_operations.py`, `policy.py` (READ_ONLY_ACTIONS / WRITE_IDB_TOOLS), tests
+3. Run `python scripts/generate_tool_skills.py` and update README + wiki
 
 ## Key Files
 

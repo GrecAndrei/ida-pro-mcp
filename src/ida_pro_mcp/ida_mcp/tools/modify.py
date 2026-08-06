@@ -113,8 +113,8 @@ def _persist_symbol_knowledge(func_ea: int, name: str) -> None:
 @tool
 @idawrite
 def modify(
-    action: Annotated[Literal["rename", "comment", "set_type", "patch_asm"],
-                      "Action: rename|comment|set_type|patch_asm"],
+    action: Annotated[Literal["rename", "comment", "set_type", "patch_asm", "patch_bytes", "rename_local"],
+                      "Action: rename|comment|set_type|patch_asm|patch_bytes|rename_local"],
     addr: Annotated[str, "Address"],
     value: Annotated[Optional[str], "New name, comment text, type declaration, or assembly instruction(s)"] = None,
     # Aliases for compatibility
@@ -311,6 +311,86 @@ def modify(
             if gov_warnings:
                 result["governance_warnings"] = gov_warnings
             return result
+
+        elif action == "patch_bytes":
+            hex_bytes = kwargs.get("hex_bytes") or value
+            nop = kwargs.get("nop") or False
+            if not hex_bytes and not nop:
+                return make_error(MCPError.INVALID_ARGS, "hex_bytes or nop=true required for patch_bytes")
+            if nop:
+                nop_count = kwargs.get("count")
+                if nop_count:
+                    patch_size = int(nop_count)
+                else:
+                    insn = idaapi.insn_t()
+                    patch_size = idaapi.decode_insn(insn, ea)
+                    if not patch_size:
+                        patch_size = 1
+                # Use arch-appropriate NOP; fall back to x86 0x90
+                nop_byte = 0x90
+                try:
+                    proc = idaapi.get_inf_structure().procname.lower()
+                    if "riscv" in proc:
+                        # RISC-V 32-bit NOP = addi x0, x0, 0 = 0x00000013
+                        nop_bytes = b"\x13\x00\x00\x00" * (patch_size // 4)
+                        if patch_size % 4:
+                            nop_bytes += bytes([0x00] * (patch_size % 4))
+                    elif "arm" in proc:
+                        nop_bytes = b"\x00\xf0\x20\xe3" * (patch_size // 4)  # ARM NOP
+                        if patch_size % 4:
+                            nop_bytes += bytes([0x00] * (patch_size % 4))
+                    else:
+                        nop_bytes = bytes([nop_byte] * patch_size)
+                except Exception:
+                    nop_bytes = bytes([nop_byte] * patch_size)
+                ida_bytes.patch_bytes(ea, nop_bytes)
+                return {"ok": True, "addr": addr, "size": patch_size, "action": "nop"}
+            else:
+                hex_str = hex_bytes.replace(" ", "").replace("0x", "")
+                try:
+                    raw = bytes.fromhex(hex_str)
+                except ValueError:
+                    return make_error(MCPError.INVALID_ARGS, f"Invalid hex string: {hex_bytes!r}")
+                ida_bytes.patch_bytes(ea, raw)
+                return {"ok": True, "addr": addr, "size": len(raw), "hex": hex_str}
+
+        elif action == "rename_local":
+            var_name = kwargs.get("var_name") or name
+            new_name = kwargs.get("new_name") or value
+            if not var_name or not new_name:
+                return make_error(MCPError.INVALID_ARGS, "var_name and new_name required for rename_local")
+            func = idaapi.get_func(ea)
+            if not func:
+                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
+            try:
+                cfunc = ida_hexrays.decompile(func.start_ea)
+                if not cfunc:
+                    return make_error(MCPError.IDA_ERROR, "Decompilation failed")
+                lvar = next((lv for lv in cfunc.lvars if lv.name == var_name), None)
+                if not lvar:
+                    available = [lv.name for lv in cfunc.lvars if lv.name]
+                    return make_error(MCPError.INVALID_ARGS,
+                                      f"Local variable '{var_name}' not found. "
+                                      f"Available: {', '.join(available[:15])}")
+
+                class _rename_modifier_t(ida_hexrays.user_lvar_modifier_t):
+                    def __init__(self, old, new):
+                        ida_hexrays.user_lvar_modifier_t.__init__(self)
+                        self.old = old
+                        self.new = new
+                    def modify_lvars(self, lvinf):
+                        for lv in lvinf.lvvec:
+                            if lv.name == self.old:
+                                lv.name = self.new
+                                return True
+                        return False
+
+                modifier = _rename_modifier_t(var_name, new_name)
+                if ida_hexrays.modify_user_lvars(func.start_ea, modifier):
+                    return {"ok": True, "addr": hex(func.start_ea), "var": var_name, "new_name": new_name}
+                return make_error(MCPError.IDA_ERROR, f"Failed to rename '{var_name}' — variable may be optimized out")
+            except Exception as e:
+                return handle_error(e, context="rename_local")
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

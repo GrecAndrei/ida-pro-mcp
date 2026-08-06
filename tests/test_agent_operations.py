@@ -289,7 +289,7 @@ def test_full_function_indexing_has_an_explicit_resumable_contract():
         "action": "index_fast",
         "_background": True,
         "mode": "full",
-        "limit": 500,
+        "_index_total_limit": 500,
         "start_after": "0x401000",
         "addr": "0x402000",
         "radius": 4096,
@@ -557,3 +557,114 @@ def test_public_protocol_rejects_unknown_or_missing_operands_before_dispatch():
     text = response["result"]["content"][0]["text"]
     assert "code: INVALID_ARGS" in text
     assert "Unknown argument" in text
+
+
+# ------------------------------------------------------------------ #
+# New operations added in the full-accessibility expansion            #
+# ------------------------------------------------------------------ #
+
+def test_new_operations_present_in_catalog():
+    names = {op.name for op in list_agent_operations()}
+    expected = {
+        "ida_read_bytes",
+        "ida_patch_bytes",
+        "ida_rename_local",
+        "ida_get_type",
+        "ida_declare_type",
+        "ida_apply_type",
+        "ida_list_types",
+        "ida_list_segments",
+        "ida_add_segment",
+        "ida_set_segment_attrs",
+        "ida_callgraph",
+        "ida_apply_sig",
+        "ida_list_sigs",
+    }
+    assert expected <= names, f"Missing: {expected - names}"
+
+
+def test_new_operations_have_valid_schemas_and_examples():
+    new_ops = [
+        "ida_read_bytes", "ida_patch_bytes", "ida_rename_local",
+        "ida_get_type", "ida_declare_type", "ida_apply_type", "ida_list_types",
+        "ida_list_segments", "ida_add_segment", "ida_set_segment_attrs",
+        "ida_callgraph", "ida_apply_sig", "ida_list_sigs",
+    ]
+    for name in new_ops:
+        op = get_agent_operation(name)
+        assert op is not None, f"{name} not found"
+        schema = op.input_schema
+        assert schema["type"] == "object"
+        assert schema["additionalProperties"] is False
+        assert set(op.example) <= set(schema["properties"]), f"{name}: example keys not in schema"
+        assert not op.validate(op.example), f"{name}: example failed validation"
+
+
+def test_read_bytes_routes_to_data_backend():
+    op = get_agent_operation("ida_read_bytes")
+    assert op.backend_tool == "data"
+    assert op.backend_action == "read_bytes"
+    _, args = op.to_backend_call({"address": "0x1000", "size": 64})
+    assert args["action"] == "read_bytes"
+    assert args["addr"] == "0x1000"
+    assert args["size"] == 64
+
+
+def test_patch_bytes_routes_to_modify_backend():
+    op = get_agent_operation("ida_patch_bytes")
+    assert op.backend_tool == "modify"
+    assert op.backend_action == "patch_bytes"
+    _, args = op.to_backend_call({"address": "0x1000", "hex_bytes": "9090", "risk_ack": True})
+    assert args["action"] == "patch_bytes"
+    assert args["addr"] == "0x1000"
+
+
+def test_rename_local_routes_to_modify_backend():
+    op = get_agent_operation("ida_rename_local")
+    assert op.backend_tool == "modify"
+    assert op.backend_action == "rename_local"
+    _, args = op.to_backend_call({"address": "0x1000", "var_name": "v3", "new_name": "size", "risk_ack": True})
+    assert args["action"] == "rename_local"
+    assert args["addr"] == "0x1000"
+    assert args["var_name"] == "v3"
+    assert args["new_name"] == "size"
+
+
+def test_callgraph_routes_to_graph_backend():
+    op = get_agent_operation("ida_callgraph")
+    assert op.backend_tool == "graph"
+    assert op.backend_action == "callgraph"
+    _, args = op.to_backend_call({"address": "0x1000", "depth": 3, "format": "mermaid", "max_nodes": 500})
+    assert args["action"] == "callgraph"
+    assert args["addr"] == "0x1000"
+    assert args["max_items"] == 500
+
+
+def test_list_segments_routes_to_segments_backend():
+    op = get_agent_operation("ida_list_segments")
+    assert op.backend_tool == "segments"
+    assert op.backend_action == "list"
+
+
+def test_list_sigs_routes_to_misc_backend():
+    op = get_agent_operation("ida_list_sigs")
+    assert op.backend_tool == "misc"
+    assert op.backend_action == "list_sigs"
+
+
+def test_apply_sig_routes_to_misc_backend():
+    op = get_agent_operation("ida_apply_sig")
+    assert op.backend_tool == "misc"
+    assert op.backend_action == "load_sig"
+    _, args = op.to_backend_call({"name": "linux_riscv", "risk_ack": True})
+    assert args["action"] == "load_sig"
+    assert args["name"] == "linux_riscv"
+
+
+def test_declare_type_routes_to_types_backend():
+    op = get_agent_operation("ida_declare_type")
+    assert op.backend_tool == "types"
+    assert op.backend_action == "declare"
+    _, args = op.to_backend_call({"declaration": "struct foo { int x; };", "risk_ack": True})
+    assert args["action"] == "declare"
+    assert args["decl"] == "struct foo { int x; };"

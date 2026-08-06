@@ -298,7 +298,7 @@ class BackgroundMixin(ServerClientStateMixin):
             quality = str(request_args.get("mode") or "fast").strip().lower()
             default_slice_size = 8 if quality == "full" else 64
             slice_size = max(1, min(256, int(raw_slice_size or default_slice_size)))
-            raw_total_limit = request_args.pop("limit", None)
+            raw_total_limit = request_args.pop("_index_total_limit", request_args.pop("limit", None))
             total_limit = int(raw_total_limit) if raw_total_limit is not None else None
             initial_cursor = request_args.pop("start_after", None)
             request_args.pop("index_limit", None)
@@ -328,8 +328,21 @@ class BackgroundMixin(ServerClientStateMixin):
                     semantic_indexed_count=0,
                 )
                 try:
-                    task.progress = {"state": "matching_binary", "quality": quality}
-                    reuse = self._seed_index_from_matching_binary(session)
+                    # Skip the full-binary similarity scan when the request is
+                    # scoped (range/limit/radius) — scanning all 34k+ functions
+                    # to seed a 5-function index is wasteful and hits the RPC timeout.
+                    _is_scoped = (
+                        total_limit is not None
+                        or scope.get("start") is not None
+                        or scope.get("end") is not None
+                        or scope.get("ranges") is not None
+                        or (scope.get("addr") is not None and scope.get("radius") is not None)
+                    )
+                    if _is_scoped:
+                        reuse = {}
+                    else:
+                        task.progress = {"state": "matching_binary", "quality": quality}
+                        reuse = self._seed_index_from_matching_binary(session)
                     while not task._cancel_event.is_set():
                         remaining = None if total_limit is None else total_limit - attempted
                         if remaining is not None and remaining <= 0:
