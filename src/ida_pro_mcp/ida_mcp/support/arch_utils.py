@@ -201,8 +201,11 @@ RETURN_MNEMONICS = {
     "jr",
     # PowerPC
     "blr",
-    # RISC-V
-    "jalr",   # jalr x0, ra, 0  is the canonical return
+    # RISC-V standard + compressed C extension
+    "jalr",     # jalr x0, ra, 0  is the canonical return
+    "ret",      # assembler pseudo-op for jalr x0, ra, 0
+    "c.jr",     # compressed return: c.jr ra
+    "c.jalr",   # compressed return-and-link (rare but valid as ret when rd=ra)
     # SPARC
     "retl", # SuperH
     "rts",
@@ -229,8 +232,11 @@ UNCONDITIONAL_JUMP_MNEMONICS = {
     # MIPS
     "j", # PowerPC
     "ba",
-    # RISC-V
+    # RISC-V standard + compressed C extension
     "jal",
+    "j",        # pseudo-op for jal x0, offset
+    "c.j",      # compressed unconditional jump
+    "c.jal",    # compressed call (RV32C only; encodes jal ra, offset)
     # SPARC
     # SuperH
     "bra",
@@ -276,8 +282,11 @@ CONDITIONAL_BRANCH_MNEMONICS = {
     "beqz", "bnez", "bgezal", "bltzal",
     # PowerPC
     "bdnz", "bdz", "bc",
-    # RISC-V
-    "bltu", "bgeu",
+    # RISC-V standard
+    "beq", "bne", "blt", "bge", "bltu", "bgeu",
+    "beqz", "bnez", "bltz", "bgez", "blez", "bgtz",  # pseudo-ops
+    # RISC-V compressed C extension
+    "c.beqz", "c.bnez",
     # SPARC
     "be", "bl", "bg",
 }
@@ -392,9 +401,29 @@ INTERESTING_INSTRUCTIONS = {
     # PowerPC
     "sc":       "system_call",
     "tw":       "trap",
-    # RISC-V
+    # RISC-V — user/supervisor/machine transitions + debug
     "ecall":    "system_call",
     "ebreak":   "breakpoint",
+    "mret":     "machine_mode_return",     # M-mode exception return
+    "sret":     "supervisor_mode_return",  # S-mode exception return (Linux kernel)
+    "uret":     "user_mode_return",        # U-mode return (N extension, rare)
+    "wfi":      "wait_for_interrupt",      # power management / idle loop sentinel
+    # CSR access — always interesting in firmware/OS analysis
+    "csrrw":    "csr_write",
+    "csrrs":    "csr_set",
+    "csrrc":    "csr_clear",
+    "csrrwi":   "csr_write_imm",
+    "csrrsi":   "csr_set_imm",
+    "csrrci":   "csr_clear_imm",
+    "csrr":     "csr_read",               # pseudo: csrrs rd, csr, x0
+    "csrw":     "csr_write",              # pseudo: csrrw x0, csr, rs1
+    "csrs":     "csr_set",                # pseudo: csrrs x0, csr, rs1
+    "csrc":     "csr_clear",              # pseudo: csrrc x0, csr, rs1
+    "csrwi":    "csr_write_imm",
+    "csrsi":    "csr_set_imm",
+    "csrci":    "csr_clear_imm",
+    "fence":    "memory_barrier",
+    "fence.i":  "instruction_fence",      # I$ invalidation — critical after self-modifying code
     # SPARC
     "ta":       "system_call",
     # SuperH
@@ -556,7 +585,10 @@ def is_return_mnemonic(mnem_lower, disasm_lower="", arch=None):
         return mnem_lower == "blr"
 
     if is_riscv_family(arch):
-        if mnem_lower == "ret":
+        if mnem_lower in ("ret", "c.jr", "mret", "sret", "uret"):
+            return True
+        # c.jalr ra  is a compressed return when the register is ra/x1
+        if mnem_lower == "c.jalr" and "ra" in disasm_lower:
             return True
         return bool(mnem_lower == "jalr" and "ra" in disasm_lower)
 
@@ -625,9 +657,10 @@ def get_prologue_pattern(mnem_list, arch=None):
         return "unknown"
 
     if is_riscv_family(arch):
-        if "addi" in mnems[:2]:
+        # Standard and compressed SP adjustments
+        if "addi" in mnems[:2] or "c.addi16sp" in mnems[:2] or "c.addi4spn" in mnems[:3]:
             return "riscv_frame_setup"
-        if "sw" in mnems[:4] or "sd" in mnems[:4]:
+        if "sw" in mnems[:4] or "sd" in mnems[:4] or "c.sw" in mnems[:4] or "c.sd" in mnems[:4]:
             return "riscv_reg_save"
         return "unknown"
 
@@ -688,11 +721,14 @@ def get_epilogue_pattern(mnem_list, arch=None):
         return "unknown"
 
     if is_riscv_family(arch):
-        if "ret" in mnems or "jalr" in mnems:
-            if "lw" in mnems or "ld" in mnems:
+        ret_mnems = {"ret", "jalr", "c.jr", "c.jalr", "mret", "sret"}
+        load_mnems = {"lw", "ld", "c.lw", "c.ld"}
+        tail_mnems = {"j", "jal", "c.j", "c.jal"}
+        if ret_mnems & set(mnems):
+            if load_mnems & set(mnems):
                 return "riscv_frame_teardown"
             return "riscv_simple_ret"
-        if "j" in mnems or "jal" in mnems:
+        if tail_mnems & set(mnems):
             return "tail_call"
         return "unknown"
 
@@ -712,8 +748,8 @@ def get_tail_call_mnemonics(arch=None):
         "mips64": {"j", "b"},
         "ppc": {"b", "ba"},
         "ppc64": {"b", "ba"},
-        "riscv": {"j", "jal"},
-        "riscv64": {"j", "jal"},
+        "riscv": {"j", "jal", "c.j", "c.jal"},
+        "riscv64": {"j", "jal", "c.j"},  # c.jal is RV32C only
         "sparc": {"ba", "jmp"},
         "sparc64": {"ba", "jmp"},
     }
@@ -792,15 +828,29 @@ def detect_riscv_gp():
                     if raw & 0x800:
                         raw -= 0x1000
                     gp_val = (prev_auipc_val + raw) & 0xFFFFFFFFFFFFFFFF
+                    # Auto-apply: set GP in IDA so GP-relative xrefs resolve
+                    applied = False
+                    apply_error = None
+                    try:
+                        idc.set_reg_value(gp_val, "gp", idc.BADADDR)
+                        applied = True
+                    except Exception as _e:
+                        apply_error = str(_e)
+                    note = (
+                        f"RISC-V: GP (x3) = {hex(gp_val)} — "
+                        f"detected from auipc/addi at {hex(start_ea)}, "
+                        + ("applied automatically so GP-relative xrefs will now resolve."
+                           if applied else
+                           f"auto-apply failed ({apply_error}); run: "
+                           f'idc.set_reg_value({hex(gp_val)}, "gp", idc.BADADDR)')
+                    )
                     return {
                         "found": True,
                         "gp": gp_val,
                         "gp_hex": hex(gp_val),
                         "at": hex(start_ea),
-                        "note": (
-                            f"GP (x3) = {hex(gp_val)} detected from auipc/addi pair at {hex(start_ea)}. "
-                            "Set it in IDA with: idc.set_reg_value(\"gp\", 0x{:x}, idc.BADADDR)".format(gp_val)
-                        ),
+                        "applied": applied,
+                        "note": note,
                     }
                 else:
                     prev_auipc_val = None
