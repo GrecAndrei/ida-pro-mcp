@@ -1189,6 +1189,70 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         argument_map={"address": "addr", "risk_ack": "_risk_ack"},
     ),
     # ------------------------------------------------------------------ #
+    # IDB management / on-the-fly analysis control                        #
+    # ------------------------------------------------------------------ #
+    AgentOperation(
+        name="ida_save_idb",
+        description=(
+            "Save the current IDB to disk. "
+            "Use after making significant changes (renames, comments, type fixes, patches) "
+            "to ensure work is not lost if IDA exits. "
+            "Optionally pass path= to save to a different file."
+        ),
+        category="edit",
+        input_schema=_schema({
+            "path": {"type": "string", "description": "Save path (default: current IDB path, i.e. in-place save)."},
+            "idb": IDB,
+        }),
+        example={},
+        backend_tool="analysis",
+        backend_action="save_idb",
+    ),
+    AgentOperation(
+        name="ida_make_code",
+        description=(
+            "Force bytes at an address to be disassembled as a CPU instruction. "
+            "Use when IDA has marked the location as data (db/dw/dq) or undefined (unk_) "
+            "but you know it is valid code — for example a missed entry point, a tail call "
+            "target, or an obfuscated branch destination. "
+            "Automatically requeues the containing function for reanalysis."
+        ),
+        category="edit",
+        input_schema=_schema(
+            {
+                "address": ADDRESS,
+                "size": {"type": "integer", "description": "Number of bytes to clear before creating instruction (default: auto-detect from current item)."},
+                "idb": IDB,
+            },
+            ["address"],
+        ),
+        example={"address": "0x401234"},
+        backend_tool="analysis",
+        backend_action="make_code",
+        argument_map={"address": "addr"},
+    ),
+    AgentOperation(
+        name="ida_undefine",
+        description=(
+            "Undefine (turn to raw bytes) code or data at an address range. "
+            "Removes all IDA annotations for the region so it can be reinterpreted. "
+            "Follow with ida_make_code, a type declaration, or reanalysis."
+        ),
+        category="edit",
+        input_schema=_schema(
+            {
+                "address": ADDRESS,
+                "size": {"type": "integer", "description": "Number of bytes to undefine (default: size of current item at address)."},
+                "idb": IDB,
+            },
+            ["address"],
+        ),
+        example={"address": "0x401234", "size": 4},
+        backend_tool="analysis",
+        backend_action="undefine",
+        argument_map={"address": "addr"},
+    ),
+    # ------------------------------------------------------------------ #
     # Local variable rename                                               #
     # ------------------------------------------------------------------ #
     AgentOperation(

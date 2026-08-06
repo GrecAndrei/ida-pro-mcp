@@ -188,7 +188,7 @@ _EXTRA_TOOL_ALIASES = {
 
 TOOL_DESCRIPTIONS = {
 
-    "analysis": "Controls IDA analysis engine settings and triggers reanalysis, and runs IDA plugins. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze, run, analyze, state, set_gp. Note: analysis(action='plugin_run', name='...') is a host-level alias that forwards to misc(action='plugin_run'). Use set_gp on RISC-V targets to set the global pointer register so GP-relative xrefs resolve.",
+    "analysis": "Controls IDA analysis engine and on-the-fly IDB management. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze, run, analyze, state, set_gp, save_idb, make_code, undefine, get_af, set_af, force_offset. save_idb persists the IDB to disk. make_code forces bytes at an address to be disassembled as an instruction (use when IDA marked code as data). undefine clears code/data annotations so a region can be reinterpreted. get_af/set_af read and toggle IDA AF_* analysis flags. force_offset tells IDA a value is a pointer and creates an xref. set_gp is RISC-V only — sets GP register for GP-relative xref resolution.",
     "annotation": "Automatically generates and manages comments, labels, and documentation across functions. Actions: auto_comment, auto_comment_function, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, propagate_names, cleanup, validate, get_context, set_structured, bulk_set, export_md, import_md, summary.",
     "background": "Background batch execution for long-running analysis tasks and IDAPython scripts. Submit scripts or tool calls to run in background threads without interrupting IDA. Actions: submit, status, cancel, result, list, wait.",
     "batch": "Executes multiple tool calls in a single request to reduce round trips. Pass a calls array of tool invocations.",
@@ -528,6 +528,11 @@ TOOL_ARG_SCHEMAS = {
         "pump": {"type": "boolean"},
         "poll_timeout": {"type": "number"},
         "gp": {"type": "string", "description": "RISC-V GP value as hex string for set_gp action (e.g. '0x2556f0')"},
+        "addr": {"type": "string", "description": "Target address (hex) for make_code, undefine, force_offset"},
+        "size": {"type": "integer", "description": "Byte count for make_code/undefine/force_offset"},
+        "af_flag": {"type": "string", "description": "AF_* flag name for get_af/set_af (e.g. 'AF_MARKCODE')"},
+        "af_value": {"type": "boolean", "description": "Enable/disable flag for set_af"},
+        "path": {"type": "string", "description": "IDB save path for save_idb (default: current IDB)"},
     },
     "data": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["data"]},

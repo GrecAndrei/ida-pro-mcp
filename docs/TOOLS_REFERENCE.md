@@ -1647,6 +1647,10 @@ Input schema:
     "idb": {
       "type": "string",
       "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    },
+    "details": {
+      "type": "boolean",
+      "description": "Include verbose enrichment: var_rename_hints, annotated_code, complexity, dataflow top_hubs. Default false."
     }
   },
   "required": [
@@ -2595,6 +2599,116 @@ Example:
     "address": "0x1234",
     "hex_bytes": "9090",
     "risk_ack": true
+  }
+}
+```
+
+## `ida_save_idb`
+
+Save the current IDB to disk. Use after making significant changes (renames, comments, type fixes, patches) to ensure work is not lost if IDA exits. Optionally pass path= to save to a different file.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Save path (default: current IDB path, i.e. in-place save)."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_save_idb",
+  "arguments": {}
+}
+```
+
+## `ida_make_code`
+
+Force bytes at an address to be disassembled as a CPU instruction. Use when IDA has marked the location as data (db/dw/dq) or undefined (unk_) but you know it is valid code — for example a missed entry point, a tail call target, or an obfuscated branch destination. Automatically requeues the containing function for reanalysis.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "size": {
+      "type": "integer",
+      "description": "Number of bytes to clear before creating instruction (default: auto-detect from current item)."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "address"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_make_code",
+  "arguments": {
+    "address": "0x401234"
+  }
+}
+```
+
+## `ida_undefine`
+
+Undefine (turn to raw bytes) code or data at an address range. Removes all IDA annotations for the region so it can be reinterpreted. Follow with ida_make_code, a type declaration, or reanalysis.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "size": {
+      "type": "integer",
+      "description": "Number of bytes to undefine (default: size of current item at address)."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "address"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_undefine",
+  "arguments": {
+    "address": "0x401234",
+    "size": 4
   }
 }
 ```

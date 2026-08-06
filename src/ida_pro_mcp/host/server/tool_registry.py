@@ -28,6 +28,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "get_options", "set_options", "set_processor",
         "set_loader_options", "set_architecture", "reanalyze",
         "run", "analyze", "state", "set_gp",
+        "save_idb", "make_code", "undefine", "get_af", "set_af", "force_offset",
     ],
     "annotation": [
         "auto_comment", "auto_comment_function", "label_loops",

@@ -44,8 +44,8 @@ def _safe_infer_arch(binary_path: str) -> dict:
 @tool
 @idawrite
 def analysis(
-    action: Annotated[Literal["get_options", "set_options", "set_processor", "set_loader_options", "set_architecture", "reanalyze", "run", "analyze", "state", "set_gp"],
-                      "Action: get_options|set_options|set_processor|set_loader_options|set_architecture|reanalyze|analyze|state|set_gp"],
+    action: Annotated[Literal["get_options", "set_options", "set_processor", "set_loader_options", "set_architecture", "reanalyze", "run", "analyze", "state", "set_gp", "save_idb", "make_code", "undefine", "get_af", "set_af", "force_offset"],
+                      "Action: get_options|set_options|set_processor|set_loader_options|set_architecture|reanalyze|analyze|state|set_gp|save_idb|make_code|undefine|get_af|set_af|force_offset"],
     options: Annotated[Optional[dict], "Options dict for set_options"] = None,
     processor: Annotated[Optional[str], "Processor name for set_processor"] = None,
     flags: Annotated[Optional[int], "Processor flags (idaapi.SETPROC_*)"] = None,
@@ -53,13 +53,18 @@ def analysis(
     value: Annotated[Optional[Union[str, dict]], "Loader options string or dict (for set_loader_options)"] = None,
     bitness: Annotated[Optional[int], "Target bitness (16/32/64) for set_architecture"] = None,
     endian: Annotated[Optional[str], "Target endian: le|be for set_architecture"] = None,
-    start: Annotated[Optional[str], "Start address for reanalysis"] = None,
-    end: Annotated[Optional[str], "End address for reanalysis"] = None,
+    start: Annotated[Optional[str], "Start address for reanalysis or make_code/undefine/force_offset range start"] = None,
+    end: Annotated[Optional[str], "End address for reanalysis or make_code/undefine range end (optional)"] = None,
     gp: Annotated[Optional[str], "RISC-V global pointer value as hex string (for set_gp action), e.g. '0x2556f0'"] = None,
+    addr: Annotated[Optional[str], "Target address for make_code, undefine, force_offset (hex string)"] = None,
+    size: Annotated[Optional[int], "Number of bytes for make_code/undefine/force_offset (default: auto)"] = None,
+    af_flag: Annotated[Optional[str], "Analysis flag name (AF_* constant name) for get_af/set_af, e.g. 'AF_MARKCODE'"] = None,
+    af_value: Annotated[Optional[bool], "Flag value (true/false) for set_af"] = None,
+    path: Annotated[Optional[str], "IDB save path for save_idb (default: current IDB path)"] = None,
     **kwargs
 ) -> dict:
     """
-    Control analysis options and reanalysis behavior.
+    Control analysis options, reanalysis, and on-the-fly IDB management.
 
     Actions:
     - get_options: Return key analysis/processor settings.
@@ -67,14 +72,28 @@ def analysis(
     - set_processor: Switch processor type.
     - set_loader_options: Apply loader-specific options string.
     - set_architecture: Update processor/bitness/endian settings.
-    - reanalyze: Re-run auto-analysis over a range.
+    - reanalyze: Re-run auto-analysis over a range (add blocking=true to wait).
+    - state: Check analysis progress (non-blocking).
     - set_gp: RISC-V only. Set the global pointer (GP / x3) value so the processor
         plugin resolves GP-relative data references and creates correct xrefs.
-        Use when you know GP from context (e.g. "jr gp" target, __global_pointer$
-        symbol, or boot stub disassembly) and auto-detection did not run or failed.
-        Params: gp (REQUIRED, hex string e.g. "0x2556f0")
-        Triggers full reanalysis automatically.
-        Example: analysis(action="set_gp", gp="0x2556f0")
+        Params: gp (REQUIRED, hex string e.g. "0x2556f0"). Triggers reanalysis.
+    - save_idb: Save the current IDB to disk. Use path= to save to a specific file.
+        Without path= saves in place (equivalent to Ctrl+W in IDA GUI).
+    - make_code: Force bytes at addr to be disassembled as code. Deletes any existing
+        data item first, then creates an instruction. Optionally reanalyzes the
+        function containing addr. Use when IDA marked an address as data or UNK
+        but you know it is code (missed entry point, tail call, obfuscated branch).
+        Params: addr (REQUIRED), size (optional, default auto-detect from disasm).
+    - undefine: Undefine (turn to raw bytes) a range starting at addr. Removes
+        code/data annotations so the area can be reinterpreted.
+        Params: addr (REQUIRED), size (optional, default: item size at addr).
+    - get_af: Read one or all IDA analysis flags (AF_*). Use af_flag= to read a
+        specific flag (e.g. "AF_MARKCODE"), or omit to get all flags and their values.
+    - set_af: Enable or disable a specific IDA analysis flag. Triggers no reanalysis
+        by itself — combine with reanalyze if needed.
+        Params: af_flag (REQUIRED, e.g. "AF_TRACING"), af_value (REQUIRED, bool).
+    - force_offset: Tell IDA a value at addr is a pointer/offset (creates xref).
+        Params: addr (REQUIRED), size optional (4 or 8 bytes, default: address size).
     """
     try:
         inf = None
@@ -651,6 +670,266 @@ def analysis(
                 "analysis_complete": analysis_ok,
                 "functions": func_count,
                 "note": "Analysis complete." if analysis_ok else "Analysis still running.",
+            }
+
+        if action == "save_idb":
+            import ida_loader as _ida_loader
+            save_path = path or ""
+            try:
+                _ida_loader.save_database(save_path, 0)
+            except Exception as e:
+                return make_error(MCPError.IDA_ERROR, f"save_database failed: {e}")
+            actual_path = save_path or (idaapi.get_input_file_path() if hasattr(idaapi, "get_input_file_path") else "")
+            return {"ok": True, "saved_to": actual_path or "<current idb>"}
+
+        if action == "make_code":
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, err = validate_addr(addr)
+            if err:
+                return err
+            import ida_bytes as _ida_bytes
+            import ida_ua as _ida_ua
+            import ida_funcs as _ida_funcs
+            # Undefine whatever is sitting at the address.
+            item_sz = max(1, idc.get_item_size(ea) if hasattr(idc, "get_item_size") else 1)
+            clear_sz = size if size and size > 0 else item_sz
+            try:
+                _ida_bytes.del_items(ea, _ida_bytes.DELIT_SIMPLE, clear_sz)
+            except Exception:
+                pass
+            # Create instruction.
+            insn_len = 0
+            try:
+                insn_len = _ida_ua.create_insn(ea)
+            except Exception:
+                pass
+            if insn_len == 0:
+                try:
+                    insn_len = idc.create_insn(ea)
+                except Exception:
+                    pass
+            if insn_len == 0:
+                return make_error(MCPError.IDA_ERROR, f"create_insn failed at {hex(ea)} — processor may not recognize bytes as a valid instruction")
+            # If the address is inside a function, requeue that function for analysis.
+            func = _ida_funcs.get_func(ea) if hasattr(_ida_funcs, "get_func") else None
+            requeued = False
+            if func:
+                try:
+                    import ida_auto as _ida_auto
+                    _ida_auto.auto_mark_range(func.start_ea, func.end_ea, _ida_auto.AU_FINAL)
+                    requeued = True
+                except Exception:
+                    pass
+            return {
+                "ok": True,
+                "addr": hex(ea),
+                "insn_len": insn_len,
+                "requeued_func": requeued,
+                "note": "Instruction created. If no function contains this address, consider funcs(action='create', addr=...) next.",
+            }
+
+        if action == "undefine":
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, err = validate_addr(addr)
+            if err:
+                return err
+            import ida_bytes as _ida_bytes
+            item_sz = max(1, idc.get_item_size(ea) if hasattr(idc, "get_item_size") else 1)
+            clear_sz = size if size and size > 0 else item_sz
+            try:
+                _ida_bytes.del_items(ea, _ida_bytes.DELIT_SIMPLE, clear_sz)
+            except Exception as e:
+                return make_error(MCPError.IDA_ERROR, f"del_items failed: {e}")
+            return {"ok": True, "addr": hex(ea), "cleared_bytes": clear_sz}
+
+        if action == "get_af":
+            # Collect all IDA AF_* constants and their current values.
+            # IDA 7.x stores analysis flags in inf.af / inf.af2.
+            # IDA 9.x exposes ida_ida.inf_get_af() and inf_get_af2().
+            af_names: dict[str, int] = {}
+            for name in dir(idc):
+                if name.startswith("AF_") or name.startswith("AF2_"):
+                    val = getattr(idc, name, None)
+                    if isinstance(val, int):
+                        af_names[name] = val
+            if not af_names:
+                for name in dir(idaapi):
+                    if name.startswith("AF_") or name.startswith("AF2_"):
+                        val = getattr(idaapi, name, None)
+                        if isinstance(val, int):
+                            af_names[name] = val
+
+            def _get_current_af() -> int:
+                for fn_name in ("inf_get_af",):
+                    fn = getattr(idaapi, fn_name, None) or getattr(__import__("ida_ida", fromlist=[fn_name]), fn_name, None)
+                    if callable(fn):
+                        try:
+                            return int(fn())
+                        except Exception:
+                            pass
+                try:
+                    _inf = idaapi.get_inf_structure()
+                    if _inf and hasattr(_inf, "af"):
+                        return int(_inf.af)
+                except Exception:
+                    pass
+                return 0
+
+            def _get_current_af2() -> int:
+                for fn_name in ("inf_get_af2",):
+                    fn = getattr(idaapi, fn_name, None)
+                    if fn is None:
+                        try:
+                            fn = getattr(__import__("ida_ida", fromlist=[fn_name]), fn_name, None)
+                        except Exception:
+                            fn = None
+                    if callable(fn):
+                        try:
+                            return int(fn())
+                        except Exception:
+                            pass
+                try:
+                    _inf = idaapi.get_inf_structure()
+                    if _inf and hasattr(_inf, "af2"):
+                        return int(_inf.af2)
+                except Exception:
+                    pass
+                return 0
+
+            current_af = _get_current_af()
+            current_af2 = _get_current_af2()
+
+            if af_flag:
+                flag_upper = af_flag.upper()
+                flag_val = af_names.get(flag_upper) or af_names.get(flag_upper.replace("IDA_", ""))
+                if flag_val is None:
+                    return make_error(MCPError.INVALID_ARGS, f"Unknown AF flag: {af_flag!r}. Use get_af without af_flag= to list all known flags.")
+                is_af2 = flag_upper.startswith("AF2_")
+                current_bits = current_af2 if is_af2 else current_af
+                return {
+                    "ok": True,
+                    "flag": flag_upper,
+                    "bit": hex(flag_val),
+                    "enabled": bool(current_bits & flag_val),
+                }
+
+            # Return all flags with current state.
+            result_flags: dict[str, dict] = {}
+            for name, bit in sorted(af_names.items()):
+                is_af2 = name.startswith("AF2_")
+                current_bits = current_af2 if is_af2 else current_af
+                result_flags[name] = {"bit": hex(bit), "enabled": bool(current_bits & bit)}
+            return {
+                "ok": True,
+                "af_raw": hex(current_af),
+                "af2_raw": hex(current_af2),
+                "flags": result_flags,
+            }
+
+        if action == "set_af":
+            if not af_flag:
+                return make_error(MCPError.INVALID_ARGS, "af_flag required (e.g. 'AF_MARKCODE')")
+            if af_value is None:
+                return make_error(MCPError.INVALID_ARGS, "af_value required (true or false)")
+            flag_upper = af_flag.upper()
+            bit = None
+            for ns in (idc, idaapi):
+                candidate = getattr(ns, flag_upper, None)
+                if isinstance(candidate, int):
+                    bit = candidate
+                    break
+            if bit is None:
+                return make_error(MCPError.INVALID_ARGS, f"Unknown AF flag: {af_flag!r}. Use get_af to list known flags.")
+            is_af2 = flag_upper.startswith("AF2_")
+
+            def _get_af_raw(af2: bool) -> int:
+                attr = "af2" if af2 else "af"
+                fn_name = "inf_get_af2" if af2 else "inf_get_af"
+                for ns in (idaapi, __import__("ida_ida")):
+                    fn = getattr(ns, fn_name, None)
+                    if callable(fn):
+                        try:
+                            return int(fn())
+                        except Exception:
+                            pass
+                try:
+                    _inf = idaapi.get_inf_structure()
+                    if _inf and hasattr(_inf, attr):
+                        return int(getattr(_inf, attr))
+                except Exception:
+                    pass
+                return 0
+
+            def _set_af_raw(af2: bool, new_val: int) -> bool:
+                fn_name = "inf_set_af2" if af2 else "inf_set_af"
+                attr = "af2" if af2 else "af"
+                for ns in (idaapi, __import__("ida_ida")):
+                    fn = getattr(ns, fn_name, None)
+                    if callable(fn):
+                        try:
+                            fn(new_val)
+                            return True
+                        except Exception:
+                            pass
+                try:
+                    _inf = idaapi.get_inf_structure()
+                    if _inf and hasattr(_inf, attr):
+                        setattr(_inf, attr, new_val)
+                        return True
+                except Exception:
+                    pass
+                return False
+
+            old_bits = _get_af_raw(is_af2)
+            if af_value:
+                new_bits = old_bits | bit
+            else:
+                new_bits = old_bits & ~bit
+            ok = _set_af_raw(is_af2, new_bits)
+            if not ok:
+                return make_error(MCPError.IDA_ERROR, f"Could not set {flag_upper} — inf_set_af not available in this IDA build")
+            return {
+                "ok": True,
+                "flag": flag_upper,
+                "bit": hex(bit),
+                "previous": bool(old_bits & bit),
+                "current": bool(new_bits & bit),
+                "note": "Flag set. Use analysis(action='reanalyze') if you want to re-run analysis with the new setting.",
+            }
+
+        if action == "force_offset":
+            if not addr:
+                return make_error(MCPError.INVALID_ARGS, "addr required")
+            ea, err = validate_addr(addr)
+            if err:
+                return err
+            import ida_bytes as _ida_bytes
+            # Determine pointer size: 8 for 64-bit IDBs, 4 for 32-bit.
+            ptr_size = size if size in (4, 8) else (8 if _inf_is_64bit() else 4)
+            # op_offset creates a cross-reference and reformats the operand as an offset.
+            # idc.op_plain_offset(ea, n, base) for IDA < 7.5 compat; op_offset for newer.
+            applied = False
+            for fn_name, fn_args in [
+                ("op_offset", (ea, 0, idaapi.REF_OFF32 if ptr_size == 4 else idaapi.REF_OFF64, idaapi.BADADDR, 0, 0)),
+                ("op_plain_offset", (ea, 0, 0)),
+            ]:
+                fn = getattr(idc, fn_name, None)
+                if callable(fn):
+                    try:
+                        fn(*fn_args)
+                        applied = True
+                        break
+                    except Exception:
+                        continue
+            if not applied:
+                return make_error(MCPError.IDA_ERROR, "op_offset/op_plain_offset not available in this IDA build")
+            return {
+                "ok": True,
+                "addr": hex(ea),
+                "ptr_size": ptr_size,
+                "note": "IDA will now treat the value at this address as an offset/pointer and create an xref.",
             }
 
         return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

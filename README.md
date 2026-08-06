@@ -3,7 +3,7 @@
 Give an LLM agent a working seat at IDA Pro.
 
 This is an [MCP](https://modelcontextprotocol.io) server that exposes IDA Pro's
-analysis to a model as 64 exact-schema operations — decompile, cross-reference,
+analysis to a model as 67 exact-schema operations — decompile, cross-reference,
 search, rename, annotate — plus an investigation workspace so the model's
 conclusions survive across turns instead of living in a context window.
 
@@ -188,7 +188,7 @@ ida_open_binary → ida_session_state → ida_overview → ida_find
 | **Code** | `decompile`, `disassemble`, `xrefs_to`, `callers`, `callees`, `read_bytes`, `callgraph` |
 | **Findings** | `write_finding`, `mark_examined`, `update_finding`, `list_findings`, `search_findings`, `next_target`, `analysis_brief`, `export_findings` |
 | **IDB sync** | `publish_findings`, `import_annotations` |
-| **Edit** | `rename`, `comment`, `change_function`, `create_function`, `patch_bytes`, `rename_local` |
+| **Edit** | `rename`, `comment`, `change_function`, `create_function`, `patch_bytes`, `rename_local`, `make_code`, `undefine`, `save_idb` |
 | **Types** | `get_type`, `declare_type`, `apply_type`, `list_types` |
 | **Segments** | `list_segments`, `add_segment`, `set_segment_attrs` |
 | **Signatures** | `apply_sig`, `list_sigs` |
