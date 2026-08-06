@@ -353,11 +353,14 @@ class IDAMCPServer(
         from .session import BookmarkManager, SessionManager  # lazy: break circular import
         self.session_mgr = SessionManager(self.cache_dir)
         # Automatic session housekeeping: if we have accumulated way more
-        # sessions than a sensible working set, prune the stale ones
-        # (older than the configured max age) at startup so the user
-        # doesn't have to remember to call session(action='cleanup_stale').
-        # Controlled by IDA_MCP_SESSION_AUTO_PRUNE_BUDGET (default 200) and
-        # IDA_MCP_SESSION_MAX_AGE_DAYS (default 30). Set budget=0 to disable.
+        # sessions than a sensible working set, prune them at startup so the
+        # user doesn't have to remember to call session(action='cleanup_stale').
+        # Controlled by IDA_MCP_SESSION_AUTO_PRUNE_BUDGET (default 200),
+        # IDA_MCP_SESSION_MAX_AGE_DAYS (default 30), and
+        # IDA_MCP_SESSION_PRUNE_MIN_IDLE_DAYS (default 7 — budget-bounding
+        # never deletes a session accessed more recently than this, so the
+        # active working set can never be wiped by a shared-cache construction).
+        # Set budget=0 to disable.
         try:
             budget = _bounded_int(
                 os.environ.get("IDA_MCP_SESSION_AUTO_PRUNE_BUDGET", "200"),
@@ -371,8 +374,16 @@ class IDAMCPServer(
                 min_value=1,
                 max_value=3650,
             )
+            min_idle = _bounded_int(
+                os.environ.get("IDA_MCP_SESSION_PRUNE_MIN_IDLE_DAYS", "7"),
+                7,
+                min_value=0,
+                max_value=3650,
+            )
             if budget > 0:
-                self.session_mgr.auto_prune_if_over_budget(budget, max_age)
+                self.session_mgr.auto_prune_if_over_budget(
+                    budget, max_age, min_idle_days=min_idle
+                )
         except Exception as e:
             log_rpc(f"Auto session prune failed: {e}")
         self.bookmark_mgr = BookmarkManager(self.session_mgr.session_dir)

@@ -17,11 +17,21 @@ import tempfile
 import time
 from typing import Annotated, Literal, get_args, get_origin
 
-ALIVE_FILE = os.path.join(os.environ.get("TEMP", tempfile.gettempdir()), "ida_mcp_heartbeat.txt")
-with open(ALIVE_FILE, "w") as f: f.write(str(time.time()))
+# Per-session heartbeat file (the host passes IDA_MCP_SESSION_LOG_DIR). All
+# sessions used to share one /tmp/ida_mcp_heartbeat.txt, and a full /tmp
+# (ENOSPC) then crashed every session on its next log write — see the many
+# "No space left on device" tracebacks in old session logs. The write is now
+# best-effort so a storage failure can never take down the RPC server.
+ALIVE_FILE = os.path.join(
+    os.environ.get("IDA_MCP_SESSION_LOG_DIR") or os.environ.get("TEMP") or tempfile.gettempdir(),
+    "ida_mcp_heartbeat.txt",
+)
 
 def log_ev(msg):
-    with open(ALIVE_FILE, "a") as f: f.write(f"[{time.ctime()}] {msg}\n")
+    try:
+        with open(ALIVE_FILE, "a") as f: f.write(f"[{time.ctime()}] {msg}\n")
+    except Exception:
+        pass  # a failed heartbeat write (ENOSPC, EACCES) must never kill IDA
     print(msg)
 
 try:

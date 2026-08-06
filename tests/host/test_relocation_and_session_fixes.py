@@ -71,32 +71,52 @@ class TestBuildIdaCommandRelocationFlags:
         )
         assert "-b0x40000" in cmd, cmd
 
-    def test_rebase_to_hex_string_becomes_paragraph_flag(self, tmp_path, monkeypatch):
+    def test_rebase_to_hex_string_becomes_load_base_flag(self, tmp_path, monkeypatch):
+        """rebase_to maps to -b (the load base switch). The old -R emission was
+        wrong — in IDA, -R means 'load MS Windows resources' and made the launch
+        abort."""
         server = _make_server(tmp_path, monkeypatch)
         server.idat_exe = "/usr/bin/idat"
         session = _fake_session(analysis_options={"rebase_to": "0x400000"})
         cmd = server._build_ida_command(
             session, "/tmp/ida.log", "/tmp/server_script.py", False, session.idb_path
         )
-        assert "-R0x40000" in cmd, cmd
+        assert "-b0x40000" in cmd, cmd
+        assert "-R0x40000" not in cmd, cmd
 
     def test_entry_point_int_is_hex_formatted(self, tmp_path, monkeypatch):
+        """entry_point maps to -i (IDA's entry-point switch), not -e (invalid)."""
         server = _make_server(tmp_path, monkeypatch)
         server.idat_exe = "/usr/bin/idat"
         session = _fake_session(analysis_options={"entry_point": 0x401000})
         cmd = server._build_ida_command(
             session, "/tmp/ida.log", "/tmp/server_script.py", False, session.idb_path
         )
-        assert "-e401000" in cmd, cmd
+        assert "-i401000" in cmd, cmd
+        assert "-e401000" not in cmd, cmd
 
-    def test_stack_size_hex_string_parsed(self, tmp_path, monkeypatch):
+    def test_stack_size_hex_string_not_emitted_as_invalid_flag(self, tmp_path, monkeypatch):
+        """stack_size has no idat CLI switch (-s is invalid and aborts the
+        launch), so it must not appear on the command line at all."""
         server = _make_server(tmp_path, monkeypatch)
         server.idat_exe = "/usr/bin/idat"
         session = _fake_session(analysis_options={"stack_size": "0x100000"})
         cmd = server._build_ida_command(
             session, "/tmp/ida.log", "/tmp/server_script.py", False, session.idb_path
         )
-        assert "-s1048576" in cmd, cmd
+        assert not any(flag.startswith(("-s", "-m", "-P")) for flag in cmd), cmd
+
+    def test_input_format_maps_to_file_type_switch(self, tmp_path, monkeypatch):
+        """input_format maps to -T (the file-type switch), not -F (invalid —
+        IDA aborts with 'Unknown switch -F' and the i64 is never created)."""
+        server = _make_server(tmp_path, monkeypatch)
+        server.idat_exe = "/usr/bin/idat"
+        session = _fake_session(analysis_options={"input_format": "bin"})
+        cmd = server._build_ida_command(
+            session, "/tmp/ida.log", "/tmp/server_script.py", False, session.idb_path
+        )
+        assert "-Tbin" in cmd, cmd
+        assert "-Fbin" not in cmd, cmd
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +249,72 @@ class TestStalePruneRespectsLiveRuntimes:
         )
         assert pruned == 1
         assert mgr.get_session(live.session_id) is not None
+
+    def test_auto_prune_bounds_store_of_idle_sessions(self, tmp_path):
+        """Budget-bounding removes the oldest idle sessions until the store is
+        back at/under budget — but only sessions idle past min_idle_days."""
+        import datetime
+
+        mgr = SessionManager(str(tmp_path / "cache"))
+        sids = []
+        now = datetime.datetime.now()
+        for i in range(5):
+            s = mgr.create_session(f"/tmp/b{i}.bin")
+            # All idle well past the min-idle window; recency varies by a day.
+            s.last_accessed = now - datetime.timedelta(days=20 - i)
+            mgr.sessions[s.session_id] = s
+            sids.append(s.session_id)
+        pruned = mgr.auto_prune_if_over_budget(
+            budget=2, max_age_days=30, runtime_alive=lambda sid: False, min_idle_days=1
+        )
+        assert pruned == 3
+        remaining = {sid for sid in sids if mgr.get_session(sid) is not None}
+        # The 2 most recently accessed survive.
+        assert remaining == set(sids[3:]), remaining
+
+    def test_auto_prune_never_deletes_recent_sessions(self, tmp_path):
+        """The budget-bounding pass must NEVER delete a session accessed within
+        the min-idle window — this is the regression test for the accidental
+        341-session wipe a shared-cache construction caused. When every
+        remaining over-budget session is recent, the store stays over budget
+        rather than deleting active work."""
+        import datetime
+
+        mgr = SessionManager(str(tmp_path / "cache"))
+        now = datetime.datetime.now()
+        # Three recent sessions (active work, accessed 1h ago) — all protected
+        # by the min-idle window.
+        recents = []
+        for i in range(3):
+            s = mgr.create_session(f"/tmp/recent{i}.bin")
+            s.last_accessed = now - datetime.timedelta(hours=1)
+            mgr.sessions[s.session_id] = s
+            recents.append(s.session_id)
+        # One idle session far outside max_age — the only pruneable candidate.
+        idle = mgr.create_session("/tmp/idle.bin")
+        idle.last_accessed = now - datetime.timedelta(days=40)
+        mgr.sessions[idle.session_id] = idle
+
+        pruned = mgr.auto_prune_if_over_budget(
+            budget=2, max_age_days=30, runtime_alive=lambda sid: False, min_idle_days=7
+        )
+        # Only the idle session is age-stale; the 3 recent sessions are
+        # protected, so the store cannot be forced down to budget.
+        assert pruned == 1
+        assert mgr.get_session(idle.session_id) is None
+        for sid in recents:
+            assert mgr.get_session(sid) is not None, "recent session must survive"
+
+    def test_auto_prune_spares_fresh_sessions_when_under_budget(self, tmp_path):
+        import datetime
+
+        mgr = SessionManager(str(tmp_path / "cache"))
+        for i in range(3):
+            s = mgr.create_session(f"/tmp/b{i}.bin")
+            s.last_accessed = datetime.datetime(2026, 8, 1) + datetime.timedelta(minutes=i)
+            mgr.sessions[s.session_id] = s
+        # Under budget: nothing pruned, even though all are younger than max_age.
+        assert mgr.auto_prune_if_over_budget(budget=10, max_age_days=1, runtime_alive=lambda sid: False) == 0
 
 
 class TestIndexingMetadataChangeGating:

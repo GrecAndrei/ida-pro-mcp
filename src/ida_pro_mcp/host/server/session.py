@@ -764,21 +764,41 @@ class SessionManager(SessionSkillsMixin):
                 self._delete_session_unlocked(sid)
             return stale
 
-    def auto_prune_if_over_budget(self, budget: int, max_age_days: int, runtime_alive: Any = None) -> int:
-        """Auto-prune stale sessions when the store exceeds ``budget``.
+    def auto_prune_if_over_budget(
+        self,
+        budget: int,
+        max_age_days: int,
+        runtime_alive: Any = None,
+        min_idle_days: int = 7,
+    ) -> int:
+        """Auto-prune sessions when the store exceeds ``budget``.
 
-        Returns the number of sessions deleted. Only acts if the live
-        session count is above the budget and at least one session is
-        older than ``max_age_days``. Safe to call repeatedly (idempotent
-        once the store is within budget). Sessions that still own a live
-        IDA runtime (``runtime_alive(sid)`` returning truthy) are never
-        pruned — deleting their metadata while idat runs would orphan the
-        process and keep the IDB lock held forever.
+        Returns the number of sessions deleted. The budget is a real cap:
+        when the store is over it, the oldest non-live sessions are deleted
+        until the count is back at or under budget — but only sessions that
+        have been idle for at least ``min_idle_days`` are eligible for the
+        budget-bounding pass. Sessions accessed more recently (active
+        research) are never deleted automatically; an over-budget store of
+        all-recent sessions simply stays over budget until they age out.
+
+        Safe to call repeatedly (idempotent once the store is within budget).
+        Sessions that still own a live IDA runtime (``runtime_alive(sid)``
+        returning truthy) are never pruned — deleting their metadata while
+        idat runs would orphan the process and keep the IDB lock held forever.
+
+        The ``min_idle_days`` guard exists because this runs from
+        ``IDAMCPServer.__init__``, which any process (not just the real host)
+        may construct against a shared cache. Deleting fresh sessions there is
+        what let one accidental real-cache construction wipe 341 sessions.
         """
         try:
             budget_i = int(budget)
         except Exception:
             return 0
+        try:
+            min_idle_days_i = int(min_idle_days)
+        except Exception:
+            min_idle_days_i = 7
         if budget_i <= 0:
             return 0
         with self._lock:
@@ -786,18 +806,40 @@ class SessionManager(SessionSkillsMixin):
             if total <= budget_i:
                 return 0
             cutoff = datetime.now() - timedelta(days=max_age_days)
-            stale = [
-                sid
+            idle_cutoff = datetime.now() - timedelta(days=max(0, min_idle_days_i))
+            # Non-live sessions, oldest first (last_accessed ascending).
+            non_live = [
+                (sid, s)
                 for sid, s in self.sessions.items()
-                if s.last_accessed < cutoff
-                and not (callable(runtime_alive) and runtime_alive(sid))
+                if not (callable(runtime_alive) and runtime_alive(sid))
             ]
+            non_live.sort(key=lambda kv: kv[1].last_accessed or "")
+
+            stale: list[str] = []
+            # Pass 1: remove age-stale sessions.
+            for sid, s in non_live:
+                if s.last_accessed < cutoff:
+                    stale.append(sid)
             for sid in stale:
                 self._delete_session_unlocked(sid)
+            # Pass 2: if still over budget, prune the oldest idle survivors —
+            # but never a session accessed within the last min_idle_days.
+            if len(self.sessions) > budget_i:
+                for sid, s in non_live:
+                    if len(self.sessions) <= budget_i:
+                        break
+                    if sid in stale:
+                        continue
+                    if s.last_accessed >= idle_cutoff:
+                        continue
+                    self._delete_session_unlocked(sid)
+                    stale.append(sid)
             if stale:
                 log_rpc(
-                    f"Auto-pruned {len(stale)} stale sessions "
-                    f"(was {total}, budget={budget_i}, max_age_days={max_age_days})"
+                    f"Auto-pruned {len(stale)} sessions to stay within budget "
+                    f"(was {total}, now {len(self.sessions)}, "
+                    f"budget={budget_i}, max_age_days={max_age_days}, "
+                    f"min_idle_days={max(0, min_idle_days_i)})"
                 )
             return len(stale)
 

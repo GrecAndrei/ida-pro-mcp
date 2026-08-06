@@ -751,6 +751,29 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             # Preserve previous behavior: phrase alone still triggers recovery path.
             return bool(info.get("detected"))
 
+    def _is_orphan_locked_db_open_failure(self, diag: str) -> bool:
+            """True when IDA aborted *reopening an existing database* because an
+            orphaned process still holds the unpacked sidecars (.id0/.id1/.nam).
+
+            That lock surfaces as "Resource temporarily unavailable" on the .id0
+            file after IDA notices the unpacked DB "did not close properly", and
+            IDA then exits with "Database initialization failed with error 4".
+
+            Deliberately does NOT match bare "error 4" — that code also fires for
+            an unrelated forced-processor mismatch on an existing IDB, which this
+            recovery path cannot fix and should not try to.
+            """
+            if not isinstance(diag, str) or not diag.strip():
+                return False
+            low = diag.lower()
+            if "resource temporarily unavailable" not in low:
+                return False
+            return (
+                "did not close properly" in low
+                or "database initialization failed" in low
+                or "database init failed" in low
+            )
+
     def _normalize_ida_args(
             self, ida_args: str | list[str] | None
         ) -> list[str]:
@@ -1396,8 +1419,10 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 if opts.get("processor") and "-p" not in ida_prefixes:
                     cmd.append(f"-p{opts['processor']}")
                 loader = opts.get("loader")
+                _t_emitted = False
                 if loader and "-T" not in ida_prefixes:
                     cmd.append(f"-T{loader}")
+                    _t_emitted = True
                 elif not loader and "-T" not in ida_prefixes:
                     # Only force -Tbin for firmware processors when the file is
                     # actually a raw blob. ELF/PE/Mach-O files have their own loaders
@@ -1423,6 +1448,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         _force_raw = not _is_native
                     if _force_raw:
                         cmd.append("-Tbin")
+                        _t_emitted = True
                     # For unknown processors with no explicit loader, let IDA's
                     # auto-detection handle it — but the pre-analysis hook will
                     # fix segment class/type/perm if needed.
@@ -1441,42 +1467,51 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 if opts.get("skip_analysis") or opts.get("no_analysis"):
                     if "-c" not in (session.ida_args or []):
                         cmd.append("-c")
-                # Force a specific file format parser (e.g. bin, elf, pe, macho, ihex, srec).
+                # Force a specific file format parser (e.g. bin, elf, pe, macho,
+                # ihex, srec). IDA's file-type switch is -T, not -F — a previous
+                # -F emission made every launch abort with "Unknown switch '-F'"
+                # (the i64 was never created, so every resume re-crashed). Only
+                # emitted when no -T (loader/raw) was already added.
                 input_format = opts.get("input_format")
-                if input_format and "-F" not in ida_prefixes:
-                    cmd.append(f"-F{input_format}")
-                # Processor-specific options (e.g. ARM CPU type, MIPS ISA variant).
-                processor_options = opts.get("processor_options")
-                if processor_options and "-P" not in ida_prefixes:
-                    cmd.append(f"-P{processor_options}")
-                # Rebase the database to a specific load address after creation.
-                rebase_to = opts.get("rebase_to")
-                if rebase_to is not None and "-R" not in ida_prefixes:
-                    # rebase_to may be a hex string like "0x400000".
-                    # IDA -R flag is in 16-byte paragraphs, not bytes.
-                    with contextlib.suppress(TypeError, ValueError):
-                        rebase_paragraphs = int(str(rebase_to), 0) // 16
-                        cmd.append(f"-R{rebase_paragraphs:#x}")
-                # Override the entry point address. IDA expects a hex address
-                # here; ints must be hex-formatted (decimal would be misread
-                # as hex by IDA's option parser).
+                if input_format and not _t_emitted:
+                    cmd.append(f"-T{input_format}")
+                # Override the entry point address. IDA's entry-point switch is
+                # -i (hex), not -e.
                 entry_point = opts.get("entry_point")
-                if entry_point is not None and "-e" not in ida_prefixes:
+                if entry_point is not None and "-i" not in ida_prefixes:
                     with contextlib.suppress(TypeError, ValueError):
                         if isinstance(entry_point, str):
-                            cmd.append(f"-e{entry_point.strip()}")
+                            cmd.append(f"-i{entry_point.strip()}")
                         else:
-                            cmd.append(f"-e{int(entry_point):x}")
-                # Set the stack size for stack analysis.
-                stack_size = opts.get("stack_size")
-                if stack_size is not None and "-s" not in ida_prefixes:
+                            cmd.append(f"-i{int(entry_point):x}")
+                # rebase_to: the previous emission used -R, which in IDA means
+                # "load MS Windows resources" (wrong). There is no post-load
+                # rebase switch; a target load address is expressed with -b (the
+                # same switch baseaddr uses), so map rebase_to there when no
+                # explicit baseaddr was given.
+                rebase_to = opts.get("rebase_to")
+                if (
+                    rebase_to is not None
+                    and opts.get("baseaddr") is None
+                    and "-b" not in ida_prefixes
+                ):
                     with contextlib.suppress(TypeError, ValueError):
-                        cmd.append(f"-s{int(str(stack_size), 0)}")
-                # Memory model: 0=flat, 1=16-bit segmented, 2=32-bit segmented.
-                memory_model = opts.get("memory_model")
-                if memory_model is not None and "-m" not in ida_prefixes:
-                    with contextlib.suppress(TypeError, ValueError):
-                        cmd.append(f"-m{int(str(memory_model), 0)}")
+                        rebase_paragraphs = int(str(rebase_to), 0) // 16
+                        cmd.append(f"-b{rebase_paragraphs:#x}")
+                # The following options have NO idat command-line equivalent:
+                #   processor_options  -P is IDA's "pack database" switch
+                #   stack_size         -s is not an idat switch
+                #   memory_model       -m is not an idat switch
+                # Emitting any of them made IDA reject the command line and abort
+                # (or silently do the wrong thing), so they are intentionally not
+                # passed on the CLI. They are best applied after load via the
+                # pre-analysis hook / a follow-up session(action=...) call.
+                for _drop_key in ("processor_options", "stack_size", "memory_model"):
+                    if opts.get(_drop_key) is not None:
+                        log_rpc(
+                            f"Ignoring {_drop_key}={opts.get(_drop_key)!r}: no idat CLI "
+                            f"switch exists for it (previous -P/-s/-m emissions were invalid)"
+                        )
 
             cmd.append(f"-S{script_path}")
             cmd.append(f"-L{log_file}")
@@ -1538,18 +1573,45 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             target_norm = os.path.realpath(os.path.abspath(target_path)).lower()
             if not target_norm:
                 return killed
+
+            candidate_pids: list[int] = []
             try:
-                have_psutil = True
+                import psutil as _ps
             except Exception:
-                have_psutil = False
-            proc_iter = None
-            if have_psutil:
+                _ps = None
+
+            if _ps is not None:
+                # Preferred path: psutil's process_iter filters by name cheaply.
                 try:
-                    import psutil as _ps
-                    proc_iter = _ps.process_iter(["pid", "name", "cmdline"])
+                    for proc in _ps.process_iter(["pid", "name", "cmdline"]):
+                        try:
+                            name = (proc.info.get("name") or "").lower()
+                        except Exception:
+                            name = ""
+                        if "ida" not in name and "idat" not in name:
+                            continue
+                        try:
+                            cmdline_parts = proc.info.get("cmdline") or []
+                            cmdline = (
+                                " ".join(cmdline_parts).lower()
+                                if cmdline_parts
+                                else ""
+                            )
+                        except Exception:
+                            cmdline = ""
+                        if not cmdline or target_norm not in cmdline:
+                            continue
+                        try:
+                            pid = int(proc.info.get("pid") or 0)
+                        except Exception:
+                            pid = 0
+                        if pid:
+                            candidate_pids.append(pid)
                 except Exception:
-                    proc_iter = None
-            if proc_iter is None:
+                    pass
+            elif sys.platform == "win32":
+                # Windows without psutil: wmic /taskkill (kept from the original
+                # implementation; wmic does not exist on POSIX).
                 try:
                     out = subprocess.run(
                         ["wmic", "process", "where", "name like '%idat%' or name like '%ida%'",
@@ -1567,41 +1629,42 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         elif line.lower().startswith("commandline"):
                             cmd = line.split(":", 1)[1].strip().lower()
                             if target_norm in cmd and block_pid:
-                                try:
-                                    subprocess.run(
-                                        ["taskkill", "/T", "/F", "/PID", str(block_pid)],
-                                        capture_output=True, timeout=5,
-                                    )
-                                    killed.append(block_pid)
-                                except Exception:
-                                    pass
-                                block_pid = None
+                                candidate_pids.append(block_pid)
+                            block_pid = None
                         else:
                             block_pid = None
                 except Exception:
                     pass
-                return killed
-            for proc in proc_iter:
+            else:
+                # POSIX without psutil: scan /proc/*/cmdline. Dependency-free and
+                # works on every Linux box. psutil is not a dependency, and the old
+                # wmic fallback made this method a silent no-op on Linux.
+                expected_names = {n.lower() for n in self._ida_binary_names()}
                 try:
-                    name = (proc.info.get("name") or "").lower()
+                    entries = os.listdir("/proc")
                 except Exception:
-                    name = ""
-                if not (("ida" in name) and (name.endswith(("t", ".exe")) or name in {"ida", "ida.exe"})):
-                    if "idat" not in name and "ida" not in name:
+                    entries = []
+                for entry in entries:
+                    if not entry.isdigit():
                         continue
-                try:
-                    cmdline_parts = proc.info.get("cmdline") or []
-                    cmdline = " ".join(cmdline_parts).lower() if cmdline_parts else ""
-                except Exception:
-                    cmdline = ""
-                if not cmdline or target_norm not in cmdline:
-                    continue
-                try:
-                    pid = int(proc.info.get("pid") or 0)
-                except Exception:
-                    pid = 0
-                if not pid:
-                    continue
+                    try:
+                        with open(f"/proc/{entry}/cmdline", "rb") as fh:
+                            cmdline = fh.read().decode("utf-8", errors="ignore").lower()
+                    except Exception:
+                        continue
+                    if not cmdline or target_norm not in cmdline:
+                        continue
+                    try:
+                        exe_name = os.path.basename(
+                            os.path.realpath(f"/proc/{entry}/exe")
+                        ).lower()
+                    except Exception:
+                        exe_name = ""
+                    if exe_name not in expected_names:
+                        continue
+                    candidate_pids.append(int(entry))
+
+            for pid in candidate_pids:
                 try:
                     if sys.platform == "win32":
                         subprocess.run(
@@ -1612,7 +1675,8 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         try:
                             os.killpg(os.getpgid(pid), signal.SIGTERM)
                         except Exception:
-                            proc.kill()
+                            with contextlib.suppress(ProcessLookupError):
+                                os.kill(pid, signal.SIGTERM)
                     killed.append(pid)
                     log_rpc(f"Terminated stale IDA pid={pid} holding {target_norm}")
                 except Exception as e:
@@ -1765,6 +1829,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
 
             sid_tag = session.session_id
             log_dir = self.session_mgr.get_session_log_dir(sid_tag)
+            env["IDA_MCP_SESSION_LOG_DIR"] = log_dir
             log_file = os.path.join(log_dir, "ida_mcp.log")
             stdout_log = os.path.join(log_dir, "ida_stdout.log")
             stderr_log = os.path.join(log_dir, "ida_stderr.log")
@@ -1772,23 +1837,25 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             # Launch IDA: Open existing IDB if present, otherwise analyze binary
             if use_existing_idb:
                 log_rpc(f"Opening existing session IDB: {effective_idb_path}")
-                # If this is a packed .i64 IDB, kill any orphaned IDA processes
-                # still holding the unpacked siblings (.id0/.id1/.nam/.til) next
-                # to the packed file. Without this, the next launch hits
-                # "Permission denied" on .id0 and aborts with
-                # "Database initialization failed with error 4".
-                # We intentionally do NOT delete the sibling files - they are
-                # IDA's working state (a re-openable cache) and on a 3 GB+ IDB
-                # thrashing them on every launch wastes GB of disk I/O. If the
-                # siblings are corrupted, IDA will surface the error and the
-                # user can clean manually.
-                if getattr(session, "packed_idb", False):
-                    killed = self._terminate_ida_processes_for_path(effective_idb_path)
-                    if killed:
-                        log_rpc(
-                            f"Pre-launch cleanup killed {len(killed)} stale IDA process(es) "
-                            f"for {effective_idb_path}"
-                        )
+                # A previous IDA instance killed before it could close cleanly
+                # (host SIGKILL/crash) survives as an orphan holding the unpacked
+                # siblings (.id0/.id1/.nam/.til) next to the packed .i64. The next
+                # launch then fails with "Resource temporarily unavailable" on .id0
+                # and aborts with "Database initialization failed with error 4".
+                # Kill those orphans so the reopen can take the lock. This runs for
+                # every existing-IDB open (not just packed IDBs): we already hold the
+                # ownership lease here, and matching on the session-specific idb path
+                # (present in every IDA cmdline) cannot touch another live session.
+                # We intentionally do NOT delete the sibling files - they are IDA's
+                # working state (a re-openable cache) and on a 3 GB+ IDB thrashing
+                # them on every launch wastes GB of disk I/O. If the siblings are
+                # corrupted, IDA will surface the error and the user can clean manually.
+                killed = self._terminate_ida_processes_for_path(effective_idb_path)
+                if killed:
+                    log_rpc(
+                        f"Pre-launch cleanup killed {len(killed)} stale IDA process(es) "
+                        f"for {effective_idb_path}"
+                    )
             else:
                 log_rpc(
                     f"Creating new IDB for binary: {session.binary_path} -> {session.idb_path}"
@@ -1883,7 +1950,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
 
                 if ida_crashed:
                     diag = self._get_ida_diagnostics(stdout_log, stderr_log)
-                    if self._is_library_init_err2(diag):
+                    if self._is_library_init_err2(diag) or self._is_orphan_locked_db_open_failure(diag):
                         return self._attempt_session_recovery(session, diag, server_port)
                     lib_init = self._extract_library_init_failure(diag)
                     details = {"log": diag}
@@ -1969,6 +2036,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     env.pop(k, None)
             sid_tag = session.session_id
             log_dir = self.session_mgr.get_session_log_dir(sid_tag)
+            env["IDA_MCP_SESSION_LOG_DIR"] = log_dir
             log_file = os.path.join(log_dir, "ida_mcp.log")
             stdout_log = os.path.join(log_dir, "ida_stdout.log")
             stderr_log = os.path.join(log_dir, "ida_stderr.log")
@@ -2075,9 +2143,11 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 details = {"log": diag, "recovery_attempted": False}
                 if lib_init:
                     details["library_init"] = lib_init
+                if self._is_orphan_locked_db_open_failure(diag):
+                    details["orphan_locked_db"] = True
                 return make_error(
                     MCPError.IDA_CRASHED,
-                    "IDA failed with 'library init failed' and recovery is disabled.",
+                    "IDA startup failed and recovery is disabled.",
                     details=details,
                 )
             if lib_init:
@@ -2085,8 +2155,13 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     f"Detected library init failure (err={lib_init.get('error_code')}) "
                     f"causes={lib_init.get('causes')} - attempting recovery..."
                 )
+            elif self._is_orphan_locked_db_open_failure(diag):
+                log_rpc(
+                    "Detected orphaned IDA process locking the unpacked database "
+                    "- killing it and attempting recovery..."
+                )
             else:
-                log_rpc("Detected library init failure - attempting recovery...")
+                log_rpc("Detected startup failure - attempting recovery...")
             self._cleanup_runtime(session.session_id)
             time.sleep(1)
 
@@ -2097,22 +2172,29 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 session.idb_path, aggressive=bool(opts.get("aggressive_cleanup", True))
             )
 
-            # If the failed launch was a packed-IDB open, the cause is almost
-            # always an orphan IDA process still holding the unpacked siblings
-            # (.id0/.id1/.nam/.til) next to the packed file from a previous
-            # crashed run. Kill those processes so the next attempt can open
-            # the siblings for read/write.
+            # The failed launch is usually an orphan IDA process still holding
+            # the unpacked siblings (.id0/.id1/.nam/.til) next to the packed .i64
+            # from a previous crashed run. Kill those processes so the next attempt
+            # can open the siblings for read/write. Runs for every recovery (packed
+            # and regular sessions alike).
             # We intentionally do NOT delete the sibling files - they are
             # IDA's working state and on a 3 GB+ IDB thrashing them on every
             # recovery wastes GB of disk I/O. If the siblings are corrupted,
             # IDA will surface the error and the user can clean manually.
-            if getattr(session, "packed_idb", False) and session.binary_path:
-                killed = self._terminate_ida_processes_for_path(session.binary_path)
-                if killed:
-                    log_rpc(
-                        f"Recovery killed {len(killed)} stale IDA process(es) "
-                        f"holding {session.binary_path}"
-                    )
+            # Match the path the orphan's cmdline actually references: for a
+            # packed IDB that is the packed file itself (binary_path); for a
+            # regular session it is the unpacked idb_path (the only path IDA's
+            # launch command line carries for an existing-IDB open).
+            if getattr(session, "packed_idb", False):
+                kill_target = session.binary_path
+            else:
+                kill_target = session.idb_path
+            killed = self._terminate_ida_processes_for_path(kill_target)
+            if killed:
+                log_rpc(
+                    f"Recovery killed {len(killed)} stale IDA process(es) "
+                    f"holding {kill_target}"
+                )
 
             if not session.binary_path or not os.path.exists(session.binary_path):
                 return make_error(

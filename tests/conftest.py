@@ -129,6 +129,21 @@ def _restore_test_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("IDA_MCP_DISABLE_RATE_LIMIT", _ORIG_RATE or "1")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_real_cache_dir(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Force every test into its own throwaway runtime cache.
+
+    This is a hard safety net: any test that constructs a full
+    ``IDAMCPServer`` must never point at the developer's real store. The
+    server ``__init__`` runs auto-prune + stale-lease cleanup against
+    ``cache_dir``; before this fixture existed, a test that forgot to
+    override ``cache_dir`` pruned 341 real sessions from
+    ``~/.local/state/ida-pro-mcp`` as a side effect of running the suite.
+    """
+    monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "ida-mcp-cache"))
+    monkeypatch.setenv("IDA_MCP_DATA_DIR", str(tmp_path / "ida-mcp-cache"))
+
+
 @pytest.fixture
 def tmp_session_dir():
     """Yield a fresh temporary directory paired with a SessionManager that
