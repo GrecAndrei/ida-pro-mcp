@@ -163,7 +163,8 @@ def misc(
             return handle_error(e, context="load_sig")
     if action == "list_sigs":
         try:
-            import os, glob
+            import glob
+            import os
             sig_dir = os.path.join(idaapi.idadir(""), "sig")
             pattern = (name or "").lower()
             sigs = []
