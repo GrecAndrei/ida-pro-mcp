@@ -750,13 +750,13 @@ def analysis(
             # IDA 9.x exposes ida_ida.inf_get_af() and inf_get_af2().
             af_names: dict[str, int] = {}
             for name in dir(idc):
-                if name.startswith("AF_") or name.startswith("AF2_"):
+                if name.startswith(("AF_", "AF2_")):
                     val = getattr(idc, name, None)
                     if isinstance(val, int):
                         af_names[name] = val
             if not af_names:
                 for name in dir(idaapi):
-                    if name.startswith("AF_") or name.startswith("AF2_"):
+                    if name.startswith(("AF_", "AF2_")):
                         val = getattr(idaapi, name, None)
                         if isinstance(val, int):
                             af_names[name] = val

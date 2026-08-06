@@ -203,7 +203,6 @@ RETURN_MNEMONICS = {
     "blr",
     # RISC-V standard + compressed C extension
     "jalr",     # jalr x0, ra, 0  is the canonical return
-    "ret",      # assembler pseudo-op for jalr x0, ra, 0
     "c.jr",     # compressed return: c.jr ra
     "c.jalr",   # compressed return-and-link (rare but valid as ret when rd=ra)
     # SPARC
@@ -234,7 +233,6 @@ UNCONDITIONAL_JUMP_MNEMONICS = {
     "ba",
     # RISC-V standard + compressed C extension
     "jal",
-    "j",        # pseudo-op for jal x0, offset
     "c.j",      # compressed unconditional jump
     "c.jal",    # compressed call (RV32C only; encodes jal ra, offset)
     # SPARC
@@ -283,8 +281,7 @@ CONDITIONAL_BRANCH_MNEMONICS = {
     # PowerPC
     "bdnz", "bdz", "bc",
     # RISC-V standard
-    "beq", "bne", "blt", "bge", "bltu", "bgeu",
-    "beqz", "bnez", "bltz", "bgez", "blez", "bgtz",  # pseudo-ops
+    "bltu", "bgeu",
     # RISC-V compressed C extension
     "c.beqz", "c.bnez",
     # SPARC
@@ -768,6 +765,7 @@ def _apply_riscv_gp(gp_val: int):
     """
     try:
         import idc as _idc
+        import idaapi as _idaapi
     except ImportError:
         return False, "IDA not available", False
 
@@ -785,7 +783,6 @@ def _apply_riscv_gp(gp_val: int):
     # Also persist via netnode so it survives IDB reload
     if applied:
         try:
-            import idaapi as _idaapi
             nn = _idaapi.netnode("$ risc-v", 0, True)
             nn.altset(1, gp_val)
         except Exception:
@@ -867,7 +864,6 @@ def detect_riscv_gp():
     try:
         import idc
         import idautils
-        import idaapi as _idaapi
     except ImportError:
         return {"found": False, "note": "IDA APIs not available"}
 
