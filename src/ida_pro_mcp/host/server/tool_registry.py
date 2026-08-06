@@ -89,7 +89,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
 
     "memory": ["read", "write", "hexdump", "search", "compare", "pointers", "entropy", "strings", "struct_walk", "histogram", "read_file", "write_file"],
     "misc": ["python", "idc", "load_sig", "list_sigs", "cache_stats", "plugin_list", "plugin_run", "read_file", "write_file", "health", "reload"],
-    "modify": ["rename", "comment", "set_type", "patch_asm"],
+    "modify": ["rename", "comment", "set_type", "patch_asm", "patch_bytes", "rename_local"],
 
 
 
