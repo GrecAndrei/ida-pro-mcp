@@ -831,15 +831,41 @@ def detect_riscv_gp():
                     # Auto-apply: set GP in IDA so GP-relative xrefs resolve
                     applied = False
                     apply_error = None
+                    reanalysis_queued = False
                     try:
                         idc.set_reg_value(gp_val, "gp", idc.BADADDR)
                         applied = True
                     except Exception as _e:
                         apply_error = str(_e)
+                    # Queue a full reanalysis so IDA revisits all GP-relative
+                    # load/store instructions now that GP is known.  Without
+                    # this, previously disassembled auipc+load/store sequences
+                    # have no xref because IDA evaluated them with GP=0.
+                    if applied:
+                        try:
+                            import ida_auto
+                            import ida_ida
+                            # Reanalyze the entire address space
+                            ida_auto.plan_and_wait(
+                                idc.get_inf_attr(idc.INF_MIN_EA),
+                                idc.get_inf_attr(idc.INF_MAX_EA),
+                            )
+                            reanalysis_queued = True
+                        except Exception:
+                            try:
+                                # Fallback: queue reanalysis for just the
+                                # code segment (cheaper, usually sufficient)
+                                idc.plan_to_apply_idasgn("")  # no-op trigger
+                                ida_auto.auto_wait()
+                                reanalysis_queued = True
+                            except Exception:
+                                pass
                     note = (
                         f"RISC-V: GP (x3) = {hex(gp_val)} — "
                         f"detected from auipc/addi at {hex(start_ea)}, "
-                        + ("applied automatically so GP-relative xrefs will now resolve."
+                        + ("applied and full reanalysis queued — GP-relative xrefs will be created."
+                           if (applied and reanalysis_queued) else
+                           "applied (reanalysis not queued — run Analysis > Reanalyze to create GP-relative xrefs)."
                            if applied else
                            f"auto-apply failed ({apply_error}); run: "
                            f'idc.set_reg_value({hex(gp_val)}, "gp", idc.BADADDR)')
@@ -850,6 +876,7 @@ def detect_riscv_gp():
                         "gp_hex": hex(gp_val),
                         "at": hex(start_ea),
                         "applied": applied,
+                        "reanalysis_queued": reanalysis_queued,
                         "note": note,
                     }
                 else:

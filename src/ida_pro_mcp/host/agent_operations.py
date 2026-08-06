@@ -825,7 +825,11 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         name="ida_decompile",
         description="Decompile one function with bounded CFG and ctree-derived structural evidence.",
         category="code",
-        input_schema=_schema({"address": ADDRESS, "idb": IDB}, ["address"]),
+        input_schema=_schema({
+            "address": ADDRESS,
+            "idb": IDB,
+            "details": {"type": "boolean", "description": "Include verbose enrichment: var_rename_hints, annotated_code, complexity, dataflow top_hubs. Default false."},
+        }, ["address"]),
         example={"address": "0x401000"},
         backend_tool="code",
         backend_action="decompile",

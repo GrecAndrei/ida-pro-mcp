@@ -26,6 +26,7 @@ from .runtime import (
     download_embed_model,
     find_embed_model,
     find_llama_server_bin,
+    find_rerank_model,
     get_install_root,
     install_optional_packages,
     kill_ida_processes,
@@ -343,8 +344,14 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
         default=opts.install_claude_skills,
     )
 
+    # These choices select an embedding *model*.  The server backend that runs
+    # the model is determined separately: either the native in-process library
+    # (libmcp_llama.so, built from scripts/build_native_llama.sh — fastest,
+    # lowest memory) or a llama-server subprocess (HTTP, works out of the box).
+    # The installer sets up the subprocess path; the native library is auto-used
+    # at runtime when present.
     _backend_choices = {
-        "qwen3-embedding-0.6b (local GGUF, fast)": "qwen3-embedding-0.6b",
+        "qwen3-embedding-0.6b (local GGUF, recommended)": "qwen3-embedding-0.6b",
         "bge-code-v1 (local GGUF)": "bge-code-v1",
         "zembed-1 (local GGUF, non-commercial)": "zembed-1",
         "gemini-embedding-2 (cloud, requires API key)": "gemini",
@@ -416,6 +423,26 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
             ui.info("Zembed 1 is opt-in and licensed CC-BY-NC-4.0 (non-commercial).")
     auto_embed_model = find_embed_model(opts.install_root or get_install_root(), opts.embed_profile)
     auto_embed_server = find_llama_server_bin(opts.install_root or get_install_root())
+    # Check for the native in-process backend (libmcp_llama.so).
+    # This is built separately from scripts/build_native_llama.sh and gives
+    # ~10x faster cold-start and ~2x lower RAM vs the llama-server subprocess.
+    # The installer doesn't build it, but we detect and report it here.
+    _native_lib = ""
+    if opts.embed_backend != "gemini":
+        try:
+            from ida_pro_mcp.host.intelligence.native import find_native_lib
+            _native_lib = find_native_lib()
+        except Exception:
+            pass
+        if _native_lib:
+            ui.ok(f"Native embedding library found: {_native_lib}")
+            ui.info("Native backend (in-process libmcp_llama.so) will be used automatically — "
+                    "no llama-server subprocess needed.")
+        else:
+            ui.info("Native embedding library (libmcp_llama.so) not found.")
+            ui.info("The server will use a llama-server subprocess (HTTP). "
+                    "For faster startup and lower RAM, build the native library after install: "
+                    "  bash scripts/build_native_llama.sh")
     if opts.embed_backend != "gemini" and auto_embed_model:
         ui.ok(f"Detected embedding model: {auto_embed_model}")
         opts.embed_auto = _prompt_yes_no("Enable semantic embedding model for MCP clients?", default=True)
@@ -455,6 +482,27 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
                 ui.warn("Semantic embedding features stay disabled by default.")
         else:
             opts.embed_auto = False
+
+    # --- Reranker model (second model required for semantic search quality) ---
+    if opts.embed_backend != "gemini" and (opts.embed_auto or opts.embed_model_path):
+        ui.info(
+            "Semantic search uses two models: an embedding model (already configured above) "
+            "and a reranker (cross-encoder) that re-scores results for precision."
+        )
+        auto_rerank_model = find_rerank_model(opts.install_root or get_install_root(), opts.rerank_profile)
+        if auto_rerank_model:
+            ui.ok(f"Detected reranker: {auto_rerank_model}")
+            if not _prompt_yes_no("Enable reranker for improved semantic search precision?", default=True):
+                auto_rerank_model = ""
+            else:
+                opts.rerank_model_path = auto_rerank_model
+        else:
+            ui.warn(f"No {opts.rerank_profile} reranker model found.")
+            if _prompt_yes_no(
+                f"Download managed {opts.rerank_profile} reranker model (~300 MB)?",
+                default=True,
+            ):
+                opts.download_rerank_model = True
 
     opts.rollback_on_fail = _prompt_yes_no(
         "Rollback backed-up config files on failure?",

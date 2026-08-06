@@ -86,7 +86,7 @@ def _compute_cfg_semantics(func):
     }
 
 
-def _build_function_structure_summary(func, cfunc=None, max_items=12):
+def _build_function_structure_summary(func, cfunc=None, max_items=12, details=False):
     """Return compact CFG/ctree evidence suitable for normal LLM responses.
 
     This deliberately does not export a raw graph or an AST dump.  Those are
@@ -94,6 +94,7 @@ def _build_function_structure_summary(func, cfunc=None, max_items=12):
     them.  The common path instead gets deterministic, bounded facts that can
     be read beside disassembly or pseudocode without drowning out the code.
     ``cfunc`` is optional so disassembly can benefit without starting Hex-Rays.
+    ``details=True`` adds dataflow top_hubs and edge counts (opt-in — verbose).
     """
     summary: dict[str, Any] = {"cfg": _compute_cfg_semantics(func)}
     call_targets: list[str] = []
@@ -155,12 +156,14 @@ def _build_function_structure_summary(func, cfunc=None, max_items=12):
             summary["control_points"] = control_points
         try:
             dataflow = _build_decompiler_dataflow(cfunc, max_items=min(160, max_items * 16))
-            summary["dataflow"] = {
+            df: dict = {
                 "argument_variables": dataflow.get("argument_variables", [])[:max_items],
-                "top_hubs": dataflow.get("top_hubs", [])[:max_items],
-                "assignment_edges": dataflow.get("assignment_edges", 0),
-                "call_edges": dataflow.get("call_edges", 0),
             }
+            if details:
+                df["top_hubs"] = dataflow.get("top_hubs", [])[:max_items]
+                df["assignment_edges"] = dataflow.get("assignment_edges", 0)
+                df["call_edges"] = dataflow.get("call_edges", 0)
+            summary["dataflow"] = df
         except Exception:
             pass
 
@@ -347,14 +350,26 @@ def _extract_var_rename_hints(cfunc) -> list:
 
             # 1. IDA type info — highest confidence
             try:
-                tinfo = getattr(v, "type", None)
+                tinfo_attr = getattr(v, "type", None)
+                # lvar_t.type is a bound method in SWIG bindings — call it to get
+                # the tinfo_t object, then stringify that. Accessing it as a
+                # property gives a method repr like "<bound method lvar_t.type...>"
+                if callable(tinfo_attr):
+                    try:
+                        tinfo = tinfo_attr()
+                    except Exception:
+                        tinfo = None
+                else:
+                    tinfo = tinfo_attr
                 if tinfo is not None:
-                    # tinfo's __str__ can return a hex memory address for
-                    # anonymous lvars — only feed a clean printable name
-                    # to the inference regex. Fall back to type name only
-                    # when it's a real type string, not a memory address.
-                    type_str = str(tinfo).strip()
-                    if not type_str or type_str.startswith(("0x", "0X")):
+                    # Prefer tinfo_t.dstr() when available (clean type string);
+                    # fall back to str() which can still return a hex address for
+                    # anonymous lvars.
+                    if hasattr(tinfo, "dstr"):
+                        type_str = tinfo.dstr().strip()
+                    else:
+                        type_str = str(tinfo).strip()
+                    if not type_str or type_str.startswith(("0x", "0X", "<")):
                         raise ValueError("anonymous lvar (no type name)")
                     type_str = type_str.lower().strip("* ")
                     # Strip pointer/array decorators for name inference.

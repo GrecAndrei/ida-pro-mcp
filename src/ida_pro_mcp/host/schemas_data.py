@@ -722,6 +722,11 @@ TOOL_ARG_SCHEMAS = {
         "limit": {"type": "integer"},
         "field_name": {"type": "string"},
         "target": {"type": "string"},
+        "details": {"type": "boolean", "description": "decompile: include verbose enrichment (var_rename_hints, annotated_code, complexity, dataflow top_hubs). Default false."},
+        "window": {"type": "integer", "description": "disasm: ±N instructions around the start address."},
+        "structured": {"type": "boolean", "description": "disasm: return per-instruction JSON instead of text."},
+        "include_comments": {"type": "boolean"},
+        "annotate_branches": {"type": "boolean"},
     },
     "ctree": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["ctree"]},

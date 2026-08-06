@@ -82,6 +82,7 @@ def code(
     field_name: Annotated[Optional[str], "Struct field name (for xrefs_to_field)"] = None,
     target: Annotated[Optional[str], "Target address (for find_paths)"] = None,
     comment: Annotated[Optional[str], "Comment text (for annotate action)"] = None,
+    details: Annotated[bool, "Include verbose enrichment fields in decompile output: var_rename_hints, annotated_code, complexity, callers/callees/strings lists, dataflow graph. Default False — omit to keep response compact."] = False,
     **kwargs
 ) -> list[dict] | dict:
     """
@@ -90,10 +91,12 @@ def code(
     ACTIONS:
 
     decompile - Decompile function to Pseudo-C (requires Hex-Rays)
-        Params: addrs (REQUIRED)
-        Returns: [{addr, code, prototype}] or {addr, error}
+        Params: addrs (REQUIRED), details (bool, default false)
+        Returns: [{addr, code, prototype, structure, api_calls, dangerous_patterns}]
+        Pass details=true to also get: var_rename_hints, annotated_code, complexity,
+          dataflow top_hubs/edge_counts, blackboard_context
         Example: code(action="decompile", addrs="0x401000")
-        Example: code(action="decompile", addrs=["main", "0x402000"])
+        Example: code(action="decompile", addrs="0x401000", details=true)
 
     disasm - Get assembly listing (LLM-compact text, one line per instruction)
         Params: addrs (REQUIRED), optional end, window (±N instructions around addrs),
@@ -312,10 +315,9 @@ def code(
                             "addr": hex_ea(func.start_ea),
                             "code": pseudo,
                             "prototype": get_prototype(func),
-                            "structure": _build_function_structure_summary(func, cfunc),
+                            "structure": _build_function_structure_summary(func, cfunc, details=details),
                         }
-                        # Inline enrichment shared with smart_decompile so the two
-                        # decompilation entrypoints do not drift apart.
+                        # Inline enrichment — heavy fields gated behind details=True
                         try:
                             enrichment = _build_decompile_enrichment(
                                 func.start_ea,
@@ -325,21 +327,33 @@ def code(
                                 include_switch_cases=False,
                                 api_limit=12,
                             )
+                            # Always include: api_calls, dangerous_patterns, crypto_hints
+                            # — actionable signal an agent needs immediately.
+                            _ALWAYS_FIELDS = {"api_calls", "dangerous_patterns", "crypto_hints"}
+                            # Opt-in via details=True: verbose/duplicate fields
+                            _DETAILS_FIELDS = {
+                                "var_rename_hints", "complexity", "blackboard_context",
+                            }
                             for key, value in enrichment.items():
-                                if value:
-                                    result_entry[key] = value
-                            # Pseudocode annotation overlay
-                            try:
-                                annotated = annotate_pseudocode(
-                                    pseudo, func.start_ea,
-                                    enrichment.get("blackboard_context", []),
-                                    enrichment.get("dangerous_patterns", []),
-                                    cfunc=cfunc,
-                                )
-                                if annotated != pseudo:
-                                    result_entry["annotated_code"] = annotated
-                            except Exception:
-                                pass
+                                if not value:
+                                    continue
+                                if key in _DETAILS_FIELDS and not details:
+                                    continue
+                                result_entry[key] = value
+                            # annotated_code is opt-in: only when it adds something
+                            # AND the caller asked for details
+                            if details:
+                                try:
+                                    annotated = annotate_pseudocode(
+                                        pseudo, func.start_ea,
+                                        enrichment.get("blackboard_context", []),
+                                        enrichment.get("dangerous_patterns", []),
+                                        cfunc=cfunc,
+                                    )
+                                    if annotated != pseudo:
+                                        result_entry["annotated_code"] = annotated
+                                except Exception:
+                                    pass
                         except Exception:
                             pass
                         results.append(result_entry)

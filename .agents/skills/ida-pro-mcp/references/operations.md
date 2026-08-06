@@ -1647,6 +1647,10 @@ Input schema:
     "idb": {
       "type": "string",
       "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    },
+    "details": {
+      "type": "boolean",
+      "description": "Include verbose enrichment: var_rename_hints, annotated_code, complexity, dataflow top_hubs. Default false."
     }
   },
   "required": [

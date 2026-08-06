@@ -534,6 +534,21 @@ def find_llama_server_bin(install_root: Path) -> str:
     return ""
 
 
+def find_rerank_model(install_root: Path, profile: str = "qwen3-reranker-0.6b") -> str:
+    """Locate an already-installed rerank GGUF, mirroring the host's _find_rerank_model logic."""
+    env_val = os.environ.get("IDA_MCP_RERANK_MODEL", "").strip()
+    if env_val and Path(env_val).is_file():
+        return env_val
+    try:
+        from ida_pro_mcp.host.intelligence.rerank import _find_rerank_model
+        result = _find_rerank_model()
+        if result:
+            return result
+    except Exception:
+        pass
+    return ""
+
+
 def _platform_asset_hints() -> tuple[list[str], list[str]]:
     machine = (os.uname().machine if hasattr(os, "uname") else "").lower()
     if sys.platform == "win32":
