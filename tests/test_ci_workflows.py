@@ -11,13 +11,12 @@ import re
 from pathlib import Path
 
 import pytest
-import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 BUILD_SCRIPT = ROOT / "scripts" / "build_native_llama.sh"
 
-pytest.importorskip("yaml")
+yaml = pytest.importorskip("yaml")
 
 
 def _load_workflow(name: str) -> dict:
@@ -63,4 +62,10 @@ def test_llama_cpp_pin_matches_build_script():
 
     assert match.group(1) == ci_pin, (
         f"llama.cpp pin drifted: workflow={ci_pin} script={match.group(1)}"
+    )
+    # The workflow's verify grep must actually match the script line, or the
+    # pin check silently no-ops on CI.  Reconstruct the grepped pattern.
+    expected = f'LLAMA_CPP_COMMIT="${{LLAMA_CPP_COMMIT:-{ci_pin}}}"'
+    assert expected in script_text, (
+        "native-build.yml verify grep would not match build_native_llama.sh"
     )

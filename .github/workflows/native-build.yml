@@ -45,7 +45,7 @@ jobs:
       - name: Verify llama.cpp pin matches build script
         run: |
           grep -q "LLAMA_CPP_COMMIT: \"$LLAMA_CPP_COMMIT\"" .github/workflows/native-build.yml
-          grep -q "LLAMA_CPP_COMMIT=\"$LLAMA_CPP_COMMIT\"" scripts/build_native_llama.sh
+          grep -q 'LLAMA_CPP_COMMIT="${LLAMA_CPP_COMMIT:-'$LLAMA_CPP_COMMIT'}"' scripts/build_native_llama.sh
 
       - name: Install build deps
         run: |
