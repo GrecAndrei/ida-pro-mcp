@@ -54,9 +54,19 @@ def test_client_config_carries_the_selected_embedding_profile(tmp_path):
         embed_model="/models/zembed-1-Q4_K_M.gguf",
         embed_server_bin="/bin/llama-server",
         embed_profile="zembed-1",
+        rerank_model="/models/qwen3-reranker-0.6b-Q4_K_M.gguf",
+        rerank_profile="qwen3-reranker-0.6b",
     )
     assert config["env"]["IDA_MCP_EMBED_PROFILE"] == "zembed-1"
     assert config["env"]["IDA_MCP_EMBED_MODEL"].endswith("zembed-1-Q4_K_M.gguf")
+    assert config["env"]["IDA_MCP_RERANK_MODEL"].endswith("qwen3-reranker-0.6b-Q4_K_M.gguf")
+    assert config["env"]["IDA_MCP_RERANK_PROFILE"] == "qwen3-reranker-0.6b"
+
+
+def test_client_config_omits_rerank_env_when_unset(tmp_path):
+    config = build_stdio_config(tmp_path / "python", tmp_path)
+    assert "IDA_MCP_RERANK_MODEL" not in config["env"]
+    assert "IDA_MCP_RERANK_PROFILE" not in config["env"]
 
 
 def test_gemini_backend_cli_args_parse():

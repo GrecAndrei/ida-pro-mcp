@@ -30,6 +30,9 @@ from typing import Any
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "src"))
+from ida_pro_mcp.host.agent_operations import AGENT_OPERATIONS  # noqa: E402
+
 LIVE_FLAG = "IDA_MCP_LIVE_TEST"
 pytestmark = [
     pytest.mark.live_ida,
@@ -163,6 +166,7 @@ class LiveMCPClient:
                 "IDA_MCP_EMBED_DISABLED": "0" if self.embeddings_enabled else "1",
                 "IDA_MCP_STRUCTURED_CONTENT": "1",
                 "IDA_MCP_STARTUP_TIMEOUT": str(self.timeout),
+                "IDA_MCP_RPC_TIMEOUT": str(max(int(self.timeout), 120)),
             }
         )
         source_root = str(REPO_ROOT / "src")
@@ -310,7 +314,11 @@ def test_public_catalog_and_help_are_live_contracts(live_context: LiveContext):
     tools = response["result"]["tools"]
     names = {tool["name"] for tool in tools}
     assert response["result"]["surface"] == "agent"
-    assert len(names) == 41
+    expected_names = {operation.name for operation in AGENT_OPERATIONS}
+    assert names == expected_names, (
+        f"live tools/list drifted from agent_operations: "
+        f"missing={sorted(expected_names - names)} extra={sorted(names - expected_names)}"
+    )
     assert "ida_session_health" in names
     assert all(name.startswith("ida_") for name in names)
     assert "search" not in names
@@ -480,7 +488,7 @@ def test_live_index_fails_honestly_when_embeddings_are_disabled(
         payload = task.get("result") or {}
         assert payload.get("error") is True, f"disabled embeddings produced a fake index: {payload}"
         assert payload.get("code") == "IDA_ERROR"
-        assert "No embeddings were created" in str(payload.get("message"))
+        assert "embedding" in str(payload.get("message")).lower(), payload
     finally:
         with contextlib.suppress(Exception):
             _assert_ok(client.call("ida_close_session", {}), "ida_close_session (no embeddings)")

@@ -27,7 +27,12 @@ CRITICAL = {
     "search": {
         "pattern", "query", "action", "limit", "mode", "intent",
         "semantic_min_score", "constraints", "include_items", "timeout_ms",
-        "target", "ea", "addr",
+        "target", "ea", "addr", "scope", "metric", "top", "top_k", "depth", "radius",
+    },
+    "code": {
+        "action", "addr", "addrs", "rule_type", "threshold", "apis",
+        "strict_order", "pattern", "type_pattern", "register", "rule",
+        "name", "target", "limit",
     },
     "funcs": {
         "action", "addr", "force", "limit", "min_score", "threshold", "top_k",

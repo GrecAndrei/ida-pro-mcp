@@ -753,6 +753,7 @@ class IDAMCPServer(
         if self._usage_intel:
             self._usage_intel._notify = self._send_notification
             self._usage_intel.start()
+        print("ida-pro-mcp server ready", file=sys.stderr, flush=True)
         try:
             while True:
                 if self._shutdown_requested:
@@ -821,6 +822,7 @@ class IDAMCPServer(
 
     def run_daemon(self):
         _write_pidfile()
+        print("ida-pro-mcp daemon ready", file=sys.stderr, flush=True)
         sock = _socket_mod.socket(_socket_mod.AF_UNIX, _socket_mod.SOCK_STREAM)
         sock.bind(DAEMON_SOCKET)
         # A daemon can serve many independent MCP clients.  A larger backlog

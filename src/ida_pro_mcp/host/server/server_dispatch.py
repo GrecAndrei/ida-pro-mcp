@@ -161,13 +161,21 @@ def _long_running_sock_timeout(tool_name: str, rpc_args: dict) -> int:
     anything not in ``LONG_RUNNING_ACTIONS``. For whitelist entries,
     returns at least 120s, adds 30s on top of any caller-supplied
     timeout arg, and always clamps to the ``IDA_MCP_RPC_MAX_RECV_TIMEOUT``
-    env cap so no caller can pin the dispatcher forever.
+    env cap so no caller can pin the dispatcher forever.  A user-raised
+    ``IDA_MCP_RPC_TIMEOUT`` default also raises the floor: operators who
+    configure a 300s default expect long scans to survive at least that
+    long, not to die at the 120s built-in floor.
     """
     try:
         cap = int(os.environ.get("IDA_MCP_RPC_MAX_RECV_TIMEOUT", "600"))
     except Exception:
         cap = 600
     cap = max(cap, 30)
+    try:
+        env_default = int(os.environ.get("IDA_MCP_RPC_TIMEOUT", "30"))
+    except Exception:
+        env_default = 30
+    floor = max(120, env_default)
 
     action = str(rpc_args.get("action") or "")
     if (tool_name, action) not in LONG_RUNNING_ACTIONS:
@@ -181,7 +189,7 @@ def _long_running_sock_timeout(tool_name: str, rpc_args: dict) -> int:
             full_index_timeout = int(os.environ.get("IDA_MCP_FULL_INDEX_RPC_TIMEOUT", "600"))
         except Exception:
             full_index_timeout = 600
-        return min(max(120, full_index_timeout), cap)
+        return min(max(floor, full_index_timeout), cap)
 
     requested = (
         rpc_args.get("timeout")
@@ -192,7 +200,7 @@ def _long_running_sock_timeout(tool_name: str, rpc_args: dict) -> int:
         n = int(requested) if requested is not None else 0
     except Exception:
         n = 0
-    candidate = max(120, n + 30) if n else 120
+    candidate = max(floor, n + 30) if n else floor
     return min(candidate, cap)
 
 

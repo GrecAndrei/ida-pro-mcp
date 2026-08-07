@@ -371,7 +371,7 @@ def search(
                 range_end=range_end,
                 center_ea=center_ea,
                 radius=raw_radius,
-                rerank=bool(kwargs.get("rerank", True)),
+                rerank=None if kwargs.get("rerank") is None else bool(kwargs.get("rerank")),
             )
 
         elif action == "behavior":

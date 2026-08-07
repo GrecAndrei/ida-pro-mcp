@@ -974,6 +974,8 @@ def build_stdio_config(
     embed_server_bin: str = "",
     embed_profile: str = "",
     embed_backend: str = "",
+    rerank_model: str = "",
+    rerank_profile: str = "",
     gemini_api_key: str = "",
     gemini_vertex_project: str = "",
     gemini_vertex_location: str = "",
@@ -1026,6 +1028,10 @@ def build_stdio_config(
         env["IDA_MCP_EMBED_SERVER_BIN"] = embed_server_bin
     if embed_profile:
         env["IDA_MCP_EMBED_PROFILE"] = embed_profile
+    if rerank_model:
+        env["IDA_MCP_RERANK_MODEL"] = rerank_model
+    if rerank_profile:
+        env["IDA_MCP_RERANK_PROFILE"] = rerank_profile
     if str(embed_backend or "").lower() == "gemini":
         env["IDA_MCP_EMBED_BACKEND"] = "gemini"
         if gemini_api_key:

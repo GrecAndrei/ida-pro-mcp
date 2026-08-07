@@ -273,7 +273,7 @@ def _handle_background_mode(args):
     return 0
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Ephemeral JSON-safe CLI for ida-pro-mcp",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -282,7 +282,7 @@ def main() -> int:
             "  ida-pro-mcp-cli rpc tools/list '{}'\n"
             "  ida-pro-mcp-cli tool session '{\"action\":\"status\"}'\n"
             "  ida-pro-mcp-cli raw '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}'\n"
-             "  ida-pro-mcp-cli intelligence status\n"
+            "  ida-pro-mcp-cli intelligence status\n"
             "  ida-pro-mcp-cli background submit '{\"script\":\"print(idc.get_idb_path())\"}'\n"
             "  ida-pro-mcp-cli background status\n"
             "  ida-pro-mcp-cli background result '{\"task_id\":\"abc123\"}'\n"
@@ -333,13 +333,17 @@ def main() -> int:
         nargs="*",
         help="Additional args",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     payload = None
     if args.stdin_json:
         payload = _read_stdin_json(label=args.mode)
     elif args.payload is not None:
         payload = _load_json_arg(args.payload, label="payload")
+    elif args.mode == "raw" and args.name is not None:
+        # raw mode takes the full JSON-RPC object as the second positional
+        # argument (documented in the epilog): mode raw '<json>'.
+        payload = _load_json_arg(args.name, label="payload")
 
     client = MCPStdioClient(_server_cmd())
     try:

@@ -356,3 +356,36 @@ def test_needs_rebuild_fires_when_embedding_format_changes(tmp_path):
         embedding_format = "profile-v1:b"
 
     assert index.needs_rebuild(_FormatB()) is True
+
+
+def test_reader_auto_refreshes_after_rebuild_replaces_rows(tmp_path):
+    """A rebuild (rows deleted + rewritten with different vectors) must not
+    keep serving stale in-RAM vectors on the next read.
+
+    Regression: after index_batch upgraded an index from fast to full
+    quality, search/nl kept ranking against the pre-rebuild vectors because
+    the assembler-cached index only refreshed when empty.  The read path
+    now notices the DB mtime moved and reloads."""
+    import sqlite3
+    import time
+
+    db_path = str(tmp_path / "sample.embeddings.db")
+    writer = FunctionEmbeddingIndex(db_path, _KeywordEmbedder())
+    assert writer.index("0x401000", "alpha_fn", "alpha body") is True
+
+    reader = FunctionEmbeddingIndex(db_path, _KeywordEmbedder())
+    assert reader.size == 1
+    hits = reader.similar_vec([1.0, 0.0], top_k=1, threshold=0.0)
+    assert hits and hits[0]["ea"] == "0x401000"
+
+    time.sleep(0.01)
+    # Simulate a full rebuild: the only row is deleted and rewritten with a
+    # different embedding (gamma -> [-1, 0]).
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DELETE FROM func_embeddings")
+        conn.commit()
+    rebuilder = FunctionEmbeddingIndex(db_path, _KeywordEmbedder())
+    assert rebuilder.index("0x401000", "gamma_fn", "gamma body") is True
+
+    hits = reader.similar_vec([1.0, 0.0], top_k=1, threshold=0.0)
+    assert hits == [], "stale pre-rebuild vectors leaked into the ranking"

@@ -2,6 +2,223 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-08-07 — intelligence control-plane coverage + reranker busy-queue fix
+
+- **Reranker lock contention retired a healthy shared server**: the
+  inter-process lock raises `EmbeddingQueueTimeout`, but the reranker's
+  handlers caught `RerankQueueTimeout` — unrelated classes.  A busy queue
+  fell through to the generic error path, was misclassified as a request
+  timeout, and recycled the shared reranker.  `_RerankInterProcessLock`
+  now translates the shared lock's timeout into `RerankQueueTimeout`, so
+  contention returns `None` cleanly without retiring the server.
+- **`ContextAssembler` control plane was ~22% covered**: new
+  `tests/host/intelligence/test_context_assembler.py` +
+  `test_context_enrichment.py` drive the tuning/threshold/circuit-breaker
+  math and the full `assemble()` pipeline with fake embedder/classifier/
+  blackboard doubles (decompile enrichment, search enrichment, next-target
+  suggestion, related-address graph, housekeeping).  `context.py` now 81%.
+  Also fixed a stats-cache aliasing bug: `_session_retrieval_stats`
+  returned shallow copies, so a caller mutating a bucket corrupted the
+  cache; store/read are now deep-copied.
+- **`Reranker` lifecycle was 26% covered**: `tests/host/intelligence/
+  test_reranker_lifecycle.py` covers discovery (env/state/HF cache),
+  lease matching/retirement, idle shutdown, recycling limits, the
+  subprocess start path (mocked `Popen` + health), request parsing,
+  chunked `rerank()` index offsetting, and singleton/reset/status.
+  `rerank.py` now 86%.
+- **Threat-corpus holder + cache pipeline untested**: `tests/host/
+  intelligence/test_threat_corpus.py` covers `ThreatCorpus` indexes and
+  lookups, serialization + V1 migration, the per-source cache manifest
+  round-trip, legacy-file backup, and the lazy singleton (build from
+  sources, auto-download, invalidation).  `threat_corpus.py` now 84%.
+- **`insight_paths` / `scope_window` were 0% covered**: path-resolution
+  fallbacks and half-open address-window helpers now have unit tests.
+
+## 2026-08-07 — threat-corpus + scanner test coverage wave
+
+- **`parse_cwe_xml` missed `Technical_Impact` scopes**: the consequence
+  whitelist only matched `Scope`, `Consequence_Scope`, and the nonexistent
+  `Technical_Impact_Scope` — the real CWE catalog uses
+  `Technical_Impact`, so every CWE entry lost its technical-impact scopes.
+  Fixed in `threat_corpus.py`.
+- **Threat-corpus source parsers were 0% covered**: `tests/
+  host/intelligence/test_threat_sources.py` drives every `SourceParser`
+  (`attack`, `cwe`, `lolbas`, `sigma_rules`, `urlhaus`, `findcrypt`,
+  `yara`, `yara_rules_extra`) with local fixtures — STIX bundles, CWE XML,
+  LOLBAS JSON, Sigma YAML, URLhaus JSON, YARA trees — plus the base-class
+  `download`/`fingerprint` contract and zip-extraction hooks.  Coverage
+  went 0% → 61–93% per module.
+- **`yara_scanner` was 28% covered**: `tests/host/intelligence/
+  test_yara_scanner.py` covers compile/load/cache, byte/file/address-range
+  scans (chunking, base offsets, read failures, byte budget), rule-file
+  iteration, and the `YaraScanner` lifecycle.  Now 75%.
+- **`ContextDensityOptimizer` compaction paths untested**: `tests/host/
+  test_context_density.py` extended to cover hex-dump/xref/string
+  compaction, address bucketing, budget-driven list truncation with
+  critical-key preservation, the legacy `optimize` shim, and density edge
+  cases.  Coverage 34% → ~90%.
+
+## 2026-08-07 — CI + reproducibility hardening
+
+- **CI ran the live-IDA integration suite**: `standalone-tests.yml` invoked
+  `pytest` over the whole tree, and with a C compiler present
+  `test_ida_live_integration.py` is not skipped — each of its five classes
+  then waited out its 120s server-startup timeout in a CI runner that has no
+  licensed IDA. The workflow now ignores `tests/integration` (the suite is
+  exercised locally against live sessions, per AGENTS.md).
+- **Live harness hung on a dead server process**:
+  `MCPIntegrationClient.start()` polled its stderr queue until the timeout
+  even after the stdio server exited (e.g. no IDA installed). It now fails
+  fast the moment the process dies before printing the ready line.
+- **llama.cpp pin lived only in a workflow comment**: the native-build CI
+  claimed the commit was documented in `mcp_llama.cpp`, which never
+  contained it. The canonical `LLAMA_CPP_COMMIT` default now lives in
+  `scripts/build_native_llama.sh` (with a git-HEAD mismatch warning), and
+  CI fails if the workflow env drifts from it.
+- **New `tests/test_ci_workflows.py`**: two local guard rails — the
+  standalone workflow ignores `tests/integration`, and the native-build
+  workflow's llama.cpp pin matches the build script's canonical default.
+
+## 2026-08-07 — search-analyze scopes + code-detect reachability
+
+- **`search analyze` outlier `tiny`/`huge` were dead code**: the metrics were
+  advertised and schema-validated, but only `size|complexity|bb_count` were
+  ever checked, so `tiny`/`huge` fell through to an empty call-graph result.
+  Both are now index-backed via `func_size` with threshold/order, and a
+  direct-IDA fallback (`_outlier_rows_from_ida`) keeps `size`/`tiny`/`huge`/
+  `bb_count` working with no embedding index; `complexity` returns a clear
+  NOT_FOUND telling the caller to index first.
+- **Call-graph edges only scanned the function's first byte**:
+  `_func_callees` collected xrefs from `XrefsFrom(func.start_ea)` alone, so
+  nearly every function looked like a leaf — callers/callees, reachability,
+  paths, and the vulnerable scope all under-reported. Edges are now collected
+  from every instruction in the body, and call targets that are not yet
+  functions (PLT stubs mid-analysis) resolve by name to the import function.
+- **`search analyze vulnerable` skipped the interesting part of the binary**:
+  it iterated every function, missing the taint-reachable sink unless it was
+  globally dangerous-looking. It now walks only functions reachable from taint
+  sources, bridges PLT stubs and import functions that share a base name
+  (`.read` vs `read`), and normalizes stub names before the dangerous-API
+  match. Live fixture: `read` → `memcpy` in `rich_taint_path` is surfaced.
+- **`search/combinators.py` referenced an undefined `_coerce_ea`** (imported
+  from `.advanced` but not exported there), which would NameError at runtime
+  in the similar/semantic/vulnerable paths. Import fixed.
+- **`code(action='detect')` was unreachable through MCP**: the host arg
+  admission rejected every detector parameter (`rule_type`, `apis`, `chain`,
+  `strict_order`, `pattern`, `string`, `type_pattern`, `type`, `name`,
+  `rule_name`, `register`, `rule`, `list_detectors`, `delete_detector`,
+  `function`) plus `search.scope`, and the action itself was gated behind the
+  `addrs` pre-check ("Address is required"). The schema now admits them,
+  `detect` runs before the address gate, and the named `target` parameter is
+  folded back into the detector kwargs so `caller_of`/`callee_of` work.
+- **Detector helpers broke on IDA 9.3**: `_iter_all_functions` called
+  `idaapi.get_next_func` (returns a `func_t` object in 9.x — `int()` blew up),
+  and `_detect_string_refs` used the nonexistent `idautils.Strings().count`.
+  Both now use the 9.x-safe iteration helpers proven in the `data` tool.
+- **Live-suite hardening**: the fixture gained `rich_taint_path` (read then
+  memcpy) and an 11-byte `rich_tiny`; a new `TestSearchAnalyzeIntegration`
+  class asserts real match content; the vulnerable test waits for observable
+  hits instead of the unreliable watchdog verdict, and the module declares a
+  900s pytest-timeout so analysis-backed setUpClass calls are not killed by
+  the global 30s default.
+
+## 2026-08-07 — per-candidate embedding latency fix
+
+- **`search(action='find')` and name resolution embedded every candidate**:
+  `semantic_score()` ran one native llama embedding per matched name, string,
+  import, comment, and instruction — tens to hundreds of sequential 6–10s
+  inferences, so a `find` on a 21-function fixture took ~3.5 minutes.  Scoring
+  is now two-phase: a deterministic subword/ngram pass ranks the whole pool
+  instantly, then a single batched call re-embeds only the top candidates
+  (capped at 24 for find, 64 elsewhere) for phrase-like queries.  A
+  decisive-winner gate skips embedding entirely when the deterministic score
+  already dominates; identifier-like queries never embed (exact/substring
+  matching is decisive there).  Live fixture `find("fixture_entry")` dropped
+  from ~3.5 min to ~0.3 s.
+- **Embedding cache at the native backend**: `NativeEmbedder` now caches
+  (purpose, text) -> vector (bounded FIFO, 4096 entries) so repeated queries,
+  candidates, and anchor texts never pay a second inference in one session.
+- **Deterministic scorer understands identifiers**: snake_case/camelCase names
+  are split into subwords, and substring + edit-similarity bonuses restore the
+  ranking signal typo'd and compound names used to get only from embeddings.
+- **Consistent rerank context default**: `IDA_MCP_RERANK_CTX` now defaults to
+  1024 on both the HTTP and native backends (was 2048 vs 1024); docs and the
+  installer wizard note the rerank pool/budget/context knobs.
+- **Installer wrote no rerank env to client configs**: `build_stdio_config()`
+  emitted `IDA_MCP_RERANK_MODEL` / `IDA_MCP_RERANK_PROFILE` only when the
+  backend forced them; the installer now passes both through in the Gemini
+  and native paths so Claude Desktop / Cursor / VS Code blocks carry the
+  chosen reranker, and the wizard surfaces the rerank pool/budget/context
+  knobs.
+- **Legacy live suite is now self-sufficient**: `test_ida_live_integration.py`
+  auto-builds a detector-rich fixture (XOR-heavy code, string refs, malloc/free
+  chain, globals, call graph) when `IDA_MCP_TEST_BINARY` is unset, and the
+  caller_of/callee_of tests now actually invoke the detector rules.  10/10
+  against a real IDA session.
+
+## 2026-08-07 — semantic-search latency/consistency fixes
+
+- **Quick-mode searches silently forced the cross-encoder**: `search(action='nl')`
+  forwarded `rerank=bool(kwargs.get('rerank', True))`, so an absent `rerank`
+  defaulted to `True` and every quick-mode search re-scored up to 12 documents
+  on the CPU native backend — a multi-minute burn the host RPC timeout then
+  reported as a hang. The dispatcher now forwards a tri-state (absent -> `None`
+  = auto: on in expand, off in quick; explicit true/false force/skip), and the
+  live agent-surface suite's quick-mode search dropped from 10+ minutes to ~11s.
+- **Rebuilt indexes kept serving stale vectors**: `FunctionEmbeddingIndex`
+  cached vectors in RAM, and `search/nl` only refreshed when the cache was
+  empty — so after `index_batch` upgraded an index from fast to decompile
+  quality, searches ranked against the pre-rebuild generation (the suite saw
+  `puts`, a libc stub, rank top for a fixture query). The index now detects a
+  rewritten DB via the newest mtime across the DB and its WAL/SHM sidecars and
+  reloads at the vector-read choke point; `get_backend()` refreshes eagerly
+  when the DB changed.
+- **Cached search responses survived index rebuilds**: indexing is not an
+  `@idawrite`, so `@idaread`-cached search results were never invalidated and a
+  repeated query after a rebuild returned the stale payload in 0s. Indexing
+  actions (`index_function`, `index_batch`/`fast`/`range`, `refresh_anchors`)
+  now invalidate the tool cache — via the exact import path the `idaread`
+  wrapper uses, since a differently-imported `cache` module is a second
+  singleton and invalidation would silently no-op.
+- **`misc(action='reload')` did not re-point the server registry**:
+  `server_script.load_tools()` stores direct function references in `TOOLS`, so
+  reloading a module kept serving the old function object (and its old action
+  `Literal`). Reload now re-executes flat tool files under the same loader the
+  server uses, reloads package tools in place, and swaps the fresh function
+  into every `TOOLS` registry it finds.
+- **Regression tests**: dispatcher rerank tri-state forwarding, reader
+  auto-refresh after a rebuild replaces rows, plus the existing Literal
+  contract and rerank-pipeline suites. Live agent-surface suite: 8/8 passing.
+
+## 2026-08-07 — action-Literal contract fixes + live-suite repair
+
+- **`read_bytes` was unreachable**: `data(action='read_bytes')` had a handler
+  branch and a registry entry but was missing from the IDA-side `action`
+  `Literal`, so every call (including the public `ida_read_bytes` operation)
+  was rejected with "Unknown action" before reaching the handler. Added it to
+  the `Literal`, the action description, and the docstring; verified live
+  against IDA 9.3.
+- **`funcs(action='list')` was unreachable** for the same reason (handler +
+  registry entry existed, `Literal` did not). Added to the `Literal`.
+- **`memory` advertised ghost actions** `read_file`/`write_file` — they are
+  implemented in `misc`, not `memory`, and would fail at runtime. Removed from
+  the registry, the tool description, and policy classification.
+- **`code(action='trace_argument_origin')` was implemented but never
+  advertised** — added to the registry so the host admits the call.
+- **New contract test** (`test_tool_registry.py::TestIdaSideLiteralContract`):
+  every action the host advertises for an IDA-side tool must exist in that
+  tool's `action` `Literal`, and vice versa (modulo dynamic wrapper actions).
+  This is the regression guard for the `read_bytes`/`funcs list` bugs.
+- **CLI fixes + coverage**: `raw '<json>'` now accepts the JSON-RPC object as
+  the documented second positional argument (previously only the third slot
+  worked, contradicting the epilog); fixed a mis-indented epilog line; added
+  `main(argv=...)` for testability and a 24-test suite for the CLI.
+- **Live integration harness repair**: `test_ida_live_integration.py`
+  computed `PROJECT_ROOT` one level too shallow, so it spawned a nonexistent
+  shim and every test timed out and skipped. The stdio/daemon servers now also
+  emit a `... server ready` line on stderr so readiness-based harnesses can
+  synchronize instead of waiting out a full timeout.
+
 ## 2026-08-05 — removed the deprecated `ida://` MCP resource surface
 
 The `ida://` MCP resources (`resources/list`, `resources/read`, and

@@ -30,6 +30,27 @@ EXPANSION_MIN_CONFIDENCE = float(
     os.environ.get("IDA_MCP_EXPANSION_MIN_CONFIDENCE", "0.50") or 0.50
 )
 
+# Cross-encoder rerank budget.  The native CPU backend costs roughly
+# 0.5-5s per (query, doc) pair on an 8-core box, so an unbounded pool turns
+# a "quick" search into a silent multi-minute CPU burn that the host RPC
+# timeout then reports as a hang.  These caps keep the rerank phase bounded
+# while preserving its purpose: re-ordering the TOP of the recall list, not
+# re-scoring the long tail.
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "") or default)
+    except (TypeError, ValueError):
+        return default
+
+
+# Max (query, doc) pairs scored by the cross-encoder in one search.
+RERANK_POOL_MAX = max(1, _env_int("IDA_MCP_RERANK_POOL", 12))
+# Per-document character budget handed to the cross-encoder (~260 tokens).
+# Longer docs are what make a 12-pair rerank take minutes on CPU (a 0.6B
+# cross-encoder runs at ~15-60 tok/s on an 8-core box); the first ~250
+# tokens of a function's pseudocode carry the decisive signal.
+RERANK_DOC_BUDGET_CHARS = max(256, _env_int("IDA_MCP_RERANK_DOC_BUDGET_CHARS", "800"))
+
 # Bounded document text handed to the cross-encoder when a candidate has no
 # persisted document_text (legacy index row).  Matches the reranker's own
 # payload truncation so the decompile fallback never exceeds it.
@@ -64,9 +85,11 @@ def get_backend():
         )
 
     idx = asm._get_index(idb_path)
-    if idx.size == 0:
+    if idx.size == 0 or idx.db_changed_since_load():
         # The host may have copied an exact-binary index into this session
-        # after the IDA-side assembler first cached an empty reader.
+        # after the IDA-side assembler first cached an empty reader, or the
+        # index was rebuilt (fast -> decompile quality) behind our back.
+        # Either way the in-RAM vectors are stale and must be reloaded.
         try:
             idx.refresh_from_disk()
         except Exception:
@@ -117,7 +140,7 @@ def search_nl(
     range_end: int | None = None,
     center_ea: int | None = None,
     radius: int | None = None,
-    rerank: bool = True,
+    rerank: bool | None = None,
 ) -> dict:
     """Natural language search via FunctionEmbeddingIndex.
 
@@ -130,8 +153,10 @@ def search_nl(
         include_items: Include structured items in response.
         classifier_threshold: Confidence threshold for behavior expansion.
         rerank: Cross-encode the recalled candidates with the reranker to fix
-            the top of the list (default True; a no-op when no rerank model
-            is installed or the model is non-discriminating).
+            the top of the list.  None (default) auto-selects: applied in
+            "expand" mode, skipped in "quick" mode so quick stays bounded;
+            pass True to force or False to disable.  A no-op when no rerank
+            model is installed or the model is non-discriminating.
 
     Returns:
         Response dict with results, similarity scores, and expansion metadata.
@@ -292,7 +317,16 @@ def search_nl(
     # or returns non-discriminating scores (e.g. a headless conversion), the
     # recall order is preserved and the response says why.
     rerank_meta = {"profile": None, "applied": False, "pool": 0, "latency_ms": 0}
-    if rerank and raw_results:
+    want_rerank = bool(rerank) if rerank is not None else (mode == "expand")
+    if not want_rerank:
+        if rerank is None:
+            rerank_meta["reason"] = (
+                f"quick mode keeps latency bounded; pass rerank=true to force "
+                f"cross-encoder re-scoring (pool capped at {RERANK_POOL_MAX})"
+            )
+        else:
+            rerank_meta["reason"] = "rerank disabled by caller"
+    if want_rerank and raw_results:
         try:
             from ida_pro_mcp.host.intelligence.rerank import Reranker
             from ida_pro_mcp.host.intelligence.rerank import RERANK_MAX_CANDIDATES
@@ -305,7 +339,7 @@ def search_nl(
             except Exception:
                 rr = None
             if rr is not None and getattr(rr, "_use_llama", False):
-                pool = raw_results[:RERANK_MAX_CANDIDATES]
+                pool = raw_results[: min(RERANK_MAX_CANDIDATES, RERANK_POOL_MAX)]
                 eas = [str(r.get("ea") or "") for r in pool]
                 docs: list[str] = []
                 stored = idx._row_docs_for_eas(eas) if hasattr(idx, "_row_docs_for_eas") else {}
@@ -318,7 +352,7 @@ def search_nl(
                             doc = str(cfunc)[:RERANK_MAX_DOC_CHARS] if cfunc else ""
                         except Exception:
                             doc = ""
-                    docs.append(doc or str(r.get("name") or ea))
+                    docs.append((doc or str(r.get("name") or ea))[:RERANK_DOC_BUDGET_CHARS])
                 rerank_started = _time.time()
                 scored = rr.rerank(query, docs) if docs else None
                 rerank_meta["latency_ms"] = round((_time.time() - rerank_started) * 1000)

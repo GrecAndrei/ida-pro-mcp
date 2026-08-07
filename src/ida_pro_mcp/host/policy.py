@@ -151,12 +151,10 @@ LOCAL_CODE_EXEC_ACTIONS = {
 }
 
 FILESYSTEM_WRITE_ACTIONS = {
-    ("memory", "write_file"),
     ("misc", "write_file"),
 }
 
 FILESYSTEM_READ_ACTIONS = {
-    ("memory", "read_file"),
     ("misc", "read_file"),
 }
 

@@ -168,7 +168,7 @@ def _install_ida_stubs():
     sys.modules.setdefault("ida_fixup", types.ModuleType("ida_fixup"))
 
 
-def _run_search_nl(index, query, scripted):
+def _run_search_nl(index, query, scripted, mode="quick", rerank=True):
     """Call semantic.search_nl with the fake index and scripted reranker."""
     import ida_pro_mcp.host.intelligence.rerank as rerank_mod
     import ida_pro_mcp.ida_mcp.tools.search.semantic as sem
@@ -190,8 +190,9 @@ def _run_search_nl(index, query, scripted):
         return sem.search_nl(
             query,
             limit=3,
-            mode="quick",
+            mode=mode,
             min_score=0.0,
+            rerank=rerank,
         )
     finally:
         # The module object outlives this test (the conftest snapshot holds the
@@ -271,6 +272,48 @@ def test_rerank_skipped_when_no_reranker_installed():
     assert [i["addr"] for i in resp["items"]] == ["0x401000", "0x402000", "0x403000"]
 
 
+def test_quick_mode_auto_skips_rerank_unless_explicitly_requested():
+    import ida_pro_mcp.host.intelligence.rerank as rerank_mod
+    import ida_pro_mcp.ida_mcp.tools.search.semantic as sem
+
+    index = _FakeIndex(_results_three())
+    sem.get_backend = lambda: (index, _FakeClassifier(), "test.idb")
+
+    class _BoomReranker:
+        """Constructing a reranker in quick mode means the auto-skip failed."""
+
+        _use_llama = True
+
+        def __init__(self, *a, **k):
+            raise AssertionError("quick-mode search must not construct a reranker")
+
+    _orig_reranker = rerank_mod.Reranker
+    rerank_mod.Reranker = _BoomReranker
+    try:
+        resp = sem.search_nl("hash function", limit=3, mode="quick", min_score=0.0)
+    finally:
+        rerank_mod.Reranker = _orig_reranker
+
+    assert resp["ok"] is True
+    assert resp["rerank"]["applied"] is False
+    assert "quick mode" in resp["rerank"]["reason"]
+    assert [i["addr"] for i in resp["items"]] == ["0x401000", "0x402000", "0x403000"]
+
+
+def test_expand_mode_auto_reranks_with_bounded_pool():
+    index = _FakeIndex(_results_three())
+    # Rerank flips the order; expand mode applies it without an explicit flag.
+    scripted = {
+        "result": [{"index": 0, "score": 0.8}, {"index": 1, "score": 0.85}, {"index": 2, "score": 0.9}],
+        "profile": "Test Reranker",
+    }
+    resp = _run_search_nl(index, "hash function", scripted, mode="expand", rerank=None)
+
+    assert resp["ok"] is True
+    assert resp["rerank"]["applied"] is True
+    assert resp["items"][0]["addr"] == "0x403000"
+
+
 # ---------------------------------------------------------------------------
 # Reranker.reset — model switching without process restart
 # ---------------------------------------------------------------------------
@@ -295,3 +338,33 @@ def test_reset_default_ctx_is_bounded_by_profile_max():
     # A pair is a bounded document + query; 4096 covers every pair without a
     # laptop-sized KV cache.
     assert rr._ctx <= 4096
+
+
+def test_rpc_dispatcher_forwards_rerank_tristate_to_search_nl():
+    """The RPC dispatcher (`search(action='nl')`) must forward the caller's
+    rerank arg as a tri-state: absent -> None (auto), false -> False, true ->
+    True.  Regression: it used to default to `True`, so every quick-mode
+    search silently forced the cross-encoder and turned a bounded search
+    into a multi-minute CPU burn."""
+    import ida_pro_mcp.ida_mcp.tools.search as search_mod
+
+    captured = {}
+
+    def fake_impl(pattern, **kw):
+        captured.update(kw)
+        return {"ok": True, "items": []}
+
+    _orig_impl = search_mod._search_nl_impl
+    search_mod._search_nl_impl = fake_impl
+    try:
+        search_mod.search(action="nl", query="hash function", limit=3, mode="quick")
+        assert captured.get("rerank") is None, "absent rerank must stay None (auto)"
+        assert captured.get("mode") == "quick"
+
+        search_mod.search(action="nl", query="hash function", limit=3, mode="expand", rerank=False)
+        assert captured.get("rerank") is False
+
+        search_mod.search(action="nl", query="hash function", limit=3, rerank=True)
+        assert captured.get("rerank") is True
+    finally:
+        search_mod._search_nl_impl = _orig_impl

@@ -503,6 +503,12 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
                 default=True,
             ):
                 opts.download_rerank_model = True
+        ui.info(
+            "Rerank tuning knobs (optional env vars): IDA_MCP_RERANK_POOL "
+            "(recall pool, default 12), IDA_MCP_RERANK_DOC_BUDGET_CHARS "
+            "(per-document budget, default 800), IDA_MCP_RERANK_CTX "
+            "(per-pair context, default 1024)."
+        )
 
     opts.rollback_on_fail = _prompt_yes_no(
         "Rollback backed-up config files on failure?",
@@ -932,6 +938,8 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                     python_exe,
                     install_root,
                     embed_backend="gemini",
+                    rerank_model=opts.rerank_model_path,
+                    rerank_profile=opts.rerank_profile,
                     gemini_api_key=opts.gemini_api_key,
                     gemini_vertex_project=opts.gemini_vertex_project,
                     gemini_vertex_location=opts.gemini_vertex_location,
@@ -1029,6 +1037,8 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                     embed_model=embed_model,
                     embed_server_bin=embed_server,
                     embed_profile=opts.embed_profile,
+                    rerank_model=rerank_model,
+                    rerank_profile=opts.rerank_profile,
                     ida_install=getattr(opts, "_ida_install", None),
                     disable_policy=opts.disable_policy,
                 )

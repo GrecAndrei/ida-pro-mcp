@@ -7,8 +7,10 @@ name: Native Backend Build
 # to the HTTP backend).
 #
 # The llama.cpp source is pinned to the exact commit the current driver is
-# built and tested against — see src/ida_pro_mcp/native/mcp_llama.cpp.  Bump
-# this hash together with any driver change that needs a newer llama.cpp.
+# built and tested against.  The canonical default lives in
+# scripts/build_native_llama.sh (LLAMA_CPP_COMMIT); the check step below
+# fails the build if this env pin drifts from it.  Bump both together with
+# any driver change that needs a newer llama.cpp.
 
 on:
   push:
@@ -39,6 +41,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Verify llama.cpp pin matches build script
+        run: |
+          grep -q "LLAMA_CPP_COMMIT: \"$LLAMA_CPP_COMMIT\"" .github/workflows/native-build.yml
+          grep -q "LLAMA_CPP_COMMIT=\"$LLAMA_CPP_COMMIT\"" scripts/build_native_llama.sh
 
       - name: Install build deps
         run: |

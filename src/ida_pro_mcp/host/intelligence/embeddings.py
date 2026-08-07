@@ -276,6 +276,23 @@ def _safe_file_head_sha256(path: str, max_bytes: int = 16 * 1024 * 1024) -> str:
     return h.hexdigest()
 
 
+def _file_mtime_ns(path: str) -> int:
+    """Latest nanosecond mtime across a SQLite DB and its WAL/SHM sidecars.
+
+    The main ``.db`` file's mtime is NOT a reliable change signal under WAL
+    journaling: small commits live in the ``-wal`` file and only reach the
+    main file at checkpoint.  Tracking the newest of the three lets readers
+    cheaply detect an index rebuild regardless of journal mode.
+    """
+    latest = 0
+    for candidate in (path, path + "-wal", path + "-shm"):
+        try:
+            latest = max(latest, os.stat(candidate).st_mtime_ns)
+        except OSError:
+            continue
+    return latest
+
+
 def _safe_stat(path: str) -> tuple[int, int]:
     if not path or not os.path.isfile(path):
         return 0, 0
@@ -408,6 +425,7 @@ class FunctionEmbeddingIndex:
         self._embedder = embedder
         self._cache: dict[str, list[float]] = {}  # ea_hex -> embedding
         self._cache_lock = threading.Lock()
+        self._db_mtime_ns = 0
 
         try:
             from ..config import CACHE_DIR
@@ -749,8 +767,16 @@ class FunctionEmbeddingIndex:
         return str(stored.get("source_fingerprint", "")) != str(source_fingerprint or "")
 
     def _load_cache(self) -> None:
-        """Load all stored embeddings into RAM for fast cosine search."""
+        """Load all stored embeddings into RAM for fast cosine search.
+
+        This is a full reload: rows removed since the previous load (e.g. an
+        index rebuild) must not linger in the in-RAM cache, or every later
+        search ranks against stale vectors.  The DB mtime is recorded so
+        callers can cheaply detect a rebuild by another code path.
+        """
         try:
+            with self._cache_lock:
+                self._cache.clear()
             with self._conn() as conn:
                 for row in conn.execute("SELECT ea, vec_blob FROM func_embeddings"):
                     ea, blob = row
@@ -758,6 +784,16 @@ class FunctionEmbeddingIndex:
                         self._cache[ea] = _unpack_floats(blob)
         except Exception:
             pass
+        self._db_mtime_ns = _file_mtime_ns(self._db_path)
+
+    def db_changed_since_load(self) -> bool:
+        """True when the on-disk index was rewritten after the last cache load.
+
+        Cheap (one stat) so callers can check it on every read path; a full
+        index rebuild (fast -> decompile quality) must not keep serving
+        vectors from the previous index generation.
+        """
+        return self._db_mtime_ns != _file_mtime_ns(self._db_path)
 
     def refresh_from_disk(self) -> int:
         """Observe rows written or copied by another process and return size."""
@@ -1017,6 +1053,8 @@ class FunctionEmbeddingIndex:
         address_ranges: list[tuple[int, int]] | None,
     ) -> list[tuple[str, list[float]]]:
         """Snapshot the cache, dropping excluded / out-of-range rows."""
+        if self.db_changed_since_load():
+            self.refresh_from_disk()
         with self._cache_lock:
             if not self._cache:
                 return []

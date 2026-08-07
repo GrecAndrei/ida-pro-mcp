@@ -654,6 +654,14 @@ def _safe_float_env(key: str, default: str) -> float:
         return float(default)
 
 
+# Bounded cold-start for block=True anchor classification.  Embedding all
+# ~60 behavior anchors inline costs ~5-8s each on a CPU box (minutes total),
+# which a caller experiences as a hang.  classify() embeds anchors only up to
+# this budget and returns the partial classification; the persistent anchor
+# cache (keyed by model identity) makes that cost one-time per model.
+ANCHOR_EMBED_BUDGET_SEC = max(1.0, _safe_float_env("IDA_MCP_ANCHOR_EMBED_BUDGET_SEC", "20.0"))
+
+
 def _available_cpu_count() -> int:
     """Return CPUs usable by this process, respecting Linux CPU affinity."""
     get_affinity = getattr(os, "sched_getaffinity", None)
@@ -1870,11 +1878,108 @@ class BehaviorClassifier:
                 cls._shared.clear_cache()
         return cls._shared
 
+    ANCHOR_CACHE_VERSION = 1
+
     def __init__(self, embedder: BgeCodeEmbedder):
         self._embedder = embedder
         self._anchor_embs: dict[str, list[float]] = {}
         self._anchor_lock = threading.Lock()
         self._anchor_generation = 0
+        self._load_anchor_cache()
+
+    # ── persistent anchor cache ─────────────────────────────────────────
+    # Anchor texts are static, so their embeddings depend only on the
+    # embedding model.  Persisting them (keyed by model identity) turns the
+    # cold-start cost of block=True classification — up to ~60 embed calls,
+    # minutes of CPU — into a one-time cost per model, shared by every
+    # process (host and idat) on the machine.
+
+    def _cache_key(self) -> str:
+        emb = getattr(self._embedder, "embedding_format", None)
+        if callable(emb):
+            try:
+                key = emb()
+            except Exception:
+                key = ""
+        else:
+            key = ""
+        if not key:
+            profile = getattr(self._embedder, "_profile", None)
+            model = getattr(self._embedder, "_model_path", "") or ""
+            dim = int(getattr(self._embedder, "dim", 0) or 0)
+            key = f"{getattr(self._embedder, 'backend', '?')}|{getattr(profile, 'key', '')}|{model}|{dim}"
+        return hashlib.sha256(key.encode("utf-8", errors="replace")).hexdigest()[:16]
+
+    def _cache_path(self) -> str:
+        try:
+            from ..config import CACHE_DIR
+        except ImportError:
+            from host.config import CACHE_DIR
+        return os.path.join(CACHE_DIR, f"anchor_cache_{self._cache_key()}.json")
+
+    def _load_anchor_cache(self) -> None:
+        dim = int(getattr(self._embedder, "dim", 0) or 0)
+        if not dim or not getattr(self._embedder, "_model_path", ""):
+            return  # cannot validate vector width (test doubles); stay cold
+        try:
+            with open(self._cache_path(), encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError, TypeError):
+            return
+        if not isinstance(data, dict) or data.get("version") != self.ANCHOR_CACHE_VERSION:
+            return
+        anchors = data.get("anchors")
+        if not isinstance(anchors, dict):
+            return
+        loaded: dict[str, list[float]] = {}
+        for behavior, vec in anchors.items():
+            if behavior not in self.ANCHORS or not isinstance(vec, list):
+                continue
+            try:
+                floats = [float(v) for v in vec]
+            except (TypeError, ValueError):
+                continue
+            if len(floats) != dim:
+                continue
+            loaded[behavior] = floats
+        if loaded:
+            with self._anchor_lock:
+                self._anchor_embs.update(loaded)
+
+    def _save_anchor(self, behavior: str, vec: list[float]) -> None:
+        dim = int(getattr(self._embedder, "dim", 0) or 0)
+        if (
+            not dim
+            or not getattr(self._embedder, "_model_path", "")
+            or not isinstance(vec, list)
+            or not vec
+        ):
+            return
+        try:
+            path = self._cache_path()
+            data: dict[str, Any] = {}
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    existing = json.load(fh)
+                if isinstance(existing, dict):
+                    data = existing
+            except (OSError, ValueError, TypeError):
+                pass
+            anchors = data.get("anchors") if isinstance(data.get("anchors"), dict) else {}
+            anchors[behavior] = [round(float(v), 6) for v in vec]
+            data.update(
+                {
+                    "version": self.ANCHOR_CACHE_VERSION,
+                    "dim": dim,
+                    "anchors": anchors,
+                }
+            )
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+            os.replace(tmp, path)
+        except Exception:
+            return
 
     def clear_cache(self) -> None:
         """Drop all cached anchor embeddings.
@@ -1929,6 +2034,7 @@ class BehaviorClassifier:
             if generation != self._anchor_generation:
                 return self._anchor_embs.get(behavior)
             self._anchor_embs.setdefault(behavior, vec)
+        self._save_anchor(behavior, vec)
         return self._anchor_embs.get(behavior)
 
     def classify_vec(
@@ -1937,6 +2043,7 @@ class BehaviorClassifier:
         threshold: float = 0.25,
         top_k: int = 4,
         block: bool = False,
+        embed_budget_sec: float | None = None,
     ) -> list[dict[str, Any]]:
         """
         Classify a pre-computed embedding vector against all behavior anchors.
@@ -1944,11 +2051,18 @@ class BehaviorClassifier:
         block=False (default): uses only anchors already in cache — returns
             immediately when anchors have not been explicitly refreshed.
         block=True: embeds any missing anchors inline — complete results
-            but may take up to 14 × embed_time on the first call.
+            but may take minutes on the first call; the embed budget
+            (ANCHOR_EMBED_BUDGET_SEC, default 20s) bounds that cold start
+            and returns the partial classification so callers never hang.
         """
         # Snapshot cached anchors without holding the lock during scoring
         with self._anchor_lock:
             cached = dict(self._anchor_embs)
+
+        deadline: float | None = None
+        if block:
+            budget = ANCHOR_EMBED_BUDGET_SEC if embed_budget_sec is None else float(embed_budget_sec)
+            deadline = time.monotonic() + max(0.0, budget)
 
         results = []
         for behavior in self.ANCHORS:
@@ -1956,6 +2070,8 @@ class BehaviorClassifier:
             if anchor is None:
                 if not block:
                     continue  # skip unloaded anchor rather than blocking
+                if deadline is not None and time.monotonic() >= deadline:
+                    break  # bounded cold-start: return partial classification
                 anchor = self._get_anchor(behavior)
                 if anchor is None:
                     continue

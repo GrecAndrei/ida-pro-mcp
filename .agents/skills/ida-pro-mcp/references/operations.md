@@ -652,7 +652,7 @@ Example:
 
 ## `ida_semantic_search`
 
-Find functions by behavior or natural-language intent after indexing the binary. Results are recalled by the embedding index (Stage 1) and, when a reranker is installed, re-scored by the cross-encoder (Stage 2) so the top of the list is the genuinely most relevant functions.
+Find functions by behavior or natural-language intent after indexing the binary. Results are recalled by the embedding index (Stage 1) and, when a reranker is installed, re-scored by the cross-encoder (Stage 2) so the top of the list is the genuinely most relevant functions. Stage 2 runs automatically in expand mode and whenever rerank=true is passed; quick mode skips it (bounded on CPU boxes) unless explicitly requested.
 
 Input schema:
 ```json
@@ -681,7 +681,7 @@ Input schema:
     },
     "rerank": {
       "type": "boolean",
-      "description": "Re-score recalled candidates with the cross-encoder reranker (default true; a no-op when no rerank model is installed)."
+      "description": "Re-score recalled candidates with the cross-encoder reranker. Omitted = auto (on in expand mode, off in quick mode); explicit true forces it, false disables it. No-op when no rerank model is installed."
     },
     "start": {
       "type": "string",

@@ -12,11 +12,9 @@ import struct
 from ida_pro_mcp.services import parse_str_list
 
 try:
-    from ..support.semantic_matching import semantic_score  # noqa: F401
+    from ..support.semantic_matching import semantic_scores
 except ImportError:
-    from support.semantic_matching import (  # type: ignore[import-not-found]
-        semantic_score,
-    )
+    from support.semantic_matching import semantic_scores  # type: ignore[import-not-found]
 
 
 _CALC_ACTIONS = {"eval", "offset", "convert", "resolve", "deref", "chain", "align", "bitops"}
@@ -56,18 +54,6 @@ _CALC_ACTION_ALIASES = {
 _INT_SUFFIX_RE = re.compile(r"^\s*([+-]?(?:0x[0-9a-fA-F_]+|\d[\d_]*))(?:\s*([kKmMgGtT]))?\s*$")
 
 
-def _semantic_score(query: str, candidate: str) -> float:
-    """Compute semantic match score for action/symbol matching.
-
-    Heuristic weights:
-    - Exact match bonus: +120
-    - Substring bonus: +55
-    - Token overlap bonus: up to +45
-    - Sequence similarity bonus: up to +20
-    """
-    return semantic_score(query, candidate, substring_bonus=55.0)
-
-
 def _normalize_calc_action(raw_action: Optional[str], fallback: str = "eval") -> str:
     """Normalize calc action via exact action, alias mapping, then semantic fuzzy match.
 
@@ -81,10 +67,14 @@ def _normalize_calc_action(raw_action: Optional[str], fallback: str = "eval") ->
     if txt in _CALC_ACTION_ALIASES:
         return _CALC_ACTION_ALIASES[txt]
 
-    scored = []
-    for act in _CALC_ACTIONS:
-        sc = _semantic_score(txt, act)
-        scored.append((sc, act))
+    acts = list(_CALC_ACTIONS)
+    scored = list(
+        zip(
+            semantic_scores(txt, acts, top_n=len(acts), substring_bonus=55.0),
+            acts,
+            strict=False,
+        )
+    )
     if not scored:
         return fallback
     scored.sort(key=lambda x: x[0], reverse=True)
@@ -200,18 +190,26 @@ def calc(
             for ea, name in idautils.Names():
                 if not name or not matcher(name):
                     continue
-                score = _semantic_score(query_text, name)
-                if name.lower() == query_text.lower():
-                    score += 40.0
-                candidates.append((score, ea))
+                candidates.append((ea, name))
             if not candidates:
                 return idaapi.BADADDR
-            candidates.sort(key=lambda x: x[0], reverse=True)
-            vals = sorted(float(x[0]) for x in candidates)
+            scores = semantic_scores(
+                query_text,
+                [name for _, name in candidates],
+                top_n=48,
+                substring_bonus=55.0,
+            )
+            scored_cands = []
+            for (ea, name), score in zip(candidates, scores, strict=False):
+                if name.lower() == query_text.lower():
+                    score += 40.0
+                scored_cands.append((score, ea))
+            scored_cands.sort(key=lambda x: x[0], reverse=True)
+            vals = sorted(float(x[0]) for x in scored_cands)
             q50 = vals[len(vals) // 2]
             q75 = vals[min(len(vals) - 1, int(round((len(vals) - 1) * 0.75)))]
             gate = q50 + max(0.0, q75 - q50)
-            return candidates[0][1] if float(candidates[0][0]) >= float(gate) else idaapi.BADADDR
+            return scored_cands[0][1] if float(scored_cands[0][0]) >= float(gate) else idaapi.BADADDR
 
         # Snapshot the user's input so the persist path can record question
         # AND answer (not just the answer). This dict is keyed by the same

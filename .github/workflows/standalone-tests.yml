@@ -51,4 +51,7 @@ jobs:
         env:
           IDA_MCP_DISABLE_RATE_LIMIT: "1"
           IDA_MCP_POLICY_MODE: "permissive"
-        run: python -m pytest -q
+        # tests/integration requires a licensed IDA installation and is
+        # exercised locally against live sessions; CI must not attempt to
+        # spawn idat (each class would wait out its startup timeout).
+        run: python -m pytest -q --ignore=tests/integration

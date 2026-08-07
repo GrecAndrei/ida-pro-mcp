@@ -288,8 +288,6 @@ def misc(
         except Exception as e:
             return handle_error(e, context="health")
     if action == "reload":
-        import importlib
-        import sys as _sys
         target = module or modules
         if not target:
             return make_error(
@@ -301,33 +299,103 @@ def misc(
         if names == ["all"]:
             from ida_mcp.tools import __all__ as _all_mods
             names = list(_all_mods)
-        results = []
-        for mod_name in names:
-            if mod_name == "misc":
-                results.append({"module": "misc", "status": "skipped", "note": "misc reloads itself on next call (avoid self-reload deadlock)"})
-                continue
-            full_name = f"ida_mcp.tools.{mod_name}"
-            if full_name not in _sys.modules:
-                try:
-                    importlib.import_module(full_name)
-                    results.append({"module": mod_name, "status": "imported"})
-                    continue
-                except Exception as e:
-                    results.append({"module": mod_name, "status": "error", "error": str(e)})
-                    continue
-            try:
-                mod = _sys.modules[full_name]
-                importlib.reload(mod)
-                results.append({"module": mod_name, "status": "reloaded"})
-            except Exception as e:
-                results.append({"module": mod_name, "status": "error", "error": str(e)})
-        return {"ok": True, "reloaded": results}
+        return {"ok": True, "reloaded": _reload_tools(names)}
     return make_error(
         MCPError.ACTION_NOT_FOUND,
         f"Unknown action: {action}",
         details={"provided": action},
         hint="Valid actions: python, idc, load_sig, cache_stats, read_file, write_file, plugin_list, plugin_run, health, reload",
     )
+
+def _server_tools_registries(mod_name: str):
+    """Find dicts that serve as the RPC server's TOOLS registry.
+
+    ``server_script.load_tools()`` stores direct references to the loaded
+    tool functions in a module-global ``TOOLS`` dict.  Reloading a module
+    without re-pointing that dict keeps serving the *old* function object
+    (with its old action Literal), which is why naive ``importlib.reload``
+    appears to do nothing.  Return every matching dict so the caller can
+    re-point them all.
+    """
+    import sys as _sys
+    found = []
+    for m in list(_sys.modules.values()):
+        if m is None:
+            continue
+        try:
+            tools = getattr(m, "TOOLS", None)
+        except Exception:
+            continue
+        if isinstance(tools, dict) and mod_name in tools:
+            found.append(tools)
+    return found
+
+
+def _reload_tool_module(mod_name: str):
+    """Re-execute one tool module from source and re-point the server's
+    TOOLS registry at the freshly loaded function.
+
+    Flat tool files are re-executed under the same name/loader the RPC
+    server uses at startup (``load_tools``), so intra-tool flat imports
+    keep working.  Package tools (``search`` etc.) are reloaded under
+    their package-qualified name via ``importlib.reload``.
+    """
+    import importlib
+    import importlib.util
+    import sys as _sys
+
+    full_name = f"ida_mcp.tools.{mod_name}"
+    flat = _sys.modules.get(mod_name)
+    pkg = _sys.modules.get(full_name)
+    mod = pkg or flat
+    if mod is None:
+        importlib.import_module(full_name)
+        mod = _sys.modules.get(full_name) or _sys.modules.get(mod_name)
+        status = "imported"
+    else:
+        status = "reloaded"
+
+    if mod is None:
+        return {"module": mod_name, "status": "error", "error": "module not importable"}
+
+    file_path = getattr(mod, "__file__", None)
+    is_package = bool(file_path) and str(file_path).endswith(os.path.join("tools", mod_name, "__init__.py"))
+    if not is_package and file_path:
+        spec = importlib.util.spec_from_file_location(mod_name, file_path)
+        new_mod = importlib.util.module_from_spec(spec)
+        _sys.modules[mod_name] = new_mod
+        spec.loader.exec_module(new_mod)
+    else:
+        importlib.reload(mod)
+        new_mod = mod
+
+    result = {"module": mod_name, "status": status}
+    new_tool = getattr(new_mod, mod_name, None)
+    if new_tool is None:
+        result["note"] = "no matching tool function on module"
+        return result
+    registries = _server_tools_registries(mod_name)
+    for registry in registries:
+        registry[mod_name] = new_tool
+    if registries:
+        result["note"] = f"server TOOLS registry updated ({len(registries)} dict(s))"
+    return result
+
+
+def _reload_tools(names):
+    """Run the reload for a list of tool names; used by misc(action='reload')."""
+    results = []
+    for mod_name in names:
+        if mod_name == "misc":
+            results.append({"module": "misc", "status": "skipped", "note": "misc reloads itself on next call (avoid self-reload deadlock)"})
+            continue
+        try:
+            results.append(_reload_tool_module(mod_name))
+        except Exception as e:
+            results.append({"module": mod_name, "status": "error", "error": str(e)})
+    return results
+
+
 
 _MAX_SCRIPT_LENGTH = 50000
 

@@ -57,7 +57,7 @@ def test_local_code_execution_allowed_with_ack():
 
 
 def test_filesystem_write_requires_ack():
-    result = evaluate_policy("memory", "write_file", purpose="release_verification")
+    result = evaluate_policy("misc", "write_file", purpose="release_verification")
 
     assert result.decision == PolicyDecision.REQUIRE_ACK
     assert result.risk == RiskTier.FILESYSTEM_WRITE

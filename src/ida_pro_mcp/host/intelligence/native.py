@@ -295,6 +295,13 @@ class NativeEmbedder:
         self._handle: int | None = None
         self._dim = 0
         self._lock = threading.Lock()
+        # Idempotent embedding cache: repeated queries/candidates in an
+        # interactive session never pay a second native inference.  Bounded
+        # FIFO; vectors are ~4-6 KB each, so 4096 entries stay well under
+        # 32 MB per session.
+        self._vec_cache: dict[tuple[str, str], list[float]] = {}
+        self._vec_cache_max = 4096
+        self._vec_cache_lock = threading.Lock()
         self._server_bin = _find_llama_server() or ""  # kept for status parity
         self._model_path = _find_model()
         state = None
@@ -402,6 +409,8 @@ class NativeEmbedder:
         self._handle = None
         self._ready = False
         self._use_native = False
+        with self._vec_cache_lock:
+            self._vec_cache.clear()
 
     def _format(self, text: str, purpose: str) -> str:
         return self._profile.format_text(str(text), purpose=purpose)
@@ -419,9 +428,16 @@ class NativeEmbedder:
         dim = self.dim
         if dim <= 0:
             return None
-        n = len(formatted)
+        keys = [(purpose, t) for t in formatted]
+        with self._vec_cache_lock:
+            cached = [self._vec_cache.get(k) for k in keys]
+        if all(v is not None for v in cached):
+            return [list(v) for v in cached]  # type: ignore[misc]
+        missing_idx = [i for i, v in enumerate(cached) if v is None]
+        missing = [formatted[i] for i in missing_idx]
+        n = len(missing)
         arr = (ctypes.c_char_p * n)(
-            *(s.encode("utf-8", errors="replace") for s in formatted)
+            *(s.encode("utf-8", errors="replace") for s in missing)
         )
         out = (ctypes.c_float * (n * dim))()
         with self._lock:
@@ -432,11 +448,27 @@ class NativeEmbedder:
         # (common_embd_normalize); native returns the raw pooled vector.  Same
         # direction, so cosine ranking is unaffected, but normalize to keep
         # stored vectors comparable to the HTTP backend.
-        vecs = []
+        new_vecs = []
         for i in range(n):
             row = [float(out[i * dim + j]) for j in range(dim)]
             norm = math.sqrt(sum(x * x for x in row)) or 1.0
-            vecs.append([x / norm for x in row])
+            new_vecs.append([x / norm for x in row])
+        with self._vec_cache_lock:
+            for i, vec in zip(missing_idx, new_vecs, strict=False):
+                if len(self._vec_cache) >= self._vec_cache_max:
+                    try:
+                        self._vec_cache.pop(next(iter(self._vec_cache)))
+                    except Exception:
+                        self._vec_cache.clear()
+                self._vec_cache[keys[i]] = vec
+        vecs = []
+        ci = 0
+        for i in range(len(formatted)):
+            if cached[i] is not None:
+                vecs.append(list(cached[i]))  # type: ignore[arg-type]
+            else:
+                vecs.append(new_vecs[ci])
+                ci += 1
         return vecs
 
     def embed(self, text: str, purpose: str = "document") -> _EmbedResult:
@@ -530,10 +562,15 @@ class NativeReranker:
         self._profile = profile_from_rerank_model(
             self._model_path, str(requested_profile or "")
         )
+        # Per-sequence budget for cross-encoder pairs.  1024 tokens is the
+        # standard cap for reranker models (bge/qwen3-reranker): enough for
+        # the query plus the decisive head of a function's pseudocode, while
+        # keeping CPU latency bounded.  The embedder keeps the larger
+        # NATIVE_CTX (2048) because its documents carry the full signal.
         self._ctx = max(
             512,
             min(
-                _safe_int_env("IDA_MCP_RERANK_CTX", str(NATIVE_CTX)),
+                _safe_int_env("IDA_MCP_RERANK_CTX", "1024"),
                 self._profile.max_context,
             ),
         )

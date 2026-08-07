@@ -29,6 +29,7 @@ from .core import (
     CALL_XREF_TYPES,
     resolve_target,
 )
+from .advanced import _coerce_ea
 
 # ============================================================================
 # Set arithmetic on function addresses (the "address algebra")
@@ -47,6 +48,42 @@ def _func_name(ea: int) -> str:
         return idc.get_func_name(ea) or hex(ea)
     except Exception:
         return hex(ea)
+
+
+def _func_callees(fea: int) -> set[int]:
+    """Function-start EAs called from anywhere in the function body.
+
+    The naive ``XrefsFrom(func.start_ea)`` only sees xrefs originating at the
+    function's first byte, so nearly every function looked like a leaf.  Call
+    edges must be collected from every instruction in the body.
+
+    When a call target has no function yet (PLT stub not auto-created, e.g.
+    mid-analysis), fall back to resolving the target's name to the import
+    function so the edge still lands in the graph.
+    """
+    func = idaapi.get_func(fea)
+    if not func:
+        return set()
+    out: set[int] = set()
+    for item in idautils.FuncItems(func.start_ea):
+        try:
+            for xref in idautils.XrefsFrom(item, 0):
+                if xref.type not in CALL_XREF_TYPES:
+                    continue
+                f = idaapi.get_func(xref.to)
+                if f:
+                    out.add(int(f.start_ea))
+                    continue
+                tname = idc.get_name(xref.to) or ""
+                if tname:
+                    tea = idc.get_name_ea_simple(tname.lstrip("._"))
+                    if tea != idaapi.BADADDR:
+                        tf = idaapi.get_func(tea)
+                        if tf:
+                            out.add(int(tf.start_ea))
+        except Exception:
+            continue
+    return out
 
 
 def _set_to_items(eas: set[int], offset: int, limit: int) -> list[dict]:
@@ -106,11 +143,8 @@ def _prim_funcs_by_api(pattern: str) -> set[int]:
     out = set()
     for ea in idautils.Functions():
         try:
-            for xref in idautils.XrefsFrom(ea, 0):
-                if not xref.iscode:
-                    continue
-                tgt = int(xref.to)
-                name = idc.get_name(tgt, idaapi.GN_VISIBLE) or ""
+            for tgt in _func_callees(int(ea)):
+                name = (idc.get_name(tgt, idaapi.GN_VISIBLE) or "").split("@")[0].lstrip("._")
                 if name and matcher(name):
                     out.add(int(ea))
                     break
@@ -162,17 +196,10 @@ def _prim_callees(target: str) -> set[int]:
     ea, err, _ = resolve_target(target)
     if err or ea == idaapi.BADADDR:
         return set()
-    out = set()
     func = idaapi.get_func(ea)
     if not func:
-        return out
-    for xref in idautils.XrefsFrom(func.start_ea, 0):
-        if not xref.iscode:
-            continue
-        f = idaapi.get_func(xref.to)
-        if f:
-            out.add(int(f.start_ea))
-    return out
+        return set()
+    return _func_callees(int(func.start_ea))
 
 
 def _prim_size(pattern: str) -> set[int]:
@@ -234,8 +261,7 @@ def _prim_leaf(pattern: str) -> set[int]:
     out = set()
     for ea in idautils.Functions():
         try:
-            has_calls = any(xr.type in CALL_XREF_TYPES for xr in idautils.XrefsFrom(ea))
-            if not has_calls:
+            if not _func_callees(int(ea)):
                 out.add(int(ea))
         except Exception:
             continue
@@ -517,16 +543,7 @@ def _bfs_path(start: int, goal: int, max_depth: int) -> Optional[list[int]]:
         ea, path = queue.popleft()
         if len(path) > max_depth:
             return None
-        func = idaapi.get_func(ea)
-        if not func:
-            continue
-        for xref in idautils.XrefsFrom(func.start_ea, 0):
-            if not xref.iscode:
-                continue
-            f = idaapi.get_func(xref.to)
-            if not f:
-                continue
-            nxt = int(f.start_ea)
+        for nxt in _func_callees(ea):
             if nxt in visited:
                 continue
             if nxt == goal:
@@ -597,15 +614,8 @@ def _reach_from(root_ea: int, max_depth: int) -> set[int]:
         if ea in visited:
             continue
         visited.add(ea)
-        func = idaapi.get_func(ea)
-        if not func:
-            continue
-        for xref in idautils.XrefsFrom(func.start_ea, 0):
-            if not xref.iscode:
-                continue
-            f = idaapi.get_func(xref.to)
-            if f:
-                queue.append((int(f.start_ea), depth + 1))
+        for nxt in _func_callees(ea):
+            queue.append((nxt, depth + 1))
     return visited
 
 
@@ -714,11 +724,21 @@ _CALL_GRAPH_CACHE: dict[str, dict] = {}
 
 
 def _idb_fingerprint() -> str:
-    """Return a fingerprint for the current IDB to key the call graph cache."""
+    """Return a fingerprint for the current IDB to key the call graph cache.
+
+    The function count alone misses edits that leave the count unchanged
+    (renames, retypes, patched bytes), so the IDB file's mtime/size and the
+    total name count are folded in. Structural changes invalidate
+    immediately via the counts; saved DB edits invalidate via mtime/size.
+    """
     try:
         path = idc.get_idb_path() if hasattr(idc, "get_idb_path") else ""
+        stats = os.stat(path) if path else None
+        mtime = int(stats.st_mtime) if stats else 0
+        size = int(stats.st_size) if stats else 0
         func_count = sum(1 for _ in idautils.Functions())
-        return f"{path}:{func_count}"
+        name_count = sum(1 for _ in idautils.Names())
+        return f"{path}:{func_count}:{name_count}:{mtime}:{size}"
     except Exception:
         return "unknown"
 
@@ -736,24 +756,51 @@ def _get_call_graph() -> dict:
     callees: dict[int, set[int]] = defaultdict(set)
 
     for ea in idautils.Functions():
-        func = idaapi.get_func(ea)
-        if not func:
-            continue
         fea = int(ea)
-        for xref in idautils.XrefsFrom(func.start_ea, 0):
-            if not xref.iscode:
-                continue
-            f = idaapi.get_func(xref.to)
-            if f:
-                callee_ea = int(f.start_ea)
-                callees[fea].add(callee_ea)
-                callers[callee_ea].add(fea)
+        for callee_ea in _func_callees(fea):
+            callees[fea].add(callee_ea)
+            callers[callee_ea].add(fea)
 
     graph = {"callers": dict(callers), "callees": dict(callees)}
     # Keep only the latest graph to avoid memory bloat
     _CALL_GRAPH_CACHE.clear()
     _CALL_GRAPH_CACHE[fp] = graph
     return graph
+
+
+def _outlier_rows_from_ida(metric: str) -> list[tuple[int, str, int]]:
+    """Compute outlier metric values for every function directly from IDA.
+
+    Used as a fallback when the embedding index is unavailable. Returns
+    ``[(ea, name, value)]`` sorted best-first for the metric (ascending for
+    ``tiny``, descending otherwise). Only cheap structural metrics are
+    supported; ``complexity`` needs the index.
+    """
+    if metric not in ("size", "tiny", "huge", "bb_count"):
+        return []
+    rows = []
+    for ea in idautils.Functions():
+        func = idaapi.get_func(ea)
+        if not func:
+            continue
+        fea = int(ea)
+        if metric in ("size", "tiny", "huge"):
+            value = int(func.size())
+        else:  # bb_count
+            try:
+                import ida_gdl
+                value = len(list(ida_gdl.FlowChart(func)))
+            except Exception:
+                value = 0
+        rows.append((fea, _func_name(fea), value))
+    if metric == "tiny":
+        rows = [r for r in rows if r[2] < 16]
+        rows.sort(key=lambda r: r[2])
+    else:
+        if metric == "huge":
+            rows = [r for r in rows if r[2] > 4096]
+        rows.sort(key=lambda r: r[2], reverse=True)
+    return rows
 
 
 # ============================================================================
@@ -992,45 +1039,87 @@ def search_analyze(
             return make_error(MCPError.INVALID_ARGS, f"unknown metric {metric!r}",
                               hint=f"Known: {', '.join(sorted(valid_metrics))}")
 
-        graph = _get_call_graph()
-
-        # For metrics available in the index, query SQL directly
-        index_metrics = {"size": "func_size", "complexity": "cyclomatic", "bb_count": "bb_count"}
+        # Metrics backed by the embedding index. tiny/huge are size-threshold
+        # views over the same column (previously declared valid but dead code:
+        # the branch below was guarded on `metric in index_metrics`, so the
+        # tiny/huge clauses could never run and those metrics silently
+        # returned empty results from the call-graph path).
+        index_metrics = {
+            "size": "func_size",
+            "complexity": "cyclomatic",
+            "bb_count": "bb_count",
+            "tiny": "func_size",
+            "huge": "func_size",
+        }
         if metric in index_metrics:
             col = index_metrics[metric]
+            idx = None
             try:
                 from ida_pro_mcp.services import get_assembler
                 asm = get_assembler()
                 idb_path = idc.get_idb_path() if hasattr(idc, "get_idb_path") else ""
                 idx = asm._get_index(idb_path) if idb_path else None
-                if idx and idx.size > 0:
+            except Exception:
+                idx = None
+
+            if idx is not None and idx.size > 0:
+                try:
                     with idx._conn() as conn:
+                        where = ""
+                        order = f"ORDER BY {col} DESC"
                         if metric == "tiny":
-                            rows = conn.execute(
-                                f"SELECT ea, name, {col} FROM func_embeddings WHERE {col} < 16 ORDER BY {col} ASC LIMIT ?",
-                                (offset + limit,)
-                            ).fetchall()
+                            where = f"WHERE {col} < 16"
+                            order = f"ORDER BY {col} ASC"
                         elif metric == "huge":
-                            rows = conn.execute(
-                                f"SELECT ea, name, {col} FROM func_embeddings WHERE {col} > 4096 ORDER BY {col} DESC LIMIT ?",
-                                (offset + limit,)
-                            ).fetchall()
-                        else:
-                            rows = conn.execute(
-                                f"SELECT ea, name, {col} FROM func_embeddings ORDER BY {col} DESC LIMIT ?",
-                                (offset + limit,)
-                            ).fetchall()
+                            where = f"WHERE {col} > 4096"
+                        total = int(conn.execute(
+                            f"SELECT COUNT(*) FROM func_embeddings {where}"
+                        ).fetchone()[0])
+                        rows = conn.execute(
+                            f"SELECT ea, name, {col} FROM func_embeddings {where} {order} LIMIT ?",
+                            (offset + limit,)
+                        ).fetchall()
                     items = [{"addr": str(r[0]), "name": str(r[1] or r[0]), metric: int(r[2] or 0), "outlier_score": int(r[2] or 0)} for r in rows[offset:]]
                     return {
                         "ok": True, "action": "analyze", "scope": "outlier",
                         "metric": metric, "results": "\n".join(f"{it['addr']}  {it['name']}  {metric}={it[metric]}" for it in items),
-                        "count": len(items), "total": len(rows), "items": items,
+                        "count": len(items), "total": total, "items": items,
                         "note": f"Outliers by {metric} from embedding index.",
                     }
-            except Exception:
-                pass
+                except Exception:
+                    pass
+
+            # No usable embedding index: compute the metric directly from IDA.
+            # This keeps size/tiny/huge/bb_count fully functional on binaries
+            # that were never indexed instead of silently returning nothing.
+            if metric != "complexity":
+                try:
+                    all_rows = _outlier_rows_from_ida(metric)
+                    total = len(all_rows)
+                    page = all_rows[offset:offset + limit]
+                    items = [
+                        {"addr": hex(ea), "name": name, metric: value, "outlier_score": value}
+                        for ea, name, value in page
+                    ]
+                    return {
+                        "ok": True, "action": "analyze", "scope": "outlier",
+                        "metric": metric, "results": "\n".join(f"{it['addr']}  {it['name']}  {metric}={it[metric]}" for it in items),
+                        "count": len(items), "total": total,
+                        "truncated": total > offset + limit, "items": items,
+                        "note": f"Outliers by {metric} from direct IDA enumeration.",
+                    }
+                except Exception as e:
+                    return make_error(
+                        MCPError.UNKNOWN_ERROR,
+                        f"Could not compute {metric} outliers: {e}",
+                    )
+            return make_error(
+                MCPError.NOT_FOUND,
+                "cyclomatic complexity requires the embedding index; run intelligence(action='index_fast') first",
+            )
 
         # Call-graph-based metrics: use cached graph
+        graph = _get_call_graph()
         caller_counts = defaultdict(int)
         callee_counts = defaultdict(int)
         for fea, callees_set in graph["callees"].items():
@@ -1107,14 +1196,33 @@ def search_analyze(
         graph = _get_call_graph()
         taint_depth = max(2, min(int(depth), 12))
 
+        # Map stripped base names to every function EA so PLT stubs and their
+        # import functions (e.g. `.read` and `read`) are treated as the same
+        # node. A call may target the stub while the taint name resolves to
+        # the import function (or vice versa), so reachability must bridge
+        # both aliases.
+        name_to_eas: dict[str, set[int]] = {}
+        for fea in idautils.Functions():
+            fname = idc.get_func_name(fea) or ""
+            base = fname.split("@")[0].split("$")[0].lstrip("._")
+            if base:
+                name_to_eas.setdefault(base, set()).add(int(fea))
+
         # Phase 1: Find taint sources and their reachable callers
         sources = set()
         for ea, name in idautils.Names():
-            base = name.split("@")[0].split("$")[0]
+            base = name.split("@")[0].split("$")[0].lstrip("._")
             if base in _TAINT_SOURCE_NAMES:
                 func = idaapi.get_func(ea)
                 if func:
                     sources.add(int(func.start_ea))
+        # Expand each source to all functions sharing its base name.
+        expanded_sources = set(sources)
+        for src in sources:
+            sname = (idc.get_func_name(src) or "").split("@")[0].split("$")[0].lstrip("._")
+            if sname:
+                expanded_sources.update(name_to_eas.get(sname, set()))
+        sources = expanded_sources
 
         reachable_from_source: set[int] = set()
         for src in sources:
@@ -1133,22 +1241,21 @@ def search_analyze(
                 frontier = next_frontier
             reachable_from_source.update(visited)
 
-        # Phase 2: Find dangerous API calls
+        # Phase 2: Find dangerous API calls — iterate only functions reachable
+        # from a taint source instead of the whole program (O(k) not O(n)).
         vuln_hits = []
-        for func_ea in idautils.Functions():
-            fea = int(func_ea)
-            if fea not in reachable_from_source:
-                continue
-            func = idaapi.get_func(func_ea)
+        for fea in reachable_from_source:
+            func = idaapi.get_func(fea)
             if not func:
                 continue
             for callee_ea in graph["callees"].get(fea, set()):
                 callee_name = idc.get_name(callee_ea) or ""
-                if callee_name in _DANGEROUS_APIS:
+                base = callee_name.split("@")[0].lstrip("._")
+                if base in _DANGEROUS_APIS:
                     fn_name = _func_name(fea)
                     vuln_hits.append({
                         "addr": hex(fea), "function": fn_name,
-                        "api": callee_name, "vuln_type": _DANGEROUS_APIS[callee_name],
+                        "api": callee_name, "vuln_type": _DANGEROUS_APIS[base],
                         "severity": "reachable_from_taint",
                         "outlier_score": 1,
                     })
@@ -1164,21 +1271,21 @@ def search_analyze(
                 queries = _VULN_ANCHORS[:4]
                 if pattern:
                     queries.insert(0, pattern)
-                seen_addrs = {h["addr"] for h in vuln_hits}
+                seen_addrs = {_coerce_ea(h["addr"]) for h in vuln_hits}
                 for q in queries:
                     try:
                         hits = idx.search(q, top_k=20, threshold=0.0)
                         for hit in hits:
-                            hit_ea = hit.get("addr") or hit.get("ea")
-                            if not hit_ea or hit_ea in seen_addrs:
+                            hit_ea = _coerce_ea(hit.get("addr") or hit.get("ea"))
+                            if hit_ea == idaapi.BADADDR or hit_ea in seen_addrs:
                                 continue
-                            hit_func = idaapi.get_func(_coerce_ea(hit_ea))
+                            hit_func = idaapi.get_func(hit_ea)
                             if not hit_func:
                                 continue
                             hit_fea = int(hit_func.start_ea)
                             if hit_fea not in reachable_from_source:
                                 continue
-                            seen_addrs.add(hit_ea)
+                            seen_addrs.add(hit_fea)
                             vuln_hits.append({
                                 "addr": hex(hit_fea), "function": _func_name(hit_fea),
                                 "api": "", "vuln_type": "behavior_candidate",

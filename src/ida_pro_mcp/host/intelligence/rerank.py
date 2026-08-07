@@ -21,8 +21,9 @@ Configuration (env, with ``reranker.json`` state file overrides):
   IDA_MCP_RERANK_PROFILE    qwen3-reranker-0.6b | bge-reranker-v2-gemma |
                             qwen3-reranker-4b | bge-reranker-v2-m3
   IDA_MCP_RERANK_PORT       fixed port (default: random)
-  IDA_MCP_RERANK_CTX        context tokens (default: 2048 — covers any pair
-                            under the DOC_CHARS cap)
+  IDA_MCP_RERANK_CTX        context tokens per (query, doc) pair (default:
+                            1024 — the standard cap for bge/qwen3-reranker
+                            models; raise for very long documents on GPU)
   IDA_MCP_RERANK_THREADS    CPU threads (default: cpu_count // 2)
   IDA_MCP_RERANK_BATCH_THREADS prompt/prefill threads (default: up to 16)
   IDA_MCP_RERANK_CHUNK      documents per /rerank request (default: 8) — llama
@@ -57,6 +58,7 @@ from typing import Any
 from .core import (
     CACHE_DIR,
     EMBED_ACTIVATION_GRACE_TIMEOUT,
+    EmbeddingQueueTimeout,
     _detect_gpu_device,
     _find_llama_server,
     _install_root,
@@ -281,6 +283,22 @@ class RerankQueueTimeout(TimeoutError):
     """The shared reranker is busy, but has not failed or been abandoned."""
 
 
+class _RerankInterProcessLock(_InterProcessLock):
+    """Inter-process lock that surfaces contention as ``RerankQueueTimeout``.
+
+    The shared lock raises ``EmbeddingQueueTimeout``; without translation the
+    reranker's busy case would fall through to the generic error handler and
+    be misclassified as a request timeout — retiring a healthy shared server
+    on lock contention.
+    """
+
+    def __enter__(self):
+        try:
+            return super().__enter__()
+        except EmbeddingQueueTimeout as exc:
+            raise RerankQueueTimeout(str(exc)) from None
+
+
 class Reranker:
     """Manages a llama-server ``--rerank`` subprocess.
 
@@ -351,7 +369,7 @@ class Reranker:
                 )
                 obj._identity_cache = None
                 obj._ctx = min(
-                    _safe_int_env("IDA_MCP_RERANK_CTX", "2048"),
+                    _safe_int_env("IDA_MCP_RERANK_CTX", "1024"),
                     obj._profile.max_context,
                 )
             cls._instance = obj
@@ -379,13 +397,15 @@ class Reranker:
         self._idle_lock = threading.Lock()
         self._idle_timer: threading.Timer | None = None
         self._idle_generation = 0
-        # Default ctx is 2048, not the profile's max (8192).  A rerank pair is
-        # a bounded document (RERANK_DOC_CHARS chars ~= 2000 tokens) plus the
-        # query, so 2048 covers every pair under the cap while keeping the KV
-        # cache and the physical batch small.  The profile max would size the
-        # compute buffers for 8k tokens and waste gigabytes on a laptop.
+        # Default ctx is 1024 — the standard cap for reranker models
+        # (bge-reranker / qwen3-reranker) and the same default the native
+        # backend uses.  A rerank pair is the query plus a bounded document
+        # (the search path truncates each doc to RERANK_DOC_BUDGET_CHARS), so
+        # 1024 keeps the KV cache and the physical batch small on CPU.  The
+        # profile max would size the compute buffers for 8k tokens and waste
+        # gigabytes on a laptop.
         self._ctx = min(
-            _safe_int_env("IDA_MCP_RERANK_CTX", "2048"),
+            _safe_int_env("IDA_MCP_RERANK_CTX", "1024"),
             self._profile.max_context,
         )
 
@@ -608,7 +628,7 @@ class Reranker:
         # Context-sized KV + batch buffers on top of the model file: give the
         # reranker 4x the model size plus a floor, not the embedder's 2x+512.
         # Measured on this box with the real benchmark (12 queries, 16-candidate
-        # pools, 8-doc chunks at ctx 2048, --parallel 2): RSS *ratchets* with
+        # pools, 8-doc chunks at ctx 1024, --parallel 2): RSS *ratchets* with
         # request size (llama.cpp allocates a fresh compute buffer per distinct
         # larger batch and never frees the old one — verified flat-plateau at
         # 1752 MiB over 12 identical requests, but climbing to 4.15 GiB on the
@@ -663,7 +683,7 @@ class Reranker:
     def _start_server(self) -> bool:
         with self._start_lock:
             try:
-                with _InterProcessLock(_rerank_start_lock_path(), RERANK_LOCK_TIMEOUT):
+                with _RerankInterProcessLock(_rerank_start_lock_path(), RERANK_LOCK_TIMEOUT):
                     return self._start_server_locked()
             except RerankQueueTimeout:
                 return False
@@ -860,7 +880,7 @@ class Reranker:
         if in_activation_grace:
             timeout = max(timeout, EMBED_ACTIVATION_GRACE_TIMEOUT)
         try:
-            with _InterProcessLock(
+            with _RerankInterProcessLock(
                 _rerank_request_lock_path(), min(RERANK_LOCK_TIMEOUT, timeout)
             ):
                 # No abandoned-slot retire here.  The request lock already

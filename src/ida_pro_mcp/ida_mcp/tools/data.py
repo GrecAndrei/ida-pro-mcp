@@ -12,8 +12,8 @@ except ImportError:
 @tool
 @idaread
 def data(
-    action: Annotated[Literal["functions", "annotations", "globals", "strings", "imports", "exports", "lookup", "bulk_query", "capability_matrix", "string_xrefs"],
-                      "Action: functions|annotations|globals|strings|imports|exports|lookup|bulk_query|capability_matrix|string_xrefs"],
+    action: Annotated[Literal["functions", "annotations", "globals", "strings", "imports", "exports", "lookup", "bulk_query", "capability_matrix", "string_xrefs", "read_bytes"],
+                      "Action: functions|annotations|globals|strings|imports|exports|lookup|bulk_query|capability_matrix|string_xrefs|read_bytes"],
     query: Annotated[Optional[str], "Filter pattern or name/address for lookup (regex/glob/substring/semantic auto-detected)"] = None,
     offset: Annotated[int, "Pagination offset"] = 0,
     count: Annotated[int, "Max results (0=all)"] = 100,
@@ -75,6 +75,10 @@ def data(
 
     string_xrefs - Build a string->referencing-function map with ranking and module clustering.
         Returns: {top_strings, module_map, total_strings_scanned}
+
+    read_bytes - Read raw bytes at an address with hex dump and ASCII preview.
+        Params: addr (hex address string), size (max 4096, default 64)
+        Returns: {ok, addr, size, hex, dump}
     """
     try:
         if action == "functions":

@@ -13,6 +13,10 @@
 set -euo pipefail
 
 SRC="${LLAMA_CPP_SRC:-/tmp/llama.cpp}"
+# The driver (mcp_llama.cpp) targets this exact llama.cpp commit.  The CI
+# native-build workflow pins the same hash and verifies this default stays
+# in sync — bump both together when the driver needs a newer llama.cpp.
+LLAMA_CPP_COMMIT="${LLAMA_CPP_COMMIT:-99111b19ce482f081e92ec6c6cdbe6a4c815c515}"
 BUILD="${1:-${SRC}/build-mcp}"
 JOBS="${JOBS:-$(nproc)}"
 INSTALL_BIN="${INSTALL_BIN:-}"
@@ -24,6 +28,15 @@ if [ ! -d "$SRC" ]; then
 fi
 echo "llama.cpp source: $SRC"
 echo "build dir:        $BUILD"
+
+if [ -d "$SRC/.git" ]; then
+    HEAD="$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)"
+    if [ -n "$HEAD" ] && [ "$HEAD" != "$LLAMA_CPP_COMMIT" ]; then
+        echo "WARNING: llama.cpp HEAD is $HEAD" >&2
+        echo "         pinned LLAMA_CPP_COMMIT is $LLAMA_CPP_COMMIT" >&2
+        echo "         the driver targets the pinned commit; other versions may fail or misbehave." >&2
+    fi
+fi
 
 cmake -S "$SRC" -B "$BUILD" \
     -DCMAKE_BUILD_TYPE=Release \

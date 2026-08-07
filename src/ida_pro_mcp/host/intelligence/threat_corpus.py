@@ -237,7 +237,7 @@ def parse_cwe_xml(path: str) -> list[dict[str, Any]]:
         if cc_el is not None:
             for scope in cc_el.iter():
                 local = _local_name(scope.tag)
-                if local not in {"Scope", "Consequence_Scope", "Technical_Impact_Scope"}:
+                if local not in {"Scope", "Consequence_Scope", "Technical_Impact", "Technical_Impact_Scope"}:
                     continue
                 if scope.text:
                     s = scope.text.strip()

@@ -2335,18 +2335,32 @@ def _detect_string_refs(pattern: str, *, max_items: int = 100) -> list[dict]:
     """Find functions that reference strings matching a pattern."""
     import re as _re
     matches = []
+    seen = set()
     try:
         rx = _re.compile(pattern, _re.IGNORECASE)
     except _re.error:
         rx = _re.compile(_re.escape(pattern), _re.IGNORECASE)
 
+    try:
+        strings_iter = idautils.Strings()
+    except Exception:
+        strings_iter = None
+    if strings_iter is None:
+        return matches
+
     # Search all string literals in the binary
-    for i in range(idautils.Strings().count):
-        s_obj = idautils.Strings()[i]
-        s = str(s_obj) if s_obj else ""
-        if not rx.search(s):
+    for s_obj in strings_iter:
+        if len(matches) >= max_items:
+            break
+        try:
+            content = str(s_obj)
+            if isinstance(content, bytes):
+                content = content.decode("utf-8", errors="replace")
+        except Exception:
             continue
-        s_ea = int(s_obj.ea) if s_obj else 0
+        if not rx.search(content):
+            continue
+        s_ea = int(getattr(s_obj, "ea", 0) or 0)
         if not s_ea:
             continue
         # Find functions referencing this string
@@ -2354,8 +2368,11 @@ def _detect_string_refs(pattern: str, *, max_items: int = 100) -> list[dict]:
             func = ida_funcs.get_func(xref_ea.frm)
             if func:
                 fname = ida_funcs.get_func_name(func.start_ea) or hex_ea(func.start_ea)
+                if fname in seen:
+                    continue
+                seen.add(fname)
                 matches.append({"addr": hex_ea(func.start_ea), "name": fname,
-                                "string": s[:80], "string_addr": hex_ea(s_ea)})
+                                "string": content[:80], "string_addr": hex_ea(s_ea)})
                 if len(matches) >= max_items:
                     return matches
     return matches
@@ -2476,7 +2493,12 @@ def _detect_callees_of(target: str, *, max_items: int = 100) -> list[dict]:
 
 def _iter_all_functions():
     """Iterate over all function EAs in the binary."""
-    func_ea = idaapi.get_next_func(0)
-    while func_ea and func_ea != idaapi.BADADDR:
-        yield int(func_ea)
-        func_ea = idaapi.get_next_func(func_ea)
+    ea = _get_next_func(0)
+    while ea is not None:
+        # IDA 9.x get_next_func returns an EA; older bindings may return a
+        # func_t object — normalize both to an int EA.
+        start = ea if isinstance(ea, int) else int(getattr(ea, "start_ea", idaapi.BADADDR))
+        if start == idaapi.BADADDR:
+            break
+        yield start
+        ea = _get_next_func(start)

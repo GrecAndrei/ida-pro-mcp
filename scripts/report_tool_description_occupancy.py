@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Report character and token occupancy for MCP tool descriptions.
 
-This script reads TOOL_DESCRIPTIONS from src/ida_pro_mcp/host/schemas.py,
+This script reads TOOL_DESCRIPTIONS from src/ida_pro_mcp/host/schemas_data.py,
 tokenizes each description with tiktoken's cl100k_base encoding, and prints a
 compact per-tool and aggregate size report.
 """
@@ -15,7 +15,7 @@ from pathlib import Path
 import tiktoken
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMAS_PATH = ROOT / "src" / "ida_pro_mcp" / "host" / "schemas.py"
+SCHEMAS_PATH = ROOT / "src" / "ida_pro_mcp" / "host" / "schemas_data.py"
 
 
 def load_tool_descriptions() -> dict[str, str]:
@@ -26,7 +26,7 @@ def load_tool_descriptions() -> dict[str, str]:
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id == "TOOL_DESCRIPTIONS":
                     return ast.literal_eval(node.value)
-    raise RuntimeError("TOOL_DESCRIPTIONS not found in schemas.py")
+    raise RuntimeError("TOOL_DESCRIPTIONS not found in schemas_data.py")
 
 
 def main() -> int:

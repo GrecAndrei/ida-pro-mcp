@@ -236,7 +236,18 @@ def code(
             return {"ok": True, "results": all_results, "count": len(all_results),
                     "query": query or "", "total_functions": len(all_funcs)}
 
-        # Support both addr (singular) and addrs (plural) for compatibility
+        # detect is address-less — it scans the whole binary, so it runs
+        # before the per-address loop (which would otherwise reject it with
+        # "Address is required" via validate_addr(None)).
+        if action == "detect":
+            # `target` is a named parameter of code() (used by find_paths), so
+            # it never lands in **kwargs — fold it back in for caller_of and
+            # callee_of detectors.
+            return _run_custom_detector({**kwargs, "target": target}, max_items)
+
+        # Support both addr (singular) and addrs (plural) for compatibility.
+        # detect is address-less (it scans the whole binary), so it must not
+        # be blocked by the addrs pre-check.
         if not addrs and addr:
             addrs = addr
         if not addrs:
@@ -1291,9 +1302,6 @@ def code(
                 max_depth = int(kwargs.get("max_depth", 4))
                 max_callers = int(kwargs.get("max_callers_per_level", 10))
                 results.append(_trace_argument_origin(func, arg_index, max_depth, max_callers))
-
-            elif action == "detect":
-                results.append(_run_custom_detector(kwargs, max_items))
 
             else:
                 return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

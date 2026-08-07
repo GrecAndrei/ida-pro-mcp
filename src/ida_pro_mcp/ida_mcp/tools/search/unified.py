@@ -9,9 +9,17 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 try:
-    from ...support.semantic_matching import semantic_score
+    from ...support.semantic_matching import (
+        DEFAULT_RESCORE_TOP_N,
+        semantic_score_cheap,
+        semantic_scores,
+    )
 except ImportError:
-    from support.semantic_matching import semantic_score  # type: ignore[import-not-found]
+    from support.semantic_matching import (  # type: ignore[import-not-found]
+        DEFAULT_RESCORE_TOP_N,
+        semantic_score_cheap,
+        semantic_scores,
+    )
 
 from .core import (
     _FIND_INSTRUCTION_CAP,
@@ -48,7 +56,7 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
     timed_out = False
     name_hits = 0
 
-    def add_find(kind, ea, line, score, name=""):
+    def add_find(kind, ea, line, score, name="", sem_text=None, bonus=0.0, cap=None):
         nonlocal name_hits
         key = (float(score), int(ea))
         record = {
@@ -58,6 +66,9 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
             "score": float(score),
             "line": line,
             "name": name or "",
+            "_sem": sem_text or line or name or "",
+            "_bonus": float(bonus or 0.0),
+            "_cap": cap,
         }
         if kind in ("names", "imports", "strings"):
             name_hits += 1
@@ -80,7 +91,7 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
                 fn_name = ida_funcs.get_func_name(func.start_ea) if func else ""
                 dem = demangle_safe(fn_name) if fn_name else ""
                 display = dem if dem and dem != fn_name else fn_name
-                sem_name = semantic_score(pattern, fn_name, substring_bonus=SCORE_SUBSTRING) if fn_name else 0.0
+                sem_name = semantic_score_cheap(pattern, fn_name, substring_bonus=SCORE_SUBSTRING) if fn_name else 0.0
                 kind = "code_ref" if xref.iscode else "data_ref"
                 add_find(kind, xref.frm, f"{hex(xref.frm)}  {display}", max(1.0, sem_name), display)
 
@@ -98,14 +109,14 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
         xref_count = xref_count_limited(ea)
         display = dem if dem and dem != name else name
         score = max(
-            semantic_score(pattern, name, substring_bonus=SCORE_SUBSTRING),
-            semantic_score(pattern, dem, substring_bonus=SCORE_SUBSTRING) if dem else 0.0,
+            semantic_score_cheap(pattern, name, substring_bonus=SCORE_SUBSTRING),
+            semantic_score_cheap(pattern, dem, substring_bonus=SCORE_SUBSTRING) if dem else 0.0,
         )
         if dem and dem != name:
             line = f"{hex(ea)}  {kind}  {name}  ({clip_text(dem, 80)})  xrefs={xref_count}"
         else:
             line = f"{hex(ea)}  {kind}  {name}  xrefs={xref_count}"
-        add_find("names", ea, line, score, display)
+        add_find("names", ea, line, score, display, sem_text=display)
         seen_eas.add(ea)
 
     # 3. Strings (cached)
@@ -116,8 +127,8 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
         s = srec["string"]
         if matcher(s):
             xref_count = xref_count_limited(ea)
-            score = semantic_score(pattern, s, substring_bonus=SCORE_SUBSTRING)
-            add_find("strings", ea, f"{hex(ea)}  xrefs={xref_count}  {clip_text(s, 180)}", score, clip_text(s, 80))
+            score = semantic_score_cheap(pattern, s, substring_bonus=SCORE_SUBSTRING)
+            add_find("strings", ea, f"{hex(ea)}  xrefs={xref_count}  {clip_text(s, 180)}", score, clip_text(s, 80), sem_text=s)
             seen_eas.add(ea)
 
     # 4. Imports (cached)
@@ -129,8 +140,8 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
         mod_name = irec["module"]
         if name and matcher(name):
             xref_count = xref_count_limited(ea)
-            score = semantic_score(pattern, name, substring_bonus=SCORE_SUBSTRING) + 15.0
-            add_find("imports", ea, f"{hex(ea)}  {mod_name}!{name}  xrefs={xref_count}", score, name)
+            score = semantic_score_cheap(pattern, name, substring_bonus=SCORE_SUBSTRING)
+            add_find("imports", ea, f"{hex(ea)}  {mod_name}!{name}  xrefs={xref_count}", score, name, sem_text=name, bonus=15.0)
             seen_eas.add(ea)
 
     # 5. Comments (high signal for agents; bounded)
@@ -153,11 +164,11 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
             blob = f"{c0} {c1}".strip()
             if not blob or not matcher(blob):
                 continue
-            score = semantic_score(pattern, blob, substring_bonus=SCORE_SUBSTRING)
+            score = semantic_score_cheap(pattern, blob, substring_bonus=SCORE_SUBSTRING)
             fn = idaapi.get_func(head)
             fn_name = ida_funcs.get_func_name(fn.start_ea) if fn else ""
             line = f"{hex(head)}  comment  {fn_name}  {clip_text(blob, 160)}"
-            add_find("comments", head, line, score, fn_name)
+            add_find("comments", head, line, score, fn_name, sem_text=blob)
             comment_hits += 1
 
     # 6. Instructions (bounded) — skip for identifier-like queries with enough symbol hits
@@ -199,17 +210,20 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
                     continue
                 line_clean = ida_lines.tag_remove(line) or ""
                 semantic_blob = f"{mnem.lower()} {line_clean}"
-                sem = min(semantic_score(pattern, semantic_blob, substring_bonus=SCORE_SUBSTRING), 160.0)
+                sem = semantic_score_cheap(pattern, semantic_blob, substring_bonus=SCORE_SUBSTRING)
                 if matcher(semantic_blob) or sem > 0.0:
                     add_find(
                         "instructions",
                         ea,
                         f"{hex(ea)}  {mnem}  {clip_text(line_clean, 180)}",
                         sem,
+                        sem_text=semantic_blob,
+                        cap=160.0,
                     )
                     instruction_hits += 1
 
     ranked = [item[1] for item in ranked_heap]
+    _rescore_find_ranked(ranked, pattern)
     page, total, is_truncated = paginate_records(
         ranked, offset, limit, sort_key=lambda r: (r["score"], r["address_ea"])
     )
@@ -412,14 +426,19 @@ def search_api(pattern, include_context, offset, limit, include_items, include_b
     matcher = compile_smart_pattern(pattern, case_sensitive=False)
     matched_apis = []
 
+    api_rows = []
     for irec in get_cached_imports():
         name = irec["name"]
         if name and matcher(name):
-            ea = irec["ea"]
-            matched_apis.append({
-                "ea": ea, "name": name, "module": irec["module"],
-                "score": semantic_score(pattern, name),
-            })
+            api_rows.append({"ea": irec["ea"], "name": name, "module": irec["module"]})
+    if api_rows:
+        scores = semantic_scores(
+            pattern, [row["name"] for row in api_rows], top_n=48
+        )
+        matched_apis = [
+            {"ea": row["ea"], "name": row["name"], "module": row["module"], "score": score}
+            for row, score in zip(api_rows, scores, strict=False)
+        ]
 
     if not matched_apis:
         target_ea, sem_err, sem_meta = resolve_target(pattern, require_function=False, include_imports=True)
@@ -491,6 +510,30 @@ def search_api(pattern, include_context, offset, limit, include_items, include_b
         result["matched_apis"] = api_summary
         result["total_calls"] = total
     return result
+
+
+def _rescore_find_ranked(ranked, pattern):
+    """Batch-embed the top-ranked pool, then compose per-kind bonuses/caps.
+
+    Phase 1 (the loops) scores every match deterministically; this phase
+    re-embeds at most ``DEFAULT_RESCORE_TOP_N`` candidates in one batched
+    call, keeping per-candidate native-embedding cost bounded.
+    """
+    if not ranked:
+        return
+    pool = [r.get("_sem") or r.get("line") or "" for r in ranked]
+    scores = semantic_scores(
+        pattern, pool, top_n=min(DEFAULT_RESCORE_TOP_N, 24), substring_bonus=SCORE_SUBSTRING
+    )
+    for record, score in zip(ranked, scores, strict=False):
+        final = float(score) + float(record.get("_bonus") or 0.0)
+        cap = record.get("_cap")
+        if cap is not None:
+            final = min(final, float(cap))
+        record["score"] = final
+        record.pop("_sem", None)
+        record.pop("_bonus", None)
+        record.pop("_cap", None)
 
 
 # ---------------------------------------------------------------------------

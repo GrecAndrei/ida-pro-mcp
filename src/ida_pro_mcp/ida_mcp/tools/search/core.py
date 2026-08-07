@@ -15,9 +15,19 @@ except ImportError:
 re = _re
 
 try:
-    from ...support.semantic_matching import normalize_action, semantic_score, semantic_tokens  # noqa: F401
+    from ...support.semantic_matching import (  # noqa: F401
+        DEFAULT_RESCORE_TOP_N,
+        normalize_action,
+        semantic_score_cheap,
+        semantic_scores,
+        semantic_tokens,
+    )
 except ImportError:
-    from support.semantic_matching import semantic_score  # type: ignore[import-not-found]
+    from support.semantic_matching import (  # type: ignore[import-not-found]
+        DEFAULT_RESCORE_TOP_N,
+        semantic_score_cheap,
+        semantic_scores,
+    )
 
 # ============================================================================
 # Module-Level Caches
@@ -576,11 +586,12 @@ def resolve_target(
     max_candidates = 512
 
     def record_candidate(ea, raw_name, display_name, kind, module_name=None, exact_bonus=0.0):
-        quick_score = semantic_score(target, raw_name, substring_bonus=SCORE_SUBSTRING, include_fuzzy=False)
+        quick_score = semantic_score_cheap(
+            target, raw_name, substring_bonus=SCORE_SUBSTRING, include_fuzzy=False
+        )
         if raw_name.lower() == target.lower():
             quick_score += exact_bonus
-        if quick_score > 0:
-            prelim.append((quick_score, ea, raw_name, display_name, kind, module_name))
+        prelim.append((quick_score, ea, raw_name, display_name, kind, module_name))
 
     for sym_ea, sym_name in idautils.Names():
         if not sym_name:
@@ -612,9 +623,15 @@ def resolve_target(
         return idaapi.BADADDR, f"Target '{target}' not found", {}
 
     prelim.sort(key=lambda r: (r[0], r[1]), reverse=True)
+    pool = prelim[:max_candidates]
+    scores = semantic_scores(
+        target,
+        [r[2] for r in pool],
+        top_n=DEFAULT_RESCORE_TOP_N,
+        substring_bonus=SCORE_SUBSTRING,
+    )
     ranked = []
-    for _, cand_ea, raw_name, display_name, kind, module_name in prelim[:max_candidates]:
-        final_score = semantic_score(target, raw_name, substring_bonus=SCORE_SUBSTRING)
+    for (_, cand_ea, raw_name, display_name, kind, module_name), final_score in zip(pool, scores, strict=False):
         if raw_name.lower() == target.lower():
             final_score += 45.0 if kind == "import" else 40.0
         ranked.append((final_score, cand_ea, display_name, kind, module_name))

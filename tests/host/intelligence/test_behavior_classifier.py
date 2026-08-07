@@ -6,6 +6,8 @@ embedding), refresh_anchors subset warming, and clear_cache invalidation.
 
 from __future__ import annotations
 
+import os
+
 from ida_pro_mcp.host.intelligence.core import BehaviorClassifier
 from ida_pro_mcp.host.intelligence.helpers import _EmbedResult
 
@@ -26,6 +28,13 @@ class _FixedVectorEmbedder:
 
     def embed_query(self, text: str) -> _EmbedResult:
         return self.embed(text, purpose="query")
+
+
+class _ModelEmbedder(_FixedVectorEmbedder):
+    """Embedder with a real model path (disk-cache eligible)."""
+
+    backend = "native-llama"
+    _model_path = "/models/fake.gguf"
 
 
 def test_classify_vec_skips_uncached_anchors_without_blocking():
@@ -110,3 +119,47 @@ def test_refresh_all_anchors_warms_every_category():
     classifier.refresh_anchors()
     with classifier._anchor_lock:
         assert set(classifier._anchor_embs) == set(BehaviorClassifier.ANCHORS)
+
+
+def test_zero_budget_block_embed_returns_without_embedding():
+    embedder = _FixedVectorEmbedder()
+    classifier = BehaviorClassifier(embedder)
+    rows = classifier.classify_vec(
+        [1.0, 0.0, 0.0], threshold=0.5, top_k=4, block=True, embed_budget_sec=0.0
+    )
+    assert rows == []
+    assert embedder.embed_calls == []
+
+
+def test_anchor_cache_persists_across_instances_and_skips_reembed(monkeypatch, tmp_path):
+    monkeypatch.setattr("ida_pro_mcp.host.config.CACHE_DIR", str(tmp_path))
+    first = BehaviorClassifier(_ModelEmbedder())
+    first.refresh_anchors(["crypto_symmetric", "crypto_hash"])
+    assert len(first._anchor_embs) == 2
+    cache_path = first._cache_path()
+    assert os.path.exists(cache_path)
+
+    second = BehaviorClassifier(_ModelEmbedder())
+    with second._anchor_lock:
+        assert set(second._anchor_embs) == {"crypto_symmetric", "crypto_hash"}
+    # A fresh instance must not re-embed what the disk cache restored.
+    assert second._embedder.embed_calls == []
+
+    # Clearing the in-memory cache keeps the disk copy; re-warm re-embeds and
+    # the file is rewritten (not appended with stale behavior keys).
+    second.clear_cache()
+    second.refresh_anchors(["crypto_symmetric"])
+    with second._anchor_lock:
+        assert set(second._anchor_embs) == {"crypto_symmetric"}
+
+
+def test_anchor_cache_rejected_when_vector_width_mismatches(monkeypatch, tmp_path):
+    monkeypatch.setattr("ida_pro_mcp.host.config.CACHE_DIR", str(tmp_path))
+
+    class _WideModelEmbedder(_ModelEmbedder):
+        dim = 7
+
+    # A cache written by a 3-dim embedder must not be loaded by a 7-dim one.
+    classifier = BehaviorClassifier(_WideModelEmbedder())
+    with classifier._anchor_lock:
+        assert classifier._anchor_embs == {}

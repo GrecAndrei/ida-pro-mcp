@@ -24,3 +24,18 @@ def test_full_decomp_index_gets_the_full_pipeline_timeout(monkeypatch):
     assert _long_running_sock_timeout(
         "intelligence", {"action": "index_fast", "mode": "full"}
     ) == 600
+
+
+def test_raised_rpc_timeout_default_raises_the_long_running_floor(monkeypatch):
+    monkeypatch.delenv("IDA_MCP_RPC_MAX_RECV_TIMEOUT", raising=False)
+    monkeypatch.setenv("IDA_MCP_RPC_TIMEOUT", "300")
+
+    assert _long_running_sock_timeout("intelligence", {"action": "index_function"}) == 300
+    assert _long_running_sock_timeout("search", {"action": "find"}) == 300
+
+
+def test_rpc_timeout_floor_never_drops_below_one_twenty(monkeypatch):
+    monkeypatch.delenv("IDA_MCP_RPC_MAX_RECV_TIMEOUT", raising=False)
+    monkeypatch.setenv("IDA_MCP_RPC_TIMEOUT", "10")
+
+    assert _long_running_sock_timeout("intelligence", {"action": "index_function"}) == 120

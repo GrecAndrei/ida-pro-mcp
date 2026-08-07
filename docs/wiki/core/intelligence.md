@@ -24,11 +24,23 @@ Cancel a running job with `ida_cancel_index(task_id=...)`.
 
 `ida_semantic_search(query=...)` finds functions by intent — e.g. "function
 that decrypts strings". Options: `mode` (`quick` or `expand`, which adds
-behavior-driven matches), `min_score`, `limit`, `rerank` (default true), and
-the same range/radius filters as indexing to confine results.
+behavior-driven matches), `min_score`, `limit`, `rerank`, and the same
+range/radius filters as indexing to confine results.
+
+`rerank` is **auto by default**: it applies in `expand` mode and whenever the
+caller passes `rerank=true` explicitly; `quick` mode skips it so quick stays
+bounded on CPU boxes (pass `rerank=true` to force). The response's `rerank`
+block reports `applied` and, when skipped, a `reason`.
 
 Indexing is host-assisted but reads the IDB through the session runtime; it
 is gated by safe mode like other whole-binary analysis.
+
+A search never ranks against a stale index generation: when an index rebuild
+(``fast`` -> ``full``) rewrites the embeddings DB, the reader notices the
+newest mtime across the DB and its WAL/SHM sidecars and reloads vectors at the
+next read, and index-mutating operations invalidate cached ``@idaread`` search
+responses so a repeated query is re-evaluated instead of served from before
+the rebuild.
 
 ## Two-stage retrieval (recall + rerank)
 
@@ -39,8 +51,17 @@ the list is only "nearby", not "correct". Stage 2 is a **cross-encoder
 reranker**: it concatenates the query with each recalled candidate's full
 document and scores the pair with cross-attention. It cannot run over the
 whole binary (every pair is a fresh forward pass), so it only re-scores the
-recalled pool — typically up to `IDA_MCP_RERANK_MAX_CANDIDATES` (default 64) —
-and the returned list is ordered by rerank score.
+recalled pool — bounded by `IDA_MCP_RERANK_POOL` (default 12) with each
+document truncated to `IDA_MCP_RERANK_DOC_BUDGET_CHARS` (default 800 chars,
+~250 tokens) — and the returned list is ordered by rerank score.  The caps
+exist because the cross-encoder costs seconds per pair on CPU: an unbounded
+pool turned a "quick" search into a silent multi-minute CPU burn.  Raise the
+env vars for GPU boxes or when precision matters more than latency.
+
+Behavior-anchor classification (`expand` mode) embeds ~60 static anchor texts;
+those embeddings are persisted per model (anchor cache under the cache dir)
+and cold-start embedding is budgeted to `IDA_MCP_ANCHOR_EMBED_BUDGET_SEC`
+(default 20s), so a fresh process never spends minutes warming anchors.
 
 The reranker runs on its own `llama-server --rerank` process with the same
 lifecycle guarantees as the embedder (lease, idle shutdown, activation grace,
@@ -48,6 +69,21 @@ request lock). It is a **quality boost, never a hard gate**: if no rerank
 model is installed, or the model returns non-discriminating scores (equal
 scores for every input — e.g. a headless conversion), the recall order is
 preserved and the response's `rerank` block reports `applied: false`.
+
+## Find scoring (two-phase, latency-bounded)
+
+`search(action='find')` and name resolution (`resolve_target`-based actions
+like `ida_callees`/`ida_decompile` with a fuzzy target) score candidates in
+two phases.  Phase 1 ranks the whole matched pool with a deterministic
+subword/ngram scorer — identifiers are split on snake_case/camelCase, exact
+matches score 120, and substring + edit-distance bonuses cover typos — so
+ordinary symbol queries never touch the embedder.  Phase 2 applies only to
+phrase-like queries (whitespace or >= 24 chars): the top candidates (24 for
+`find`, 64 elsewhere) are embedded in a *single* batched native call and their
+scores become embedding-first.  A decisive-winner gate skips phase 2 entirely
+when the deterministic top score already dominates, and all vectors are
+cached per session, so repeated queries are instant and per-candidate
+embedding cost is bounded regardless of pool size.
 
 Configuration is per-profile (see `rerank_profiles.py`):
 
@@ -133,7 +169,11 @@ reports `backend: native-llama` when active.
   streaming the weights once each.  The KV cache is `Q8_0`-quantized to fit a
   16 × 2048-token batch in ~0.5 GiB.  Over-long sequences are truncated
   head-first (query + document prefix preserved).  `MCP_NSEQ=<1..64>` env
-  overrides the batch width for diagnostics.
+  overrides the batch width for diagnostics.  The context passed by the
+  Python side (`IDA_MCP_EMBED_CTX` / `IDA_MCP_RERANK_CTX`) is the
+  **per-sequence** token budget — the total KV spans `n_ctx_seq × n_seq_max`.
+  (An earlier interpretation divided the caller's value by `n_seq_max`,
+  silently truncating every prompt to a fraction of its budget.)
 - **Q4_K_M models**: `mcp_quantize` (built by the same script) produces
   ~1.6× smaller weights; model discovery prefers `Q4_K_M` over `Q8_0` when
   both are installed (`IDA_MCP_Q4=0` forces Q8; explicit

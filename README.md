@@ -336,8 +336,10 @@ differential growth checks that only recycle on real leaks).
 | `IDA_MCP_RERANK_PROFILE` | `qwen3-reranker-0.6b` | Selects the rerank model profile |
 | `IDA_MCP_RERANK_MODEL` | auto-detect | Path to the rerank GGUF |
 | `IDA_MCP_RERANK_DOC_CHARS` | `6000` | Document cap per rerank pair |
+| `IDA_MCP_RERANK_DOC_BUDGET_CHARS` | `800` | Per-document budget passed to the reranker from search |
+| `IDA_MCP_RERANK_POOL` | `12` | Recalled pool capped before cross-encoder re-scoring |
 | `IDA_MCP_RERANK_CHUNK` | `8` | Documents scored per request, so peak memory tracks the chunk not the pool |
-| `IDA_MCP_RERANK_CTX` | `2048` | Rerank context size |
+| `IDA_MCP_RERANK_CTX` | `1024` | Per-pair rerank context size (query + document) |
 
 The full set of knobs for both backends lives in
 [docs/wiki/core/intelligence.md](docs/wiki/core/intelligence.md).

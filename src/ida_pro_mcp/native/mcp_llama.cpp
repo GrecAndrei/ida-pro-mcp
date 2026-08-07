@@ -92,22 +92,25 @@ struct mcp_llama_common {
         model = llama_model_load_from_file(model_path, mparams);
         if (!model) return false;
         const int train_ctx = static_cast<int>(llama_model_n_ctx_train(model));
-        n_ctx = ctx_size > 0 ? ctx_size : train_ctx;
-        if (n_ctx <= 0) n_ctx = kCtxSeqDefault * kSeqMaxDefault;
-
-        // Split the context into per-sequence streams: with kv_unified=false
-        // the context rounds n_ctx down to n_ctx_seq * n_seq_max, so derive
-        // the per-sequence budget from whatever n_ctx was asked for.
+        // ctx_size is the PER-SEQUENCE token budget: the Python side passes
+        // IDA_MCP_EMBED_CTX / IDA_MCP_RERANK_CTX, which are per-input
+        // budgets.  With kv_unified=false each sequence owns its own KV
+        // stream, so the total context is n_ctx_seq * n_seq_max.  The
+        // previous interpretation (total ctx / n_seq_max) silently capped
+        // every prompt at ctx_size/16 tokens — 128 for the 2048 default —
+        // truncating embedding documents and rerank pairs to a fraction of
+        // their intended signal.
         // MCP_NSEQ overrides the batch width (diagnostic / tuning knob).
         n_seq_max = kSeqMaxDefault;
         if (const char * e = getenv("MCP_NSEQ")) {
             const int v = atoi(e);
             if (v >= 1 && v <= 64) n_seq_max = v;
         }
-        n_ctx_seq = n_ctx / n_seq_max;
+        n_ctx_seq = ctx_size > 0 ? ctx_size : train_ctx;
+        if (n_ctx_seq <= 0) n_ctx_seq = kCtxSeqDefault;
         if (n_ctx_seq < 64) n_ctx_seq = 64;          // never starve a sequence
         if (n_ctx_seq > kCtxSeqDefault) n_ctx_seq = kCtxSeqDefault;
-        n_ctx = n_ctx_seq * n_seq_max;               // exact, no rounding
+        n_ctx = n_ctx_seq * n_seq_max;
 
         llama_context_params cparams = llama_context_default_params();
         cparams.n_ctx = static_cast<uint32_t>(n_ctx);

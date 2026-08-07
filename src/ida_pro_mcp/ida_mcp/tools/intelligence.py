@@ -457,6 +457,31 @@ def suggest_next_steps(kwargs: dict, default_addr: Any = None) -> dict:
         "suggestions": suggestions[:3],
     }
 
+
+def _invalidate_tool_cache() -> None:
+    """Drop cached @idaread responses after the index changes on disk.
+
+    Indexing is not an @idawrite operation, but it rewrites the embedding
+    index that search/nl and similar_* rank against — so every cached
+    search response is stale the moment a rebuild commits.  Index-mutating
+    actions call this before returning.
+    """
+    # Mirror the idaread wrapper's import order exactly (ida_mcp.ida_mcp
+    # first, flat `cache` fallback): the tool-cache singleton the search
+    # tool consults is whichever instance that resolution produced.  Using
+    # a different import path (e.g. ida_pro_mcp.ida_mcp.cache) yields a
+    # second module instance with its own TOOL_CACHE, and invalidation
+    # would silently no-op against the cache the search tool actually
+    # reads.
+    try:
+        from ida_mcp.ida_mcp.cache import TOOL_CACHE
+    except ImportError:
+        try:
+            from cache import TOOL_CACHE
+        except ImportError:
+            return
+    TOOL_CACHE.invalidate_all()
+
 @tool
 @idaread
 def intelligence(
@@ -639,6 +664,7 @@ def intelligence(
                 from ida_pro_mcp.services import parse_str_list
                 behaviors = parse_str_list(str(query))
             classifier.refresh_anchors(behaviors or None)
+            _invalidate_tool_cache()
             loaded = len(getattr(classifier, "_anchor_embs", {}) or {})
             return {"ok": True, "refreshed": behaviors or "all", "loaded": loaded}
 
@@ -709,6 +735,7 @@ def intelligence(
                     hint="Configure bge-code-v1 and llama-server, then retry indexing.",
                 )
             _persist_embedder_state(idx, "index_function")
+            _invalidate_tool_cache()
             return {
                 "ok": True,
                 "addr": hex(ea),
@@ -976,6 +1003,7 @@ def intelligence(
             # background orchestrator resumes from before the failed batch
             # instead of treating a partial index as a total failure.
             _persist_embedder_state(idx, action_label)
+            _invalidate_tool_cache()
             quality_counts = idx.quality_counts()
             if use_decompile:
                 quality_coverage = int(quality_counts.get("full", 0)) + int(

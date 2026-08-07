@@ -209,7 +209,7 @@ TOOL_DESCRIPTIONS = {
      "intelligence": "Local embeddings index + behavior classification backend for search.nl. Prefer index_fast (quick) or index_batch (decompile-quality), then search(action=nl). Actions (core): index_fast, index_batch, semantic_search, similar_functions, embedder_status, intelligence_status.",
     "knowledge": "Cross-session chip/symbol knowledge base (not the analysis notebook). For findings and hypotheses use blackboard. Actions: chip_identify, symbol_lookup, import_symbols, export_session, chip_families.",
 
-    "memory": "Read, write, and inspect raw memory/bytes in the binary or debuggee, plus host filesystem read/write helpers. search: set literal=true to bypass integer detection for digit-only patterns. compare: returns hamming_distance for large inputs, edit_distance for small. Actions: read, write, hexdump, search, compare, pointers, entropy, strings, struct_walk, histogram, read_file, write_file.",
+    "memory": "Read, write, and inspect raw memory/bytes in the binary or debuggee. search: set literal=true to bypass integer detection for digit-only patterns. compare: returns hamming_distance for large inputs, edit_distance for small. Actions: read, write, hexdump, search, compare, pointers, entropy, strings, struct_walk, histogram.",
     "misc": "Utility grab-bag: run scripts (python/idc), load signatures, inspect cache stats, read/write files on the host filesystem, and reload IDA-side tool modules without restarting. reload: pass module='funcs' or modules='funcs,search' (or 'all') to pick up source changes instantly — no opencode restart needed for IDA-side changes. Actions: python, idc, load_sig, cache_stats, plugin_list, plugin_run, read_file, write_file, health, reload. (analysis(action='plugin_run') and memory read/write live alongside here.)",
     "modify": "Apply edits to the IDB: rename symbols, add comments (regular/repeatable/anterior/posterior), set types, and patch assembly (multi-line instructions separated by semicolons). Actions: rename, comment, set_type, patch_asm.",
 
@@ -581,6 +581,7 @@ TOOL_ARG_SCHEMAS = {
 
         "target": {"type": "string", "description": "Alias for pattern/addr for ref searches"},
         "ea": {"type": "string", "description": "Address alias for pattern/addr"},
+        "scope": {"type": "string", "description": "analyze scope: neighborhood|outlier|similar|vulnerable|semantic (default auto)"},
         "metric": {"type": "string", "description": "outlier metric: size|complexity|bb_count|orphan|leaf|hub|deep|tiny|huge"},
         "top": {"type": "integer", "description": "outlier top N (default 50)"},
         "top_k": {"type": "integer", "description": "fingerprint top K (default 20)"},
@@ -733,6 +734,24 @@ TOOL_ARG_SCHEMAS = {
         "structured": {"type": "boolean", "description": "disasm: return per-instruction JSON instead of text."},
         "include_comments": {"type": "boolean"},
         "annotate_branches": {"type": "boolean"},
+        # detect (custom per-session detector engine) — previously the action
+        # was advertised but every one of its params was rejected.
+        "rule_type": {"type": "string", "description": "detect rule: api_chain|string_ref|type_match|xor_threshold|caller_of|callee_of|list|delete"},
+        "threshold": {"type": "integer", "description": "detect xor_threshold: minimum XOR ops (default 4)"},
+        "apis": {"type": ["array", "string"], "items": {"type": "string"}, "description": "detect api_chain: API names in sequence"},
+        "chain": {"type": ["array", "string"], "items": {"type": "string"}, "description": "detect api_chain alias for apis"},
+        "strict_order": {"type": "boolean", "description": "detect api_chain: enforce call order (default true)"},
+        "pattern": {"type": "string", "description": "detect string_ref: string content pattern"},
+        "string": {"type": "string", "description": "detect string_ref alias for pattern"},
+        "type_pattern": {"type": "string", "description": "detect type_match: parameter type pattern (e.g. 'SOCKET')"},
+        "type": {"type": "string", "description": "detect type_match alias for type_pattern"},
+        "name": {"type": "string", "description": "detect: registered rule name"},
+        "rule_name": {"type": "string", "description": "detect alias for name"},
+        "register": {"type": "boolean", "description": "detect: persist the rule for the session"},
+        "rule": {"type": "object", "description": "detect: rule dict when registering"},
+        "list_detectors": {"type": "boolean", "description": "detect: list registered detectors"},
+        "delete_detector": {"type": "boolean", "description": "detect: delete a registered detector"},
+        "function": {"type": "string", "description": "detect caller_of/callee_of alias for target"},
     },
     "ctree": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["ctree"]},

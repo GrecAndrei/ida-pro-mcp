@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import atexit
 import contextlib
+import copy
 import hashlib
 import json
 import threading
@@ -234,7 +235,9 @@ class ContextAssembler:
             with self._stats_cache_lock:
                 cached = self._session_stats_cache.get(session_id)
                 if cached and (now - cached[0] <= self._stats_cache_ttl_sec):
-                    return dict(cached[1])
+                    # Deep copy so callers cannot corrupt the cached snapshot
+                    # by mutating a returned bucket dict.
+                    return copy.deepcopy(cached[1])
             with self._retrieval_metrics_lock:
                 metrics = dict(self._retrieval_metrics.get(session_id, {}))
             if not metrics:
@@ -256,7 +259,7 @@ class ContextAssembler:
                 }
             out["semantic_threshold"] = self._get_semantic_threshold(session_id)
             with self._stats_cache_lock:
-                self._session_stats_cache[session_id] = (now, dict(out))
+                self._session_stats_cache[session_id] = (now, copy.deepcopy(out))
             return out
         except Exception:
             return {}
@@ -449,7 +452,10 @@ class ContextAssembler:
                 if abs(nxt - cur) >= 0.005:
                     self._session_semantic_threshold[session_id] = round(nxt, 3)
                     self._invalidate_session_caches(session_id)
-                    self._schedule_policy_save(session_id)
+                    # Thresholds are adaptive in-memory session state (the
+                    # old context_policy persistence hook was removed with
+                    # the policy mixin); they re-tune from live retrieval
+                    # telemetry on the next enrichment cycle.
         except Exception:
             return
 
