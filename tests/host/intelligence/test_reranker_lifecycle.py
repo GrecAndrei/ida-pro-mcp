@@ -766,7 +766,9 @@ class TestRequestRerank:
 
     def test_timeout_retires_lease_outside_grace(self, tmp_path, monkeypatch):
         obj = self._ready(monkeypatch, str(tmp_path / "lease.json"))
-        obj._server_started_at = 0.0  # far outside activation grace
+        obj._server_started_at = (
+            time.monotonic() - rerank_mod.EMBED_ACTIVATION_GRACE_TIMEOUT - 1.0
+        )
         retired: list = []
         monkeypatch.setattr(obj, "_retire_lease_process", lambda lease, reason: retired.append(reason))
         monkeypatch.setattr(obj, "_read_lease", lambda: {"pid": 1})
