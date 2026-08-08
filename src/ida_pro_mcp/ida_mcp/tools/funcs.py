@@ -8,9 +8,9 @@ import functools
 import hashlib
 
 try:
-    from ida_pro_mcp.ida_mcp.sync import sync_wrapper
+    from ida_pro_mcp.ida_mcp.sync import _tool_cache, sync_wrapper
 except ImportError:
-    from sync import sync_wrapper  # type: ignore[import-not-found]
+    from sync import _tool_cache, sync_wrapper  # type: ignore[import-not-found]
 
 # ============================================================================
 # 10. FUNCS - Function management
@@ -807,6 +807,13 @@ def funcs(
         **kwargs,
     }
     if action in _FUNCS_WRITE_ACTIONS:
+        # IDB-mutating actions must drop cached @idaread results (functions
+        # listings, decompiled pseudocode) the same way @idawrite does, or a
+        # just-created/deleted function keeps serving stale reads for the
+        # whole cache TTL.
+        cache = _tool_cache()
+        if cache is not None:
+            cache.invalidate_all()
         ff = functools.partial(_funcs_impl, **call_kwargs)
         ff.__name__ = "_funcs_impl"
         return sync_wrapper(ff, idaapi.MFF_WRITE)

@@ -11,11 +11,43 @@ import time
 from typing import Any
 
 
-def _default_db_path() -> str:
+def _data_root() -> str:
     xdg = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
-    root = os.environ.get("IDA_MCP_CACHE_DIR") or os.environ.get("IDA_MCP_DATA_DIR") or os.path.join(xdg, "ida-pro-mcp")
+    return os.environ.get("IDA_MCP_CACHE_DIR") or os.environ.get("IDA_MCP_DATA_DIR") or os.path.join(xdg, "ida-pro-mcp")
+
+
+def _default_db_path() -> str:
+    root = _data_root()
     os.makedirs(root, exist_ok=True)
     return os.path.join(root, "symbol_kb.db")
+
+
+def _confine_db_path(db_path: str) -> str:
+    """Confine a caller-supplied symbol DB path to the trusted data root.
+
+    Mirrors the memory-tool filesystem sandbox: directories are only ever
+    created inside the data root, and ``..`` traversal is rejected. An
+    out-of-root path is accepted only when its parent already exists (opening
+    an existing shared DB, or creating a new DB in an existing directory) — a
+    read-tier call must never fabricate directories anywhere on the host.
+    """
+    root = os.path.realpath(_data_root())
+    raw = str(db_path).strip()
+    if not raw:
+        return _default_db_path()
+    expanded = os.path.expanduser(raw)
+    candidate = os.path.realpath(expanded) if os.path.isabs(expanded) else os.path.realpath(os.path.join(root, expanded))
+    if ".." in expanded.split(os.sep):
+        raise ValueError(f"symbol db_path must not contain '..': {db_path!r}")
+    if candidate == root or candidate.startswith(root + os.sep):
+        os.makedirs(os.path.dirname(candidate) or root, exist_ok=True)
+        return candidate
+    parent = os.path.dirname(candidate)
+    if not os.path.isdir(parent):
+        raise ValueError(
+            f"symbol db_path is outside the data root and its parent does not exist: {candidate!r}"
+        )
+    return candidate
 
 
 class SymbolDB:
@@ -25,8 +57,7 @@ class SymbolDB:
     _init_lock = threading.Lock()
 
     def __init__(self, db_path: str | None = None):
-        self.db_path = db_path or _default_db_path()
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        self.db_path = _confine_db_path(db_path or _default_db_path())
         with SymbolDB._init_lock:
             if (
                 self.db_path not in SymbolDB._initialized_paths
@@ -66,6 +97,25 @@ class SymbolDB:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(symbol_name)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_symbols_fp ON symbols(fingerprint)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_symbols_chip ON symbols(chip_family)")
+            # Enforce uniqueness so concurrent upserts cannot both SELECT-miss
+            # and INSERT duplicate rows for the same (symbol_name, fingerprint).
+            # A legacy DB may already hold duplicates; merge them first.
+            try:
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_symbols_uniq ON symbols(symbol_name, fingerprint)"
+                )
+            except sqlite3.IntegrityError:
+                conn.execute(
+                    """
+                    DELETE FROM symbols
+                    WHERE id NOT IN (
+                        SELECT MAX(id) FROM symbols GROUP BY symbol_name, fingerprint
+                    )
+                    """
+                )
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_symbols_uniq ON symbols(symbol_name, fingerprint)"
+                )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS hypotheses (
@@ -87,8 +137,33 @@ class SymbolDB:
         finally:
             conn.close()
 
+    def _update_symbol(self, conn: sqlite3.Connection, row_id: int, payload: dict[str, Any], now: float) -> int:
+        conn.execute(
+            """
+            UPDATE symbols
+            SET updated_at=?, source_session=?, source_binary=?, source_addr=?, chip_family=?,
+                callgraph_hash=?, strings_json=?, embedding_json=?, confidence=?
+            WHERE id=?
+            """,
+            (
+                now,
+                payload["source_session"],
+                payload["source_binary"],
+                payload["source_addr"],
+                payload["chip_family"],
+                payload["callgraph_hash"],
+                payload["strings_json"],
+                payload["embedding_json"],
+                payload["confidence"],
+                row_id,
+            ),
+        )
+        conn.commit()
+        return row_id
+
     def upsert_symbol(self, row: dict[str, Any]) -> int:
         now = time.time()
+        _conf = row.get("confidence")
         payload = {
             "symbol_name": row.get("symbol_name") or "",
             "source_session": row.get("source_session") or "",
@@ -99,7 +174,9 @@ class SymbolDB:
             "callgraph_hash": row.get("callgraph_hash") or "",
             "strings_json": json.dumps(row.get("strings") or []),
             "embedding_json": json.dumps(row.get("embedding") or []),
-            "confidence": float(row.get("confidence", 1.0) or 1.0),
+            # A deliberately zero-confidence symbol must stay 0 — only an
+            # absent value falls back to the default.
+            "confidence": float(_conf) if _conf is not None else 1.0,
         }
         if not payload["symbol_name"] or not payload["fingerprint"]:
             return 0
@@ -109,51 +186,42 @@ class SymbolDB:
                 (payload["symbol_name"], payload["fingerprint"]),
             ).fetchone()
             if existing:
-                conn.execute(
+                return self._update_symbol(conn, int(existing[0]), payload, now)
+            try:
+                cur = conn.execute(
                     """
-                    UPDATE symbols
-                    SET updated_at=?, source_session=?, source_binary=?, source_addr=?, chip_family=?,
-                        callgraph_hash=?, strings_json=?, embedding_json=?, confidence=?
-                    WHERE id=?
+                    INSERT INTO symbols(symbol_name, source_session, source_binary, source_addr, chip_family,
+                                        fingerprint, callgraph_hash, strings_json, embedding_json, confidence, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        now,
+                        payload["symbol_name"],
                         payload["source_session"],
                         payload["source_binary"],
                         payload["source_addr"],
                         payload["chip_family"],
+                        payload["fingerprint"],
                         payload["callgraph_hash"],
                         payload["strings_json"],
                         payload["embedding_json"],
                         payload["confidence"],
-                        int(existing[0]),
+                        now,
+                        now,
                     ),
                 )
                 conn.commit()
-                return int(existing[0])
-            cur = conn.execute(
-                """
-                INSERT INTO symbols(symbol_name, source_session, source_binary, source_addr, chip_family,
-                                    fingerprint, callgraph_hash, strings_json, embedding_json, confidence, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    payload["symbol_name"],
-                    payload["source_session"],
-                    payload["source_binary"],
-                    payload["source_addr"],
-                    payload["chip_family"],
-                    payload["fingerprint"],
-                    payload["callgraph_hash"],
-                    payload["strings_json"],
-                    payload["embedding_json"],
-                    payload["confidence"],
-                    now,
-                    now,
-                ),
-            )
-            conn.commit()
-            return int(cur.lastrowid or 0)
+                return int(cur.lastrowid or 0)
+            except sqlite3.IntegrityError:
+                # A concurrent writer inserted the same (symbol_name, fingerprint)
+                # between our SELECT and INSERT. The UNIQUE index makes the race
+                # safe — merge into the existing row instead of duplicating.
+                existing = conn.execute(
+                    "SELECT id FROM symbols WHERE symbol_name=? AND fingerprint=?",
+                    (payload["symbol_name"], payload["fingerprint"]),
+                ).fetchone()
+                if existing:
+                    return self._update_symbol(conn, int(existing[0]), payload, now)
+                raise
 
     def query_symbols(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
         q = f"%{str(query or '').strip()}%"
@@ -234,6 +302,7 @@ class SymbolDB:
         if not binary_hash or not hypothesis_text:
             return 0
         now = time.time()
+        _conf = confidence if confidence is not None else 0.8
         with contextlib.closing(self._conn()) as conn:
             existing = conn.execute(
                 "SELECT id FROM hypotheses WHERE binary_hash=? AND addr_offset=? AND hypothesis_text=?",
@@ -247,7 +316,7 @@ class SymbolDB:
                     WHERE id=?
                     """,
                     (
-                        float(confidence or 0.8),
+                        float(_conf),
                         str(chip_family or ""),
                         str(source_session or ""),
                         str(source_binary or ""),
@@ -267,7 +336,7 @@ class SymbolDB:
                     str(chip_family or ""),
                     int(addr_offset),
                     str(hypothesis_text),
-                    float(confidence or 0.8),
+                    float(_conf),
                     str(source_session or ""),
                     str(source_binary or ""),
                     now,

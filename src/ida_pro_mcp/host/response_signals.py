@@ -26,7 +26,6 @@ from typing import Any
 def build_session_resume(
     session_manager,
     sid: str,
-    _blackboard_entries: list[dict] | None = None,
 ) -> dict | None:
     """Build a session resume context block for reconnecting LLMs.
 

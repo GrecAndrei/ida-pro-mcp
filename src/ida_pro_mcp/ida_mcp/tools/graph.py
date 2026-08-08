@@ -90,7 +90,7 @@ def graph(
 
             traverse(ea, 0, set())
 
-            return _format_graph(nodes, edges, format, cycle_nodes=cycle_nodes)
+            return _format_graph(nodes, edges, format, cycle_nodes=cycle_nodes, root_ea=ea)
 
         elif action == "cfg":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
@@ -305,7 +305,7 @@ def graph(
                 stack.discard(target_ea)
 
             traverse_xrefs(ea, 0, set())
-            return _format_graph(nodes, edges, format, cycle_nodes=cycle_nodes)
+            return _format_graph(nodes, edges, format, cycle_nodes=cycle_nodes, root_ea=ea)
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
@@ -313,11 +313,23 @@ def graph(
         return handle_error(e)
 
 
-def _format_graph(nodes, edges, format, cycle_nodes=None):
+def _format_graph(nodes, edges, format, cycle_nodes=None, root_ea=None):
     """Format graph nodes/edges into the requested output format."""
     cycle_nodes = cycle_nodes or set()
     if len(nodes) > 500:
-        keep = set(sorted(nodes.keys())[:500])
+        # Keep the traversal anchored on relevance, not address order: the
+        # requested root first, then the most-connected nodes. Address-sorted
+        # truncation could silently drop the root (and every edge touching
+        # it), yielding a graph that reports 500 nodes but loses the subtree.
+        degree = {}
+        for src, dst in edges:
+            degree[src] = degree.get(src, 0) + 1
+            degree[dst] = degree.get(dst, 0) + 1
+
+        def _relevance_key(ea):
+            return (0 if ea == root_ea else 1, -degree.get(ea, 0), ea)
+
+        keep = set(sorted(nodes.keys(), key=_relevance_key)[:500])
         nodes = {ea: name for ea, name in nodes.items() if ea in keep}
         edges = [(src, dst) for src, dst in edges if src in keep and dst in keep]
     if format == "mermaid":

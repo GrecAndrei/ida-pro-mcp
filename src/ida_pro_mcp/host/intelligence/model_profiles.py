@@ -149,7 +149,7 @@ def read_gguf_metadata(path: str) -> dict[str, Any]:
                     handle, struct.unpack("<I", value_type_raw)[0]
                 )
             return metadata
-    except (OSError, ValueError, struct.error):
+    except (OSError, ValueError, struct.error, RecursionError):
         return {}
 
 

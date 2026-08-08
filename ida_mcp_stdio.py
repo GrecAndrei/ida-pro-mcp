@@ -54,7 +54,6 @@ from ida_pro_mcp.host.config import (  # noqa: E402,F401
     _parse_line_range,
     _parse_str_list,
     log_rpc,
-    validate_path,
 )
 from ida_pro_mcp.host.errors import MCPError, make_error  # noqa: E402,F401
 from ida_pro_mcp.host.schemas import (  # noqa: E402,F401

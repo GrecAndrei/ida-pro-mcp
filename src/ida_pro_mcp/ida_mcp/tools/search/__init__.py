@@ -296,7 +296,7 @@ def search(
         if action == "bytes":
             response = search_bytes(actual_pattern, range_start, range_end, include_context, offset, limit, timeout_ms)
         elif action == "string":
-            response = search_string(actual_pattern, case_sensitive, include_context, offset, limit, timeout_ms)
+            response = search_string(actual_pattern, case_sensitive, include_context, offset, limit, timeout_ms, range_start, range_end)
         elif action == "immediate":
             response = search_immediate(actual_pattern, range_start, range_end, include_context, offset, limit, timeout_ms)
         elif action == "name":
@@ -335,9 +335,9 @@ def search(
                 include_items=include_items,
             )
         elif action == "constants":
-            response = search_constants(actual_pattern, range_start, range_end, include_context, offset, limit, include_items)
+            response = search_constants(actual_pattern, range_start, range_end, include_context, offset, limit, include_items, timeout_ms=timeout_ms)
         elif action == "decompiled":
-            response = search_decompiled(actual_pattern, case_sensitive, range_start, range_end, offset, limit, include_items, **kwargs)
+            response = search_decompiled(actual_pattern, case_sensitive, range_start, range_end, offset, limit, include_items, timeout_ms=timeout_ms, **kwargs)
         elif action == "structured":
             response = search_structured(constraints or {}, actual_pattern, range_start, range_end, include_context, offset, limit, include_items, timeout_ms)
         elif action == "type":

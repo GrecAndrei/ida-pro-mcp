@@ -170,8 +170,11 @@ def search_func_by_sig(pattern, offset, limit, timeout_ms=0):
     size_rules = []
     call_pattern = None
     args_rule = None
-    want_leaf = "leaf" in criteria or "no_callee" in criteria
-    want_no_callers = "no_caller" in criteria or "entry_point" in criteria or "entrypoint" in criteria
+    # Word-boundary anchoring keeps bare structural keywords (leaf, no_callers,
+    # calls:NAME, ...) from firing on ordinary names that merely contain them
+    # (e.g. 'calloc', 'leaflet', 'find_leaf_node').
+    want_leaf = bool(re_module.search(r"\bleaf\b", criteria)) or bool(re_module.search(r"\bno_callees?\b", criteria))
+    want_no_callers = bool(re_module.search(r"\bno_callers?\b", criteria)) or bool(re_module.search(r"\bentry_?points?\b", criteria))
 
     for m in re_module.finditer(r"size\s*[:=]\s*([<>]?)(\d+)(?:\s*-\s*(\d+))?", criteria):
         op, val1, val2 = m.groups()
@@ -181,7 +184,7 @@ def search_func_by_sig(pattern, offset, limit, timeout_ms=0):
     for m in re_module.finditer(r"(?:smaller|less)\s+than\s+(\d+)", criteria):
         size_rules.append(("<", int(m.group(1)), None))
 
-    m_calls = re_module.search(r"(?:calls?|invoke(?:s|d)?|callee)\s*[:=]?\s*([^\s,;]+)", criteria)
+    m_calls = re_module.search(r"\b(?:calls?|invoke(?:s|d)?|callee)\b\s*[:=]?\s*([^\s,;]+)", criteria)
     if m_calls:
         call_pattern = m_calls.group(1).strip()
 

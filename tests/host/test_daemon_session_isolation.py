@@ -539,6 +539,11 @@ def test_status_and_state_can_target_a_specific_session_explicitly(
         assert active["session"]["session_id"] == sid_b
 
         # Explicit idb steers status at session A — and makes it active.
+        # Cross-agent note: this is a deliberate READ-only call that mutates
+        # the connection-wide active session. On a multiplexed MCP connection
+        # where several agents share one connection, one agent polling its
+        # session with an explicit idb re-points what the next UNscoped call
+        # from any agent does — an implicit cross-agent steering side effect.
         targeted = _tool_call(server, 4, "ida_session_status", {"idb": sid_a})
         assert targeted["session"]["session_id"] == sid_a
         assert server.current_session.session_id == sid_a

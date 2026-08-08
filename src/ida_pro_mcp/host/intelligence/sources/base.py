@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import zipfile
@@ -44,16 +45,26 @@ class SourceParser(ABC):
             fpath = os.path.join(source_dir, fname)
             if not force and os.path.isfile(fpath):
                 continue
+            wrote = False
             try:
                 if progress_cb:
                     progress_cb(f"Downloading {self.name}: {fname}...")
                 data = _download_url(url)
                 with open(fpath, "wb") as f:
                     f.write(data)
+                wrote = True
                 self._post_download(fpath, source_dir)
                 result["downloaded"].append(fname)
             except Exception as e:
                 result["errors"].append(f"{self.name} {fname}: {e}")
+                # A file written during this attempt is incomplete or corrupt
+                # (e.g. a truncated archive rejected by _post_download). Remove
+                # it so a later non-forced run re-downloads instead of skipping
+                # a poisoned cache entry forever. Files that predate this
+                # attempt are left untouched.
+                if wrote:
+                    with contextlib.suppress(OSError):
+                        os.remove(fpath)
 
         result["data_dir"] = source_dir
         return result

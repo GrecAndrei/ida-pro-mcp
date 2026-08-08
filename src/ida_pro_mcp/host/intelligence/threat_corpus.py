@@ -19,10 +19,11 @@ The parsed corpus is cached as per-source JSON files under
 CACHE_DIR/corpus/. Lazy-loaded singleton on first use; the installer
 populates it via ``bron_corpus.download_bron_corpus``.
 
-The corpus is consumed by:
-  - ``taint`` module signature patterns
-  - ``SecBertStaticEmbedder`` corpus selection
-  - FindCrypt crypto signature extraction
+The corpus is built and saved by the installer
+(``installer.bron_corpus``). No MCP server operation currently loads it;
+wiring a consumer (e.g. a corpus search tool) into the host/server layer
+is pending, at which point ``ensure_corpus_loaded``/``load_corpus`` become
+the runtime entry points.
 """
 
 from __future__ import annotations
@@ -534,7 +535,8 @@ class ThreatCorpus:
         self.source_fingerprints: dict[str, str] = source_fingerprints or {}
         self.built_at: str = built_at or datetime.now(UTC).isoformat()
         self._indexes: dict[str, dict[str, Any]] = {}
-        self._yara_string_to_rules: dict[str, list[str]] = {}
+        # string-key -> list of (source_name, rule_name) pairs
+        self._yara_string_to_rules: dict[str, list[tuple[str, str]]] = {}
         self._rebuild_indexes()
 
     def _rebuild_indexes(self) -> None:
@@ -558,7 +560,13 @@ class ThreatCorpus:
                     for s in r.get("strings") or []:
                         key = s.lower()
                         if key:
-                            self._yara_string_to_rules.setdefault(key, []).append(r.get("name", ""))
+                            # Record the source alongside the rule name so a
+                            # rule present in both corpora resolves to the
+                            # corpus it actually matched in (see
+                            # search_yara_strings).
+                            self._yara_string_to_rules.setdefault(key, []).append(
+                                (source_name, r.get("name", ""))
+                            )
 
     # ── Backward-compatible properties ────────────────────────────────
 
@@ -620,25 +628,23 @@ class ThreatCorpus:
             return []
         key = needle.lower()
         matches: list[dict[str, Any]] = []
-        rule_names = self._yara_string_to_rules.get(key) or []
-        yara_idx: dict[str, Any] = {}
-        yara_idx.update(self._indexes.get("yara_rules", {}))
-        yara_idx.update(self._indexes.get("yara_rules_extra", {}))
-        for rname in rule_names[:limit]:
-            rule = yara_idx.get(rname)
+        rule_refs = self._yara_string_to_rules.get(key) or []
+        for source_name, rname in rule_refs[:limit]:
+            rule = self._indexes.get(source_name, {}).get(rname)
             if rule is not None:
                 matches.append(rule)
         if not matches:
             sub = key[: max(3, len(key) // 2)]
-            seen: set[str] = set()
-            for skey, rules in self._yara_string_to_rules.items():
+            seen: set[tuple[str, str]] = set()
+            for skey, refs in self._yara_string_to_rules.items():
                 if sub not in skey:
                     continue
-                for rname in rules:
-                    if rname in seen:
+                for ref in refs:
+                    if ref in seen:
                         continue
-                    seen.add(rname)
-                    rule = yara_idx.get(rname)
+                    seen.add(ref)
+                    source_name, rname = ref
+                    rule = self._indexes.get(source_name, {}).get(rname)
                     if rule is not None:
                         matches.append(rule)
                         if len(matches) >= limit:
@@ -865,11 +871,14 @@ def delete_corpus_cache() -> bool:
             except OSError:
                 pass
     legacy = corpus_cache_path()
-    try:
-        os.remove(legacy)
-        removed = True
-    except OSError:
-        pass
+    # save_corpus renames the legacy file to a .v1_backup; clear that too so a
+    # stale backup does not accumulate forever.
+    for path in (legacy, legacy + ".v1_backup"):
+        try:
+            os.remove(path)
+            removed = True
+        except OSError:
+            pass
     return removed
 
 # ── Download pipeline (registry-based) ─────────────────────────────────────
@@ -943,7 +952,7 @@ def _build_from_sources(download_result: dict[str, Any]) -> ThreatCorpus | None:
         # Record even empty sources: a source that was downloaded but parsed
         # nothing must remain distinguishable from a source that was never
         # attempted, so ingestion failures survive a save/load round-trip.
-        fingerprints[source.name] = source.fingerprint(data_dir)
+        fp = source.fingerprint(data_dir)
 
         if source.is_multi_type:
             buckets: dict[str, list[dict[str, Any]]] = {}
@@ -955,8 +964,15 @@ def _build_from_sources(download_result: dict[str, Any]) -> ThreatCorpus | None:
                     entries[bucket].extend(bucket_entries)
                 else:
                     entries[bucket] = bucket_entries
+                # A multi-type source spreads its entries across bucket keys
+                # (attack_patterns/malware/...), and save_corpus keys the
+                # manifest off entry names. Record the source fingerprint
+                # under every bucket it populates or it is silently dropped
+                # on save/load.
+                fingerprints[bucket] = fp
         else:
             entries.setdefault(source.name, []).extend(parsed)
+            fingerprints[source.name] = fp
 
     if not entries:
         return None
@@ -1002,6 +1018,18 @@ def build_corpus_from_sources(
 _corpus_singleton: ThreatCorpus | None = None
 _corpus_lock = __import__("threading").Lock()
 
+
+def _cache_hit_info(corpus: ThreatCorpus) -> dict[str, Any]:
+    return {
+        "loaded": True,
+        "from_cache": True,
+        "rebuilt": False,
+        "singleton": True,
+        "counts": corpus.count_by_type(),
+        "source_fingerprint": corpus.source_fingerprint,
+    }
+
+
 def ensure_corpus_loaded(
     rebuild: bool = False,
     cwe_path: str | None = None,
@@ -1013,43 +1041,46 @@ def ensure_corpus_loaded(
 
     On first call: loads from cache or builds from sources.
     On subsequent calls: returns cached singleton (unless rebuild=True).
+
+    Network downloads run OUTSIDE the process-global lock: the singleton is
+    shared by every session, so holding the lock across a multi-source
+    download (up to 120s per source) would stall unrelated callers. The
+    build/persist/assign steps that mutate the singleton stay under the lock.
     """
     global _corpus_singleton
 
     if _corpus_singleton is not None and not rebuild:
-        return _corpus_singleton, {
-            "loaded": True,
-            "from_cache": True,
-            "rebuilt": False,
-            "singleton": True,
-            "counts": _corpus_singleton.count_by_type(),
-            "source_fingerprint": _corpus_singleton.source_fingerprint,
-        }
+        return _corpus_singleton, _cache_hit_info(_corpus_singleton)
+
+    # Peek the on-disk cache before any network I/O so a warm cache is never
+    # followed by a pointless download. load_corpus() is safe without the lock
+    # (files are written atomically via os.replace); the locked section below
+    # re-verifies before assigning the singleton.
+    if not rebuild:
+        cached = load_corpus()
+        if cached is not None:
+            with _corpus_lock:
+                if _corpus_singleton is not None:
+                    return _corpus_singleton, _cache_hit_info(_corpus_singleton)
+                _corpus_singleton = cached
+                return cached, _cache_hit_info(cached)
+
+    # Kick off the (potentially slow) download before taking the lock.
+    pre_download: dict[str, Any] | None = None
+    if auto_download and not (cwe_path or attack_paths or yara_dir):
+        pre_download = download_corpus_sources(force=rebuild)
 
     with _corpus_lock:
         if _corpus_singleton is not None and not rebuild:
-            return _corpus_singleton, {
-                "loaded": True,
-                "from_cache": True,
-                "rebuilt": False,
-                "singleton": True,
-                "counts": _corpus_singleton.count_by_type(),
-                "source_fingerprint": _corpus_singleton.source_fingerprint,
-            }
+            return _corpus_singleton, _cache_hit_info(_corpus_singleton)
 
-        # Try cache
+        # Try cache (only reached when a cache appeared after the probe above,
+        # e.g. written by a concurrent thread while we were downloading).
         if not rebuild:
             corpus = load_corpus()
             if corpus is not None:
                 _corpus_singleton = corpus
-                return corpus, {
-                    "loaded": True,
-                    "from_cache": True,
-                    "rebuilt": False,
-                    "singleton": True,
-                    "counts": corpus.count_by_type(),
-                    "source_fingerprint": corpus.source_fingerprint,
-                }
+                return corpus, _cache_hit_info(corpus)
 
         # Build from sources (legacy path if explicit paths provided)
         if cwe_path or attack_paths or yara_dir:
@@ -1067,7 +1098,7 @@ def ensure_corpus_loaded(
 
         # Auto-download and build using registry
         if auto_download:
-            dl = download_corpus_sources(force=rebuild)
+            dl = pre_download if pre_download is not None else download_corpus_sources(force=rebuild)
             corpus = _build_from_sources(dl)
             if corpus is not None and not corpus.is_empty():
                 saved = save_corpus(corpus)
@@ -1091,6 +1122,9 @@ def ensure_corpus_loaded(
 def invalidate_corpus_cache() -> None:
     """Clear the singleton and delete all cache files."""
     global _corpus_singleton
+    # Hold the lock while deleting so no other thread can load_corpus() between
+    # the singleton reset and the file removal and re-populate a live singleton
+    # backed by a cache we are about to erase.
     with _corpus_lock:
         _corpus_singleton = None
-    delete_corpus_cache()
+        delete_corpus_cache()

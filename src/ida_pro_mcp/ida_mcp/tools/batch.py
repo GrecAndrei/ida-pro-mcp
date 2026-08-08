@@ -80,7 +80,12 @@ def _macro_apply_pipe_op(data: Any, op: str) -> Any:
     if op == "count":
         return len(data) if isinstance(data, (list, dict, str)) else 0
     elif op.startswith("first(") and op.endswith(")"):
-        n = int(op[6:-1])
+        try:
+            n = int(op[6:-1])
+        except ValueError:
+            # Malformed count (e.g. `first(abc)`) — pass data through unchanged
+            # rather than letting the error escape the interpreter.
+            return data
         if isinstance(data, list):
             return data[:n]
         return data
@@ -155,8 +160,13 @@ class MacroDSLInterpreter:
         lines = [l.strip() for l in script.splitlines() if l.strip() and not l.strip().startswith("#")]
         for line in lines:
             self._execute_line(line)
+        errors = sum(
+            1
+            for r in self.results
+            if isinstance(r.get("result"), dict) and r.get("result").get("error")
+        )
         return {
-            "ok": True,
+            "ok": errors == 0,
             "results": self.results,
             "vars": {k: v for k, v in self.vars.items() if not k.startswith("_")},
         }
@@ -476,7 +486,7 @@ def _check_condition(call, results):
 
 
 @tool
-@idaread
+@idawrite
 def batch(
     calls: Annotated[list[dict], "List of tool calls: [{tool: str, action: str, ...params}]"] = None,
     stop_on_error: Annotated[bool, "Stop executing remaining calls if one fails"] = False,
@@ -553,7 +563,10 @@ def batch(
                 "tool_calls_detected": detected,
             }
         interpreter = MacroDSLInterpreter()
-        result = interpreter.run(script)
+        try:
+            result = interpreter.run(script)
+        except Exception as e:
+            return handle_error(e, context="batch script")
         result["final"] = interpreter.vars.get("_")
         return result
 
@@ -688,7 +701,9 @@ def batch(
     failed = sum(1 for r in results if isinstance(r, dict) and r.get("error"))
 
     return {
-        "ok": True,
+        # The whole batch is a failure only when a sub-call actually errored;
+        # skipped/conditional calls are not failures. Matches host _handle_batch.
+        "ok": failed == 0,
         "results": results,
         "total": len(calls),
         "executed": executed,

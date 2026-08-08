@@ -35,8 +35,16 @@ def config_json_set(key: str, value):
 
 
 def handle_enabled_tools(registry: McpRpcRegistry, config_key: str):
-    """Changed to registry to enable configured tools, returns original tools."""
+    """Filter the registry down to the tools enabled in the persisted config.
+
+    Returns the full pre-filter tool set. Tools the config has never seen
+    (registered after the last save) default to enabled and are persisted, so
+    the next /config POST does not wipe them. Every tool ever seen is also
+    recorded in ``_KNOWN_TOOLS`` so the config page can keep listing (and
+    re-enabling) tools that are currently filtered out.
+    """
     original_tools = registry.methods.copy()
+    _KNOWN_TOOLS.update(original_tools)
     enabled_tools = config_json_get(
         config_key, dict.fromkeys(original_tools, True)
     )
@@ -59,22 +67,26 @@ def handle_enabled_tools(registry: McpRpcRegistry, config_key: str):
 
 DEFAULT_CORS_POLICY = "local"
 
+MAX_CONFIG_BODY = 1_048_576
 
-# Snapshot of the tool registry at import time. It is only the *base* for the
-# config page: tools registered after this module is imported are merged back
-# in at request time (see _all_known_tools), so they neither vanish from the
-# page nor get wiped by the next /config POST.
-ORIGINAL_TOOLS = handle_enabled_tools(MCP_SERVER.tools, "enabled_tools")
+# Every tool this process has ever seen, by name. The live registry
+# (MCP_SERVER.tools.methods) holds only *enabled* tools once handle_enabled_tools
+# has filtered it, so the config page needs this separate reference to keep
+# listing (and re-enabling) tools that are currently disabled. It cannot be an
+# import-time snapshot: tool modules register lazily (ida_mcp/tools/__init__.py
+# imports on demand), so the registry is still empty when this module loads and
+# a filter applied then would be a no-op — see _sync_enabled_tools.
+_KNOWN_TOOLS: dict = {}
 
 
 def _all_known_tools() -> dict:
-    """Union of the import-time tool set and tools registered later.
+    """Union of every tool ever registered and the current live registry.
 
-    The config page and /config POST must never operate on a frozen
-    import-time snapshot, or post-import tools would disappear from the page
-    and be dropped from the registry on the next save.
+    The config page and /config POST must never operate on the filtered live
+    registry alone, or disabled tools would disappear from the page and become
+    impossible to re-enable.
     """
-    merged = dict(ORIGINAL_TOOLS)
+    merged = dict(_KNOWN_TOOLS)
     merged.update(MCP_SERVER.tools.methods)
     return merged
 
@@ -83,6 +95,7 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
     def __init__(self, request, client_address, server):
         super().__init__(request, client_address, server)
         self.update_cors_policy()
+        self._sync_enabled_tools()
         # Bound how long a single client connection can sit idle, so a hung
         # or slow client cannot block a request thread (and the config body
         # read below) indefinitely.
@@ -99,6 +112,18 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
                 self.mcp_server.cors_allowed_origins = self.mcp_server.cors_localhost
             case "direct":
                 self.mcp_server.cors_allowed_origins = None
+
+    def _sync_enabled_tools(self):
+        """Honor the persisted enabled_tools config on the live tool registry.
+
+        Runs on every request (idempotently) instead of at module import: tool
+        modules register lazily, so the registry is empty when this module loads
+        and an eager filter would be a no-op — every disabled tool would
+        reappear after a restart. Re-filtering here keeps the registry
+        consistent with the stored config as soon as tools are registered,
+        including a previously-disabled tool imported after a save.
+        """
+        handle_enabled_tools(self.mcp_server.tools, "enabled_tools")
 
     def do_POST(self):
         """Handles POST requests."""
@@ -351,10 +376,11 @@ input[type="submit"]:hover {
             self.send_error(400, f"Unsupported Content-Type: {content_type}")
             return
 
-        # Parse the form data (cap the body so a bogus content-length cannot
-        # force an unbounded read). Mirror zeromcp do_POST: reject a
-        # non-integer Content-Length outright, and reject negative values
-        # (rfile.read(-1) would read the whole stream).
+        # Parse the form data. Mirror zeromcp do_POST: reject a non-integer
+        # Content-Length outright, reject negative values (rfile.read(-1) would
+        # read the whole stream), and reject over-limit bodies outright — a
+        # truncated body would be parsed as a valid submission and silently
+        # disable every unchecked tool.
         try:
             length = int(self.headers.get("content-length", "0"))
         except (TypeError, ValueError):
@@ -363,8 +389,24 @@ input[type="submit"]:hover {
         if length < 0:
             self.send_error(400, "Invalid Content-Length")
             return
-        length = min(length, 1_048_576)
-        postvars = parse_qs(self.rfile.read(length).decode("utf-8"))
+        if length > MAX_CONFIG_BODY:
+            self.send_error(413, f"Payload Too Large: exceeds {MAX_CONFIG_BODY} bytes")
+            return
+        body = self.rfile.read(length)
+        if len(body) != length:
+            # The client advertised more bytes than it sent; the form is
+            # truncated and must not be applied as a partial config.
+            self.send_error(400, "Truncated request body")
+            return
+        postvars = parse_qs(body.decode("utf-8"))
+
+        # A genuinely empty body (bare curl POST, health-check probe, etc.) is
+        # never a real form submission — the config page always includes the
+        # cors_policy radio group. Treat it as a client error instead of
+        # interpreting it as "disable every tool".
+        if not postvars:
+            self.send_error(400, "Empty form body")
+            return
 
         # Update CORS policy
         cors_policy = postvars.get("cors_policy", [DEFAULT_CORS_POLICY])[0]

@@ -14,6 +14,14 @@ from ..errors import MCPError, make_error
 _MIN_MAX_TOKENS = 500
 _MAX_TRUNCATION_STORE = 50
 _TOKEN_TTL_SEC = 600  # 10 minutes
+# Recursion guard for _truncate_recursive: a pathologically deep (or
+# self-referential) response must not blow the interpreter stack and be
+# misreported by the dispatcher as an IDA/connection failure.
+_MAX_TRUNCATION_DEPTH = 64
+# Per-value cap on the text search_truncated scans. Regexes run on the request
+# thread against the FULL stored response, so a multi-MB value plus a hostile
+# pattern could stall the call; bound the scanned window per value.
+_SEARCH_MAX_CHARS = 1_000_000
 
 _TRUNCATION_STORE: dict[str, dict[str, Any]] = {}
 _TRUNCATION_ORDER: deque[str] = deque()
@@ -69,12 +77,18 @@ def _get_entry(token: str, session_id: str = "", owner_id: str = "") -> dict[str
     # Session scoping: when the entry was stored under a session, require an
     # exact match. Empty caller session_id must not unlock foreign tokens.
     entry_sid = entry.get("session_id", "")
-    if entry_sid and session_id != entry_sid:
-        return None
-    # Connection ownership: when the entry was bound to a client connection,
-    # require an exact owner match so daemon peers cannot continue each other.
     entry_owner = entry.get("owner_id", "")
-    if entry_owner and owner_id != entry_owner:
+    if entry_sid or entry_owner:
+        # Scoped entry: require exact matches on whichever scope is bound.
+        if entry_sid and session_id != entry_sid:
+            return None
+        if entry_owner and owner_id != entry_owner:
+            return None
+    elif session_id or owner_id:
+        # Fail closed: a token stored with NO scope (private host-internal
+        # path) must not be unlocked by a scoped caller. Only an equally
+        # unscoped caller — the same private path that minted it — may
+        # continue it, so a leaked token cannot be replayed across sessions.
         return None
     return entry
 
@@ -181,18 +195,23 @@ def continue_truncated(
     info = entry["fields"][field]
 
     if info.get("type") == "list" and isinstance(value, list):
-        raw_next = info.get("next_offset", 0)
-        start = max(0, int(raw_next)) if raw_next is not None and offset is None else max(0, int(offset or 0))
-        chunk = count if count is not None else info.get("chunk_size", 0)
-        if chunk <= 0:
-            return make_error(
-                MCPError.INVALID_ARGS,
-                "Invalid count for continuation",
-                hint="Pass count=N with N>0.",
-            )
-        items = value[start : start + chunk]
-        next_offset = start + len(items)
-        info["next_offset"] = next_offset
+        # The cursor (next_offset) is shared live state in the module-level
+        # store; read-advance-write must be atomic so concurrent ida_continue
+        # calls on the same token emit disjoint pages instead of overlapping
+        # chunks with a lost update.
+        with _STORE_LOCK:
+            raw_next = info.get("next_offset", 0)
+            start = max(0, int(raw_next)) if raw_next is not None and offset is None else max(0, int(offset or 0))
+            chunk = count if count is not None else info.get("chunk_size", 0)
+            if chunk <= 0:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "Invalid count for continuation",
+                    hint="Pass count=N with N>0.",
+                )
+            items = value[start : start + chunk]
+            next_offset = start + len(items)
+            info["next_offset"] = next_offset
         return {
             "ok": True,
             "token": token,
@@ -205,18 +224,19 @@ def continue_truncated(
         }
 
     if info.get("type") == "string" and isinstance(value, str):
-        raw_next = info.get("next_offset", 0)
-        start = max(0, int(raw_next)) if raw_next is not None and offset is None else max(0, int(offset or 0))
-        chunk = count if count is not None else info.get("chunk_size", 0)
-        if chunk <= 0:
-            return make_error(
-                MCPError.INVALID_ARGS,
-                "Invalid count for continuation",
-                hint="Pass count=N with N>0.",
-            )
-        text = value[start : start + chunk]
-        next_offset = start + len(text)
-        info["next_offset"] = next_offset
+        with _STORE_LOCK:
+            raw_next = info.get("next_offset", 0)
+            start = max(0, int(raw_next)) if raw_next is not None and offset is None else max(0, int(offset or 0))
+            chunk = count if count is not None else info.get("chunk_size", 0)
+            if chunk <= 0:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "Invalid count for continuation",
+                    hint="Pass count=N with N>0.",
+                )
+            text = value[start : start + chunk]
+            next_offset = start + len(text)
+            info["next_offset"] = next_offset
         return {
             "ok": True,
             "token": token,
@@ -271,6 +291,46 @@ def peek_truncated(
     }
 
 
+def _is_catastrophic_regex(pattern: str) -> bool:
+    """Best-effort ReDoS guard for caller-supplied regex patterns.
+
+    A quantified group that itself contains a quantifier (``(a+)+``, ``(a*)*``,
+    ``(ab+)+``) can backtrack exponentially against adversarial text and would
+    stall the request thread. Return True so the caller can reject the pattern
+    up front with a clear error instead of timing out.
+    """
+    i = 0
+    n = len(pattern)
+    stack: list[bool] = []  # per open group: whether it already holds a quantifier
+    while i < n:
+        ch = pattern[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == "[":
+            # Character classes make parens/quantifiers literal; skip them.
+            i += 1
+            while i < n and pattern[i] != "]":
+                i += 2 if pattern[i] == "\\" else 1
+            continue
+        if ch == "(":
+            stack.append(False)
+        elif ch == ")":
+            if not stack:
+                return False
+            has_quant = stack.pop()
+            if i + 1 < n and pattern[i + 1] in "*+?":
+                if has_quant:
+                    return True
+                if stack:
+                    stack[-1] = True
+        elif ch in "*+":
+            if stack:
+                stack[-1] = True
+        i += 1
+    return False
+
+
 def search_truncated(
     token: str,
     pattern: str,
@@ -315,6 +375,12 @@ def search_truncated(
             rx = re.compile(pattern, flags)
         except re.error as e:
             return make_error(MCPError.INVALID_ARGS, f"Invalid regex: {e}")
+        if _is_catastrophic_regex(pattern):
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "Regex pattern rejected: nested quantifiers can backtrack exponentially",
+                hint="Simplify the pattern (avoid a quantified group inside another quantified group, e.g. `(a+)+`).",
+            )
         def match_fn(text: str) -> bool:
             return bool(rx.search(text))
     else:
@@ -322,6 +388,9 @@ def search_truncated(
         def match_fn(text: str) -> bool:
             t = text if case_sensitive else text.lower()
             return needle in t
+
+    def _bounded(text: str) -> str:
+        return text if len(text) <= _SEARCH_MAX_CHARS else text[:_SEARCH_MAX_CHARS]
 
     matches = []
     for fname in search_fields:
@@ -332,7 +401,7 @@ def search_truncated(
             for idx, item in enumerate(value):
                 if len(matches) >= limit:
                     break
-                text = json.dumps(item, ensure_ascii=False) if not isinstance(item, str) else item
+                text = _bounded(json.dumps(item, ensure_ascii=False) if not isinstance(item, str) else item)
                 if match_fn(text):
                     matches.append({
                         "field": fname,
@@ -341,15 +410,16 @@ def search_truncated(
                     })
         elif isinstance(value, str):
             flags_re = 0 if case_sensitive else re.IGNORECASE
-            for m in re.finditer(re.escape(pattern) if not is_regex else pattern, value, flags_re):
+            search_text = _bounded(value)
+            for m in re.finditer(re.escape(pattern) if not is_regex else pattern, search_text, flags_re):
                 if len(matches) >= limit:
                     break
                 start = max(0, m.start() - 40)
-                end = min(len(value), m.end() + 40)
+                end = min(len(search_text), m.end() + 40)
                 matches.append({
                     "field": fname,
                     "offset": m.start(),
-                    "context": value[start:end],
+                    "context": search_text[start:end],
                 })
 
     return {
@@ -442,6 +512,7 @@ def _truncate_recursive(
     path: str = "",
     trunc_offset: int | None = None,
     trunc_limit: int | None = None,
+    _depth: int = 0,
 ) -> Any:
     """Recursively truncate large lists and strings in nested structures."""
     if isinstance(obj, list) and len(obj) > 10:
@@ -474,12 +545,19 @@ def _truncate_recursive(
         return obj[start:end] if start < len(obj) else ""
 
     if isinstance(obj, dict):
+        # Bound descent so a pathologically deep (or self-referential)
+        # response raises RecursionError instead of being misreported by the
+        # dispatcher as an IDA/connection failure. Beyond the limit the subtree
+        # is returned as-is; outer truncation already bounded the top level.
+        if _depth >= _MAX_TRUNCATION_DEPTH:
+            return obj
         return {
             k: _truncate_recursive(
                 v, max_tokens, truncated_fields,
                 path=f"{path}.{k}" if path else k,
                 trunc_offset=trunc_offset,
                 trunc_limit=trunc_limit,
+                _depth=_depth + 1,
             )
             for k, v in obj.items()
         }

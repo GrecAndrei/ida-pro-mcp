@@ -55,6 +55,29 @@ class KnowledgeGraph:
         conn.row_factory = sqlite3.Row
         return conn
 
+    @contextlib.contextmanager
+    def _immediate_tx(self):
+        """Run the enclosed read-modify-write inside an immediate (writer-locked)
+        transaction.
+
+        The JSON columns (``seen_at``, ``transitions``, ...) are appended in
+        Python after a SELECT, so a plain per-call connection lets two concurrent
+        writers read the same snapshot and lose one append. ``BEGIN IMMEDIATE``
+        takes the write lock up front, serializing writers (readers keep working
+        under WAL) so the second writer sees the first one's committed JSON.
+        """
+        conn = self._conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            yield conn
+            conn.execute("COMMIT")
+        except BaseException:
+            with contextlib.suppress(Exception):
+                conn.execute("ROLLBACK")
+            raise
+        finally:
+            conn.close()
+
     # ── schema ────────────────────────────────────────────────────────────────
 
     def _init_tables(self):
@@ -254,7 +277,7 @@ class KnowledgeGraph:
 
     def record_struct_access(self, struct_id: str, addr: str,
                               access_type: str, offset: int) -> bool:
-        with contextlib.closing(self._conn()) as c:
+        with self._immediate_tx() as c:
             row = c.execute("SELECT seen_at FROM kg_structs WHERE id=?",
                             (struct_id,)).fetchone()
             if not row:
@@ -264,7 +287,6 @@ class KnowledgeGraph:
                          "offset": offset, "ts": _now()})
             c.execute("UPDATE kg_structs SET seen_at=?, updated_at=? WHERE id=?",
                       (_j(seen), _now(), struct_id))
-            c.commit()
         return True
 
     def get_struct(self, struct_id: str) -> dict | None:
@@ -349,7 +371,7 @@ class KnowledgeGraph:
 
     def add_transition(self, sm_id: str, from_state: Any, to_state: Any,
                         trigger_addr: str, condition: str = "") -> bool:
-        with contextlib.closing(self._conn()) as c:
+        with self._immediate_tx() as c:
             row = c.execute("SELECT transitions FROM kg_state_machines WHERE id=?",
                             (sm_id,)).fetchone()
             if not row:
@@ -360,7 +382,6 @@ class KnowledgeGraph:
                           "ts": _now()})
             c.execute("UPDATE kg_state_machines SET transitions=?, updated_at=? WHERE id=?",
                       (_j(trans), _now(), sm_id))
-            c.commit()
         return True
 
     def get_state_machine(self, sm_id: str) -> dict | None:
@@ -415,7 +436,7 @@ class KnowledgeGraph:
         return n > 0
 
     def add_gap_candidate(self, gap_id: str, addr: str) -> bool:
-        with contextlib.closing(self._conn()) as c:
+        with self._immediate_tx() as c:
             row = c.execute("SELECT candidates FROM kg_gaps WHERE id=?",
                             (gap_id,)).fetchone()
             if not row:
@@ -425,7 +446,6 @@ class KnowledgeGraph:
                 cands.append(addr)
             c.execute("UPDATE kg_gaps SET candidates=?, updated_at=? WHERE id=?",
                       (_j(cands), _now(), gap_id))
-            c.commit()
         return True
 
     def list_gaps(self, resolved: bool = False) -> list[dict]:
@@ -519,20 +539,23 @@ class KnowledgeGraph:
     def record_peripheral_access(self, base_addr: str, driver_addr: str,
                                    offset: int, access_type: str = "rw") -> str:
         """Record that driver_addr accesses peripheral at base_addr+offset."""
-        with contextlib.closing(self._conn()) as c:
+        with contextlib.closing(self._conn()) as probe:
+            row = probe.execute(
+                "SELECT id FROM kg_peripherals WHERE base_addr=?", (base_addr,)
+            ).fetchone()
+        pid = row[0] if row else None
+        if pid is None:
+            # Create on a separate connection BEFORE taking the write lock, so
+            # add_peripheral's own INSERT never deadlocks against it.
+            pid = self.add_peripheral(base_addr, confidence=0.4)
+        with self._immediate_tx() as c:
             row = c.execute(
-                "SELECT id, registers, drivers FROM kg_peripherals WHERE base_addr=?",
-                (base_addr,)
+                "SELECT id, registers, drivers FROM kg_peripherals WHERE id=?", (pid,)
             ).fetchone()
             if not row:
-                pid = self.add_peripheral(base_addr, confidence=0.4)
-                row = c.execute(
-                    "SELECT id, registers, drivers FROM kg_peripherals WHERE id=?",
-                    (pid,)
-                ).fetchone()
-            pid, regs_json, drivers_json = row[0], row[1], row[2]
-            regs = json.loads(regs_json or "[]")
-            drivers = json.loads(drivers_json or "[]")
+                return pid
+            regs = json.loads(row[1] or "[]")
+            drivers = json.loads(row[2] or "[]")
             # Add register if new offset
             if not any(r.get("offset") == offset for r in regs):
                 regs.append({"offset": offset, "name": f"reg_{offset:03x}",
@@ -543,7 +566,6 @@ class KnowledgeGraph:
                 "UPDATE kg_peripherals SET registers=?, drivers=?, updated_at=? WHERE id=?",
                 (_j(regs), _j(drivers), _now(), pid)
             )
-            c.commit()
         return pid
 
     def list_peripherals(self) -> list[dict]:

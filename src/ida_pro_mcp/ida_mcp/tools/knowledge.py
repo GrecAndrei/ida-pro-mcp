@@ -74,8 +74,14 @@ def knowledge(
         sdb = SymbolDB(db_path)
 
         if action == "chip_identify":
-            idb_path = idc.get_idb_path() or ""
-            input_path = idb_path[:-4] if idb_path.lower().endswith(".i64") else idb_path
+            # Use the real input binary path, not a string-strip of the IDB
+            # path (foo.i64 -> 'foo' for PE/ELF, or a raw .idb on 32-bit).
+            if hasattr(ida_nalt, "get_input_file_path"):
+                input_path = ida_nalt.get_input_file_path() or ""
+            elif hasattr(idaapi, "get_input_file_path"):
+                input_path = idaapi.get_input_file_path() or ""
+            else:
+                input_path = ""
             if not input_path:
                 return make_error(MCPError.IDA_ERROR, "Could not resolve input binary path")
             profile = infer_binary_arch_profile(input_path)

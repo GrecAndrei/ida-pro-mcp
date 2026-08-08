@@ -243,6 +243,18 @@ class ServerMultiSessionMixin:
         # cross_resolve/status/cross_decompile reading the link table never
         # observes a half-built entry or mutates mid-iteration.
         with self._session_groups_lock:
+            # Re-resolve under the lock: a concurrent group_remove +
+            # group_create with the same id may have replaced the object we
+            # captured above, and writing links into the stale object would be
+            # a lost update (the live group would keep zero links).
+            group_id = group.group_id
+            group = self._session_groups.get(group_id)
+            if group is None:
+                return make_error(
+                    MCPError.NOT_FOUND,
+                    f"Session group '{group_id}' not found",
+                    hint="The group was removed while linking; re-create it and retry.",
+                )
             for sid in group.session_ids:
                 result = self._dispatch_to_session(sid, "imports_deep", {"action": "resolve"})
                 if isinstance(result, dict) and result.get("error"):

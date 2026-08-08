@@ -31,6 +31,9 @@ from .core import (  # noqa: E402
 )
 
 _DECOMPILED_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
+# Bounds the full-binary constants scan: keeps found_rows allocation and the
+# response payload finite even before pagination runs.
+_CONSTANTS_HIT_CAP = 2000
 _DECOMPILED_STOPWORDS = frozenset({
     "the", "and", "for", "with", "that", "this", "from", "into", "while",
     "void", "char", "int", "uint", "long", "short", "bool", "true", "false",
@@ -93,6 +96,20 @@ def _coerce_ea(value) -> int:
         return idaapi.BADADDR
 
 
+def _decomp_cache_mod_sig(func_ea) -> str:
+    """Return a fingerprint of the function's current name+prototype.
+
+    Used in the decompiled-cache key. func_t.flags (FUNC_*) does not change on
+    rename/retype, so it cannot invalidate cached pseudocode (which embeds the
+    symbol name and prototype); the name+prototype string changes when the user
+    annotates the IDB, which is the signal the cache key should track.
+    """
+    try:
+        return f"{idc.get_func_name(func_ea) or ''}|{idc.get_type(func_ea) or ''}"
+    except Exception:
+        return ""
+
+
 def _get_intelligence_index():
     try:
         from ida_pro_mcp.services import get_assembler
@@ -113,7 +130,10 @@ def _get_intelligence_index():
 
 def _seed_decompiled_candidates(pattern, matcher, range_start, range_end, max_functions, timeout_ms):
     """Rank likely matching functions before falling back to broad sampling."""
-    planning_budget_ms = min(2000, max(250, timeout_ms // 4))
+    # timeout_ms=0 means "no limit"; planning is still capped by design, so fall
+    # back to the historical 8s default for the planning budget in that case.
+    effective_timeout = timeout_ms if timeout_ms > 0 else 8000
+    planning_budget_ms = min(2000, max(250, effective_timeout // 4))
     timer = SearchTimeout(planning_budget_ms)
     tokens = _decompiled_query_tokens(pattern)
     seed_cap = max(128, max_functions * 3)
@@ -297,17 +317,28 @@ def _spread_sample_functions(all_funcs: list[int], seen: set[int], remaining: in
     return out
 
 
-def search_constants(pattern, range_start, range_end, include_context, offset, limit, include_items):
+def search_constants(pattern, range_start, range_end, include_context, offset, limit, include_items, timeout_ms=0):
     """Search for magic/crypto constants in instruction immediates."""
     import ida_ua
     const_matcher = compile_smart_pattern(pattern, case_sensitive=False) if pattern else None
     KNOWN_CONSTANTS = get_cached_constant_db()
 
+    timer = SearchTimeout(timeout_ms)
     found_rows = []
+    timed_out = False
+    capped = False
 
     for seg_start, seg_end in iter_segments(range_start, range_end, require_exec=True):
         curr = seg_start
         while curr < seg_end:
+            if len(found_rows) >= _CONSTANTS_HIT_CAP:
+                capped = True
+                break
+            try:
+                timer.check()
+            except TimeoutError:
+                timed_out = True
+                break
             insn = ida_ua.insn_t()
             if ida_ua.decode_insn(insn, curr) > 0:
                 for op in insn.ops:
@@ -342,23 +373,35 @@ def search_constants(pattern, range_start, range_end, include_context, offset, l
                 curr = idc.next_head(curr, seg_end)
                 if curr == idaapi.BADADDR:
                     break
+        if capped or timed_out:
+            break
 
     page, total, is_truncated = paginate_records(
         found_rows, offset, limit, sort_key=lambda r: r["address_ea"], reverse=False
     )
+    is_truncated = is_truncated or capped or timed_out
     result = build_response([r["line"] for r in page], offset, limit, total, is_truncated, total_found=total)
     if include_items:
         result["items"] = [{"address": r["address"], "value": r["value"], "name": r["name"], "function": r["function"]} for r in page]
     if pattern:
         result["query"] = pattern
+    if timed_out:
+        result["timed_out"] = True
+        result["hint"] = "Search timed out. Narrow with range or increase timeout_ms."
+    if capped:
+        result["note"] = f"Hit scan cap ({_CONSTANTS_HIT_CAP} constant sites) — results may be partial."
     return result
 
 
-def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, limit, include_items, **kwargs):
+def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, limit, include_items, timeout_ms=0, **kwargs):
     """Search decompiled pseudocode using the embedding index for ranking.
 
     Requires a prior intelligence(action='index_fast') or index_batch call.
     The index narrows the search to the most relevant functions before decompiling.
+
+    ``timeout_ms`` is an explicit parameter (0 = no limit) so the router can
+    forward it — reading it from **kwargs silently lost it because the router
+    binds timeout_ms as a named arg.
     """
     matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
 
@@ -375,9 +418,12 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
 
     scope_addr = kwargs.get("addr") or kwargs.get("func") or kwargs.get("function") or kwargs.get("scope")
     try:
-        timeout_ms = max(250, min(int(kwargs.get("timeout_ms", 8000)), 120000))
+        raw_timeout = int(timeout_ms)
     except (ValueError, TypeError):
-        timeout_ms = 8000
+        raw_timeout = 8000
+    # 0 means "no limit" (SearchTimeout convention); otherwise clamp to a sane
+    # window so a typo'd huge value cannot spin the decompile pump forever.
+    timeout_ms = 0 if raw_timeout <= 0 else max(250, min(raw_timeout, 120000))
     try:
         max_functions = max(1, min(int(kwargs.get("max_functions", kwargs.get("sample_max_funcs", 512))), 5000))
     except (ValueError, TypeError):
@@ -465,18 +511,15 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
     asm, intelligence_idx, _idb_path = (asm, idx, _idb_path) if index_available else (None, None, "")
 
     for func_ea in target_funcs:
-        if (_time.time() - started_at) >= (timeout_ms / 1000.0):
+        if timeout_ms > 0 and (_time.time() - started_at) >= (timeout_ms / 1000.0):
             timed_out = True
             break
         scanned += 1
 
-        cache_key = _cache_key("decomp", func_ea)
-        # Invalidate cache when function has been modified (rename, retype, etc.)
-        try:
-            mod_ctr = ida_funcs.get_func(func_ea).flags if ida_funcs.get_func(func_ea) else 0
-        except Exception:
-            mod_ctr = 0
-        cache_key = _cache_key("decomp", func_ea, mod_ctr)
+        # Invalidate cache on annotation changes (rename, retype, ...): the
+        # name+prototype fingerprint changes when the user annotates the IDB,
+        # so cached pseudocode is never served with a stale symbol/prototype.
+        cache_key = _cache_key("decomp", func_ea, _decomp_cache_mod_sig(func_ea))
         cached = _cache_get(cache_key)
         if cached is not None:
             pseudocode = cached

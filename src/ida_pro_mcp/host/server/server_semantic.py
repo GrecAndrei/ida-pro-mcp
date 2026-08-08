@@ -215,6 +215,7 @@ class ServerSemanticMixin:
             finally:
                 conn.close()
         return {
+            "ok": True,
             "db_path": db_path,
             "fingerprint": fingerprint,
             "rows_indexed": len(indexed_rows),
@@ -263,6 +264,14 @@ class ServerSemanticMixin:
                 MCPError.SESSION_REQUIRED,
                 "No active session. Create one first with: ida_open_binary(binary_path='path/to/binary')",
             )
+        # A cached index is per-session and unencrypted; a connection must never
+        # read another connection's session's gadget rows. This guard also runs
+        # before _semantic_index_db_path, so a foreign session's artifact dir is
+        # not created as a side effect either. (The rebuild path already goes
+        # through call_tool, which applies the same guard.)
+        ownership_error = self._ensure_client_owns_session(session)
+        if ownership_error:
+            return ownership_error
 
         db_path = self._semantic_index_db_path(session.session_id)
         wanted_fingerprint = self._semantic_index_fingerprint(session)

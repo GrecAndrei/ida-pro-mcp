@@ -392,10 +392,36 @@ def ctree(
         try:
             if not ida_hexrays.init_hexrays_plugin():
                 return make_error(MCPError.IDA_ERROR, "Decompiler required for CTree")
-            cfunc = ida_hexrays.decompile(ea)
-            if not cfunc: return make_error(MCPError.IDA_ERROR, "Decompilation failed")
-        except Exception:
-            return make_error(MCPError.IDA_ERROR, "Decompiler required for CTree")
+        except Exception as e:
+            return make_error(MCPError.IDA_ERROR, f"Decompiler init failed: {e}")
+        # A failed decompile is a retryable decompile-path problem, not a
+        # "decompiler not installed" problem. Surface the real reason via
+        # hexrays_failure_t when available and use DECOMPILER_FAILED so the
+        # agent gets the 'try ida_disassemble' hint instead of chasing a
+        # phantom decompiler-install issue.
+        hf = ida_hexrays.hexrays_failure_t() if hasattr(ida_hexrays, "hexrays_failure_t") else None
+        try:
+            cfunc = ida_hexrays.decompile(ea, hf) if hf is not None else ida_hexrays.decompile(ea)
+        except Exception as e:
+            return make_error(
+                MCPError.DECOMPILER_FAILED,
+                f"Decompilation failed at {hex(ea)}: {e}",
+                details={"address": hex(ea)},
+            )
+        if not cfunc:
+            err_msg = ""
+            hf_code = None
+            if hf is not None:
+                hf_code = getattr(hf, "code", None)
+                try:
+                    err_msg = str(hf.desc() or "")
+                except Exception:
+                    err_msg = ""
+            return make_error(
+                MCPError.DECOMPILER_FAILED,
+                f"Decompilation failed at {hex(ea)}" + (f": {err_msg}" if err_msg else ""),
+                details={"address": hex(ea), "hexrays_code": hf_code},
+            )
 
         func_name = idc.get_func_name(ea)
         filter_matcher = compile_smart_pattern(query, case_sensitive=False) if query else None

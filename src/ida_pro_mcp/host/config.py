@@ -14,6 +14,56 @@ from pathlib import Path
 from typing import Any
 
 
+def _env_int(
+    name: str,
+    default: int,
+    *,
+    min_value: int | None = None,
+    max_value: int | None = None,
+) -> int:
+    """Read an integer env var, falling back to ``default`` when the value is
+    missing or not an integer.
+
+    A malformed operator value must never crash the host at import time, so
+    every module-level numeric constant goes through here (or ``_env_float``)
+    rather than a bare ``int(os.environ[...])``.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except (ValueError, TypeError):
+        return default
+    if min_value is not None:
+        value = max(min_value, value)
+    if max_value is not None:
+        value = min(max_value, value)
+    return value
+
+
+def _env_float(
+    name: str,
+    default: float,
+    *,
+    min_value: float | None = None,
+    max_value: float | None = None,
+) -> float:
+    """Read a float env var, falling back to ``default`` on missing/invalid input."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except (ValueError, TypeError):
+        return default
+    if min_value is not None:
+        value = max(min_value, value)
+    if max_value is not None:
+        value = min(max_value, value)
+    return value
+
+
 def _default_runtime_dir() -> str:
     if sys.platform == "win32":
         root = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
@@ -104,14 +154,8 @@ BRIDGE_LOG = os.path.join(CACHE_DIR, "bridge.log")
 # (keep the last 25% as recent context) so it can't grow unbounded across
 # bridge restarts. Off by default until the user opts in via env var, but
 # strongly recommended for any long-lived installation.
-_BRIDGE_LOG_MAX_BYTES = max(
-    0,
-    int(os.environ.get("IDA_MCP_BRIDGE_LOG_MAX_MB", "100")) * 1024 * 1024,
-)
-_BRIDGE_LOG_KEEP_BYTES = max(
-    0,
-    int(os.environ.get("IDA_MCP_BRIDGE_LOG_KEEP_MB", "25")) * 1024 * 1024,
-)
+_BRIDGE_LOG_MAX_BYTES = _env_int("IDA_MCP_BRIDGE_LOG_MAX_MB", 100, min_value=0) * 1024 * 1024
+_BRIDGE_LOG_KEEP_BYTES = _env_int("IDA_MCP_BRIDGE_LOG_KEEP_MB", 25, min_value=0) * 1024 * 1024
 
 
 def _rotate_bridge_log_if_needed() -> None:
@@ -151,30 +195,29 @@ def _rotate_bridge_log_if_needed() -> None:
 _rotate_bridge_log_if_needed()
 
 # Runtime lease configuration
-RUNTIME_LEASE_TTL = max(15, int(os.environ.get("IDA_MCP_RUNTIME_LEASE_TTL", "75")))
+RUNTIME_LEASE_TTL = _env_int("IDA_MCP_RUNTIME_LEASE_TTL", 75, min_value=15)
 _DEFAULT_RUNTIME_LEASE_HEARTBEAT_SECONDS = max(2, RUNTIME_LEASE_TTL // 3)
-RUNTIME_LEASE_HEARTBEAT_SECONDS = max(
-    2,
-    int(
-        os.environ.get(
-            "IDA_MCP_RUNTIME_LEASE_HEARTBEAT",
-            str(_DEFAULT_RUNTIME_LEASE_HEARTBEAT_SECONDS),
-        )
-    ),
+# The heartbeat must stay strictly below the lease TTL: the stale-cleanup pass
+# treats `now - updated > TTL` as expired, so a heartbeat >= TTL would let a
+# live runtime's lease lapse between heartbeats and get reclaimed. Clamp it so
+# a misconfiguration degrades to a safe value instead of silent session loss.
+RUNTIME_LEASE_HEARTBEAT_SECONDS = _env_int(
+    "IDA_MCP_RUNTIME_LEASE_HEARTBEAT",
+    _DEFAULT_RUNTIME_LEASE_HEARTBEAT_SECONDS,
+    min_value=2,
+    max_value=RUNTIME_LEASE_TTL - 1,
 )
-PROCESS_TERMINATION_TIMEOUT_SECONDS = max(
-    1.0, float(os.environ.get("IDA_MCP_PROCESS_TERMINATION_TIMEOUT", "2.0"))
+PROCESS_TERMINATION_TIMEOUT_SECONDS = _env_float(
+    "IDA_MCP_PROCESS_TERMINATION_TIMEOUT", 2.0, min_value=1.0
 )
 _RUNTIME_LEASE_RE = re.compile(r"^SID_([A-Za-z0-9]{8})\.lease\.json$")
 
 # Semantic index configuration
 SEMANTIC_INDEX_VERSION = 1
 SEMANTIC_INDEX_DB_NAME = f"semantic_asm_index_v{SEMANTIC_INDEX_VERSION}.sqlite3"
-SEMANTIC_INDEX_MAX_WORKERS = max(
-    1, int(os.environ.get("IDA_MCP_SEMANTIC_INDEX_WORKERS", "2"))
-)
-SEMANTIC_INDEX_WAIT_SECONDS = max(
-    0.0, float(os.environ.get("IDA_MCP_SEMANTIC_INDEX_WAIT_SECONDS", "3.0"))
+SEMANTIC_INDEX_MAX_WORKERS = _env_int("IDA_MCP_SEMANTIC_INDEX_WORKERS", 2, min_value=1)
+SEMANTIC_INDEX_WAIT_SECONDS = _env_float(
+    "IDA_MCP_SEMANTIC_INDEX_WAIT_SECONDS", 3.0, min_value=0.0
 )
 SEMANTIC_GADGET_SOURCE_ACTIONS = (
     "rop",
@@ -184,8 +227,8 @@ SEMANTIC_GADGET_SOURCE_ACTIONS = (
     "write_what_where",
     "stack_pivot",
 )
-SEMANTIC_INDEX_SOURCE_LIMIT = max(
-    50, int(os.environ.get("IDA_MCP_SEMANTIC_INDEX_SOURCE_LIMIT", "3000"))
+SEMANTIC_INDEX_SOURCE_LIMIT = _env_int(
+    "IDA_MCP_SEMANTIC_INDEX_SOURCE_LIMIT", 3000, min_value=50
 )
 SEMANTIC_SCORE_SUBSTRING_MATCH = 48
 SEMANTIC_SCORE_PATTERN_MATCH = 120
@@ -201,7 +244,7 @@ MAX_BATCH_PAYLOAD_BYTES = 512 * 1024
 # caller on upfront analysis; the session then starts in safe mode. 50 MiB by
 # default; override with IDA_MCP_LARGE_BINARY_MB.
 LARGE_BINARY_THRESHOLD_BYTES = (
-    max(1, int(os.environ.get("IDA_MCP_LARGE_BINARY_MB", "50"))) * 1024 * 1024
+    _env_int("IDA_MCP_LARGE_BINARY_MB", 50, min_value=1) * 1024 * 1024
 )
 
 # Safe mode: while a session's IDA auto-analysis is still completing, the
@@ -210,9 +253,9 @@ LARGE_BINARY_THRESHOLD_BYTES = (
 # the runtime every SAFE_MODE_POLL_SECONDS and gives up after
 # SAFE_MODE_WATCH_SECONDS. Override with IDA_MCP_SAFE_MODE_POLL_SEC and
 # IDA_MCP_SAFE_MODE_WATCH_SEC.
-SAFE_MODE_POLL_SECONDS = max(1.0, float(os.environ.get("IDA_MCP_SAFE_MODE_POLL_SEC", "5")))
-SAFE_MODE_WATCH_SECONDS = max(
-    60.0, float(os.environ.get("IDA_MCP_SAFE_MODE_WATCH_SEC", str(6 * 3600)))
+SAFE_MODE_POLL_SECONDS = _env_float("IDA_MCP_SAFE_MODE_POLL_SEC", 5.0, min_value=1.0)
+SAFE_MODE_WATCH_SECONDS = _env_float(
+    "IDA_MCP_SAFE_MODE_WATCH_SEC", float(6 * 3600), min_value=60.0
 )
 
 # How long a tool call may wait for a session's RPC lane before the host
@@ -221,14 +264,14 @@ SAFE_MODE_WATCH_SECONDS = max(
 # the same session serialize here; different sessions stay fully parallel.
 # 0 disables the bound (unlimited queueing). Override with
 # IDA_MCP_RPC_QUEUE_TIMEOUT (seconds).
-RPC_QUEUE_TIMEOUT_SECONDS = max(
-    0.0, float(os.environ.get("IDA_MCP_RPC_QUEUE_TIMEOUT", "300"))
+RPC_QUEUE_TIMEOUT_SECONDS = _env_float(
+    "IDA_MCP_RPC_QUEUE_TIMEOUT", 300, min_value=0.0
 )
 
 # Rate limiting defaults
-RATE_LIMIT_PER_TOOL = float(os.environ.get("IDA_MCP_RATE_LIMIT_PER_TOOL", "10.0"))
-RATE_LIMIT_GLOBAL = float(os.environ.get("IDA_MCP_RATE_LIMIT_GLOBAL", "30.0"))
-RATE_LIMIT_BURST = int(os.environ.get("IDA_MCP_RATE_LIMIT_BURST", "20"))
+RATE_LIMIT_PER_TOOL = _env_float("IDA_MCP_RATE_LIMIT_PER_TOOL", 10.0, min_value=0.0)
+RATE_LIMIT_GLOBAL = _env_float("IDA_MCP_RATE_LIMIT_GLOBAL", 30.0, min_value=0.0)
+RATE_LIMIT_BURST = _env_int("IDA_MCP_RATE_LIMIT_BURST", 20, min_value=1)
 
 MAX_LIST_LIMIT = 200
 MAX_LIST_OFFSET = 100_000
@@ -427,15 +470,3 @@ def _parse_iso_datetime(value: Any) -> datetime | None:
         return None
 
 
-def validate_path(path: str) -> str | None:
-    if not path or "\x00" in path:
-        return None
-    # Reject paths containing '..' components before normalization
-    if ".." in Path(path).parts:
-        return None
-    resolved = os.path.normpath(os.path.abspath(path))
-    # Resolve symlinks (defense-in-depth: realpath should never produce '..')
-    try:
-        return os.path.realpath(resolved)
-    except (OSError, ValueError):
-        return resolved

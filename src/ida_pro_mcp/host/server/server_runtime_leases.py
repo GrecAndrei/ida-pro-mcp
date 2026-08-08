@@ -75,6 +75,32 @@ class ServerRuntimeLeasesMixin:
             with contextlib.suppress(OSError):
                 os.remove(self._runtime_lease_path(sid))
 
+    def _remove_runtime_lease_if_pid_matches(self, sid: str, pid: int | None) -> None:
+            """Remove a runtime lease only if it still records this pid.
+
+            Between the heartbeat's identity check and the removal, a fresh
+            runtime for the same sid can be registered and its lease rewritten
+            with a new pid. Removing unconditionally would delete the fresh
+            lease and leave the shared cache without an ownership record for a
+            live runtime.
+            """
+            if not pid:
+                return
+            path = self._runtime_lease_path(sid)
+            try:
+                with open(path, encoding="utf-8") as f:
+                    lease = json.load(f)
+            except Exception:
+                return
+            try:
+                lease_pid = int(lease.get("pid") or 0)
+            except Exception:
+                lease_pid = 0
+            if lease_pid != pid:
+                return
+            with contextlib.suppress(OSError):
+                os.remove(path)
+
     def _kill_stale_pid(self, pid: int) -> bool:
             """Best-effort terminate a stale PID.
 
@@ -262,6 +288,29 @@ class ServerRuntimeLeasesMixin:
                 return True
             return False
 
+    def _rewrite_lease_if_unchanged(self, path: str, lease: dict, expected_updated: float) -> bool:
+            """Write a lease update only if it has not been rewritten since read.
+
+            Between reading a stale lease and writing the ``terminate_failed``
+            backoff marker, a fresh runtime for the same sid can be registered
+            (its lease is rewritten with a new ``updated_at``). Re-reading the
+            file before the atomic replace keeps that fresh lease intact instead
+            of clobbering a live runtime's ownership record.
+            """
+            try:
+                with open(path, encoding="utf-8") as f:
+                    current = json.load(f)
+            except Exception:
+                return False
+            try:
+                updated = float(current.get("updated_at") or 0.0)
+            except Exception:
+                updated = 0.0
+            if updated != expected_updated:
+                return False
+            self._write_runtime_lease_record(path, lease)
+            return True
+
     def _cleanup_stale_runtime_leases(self) -> None:
             try:
                 entries = os.listdir(self._runtime_lease_dir)
@@ -358,6 +407,14 @@ class ServerRuntimeLeasesMixin:
                         # lease for a later pass rather than risk a wrong kill.
                         skip_count += 1
                     continue
+                # Signal only the recorded pid, never the whole process tree.
+                # The stale path has no Popen and only identity-verifies the
+                # recorded pid (it may not be a process-group leader), so
+                # killing the tree here could signal an unrelated group. The
+                # tracked teardown path (server_runtime.py) uses
+                # _kill_process_tree where the group is guaranteed; the price
+                # here is that an orphaned idat.exe -> ida.exe child can keep
+                # the unpacked .id0/.id1 files open and FILE_LOCK a later open.
                 killed = self._kill_stale_pid(pid)
                 if killed:
                     if self._remove_lease_if_unchanged(path, updated):
@@ -367,10 +424,15 @@ class ServerRuntimeLeasesMixin:
                         # this sid appeared) — leave it alone.
                         kept_count += 1
                 else:
-                    # Keep lease for retry, but back off immediate repeated kill attempts.
+                    # Keep lease for retry, but back off immediate repeated
+                    # kill attempts. Re-check that the lease was not rewritten
+                    # (a new owner claimed this sid) during the kill window
+                    # before writing the backoff marker over it.
                     lease["updated_at"] = now
                     lease["last_error"] = "terminate_failed"
-                    self._write_runtime_lease_record(path, lease)
+                    # Guarded write: a no-op when the lease was rewritten
+                    # mid-cleanup, preserving the fresh owner's record.
+                    self._rewrite_lease_if_unchanged(path, lease, updated)
                     kept_count += 1
             if skip_count or removed_count or kept_count:
                 log_rpc(
@@ -392,16 +454,27 @@ class ServerRuntimeLeasesMixin:
                 for sid, runtime in runtime_items:
                     if self._shutdown_requested:
                         break
-                    with self._runtime_lock:
-                        if self.session_runtimes.get(sid) is not runtime:
+                    try:
+                        with self._runtime_lock:
+                            if self.session_runtimes.get(sid) is not runtime:
+                                continue
+                        proc = runtime.get("process")
+                        if not proc:
                             continue
-                    proc = runtime.get("process")
-                    if not proc:
-                        continue
-                    if proc.poll() is None:
-                        self._write_runtime_lease(sid, runtime)
-                    else:
-                        self._remove_runtime_lease(sid)
+                        if proc.poll() is None:
+                            self._write_runtime_lease(sid, runtime)
+                        else:
+                            # Guarded removal: a fresh runtime may have been
+                            # registered for this sid (its lease rewritten)
+                            # since the identity check above — never delete a
+                            # live runtime's lease.
+                            self._remove_runtime_lease_if_pid_matches(sid, proc.pid)
+                    except Exception as e:
+                        # A single raised exception must not kill the daemon
+                        # heartbeat thread (nothing would ever restart it), or
+                        # the host's live runtimes silently stop refreshing
+                        # their leases. Log and continue on the next tick.
+                        log_rpc(f"Runtime lease heartbeat failed for {sid}: {e}")
 
     def _start_runtime_lease_heartbeat(self) -> None:
             if self._lease_thread and self._lease_thread.is_alive():
@@ -420,10 +493,12 @@ class ServerRuntimeLeasesMixin:
                 t.join(timeout=1.0)
 
     def _register_lifecycle_handlers(self) -> None:
-            cls = self.__class__
-            if not cls._atexit_registered:
-                atexit.register(self.shutdown)
-                cls._atexit_registered = True
+            # Register shutdown for every instance, not just the first one in
+            # the process. atexit registration is per-handler, not class-level,
+            # and shutdown() is idempotent (guarded by self._shutdown), so a
+            # second+ instance must not be skipped — a class flag would leave
+            # its runtimes leaking on normal exit.
+            atexit.register(self.shutdown)
             for sig_name in ("SIGINT", "SIGTERM"):
                 sig = getattr(signal, sig_name, None)
                 if sig is None:

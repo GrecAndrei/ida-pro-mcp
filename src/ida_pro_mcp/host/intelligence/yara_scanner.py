@@ -129,6 +129,7 @@ def _iter_rule_files(rules_dir: str) -> list[tuple[str, str]]:
     if not rules_dir or not os.path.isdir(rules_dir):
         return []
     out: list[tuple[str, str]] = []
+    seen_namespaces: dict[str, int] = {}
     # Collect from primary rules_dir and any extra registered dirs
     dirs_to_scan = [rules_dir]
     fc_dir = findcrypt_rules_dir()
@@ -148,6 +149,19 @@ def _iter_rule_files(rules_dir: str) -> list[tuple[str, str]]:
                 except OSError:
                     continue
                 namespace = os.path.splitext(fname)[0]
+                # Two files sharing a basename across merged rule dirs would
+                # otherwise silently overwrite each other in compile_rules'
+                # filepaths dict. Disambiguate so both rule sets are compiled
+                # and scanned instead of one being dropped with no signal.
+                if namespace in seen_namespaces:
+                    seen_namespaces[namespace] += 1
+                    namespace = f"{namespace}__{seen_namespaces[namespace]}"
+                    logger.warning(
+                        "duplicate yara rule namespace, disambiguated to %r (%s)",
+                        namespace, full,
+                    )
+                else:
+                    seen_namespaces[namespace] = 0
                 out.append((namespace, full))
                 if len(out) >= _MAX_RULE_FILES:
                     return out

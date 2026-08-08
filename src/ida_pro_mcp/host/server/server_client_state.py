@@ -133,17 +133,35 @@ class ServerClientStateMixin:
                         )
                         or set()
                     ):
+                        if not self._connection_is_current_owner(state, str(sid)):
+                            # A sibling connection adopted this session after
+                            # this connection's runtime died; its live runtime
+                            # must not be torn down here.
+                            continue
                         with contextlib.suppress(Exception):
                             cleanup(str(sid))
                 for sid in list(getattr(state, "owned_session_ids", set()) or set()):
+                    if not self._connection_is_current_owner(state, str(sid)):
+                        continue
                     with contextlib.suppress(Exception):
                         cleanup(str(sid))
             # Drop this connection's agents from the shared realm registry.
             realm = getattr(self, "_sso_realm_store", None)
             if isinstance(realm, dict) and isinstance(state.agents_logged_in, set):
                 logged_in = realm.get("logged_in") or {}
-                for name in list(state.agents_logged_in):
-                    logged_in.pop(name, None)
+                names = list(state.agents_logged_in)
+                lock = realm.get("lock")
+                if lock is None:
+                    for name in names:
+                        logged_in.pop(name, None)
+                else:
+                    # Login/logout mutate realm['logged_in'] under this lock
+                    # (see _bind_agent_call), so an unlocked teardown could
+                    # race a concurrent _bind_agent_call observing an entry
+                    # mid-removal on a multi-connection daemon.
+                    with lock:
+                        for name in names:
+                            logged_in.pop(name, None)
         var.reset(token)
 
     @property
@@ -166,12 +184,14 @@ class ServerClientStateMixin:
             if sid:
                 state.current_session_by_agent[agent] = value
                 state.owned_sessions_by_agent.setdefault(agent, set()).add(str(sid))
+                self._record_session_current_owner(str(sid))
             else:
                 state.current_session_by_agent.pop(agent, None)
             return
         state.current_session = value
         if sid:
             state.owned_session_ids.add(str(sid))
+            self._record_session_current_owner(str(sid))
 
     def _client_owns_session(self, session_id: str) -> bool:
         """Whether this MCP connection has explicitly selected the session.
@@ -185,6 +205,36 @@ class ServerClientStateMixin:
             owned = state.owned_sessions_by_agent.get(state.active_agent, set()) or set()
             return str(session_id) in owned
         return str(session_id) in state.owned_session_ids
+
+    def _record_session_current_owner(self, sid: str) -> None:
+        """Record this connection as the session's latest owner/user.
+
+        ``_end_client_connection`` consults this registry so a connection whose
+        ownership record went stale (its runtime died and a sibling adopted the
+        session) does not SIGKILL the sibling's live runtime on disconnect.
+        """
+        state = self._client_request_state()
+        owner = getattr(self, "_session_current_owner", None)
+        if owner is None:
+            owner = {}
+            self._session_current_owner = owner
+        owner[str(sid)] = str(state.connection_id)
+
+    def _connection_is_current_owner(self, state: Any, sid: str) -> bool:
+        """Whether this connection may tear down ``sid``'s runtime.
+
+        True when nobody is recorded as the session's current owner (fall back
+        to historical behavior) or when this connection is the recorded owner.
+        False only when a *different* connection adopted the session — tearing
+        that down would kill the sibling's live runtime and lose its IDB state.
+        """
+        owner = getattr(self, "_session_current_owner", None)
+        if not isinstance(owner, dict):
+            return True
+        recorded = owner.get(str(sid))
+        if recorded is None:
+            return True
+        return recorded == str(getattr(state, "connection_id", ""))
 
     def _session_is_busy(self, session_id: str) -> bool:
         """Whether another live owner is actively running the session's IDA.
@@ -358,6 +408,7 @@ class ServerClientStateMixin:
             )
         else:
             state.owned_session_ids.add(str(sid))
+        self._record_session_current_owner(str(sid))
         return None
 
     @property
@@ -538,7 +589,20 @@ class ServerClientStateMixin:
         exp = float(meta.get("exp") or 0)
         if exp and exp < time.time():
             return None, make_error(MCPError.POLICY_DENIED, "Ticket has expired.")
-        scopes = meta.get("scopes") or ["all"]
+        raw_scopes = meta.get("scopes")
+        if raw_scopes is None:
+            scopes = ["all"]
+        elif isinstance(raw_scopes, list) and all(
+            isinstance(s, str) and s.strip() for s in raw_scopes
+        ):
+            scopes = [s.strip() for s in raw_scopes]
+        else:
+            # Scopes are stored and echoed back to the caller; malformed values
+            # would imply a scope model the host does not actually enforce.
+            return None, make_error(
+                MCPError.POLICY_DENIED,
+                "Ticket scopes must be a list of non-empty strings.",
+            )
         with realm["lock"]:
             existing = realm["logged_in"].get(name)
             if existing and existing.get("conn_id") != state.connection_id:

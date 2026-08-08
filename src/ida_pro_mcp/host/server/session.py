@@ -40,6 +40,12 @@ from ..config import (
 )
 from ..errors import MCPError, is_error_result, make_error
 
+# Session ids are 8 uppercase alphanumeric chars (uuid hex), and on-disk
+# orphan recovery may produce lowercase variants, so the guard accepts either
+# case. Anything else (path separators, "..", oversized values) is rejected
+# before it can be joined into filesystem paths or fed to a glob pattern.
+_SAFE_SID_RE = re.compile(r"^[A-Za-z0-9]{8}$")
+
 # ============================================================================
 # SESSION
 # ============================================================================
@@ -580,6 +586,9 @@ class SessionManager(SessionSkillsMixin):
             return result
 
     def _delete_session_unlocked(self, sid: str) -> bool:
+        if not _SAFE_SID_RE.fullmatch(str(sid or "")):
+            log_rpc(f"Refusing to delete session with malformed id: {sid!r}")
+            return False
         session = self.sessions.pop(sid, None)
         deleted = False
         base_pattern = os.path.join(self.session_dir, f"SID_{sid}*")
@@ -686,6 +695,11 @@ class SessionManager(SessionSkillsMixin):
         with self._lock:
             if sid not in self.sessions:
                 return []
+            try:
+                threshold = float(min_confidence)
+            except (TypeError, ValueError):
+                threshold = 0.8
+            threshold = min(1.0, max(0.0, threshold))
             data = self._load_skills(sid)
             out: list[dict] = []
             for h in data.get("hypotheses", []) or []:
@@ -693,7 +707,7 @@ class SessionManager(SessionSkillsMixin):
                     conf = float(h.get("confidence", 0.0) or 0.0)
                 except Exception:
                     conf = 0.0
-                if conf >= float(min_confidence):
+                if conf >= threshold:
                     out.append(h)
             return out
 
@@ -737,7 +751,13 @@ class SessionManager(SessionSkillsMixin):
             return copy.copy(session)
 
     def archive_session(self, sid: str) -> Session | None:
-        return self.update_session(sid, tags=["archived"])
+        session = self.sessions.get(sid)
+        if not session:
+            return None
+        tags = list(getattr(session, "tags", []) or [])
+        if "archived" not in tags:
+            tags.append("archived")
+        return self.update_session(sid, tags=tags)
 
     def unarchive_session(self, sid: str) -> Session | None:
         session = self.sessions.get(sid)
@@ -974,8 +994,8 @@ class SessionManager(SessionSkillsMixin):
                 if sid_to_merge != sid1:
                     data_src = self._load_skills(sid_to_merge)
                     data_dst = self._load_skills(sid1)
-                    data_dst["hypotheses"].extend(data_src.get("hypotheses", []))
-                    data_dst["activity_log"].extend(data_src.get("activity_log", []))
+                    data_dst.setdefault("hypotheses", []).extend(data_src.get("hypotheses", []))
+                    data_dst.setdefault("activity_log", []).extend(data_src.get("activity_log", []))
                     self._save_skills(sid1, data_dst)
             s1.update_access()
             self._save_metadata(s1)
@@ -1209,10 +1229,6 @@ class SessionManager(SessionSkillsMixin):
                 return {"ok": True, "hypothesis_id": hid, "hypothesis": h}
         return make_error(MCPError.NOT_FOUND, f"Hypothesis {hid} not found")
 
-    # ====================================================================
-    # SKILL CRYSTALLIZATION (L3 + Global Registry)
-    # ====================================================================
-
 # ============================================================================
 # BOOKMARK MANAGER
 # ============================================================================
@@ -1414,7 +1430,9 @@ class BookmarkManager:
                     prio = "*" * (6 - int(b.get("priority", 3)))
                 except (TypeError, ValueError):
                     prio = ""
-                lines.append(f"## [{b['id']}] {b['name']} @ {b['addr']} {prio}")
+                lines.append(
+                    f"## [{b.get('id', '?')}] {b.get('name', 'Untitled')} @ {b.get('addr', '?')} {prio}"
+                )
                 lines.append(f"- **Category**: {b.get('category', 'general')}")
                 tags = _coerce_bookmark_tags(b.get("tags", []))
                 if tags:
@@ -1426,7 +1444,3 @@ class BookmarkManager:
                 lines.append("---")
                 lines.append("")
             return {"ok": True, "report": "\n".join(lines)}
-
-    # Compatibility anchors for source-based regression tests.
-    # while skill_id in data["skills"]:
-    # skill_id = f"{base_skill_id}_{suffix}"

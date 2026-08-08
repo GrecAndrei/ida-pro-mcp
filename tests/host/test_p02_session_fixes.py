@@ -639,10 +639,15 @@ def test_multi_session_groups_concurrent_access_does_not_crash():
     errors = []
 
     def creator():
+        # Every real writer in server_multi_session.py takes the lock (e.g.
+        # _ms_group_create / _drop_sid_from_groups), so the writer must model
+        # the locked producer the audit lens cares about — an unlocked writer
+        # would only test a scenario production never runs.
         try:
             for i in range(300):
                 gid = f"g{i}"
-                mixin._session_groups[gid] = SessionGroup(gid)
+                with mixin._session_groups_lock:
+                    mixin._session_groups[gid] = SessionGroup(gid)
         except Exception as e:  # pragma: no cover - failure path
             errors.append(e)
 
@@ -650,7 +655,8 @@ def test_multi_session_groups_concurrent_access_does_not_crash():
         try:
             for _ in range(300):
                 with mixin._session_groups_lock:
-                    _ = [g.to_dict() for g in mixin._session_groups.values()]
+                    for group in mixin._session_groups.values():
+                        assert group.to_dict()["group_id"]
         except Exception as e:  # pragma: no cover - failure path
             errors.append(e)
 
@@ -661,3 +667,8 @@ def test_multi_session_groups_concurrent_access_does_not_crash():
     t1.join()
     t2.join()
     assert not errors
+    # No lost updates: every group the writer created survives, so a lock-
+    # discipline regression (a reader or writer bypassing the lock and tearing
+    # the store) would not pass silently.
+    assert len(mixin._session_groups) == 300
+    assert all(isinstance(mixin._session_groups[k], SessionGroup) for k in mixin._session_groups)

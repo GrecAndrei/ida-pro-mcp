@@ -37,6 +37,8 @@ def search_bytes(pattern, range_start, range_end, include_context, offset, limit
         return False
 
     for seg_start, seg_end in iter_segments(range_start, range_end, require_exec=False):
+        if truncated or timed_out:
+            break
         if hasattr(ida_bytes, "compiled_binpat_vec_t"):
             pt = ida_bytes.compiled_binpat_vec_t()
             err = ida_bytes.parse_binpat_str(pt, 0, pattern, 16)
@@ -44,6 +46,13 @@ def search_bytes(pattern, range_start, range_end, include_context, offset, limit
                 return make_error(MCPError.INVALID_ARGS, f"Invalid pattern: {err}")
             ea, _ = ida_bytes.bin_search(seg_start, seg_end, pt, ida_bytes.BIN_SEARCH_FORWARD)
             while ea != idaapi.BADADDR:
+                if truncated or timed_out:
+                    break
+                try:
+                    timer.check()
+                except TimeoutError:
+                    timed_out = True
+                    break
                 line = hex(ea)
                 if include_context:
                     match_bytes = ida_bytes.get_bytes(ea, min(32, seg_end - ea))
@@ -135,7 +144,7 @@ def search_bytes(pattern, range_start, range_end, include_context, offset, limit
     return result
 
 
-def search_string(pattern, case_sensitive, include_context, offset, limit, timeout_ms=0):
+def search_string(pattern, case_sensitive, include_context, offset, limit, timeout_ms=0, range_start=None, range_end=None):
     """Search string literals."""
     matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
     results = []
@@ -147,6 +156,8 @@ def search_string(pattern, case_sensitive, include_context, offset, limit, timeo
     for sc in safe_get_strlist_items():
         if truncated or timed_out:
             break
+        if range_start is not None and range_end is not None and not (range_start <= sc.ea < range_end):
+            continue
         try:
             timer.check()
         except TimeoutError:

@@ -30,7 +30,6 @@ from .config import (
     _resolve_runtime_dir,
     _select_runtime_dir,
     log_rpc,
-    validate_path,
 )
 from .errors import MCPError, make_error
 from .schemas import (
@@ -95,7 +94,6 @@ __all__ = [
     "_select_runtime_dir",
     "_resolve_runtime_dir",
     "_default_runtime_dir",
-    "validate_path",
     "MCPError",
     "make_error",
     "compile_smart_pattern",

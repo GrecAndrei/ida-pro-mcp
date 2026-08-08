@@ -271,7 +271,8 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         return text
 
     def _capture_code_anchor(
-        self, tool_name: str, action: str, call_args: Any, payload: dict
+        self, tool_name: str, action: str, call_args: Any, payload: dict,
+        session: Any = None,
     ) -> None:
         """Record the code just rendered, and flag claims that predate it.
 
@@ -288,7 +289,11 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         addr = self._first_addr(call_args)
         if not addr:
             return
-        store = self._get_blackboard_store()
+        store = (
+            self._blackboard_store_for(session)
+            if session is not None
+            else self._get_blackboard_store()
+        )
         if store is None:
             return
         for key, anchor_kind in self._ANCHOR_SOURCES:
@@ -304,7 +309,9 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                 )
             return
 
-    def _inject_workspace_recall(self, tool_name: str, payload: dict, call_args: Any) -> None:
+    def _inject_workspace_recall(
+        self, tool_name: str, payload: dict, call_args: Any, session: Any = None
+    ) -> None:
         """Surface what the workspace already knows, without being asked.
 
         A memory the model has to remember to query is a memory it will not
@@ -324,7 +331,11 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         """
         if tool_name in self._RECALL_EXEMPT_TOOLS:
             return
-        store = self._get_blackboard_store()
+        store = (
+            self._blackboard_store_for(session)
+            if session is not None
+            else self._get_blackboard_store()
+        )
         if store is None:
             return
         try:
@@ -358,6 +369,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         payload: dict,
         addr: str,
         opts: dict | None = None,
+        session: Any = None,
     ) -> None:
         """
         Build a context_pack via the intelligence layer (bge-code-v1) and inject
@@ -371,14 +383,18 @@ class ServerResponseMixin(ServerResponseCompactMixin):
 
         try:
             session_id = (
-                getattr(self.current_session, "session_id", None)
-                if self.current_session else "default"
+                getattr(session, "session_id", None)
+                if session is not None else "default"
             )
             idb_path = (
-                getattr(self.current_session, "idb_path", None)
-                if self.current_session else None
+                getattr(session, "idb_path", None)
+                if session is not None else None
             )
-            bb_store = self._get_blackboard_store()
+            bb_store = (
+                self._blackboard_store_for(session)
+                if session is not None
+                else self._get_blackboard_store()
+            )
             mode = str((opts or {}).get("mode") or "").strip().lower()
             pack = self.assembler.assemble(
                 tool=tool_name,
@@ -417,8 +433,8 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                             hints.append(" — ".join(parts))
                         if hints:
                             payload["_context"] = hints
-        except Exception:
-            pass
+        except Exception as exc:  # surfaced, not swallowed (like _recall_error)
+            payload["_context_error"] = f"{type(exc).__name__}: {exc}"[:200]
 
     def _collect_hex_addresses(self, value: Any, max_items: int = 8) -> list[str]:
         found: list[str] = []
@@ -634,8 +650,17 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                                     return val
                                 except (ValueError, TypeError):
                                     pass
+                        # The meta probe returned but yielded no usable base:
+                        # cache the miss so the response path does not re-fire
+                        # this synchronous RPC on every code-rendering call.
+                        runtime["imagebase"] = None
                     except Exception:
-                        pass
+                        # Timeout / RPC error on the meta probe: negative-cache
+                        # it too, otherwise every decompile/disasm pays a hidden
+                        # 1s round-trip for the life of the runtime. A runtime
+                        # restart replaces this dict, so a later-known base is
+                        # still discoverable.
+                        runtime["imagebase"] = None
 
         return None
 
@@ -716,6 +741,61 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             compacted["llm_address_calculation"] = calc_dict
             compacted["llm_address_calculation_imagebase"] = hex(imagebase)
 
+    def _resolve_response_session(self, call_args: Any):
+        """Resolve the session a tool call actually executed against.
+
+        Dispatch resolves ``idb=`` / ``session_id`` references to a concrete
+        session without mutating ``self.current_session``
+        (``server_dispatch.call_tool`` -> ``_resolve_session_from_idb_ref``).
+        Response enrichment must follow the same resolution so an
+        ``idb=``-targeted call on a shared connection enriches, recalls, and
+        truncates against the session that actually ran — not the shared
+        active default. Falls back to ``current_session`` when the call does
+        not name a session (or the reference does not resolve).
+        """
+        if isinstance(call_args, dict):
+            resolve = getattr(self, "_resolve_session_from_idb_ref", None)
+            for key in ("idb", "session_id"):
+                ref = call_args.get(key)
+                if not ref or not isinstance(ref, str) or not ref.strip():
+                    continue
+                if not callable(resolve):
+                    break
+                try:
+                    sess = resolve(ref.strip())
+                except Exception:
+                    sess = None
+                if sess is not None:
+                    return sess
+        return self.current_session
+
+    def _blackboard_store_for(self, session) -> Any | None:
+        """A BlackboardStore scoped to *session*, not just current_session.
+
+        ``_get_blackboard_store`` (server_blackboard.py) keys off the shared
+        active session; when a call targeted a different session via ``idb=``
+        the enrichment must read/write that session's workspace, or findings
+        leak across binaries (B's code digests land in A's store and A's
+        findings get recalled into B's response).
+        """
+        if session is None:
+            return None
+        try:
+            if getattr(type(self), "_blackboard_module", None) is None:
+                # Trigger the lazy blackboard-module import exactly like
+                # _get_blackboard_store does; the loaded module is cached on
+                # the class so this only costs the import once.
+                self._get_blackboard_store()
+            mod = getattr(type(self), "_blackboard_module", None)
+            if mod is None:
+                return None
+            db_path = self._session_blackboard_path(session_obj=session)
+            if not str(db_path or "").strip():
+                return None
+            return mod.BlackboardStore(db_path=db_path)
+        except Exception:
+            return None
+
     def _prepare_response_payload(
         self,
         payload: Any,
@@ -750,6 +830,21 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         payload = self._apply_output_filters(payload, opts)
         payload = self._json_safe_value(payload)
 
+        # The session the tool call actually executed against. Dispatch
+        # resolves idb=/session_id without mutating current_session, so the
+        # enrichment below must follow the same resolution or an idb=-targeted
+        # call would recall/annotate/truncate the wrong session's workspace.
+        target_session = self._resolve_response_session(call_args)
+        # Dispatch (call_tool) already applies the per-call truncation
+        # overrides to the raw RPC result; truncate_response stamps _truncated
+        # on the result it prunes. A payload carrying that marker has already
+        # been truncated once, so the response layer must not truncate it again
+        # (that would cap at default_truncate_tokens AND orphan the first
+        # continuation token by overwriting _continue with a compacted view).
+        _already_truncated = bool(
+            isinstance(payload, dict) and payload.get("_truncated")
+        )
+
         # ---- One-shot analysis-completion notice ----
         # When a background-loaded session's analysis completes, the next
         # response for that session carries the transition warning exactly
@@ -758,7 +853,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         # a list/scalar payload leaves it pending for the next response.
         try:
             notices = getattr(self, "_pending_session_notices", None)
-            current = getattr(self, "current_session", None)
+            current = target_session
             if (
                 isinstance(notices, dict)
                 and current is not None
@@ -790,11 +885,18 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                 # Check per-call truncation overrides
                 if _tc.get("no_truncate"):
                     pass  # skip truncation
+                elif _already_truncated:
+                    # call_tool already truncated the raw result; re-truncating
+                    # the compacted view would cap at default_truncate_tokens
+                    # and overwrite _continue, making items beyond the first
+                    # page unrecoverable. Keep the single truncation and its
+                    # continuation token (which points at the full raw result).
+                    pass  # skip truncation
                 else:
                     _budget = _tc.get("max_tokens") or budget
                     _sid = ""
-                    if getattr(self, "current_session", None) is not None:
-                        _sid = str(getattr(self.current_session, "session_id", "") or "")
+                    if target_session is not None:
+                        _sid = str(getattr(target_session, "session_id", "") or "")
                     _owner = ""
                     if hasattr(self, "_truncation_owner_id"):
                         _owner = self._truncation_owner_id()
@@ -855,7 +957,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             # ---- Address Patching: annotate rip-relative in disasm/pseudo ----
             try:
                 if tool_name in self._CODE_RENDERING_TOOLS and action_name in ("decompile", "semantic_decompile", "disasm"):
-                    from .response_enrichment import patch_addresses
+                    from ..response_enrichment import patch_addresses
                     if "pseudocode" in compacted:
                         pseudo_key = "pseudocode"
                     elif "code" in compacted:
@@ -869,8 +971,8 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                         # x86-64 pseudo/disasm). _get_session_imagebase never
                         # fabricates a default, so unknown sessions stay plain.
                         _patch_sid = ""
-                        if getattr(self, "current_session", None) is not None:
-                            _patch_sid = str(getattr(self.current_session, "session_id", "") or "")
+                        if target_session is not None:
+                            _patch_sid = str(getattr(target_session, "session_id", "") or "")
                         _imgbase = self._get_session_imagebase(_patch_sid or None)
                         _base_registers = {"rip": _imgbase} if _imgbase else None
                         compacted[pseudo_key] = patch_addresses(compacted[pseudo_key], _base_registers)
@@ -883,7 +985,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             _safe_mode_fn = getattr(self, "_safe_mode_active", None)
             _safe_mode_active = bool(
                 _safe_mode_fn(
-                    getattr(self.current_session, "session_id", "") or ""
+                    str(getattr(target_session, "session_id", "") or "")
                 )
                 if callable(_safe_mode_fn)
                 else False
@@ -891,7 +993,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             if self.enable_response_enrichment and not _safe_mode_active:
                 try:
                     if tool_name in self._CODE_RENDERING_TOOLS and action_name in ("decompile", "semantic_decompile"):
-                        from .response_enrichment import digest_decompiled
+                        from ..response_enrichment import digest_decompiled
                         if "pseudocode" in compacted:
                             pseudo_key = "pseudocode"
                         elif "code" in compacted:
@@ -922,16 +1024,26 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             # enriched response).
             if self.enable_response_enrichment and not _safe_mode_active:
                 try:
-                    if hasattr(self, 'session_mgr') and self.current_session:
-                        from .response_enrichment import build_session_resume
-                        sid = self.current_session.session_id
-                        with self._session_resume_calls_lock:
-                            call_count = self._session_resume_calls.get(sid, 0)
-                            self._session_resume_calls[sid] = call_count + 1
-                        if call_count < 2:
-                            resume = build_session_resume(self.session_mgr, sid)
-                            if resume:
-                                compacted["_session_resume"] = resume
+                    if hasattr(self, 'session_mgr') and target_session is not None:
+                        from ..response_enrichment import build_session_resume
+                        sid = str(getattr(target_session, "session_id", "") or "")
+                        if sid:
+                            # Decide under the lock so two concurrent
+                            # first-calls cannot both inject the resume, and
+                            # free the counter once the first two calls have
+                            # been counted so churned sessions don't accumulate
+                            # entries forever.
+                            with self._session_resume_calls_lock:
+                                call_count = self._session_resume_calls.get(sid, 0) + 1
+                                should_resume = call_count <= 2
+                                if call_count > 2:
+                                    self._session_resume_calls.pop(sid, None)
+                                else:
+                                    self._session_resume_calls[sid] = call_count
+                            if should_resume:
+                                resume = build_session_resume(self.session_mgr, sid)
+                                if resume:
+                                    compacted["_session_resume"] = resume
                 except Exception:
                     pass
 
@@ -961,10 +1073,15 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             # very response is already flagged stale by the time recall reads it.
             if isinstance(compacted, dict) and not is_error_result(compacted):
                 try:
-                    self._capture_code_anchor(tool_name, action_name, call_args, compacted)
+                    self._capture_code_anchor(
+                        tool_name, action_name, call_args, compacted,
+                        session=target_session,
+                    )
                 except Exception as exc:
                     compacted["_anchor_error"] = f"{type(exc).__name__}: {exc}"[:200]
-                self._inject_workspace_recall(tool_name, compacted, call_args)
+                self._inject_workspace_recall(
+                    tool_name, compacted, call_args, session=target_session
+                )
 
             # ---- Intelligence Layer: assemble real context and inject ----
             try:
@@ -973,7 +1090,8 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                     if isinstance(call_args, dict):
                         addr = str(call_args.get("addr") or call_args.get("addrs") or "")
                     self._assemble_and_inject_context(
-                        tool_name, action_name, compacted, addr, opts=opts
+                        tool_name, action_name, compacted, addr,
+                        opts=opts, session=target_session,
                     )
             except Exception:
                 pass
@@ -999,7 +1117,10 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             if self.enable_response_enrichment:
                 try:
                     if isinstance(compacted, dict):
-                        session_id = getattr(self.current_session, "session_id", None) if self.current_session else None
+                        session_id = (
+                            getattr(target_session, "session_id", None)
+                            if target_session is not None else None
+                        )
                         self._add_address_calculations(compacted, session_id)
                 except Exception:
                     pass

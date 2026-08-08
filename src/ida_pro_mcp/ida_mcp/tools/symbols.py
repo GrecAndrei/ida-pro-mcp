@@ -48,7 +48,7 @@ def symbols(
             import ida_loader
             if ida_loader.load_and_run_plugin("dwarf", 0):
                 return {"ok": True, "loaded": True}
-            return {"ok": True, "note": "DWARF processing handled by IDA during analysis"}
+            return make_error(MCPError.IDA_ERROR, "DWARF plugin failed to load or run")
 
         elif action == "status":
             named_funcs = 0

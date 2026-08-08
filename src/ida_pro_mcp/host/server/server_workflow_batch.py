@@ -6,9 +6,21 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ..config import MAX_BATCH_CALLS, MAX_BATCH_PAYLOAD_BYTES
+from ..config import MAX_BATCH_CALLS, MAX_BATCH_PAYLOAD_BYTES, _coerce_bool
 from ..errors import MCPError, is_error_result, make_error
 from ..schemas import TOOLS, _resolve_tool_alias
+
+# Keys that workflow composition/prioritization annotate onto planned calls
+# for the human reader (sources/source_count/index, priority_index/priority_mode).
+# They are not tool arguments: merging them into call_args through the
+# passthrough would have every step rejected by RPC argument admission.
+_NON_ARG_ANNOTATION_KEYS = {
+    "sources",
+    "source_count",
+    "index",
+    "priority_index",
+    "priority_mode",
+}
 
 
 class ServerWorkflowBatchMixin:
@@ -70,6 +82,7 @@ class ServerWorkflowBatchMixin:
             k: v
             for k, v in call.items()
             if k not in {"name", "tool", "arguments", "args", "action"}
+            and k not in _NON_ARG_ANNOTATION_KEYS
         }
         if passthrough:
             call_args = dict(call_args)
@@ -108,7 +121,9 @@ class ServerWorkflowBatchMixin:
                 f"Batch payload too large ({payload_size} bytes, max {MAX_BATCH_PAYLOAD_BYTES})",
             )
 
-        continue_on_error = bool(args.get("continue_on_error", False))
+        # _coerce_bool, not bool(): a caller passing the JSON string "false"
+        # must get stop-on-error semantics, not continue-on-error.
+        continue_on_error = _coerce_bool(args.get("continue_on_error"), False)
         results = []
         for idx, call in enumerate(calls):
             name, call_args, normalize_err = self._normalize_batch_call(call, idx)

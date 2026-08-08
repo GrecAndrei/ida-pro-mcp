@@ -2,6 +2,134 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-08-08 — swarm/agent-blitz integration: host-seam reconciliation
+
+Integration pass that resolved the 10 cross-package host-side seams surfaced by
+the agent-blitz fixer wave (handoffs.json), reconciled the tool registry against
+the IDA-side `action:` Literal contract, and re-verified docs/op-count parity.
+
+### Policy tiering
+- **`firmware_view/bootstrap`** (segment reclassification / range creation) and
+  **`calc/persist`** (durable blackboard write) now classify `WRITE_IDB` and
+  require ack; `calc` otherwise remains a read-only tool.
+- **`misc/reload`** (re-executes arbitrary tool-module source via
+  `spec.loader.exec_module`/`importlib.reload` and re-points the live TOOLS
+  registry) classifies `LOCAL_CODE_EXEC`, on par with `misc/python|idc|plugin_run`.
+
+### Dispatch / timeouts
+- **`firmware_view/detect_mmio`**, **`firmware_view/rtos_scan`** (unbounded
+  full-binary scans) and **`search/constants`** added to `LONG_RUNNING_ACTIONS`
+  so the host extends the RPC timeout instead of applying short-op heuristics.
+
+### Tool registry ↔ IDA Literal contract
+- **`analysis/plugin_run` removed from the analysis action list**: the IDA-side
+  `analysis` Literal correctly has no `plugin_run` (the host routes
+  `analysis/plugin_run` to the `misc` tool via the dispatch shim), and the
+  committed contract tests require `plugin_run` to live only on `misc`. The
+  routing shim itself is unchanged, so the convenience path still works.
+- **`gadgets/semantic_find` reconciled across the registry↔Literal contract**:
+  the action is host-intercepted (served by `server_semantic`, never an IDA
+  RPC), so the registry and the IDA-side `gadgets` `action:` Literal must agree
+  for `TestIdaSideLiteralContract` (the read_bytes-class guard). Both now
+  declare `semantic_find`: the host registry advertises it (so the MCP surface
+  exposes the feature, with `(gadgets, semantic_find)` tiered READ), and the
+  IDA-side `gadgets` Literal admits the same value with a defensive handler that
+  returns a clear "host-intercepted" error if the RPC is ever called directly
+  (the dispatch shim at `server_dispatch.py:1861` routes it to the host first,
+  so this path only fires with host interception disabled).
+
+### Arg schema admission
+- **`code` schema admits `arg_index` / `max_callers_per_level`** so
+  `trace_argument_origin` knobs reach the handler instead of being dropped by
+  `prepare_rpc_args`.
+- **`memory` schema admits `governed`** for governed-memory scan/walk semantics.
+
+### Cross-package consistency
+- **`compile_smart_pattern` honors `case_sensitive` on the glob path**
+  (`fnmatch` was lowercasing unconditionally whenever the pattern contained
+  `*`/`?`).
+- **`blackboard_store.next_target` accepts a `strategy` kwarg** (validated
+  against `STRATEGIES`), so `frontier`-style calls no longer raise `TypeError`.
+- **Tool-cache resolution unified**: `intelligence._invalidate_tool_cache` and
+  `misc.cache_stats` now call `sync._tool_cache` (the canonical
+  `ida_mcp.ida_mcp.cache → cache → ida_pro_mcp.ida_mcp.cache` chain), so index
+  invalidation and cache stats always hit the same singleton the readers use
+  (previously a different import path yielded a second `TOOL_CACHE` instance and
+  invalidation silently no-opped).
+- **`query_lang` folds compact-text `data` results** (functions/strings/imports)
+  into records before condition matching — previously it iterated the joined
+  text (characters) and `_match_conditions` raised `AttributeError`.
+
+### Docs / surface
+- `docs/TOOLS_REFERENCE.md` + `.agents/skills` regenerated from
+  `host/agent_operations.py` (no drift); README op-count (67) verified against
+  the 67 exported `ida_*` AgentOperations.
+
+### Notes
+- Host suite runs with `--basetemp` on `/home` (the `/tmp` tmpfs fills, `ENOSPC`).
+- `tests/ida_mcp/test_swarm_t11_intel_tools.py` fixture re-resolves the
+  `blackboard` module at call time: the conftest purges `ida_mcp.tools.*`
+  submodules between tests, so the collection-time module object went stale and
+  `mark_examined` recorded to a real store instead of the recording fake in
+  full-suite runs (pass-in-isolation order-dependence). Fixed by patching the
+  module the tool's `from .blackboard import` resolves to.
+
+## 2026-08-08 — swarm/session-blitz: session ownership/isolation, runtime & dispatch hardening
+
+A 19-agent fixer wave over `host/` (session ownership & isolation, runtime leases,
+response attribution, blackboard per-session state, dispatch integrity) plus an
+integration pass that reconciled cross-package handoffs and left the host suite
+green. Branch `swarm/session-blitz`.
+
+### Session ownership & isolation
+- **Ownership guard applied across the session surface**: declarative mutators
+  (rename/duplicate/archive/unarchive/tag/untag/add_note/clear_notes) and the
+  diff/note paths enforce `_ensure_client_owns_session` via `_run_session_spec`,
+  so a multiplexed connection can never mutate another connection's live session.
+  Foreign-session reads/mutates return the `FILE_LOCKED` envelope.
+- **Semantic gadgets are ownership-scoped**: `_resolve_session_from_idb_ref` now
+  routes through the ownership guard before reading a cached per-session index,
+  and the rebuild path is covered too.
+- **Truncation tokens carry real session/owner scoping** instead of empty
+  placeholders; symbol-db queries and blackboard phase/policy state are
+  per-session rather than host-global.
+
+### Runtime & response
+- **Usage intelligence is no longer double-fed**: `_record_activity` kept
+  last-activity tracking and the auto-nudge fallback but stopped calling
+  `UsageIntelligence.observe` (the dispatch path already feeds the rich
+  latency+error observation once per call), fixing diluted error-rate / halved
+  latency drift signals and false STUCK_LOOP trips.
+- **Runtime lease hygiene**: recycled-pid verification, heartbeat clamp, and
+  cross-process batch persistence reconciled with per-instance tests.
+- **Response enrichment / audit attribution** now key off the session the call
+  actually executed against (idb-resolved), not the shared active default.
+
+### Dispatch & policy integrity
+- **`gadgets(action='semantic_find')` is now fully registered**: added to
+  `_TOOL_ACTIONS['gadgets']`, its arg schema enum (derived), and classified as a
+  read-tier policy action instead of UNKNOWN.
+- **`analysis(action='plugin_run')` is advertised**: added to the analysis
+  action list so the schema enum and tool list admit it.
+- **Policy gaps closed**: `multi_session/group_create|group_link`, the
+  `session/bootstrap_*` skills mutators, and `session/log_activity` classify
+  WRITE_IDB; the blackboard read-only overrides (`working_set`, `state_health`,
+  `quest_board`, `conflicts`, `stale`, `recall`, `workspace_brief`,
+  `campaign_summary`, `phase_status`) are read-tier. `session/sso_activate`
+  deliberately stays READ (gating it breaks the SSO realm lifecycle).
+- **Dead code removed**: orphaned `config.validate_path` and its exports, and
+  the unused `ARG_SCHEMAS`/`ARG_ALIASES`/`ACTION_ALIASES` stubs in
+  `tool_registry.py` (real schemas live in `schemas_data.py`/`schemas.py`).
+
+### Reconciliation
+- The bootstrap plan matrix lists only implemented methods so the readiness gate
+  can reach 100% (phantom blended-strategy names removed); `bootstrap_snapshot`
+  returns a graceful uninitialized dict (consistent with `bootstrap_status`)
+  whose hint references the reachable `bootstrap_init` action.
+
+### Notes
+- Host suite runs with `--basetemp` on `/home` (the `/tmp` tmpfs fills, `ENOSPC`).
+
 ## 2026-08-08 — swarm/agent-blitz: contract hardening, security, coverage (67-agent wave)
 
 ~360 audit findings verified and fixed across a 17-agent fixer fleet (disjoint file

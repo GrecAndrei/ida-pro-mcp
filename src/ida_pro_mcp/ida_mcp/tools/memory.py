@@ -4,6 +4,11 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+try:
+    from .governance_engine import evaluate_operation
+except ImportError:
+    from governance_engine import evaluate_operation  # type: ignore[import-not-found]
+
 import re
 from collections import Counter
 
@@ -131,6 +136,26 @@ def _find_pointers(data, start_ea):
     return pointers
 
 
+def _write_governance_metadata(ea):
+    """Gather section metadata so memory(write) honors the same deterministic
+    patch governance that modify(patch_bytes) runs by default.
+
+    Mirrors modify.py's patch branch: executable/code sections are flagged as
+    control-flow modifications and import sections are tagged for the
+    import-table guard.
+    """
+    metadata = {}
+    seg = ida_segment.getseg(ea)
+    if seg:
+        sname = ida_segment.get_segm_name(seg)
+        metadata["section_type"] = sname or ""
+        metadata["is_import_addr"] = sname in (".idata", ".plt", ".edata", ".iat")
+        executable = (getattr(seg, "perm", 0) & getattr(ida_segment, "SEGPERM_X", 1)) != 0
+        if executable or sname in (".text", ".code"):
+            metadata["modifies_control_flow"] = True
+    return metadata
+
+
 @tool
 @idawrite
 def memory(
@@ -169,7 +194,8 @@ def memory(
     - data: Hex string to write (e.g. "90 90 90") REQUIRED for write; search pattern for search.
     - end_addr: End address for region-based actions (search, compare, pointers, entropy, strings, histogram).
     - depth: Max recursion depth for struct_walk.
-    - **kwargs: search supports regex (bool), literal (bool — bypass integer detection), int_width (int, default 4).
+    - **kwargs: search supports regex (bool), literal (bool — bypass integer detection), int_width (int, default 4);
+      write supports governed (bool, default True — run deterministic governance pre-check on patch).
     """
     result = _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs)
     return result
@@ -194,7 +220,10 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
             if error:
                 return error
 
-        if action != "search" and ea is None:
+        # compare is the one non-search action that can legitimately run without
+        # a single `addr` (it takes addr1/addr2 instead); let its own branch
+        # validate the region endpoints.
+        if action not in ("search", "compare") and ea is None:
             return make_error(MCPError.INVALID_ARGS, "addr required")
 
         if action == "read":
@@ -245,7 +274,12 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
                 is_64 = _inf_bitness() == 64
                 value = ida_bytes.get_qword(ea) if is_64 else ida_bytes.get_wide_dword(ea)
             elif type == "string":
-                s = idc.get_strlit_contents(ea, -1, 0)
+                try:
+                    s = idc.get_strlit_contents(ea, -1, 0)
+                except TypeError:
+                    # Signature varies across IDA 7.x–9.x; fall back to the
+                    # single-argument form like data.py's strings action.
+                    s = idc.get_strlit_contents(ea)
                 if s:
                     if isinstance(s, bytes):
                         if len(s) > 65536:
@@ -273,11 +307,41 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
                 bytes_data = bytes.fromhex(data.replace(" ", ""))
             except ValueError:
                 return make_error(MCPError.INVALID_ARGS, "Invalid hex data")
-            ida_bytes.patch_bytes(ea, bytes_data)
+            # Deterministic governance pre-check — the same layer modify(patch_bytes)
+            # runs by default. Without it memory(write) could silently patch an
+            # executable/import section that the sibling tool would block.
+            if kwargs.get("governed", True):
+                gov_result = evaluate_operation(
+                    operation_type="patch",
+                    addr=ea,
+                    proposed_value=data,
+                    context={"tool": "memory", "action": "write"},
+                    metadata=_write_governance_metadata(ea),
+                )
+                if not gov_result["approved"]:
+                    return make_error(
+                        MCPError.GOVERNANCE_BLOCKED,
+                        f"Governance blocked write: {gov_result['verdict']}",
+                        details={
+                            "violations": gov_result["violations"],
+                            "ontology_class": gov_result.get("ontology_class"),
+                            "axiom_score": gov_result.get("axiom_score"),
+                        },
+                    )
+            # patch_bytes returns the count of bytes actually patched (0 on a
+            # failed/read-only byte); surface a partial write instead of
+            # reporting the requested size as success.
+            written = ida_bytes.patch_bytes(ea, bytes_data)
+            if written != len(bytes_data):
+                return make_error(
+                    MCPError.IDA_ERROR,
+                    f"Patch failed at {hex(ea)}: wrote {written} of {len(bytes_data)} byte(s)",
+                    details={"requested": len(bytes_data), "written": written},
+                )
             return {
                 "ok": True,
                 "addr": addr,
-                "size": len(bytes_data),
+                "size": written,
                 "data": data,
                 "note": "This patched the IDA database, not live process memory. Use debug(action='write_mem') for debugger memory writes.",
             }
@@ -333,8 +397,28 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
                     int_mode = True
                     v = int(pattern, 0)
                     width = int(kwargs.get("int_width", 4) or 4)
+                    if width <= 0:
+                        return make_error(MCPError.INVALID_ARGS, "int_width must be positive")
                     endian = "big" if _inf_is_be() else "little"
-                    pattern_bytes = int(v).to_bytes(width, endian, signed=False)
+                    try:
+                        pattern_bytes = int(v).to_bytes(width, endian, signed=False)
+                    except OverflowError:
+                        # Value wider than the requested width (the common case
+                        # is a 64-bit pointer with default int_width=4). Widen
+                        # to the pointer size when it fits there so a full-width
+                        # pointer search matches; otherwise reject loudly instead
+                        # of silently degrading to a UTF-8 text search that
+                        # reports a wrong 0-hit result.
+                        ptr_width = max(1, _inf_bitness() // 8)
+                        if width < ptr_width and v < (1 << (8 * ptr_width)):
+                            width = ptr_width
+                            pattern_bytes = int(v).to_bytes(width, endian, signed=False)
+                        else:
+                            return make_error(
+                                MCPError.INVALID_ARGS,
+                                f"Integer search value {pattern} does not fit in {width} byte(s)",
+                                hint=f"Pass int_width={ptr_width} to search full-width ({ptr_width}-byte) values, or use a hex byte pattern",
+                            )
                 elif re.search(r"\?\?|[0-9a-fA-F]{2}(?:\s+[0-9a-fA-F?]{2})+", pattern):
                     toks = pattern.split()
                     pb = []

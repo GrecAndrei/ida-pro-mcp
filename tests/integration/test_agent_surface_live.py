@@ -408,49 +408,63 @@ def test_live_code_navigation_uses_fixture_symbols(live_context: LiveContext):
 
 def test_live_mutations_and_findings_are_observable(live_context: LiveContext):
     client = live_context.client
+    original = "fixture_mutation_target"
     renamed = "fixture_mutation_target_renamed"
     _assert_ok(
-        client.call("ida_rename", {"address": "fixture_mutation_target", "name": renamed, "risk_ack": True}),
+        client.call("ida_rename", {"address": original, "name": renamed, "risk_ack": True}),
         "ida_rename",
     )
-    _assert_ok(
-        client.call("ida_comment", {"address": renamed, "comment": "live agent-surface test", "risk_ack": True}),
-        "ida_comment",
-    )
-    find_payload = _assert_ok(client.call("ida_find", {"query": renamed, "limit": 10}), "ida_find after rename")
-    assert renamed in json.dumps(find_payload)
+    try:
+        _assert_ok(
+            client.call("ida_comment", {"address": renamed, "comment": "live agent-surface test", "risk_ack": True}),
+            "ida_comment",
+        )
+        find_payload = _assert_ok(client.call("ida_find", {"query": renamed, "limit": 10}), "ida_find after rename")
+        assert renamed in json.dumps(find_payload)
 
-    title = "live agent-surface finding"
-    recorded = _assert_ok(
-        client.call(
+        title = "live agent-surface finding"
+        recorded = _assert_ok(
+            client.call(
+                "ida_write_finding",
+                {
+                    "title": title,
+                    "content": "The live fixture exposes a caller/callee chain for public MCP validation.",
+                    "address": "fixture_entry",
+                    "category": "test",
+                    "confidence": 1.0,
+                    "tags": ["live", "agent-surface"],
+                },
+            ),
             "ida_write_finding",
-            {
-                "title": title,
-                "content": "The live fixture exposes a caller/callee chain for public MCP validation.",
-                "address": "fixture_entry",
-                "category": "test",
-                "confidence": 1.0,
-                "tags": ["live", "agent-surface"],
-            },
-        ),
-        "ida_write_finding",
-    )
-    findings = _assert_ok(client.call("ida_list_findings", {"limit": 50}), "ida_list_findings")
-    assert title in json.dumps(findings)
-    searched = _assert_ok(
-        client.call("ida_search_findings", {"query": "caller/callee chain", "limit": 10}),
-        "ida_search_findings",
-    )
-    assert title in json.dumps(searched)
-    _assert_ok(client.call("ida_analysis_brief", {"limit": 8}), "ida_analysis_brief")
-    _assert_ok(
-        client.call(
+        )
+        findings = _assert_ok(client.call("ida_list_findings", {"limit": 50}), "ida_list_findings")
+        assert title in json.dumps(findings)
+        searched = _assert_ok(
+            client.call("ida_search_findings", {"query": "caller/callee chain", "limit": 10}),
+            "ida_search_findings",
+        )
+        assert title in json.dumps(searched)
+        _assert_ok(client.call("ida_analysis_brief", {"limit": 8}), "ida_analysis_brief")
+        _assert_ok(
+            client.call(
+                "ida_update_finding",
+                {"entry_id": recorded["entry_id"], "status": "confirmed", "reason": "Live verification passed."},
+            ),
             "ida_update_finding",
-            {"entry_id": recorded["entry_id"], "status": "confirmed", "reason": "Live verification passed."},
-        ),
-        "ida_update_finding",
-    )
-    _assert_ok(client.call("ida_next_target", {"limit": 10}), "ida_next_target")
+        )
+        _assert_ok(client.call("ida_next_target", {"limit": 10}), "ida_next_target")
+    finally:
+        # Undo the rename so the module-scoped shared session stays in its
+        # original state. test_live_full_decomp_index asserts the original
+        # symbol name from a semantic query; without this restore the two
+        # tests would be order-coupled (the decomp assertion would only pass
+        # because the renamed symbol still contains the original as a
+        # substring).
+        with contextlib.suppress(Exception):
+            _assert_ok(
+                client.call("ida_rename", {"address": renamed, "name": original, "risk_ack": True}),
+                "ida_rename restore",
+            )
 
 
 def test_live_protocol_rejects_public_contract_edge_cases(live_context: LiveContext):

@@ -49,6 +49,15 @@ class TokenBucket:
             self.tokens = min(self.burst, self.tokens + tokens)
 
 
+# Upper bound on distinct per-tool buckets we retain. A caller can send many
+# bogus tool names, and each one currently mints a fresh per-tool bucket (full
+# burst) before the dispatcher validates the tool; without a cap the dict would
+# grow without bound and each bogus name would dodge the per-tool limit by
+# rotating names. Legitimate tools are a handful, so this is generous; the
+# oldest bucket is evicted on overflow.
+MAX_TOOL_BUCKETS = 1024
+
+
 class RateLimiter:
     """
     Rate limiter with per-tool and global buckets.
@@ -87,9 +96,16 @@ class RateLimiter:
 
     def _get_tool_bucket(self, tool: str) -> TokenBucket:
         with self._lock:
-            if tool not in self._tool_buckets:
-                self._tool_buckets[tool] = TokenBucket(self.per_tool_rate, self.burst)
-            return self._tool_buckets[tool]
+            bucket = self._tool_buckets.get(tool)
+            if bucket is None:
+                if len(self._tool_buckets) >= MAX_TOOL_BUCKETS:
+                    # Evict the oldest entry to bound memory. A bogus tool name
+                    # still draws from the shared global bucket on every call,
+                    # but it can no longer grow the dict without limit.
+                    self._tool_buckets.pop(next(iter(self._tool_buckets)))
+                bucket = TokenBucket(self.per_tool_rate, self.burst)
+                self._tool_buckets[tool] = bucket
+            return bucket
 
     def check(self, tool: str) -> tuple[bool, str]:
         """
@@ -114,11 +130,13 @@ class RateLimiter:
             "global": {
                 "rate": self.global_rate,
                 "burst": self.burst,
-                "tokens": round(self._global_bucket.tokens, 2),
             },
             "per_tool_rate": self.per_tool_rate,
         }
         with self._lock:
+            # Read the global token level under the same lock the buckets use,
+            # so a concurrent acquire never races this snapshot.
+            out["global"]["tokens"] = round(self._global_bucket.tokens, 2)
             for tool, bucket in self._tool_buckets.items():
                 out[tool] = {"tokens": round(bucket.tokens, 2)}
         return out

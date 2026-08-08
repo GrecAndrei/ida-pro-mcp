@@ -51,7 +51,7 @@ def types(
     addr: Annotated[Optional[str], "Address (for set_prototype/apply/infer/read_struct)"] = None,
     decl: Annotated[Optional[str], "Type declaration string (or header content)"] = None,
     query: Annotated[Optional[str], "Search query (regex/glob/substring/semantic; for list/search_structs)"] = None,
-    kind: Annotated[Optional[str], "Apply kind: function, global, local, stack"] = None,
+    kind: Annotated[Optional[str], "Apply kind: function, global, local"] = None,
     offset: Annotated[int, "Pagination offset"] = 0,
     count: Annotated[int, "Maximum items to return"] = 100,
     # Extended action parameters
@@ -328,6 +328,12 @@ def types(
             if not apply_kind:
                 apply_kind = "function" if func and func.start_ea == ea else "global"
 
+            if apply_kind not in ("function", "global", "local"):
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    f"Invalid apply kind '{apply_kind}'. Supported kinds: function, global, local.",
+                )
+
             if apply_kind == "function":
                 if not ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.TINFO_DEFINITE):
                     return make_error(MCPError.IDA_ERROR, f"Failed to apply function type at {hex(ea)}. "
@@ -397,7 +403,10 @@ def types(
                 tif = ida_typeinf.tinfo_t()
                 if tif.get_numbered_type(None, ordinal) and (tif.is_struct() or tif.is_union()):
                     type_name = tif.get_type_name()
-                    if matcher(type_name):
+                    # Anonymous structs/unions have no name (get_type_name returns
+                    # None); the smart-pattern matcher cannot handle None, so only
+                    # match named types here. Same guard applies to unnamed members.
+                    if type_name and matcher(type_name):
                         matches.append({"name": type_name, "ordinal": ordinal, "match": "name"})
                         continue
 
@@ -405,7 +414,7 @@ def types(
                     if tif.get_udt_details(udt):
                         for i in range(udt.size()):
                             m = udt[i]
-                            if matcher(m.name):
+                            if m.name and matcher(m.name):
                                 matches.append({
                                     "name": type_name,
                                     "ordinal": ordinal,
@@ -1082,15 +1091,30 @@ def types(
                     break
                 if not ida_bytes.is_loaded(target):
                     break
-                if target in seen_targets:
+                # A vtable can legitimately point several slots at the same
+                # implementation (multiple interfaces collapsing to one method),
+                # so a repeated target does NOT end the vtable — skip it and keep
+                # scanning. Only a self-referential entry (pointer back to the
+                # vtable base) marks the end of the meaningful run.
+                if target == vtable_ea:
                     break
+                if target in seen_targets:
+                    cur += ptr_size
+                    idx += 1
+                    continue
                 seen_targets.add(target)
                 func = idaapi.get_func(target)
                 func_name = idc.get_name(target) or ""
                 demangled = func_name
+                # ida_nalt.demangle_name / get_short_name_synonym are absent or
+                # wrong-arity on IDA 9; idc.demangle_name(name, disable_mask)
+                # is the portable API (same idiom as search/unified.py).
                 try:
-                    import ida_nalt
-                    demangled = ida_nalt.demangle_name(func_name, ida_nalt.get_short_name_synonym()) or func_name
+                    typeinf = idc.get_inf_attr(idc.INF_SHORT_DN)
+                except Exception:
+                    typeinf = 0
+                try:
+                    demangled = idc.demangle_name(func_name, typeinf) or func_name
                     # Strip parameters for readability: "Class::method(int)" -> "Class::method"
                     if "(" in demangled:
                         demangled = demangled[:demangled.index("(")].strip()

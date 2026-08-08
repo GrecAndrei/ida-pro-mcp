@@ -313,22 +313,42 @@ def test_auto_reanalyze_text_segments_schedules_per_range():
         plan_calls.append((s, e))
     ida_auto.plan_range = fake_plan
 
-    # Simulate the work landing: bump func count after plan_range.
-    _state = {"fc": 219}
+    # Simulate the work landing: bump func count as the bounded pump loop
+    # steps the analyzer. auto_wait() is never used — it drains the whole
+    # queue with no timeout, which can blow the host RPC recv deadline on a
+    # large binary, so the wait path must poll auto_is_ok() and pump
+    # incrementally with auto_make_step() instead.
+    _state = {"fc": 219, "steps": 0}
+    auto_wait_calls = []
+
+    def fake_auto_make_step(s, e):
+        _state["steps"] += 1
+        return True
 
     def fake_auto_wait():
-        # Simulate that 8846 functions got created
+        auto_wait_calls.append(True)
         _state["fc"] = 9065
+
+    def fake_auto_is_ok():
+        # The queue drains after two pump steps, creating the functions.
+        if _state["steps"] >= 2:
+            _state["fc"] = 9065
+            return True
+        return False
 
     def fake_get_func_qty():
         return _state["fc"]
 
+    ida_auto.auto_make_step = fake_auto_make_step
     ida_auto.auto_wait = fake_auto_wait
     idaapi.get_func_qty = fake_get_func_qty
-    # The analyzer has not drained yet, so the wait path must run auto_wait.
-    idaapi.auto_is_ok = lambda: False
+    idaapi.auto_is_ok = fake_auto_is_ok
 
-    result = _auto_reanalyze_text_segments(wait_seconds=0.1)
+    result = _auto_reanalyze_text_segments(wait_seconds=0.5)
+
+    # The bounded pump drives completion; the unbounded queue-drain is never
+    # invoked.
+    assert auto_wait_calls == []
 
     # Two eligible ranges were scheduled
     assert len(plan_calls) == 2, f"expected 2 plan_range calls, got {plan_calls}"

@@ -35,6 +35,12 @@ Configuration (env, with the ``rerank`` section of the install
    safe slot count that keeps scores distinct while cutting peak memory)
   IDA_MCP_RERANK_DOC_CHARS  per-document truncation for the /rerank payload
   IDA_MCP_RERANK_GPU        1/true to offload to a detected Vulkan device
+  IDA_MCP_RERANK_START_TIMEOUT    health-poll deadline for a cold server start
+                            (default: 60s)
+  IDA_MCP_RERANK_START_LOCK_TIMEOUT inter-process lock budget for a cold start
+                            (default: 75s; must exceed START_TIMEOUT so a
+                            concurrent host's first rerank does not spuriously
+                            time out)
   IDA_MCP_RERANK_MAX_CANDIDATES default recall pool the search passes here
   IDA_MCP_RERANK_TIMEOUT    per-request deadline (default: 30s)
   IDA_MCP_RERANK_IDLE_TIMEOUT seconds to retain an idle rerank server
@@ -106,6 +112,14 @@ RERANK_DOC_CHARS = _safe_int_env("IDA_MCP_RERANK_DOC_CHARS", "6000")
 RERANK_REQUEST_TIMEOUT = _safe_float_env("IDA_MCP_RERANK_TIMEOUT", "30.0")
 RERANK_BATCH_REQUEST_TIMEOUT = _safe_float_env("IDA_MCP_RERANK_BATCH_TIMEOUT", "120.0")
 RERANK_LOCK_TIMEOUT = _safe_float_env("IDA_MCP_RERANK_LOCK_TIMEOUT", "45.0")
+# The cross-process startup lock (see _start_server) is held across the whole
+# spawn + health-poll critical section.  Its timeout must clear that window, or
+# a second host cold-starting concurrently fails its first rerank with
+# RerankQueueTimeout even though the first host is starting fine.  The request
+# lock (RERANK_LOCK_TIMEOUT) guards a request-sized critical section and keeps
+# its own, shorter budget.
+RERANK_START_DEADLINE = _safe_float_env("IDA_MCP_RERANK_START_TIMEOUT", "60.0")
+RERANK_START_LOCK_TIMEOUT = _safe_float_env("IDA_MCP_RERANK_START_LOCK_TIMEOUT", "75.0")
 RERANK_MAX_REQUESTS = _safe_int_env("IDA_MCP_RERANK_MAX_REQUESTS", "512")
 RERANK_MAX_RSS_MB = _safe_int_env("IDA_MCP_RERANK_MAX_RSS_MB", "0")
 # A rerank server (larger model + context-sized KV) legitimately grows a few
@@ -686,7 +700,7 @@ class Reranker:
     def _start_server(self) -> bool:
         with self._start_lock:
             try:
-                with _RerankInterProcessLock(_rerank_start_lock_path(), RERANK_LOCK_TIMEOUT):
+                with _RerankInterProcessLock(_rerank_start_lock_path(), RERANK_START_LOCK_TIMEOUT):
                     return self._start_server_locked()
             except RerankQueueTimeout:
                 return False
@@ -778,7 +792,7 @@ class Reranker:
                 self._ready = False
                 return False
 
-            deadline = time.time() + 60.0
+            deadline = time.time() + RERANK_START_DEADLINE
             while time.time() < deadline:
                 time.sleep(1.0)
                 try:
@@ -812,7 +826,33 @@ class Reranker:
                     return False
 
             self._ready = False
+            self._abandon_owned_server("health poll timed out")
             return False
+
+    def _abandon_owned_server(self, reason: str) -> None:
+        """Kill a server we spawned but could not bring healthy.
+
+        The start-timeout path has no lease to retire (a lease is only written
+        once the health poll succeeds), so a hung llama-server would otherwise
+        be orphaned forever: every subsequent ``_start_server_locked`` would
+        Popen a fresh one over the top, and ``stop()`` never reaps the earlier
+        process.  Terminate it here and drop the reference so the next cold
+        start is clean.
+        """
+        proc = self._proc
+        if proc is not None and self._owns_proc:
+            if proc.poll() is None:
+                with contextlib.suppress(Exception):
+                    proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        proc.kill()
+                        proc.wait(timeout=2)
+        self._proc = None
+        self._owns_proc = False
+        self._last_recycle_reason = reason
 
     def stop(self) -> None:
         self._cancel_idle_shutdown()

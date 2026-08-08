@@ -7,13 +7,13 @@ unreachable through MCP with no error (find_similar tuning, memory compare's
 2nd address, the entire KG builder, etc.). This pins the admission of every
 handler-read kwarg that was previously stripped, per tool/action.
 """
-import os
 import sys
+from pathlib import Path
 
-ROOT = os.path.dirname(os.path.dirname(__file__))
-SRC = os.path.join(ROOT, "src")
-if SRC not in sys.path:
-    sys.path.insert(0, SRC)
+ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 from ida_pro_mcp.services import TOOL_ARG_SCHEMAS
 

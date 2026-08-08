@@ -1785,15 +1785,22 @@ class BlackboardStore:
             return out
         return []
 
-    def next_target(self, limit: int = 5, rpc_fn=None, query: str | None = None) -> builtins.list[dict]:
+    def next_target(self, limit: int = 5, rpc_fn=None, query: str | None = None, strategy: str = "unresolved") -> builtins.list[dict]:
         """Compatibility shim over :meth:`targets`.
 
-        Runs ``unresolved`` and tops up from ``coverage`` when the workspace is
-        too sparse to have opinions yet. Kept because several resource handlers
-        and the legacy tool surface call it positionally.
+        By default runs ``unresolved`` and tops up from ``coverage`` when the
+        workspace is too sparse to have opinions yet. A caller may pass an
+        explicit ``strategy`` (any of :data:`STRATEGIES`, e.g. ``frontier``),
+        which is honored directly without the coverage top-up. Kept because
+        several resource handlers and the legacy tool surface call it
+        positionally.
         """
         self.last_query_applied = None if not (query and str(query).strip()) else True
         self.last_query_error = ""
+        if strategy not in STRATEGIES:
+            raise ValueError("strategy must be one of: " + ", ".join(STRATEGIES))
+        if strategy != "unresolved":
+            return self.targets(strategy, limit=limit, rpc_fn=rpc_fn, query=query)["targets"][:limit]
         found = self.targets("unresolved", limit=limit, rpc_fn=rpc_fn, query=query)["targets"]
         if len(found) < limit and rpc_fn is not None:
             topup = self.targets("coverage", limit=limit - len(found), rpc_fn=rpc_fn, query=query)

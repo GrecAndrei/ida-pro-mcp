@@ -46,9 +46,40 @@ except ImportError:
         summarize_campaign_regions,
     )
 
+try:
+    from .governance_engine import evaluate_operation as _govern_evaluate
+except ImportError:
+    try:
+        from governance_engine import evaluate_operation as _govern_evaluate  # type: ignore[import-not-found]
+    except ImportError:
+        _govern_evaluate = None  # type: ignore
+
 
 def _is_64bit() -> bool:
     return _inf_is_64bit()
+
+
+def _fw_is_be() -> bool:
+    """True when the IDB is big-endian.
+
+    ``_inf_is_be`` is exported by ``_common`` under ``__all__`` and is always
+    present inside IDA; host-side test stubs do not export underscore names, so
+    fall back to little-endian to keep the format helpers safe everywhere.
+    """
+    try:
+        return bool(_inf_is_be())
+    except Exception:
+        return False
+
+
+def _fw_u32_fmt() -> str:
+    """struct format string for a native-endian 32-bit word."""
+    return "<I" if not _fw_is_be() else ">I"
+
+
+def _fw_u64_fmt() -> str:
+    """struct format string for a native-endian 64-bit word."""
+    return "<Q" if not _fw_is_be() else ">Q"
 
 
 def _fw_state_path() -> str:
@@ -266,8 +297,38 @@ def _fwb_int_addr(v: Any) -> Optional[int]:
         return None
 
 
+def _fwb_govern(operation_type: str, addr: int, proposed_value: str) -> tuple[bool, str]:
+    """Governance pre-check for firmware_view IDB mutations.
+
+    Mirrors the sibling write tools (modify/annotation) by routing the
+    governable renames and comments through the governance engine: WARNED
+    verdicts stay approved, PII is redacted out of comments, and hard blocks
+    make the mutation get skipped. When the engine is unavailable (standalone
+    or host-test mode) the mutation is allowed unchanged.
+    """
+    if _govern_evaluate is None:
+        return True, proposed_value
+    try:
+        res = _govern_evaluate(
+            operation_type=operation_type,
+            addr=addr,
+            proposed_value=proposed_value,
+            context={"tool": "firmware_view", "operation_type": operation_type},
+            metadata={},
+        )
+    except Exception:
+        return True, proposed_value
+    if not res.get("approved", True):
+        return False, proposed_value
+    redacted = res.get("redacted_content")
+    if redacted is not None and str(redacted) != proposed_value:
+        return True, str(redacted)
+    return True, proposed_value
+
+
 def _fwb_annotate_mmio(peripherals: List[Dict[str, Any]]) -> Dict[str, Any]:
     annotated = 0
+    blocked = 0
     for p in peripherals:
         if not isinstance(p, dict):
             continue
@@ -278,10 +339,16 @@ def _fwb_annotate_mmio(peripherals: List[Dict[str, Any]]) -> Dict[str, Any]:
         sym = name.upper().replace(" ", "_")
         if not sym.endswith("_BASE"):
             sym += "_BASE"
-        idc.set_name(base, sym, ida_name.SN_FORCE)
-        idc.set_cmt(base, f"MMIO base for {name}", 1)
+        gov_ok, eff_sym = _fwb_govern("rename", base, sym)
+        if not gov_ok:
+            blocked += 1
+            continue
+        idc.set_name(base, eff_sym, ida_name.SN_FORCE)
+        _gov_ok, eff_cmt = _fwb_govern("comment", base, f"MMIO base for {name}")
+        if _gov_ok:
+            idc.set_cmt(base, eff_cmt, 1)
         annotated += 1
-    return {"peripherals_annotated": annotated}
+    return {"peripherals_annotated": annotated, "peripherals_blocked": blocked}
 
 
 def _fwb_define_ascii_strings(limit: int = 256) -> Dict[str, Any]:
@@ -341,6 +408,27 @@ def _fwb_define_ascii_strings(limit: int = 256) -> Dict[str, Any]:
     return {"strings_defined": defined, "skipped": skipped}
 
 
+def _fwb_segment_has_items(seg) -> bool:
+    """True when the segment contains any defined code/data/string item.
+
+    Raw-loader-created BSS/DATA segments for raw blobs are entirely undefined,
+    so they still get the CODE upgrade; real ELF/PE firmware segments (.text,
+    .rodata, .data) carry defined items and must not be force-reclassified as
+    executable CODE. Bounded scan so a huge raw segment cannot stall bootstrap.
+    """
+    ea = int(seg.start_ea)
+    end = int(seg.end_ea)
+    budget = 0
+    while ea < end and budget < 4096:
+        flags = ida_bytes.get_flags(ea)
+        if flags and (ida_bytes.is_code(flags) or ida_bytes.is_data(flags)):
+            return True
+        nxt = ea + max(1, idc.get_item_size(ea))
+        ea = nxt if nxt > ea else ea + 1
+        budget += 1
+    return False
+
+
 def _fwb_run_vector_bootstrap() -> Dict[str, Any]:
     res = firmware_view(action="detect_vector_table", auto_blackboard=False)
     vectors = res.get("vectors") if isinstance(res, dict) else []
@@ -354,25 +442,34 @@ def _fwb_run_vector_bootstrap() -> Dict[str, Any]:
     code_failures = []
     func_failures = []
 
-    # Fix ALL segments: ensure CODE type/class/perm so create_insn() and
-    # add_func() work. IDA's processor-module loader creates BSS/DATA
-    # segments for raw binaries; we upgrade every segment here.
+    # Fix segments so create_insn() and add_func() work. IDA's processor-module
+    # loader creates BSS/DATA segments for raw binaries; we upgrade those here.
+    # Segments that already carry defined items (.rodata/.data/.text on a real
+    # ELF/PE) are left alone, and only segments that were actually mutated count
+    # toward segments_fixed.
     seg_fix_count = 0
     for seg_ea in idautils.Segments():
         try:
             seg = idaapi.getseg(seg_ea)
             if not seg:
                 continue
+            if _fwb_segment_has_items(seg):
+                continue
+            fixed = False
             cur_class = ida_segment.get_segm_class(seg)
             if cur_class != "CODE":
                 ida_segment.set_segm_class(seg, "CODE")
+                fixed = True
             if seg.type != idaapi.SEG_CODE:
                 seg.type = idaapi.SEG_CODE
                 ida_segment.update_segm(seg)
+                fixed = True
             if not (seg.perm & idaapi.SEGPERM_EXEC):
                 seg.perm |= idaapi.SEGPERM_EXEC
                 ida_segment.update_segm(seg)
-            seg_fix_count += 1
+                fixed = True
+            if fixed:
+                seg_fix_count += 1
         except Exception:
             pass
 
@@ -477,12 +574,16 @@ def _fwb_run_vector_bootstrap() -> Dict[str, Any]:
             entries += 1
             idx = int(vec.get("index", -1) or -1)
             if idx == 1:
-                idc.set_name(fn.start_ea, "Reset_Handler", ida_name.SN_FORCE)
+                _gov_ok, eff_name = _fwb_govern("rename", fn.start_ea, "Reset_Handler")
+                if _gov_ok:
+                    idc.set_name(fn.start_ea, eff_name, ida_name.SN_FORCE)
                 reset_addr = fn.start_ea
             elif idx > 1:
                 nm = str(vec.get("name") or "")
                 if nm and nm.endswith("_Handler"):
-                    idc.set_name(fn.start_ea, nm, ida_name.SN_FORCE)
+                    _gov_ok, eff_name = _fwb_govern("rename", fn.start_ea, nm)
+                    if _gov_ok:
+                        idc.set_name(fn.start_ea, eff_name, ida_name.SN_FORCE)
     primary_seg_ea = mn if mn > 0 else next(idautils.Segments(), idaapi.BADADDR)
     primary_seg = idaapi.getseg(primary_seg_ea) if primary_seg_ea != idaapi.BADADDR else None
     seg_code_verified = bool(
@@ -1359,8 +1460,13 @@ def firmware_view(
             rolled = 0
             if ea_i != idaapi.BADADDR:
                 sz = int(target.get("size") or 1)
-                if ida_bytes.del_items(ea_i, ida_bytes.DELIT_SIMPLE, max(1, sz)):
+                try:
+                    # del_items is a C void API; a clean call is a successful
+                    # rollback — only guard against exceptions.
+                    ida_bytes.del_items(ea_i, ida_bytes.DELIT_SIMPLE, max(1, sz))
                     rolled = 1
+                except Exception:
+                    rolled = 0
                 prev = str(target.get("prev_kind") or "unknown")
                 if prev == "code":
                     try:
@@ -1467,8 +1573,8 @@ def firmware_view(
             # Read first 8 bytes
             first8 = ida_bytes.get_bytes(min_ea, 8)
             if first8 and len(first8) == 8:
-                sp_val = _struct.unpack_from("<I", first8, 0)[0]
-                reset_val = _struct.unpack_from("<I", first8, 4)[0]
+                sp_val = _struct.unpack_from(_fw_u32_fmt(), first8, 0)[0]
+                reset_val = _struct.unpack_from(_fw_u32_fmt(), first8, 4)[0]
                 reset_addr = reset_val & ~1  # clear Thumb bit
                 is_thumb = bool(reset_val & 1)
 
@@ -1506,7 +1612,7 @@ def firmware_view(
                 for sample_ea in sample_eas:
                     chunk = ida_bytes.get_bytes(sample_ea, min(256, max_ea - sample_ea)) or b""
                     for i in range(0, len(chunk) - 3, 4):
-                        v = _struct.unpack_from("<I", chunk, i)[0]
+                        v = _struct.unpack_from(_fw_u32_fmt(), chunk, i)[0]
                         # Try common bases
                         for base in (0x00000000, 0x08000000, 0x10000000, 0x20000000,
                                      0x40000000, 0x80000000, 0xBFC00000):
@@ -1619,7 +1725,7 @@ def firmware_view(
             if "arm" in proc or not proc or (is_raw and "metapc" in proc):
                 chunk = ida_bytes.get_bytes(min_ea, min(256 * 4, binary_size)) or b""
                 if len(chunk) >= 8:
-                    sp_val = _struct.unpack_from("<I", chunk, 0)[0]
+                    sp_val = _struct.unpack_from(_fw_u32_fmt(), chunk, 0)[0]
                     # SP plausibility: non-zero, 4-byte aligned, not all-ones.
                     # Covers standard Cortex-M SRAM (0x20000000+), vendor SRAM
                     # (e.g. AIC8800D80 at 0x1a0000), and ITCM/CCM ranges.
@@ -1628,7 +1734,7 @@ def firmware_view(
                     )
                     thumb_like = 0
                     for i in range(1, min(32, len(chunk) // 4)):
-                        vv = _struct.unpack_from("<I", chunk, i * 4)[0]
+                        vv = _struct.unpack_from(_fw_u32_fmt(), chunk, i * 4)[0]
                         if vv & 1:
                             thumb_like += 1
                     # With a plausible SP, require >=4 Thumb-bit entries (strong signal).
@@ -1647,7 +1753,7 @@ def firmware_view(
                             "PendSV_Handler", "SysTick_Handler",
                         ]
                         for i in range(min(64, len(chunk) // 4)):
-                            v = _struct.unpack_from("<I", chunk, i * 4)[0]
+                            v = _struct.unpack_from(_fw_u32_fmt(), chunk, i * 4)[0]
                             if i == 0:
                                 vectors.append({
                                     "index": 0, "addr": hex(min_ea + i * 4),
@@ -1688,7 +1794,7 @@ def firmware_view(
                 arch_hint = "generic"
                 chunk = ida_bytes.get_bytes(min_ea, min(512, binary_size)) or b""
                 for i in range(0, len(chunk) - ptr_size + 1, ptr_size):
-                    v = _struct.unpack_from("<I", chunk, i)[0] if ptr_size == 4 else _struct.unpack_from("<Q", chunk, i)[0]
+                    v = _struct.unpack_from(_fw_u32_fmt(), chunk, i)[0] if ptr_size == 4 else _struct.unpack_from(_fw_u64_fmt(), chunk, i)[0]
                     mapped_v, derived_base = _normalize_handler(v)
                     if mapped_v is not None:
                         func = idaapi.get_func(mapped_v)
@@ -1786,7 +1892,11 @@ def firmware_view(
 
             def _record_mmio(v: int, ea: int):
                 """Record a peripheral address hit."""
-                if not v or (min_ea <= v < max_ea):
+                # 0, all-ones masks (-1 / 0xFFFFFFFF), and in-binary addresses
+                # are not MMIO accesses: all-ones would otherwise false-positive
+                # against ARM_system_space (0xE0000000-0xFFFFFFFF) from
+                # `mov reg, -1`, mask operands, and uninitialized 0xFFFFFFFF words.
+                if not v or v in (~0, 0xFFFFFFFF) or (min_ea <= v < max_ea):
                     return
                 for pbase, pend, pname, pfamily in _KNOWN_PERIPHERALS:
                     if pbase <= v <= pend:
@@ -1850,7 +1960,7 @@ def firmware_view(
                 while offset < scan_limit:
                     chunk = ida_bytes.get_bytes(min_ea + offset, min(chunk_size, scan_limit - offset)) or b""
                     for i in range(0, len(chunk) - 3, 4):
-                        v = _struct.unpack_from("<I", chunk, i)[0]
+                        v = _struct.unpack_from(_fw_u32_fmt(), chunk, i)[0]
                         _record_mmio(v, min_ea + offset + i)
                     offset += len(chunk)
                     if not chunk:

@@ -39,7 +39,10 @@ class SigmaRulesSource(SourceParser):
                     if os.path.getsize(fpath) > 500_000:
                         continue
                     with open(fpath, encoding="utf-8", errors="replace") as f:
-                        content = f.read(4096)
+                        # Read the whole file: rule metadata (title, id) can sit
+                        # below a long comment/license preamble, so a fixed short
+                        # prefix would silently stamp a non-stable SIGMA-N id.
+                        content = f.read()
                 except OSError:
                     continue
 

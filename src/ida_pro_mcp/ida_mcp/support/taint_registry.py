@@ -15,8 +15,9 @@ TAINT_SOURCES: frozenset[str] = frozenset({
     "scanf", "sscanf", "fscanf",
     # Environment
     "getenv", "getenv_s",
-    # Windows
-    "ReadFile", "RegQueryValueEx", "GetEnvironmentVariable",
+    # Windows (A/W macro variants included — import tables carry the wide form)
+    "ReadFile", "RegQueryValueEx", "RegQueryValueExA", "RegQueryValueExW",
+    "GetEnvironmentVariable", "GetEnvironmentVariableA", "GetEnvironmentVariableW",
     "WinHttpReceiveResponse", "InternetReadFile",
     # Firmware: UART receive
     "UART_Receive", "UART_Read", "uart_read", "uart_receive", "uart_getc",
@@ -35,7 +36,8 @@ TAINT_SOURCES: frozenset[str] = frozenset({
     # Windows: additional
     "ioctl", "DeviceIoControl", "NtDeviceIoControlFile",
     "NtQueryInformationFile",
-    "URLDownloadToFile", "URLDownloadToCacheFile",
+    "URLDownloadToFile", "URLDownloadToFileA", "URLDownloadToFileW",
+    "URLDownloadToCacheFile",
     "WinHttpReadData",
     # Firmware: additional from combinators.py
     "sic_recv", "spi_receive", "i2c_read",
@@ -63,17 +65,26 @@ DANGEROUS_SINKS: dict[str, str] = {
     "sscanf": "buffer_overflow",
     "fscanf": "buffer_overflow",
     "lstrcpy": "buffer_overflow",
+    "lstrcpyA": "buffer_overflow",
+    "lstrcpyW": "buffer_overflow",
     "lstrcat": "buffer_overflow",
+    "lstrcatA": "buffer_overflow",
+    "lstrcatW": "buffer_overflow",
     "RtlCopyMemory": "buffer_overflow",
-    # Command execution
+    # Command execution.  Windows import tables carry the A/W macro variants
+    # (ShellExecuteA/W, CreateProcessA/W), so the wide forms are sinks too.
     "system": "command_injection",
     "exec": "command_injection",
     "execve": "command_injection",
     "execl": "command_injection",
     "popen": "command_injection",
     "ShellExecute": "command_injection",
+    "ShellExecuteA": "command_injection",
+    "ShellExecuteW": "command_injection",
     "WinExec": "command_injection",
     "CreateProcess": "command_injection",
+    "CreateProcessA": "command_injection",
+    "CreateProcessW": "command_injection",
     # Memory control
     "VirtualAlloc": "memory_control",
     "WriteProcessMemory": "process_injection",

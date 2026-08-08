@@ -47,6 +47,14 @@ _SESSION_STATE_CACHE_TTL = 30.0  # seconds
 _SESSION_DIFF_INFLIGHT: set[tuple[str, str]] = set()
 _SESSION_DIFF_LOCK = threading.Lock()
 
+# Guards the safe-mode bookkeeping collections (_pending_analysis,
+# _analysis_complete_sessions, _analysis_pending_no_idb, _analysis_watchers,
+# _background_loads/_background_load_errors, _reloading_sessions). Module-level
+# so a check-then-act lazy init of those collections is serialized across the
+# request and watcher threads that mutate them; a per-instance attribute would
+# need the lock object itself created under a lock (a chicken-and-egg race).
+_ANALYSIS_STATE_LOCK = threading.RLock()
+
 # Keys that count as an architecture/loader preload request when opening a
 # binary; shared by the reuse-decision logic in create/create_background.
 _OPEN_PRELOAD_KEYS = ("processor", "bitness", "endian", "loader", "flags", "loader_options", "value")
@@ -88,6 +96,9 @@ def _sess_coerce_untag(args):
     tag = args.get("tag")
     if not tag:
         return None, make_error(MCPError.INVALID_ARGS, "tag required")
+    tag = str(tag).strip()[:MAX_TAG_LEN]
+    if not tag:
+        return None, make_error(MCPError.INVALID_ARGS, "tag required")
     return {"tag": tag}, None
 
 def _sess_coerce_note(args):
@@ -127,10 +138,10 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
 
         def _diff():
             try:
-                from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex
-            except ImportError:
-                return
-            try:
+                try:
+                    from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex
+                except ImportError:
+                    return
                 embedder = BgeCodeEmbedder()
                 new_idx = FunctionEmbeddingIndex(new_idb + ".embeddings.db", embedder)
                 old_idx = FunctionEmbeddingIndex(old_idb + ".embeddings.db", embedder)
@@ -242,6 +253,14 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             sid, err = self._require_session_sid(args)
             if err:
                 return err
+            # The declarative mutators (rename/duplicate/archive/unarchive/
+            # tag/untag/add_note/clear_notes) must never act on a session the
+            # caller does not own. _require_owned_session_id rejects a live
+            # foreign session with the FILE_LOCKED envelope and adopts a
+            # session nobody is running, matching every hand-written mutator.
+            owned_err = self._require_owned_session_id(sid)
+            if owned_err:
+                return owned_err
         coerced, cerr = coerce(args)
         if cerr:
             return cerr
@@ -390,7 +409,13 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             # If the runtime for this session is dead, spawn a fresh
             # idat and block until the IDB is on disk. The caller then
             # gets a usable session without extra round-trips.
-            self._ensure_runtime_and_idb(updated)
+            spawn_error = self._ensure_runtime_and_idb(updated)
+            if spawn_error:
+                out["spawn_error"] = spawn_error
+                out["note"] = (
+                    "IDA runtime failed to start; safe mode is on until a "
+                    "runtime can be spawned. See spawn_error."
+                )
             out["idb_exists"] = bool(
                 updated.idb_path and os.path.isfile(updated.idb_path)
             )
@@ -484,7 +509,13 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
 
         # Spawn idat and wait for the IDB so the caller gets a usable
         # session on the first call.
-        self._ensure_runtime_and_idb(self.current_session)
+        spawn_error = self._ensure_runtime_and_idb(self.current_session)
+        if spawn_error:
+            out["spawn_error"] = spawn_error
+            out["note"] = (
+                "IDA runtime failed to start; safe mode is on until a "
+                "runtime can be spawned. See spawn_error."
+            )
         out["idb_exists"] = bool(
             self.current_session.idb_path
             and os.path.isfile(self.current_session.idb_path)
@@ -818,6 +849,20 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
     # pending state.
     # ------------------------------------------------------------------
 
+    def _analysis_state_lock(self) -> threading.RLock:
+        """Reentrant lock guarding the safe-mode bookkeeping collections.
+
+        These sets/dicts are mutated from request threads (create/switch/
+        rebuild/status) and watcher threads (_watch_analysis_completion)
+        concurrently. A check-then-act init (``if not isinstance(pending,
+        set): self._pending_analysis = set()``) without a lock can orphan one
+        thread's fresh set and silently lose a session's pending marker, which
+        would let full-binary analysis run on a half-analyzed IDB. Following
+        the convention already used by ``_get_cached_coverage``, every
+        mutation of this state takes the lock.
+        """
+        return _ANALYSIS_STATE_LOCK
+
     def _safe_mode_active(self, sid: str) -> bool:
         """True while *sid*'s IDA auto-analysis is still completing."""
         pending = getattr(self, "_pending_analysis", None)
@@ -831,66 +876,73 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
     def _mark_analysis_pending(self, session) -> None:
         """Enter safe mode for *session* and start watching for completion."""
         sid = session.session_id
-        pending = getattr(self, "_pending_analysis", None)
-        if not isinstance(pending, set):
-            self._pending_analysis = set()
-            pending = self._pending_analysis
-        pending.add(sid)
-        complete = getattr(self, "_analysis_complete_sessions", None)
-        if isinstance(complete, set):
-            complete.discard(sid)
-        if not getattr(session, "idb_on_disk", lambda: False)():
-            no_idb = getattr(self, "_analysis_pending_no_idb", None)
-            if not isinstance(no_idb, set):
-                self._analysis_pending_no_idb = set()
-                no_idb = self._analysis_pending_no_idb
-            no_idb.add(sid)
+        with self._analysis_state_lock():
+            pending = getattr(self, "_pending_analysis", None)
+            if not isinstance(pending, set):
+                self._pending_analysis = set()
+                pending = self._pending_analysis
+            pending.add(sid)
+            complete = getattr(self, "_analysis_complete_sessions", None)
+            if isinstance(complete, set):
+                complete.discard(sid)
+            if not getattr(session, "idb_on_disk", lambda: False)():
+                no_idb = getattr(self, "_analysis_pending_no_idb", None)
+                if not isinstance(no_idb, set):
+                    self._analysis_pending_no_idb = set()
+                    no_idb = self._analysis_pending_no_idb
+                no_idb.add(sid)
         self._spawn_analysis_watcher(sid)
 
     def _mark_analysis_complete(self, session) -> None:
         """Lift safe mode for *session* and remember it as confirmed."""
         sid = session.session_id
-        pending = getattr(self, "_pending_analysis", None)
-        if isinstance(pending, set):
-            pending.discard(sid)
-        complete = getattr(self, "_analysis_complete_sessions", None)
-        if not isinstance(complete, set):
-            self._analysis_complete_sessions = set()
-            complete = self._analysis_complete_sessions
-        complete.add(sid)
+        with self._analysis_state_lock():
+            pending = getattr(self, "_pending_analysis", None)
+            if isinstance(pending, set):
+                pending.discard(sid)
+            complete = getattr(self, "_analysis_complete_sessions", None)
+            if not isinstance(complete, set):
+                self._analysis_complete_sessions = set()
+                complete = self._analysis_complete_sessions
+            complete.add(sid)
 
     def _forget_analysis_state(self, sid: str) -> None:
         """Drop safe-mode tracking when a session is closed or killed."""
-        for attr in (
-            "_pending_analysis",
-            "_analysis_complete_sessions",
-            "_analysis_pending_no_idb",
-            "_reloading_sessions",
-        ):
-            coll = getattr(self, attr, None)
-            if isinstance(coll, set):
-                coll.discard(sid)
-            elif isinstance(coll, dict):
-                coll.pop(sid, None)
-        bg_loads = getattr(self, "_background_loads", None)
-        if isinstance(bg_loads, dict):
-            bg_loads.pop(sid, None)
-        notices = getattr(self, "_pending_session_notices", None)
-        if isinstance(notices, dict):
-            notices.pop(sid, None)
-        watchers = getattr(self, "_analysis_watchers", None)
-        if isinstance(watchers, set):
-            watchers.discard(sid)
+        with self._analysis_state_lock():
+            for attr in (
+                "_pending_analysis",
+                "_analysis_complete_sessions",
+                "_analysis_pending_no_idb",
+                "_reloading_sessions",
+            ):
+                coll = getattr(self, attr, None)
+                if isinstance(coll, set):
+                    coll.discard(sid)
+                elif isinstance(coll, dict):
+                    coll.pop(sid, None)
+            bg_loads = getattr(self, "_background_loads", None)
+            if isinstance(bg_loads, dict):
+                bg_loads.pop(sid, None)
+            notices = getattr(self, "_pending_session_notices", None)
+            if isinstance(notices, dict):
+                notices.pop(sid, None)
+            watchers = getattr(self, "_analysis_watchers", None)
+            if isinstance(watchers, set):
+                watchers.discard(sid)
+            bg_errors = getattr(self, "_background_load_errors", None)
+            if isinstance(bg_errors, dict):
+                bg_errors.pop(sid, None)
 
     def _spawn_analysis_watcher(self, sid: str) -> None:
         """Start the single analysis-completion watcher for *sid*."""
-        watchers = getattr(self, "_analysis_watchers", None)
-        if not isinstance(watchers, set):
-            self._analysis_watchers = set()
-            watchers = self._analysis_watchers
-        if sid in watchers:
-            return
-        watchers.add(sid)
+        with self._analysis_state_lock():
+            watchers = getattr(self, "_analysis_watchers", None)
+            if not isinstance(watchers, set):
+                self._analysis_watchers = set()
+                watchers = self._analysis_watchers
+            if sid in watchers:
+                return
+            watchers.add(sid)
         threading.Thread(
             target=self._watch_analysis_completion,
             args=(sid,),
@@ -1078,7 +1130,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
 
         def _run():
             try:
-                self._ensure_runtime_and_idb(session)
+                err = self._ensure_runtime_and_idb(session)
+                if isinstance(err, dict) and err.get("error"):
+                    self._background_load_errors[session.session_id] = err
             except Exception as exc:  # pragma: no cover - exercised at runtime
                 self._background_load_errors[session.session_id] = make_error(
                     MCPError.IDA_CRASHED,
@@ -1235,6 +1289,14 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 f"Session '{sid}' not found",
                 hint="Use ida_session_list to see available sessions.",
             )
+        # A session's record carries notes, tags, metadata and launch options:
+        # on a multiplexed connection another client's live session must never
+        # be readable through get (search_notes applies the same rule). The
+        # guard adopts a session nobody is running and rejects a live foreign
+        # one with the FILE_LOCKED envelope.
+        ownership_error = self._ensure_client_owns_session(session)
+        if ownership_error:
+            return ownership_error
         runtime = self.session_runtimes.get(sid)
         is_running = bool(
             runtime
@@ -1276,7 +1338,14 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         # alive) instead of an opaque locked flag.
         session_dicts = []
         for d in result["sessions"]:
-            runtime = self.session_runtimes.get(d["session_id"])
+            sid = d["session_id"]
+            # Same visibility rule search_notes documents: only sessions this
+            # client owns, or that no live owner is running, are returned.
+            # Enumerating a peer's full record (notes, tags, ida_args,
+            # analysis_options) through list would defeat the isolation model.
+            if not self._client_owns_session(sid) and self._session_is_busy(sid):
+                continue
+            runtime = self.session_runtimes.get(sid)
             d["is_running"] = bool(
                 runtime
                 and runtime.get("process")
@@ -1373,7 +1442,6 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         if ownership_error:
             return ownership_error
 
-        self.current_session = session
         new_idb = getattr(session, "idb_path", None)
         if old_idb and new_idb and old_idb != new_idb:
             self._trigger_session_diff(old_idb, new_idb)
@@ -1384,6 +1452,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         should_spawn = (
             reopen or not runtime_alive
         ) and os.path.isfile(getattr(session, "binary_path", "") or "")
+        spawn_failed = False
         if should_spawn and hasattr(self, "_start_server"):
             # A fresh idat runs auto-analysis from the moment it spawns; re-enter
             # safe mode so full-binary operations stay gated until a live
@@ -1406,13 +1475,22 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                             runtime_alive = bool(runtime) and bool(self._runtime_alive(runtime))
                 else:
                     # Surface the failure but keep the switch logically valid.
+                    spawn_failed = True
                     self._last_spawn_error = start_res
             except Exception as exc:  # pragma: no cover - exercised only at runtime
+                spawn_failed = True
                 self._last_spawn_error = make_error(
                     MCPError.IDA_CRASHED,
                     f"Runtime spawn failed: {exc}",
                     details={"exception_type": type(exc).__name__},
                 )
+
+        # Make the target the active session only once the spawn is confirmed
+        # (or no spawn was needed). A failed spawn leaves a dead-runtime
+        # session: promoting it to active would make status keep serving a
+        # stale target with safe mode stuck on.
+        if not spawn_failed:
+            self.current_session = session
 
         runtime_attached = runtime_alive
         response = {
@@ -1436,14 +1514,16 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             self._last_spawn_error = None
         return response
 
-    def _ensure_runtime_and_idb(self, session: Any, timeout: float = 120.0) -> None:
+    def _ensure_runtime_and_idb(self, session: Any, timeout: float = 120.0) -> dict | None:
         """Spawn idat for *session* if its runtime is dead and wait for the IDB.
 
         Used by the reuse path so a session restored from disk without a
-        live runtime is immediately usable. No-op if the runtime is already
-        attached and the IDB exists."""
+        live runtime is immediately usable. Returns ``None`` when the runtime
+        is (or became) usable. Returns an error envelope when the spawn
+        fails, so a blocking create call can distinguish a failed spawn from
+        'still starting' instead of reporting a silent partial failure."""
         if not hasattr(self, "_start_server") or not hasattr(self, "session_runtimes"):
-            return
+            return None
         sid = session.session_id
         runtime = self.session_runtimes.get(sid)
         if runtime and self._runtime_alive(runtime):
@@ -1451,16 +1531,24 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             idb_path = getattr(session, "idb_path", None)
             if idb_path and not os.path.isfile(idb_path):
                 self._wait_for_idb(session, timeout=timeout)
-            return
+            return None
         # Runtime is dead or missing — spawn a replacement
         try:
             start_res = self._start_server(session)
-            if isinstance(start_res, dict) and "error" not in start_res:
-                runtime = self.session_runtimes.get(sid)
-                if runtime and self._runtime_alive(runtime):
-                    self._wait_for_idb(session, timeout=timeout)
-        except Exception:
-            pass  # Surface via the caller's spawn_error if needed
+        except Exception as exc:
+            return make_error(
+                MCPError.IDA_CRASHED,
+                f"IDA runtime start failed: {exc}",
+                details={"session_id": sid, "exception_type": type(exc).__name__},
+            )
+        if isinstance(start_res, dict) and "error" in start_res:
+            result = dict(start_res)
+            result.setdefault("session_id", sid)
+            return result
+        runtime = self.session_runtimes.get(sid)
+        if runtime and self._runtime_alive(runtime):
+            self._wait_for_idb(session, timeout=timeout)
+        return None
 
     def _wait_for_idb(self, session: Any, timeout: float = 120.0) -> bool:
         """Block until the IDB for *session* is written to disk.
@@ -1935,12 +2023,17 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
 
     def _session_action_logs(self, args: dict) -> dict:
         """Return recent IDA log lines — reads the -L log file directly, no IDA RPC."""
-        session = self.current_session
+        # Honor explicit session_id/idb targeting (and its ownership guard)
+        # instead of always reading the shared active session's logs, so a
+        # caller asking for session X's logs never silently gets session Y's.
+        session, target_error = self._session_target(args)
+        if target_error:
+            return target_error
         if not session:
             return make_error(MCPError.SESSION_REQUIRED, "No active session.")
         runtime = self.session_runtimes.get(session.session_id) if hasattr(self, "session_runtimes") else None
         if not isinstance(runtime, dict):
-            return make_error(MCPError.IDA_ERROR, "No runtime record for current session.")
+            return make_error(MCPError.IDA_ERROR, "No runtime record for the target session.")
         try:
             lines = int(args.get("lines") or args.get("tail") or 80)
         except Exception:
@@ -2222,7 +2315,16 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
 
         start_res = self._start_server(session)
         if "error" in start_res:
-            return start_res
+            # The IDB was already deleted and the runtime torn down. Re-enter
+            # pending so safe mode gates the session until a later spawn
+            # restores the database; otherwise a subsequent operation sees a
+            # session with no IDB on disk and no gate at all.
+            self._mark_analysis_pending(session)
+            response = dict(start_res)
+            response["session_id"] = session.session_id
+            response["safe_mode"] = True
+            response["analysis_complete"] = False
+            return response
         self.current_session = session
         # A rebuild deletes the IDB and re-runs auto-analysis: the session
         # re-enters safe mode and the watcher lifts it when the rebuild
@@ -2245,21 +2347,51 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             return sid_err
         if not sid:
             return make_error(MCPError.INVALID_ARGS, "session_id required")
-        update_kwargs = {
-            k: v for k, v in args.items() if k not in ("action", "session_id")
-        }
-        if "tags" in update_kwargs and isinstance(update_kwargs["tags"], str):
-            update_kwargs["tags"] = [
-                t.strip() for t in update_kwargs["tags"].split(",") if t.strip()
-            ]
-        if "notes" in update_kwargs:
-            update_kwargs["notes"] = str(update_kwargs.get("notes", ""))[
-                :MAX_NOTE_LEN
-            ]
-        if "auto_name" in update_kwargs:
+        owned_err = self._require_owned_session_id(sid)
+        if owned_err:
+            return owned_err
+        # Whitelist the fields a caller may rewrite. update_session does a
+        # blind setattr of any Session attribute, so forwarding arbitrary keys
+        # would let one agent repoint a peer session's idb_path/binary_path or
+        # inject metadata/ida_args that later session-actions trust. Reject
+        # anything else instead of silently ignoring it.
+        _UPDATE_FIELDS = ("tags", "notes", "auto_name", "name", "phase")
+        unknown = [
+            k for k in args
+            if k not in ("action", "session_id") and k not in _UPDATE_FIELDS
+        ]
+        if unknown:
+            return make_error(
+                MCPError.INVALID_ARGS,
+                f"Unsupported session update field(s): {', '.join(sorted(unknown))}",
+                details={
+                    "allowed": sorted(_UPDATE_FIELDS),
+                    "hint": "update supports tags, notes, auto_name (or name), and phase.",
+                },
+            )
+        update_kwargs = {}
+        if "tags" in args:
+            raw_tags = args.get("tags")
+            if isinstance(raw_tags, str):
+                update_kwargs["tags"] = [
+                    t.strip() for t in raw_tags.split(",") if t.strip()
+                ]
+            else:
+                update_kwargs["tags"] = raw_tags
+        if "notes" in args:
+            update_kwargs["notes"] = str(args.get("notes", ""))[:MAX_NOTE_LEN]
+        if "auto_name" in args:
             update_kwargs["auto_name"] = str(
-                update_kwargs.get("auto_name", "")
+                args.get("auto_name", "")
             ).strip()[:MAX_NAME_LEN]
+        elif "name" in args:
+            update_kwargs["auto_name"] = str(
+                args.get("name", "")
+            ).strip()[:MAX_NAME_LEN]
+        if "phase" in args:
+            update_kwargs["phase"] = str(args.get("phase", "")).strip()[:MAX_NAME_LEN]
+        if not update_kwargs:
+            return make_error(MCPError.INVALID_ARGS, "No updatable field provided")
         result = self.session_mgr.update_session(sid, **update_kwargs)
         if result is None:
             return make_error(
@@ -2270,12 +2402,15 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             "session": result.to_dict(),
         }
 
-    # rename, duplicate, archive, unarchive, tag, untag, find_by_tag, add_note,
-    # clear_notes, search_notes, recent, oldest, suggest_strategy,
-    # get_activity_log, notebook_append/read/section, list_hypotheses,
-    # dashboard, get_phase, advance_phase, link_session,
-    # cross_reference_sessions, list_snapshots: declarative — see
-    # _SESSION_ACTIONS + _run_session_spec.
+    # Declarative session actions (rename, duplicate, archive, unarchive, tag,
+    # untag, add_note, clear_notes) are dispatched through _SESSION_ACTIONS +
+    # _run_session_spec; search_notes, snapshot and restore_snapshot are bespoke
+    # methods also registered there. The other _session_action_* handlers below
+    # (discover, export_session, import_session, stats, narrative, validate,
+    # bulk_delete, bulk_tag, merge, analogy, hypothesis tracking, macros,
+    # recent_workset) are NOT registered in _SESSION_ACTIONS, so they are
+    # unreachable through the public session tool and kept only for internal
+    # callers/tests.
 
     def _session_action_export_session(self, args: dict) -> dict:
         sid, sid_err = self._require_session_sid(args)
@@ -2314,12 +2449,47 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         max_age = _bounded_int(
             args.get("max_age_days", 30), 30, min_value=1, max_value=3650
         )
-        deleted = self.session_mgr.cleanup_stale(
-            max_age_days=max_age,
-            runtime_alive=lambda sid: bool(
-                self.session_runtimes.get(sid) and self._runtime_alive(self.session_runtimes.get(sid))
-            ),
-        )
+        # Age-stale deletion must honor the same ownership rule the orphan
+        # sub-path below applies: never delete another client's session
+        # (multiplexed connections enforce subagent isolation). The manager's
+        # cleanup_stale deletes wholesale with no per-sid ownership filter, so
+        # iterate the visible rows here and delete one at a time. Live
+        # runtimes are skipped, matching the manager's runtime_alive filter.
+        now_epoch = datetime.now().timestamp()
+        cutoff_epoch = now_epoch - max_age * 86400
+        deleted: list[str] = []
+        for raw in self.session_mgr.list_sessions(offset=0, limit=10_000).get("sessions", []):
+            sid = _normalize_session_id(raw.get("session_id") or "")
+            if not sid:
+                continue
+            # Adoption semantics match the orphan branch: unbusy sessions are
+            # adoptable, live foreign sessions are rejected as locked.
+            if self._require_owned_session_id(sid):
+                continue
+            last_accessed = raw.get("last_accessed")
+            if not last_accessed:
+                continue
+            try:
+                last_used_epoch = datetime.fromisoformat(
+                    last_accessed.replace("Z", "+00:00")
+                ).timestamp()
+            except Exception:
+                continue
+            if last_used_epoch >= cutoff_epoch:
+                continue
+            runtime = self.session_runtimes.get(sid)
+            if runtime and self._runtime_alive(runtime):
+                continue
+            with contextlib.suppress(Exception):
+                self._cleanup_runtime(sid)
+            if self.session_mgr.delete_session(sid):
+                deleted.append(sid)
+                self._forget_analysis_state(sid)
+                if (
+                    self.current_session
+                    and self.current_session.session_id == sid
+                ):
+                    self.current_session = None
 
         # Also prune sessions whose binary path no longer exists — those
         # are "stale-by-evidence" rather than age-stale, and they're usually
@@ -2467,6 +2637,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 )
             deleted = self.session_mgr.delete_session(sid)
             if deleted:
+                self._forget_analysis_state(sid)
                 if (
                     self.current_session
                     and self.current_session.session_id == sid
@@ -2494,6 +2665,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                             self._cleanup_runtime(sid)
                         if self.session_mgr.delete_session(sid):
                             orphan_sids.append(sid)
+                            self._forget_analysis_state(sid)
                             self._drop_sid_from_groups(sid)
                     except Exception:
                         continue
@@ -2602,8 +2774,10 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             and self.current_session.session_id in cleaned_sids
         ):
             self.current_session = None
-        # Keep multi-session groups consistent with the deletions.
+        # Drop safe-mode bookkeeping and keep multi-session groups consistent
+        # with the deletions.
         for sid in cleaned_sids:
+            self._forget_analysis_state(sid)
             self._drop_sid_from_groups(sid)
         return {"ok": True, "results": results}
 
@@ -2639,6 +2813,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
+        owned_err = self._require_owned_session_id(sid)
+        if owned_err:
+            return owned_err
         snapshot_res = self.session_mgr.snapshot_session(sid)
         if snapshot_res is None:
             return make_error(
@@ -2650,6 +2827,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
+        owned_err = self._require_owned_session_id(sid)
+        if owned_err:
+            return owned_err
         snapshot_id = args.get("snapshot_id")
         if not snapshot_id:
             return make_error(MCPError.INVALID_ARGS, "snapshot_id required")
@@ -2675,6 +2855,17 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 MCPError.INVALID_ARGS,
                 "session_id (or target_id) and source_id required",
             )
+        if sid1 == sid2:
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "target and source must be different sessions",
+            )
+        # Merging pulls the source's notes/tags/analysis into the target's
+        # record, so both sides must be owned by the caller.
+        for sid in (sid1, sid2):
+            owned_err = self._require_owned_session_id(sid)
+            if owned_err:
+                return owned_err
         result = self.session_mgr.merge_sessions(sid1, sid2)
         if result is None:
             return make_error(
@@ -2686,6 +2877,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
+        owned_err = self._require_owned_session_id(sid)
+        if owned_err:
+            return owned_err
         skill_id = str(args.get("skill_id") or "").strip()
         if not skill_id:
             return make_error(MCPError.INVALID_ARGS, "skill_id required")
@@ -2700,6 +2894,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
+        owned_err = self._require_owned_session_id(sid)
+        if owned_err:
+            return owned_err
         min_q = args.get("min_q", 0.0)
         try:
             min_q = float(min_q)
@@ -2716,6 +2913,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
+        owned_err = self._require_owned_session_id(sid)
+        if owned_err:
+            return owned_err
         context = args.get("context")
         if context is not None:
             context = str(context)
@@ -2733,6 +2933,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
+        owned_err = self._require_owned_session_id(sid)
+        if owned_err:
+            return owned_err
         context = args.get("context")
         if context is not None:
             context = str(context)
@@ -2742,12 +2945,18 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
+        owned_err = self._require_owned_session_id(sid)
+        if owned_err:
+            return owned_err
         return self.session_mgr.get_phase(sid)
 
     def _session_action_dashboard(self, args: dict) -> dict:
         sid, sid_err = self._require_session_sid(args)
         if sid_err:
             return sid_err
+        owned_err = self._require_owned_session_id(sid)
+        if owned_err:
+            return owned_err
         return self.session_mgr.dashboard(sid)
 
     def _session_action_suggest_analogy(self, args: dict) -> dict:

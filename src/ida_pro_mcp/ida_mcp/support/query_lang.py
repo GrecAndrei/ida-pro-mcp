@@ -292,6 +292,28 @@ class QueryExecutor:
         if not isinstance(result, dict) or "functions" not in result:
             return make_error("QUERY_ERROR", "Failed to fetch functions")
         funcs = result["functions"]
+        if isinstance(funcs, str):
+            # The data tool returns one compact line per function; fold them
+            # into dicts so conditions can match on addr/size/xrefs_to/name.
+            items = []
+            for line in funcs.splitlines():
+                entry = {"text": line}
+                parts = line.split()
+                if parts:
+                    entry["addr"] = parts[0]
+                for part in parts[1:]:
+                    if part.startswith("xrefs="):
+                        entry["xrefs_to"] = part[len("xrefs="):]
+                    elif part.startswith("xrefs_from="):
+                        entry["xrefs_from"] = part[len("xrefs_from="):]
+                if len(parts) > 1:
+                    entry["size"] = parts[1]
+                if len(parts) > 3:
+                    entry["name"] = parts[3]
+                items.append(entry)
+            funcs = items
+        elif not isinstance(funcs, list):
+            funcs = []
         matched = [f for f in funcs if self._match_conditions(f, plan["conditions"])]
         return self._apply_postprocessing(matched, plan)
 
@@ -313,6 +335,28 @@ class QueryExecutor:
         if not isinstance(result, dict):
             return make_error("QUERY_ERROR", "Failed to fetch strings")
         strings = result.get("strings", [])
+        if isinstance(strings, str):
+            # One compact line per string (<addr>  xrefs=N  <content>); fold
+            # into dicts so conditions can match on addr/xrefs_to/text.
+            items = []
+            for line in strings.splitlines():
+                entry = {"text": line}
+                parts = line.split()
+                if parts:
+                    entry["addr"] = parts[0]
+                for part in parts[1:]:
+                    if part.startswith("xrefs="):
+                        entry["xrefs_to"] = part[len("xrefs="):]
+                        break
+                # The string content is everything after the xrefs= token.
+                for idx, part in enumerate(parts[1:]):
+                    if part.startswith("xrefs="):
+                        entry["text"] = " ".join(parts[idx + 2:])
+                        break
+                items.append(entry)
+            strings = items
+        elif not isinstance(strings, list):
+            strings = []
         matched = [s for s in strings if self._match_conditions(s, plan["conditions"])]
         return self._apply_postprocessing(matched, plan)
 
@@ -321,6 +365,23 @@ class QueryExecutor:
         if not isinstance(result, dict):
             return make_error("QUERY_ERROR", "Failed to fetch imports")
         imports = result.get("imports", [])
+        if isinstance(imports, str):
+            # One compact line per import (<addr>  <module>  <name>); fold into
+            # dicts so conditions can match on addr/module/name.
+            items = []
+            for line in imports.splitlines():
+                entry = {"text": line}
+                parts = line.split()
+                if parts:
+                    entry["addr"] = parts[0]
+                if len(parts) > 1:
+                    entry["module"] = parts[1]
+                if len(parts) > 2:
+                    entry["name"] = " ".join(parts[2:])
+                items.append(entry)
+            imports = items
+        elif not isinstance(imports, list):
+            imports = []
         matched = [i for i in imports if self._match_conditions(i, plan["conditions"])]
         return self._apply_postprocessing(matched, plan)
 
@@ -354,11 +415,40 @@ class QueryExecutor:
         return self._apply_postprocessing(matched, plan)
 
     def _execute_block(self, plan: Dict) -> Dict:
-        # Basic blocks: via code blocks action
-        result = _call_tool("code", action="blocks", addr="0x0", limit=200)
+        # Basic blocks: via the code blocks action. The identifier is the
+        # function address/name whose CFG to inspect; the tool enumerates the
+        # blocks of one function, not a program-wide scan.
+        identifier = plan["identifier"]
+        if identifier == "*":
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "block target requires a function address or name",
+                hint="MATCH block <func_addr|name> WHERE ...",
+            )
+        result = _call_tool("code", action="blocks", addr=identifier, limit=200)
         if not isinstance(result, dict):
             return make_error("QUERY_ERROR", "Failed to fetch blocks")
+        if result.get("error"):
+            return result
         blocks = result.get("blocks", result.get("results", []))
+        if isinstance(blocks, str):
+            # The code blocks action returns one compact line per block; fold
+            # them into dicts so conditions can match on addr/text/succs/preds.
+            block_items = []
+            for line in blocks.splitlines():
+                entry = {"text": line}
+                parts = line.split()
+                if parts:
+                    entry["addr"] = parts[0]
+                for part in parts[1:]:
+                    if part.startswith("succs="):
+                        entry["succs"] = part[len("succs="):].strip("[]")
+                    elif part.startswith("preds="):
+                        entry["preds"] = part[len("preds="):].strip("[]")
+                block_items.append(entry)
+            blocks = block_items
+        elif not isinstance(blocks, list):
+            blocks = []
         matched = [b for b in blocks if self._match_conditions(b, plan["conditions"])]
         return self._apply_postprocessing(matched, plan)
 

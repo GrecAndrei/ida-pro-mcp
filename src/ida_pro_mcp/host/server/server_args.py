@@ -6,7 +6,6 @@ Extracted from host/server.py so the main JSON-RPC server file is less monolithi
 
 from __future__ import annotations
 
-import contextlib
 import json
 import re
 import shlex
@@ -16,7 +15,7 @@ import uuid
 from typing import Any
 
 from ..config import _coerce_bool
-from ..errors import is_error_result
+from ..errors import MCPError, is_error_result, make_error
 from ..schemas import (
     ACTION_ALIASES_BY_TOOL,
     ACTION_PREFIX_RE,
@@ -169,12 +168,35 @@ class ServerArgsMixin:
                 # Parse as decimal, except explicit 0x/0X hex (addresses like
                 # baseaddr="0x401000"). int(value, 0) would silently reinterpret
                 # a leading-zero numeric string as octal ("010" -> 8, "08" -> ValueError).
-                with contextlib.suppress(Exception):
+                try:
                     text_value = value.strip()
                     if text_value.lower().startswith("0x"):
                         normalized[key] = int(text_value, 16)
                     else:
                         normalized[key] = int(text_value, 10)
+                except (ValueError, TypeError):
+                    # Some schemas explicitly admit string values for a field
+                    # (e.g. session baseaddr/start_ea are typed 'string'|'integer').
+                    # Respect that union and keep the raw string for the tool to
+                    # interpret; otherwise the unparseable value is a caller bug
+                    # and forwarding it to the IDA bridge would fail obscurely —
+                    # surface it instead of silently stripping/ignoring it.
+                    _field_spec = schema.get(key) if isinstance(schema, dict) else None
+                    _field_type = _field_spec.get("type") if isinstance(_field_spec, dict) else None
+                    _allows_str = (
+                        isinstance(_field_type, (list, tuple, set))
+                        and "string" in _field_type
+                    )
+                    if _allows_str:
+                        continue
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        f"Invalid integer for '{key}': {value!r}",
+                        hint=(
+                            f"Expected a decimal integer or 0x-hex value for "
+                            f"'{key}' on tool '{tool_name}'."
+                        ),
+                    )
         # For array-like address fields, gracefully normalize common malformed scalar wrappers.
         if "addrs" in normalized and isinstance(normalized["addrs"], str):
             text = normalized["addrs"].strip()
@@ -276,7 +298,17 @@ class ServerArgsMixin:
             else:
                 out.pop("action", None)
         elif action is not None and valid_actions:
-            out.pop("action", None)
+            # A non-string, non-dict action on a tool with a known action list
+            # is malformed. Silently dropping it would run the tool's default
+            # with no action and hide the caller's mistake — reject it instead,
+            # consistent with the module's "reject unknown, don't silently
+            # strip" rule.
+            preview = ", ".join(str(a) for a in list(valid_actions)[:24])
+            return make_error(
+                MCPError.INVALID_ARGS,
+                f"action must be a string for tool '{tool_name}', got {type(action).__name__}",
+                hint=f"Valid actions: {preview}{'…' if len(valid_actions) > 24 else ''}",
+            )
 
         if "action" not in out and valid_actions:
             for candidate_key in ("subaction",):

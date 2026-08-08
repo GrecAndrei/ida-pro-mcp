@@ -101,7 +101,13 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
                 data = self._load_skills(sid)
                 bootstrap = data.get("bootstrap")
 
-            rounds = max(1, min(int(rounds), 50000))
+            # Bound the work done while holding the SessionManager-wide RLock
+            # (shared by every session on the host): each round scores all 12
+            # policies, so the old 50000-round cap could hold the lock for
+            # seconds, blocking create/close/switch/list/health for other
+            # sessions. 5000 rounds is still ample for the readiness gate
+            # (default min_tournament_rounds=1000).
+            rounds = max(1, min(int(rounds), 5000))
             rng = random.Random(int(seed))
             policies = bootstrap.get("policies") or {}
             if not policies:
@@ -357,33 +363,46 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
                     "executed": [],
                 }
 
+            # Params flow through the persisted mitigation plan returned to the
+            # caller and could come from a hand-edited skills.json or a future
+            # plan edit, so coerce defensively and return an error envelope
+            # rather than raising ValueError out of this action.
+            def _int_param(p: dict, key: str, default: int) -> int:
+                return int(p.get(key, default))
+
             executed = []
             for item in actions:
                 name = str(item.get("action") or "")
                 params = dict(item.get("params") or {})
-                if name == "bootstrap_run_tournament":
-                    out = self.bootstrap_run_tournament(
-                        sid,
-                        rounds=int(params.get("rounds", 800)),
-                        seed=int(params.get("seed", int(time.time()) % 100000)),
+                try:
+                    if name == "bootstrap_run_tournament":
+                        out = self.bootstrap_run_tournament(
+                            sid,
+                            rounds=_int_param(params, "rounds", 800),
+                            seed=_int_param(params, "seed", int(time.time()) % 100000),
+                        )
+                    elif name == "bootstrap_simulate_batch":
+                        out = self.bootstrap_simulate_batch(
+                            sid,
+                            n=_int_param(params, "n", 600),
+                            seed=_int_param(params, "seed", int(time.time()) % 100000),
+                            positive_rate=float(params.get("positive_rate", 0.55)),
+                        )
+                    elif name == "bootstrap_snapshot":
+                        out = self.bootstrap_snapshot(sid, name=str(params.get("name") or "mitigation"))
+                    elif name == "bootstrap_update_baseline":
+                        out = self.bootstrap_update_baseline(
+                            sid,
+                            window=_int_param(params, "window", max(30, window)),
+                            percentile=float(params.get("percentile", 95.0)),
+                        )
+                    else:
+                        out = make_error(MCPError.ACTION_NOT_FOUND, f"Unknown mitigation action {name}")
+                except (TypeError, ValueError) as e:
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        f"Invalid numeric params for mitigation action {name}: {e}",
                     )
-                elif name == "bootstrap_simulate_batch":
-                    out = self.bootstrap_simulate_batch(
-                        sid,
-                        n=int(params.get("n", 600)),
-                        seed=int(params.get("seed", int(time.time()) % 100000)),
-                        positive_rate=float(params.get("positive_rate", 0.55)),
-                    )
-                elif name == "bootstrap_snapshot":
-                    out = self.bootstrap_snapshot(sid, name=str(params.get("name") or "mitigation"))
-                elif name == "bootstrap_update_baseline":
-                    out = self.bootstrap_update_baseline(
-                        sid,
-                        window=int(params.get("window", max(30, window))),
-                        percentile=float(params.get("percentile", 95.0)),
-                    )
-                else:
-                    out = make_error(MCPError.ACTION_NOT_FOUND, f"Unknown mitigation action {name}")
 
                 executed.append(
                     {
@@ -855,7 +874,13 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
             session = self.sessions.get(sid)
             if not session:
                 return make_error(MCPError.SESSION_NOT_FOUND, f"Session {sid} not found")
-            count = max(1, min(int(n), 200000))
+            # Bound the work done while holding the SessionManager-wide RLock
+            # (shared by every session on the host): each outcome updates all
+            # 12 policies' calibration bins, so the old 200000-outcome cap
+            # could hold the lock for tens of seconds, blocking other sessions.
+            # 20000 outcomes is still ample for the readiness gate (default
+            # min_outcomes=200).
+            count = max(1, min(int(n), 20000))
             p = max(0.01, min(0.99, float(positive_rate)))
             rng = random.Random(int(seed))
             brier_sum = 0.0
@@ -956,16 +981,25 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
             status = str(status or "all").strip().lower()
             t_since = None
             t_until = None
+            # A malformed filter must surface as an error, not silently become
+            # "no filter" and return the full history (the opposite of the
+            # caller's intent, and potentially a very large response).
             if since:
                 try:
                     t_since = datetime.fromisoformat(str(since))
-                except Exception:
-                    t_since = None
+                except ValueError:
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        f"since must be an ISO-8601 timestamp (got {since!r})",
+                    )
             if until:
                 try:
                     t_until = datetime.fromisoformat(str(until))
-                except Exception:
-                    t_until = None
+                except ValueError:
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        f"until must be an ISO-8601 timestamp (got {until!r})",
+                    )
 
             def _in_window(ts: str | None) -> bool:
                 if not ts:

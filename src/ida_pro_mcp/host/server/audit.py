@@ -15,7 +15,41 @@ import sys
 import threading
 import time
 from datetime import UTC, datetime
+from itertools import islice
 from typing import Any
+
+# Max container items serialized to compute result_size; larger results are
+# sampled so the byte count never costs a full O(result) serialization.
+_RESULT_SIZE_SAMPLE_CAP = 8192
+
+
+def _sample_value(value: Any) -> Any:
+    """Return a bounded sample of a container for size estimation."""
+    if isinstance(value, dict):
+        return {
+            k: _sample_value(v)
+            for k, v in islice(value.items(), _RESULT_SIZE_SAMPLE_CAP)
+        }
+    if isinstance(value, (list, tuple)):
+        return [_sample_value(v) for v in islice(value, _RESULT_SIZE_SAMPLE_CAP)]
+    return value
+
+
+def _bounded_result_size(result: Any) -> int:
+    """Approximate serialized size of the audit result.
+
+    Small results are measured exactly. Large ones (big disassemblies, raw byte
+    hexdumps, batch members) are sampled so the byte count never costs a full
+    O(result) serialization on the hot path; the value is then a floor.
+    """
+    if result is None:
+        return 0
+    if isinstance(result, (str, bytes)):
+        return len(result)
+    sample = _sample_value(result)
+    with contextlib.suppress(Exception):
+        return len(json.dumps(sample, default=str))
+    return 0
 
 
 class AuditLogger:
@@ -96,35 +130,44 @@ class AuditLogger:
         swallowed so it can never fail the tool call that already produced a
         valid result.
         """
-        with self._lock:
-            try:
-                now = datetime.now(UTC)
-                record: dict[str, Any] = {
-                    "ts": now.isoformat(),
-                    "unix_ms": int(time.time() * 1000),
-                    "session_id": session_id,
-                    "tool": tool,
-                    "action": action,
-                    # Hash args to detect tampering without logging sensitive values
-                    "args_hash": hashlib.sha256(
-                        json.dumps(args, sort_keys=True, default=str).encode()
-                    ).hexdigest()[:16],
-                    "args_keys": sorted(args.keys()) if isinstance(args, dict) else [],
-                    "latency_ms": round(latency_ms, 3),
-                    "guardrail_mode": guardrail_mode,
-                    "guardrail_blocked": guardrail_blocked,
-                    "error": error,
-                    "result_type": type(result).__name__,
-                    "result_size": len(json.dumps(result, default=str)) if result is not None else 0,
+        try:
+            now = datetime.now(UTC)
+            record: dict[str, Any] = {
+                "ts": now.isoformat(),
+                "unix_ms": int(time.time() * 1000),
+                "session_id": session_id,
+                "tool": tool,
+                "action": action,
+                # Hash args to detect tampering without logging sensitive values
+                "args_hash": hashlib.sha256(
+                    json.dumps(args, sort_keys=True, default=str).encode()
+                ).hexdigest()[:16],
+                "args_keys": sorted(args.keys()) if isinstance(args, dict) else [],
+                "latency_ms": round(latency_ms, 3),
+                "guardrail_mode": guardrail_mode,
+                "guardrail_blocked": guardrail_blocked,
+                "error": error,
+                "result_type": type(result).__name__,
+                "result_size": _bounded_result_size(result),
+            }
+            # Include truncated args for non-sensitive tools (no paths, no raw
+            # bytes, no executed source). `idb` carries a full session/IDB path
+            # for host-side tools (wiki/blackboard/session/gadgets), which return
+            # before the dispatcher pops it — it belongs in the no-paths set too.
+            # `code` is the arbitrary script payload for misc python/idc and is
+            # redacted like raw_bytes rather than written to the log in plaintext.
+            if tool not in {"blackboard", "session", "batch"} and isinstance(args, dict):
+                safe_args = {
+                    k: v
+                    for k, v in args.items()
+                    if k not in {"idb", "raw_bytes", "binary_path", "idb_path", "path", "code"}
                 }
-                # Include truncated args for non-sensitive tools (no paths, no raw bytes).
-                # `idb` carries a full session/IDB path for host-side tools
-                # (wiki/blackboard/session/gadgets), which return before the
-                # dispatcher pops it — it belongs in the no-paths set too.
-                if tool not in {"blackboard", "session", "batch"} and isinstance(args, dict):
-                    safe_args = {k: v for k, v in args.items() if k not in {"idb", "raw_bytes", "binary_path", "idb_path", "path"}}
-                    record["args_preview"] = json.dumps(safe_args, default=str)[:500]
+                record["args_preview"] = json.dumps(safe_args, default=str)[:500]
 
+            # Hold the lock only around the file write; building the record (arg
+            # hashing, preview, result-size sampling) is pure computation and
+            # must not serialize other threads' log() calls behind a slow dump.
+            with self._lock:
                 f = self._open_for_date(now)
                 line = json.dumps(record, default=str, ensure_ascii=False) + "\n"
                 f.write(line)
@@ -133,11 +176,11 @@ class AuditLogger:
                 if self._total_written > 1024 * 1024:
                     self._maybe_prune_old()
                     self._total_written = 0
-            except Exception as exc:
-                with contextlib.suppress(Exception):
-                    sys.stderr.write(
-                        f"[ida-pro-mcp] audit log write failed for {tool}/{action}: {exc}\n"
-                    )
+        except Exception as exc:
+            with contextlib.suppress(Exception):
+                sys.stderr.write(
+                    f"[ida-pro-mcp] audit log write failed for {tool}/{action}: {exc}\n"
+                )
 
     def close(self) -> None:
         with self._lock:

@@ -206,21 +206,22 @@ def _invalidate_tool_cache() -> None:
     search response is stale the moment a rebuild commits.  Index-mutating
     actions call this before returning.
     """
-    # Mirror the idaread wrapper's import order exactly (ida_mcp.ida_mcp
-    # first, flat `cache` fallback): the tool-cache singleton the search
-    # tool consults is whichever instance that resolution produced.  Using
-    # a different import path (e.g. ida_pro_mcp.ida_mcp.cache) yields a
-    # second module instance with its own TOOL_CACHE, and invalidation
-    # would silently no-op against the cache the search tool actually
-    # reads.
+    # Resolve the same ToolResultCache singleton @idaread/@idawrite use via
+    # sync._tool_cache — the single canonical resolver (sync.py tries
+    # ida_mcp.ida_mcp.cache -> cache -> ida_pro_mcp.ida_mcp.cache). Importing
+    # via a different path (e.g. a hard-coded ida_pro_mcp.ida_mcp.cache) would
+    # yield a second module instance with its own TOOL_CACHE, and invalidation
+    # would silently no-op against the cache the search tool actually reads.
     try:
-        from ida_mcp.ida_mcp.cache import TOOL_CACHE
+        from ida_pro_mcp.ida_mcp.sync import _tool_cache
     except ImportError:
         try:
-            from cache import TOOL_CACHE
+            from ida_mcp.sync import _tool_cache  # type: ignore[import-not-found]
         except ImportError:
-            return
-    TOOL_CACHE.invalidate_all()
+            from sync import _tool_cache  # type: ignore[import-not-found]
+    _cache = _tool_cache()
+    if _cache is not None:
+        _cache.invalidate_all()
 
 @tool
 @idaread
@@ -935,7 +936,10 @@ def intelligence(
             # call so the agent reads one representative per family, not all N.
             if kwargs.get("mark_examined"):
                 try:
-                    from blackboard import BlackboardStore  # type: ignore
+                    try:
+                        from .blackboard import BlackboardStore
+                    except ImportError:
+                        from blackboard import BlackboardStore  # type: ignore[import-not-found]
                     store = BlackboardStore()
                     verdict = str(kwargs.get("verdict") or "boring")
                     marked = 0
