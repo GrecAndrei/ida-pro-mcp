@@ -93,9 +93,10 @@ class _Harness(ServerArgsMixin, ServerDispatchMixin):
 # ---------------------------------------------------------------------------
 
 
-def test_blackboard_write_without_ack_is_policy_denied():
+def test_blackboard_write_without_ack_is_policy_denied(monkeypatch):
     """blackboard is classified WRITE_IDB; with the exemption removed the
     deterministic preflight must refuse it in assist mode without an ack."""
+    monkeypatch.setenv("IDA_MCP_POLICY_MODE", "assist")
     h = _Harness()
     result = h._execute_tool_inner("blackboard", "blackboard", {"action": "write", "content": "x"})
     assert is_error_result(result)
@@ -113,8 +114,9 @@ def test_blackboard_write_with_ack_reaches_handler():
     assert result.get("handler") == "blackboard"
 
 
-def test_background_script_without_ack_is_policy_denied():
+def test_background_script_without_ack_is_policy_denied(monkeypatch):
     """('background','script') is LOCAL_CODE_EXEC -> REQUIRE_ACK in assist."""
+    monkeypatch.setenv("IDA_MCP_POLICY_MODE", "assist")
     h = _Harness()
     result = h._execute_tool_inner("background", "background", {"action": "script", "code": "1"})
     assert is_error_result(result)
@@ -159,7 +161,7 @@ def test_safe_mode_gate_allows_manual_reads_still():
 def test_next_cache_lock_returns_usable_lock():
     h = _Harness()
     lock = h._next_cache_lock()
-    assert isinstance(lock, threading.Lock)
+    assert isinstance(lock, type(threading.Lock()))
     # Repeated calls return the same per-instance lock.
     assert h._next_cache_lock() is lock
     with lock:

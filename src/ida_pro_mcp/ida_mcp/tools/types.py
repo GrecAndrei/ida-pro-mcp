@@ -1,4 +1,6 @@
 
+from __future__ import annotations
+
 try:
     from ._common import *
 except ImportError:

@@ -61,4 +61,4 @@ class TestConnectionLifecycle:
         assert sid  # sanity: writes succeeded
 
     def test_init_lock_present(self):
-        assert isinstance(SymbolDB._init_lock, __import__("threading").Lock)
+        assert isinstance(SymbolDB._init_lock, type(__import__("threading").Lock()))

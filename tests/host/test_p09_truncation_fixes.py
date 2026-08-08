@@ -48,6 +48,6 @@ class TestNestedFieldContinuation:
     def test_lock_guards_store(self):
         # The lock is module-level; ensure it exists and the store writes
         # hold it so concurrent truncate_response calls cannot tear state.
-        assert isinstance(T._STORE_LOCK, threading.Lock)
+        assert isinstance(T._STORE_LOCK, type(threading.Lock()))
         res = T.truncate_response({"a": [1, 2, 3] * 100}, max_tokens=100)
         assert res.get("_truncated") is True
