@@ -29,6 +29,7 @@ def search_type(pattern, case_sensitive, offset, limit, include_items):
     """Search type library for matching type names and usages."""
     matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
     results = []
+    items = []
     truncated = False
     matches_seen = 0
 
@@ -49,6 +50,11 @@ def search_type(pattern, case_sensitive, offset, limit, include_items):
                             size_str = f"size={size}" if size != idaapi.BADADDR else "size=?"
                             line = f"type_ordinal={idx}  {name}  {size_str}"
                             results.append(line)
+                            items.append({
+                                "ordinal": idx,
+                                "name": name,
+                                "size": size if size != idaapi.BADADDR else None,
+                            })
                             if len(results) >= limit:
                                 truncated = True
                                 break
@@ -71,20 +77,27 @@ def search_type(pattern, case_sensitive, offset, limit, include_items):
                             sym_name = idc.get_name(ea) or ""
                             line = f"{hex(ea)}  type_use:{name}  {sym_name}"
                             results.append(line)
+                            items.append({"addr": hex(ea), "type": name, "name": sym_name})
                             if len(results) >= limit:
                                 truncated = True
                                 break
             except Exception:
                 pass
             ea = idc.next_head(ea, seg_end)
+            if ea == idaapi.BADADDR:
+                break
 
-    return build_response(results, offset, limit, matches_seen, truncated, pattern=pattern)
+    result = build_response(results, offset, limit, matches_seen, truncated, pattern=pattern)
+    if include_items:
+        result["items"] = items
+    return result
 
 
 def search_export(pattern, case_sensitive, offset, limit, include_items):
     """Search exported symbols."""
     matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
     results = []
+    items = []
     truncated = False
     matches_seen = 0
 
@@ -105,13 +118,17 @@ def search_export(pattern, case_sensitive, offset, limit, include_items):
                 if matches_seen > offset:
                     line = f"{hex(ea)}  export_ordinal={ordinal}  {name}"
                     results.append(line)
+                    items.append({"addr": hex(ea), "ordinal": ordinal, "name": name})
                     if len(results) >= limit:
                         truncated = True
                         break
         except Exception:
             pass
 
-    return build_response(results, offset, limit, matches_seen, truncated, pattern=pattern)
+    result = build_response(results, offset, limit, matches_seen, truncated, pattern=pattern)
+    if include_items:
+        result["items"] = items
+    return result
 
 
 def search_summary(pattern, case_sensitive, range_start, range_end):

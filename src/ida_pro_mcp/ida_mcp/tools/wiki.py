@@ -24,12 +24,6 @@ _WIKI_CACHE = OrderedDict()
 _MAX_WIKI_CACHE = 16
 
 
-def _get_wiki_root():
-    _script_dir = os.path.dirname(os.path.abspath(__file__))
-    _repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_script_dir))))
-    return os.path.join(_repo_root, "docs", "wiki")
-
-
 def _read_wiki_file(path):
     """Read a wiki file with caching."""
     real_path = os.path.realpath(path)

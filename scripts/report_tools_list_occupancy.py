@@ -11,13 +11,22 @@ import json
 import sys
 from pathlib import Path
 
-import tiktoken
+try:
+    import tiktoken
+except ImportError:  # not declared in pyproject.toml
+    raise SystemExit("tiktoken is required for this report; install it with: pip install tiktoken") from None
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# ida_mcp_stdio swaps sys.stdout -> sys.stderr at import time so the MCP
+# protocol stream stays isolated. The report's own output must remain on
+# stdout, so capture and restore the original stream around the import.
+_ORIG_STDOUT = sys.stdout
 from ida_mcp_stdio import IDAMCPServer  # noqa: E402
+
+sys.stdout = _ORIG_STDOUT
 
 
 def measure_payload(server: IDAMCPServer, mode: str) -> dict:

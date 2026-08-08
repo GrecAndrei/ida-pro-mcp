@@ -50,17 +50,14 @@ READ_ONLY_TOOLS = {
     "bookmarks",
     "calc",
     "code",
-    "crypto_id",
     "ctree",
     "data",
-    "entropy",
     "firmware_view",
     "graph",
     "idb",
     "imports_deep",
     "intelligence",
     "knowledge",
-    "protocol",
     "search",
     "session",
     "stack_analysis",
@@ -73,10 +70,10 @@ READ_ONLY_TOOLS = {
 
 WRITE_IDB_TOOLS = {
     "annotation",
+    "batch",
     "blackboard",
     "funcs",
     "governance",
-    "hooks",
     "modify",
     "segments",
 }
@@ -107,6 +104,36 @@ DESTRUCTIVE_TOOL_ACTIONS: set[tuple[str, str]] = {
     ("session", "cleanup_stale"),
     ("session", "idle_purge"),
     ("session", "restore_snapshot"),
+}
+
+# (tool, action) pairs that mutate the IDB (or equivalent durable state) but
+# whose tool sits in READ_ONLY_TOOLS and whose action name is not distinctive
+# enough for WRITE_ACTIONS (e.g. load_sig, declare). Without this set these
+# would sail through without ack — yet they genuinely write to the IDB or its
+# symbol database.
+WRITE_TOOL_ACTIONS: set[tuple[str, str]] = {
+    ("analysis", "reanalyze"),
+    ("analysis", "set_architecture"),
+    ("analysis", "set_loader_options"),
+    ("analysis", "set_processor"),
+    ("firmware_view", "auto_retype"),
+    ("firmware_view", "rollback_last"),
+    ("firmware_view", "smart_carve"),
+    ("knowledge", "import_symbols"),
+    ("misc", "load_sig"),
+    ("session", "add_note"),
+    ("session", "archive"),
+    ("session", "clear_notes"),
+    ("session", "duplicate"),
+    ("session", "snapshot"),
+    ("session", "unarchive"),
+    ("session", "untag"),
+    ("symbols", "load_dwarf"),
+    ("symbols", "load_pdb"),
+    ("types", "declare"),
+    ("types", "import_header"),
+    ("types", "propagate"),
+    ("types", "set_prototype"),
 }
 
 WRITE_ACTIONS = {
@@ -147,11 +174,13 @@ LOCAL_CODE_EXEC_ACTIONS = {
     ("misc", "python"),
     ("misc", "idc"),
     ("analysis", "plugin_run"),
-    ("background", "script"),
+    ("misc", "plugin_run"),
 }
 
 FILESYSTEM_WRITE_ACTIONS = {
     ("misc", "write_file"),
+    ("symbols", "export"),
+    ("knowledge", "export_session"),
 }
 
 FILESYSTEM_READ_ACTIONS = {
@@ -181,6 +210,44 @@ READ_ONLY_ACTIONS = {
     ("misc", "plugin_list"),
     ("misc", "health"),
     ("data", "read_bytes"),
+    # Blackboard reads: blackboard is in WRITE_IDB_TOOLS, so without these
+    # explicit overrides every blackboard action would require an ack even
+    # though read/list/search/stats/frontier/next_target only query the store.
+    # decision_card is deliberately NOT here — the host handler writes a new
+    # card via store.write, so it stays WRITE_IDB.
+    ("blackboard", "read"),
+    ("blackboard", "list"),
+    ("blackboard", "search"),
+    ("blackboard", "stats"),
+    ("blackboard", "frontier"),
+    ("blackboard", "next_target"),
+    ("blackboard", "coverage"),
+    ("search", "comment"),
+    ("gadgets", "rop"),
+    ("gadgets", "jop"),
+    ("gadgets", "cop"),
+    ("gadgets", "syscall"),
+    ("gadgets", "write_what_where"),
+    ("gadgets", "stack_pivot"),
+    ("gadgets", "shellcode_space"),
+    ("gadgets", "mitigations"),
+    ("gadgets", "seh_handlers"),
+    ("gadgets", "pivot_chains"),
+    ("gadgets", "classify_chain"),
+    ("memory", "read"),
+    ("memory", "hexdump"),
+    ("memory", "search"),
+    ("memory", "compare"),
+    ("memory", "pointers"),
+    ("memory", "entropy"),
+    ("memory", "strings"),
+    ("memory", "struct_walk"),
+    ("memory", "histogram"),
+    ("multi_session", "group_list"),
+    ("multi_session", "cross_resolve"),
+    ("multi_session", "cross_decompile"),
+    ("multi_session", "cross_xrefs"),
+    ("multi_session", "status"),
 }
 
 
@@ -296,6 +363,8 @@ def classify_tool_action(tool: Any, action: Any) -> RiskTier:
         return RiskTier.DESTRUCTIVE
     if pair in DESTRUCTIVE_TOOL_ACTIONS:
         return RiskTier.DESTRUCTIVE
+    if pair in WRITE_TOOL_ACTIONS:
+        return RiskTier.WRITE_IDB
     if pair in READ_ONLY_ACTIONS:
         return RiskTier.READ
     if tool_name in WRITE_IDB_TOOLS or action_name in WRITE_ACTIONS:
@@ -339,9 +408,11 @@ def evaluate_policy(
     normalized_purpose = normalize_name(purpose) or None
 
     if policy_mode == PolicyMode.OFF:
+        # OFF still reports the real risk tier so the audit trail reflects what
+        # the action would have been — only the gate itself is bypassed.
         return PolicyResult(
             decision=PolicyDecision.ALLOW,
-            risk=RiskTier.READ,
+            risk=classify_tool_action(tool_name, action_name),
             tool=tool_name,
             action=action_name,
             mode=policy_mode,
@@ -364,6 +435,7 @@ def evaluate_policy(
     requires_ack = risk in {
         RiskTier.WRITE_IDB,
         RiskTier.DESTRUCTIVE,
+        RiskTier.FILESYSTEM_READ,
         RiskTier.FILESYSTEM_WRITE,
         RiskTier.LOCAL_CODE_EXEC,
         RiskTier.DEBUGGER,

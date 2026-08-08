@@ -31,12 +31,19 @@ import select
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Any
 
-VENV_PY = "/home/alex/.local/share/ida-pro-mcp/.venv/bin/python"
+# Machine install paths. Override with IDA_MCP_VENV_PY / IDADIR so the scripts
+# stay runnable on other boxes; the defaults match this dev machine.
+VENV_PY = os.environ.get("IDA_MCP_VENV_PY", "/home/alex/.local/share/ida-pro-mcp/.venv/bin/python")
 HOST_MODULE = "ida_pro_mcp.host.server"
-DEFAULT_BINARY = "/home/alex/ida-pro-mcp/tests/data/test_binary.exe"
 DEFAULT_TIMEOUT = 120
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# No test-fixture binary ships in the repo, so the default cannot point at one.
+# Pass --binary to select a target; the FATAL check in main() enforces it.
+DEFAULT_BINARY: str | None = None
 
 # Replicate the env Claude Code uses to launch the host, plus test-friendly
 # disables. IDA_MCP_RESPONSE_ENRICH intentionally unset (default off) so
@@ -59,6 +66,13 @@ BASE_ENV = {
 # Curated to be read-only / light / fast. _risk_ack=true bypasses the policy
 # REQUIRE_ACK gate (server_dispatch.py:952) so we exercise the real in-IDA path,
 # not the ack-reject path. Chosen actions are non-destructive, so acking is safe.
+#
+# NOTE: the loop below only iterates the tools that tools/list advertises
+# (schemas_data.ADVERTISED_TOOLS: session, analysis, code, funcs, search, data,
+# modify, types, memory, segments, idb, misc, intelligence, blackboard, graph,
+# batch, truncation). Entries here for non-advertised tools (abi, agent,
+# binary_info, ...) are documentation of the wider callable surface and are
+# never exercised by this smoke.
 CURATED: dict[str, tuple[str, dict]] = {
     "abi":            ("detect",        {"addr": "__ADDR__"}),
     "agent":          ("search_all",    {"query": "zzzznomatchxyz", "max_items": 1}),
@@ -84,7 +98,7 @@ CURATED: dict[str, tuple[str, dict]] = {
     "funcs":          ("info",          {"addr": "__ADDR__"}),
     "gadgets":        ("mitigations",   {}),
     "governance":     ("list_rules",    {}),
-    "graph":          ("hub_functions", {}),
+    "graph":          ("callgraph",     {"addr": "__ADDR__"}),
     "history":        ("list",          {}),
     "hooks":          ("suggest",       {"addr": "__ADDR__"}),
     "idb":            ("summary",       {}),
@@ -117,14 +131,6 @@ CURATED: dict[str, tuple[str, dict]] = {
     "workflow":       ("catalog",       {}),
 }
 
-# Tools whose only meaningful actions are lifecycle/meta and would corrupt the
-# run if actually executed (close/delete/kill/restore/patch). We still call them
-# but with a deliberately-benign action so they return a clean error, never run.
-META_FORCE_CLEAN: dict[str, tuple[str, dict]] = {
-    # session: "list" is in CURATED already (read-only).
-    "history": ("list", {}),  # already read; keep
-}
-
 SKIP_TOOLS: set[str] = set()  # nothing skipped by default
 
 
@@ -143,7 +149,7 @@ class MCPClient:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
-            cwd="/home/alex/ida-pro-mcp",
+            cwd=str(REPO_ROOT),
             bufsize=0,
         )
         self._id = 0
@@ -163,7 +169,8 @@ class MCPClient:
             self.proc = None
 
     def _readline_timeout(self, timeout: float) -> bytes | None:
-        assert self.proc is not None and self.proc.stdout is not None
+        assert self.proc is not None, "MCPClient.proc is None (call start() first)"
+        assert self.proc.stdout is not None, "MCPClient.proc.stdout is None"
         fd = self.proc.stdout.fileno()
         deadline = time.time() + timeout
         while True:
@@ -184,7 +191,8 @@ class MCPClient:
     def call(self, method: str, params: dict | None = None) -> dict | None:
         """Send one JSON-RPC request, return the matching response (id-matched,
         skipping interleaved notifications / late/mismatched lines)."""
-        assert self.proc is not None and self.proc.stdin is not None
+        assert self.proc is not None, "MCPClient.proc is None (call start() first)"
+        assert self.proc.stdin is not None, "MCPClient.proc.stdin is None"
         self._id += 1
         rid = self._id
         req: dict[str, Any] = {"jsonrpc": "2.0", "id": rid, "method": method}
@@ -353,13 +361,16 @@ def fallback_args(schema: dict, addr: str) -> dict:
 def main() -> int:
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("--binary", default=DEFAULT_BINARY)
+    ap.add_argument("--binary", default=None, help="Path to a binary to analyze (required; no fixture ships in the repo)")
     ap.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     ap.add_argument("--only", help="comma-separated tool names to run")
     args_cli = ap.parse_args()
 
     if not os.path.isfile(VENV_PY):
         print(f"FATAL: venv python not found: {VENV_PY}", file=sys.stderr)
+        return 2
+    if not args_cli.binary:
+        print("FATAL: --binary is required (no test-fixture binary ships in the repo).", file=sys.stderr)
         return 2
     if not os.path.isfile(args_cli.binary):
         print(f"FATAL: binary not found: {args_cli.binary}", file=sys.stderr)

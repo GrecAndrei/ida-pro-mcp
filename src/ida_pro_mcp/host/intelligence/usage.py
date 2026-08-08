@@ -19,8 +19,9 @@ unvalidated.
 Usage:
     ui = UsageIntelligence(audit_dir, notify_fn)
     ui.start()
-    ui.observe(tool, action, session_id, latency_ms, error, addr)
-    ui.session_drift_report(session_id)    -> dict
+    ui.observe(tool, action, session_id, latency_ms=..., error=..., addr=...)
+    ui.session_report(session_id)    -> dict
+    ui.is_running()                  -> bool
 """
 from __future__ import annotations
 
@@ -40,7 +41,8 @@ class DriftDetector:
     - ANALYZE_WITHOUT_RECORD: many decompile/disasm calls, few blackboard writes
     - SAME_ADDR: same address analyzed multiple times
     - HIGH_ERROR_RATE: >30% of recent calls returning errors
-    - LATENCY_SPIKE: sudden increase in average latency
+    (latencies are collected for the per-session report average; a dedicated
+    LATENCY_SPIKE detector is intentionally not emitted.)
     """
 
     ANALYSIS_TOOLS = {"code", "search", "graph", "deobfuscate"}
@@ -48,7 +50,9 @@ class DriftDetector:
 
     def __init__(self, window: int = 20):
         self._window = window
-        self._recent: collections.deque = collections.deque(maxlen=window)
+        # Per-session recent-call tails.  The recent window is tracked per
+        # session (not host-global) so LOOP detection in a multi-session host
+        # is not diluted or corrupted by other agents' interleaved calls.
         self._session_stats: dict[str, dict] = collections.defaultdict(lambda: {
             "analysis_calls": 0,
             "record_calls": 0,
@@ -56,6 +60,8 @@ class DriftDetector:
             "total_calls": 0,
             "addrs_seen": collections.Counter(),
             "latencies": collections.deque(maxlen=50),
+            "recent": collections.deque(maxlen=window),
+            "last_seen": 0.0,
         })
         self._lock = threading.Lock()
 
@@ -82,8 +88,9 @@ class DriftDetector:
                 addr: str | None = None):
         with self._lock:
             state = (tool, action)
-            self._recent.append(state)
             s = self._session_stats[session_id]
+            s["recent"].append(state)
+            s["last_seen"] = time.time()
             s["total_calls"] += 1
             if tool in self.ANALYSIS_TOOLS:
                 s["analysis_calls"] += 1
@@ -156,8 +163,8 @@ class DriftDetector:
                     "error_rate": round(errors / total, 1),
                 })
 
-            # LOOP detection from recent window
-            recent = list(self._recent)
+            # LOOP detection from this session's recent window
+            recent = list(s["recent"])
             loop_tail_len = self._loop_tail_len()
             if len(recent) >= loop_tail_len:
                 tail = recent[-loop_tail_len:]
@@ -193,6 +200,20 @@ class DriftDetector:
             "drift_signals": self.check(session_id),
         }
 
+    def prune(self, before: float) -> None:
+        """Drop per-session state for sessions idle since ``before``.
+
+        A long-lived host otherwise accumulates one stats entry per session
+        forever and keeps re-checking long-dead sessions every drift pass.
+        """
+        with self._lock:
+            stale = [
+                sid for sid, s in self._session_stats.items()
+                if float(s.get("last_seen") or 0.0) < before
+            ]
+            for sid in stale:
+                self._session_stats.pop(sid, None)
+
 
 # ── UsageIntelligence ─────────────────────────────────────────────────────────
 
@@ -218,6 +239,12 @@ class UsageIntelligence:
         self._thread: threading.Thread | None = None
         self._active_sessions: set = set()
         self._last_drift_check = 0.0
+        # (session_id, signal_type) -> notified, so a stuck session does not
+        # re-emit the identical warning notification every drift interval.
+        self._notified_signals: set[tuple[str, str]] = set()
+        # Last-observed wall-clock per session, used to prune dead sessions.
+        self._last_seen: dict[str, float] = {}
+        self._sessions_lock = threading.Lock()
 
     def start(self):
         if self._thread and self._thread.is_alive():
@@ -231,11 +258,21 @@ class UsageIntelligence:
     def stop(self):
         self._stop.set()
 
+    def is_running(self) -> bool:
+        """True while the background drift loop thread is alive.
+
+        server_dispatch gates the STUCK_LOOP blocker on this so a stopped /
+        never-started observer never raises AttributeError mid-dispatch.
+        """
+        return bool(self._thread is not None and self._thread.is_alive())
+
     def observe(self, tool: str, action: str, session_id: str,
                 latency_ms: float = 0.0, error: str | None = None,
                 addr: str | None = None):
         """Live observation — called on every tool call from server.py."""
-        self._active_sessions.add(session_id)
+        with self._sessions_lock:
+            self._active_sessions.add(session_id)
+            self._last_seen[session_id] = time.time()
         self.drift.observe(tool, action, session_id, latency_ms, error, addr)
 
     def predict_next(self, tool: str, action: str, top_k: int = 5) -> list[dict]:
@@ -266,20 +303,45 @@ class UsageIntelligence:
             self._stop.wait(timeout=30)
 
     def _check_all_sessions(self):
-        for sid in list(self._active_sessions):
+        now = time.time()
+        # Drop sessions idle long enough that their drift state is noise —
+        # a long-lived host must not keep notifying about (and tracking)
+        # long-dead sessions forever.
+        stale_before = now - max(600.0, self._drift_interval * 10)
+        self.drift.prune(stale_before)
+        with self._sessions_lock:
+            self._active_sessions = {
+                sid for sid in self._active_sessions
+                if self._last_seen.get(sid, 0.0) >= stale_before
+            }
+            active = list(self._active_sessions)
+        for sid in active:
             signals = self.drift.check(sid)
+            # Track which (session, signal) pairs are currently live so a
+            # sustained warning is sent once, and re-sent only after it
+            # actually clears and re-triggers.
+            current: set[tuple[str, str]] = set()
             for sig in signals:
                 if sig.get("severity") in ("warning",):
-                    self._notify({
-                        "jsonrpc": "2.0",
-                        "method": "notifications/message",
-                        "params": {
-                            "level": "warning",
-                            "data": {
-                                "type": "usage_drift",
-                                "session_id": sid,
-                                "signal": sig["type"],
-                                "message": sig["message"],
+                    key = (sid, str(sig["type"]))
+                    current.add(key)
+                    if key not in self._notified_signals:
+                        self._notified_signals.add(key)
+                        self._notify({
+                            "jsonrpc": "2.0",
+                            "method": "notifications/message",
+                            "params": {
+                                "level": "warning",
+                                "data": {
+                                    "type": "usage_drift",
+                                    "session_id": sid,
+                                    "signal": sig["type"],
+                                    "message": sig["message"],
+                                },
                             },
-                        },
-                    })
+                        })
+            with self._sessions_lock:
+                if current:
+                    self._notified_signals = {
+                        k for k in self._notified_signals if k[0] != sid or k in current
+                    }

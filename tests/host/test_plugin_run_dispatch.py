@@ -55,10 +55,77 @@ def test_plugin_run_routes_to_misc_not_analysis():
     only tool whose Literal set includes `plugin_run`."""
     dispatch = _make_session_ctx()
     result = dispatch._handle_analysis_plugin_run({"name": "MyPlugin", "arg": 0})
-    assert result == {
-        "ok": True,
-        "echo": {"tool": "misc", "args": {"action": "plugin_run", "name": "MyPlugin", "arg": 0}}
+    assert result["ok"] is True
+    assert result["echo"] == {
+        "tool": "misc", "args": {"action": "plugin_run", "name": "MyPlugin", "arg": 0}
     }
+    # The response self-identifies the session the plugin ran in, so a call
+    # aimed at the wrong session on a shared connection is visible instead of
+    # silently attributed to the shared active session.
+    assert result["_executed_in"]["session_id"] == "A1B2C3D4"
+
+
+def test_plugin_run_resolves_idb_target():
+    """An explicit idb ref must target that session (with ownership) rather
+    than silently running in the shared active session."""
+    from unittest.mock import Mock
+
+    dispatch = _build_dispatcher()
+    dispatch.current_session = Mock(session_id="ACTIVE")
+    dispatch.session_runtimes = {
+        "ACTIVE": {"port": 31337, "pid": 9999, "process": Mock(returncode=None)},
+        "TARGET": {"port": 31338, "pid": 9998, "process": Mock(returncode=None)},
+    }
+    # Ownership: TARGET is recorded as owned by this connection, so the guard
+    # passes and the plugin runs there.
+    state = dispatch._client_request_state()
+    state.owned_session_ids.add("TARGET")
+    dispatch._resolve_session_from_idb_ref = lambda ref: (
+        Mock(session_id="TARGET", idb_path="/tmp/target.i64")
+        if ref == "TARGET"
+        else None
+    )
+    result = dispatch._handle_analysis_plugin_run(
+        {"name": "MyPlugin", "idb": "TARGET"}
+    )
+    assert result.get("ok") is True
+    assert result["_executed_in"]["session_id"] == "TARGET"
+
+
+def test_plugin_run_rejects_unowned_idb_target():
+    """An explicit idb ref pointing at a session this connection does not own
+    must be refused before any plugin code runs."""
+    from unittest.mock import Mock
+
+    dispatch = _build_dispatcher()
+    dispatch.current_session = Mock(session_id="ACTIVE")
+    dispatch.session_runtimes = {
+        "ACTIVE": {"port": 31337, "pid": 9999, "process": Mock(returncode=None)},
+        "TARGET": {"port": 31338, "pid": 9998, "process": Mock(returncode=None)},
+    }
+    dispatch._resolve_session_from_idb_ref = lambda ref: (
+        Mock(session_id="TARGET", idb_path="/tmp/target.i64")
+        if ref == "TARGET"
+        else None
+    )
+    # TARGET has a live runtime held by another connection -> FILE_LOCKED.
+    # Provide the full ownership-report shape: the FILE_LOCKED error copies
+    # specific keys verbatim (report[k], not report.get(k)).
+    dispatch._session_ownership_report = lambda sid: {
+        "locked": True,
+        "holder": "another connection on this server",
+        "owner_id": None,
+        "owner_pid": None,
+        "owner_alive": None,
+        "idat_pid": 9998,
+        "lease_age_seconds": 12.0,
+        "lease_updated_at": None,
+    }
+    result = dispatch._handle_analysis_plugin_run(
+        {"name": "MyPlugin", "idb": "TARGET"}
+    )
+    assert result.get("ok") is not True
+    assert result.get("code") == "FILE_LOCKED"
 
 
 def test_plugin_run_validates_name():

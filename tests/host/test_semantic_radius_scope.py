@@ -18,9 +18,9 @@ def test_radius_address_range_is_half_open():
 
 
 def test_radius_address_range_rejects_non_positive():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="radius must be greater than zero"):
         radius_address_range(0x1000, 0)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="radius must be greater than zero"):
         radius_address_range(0x1000, -1)
 
 

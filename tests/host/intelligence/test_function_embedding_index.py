@@ -164,7 +164,8 @@ def test_fast_refresh_does_not_downgrade_an_existing_full_decomp_vector(tmp_path
 
     assert index.quality_counts() == {"full": 1}
     matches = index.search_text("deep behavior marker", top_k=5)
-    assert matches and matches[0]["name"] == "renamed_target"
+    assert matches
+    assert matches[0]["name"] == "renamed_target"
 
 
 def test_lexical_search_normalizes_behavior_verbs_and_print_apis(tmp_path):
@@ -238,7 +239,8 @@ def test_similar_vec_excludes_ea(tmp_path):
     index = _index_alpha_beta(tmp_path)
 
     hits = index.similar_vec([1.0, 0.0], top_k=5, threshold=0.0, exclude_ea="0x1000")
-    assert hits and hits[0]["ea"] == "0x2000"
+    assert hits
+    assert hits[0]["ea"] == "0x2000"
 
 
 def test_similar_vec_respects_address_ranges(tmp_path):
@@ -272,7 +274,8 @@ def test_similar_embeds_then_ranks_like_similar_vec(tmp_path):
     index = _index_alpha_beta(tmp_path)
 
     hits = index.similar("alpha query text", top_k=5, threshold=0.5)
-    assert hits and hits[0]["ea"] == "0x1000"
+    assert hits
+    assert hits[0]["ea"] == "0x1000"
     direct = index.similar_vec([1.0, 0.0], top_k=5, threshold=0.5)
     assert hits[0]["similarity"] == direct[0]["similarity"]
 
@@ -281,7 +284,8 @@ def test_similar_supports_address_ranges_and_exclude(tmp_path):
     index = _index_alpha_beta(tmp_path)
 
     hits = index.similar("alpha query", top_k=5, threshold=0.0, exclude_ea="0x1000")
-    assert hits and hits[0]["ea"] == "0x2000"
+    assert hits
+    assert hits[0]["ea"] == "0x2000"
 
     ranged = index.similar("alpha query", top_k=5, threshold=0.5, address_ranges=[(0x0000, 0x2000)])
     assert [h["ea"] for h in ranged] == ["0x1000"]
@@ -300,10 +304,12 @@ def test_search_dispatches_vector_to_similar_vec_and_text_to_hybrid(tmp_path):
     index = _index_alpha_beta(tmp_path)
 
     vec_hits = index.search([1.0, 0.0], top_k=5, threshold=0.5)
-    assert vec_hits and vec_hits[0]["ea"] == "0x1000"
+    assert vec_hits
+    assert vec_hits[0]["ea"] == "0x1000"
 
     str_hits = index.search("alpha behavior", top_k=5, threshold=0.0)
-    assert str_hits and str_hits[0]["ea"] == "0x1000"
+    assert str_hits
+    assert str_hits[0]["ea"] == "0x1000"
     assert "score" in str_hits[0]
 
 
@@ -317,7 +323,8 @@ def test_hybrid_search_merges_semantic_and_lexical_with_rank_reason(tmp_path):
     )
 
     hits = index.hybrid_search("alpha packet parse", top_k=5, threshold=0.0)
-    assert hits and hits[0]["ea"] == "0x1000"
+    assert hits
+    assert hits[0]["ea"] == "0x1000"
     assert hits[0]["similarity"] == pytest.approx(1.0, abs=1e-6)
     assert set(hits[0]["rank_reason"]) == {"semantic", "lexical", "token_coverage", "exact"}
 
@@ -376,7 +383,8 @@ def test_reader_auto_refreshes_after_rebuild_replaces_rows(tmp_path):
     reader = FunctionEmbeddingIndex(db_path, _KeywordEmbedder())
     assert reader.size == 1
     hits = reader.similar_vec([1.0, 0.0], top_k=1, threshold=0.0)
-    assert hits and hits[0]["ea"] == "0x401000"
+    assert hits
+    assert hits[0]["ea"] == "0x401000"
 
     time.sleep(0.01)
     # Simulate a full rebuild: the only row is deleted and rewritten with a

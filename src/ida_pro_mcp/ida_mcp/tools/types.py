@@ -388,18 +388,15 @@ def types(
                 return make_error(MCPError.IDA_ERROR, "Type ordinal API not available. "
                                   "This IDA version may use a different type enumeration API.")
 
+            # Scan the whole TIL once so `total` is accurate, then paginate the
+            # collected matches with offset/count (offset is not a scan window).
             max_types = max(1, qty_func(None))
-            limit = max_types
-            if count > 0:
-                limit = min(max_types, offset + count + 100)  # scan ahead beyond page
-            for ordinal in range(1, limit):
+            for ordinal in range(1, max_types + 1):
                 tif = ida_typeinf.tinfo_t()
                 if tif.get_numbered_type(None, ordinal) and (tif.is_struct() or tif.is_union()):
                     type_name = tif.get_type_name()
                     if matcher(type_name):
                         matches.append({"name": type_name, "ordinal": ordinal, "match": "name"})
-                        if count > 0 and len(matches) >= count:
-                            break
                         continue
 
                     udt = ida_typeinf.udt_type_data_t()
@@ -413,10 +410,10 @@ def types(
                                     "match": "field",
                                     "field": m.name,
                                 })
-                                if count > 0 and len(matches) >= count:
-                                    break
                                 break
-            return {"ok": True, "matches": matches, "total": len(matches)}
+            total = len(matches)
+            page = matches[offset:] if count == 0 else matches[offset:offset + count]
+            return {"ok": True, "matches": page, "total": total, "offset": offset, "count": len(page)}
 
         # ====================================================================
         # infer - Guess the type at an address
@@ -430,7 +427,6 @@ def types(
                 return make_error(MCPError.INVALID_ARGS, f"Invalid address: {addr}")
 
             inferred_types = []
-            applied = False
             conf = 0.0
             # Prologue/frame-driven locals inference.
             try:
@@ -473,7 +469,7 @@ def types(
                         conf = max(conf, 0.8)
                 except Exception:
                     pass
-            return {"ok": True, "addr": addr, "inferred_types": inferred_types, "confidence": round(float(conf), 3), "applied": bool(applied)}
+            return {"ok": True, "addr": addr, "inferred_types": inferred_types, "confidence": round(float(conf), 3)}
 
         # ====================================================================
         # read_struct - Read structured data from memory using a type
@@ -523,7 +519,6 @@ def types(
                 m = udt[i]
                 field_offset = m.offset // 8
                 mem_addr = ea + field_offset
-                str(m.type)
                 mem_size = m.type.get_size()
 
                 val_str = "?"
@@ -743,8 +738,6 @@ def types(
                     lines.append(f"  [{field_type:<30}]  {field_name:<20}  ({field_size} bytes)")
                 else:
                     offset_str = f"{field_offset:3d}-{field_end - 1:3d}"
-                    bar_marker = "#" if m.is_gap() else " "
-                    "|" + bar_marker * max(field_size, 1)
                     lines.append(f"  {offset_str}  [{field_type:<30}]  {field_name:<20}  ({field_size} bytes)")
 
             if not is_union:
@@ -1078,7 +1071,10 @@ def types(
                 if not raw or len(raw) < ptr_size:
                     break
                 import struct
-                fmt = "<Q" if ptr_size == 8 else "<I"
+                # Respect database endianness — hardcoding little-endian swaps
+                # every pointer on big-endian targets (PPC, big-endian MIPS/ARM).
+                endian = ">" if _inf_is_be() else "<"
+                fmt = f"{endian}Q" if ptr_size == 8 else f"{endian}I"
                 target = struct.unpack(fmt, raw)[0]
                 if target == 0:
                     break

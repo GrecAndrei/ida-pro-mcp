@@ -12,7 +12,7 @@ from ida_pro_mcp.host.intelligence.scope_window import (
 
 def test_radius_range_half_open():
     assert radius_address_range(0x1000, 16) == (0xFF0, 0x1010)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="radius must be greater than zero"):
         radius_address_range(0x1000, 0)
 
 
@@ -21,7 +21,7 @@ def test_radius_range_clamps_at_zero():
 
 
 def test_radius_range_requires_positive_radius():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="radius must be greater than zero"):
         radius_address_range(0x1000, -4)
 
 

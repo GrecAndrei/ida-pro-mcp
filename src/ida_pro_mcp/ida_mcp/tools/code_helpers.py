@@ -1,4 +1,5 @@
 import re
+import time
 
 from ida_pro_mcp.ida_mcp.support.crypto_registry import DECOMP_CRYPTO_SIGS as _DECOMP_CRYPTO_SIGS
 
@@ -708,7 +709,7 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
             if callee_ea and callee_ea != idaapi.BADADDR:
                 try:
                     callee_tinfo = ida_typeinf.tinfo_t()
-                    if callee_tinfo.get_numbered_type(idaapi.get_idb(), callee_ea):
+                    if ida_nalt.get_tinfo(callee_tinfo, callee_ea):
                         func_data = ida_typeinf.func_type_data_t()
                         if callee_tinfo.get_func_details(func_data):
                             for i in range(func_data.size()):
@@ -865,9 +866,6 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
                             freed_vars[name] = (int(getattr(expr, "ea", 0)), "assigned NULL")
             except Exception:
                 pass
-
-        def visit_insn(self, insn):
-            return 0
 
     try:
         v = VulnVisitor()
@@ -1486,7 +1484,9 @@ def _build_decompile_enrichment(
 ) -> dict:
     found_apis = _detect_api_calls(pseudo, limit=api_limit)
     crypto_hints, xor_count = _detect_crypto_hints(pseudo)
-    dangerous = _detect_dangerous_patterns(found_apis, pseudo, detailed=True, cfunc=cfunc)
+    dangerous = _detect_dangerous_patterns(
+        found_apis, pseudo, detailed=detailed_dangerous, cfunc=cfunc
+    )
     var_hints = _extract_var_rename_hints(cfunc)
     ctx = gather_function_context(func_start_ea, max_refs=8)
     return {
@@ -1572,10 +1572,7 @@ def _get_blackboard_context_for_addr(addr_hex: str) -> list:
     Returns compact list of {title, category, confidence}.
     """
     try:
-        import os as _os
-        _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
-                             "..", "..", "host", "knowledge_graph.py")
-        # Use blackboard directly
+        # Use blackboard directly (no IDA deps)
         from blackboard import BlackboardStore  # type: ignore
         store = BlackboardStore()
         entries = store.list(addr=addr_hex, limit=5, include_resolved=False)
@@ -1979,7 +1976,12 @@ def _trace_argument_origin(func, arg_index, max_depth, max_callers_per_level):
         try:
             func_type = idc.parse_decl(proto, idc.PT_SILENT)
             if func_type:
-                _, _, _, args = idc.get_type(target_addr) or ("", "", "", [])
+                func_data = ida_typeinf.func_type_data_t()
+                if func_type.get_func_details(func_data):
+                    arg_names = [
+                        str(getattr(func_data[i], "name", "") or f"arg{i}")
+                        for i in range(func_data.size())
+                    ]
         except Exception:
             pass
     if not arg_names:
@@ -2050,7 +2052,9 @@ def _trace_argument_origin(func, arg_index, max_depth, max_callers_per_level):
                     arg_type = f"decompile_error: {e}"
 
                 call_entry = {
-                    "depth": depth,
+                    # depth is the number of hops from the target function:
+                    # a direct caller of the target is depth 1, its callers 2, etc.
+                    "depth": depth + 1,
                     "caller_addr": hex(caller_ea),
                     "caller_name": caller_name,
                     "call_site": call_site,
@@ -2392,7 +2396,7 @@ def _detect_type_matches(type_pattern: str, *, max_items: int = 100) -> list[dic
             break
         try:
             tinfo = ida_typeinf.tinfo_t()
-            if not tinfo.get_numbered_type(idaapi.get_idb(), func_ea):
+            if not ida_nalt.get_tinfo(tinfo, func_ea):
                 continue
             func_data = ida_typeinf.func_type_data_t()
             if not tinfo.get_func_details(func_data):

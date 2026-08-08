@@ -203,6 +203,10 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
                         "loader": {"type": "string", "description": "IDA loader name, e.g. elf, pe, bin."},
                         "flags": {"type": "integer", "description": "IDA loader flags."},
                         "loader_options": {"type": "string", "description": "Raw loader options string."},
+                        "arch": {"type": "string", "description": "Alias for processor."},
+                        "proc": {"type": "string", "description": "Alias for processor."},
+                        "bits": {"type": "integer", "description": "Alias for bitness."},
+                        "endianness": {"type": "string", "description": "Alias for endian."},
                     },
                 },
                 "analysis_options": {
@@ -272,6 +276,10 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
                         "loader": {"type": "string", "description": "IDA loader name, e.g. elf, pe, bin."},
                         "flags": {"type": "integer", "description": "IDA loader flags."},
                         "loader_options": {"type": "string", "description": "Raw loader options string."},
+                        "arch": {"type": "string", "description": "Alias for processor."},
+                        "proc": {"type": "string", "description": "Alias for processor."},
+                        "bits": {"type": "integer", "description": "Alias for bitness."},
+                        "endianness": {"type": "string", "description": "Alias for endian."},
                     },
                 },
                 "analysis_options": {
@@ -358,10 +366,19 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         name="ida_close_session",
         description="Close the active IDA analysis session and release its runtime.",
         category="session",
-        input_schema=_schema({}),
-        example={},
+        input_schema=_schema(
+            {
+                "risk_ack": {
+                    "type": "boolean",
+                    "description": "Set true only after verifying this session teardown is intended.",
+                }
+            },
+            ["risk_ack"],
+        ),
+        example={"risk_ack": True},
         backend_tool="session",
         backend_action="close",
+        argument_map={"risk_ack": "_risk_ack"},
     ),
     AgentOperation(
         name="ida_session_get",
@@ -796,8 +813,11 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
             {
                 "value": CALC_VALUE,
                 "target": CALC_VALUE,
-                "bit_op": {"type": "string", "enum": ["and", "or", "xor", "not", "shl", "shr"]},
-                "op": {"type": "string", "enum": ["and", "or", "xor", "not", "shl", "shr"]},
+                "bit_op": {
+                    "type": "string",
+                    "enum": ["and", "or", "xor", "not", "shl", "shr"],
+                    "description": "Bitwise operation to apply (and, or, xor, not, shl, shr).",
+                },
                 "intent": {"type": "string"},
                 "persist": PERSIST,
                 "idb": IDB,
@@ -1210,10 +1230,12 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         input_schema=_schema({
             "path": {"type": "string", "description": "Save path (default: current IDB path, i.e. in-place save)."},
             "idb": IDB,
-        }),
-        example={},
+            "risk_ack": RISK_ACK,
+        }, ["risk_ack"]),
+        example={"risk_ack": True},
         backend_tool="analysis",
         backend_action="save_idb",
+        argument_map={"risk_ack": "_risk_ack"},
     ),
     AgentOperation(
         name="ida_make_code",
@@ -1230,13 +1252,14 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
                 "address": ADDRESS,
                 "size": {"type": "integer", "description": "Number of bytes to clear before creating instruction (default: auto-detect from current item)."},
                 "idb": IDB,
+                "risk_ack": RISK_ACK,
             },
-            ["address"],
+            ["address", "risk_ack"],
         ),
-        example={"address": "0x401234"},
+        example={"address": "0x401234", "risk_ack": True},
         backend_tool="analysis",
         backend_action="make_code",
-        argument_map={"address": "addr"},
+        argument_map={"address": "addr", "risk_ack": "_risk_ack"},
     ),
     AgentOperation(
         name="ida_undefine",
@@ -1251,13 +1274,14 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
                 "address": ADDRESS,
                 "size": {"type": "integer", "description": "Number of bytes to undefine (default: size of current item at address)."},
                 "idb": IDB,
+                "risk_ack": RISK_ACK,
             },
-            ["address"],
+            ["address", "risk_ack"],
         ),
-        example={"address": "0x401234", "size": 4},
+        example={"address": "0x401234", "size": 4, "risk_ack": True},
         backend_tool="analysis",
         backend_action="undefine",
-        argument_map={"address": "addr"},
+        argument_map={"address": "addr", "risk_ack": "_risk_ack"},
     ),
     # ------------------------------------------------------------------ #
     # Local variable rename                                               #
@@ -1346,7 +1370,7 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         example={"address": "0x401000", "type_str": "int __fastcall foo(int a, int b)", "kind": "function", "risk_ack": True},
         backend_tool="types",
         backend_action="apply",
-        argument_map={"address": "addr", "type_str": "decl", "risk_ack": "_risk_ack"},
+        argument_map={"address": "addr", "type_str": "decl", "var_name": "name", "risk_ack": "_risk_ack"},
     ),
     AgentOperation(
         name="ida_list_types",
@@ -1367,6 +1391,7 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         example={"kind": "struct", "limit": 20},
         backend_tool="types",
         backend_action="list",
+        argument_map={"limit": "count"},
     ),
     # ------------------------------------------------------------------ #
     # Segment management                                                  #
@@ -1405,24 +1430,32 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     ),
     AgentOperation(
         name="ida_set_segment_attrs",
-        description="Update a segment's name, permissions (rwx), class, bitness, or type.",
+        description=(
+            "Update one segment attribute: name, align, comb, perm, bitness, type, or color. "
+            "Pass the segment's start address plus attr and value. "
+            "For permissions use attr='perm' with value like 'rwx' or an integer bitmap."
+        ),
         category="edit",
         input_schema=_schema(
             {
                 "address": ADDRESS,
-                "name": {"type": "string", "description": "New segment name."},
-                "perms": {"type": "string", "description": "Permission string, e.g. 'rwx', 'r-x', 'rw-'."},
-                "sclass": {"type": "string", "description": "Segment class: CODE, DATA, BSS, etc."},
-                "bitness": {"type": "integer", "description": "0=16-bit, 1=32-bit, 2=64-bit."},
+                "attr": {
+                    "type": "string",
+                    "description": "Segment attribute to change: name, align, comb, perm, bitness, type, or color.",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "New value for the attribute (e.g. 'rwx' or an integer bitmap such as '0x7' for perm).",
+                },
                 "risk_ack": RISK_ACK,
                 "idb": IDB,
             },
-            ["address", "risk_ack"],
+            ["address", "attr", "value", "risk_ack"],
         ),
-        example={"address": "0x40000000", "perms": "rwx", "sclass": "CODE", "risk_ack": True},
+        example={"address": "0x40000000", "attr": "perm", "value": "rwx", "risk_ack": True},
         backend_tool="segments",
         backend_action="set_attr",
-        argument_map={"address": "addr", "risk_ack": "_risk_ack"},
+        argument_map={"address": "start", "attr": "attr", "value": "value", "risk_ack": "_risk_ack"},
     ),
     # ------------------------------------------------------------------ #
     # Call graph export                                                   #
@@ -1495,6 +1528,7 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         example={"query": "arm"},
         backend_tool="misc",
         backend_action="list_sigs",
+        argument_map={"query": "name"},
     ),
     AgentOperation(
         name="ida_python",

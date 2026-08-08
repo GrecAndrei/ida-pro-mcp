@@ -8,6 +8,7 @@ import contextlib
 import json
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -20,6 +21,24 @@ from ..config import (
     _normalize_session_id,
     log_rpc,
 )
+
+
+def _resolve_stale_cleanup_budget() -> float:
+    """Bound total time spent killing stale runtime leases at host startup.
+
+    Every stubborn orphan can take ~PROCESS_TERMINATION_TIMEOUT_SECONDS to
+    escalate; on a shared cache with many orphans this would block the server
+    from serving its first request. The budget defers remaining kills to the
+    next startup instead.
+    """
+    try:
+        budget = float(os.environ.get("IDA_MCP_STALE_LEASE_CLEANUP_BUDGET", "10"))
+    except (TypeError, ValueError):
+        budget = 10.0
+    return max(1.0, budget)
+
+
+STALE_CLEANUP_BUDGET_SECONDS = _resolve_stale_cleanup_budget()
 
 
 class ServerRuntimeLeasesMixin:
@@ -103,7 +122,11 @@ class ServerRuntimeLeasesMixin:
             if pid <= 0:
                 return False
             if sys.platform != "linux":
-                return True
+                # No /proc identity to verify here. Best-effort name check via
+                # the platform process lister; if it cannot confirm an IDA-named
+                # process, refuse to signal the pid (a recycled PID could belong
+                # to any unrelated program).
+                return self._platform_pid_is_ida_process(pid, lease)
             expected_path = str(
                 lease.get("idat_exe") or getattr(self, "idat_exe", "") or ""
             ).strip()
@@ -144,6 +167,49 @@ class ServerRuntimeLeasesMixin:
                 return True
             return any(os.path.basename(part).lower() in expected_names for part in parts)
 
+    def _platform_pid_is_ida_process(self, pid: int, lease: dict) -> bool:
+            """Best-effort non-Linux identity check for a recorded runtime PID.
+
+            Confirms the process image name against the known IDA binary names
+            (and the recorded ``idat_exe``). Any failure to inspect the process
+            returns False so the stale-lease cleanup never signals a PID whose
+            identity it could not verify.
+            """
+            expected_names = {n.lower() for n in self._ida_binary_names()}
+            expected_path = str(
+                lease.get("idat_exe") or getattr(self, "idat_exe", "") or ""
+            ).strip()
+            if expected_path:
+                expected_names.add(
+                    os.path.basename(os.path.realpath(os.path.expanduser(expected_path))).lower()
+                )
+            try:
+                if sys.platform == "win32":
+                    out = subprocess.run(
+                        ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
+                    line = (out.stdout or "").strip()
+                    if not line:
+                        return False
+                    # CSV row: "Image Name","PID","Session Name",...
+                    image = line.split('","', 1)[0].strip('"').lower()
+                    return bool(image) and os.path.basename(image) in expected_names
+                out = subprocess.run(
+                    ["ps", "-p", str(pid), "-o", "comm="],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                name = (out.stdout or "").strip().lower()
+                if not name:
+                    return False
+                return os.path.basename(name) in expected_names
+            except Exception:
+                return False
+
     @staticmethod
     def _lease_has_live_foreign_owner(lease: dict) -> bool:
             """Whether a different live MCP host still owns this lease.
@@ -172,12 +238,37 @@ class ServerRuntimeLeasesMixin:
                 return False
             return True
 
+    def _remove_lease_if_unchanged(self, path: str, expected_updated: float) -> bool:
+            """Remove a stale lease only if it has not been rewritten since read.
+
+            Between reading a stale lease and removing it, a fresh runtime for
+            the same sid can be registered (its lease is rewritten with a new
+            ``updated_at``). Re-reading the file before ``os.remove`` keeps that
+            fresh lease intact instead of deleting a live runtime's coverage.
+            """
+            try:
+                with open(path, encoding="utf-8") as f:
+                    lease = json.load(f)
+            except Exception:
+                return False
+            try:
+                updated = float(lease.get("updated_at") or 0.0)
+            except Exception:
+                updated = 0.0
+            if updated != expected_updated:
+                return False
+            with contextlib.suppress(OSError):
+                os.remove(path)
+                return True
+            return False
+
     def _cleanup_stale_runtime_leases(self) -> None:
             try:
                 entries = os.listdir(self._runtime_lease_dir)
             except Exception:
                 return
             now = time.time()
+            cleanup_deadline = now + STALE_CLEANUP_BUDGET_SECONDS
             skip_count = 0
             removed_count = 0
             kept_count = 0
@@ -223,17 +314,58 @@ class ServerRuntimeLeasesMixin:
                     kept_count += 1
                     continue
                 if pid <= 0:
-                    with contextlib.suppress(OSError):
-                        os.remove(path)
+                    if self._remove_lease_if_unchanged(path, updated):
+                        removed_count += 1
+                    else:
+                        kept_count += 1  # rewritten mid-cleanup: leave it
+                    continue
+                # Confirm the recorded pid is (still) a process before touching
+                # anything: a recycled PID could belong to an unrelated program
+                # and must never be signalled.
+                alive = None
+                try:
+                    os.kill(pid, 0)
+                    alive = True
+                except ProcessLookupError:
+                    alive = False
+                except Exception:
+                    alive = None  # cannot probe (e.g. EPERM)
+                if alive is False:
+                    # Recorded pid is gone — nothing to kill. Drop the stale
+                    # lease instead of letting it accumulate forever.
+                    if self._remove_lease_if_unchanged(path, updated):
+                        removed_count += 1
+                    else:
+                        kept_count += 1
+                    continue
+                if time.time() >= cleanup_deadline:
+                    # Budget exhausted: defer remaining identity checks/kills to
+                    # the next startup so a host with many orphans can still
+                    # serve the first request.
+                    skip_count += 1
                     continue
                 if not self._is_expected_ida_process(pid, lease):
-                    skip_count += 1
+                    if alive is True:
+                        # PID was recycled to an unrelated live process: never
+                        # signal it, but drop the stale lease so it cannot
+                        # accumulate either.
+                        if self._remove_lease_if_unchanged(path, updated):
+                            removed_count += 1
+                        else:
+                            kept_count += 1
+                    else:
+                        # Liveness unknown and identity unverifiable — keep the
+                        # lease for a later pass rather than risk a wrong kill.
+                        skip_count += 1
                     continue
                 killed = self._kill_stale_pid(pid)
                 if killed:
-                    with contextlib.suppress(OSError):
-                        os.remove(path)
-                    removed_count += 1
+                    if self._remove_lease_if_unchanged(path, updated):
+                        removed_count += 1
+                    else:
+                        # Lease was rewritten mid-cleanup (a fresh runtime for
+                        # this sid appeared) — leave it alone.
+                        kept_count += 1
                 else:
                     # Keep lease for retry, but back off immediate repeated kill attempts.
                     lease["updated_at"] = now
@@ -343,3 +475,11 @@ class ServerRuntimeLeasesMixin:
                     self._global_facts.close()
             except Exception as e:
                 log_rpc(f"Failed to close global facts DB: {e}")
+            # Release the audit file handle so it is not leaked when the host
+            # is torn down via signal/atexit/finally. AuditLogger.close() is
+            # idempotent, so it is safe if shutdown() runs more than once.
+            try:
+                if hasattr(self, "audit") and self.audit is not None:
+                    self.audit.close()
+            except Exception as e:
+                log_rpc(f"Failed to close audit logger: {e}")

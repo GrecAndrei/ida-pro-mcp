@@ -33,4 +33,4 @@ class CweSource(SourceParser):
             import zipfile
 
             with zipfile.ZipFile(fpath) as zf:
-                zf.extractall(dest_dir, members=[m for m in zf.namelist() if ".xml" in m])
+                self._safe_extract(zf, dest_dir, members=[m for m in zf.namelist() if ".xml" in m])

@@ -11,7 +11,7 @@ Address and value arithmetic without running scripts.
 | `ida_calc_deref(address)` | Read a typed value (`u8`–`u64`, `f32`, `ptr`, `string`, ...) at an address, with `deref_depth` hops. |
 | `ida_calc_chain(address, offsets)` | Follow a pointer chain with explicit offsets. |
 | `ida_calc_align(value, size)` | Align a value down/up/nearest to a boundary. |
-| `ida_calc_bitops(value, op)` | and/or/xor/not/shl/shr on integer values. |
+| `ida_calc_bitops(value, bit_op)` | and/or/xor/not/shl/shr on integer values. |
 
 Values accept numeric literals, hex addresses, or symbols. Set `persist:
 true` to save a result into the investigation notebook.

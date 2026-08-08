@@ -3,35 +3,19 @@
 This package provides MCP (Model Context Protocol) integration for IDA Pro,
 enabling AI assistants to interact with IDA's disassembler and decompiler.
 
-OPTIMIZED: 23 mega-tools instead of 100+, each with action parameter.
-This is much more efficient for LLM context windows.
+Tools are consolidated into action-parameterized mega-tools to keep LLM
+context windows small. The IDA-side tool modules live in ``ida_mcp/tools/``
+(each exposing one ``@tool`` function with an ``action`` enum):
 
-MODULAR TOOLS (tools/):
-1. idb       - database metadata, segments, cursor, entrypoints
-2. code      - decompile, disassemble, xrefs, callgraph, basic blocks
-3. data      - functions, globals, strings, imports, exports, lookup
-4. search    - find bytes, strings, immediate values, names
-5. types     - local types, structs, prototypes
-6. memory    - read/write all data types
-7. modify    - rename, comments, set type
-8. misc      - python exec, signatures, bookmarks, undo, stack
-9. debug     - debugger control, breakpoints, registers
-10. funcs    - function create/delete/flags
-11. segments - segment management
-12. files    - file operations
-13. plugins  - plugin management
-14. trace    - execution tracing
-15. fixups   - relocation management
-16. data_ops - data definition operations
-17. agent    - high-level agent helpers
-18. microcode - Hex-Rays intermediate representation
-19. graph    - call graphs, CFGs, xref graphs (JSON/DOT)
-20. bulk     - bulk rename/comment/type operations
+  idb, code, data, search, types, memory, modify, misc, funcs, segments,
+  graph, ctree, imports_deep, symbols, firmware_view, wiki, intelligence,
+  gadgets, stack_analysis, annotation, blackboard, governance, knowledge,
+  batch, analysis, calc
 
-ADDITIONAL TOOLS (separate files):
-21. enum      - enum management (api_enums.py)
-22. bookmark  - bookmark management (api_bookmarks.py)
-23. signatures - FLIRT/TIL/Lumina (api_signatures.py)
+Host-side session/batch/workflow tools are defined in the ``host`` package.
+Shared helpers live in ``ida_mcp/tools/_common.py`` and ``ida_mcp/support/``;
+the sync/cache/rpc/error-handling infrastructure in this package is what the
+IDA plugin runtime uses.
 """
 
 # Import infrastructure modules

@@ -37,6 +37,10 @@ def _assembler(**attrs) -> ContextAssembler:
     obj._semantic_budget_lock = threading.Lock()
     obj._activity = collections.defaultdict(list)
     obj._activity_lock = threading.Lock()
+    obj._max_indexes = 4
+    obj._idx_last_access = {}
+    obj._session_last_seen = {}
+    obj._session_last_seen_lock = threading.Lock()
     for key, value in attrs.items():
         # Kwargs mirror the private attribute names (e.g.
         # _related_graph_max_edges), matching the defaults set above.

@@ -562,7 +562,9 @@ def test_status_and_state_can_target_a_specific_session_explicitly(
             server.session_runtimes[sid_a] = {"process": _FakeIdaProcess()}
             denied = server._handle_session({"action": "status", "idb": sid_a})
             assert denied.get("error") is True
-            assert denied.get("code") in {"FILE_LOCKED", "INVALID_ARGS"}
+            # The ownership guard reports FILE_LOCKED when the foreign session's
+            # runtime is live (server_client_state._ensure_client_owns_session).
+            assert denied.get("code") == "FILE_LOCKED"
         finally:
             server._end_client_connection(token_peer)
     finally:

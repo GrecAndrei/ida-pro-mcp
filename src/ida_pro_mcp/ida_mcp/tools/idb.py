@@ -207,8 +207,8 @@ def idb_meta():
         },
         "compiler": compiler_names.get(comp, f"compiler_{comp}"),
         "image_base": hex(_safe_inf_get("baseaddr", 0)),
-        "min_ea": hex(min_ea) if min_ea else None,
-        "max_ea": hex(max_ea) if max_ea else None,
+        "min_ea": hex(min_ea) if min_ea is not None else None,
+        "max_ea": hex(max_ea) if max_ea is not None else None,
         "image_size": hex(max_ea - min_ea) if (min_ea is not None and max_ea is not None and max_ea > min_ea) else None,
         "md5": md5.hex() if md5 else None,
         "sha256": sha256.hex() if sha256 else None,
@@ -337,7 +337,12 @@ def idb_summary(fast=False):
     """Comprehensive analysis summary."""
     # Count functions
     all_funcs = list(idautils.Functions())
-    named_funcs = sum(1 for ea in all_funcs if not idc.get_func_name(ea).startswith("sub_"))
+
+    def _auto_named(name: str) -> bool:
+        """IDA auto-names: empty or a reserved auto prefix (matches data annotations)."""
+        return not name or name.startswith(("sub_", "j_", "loc_", "nullsub_", "unknown_libname_"))
+
+    named_funcs = sum(1 for ea in all_funcs if not _auto_named(idc.get_func_name(ea) or ""))
 
     # Count strings
     string_count = idaapi.get_strlist_qty()
@@ -471,10 +476,10 @@ def idb_architecture_profile(meta=None, summary=None):
         try:
             gp_info = detect_riscv_gp()
             if gp_info.get("found"):
+                gp_val = gp_info.get("gp")
+                gp_expr = hex(gp_val) if isinstance(gp_val, int) else str(gp_val)
                 recs.append(
-                    "misc(action='idc', expr='idc.set_reg_value(\"gp\", {}, idc.BADADDR)'.format({})".format(
-                        gp_info["gp"], gp_info["gp"]
-                    )
+                    f"misc(action='idc', expr='idc.set_reg_value(\"gp\", {gp_expr}, idc.BADADDR)')"
                 )
         except Exception:
             gp_info = None

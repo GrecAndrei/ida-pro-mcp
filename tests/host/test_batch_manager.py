@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 
 import pytest
@@ -34,18 +35,17 @@ def test_submit_with_run_fn():
 
 def test_cancel():
     mgr = BatchManager(max_workers=1)
-    ready = []
+    ready = threading.Event()
 
     def _slow(task):
-        ready.append(1)
+        ready.set()
         for _ in range(100):
             if task._cancel_event.is_set():
                 return
             time.sleep(0.01)
 
     task_id = mgr.submit("script", {}, run_fn=_slow)
-    while not ready:
-        time.sleep(0.01)
+    assert ready.wait(timeout=5), "worker never started"
     cancel_result = mgr.cancel(task_id)
     assert cancel_result["state"] == "cancelled"
 
@@ -81,15 +81,14 @@ def test_result_nonexistent():
 
 def test_wait_timeout():
     mgr = BatchManager(max_workers=1)
-    ready = []
+    ready = threading.Event()
 
     def _block(task):
-        ready.append(1)
+        ready.set()
         task._cancel_event.wait()
 
     task_id = mgr.submit("script", {}, run_fn=_block)
-    while not ready:
-        time.sleep(0.01)
+    assert ready.wait(timeout=5), "worker never started"
     result = mgr.wait(task_id, timeout=0.1)
     assert result["state"] == "running"
     mgr.cancel(task_id)

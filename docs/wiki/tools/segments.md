@@ -6,7 +6,7 @@ Inspect and manage binary segments — their address ranges, permissions, and cl
 | --- | --- | --- |
 | `ida_list_segments()` | List all segments with name, address range, size, permissions, class, and bitness. | — |
 | `ida_add_segment(start, end, name)` | Create a new segment. Optional: `sclass` (CODE/DATA/BSS/etc.). | `start`, `end`, `name`, `risk_ack` |
-| `ida_set_segment_attrs(address)` | Update a segment's name, permissions (`rwx`/`r-x`/`rw-`), class, or bitness. `address` is any address inside the segment. | `address`, `risk_ack` |
+| `ida_set_segment_attrs(address, attr, value)` | Update one segment attribute: `name`, `align`, `comb`, `perm`, `bitness`, `type`, or `color`. `address` is any address inside the segment. For permissions use `attr='perm'` with a value like `'rwx'` or an integer bitmap. | `address`, `attr`, `value`, `risk_ack` |
 
 ## Working pattern
 
@@ -14,8 +14,9 @@ Inspect and manage binary segments — their address ranges, permissions, and cl
    where IDA may not have carved the correct regions.
 2. `ida_add_segment` to define MMIO regions, ROM/RAM boundaries, or any range
    IDA did not create automatically.
-3. `ida_set_segment_attrs` to fix up permissions or class on an existing segment
-   (e.g. mark a data region as `r--` after confirming it is read-only).
+3. `ida_set_segment_attrs` to fix up permissions, name, bitness, or color on an
+   existing segment (e.g. mark a data region read-only with
+   `attr='perm', value='r--'` after confirming it should not be writable).
 
 ## Notes
 

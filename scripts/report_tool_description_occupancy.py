@@ -12,7 +12,10 @@ import ast
 import json
 from pathlib import Path
 
-import tiktoken
+try:
+    import tiktoken
+except ImportError:  # not declared in pyproject.toml
+    raise SystemExit("tiktoken is required for this report; install it with: pip install tiktoken") from None
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMAS_PATH = ROOT / "src" / "ida_pro_mcp" / "host" / "schemas_data.py"

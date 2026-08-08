@@ -9,6 +9,11 @@ try:
 except Exception:
     ida_struct = None
 
+try:
+    import ida_ua
+except Exception:
+    ida_ua = None
+
 
 # Canary symbol names across architectures
 _CANARY_SYMBOLS = [
@@ -28,6 +33,34 @@ _ALLOCA_SYMBOLS = [
     "__chkstk", "_chkstk", "__chkstk_ms",
     "__alloca_probe", "__alloca_probe_16",
 ]
+
+# Store-type mnemonics (the destination operand is a memory write). The
+# uninitialized heuristic must only count these: instructions like
+# 'cmp [rbp-8], 0' are reads, not writes, and must not mark a local as
+# initialized.
+_STORE_MNEMONICS = {
+    "mov", "movzx", "movsx", "movsxd", "movss", "movsd", "movd", "movq",
+    "str", "strb", "strh", "strd",
+    "sw", "sh", "sb", "sd", "st", "stb", "stw", "std",
+    "stosb", "stosw", "stosd", "stosq",
+    "fst", "fstp",
+}
+
+# Shared buffer/array size heuristic so the `buffers`, `arrays`, and `summary`
+# actions agree on the same frame. A member is buffer-like when its type is an
+# explicit array (`[...]`), or it is a char/byte block of at least 8 bytes (a
+# C fixed buffer), or any other non-pointer member of at least 16 bytes.
+_BUFFER_MIN_SIZE = 8
+_ARRAY_MIN_SIZE = 16
+
+
+def _is_buffer_like(type_str: str, size: int) -> bool:
+    """Return True when a frame member should be treated as a buffer/array."""
+    if "[" in type_str:
+        return True
+    if size >= _BUFFER_MIN_SIZE and "char" in type_str.lower():
+        return True
+    return size >= _ARRAY_MIN_SIZE and "*" not in type_str
 
 
 def _get_func_or_error(addr):
@@ -245,12 +278,9 @@ def stack_analysis(
                 return err
             buffers = []
             for _, _member, name, offset, size, type_str in _iter_frame_members(frame):
-                is_buffer = False
-                # Arrays are buffers
-                type_l = type_str.lower()
-                if "[" in type_str or (size >= 8 and "char" in type_l):
-                    is_buffer = True
-                if is_buffer:
+                # Arrays are buffers; shared heuristic keeps `summary`/`arrays`
+                # in agreement on the same frame.
+                if _is_buffer_like(type_str, size):
                     buffers.append({
                         "name": name,
                         "offset": hex(offset),
@@ -500,8 +530,9 @@ def stack_analysis(
                         element_count = int(m.group(1))
                         if element_count > 0:
                             element_size = size // element_count
-                elif size >= 16 and "*" not in type_str:
-                    # Heuristic: large non-pointer might be array
+                elif _is_buffer_like(type_str, size):
+                    # Heuristic: large non-pointer / char block might be array
+                    # (shared with `buffers`/`summary` so actions agree).
                     is_array = True
                     # Guess element size from type
                     tl = type_str.lower()
@@ -554,22 +585,37 @@ def stack_analysis(
                     "size": size,
                     "type": type_str,
                 })
-            # Scan instructions for writes to stack frame offsets
+            # Scan instructions for writes to stack frame offsets.
+            #
+            # Two corrections over the naive operand-dump approach:
+            #  1. Only store-type instructions count, so reads such as
+            #     'cmp [rbp-8], 0' are never recorded as writes.
+            #  2. The frame offset is resolved via ida_frame.get_stkvar, which
+            #     maps both RBP-relative and RSP-relative (frame-pointer-less)
+            #     accesses to the actual frame-member offset, instead of
+            #     comparing raw displacements (e.g. +0x10 for [rsp+0x10])
+            #     against soffs.
+            _arch_name = get_arch()
+            _dst_op_index = 0 if is_x86_family(_arch_name) else 1
             written_offsets = set()
             ea = func.start_ea
             uninit_iter = 0
             while ea < func.end_ea and ea != idaapi.BADADDR:
-                mnem = idc.print_insn_mnem(ea)
-                if mnem:
-                    mnem.lower()
-                    # x86/x64: mov/lea to [rbp-X] or [rsp+X]
-                    # ARM: str to [fp, #-X] or [sp, #X]
-                    op0_type = idc.get_operand_type(ea, 0)
-                    # Memory write: operand 0 is a memory reference
-                    if op0_type in (idc.o_displ, idc.o_phrase):
-                        op0_val = idc.get_operand_value(ea, 0)
-                        if op0_val is not None:
-                            written_offsets.add(op0_val)
+                mnem = (idc.print_insn_mnem(ea) or "").lower()
+                if mnem in _STORE_MNEMONICS:
+                    try:
+                        insn = ida_ua.insn_t()
+                        if ida_ua.decode_insn(insn, ea) > 0 and len(insn.ops) > _dst_op_index:
+                            op = insn.ops[_dst_op_index]
+                            if op.type in (ida_ua.o_displ, ida_ua.o_phrase):
+                                try:
+                                    member, _delta = ida_frame.get_stkvar(insn, op)
+                                except Exception:
+                                    member = None
+                                if member is not None:
+                                    written_offsets.add(member.soff)
+                    except Exception:
+                        pass
                 ea = idc.next_head(ea)
                 uninit_iter += 1
                 if uninit_iter >= 100000:
@@ -617,7 +663,7 @@ def stack_analysis(
                         pass  # return addr
                     else:
                         local_count += 1
-                    if "[" in type_str or (size >= 16 and "*" not in type_str):
+                    if _is_buffer_like(type_str, size):
                         buffer_count += 1
             # Quick canary check
             for sym in _CANARY_SYMBOLS:

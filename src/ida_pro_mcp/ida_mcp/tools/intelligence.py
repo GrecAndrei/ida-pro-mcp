@@ -26,7 +26,6 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
-import contextlib
 import re
 from typing import Any
 
@@ -41,55 +40,6 @@ try:
     from .code_helpers import _build_function_structure_summary
 except ImportError:
     from code_helpers import _build_function_structure_summary  # type: ignore[import-not-found]
-
-def _parse_register_offset(op_str: str) -> Optional[tuple[str, int]]:
-    op_str = op_str.lower()
-    if '[' not in op_str or ']' not in op_str:
-        return None
-    inner = op_str.split('[')[1].split(']')[0].strip()
-    tokens = re.split(r'(\+|\-)', inner)
-    base_reg = None
-    offset = 0
-    current_sign = 1
-
-    valid_regs = {'rax', 'rcx', 'rdx', 'rbx', 'rsp', 'rbp', 'rsi', 'rdi',
-                  'r8', 'r9', 'r10', 'r11', 'r12', 'r13', 'r14', 'r15',
-                  'eax', 'ecx', 'edx', 'ebx', 'esp', 'ebp', 'esi', 'edi'}
-
-    for tok in tokens:
-        tok = tok.strip()
-        if not tok:
-            continue
-        if tok == '+':
-            current_sign = 1
-            continue
-        if tok == '-':
-            current_sign = -1
-            continue
-
-        if tok in valid_regs:
-            if base_reg is None:
-                base_reg = tok
-        else:
-            val = 0
-            if tok.endswith('h'):
-                with contextlib.suppress(ValueError):
-                    val = int(tok[:-1], 16)
-            elif tok.startswith('0x'):
-                with contextlib.suppress(ValueError):
-                    val = int(tok, 16)
-            else:
-                try:
-                    val = int(tok, 10)
-                except ValueError:
-                    with contextlib.suppress(ValueError):
-                        val = int(tok, 16)
-            if val != 0:
-                offset += current_sign * val
-
-    if base_reg:
-        return base_reg, offset
-    return None
 
 def _build_fast_signature(fea: int, func=None) -> str:
     """Build a fast signature string from disassembly + metadata (no decompile).
@@ -248,216 +198,6 @@ def _function_index_metadata(func) -> dict[str, Any]:
         "cyclomatic": cyclomatic,
     }
 
-def suggest_next_steps(kwargs: dict, default_addr: Any = None) -> dict:
-    """Return up to 3 concrete tool calls the LLM should fire next.
-
-    Opt-in replacement for the auto-nudge shotgun that used to inject 3-5
-    directives into every decompile response. Only runs when the LLM
-    explicitly calls `intelligence(action="suggest", ...)`.
-
-    Args:
-        kwargs:        caller-supplied kwargs. Recognized keys:
-            tool     — the tool the LLM just called (e.g. "code")
-            action   — the action it just took (e.g. "decompile")
-            payload  — optional result dict the LLM is reasoning about
-            addr     — function address (overrides default_addr)
-        default_addr:  the function address from the parent call.
-
-    Returns:
-        {"ok": True, "based_on": {...}, "suggestions": [up to 3 entries]} on
-        a meaningful context, or {"ok": True, "suggestions": [], "reason": "..."}
-        when there is no obvious next step.
-    """
-    last_tool = str(kwargs.get("tool") or "").strip()
-    last_action = str(kwargs.get("action") or "").strip()
-    raw_payload = kwargs.get("payload")
-    last_payload = raw_payload if isinstance(raw_payload, dict) else {}
-    addr_kw = kwargs.get("addr")
-    target_addr = (str(addr_kw or default_addr) if (addr_kw or default_addr) else "")
-
-    suggestions: list = []
-
-    # ---- code:decompile / smart_decompile / semantic_decompile ----
-    if last_tool == "code" and last_action in (
-        "decompile", "smart_decompile", "semantic_decompile"
-    ) and target_addr:
-        api_calls = last_payload.get("api_calls", []) or []
-        if isinstance(api_calls, str):
-            api_calls = [api_calls]
-        behavior_tags = last_payload.get("behavior_tags", []) or []
-
-        dangerous_sinks = {"strcpy", "strcat", "sprintf", "memcpy", "gets",
-                            "system", "popen", "execve"}
-        has_dangerous_sink = any(s in dangerous_sinks for s in api_calls)
-        has_network = "network" in behavior_tags
-        has_process_injection = "process_injection" in behavior_tags
-
-        # One taint suggestion covering the strongest signal we have. The
-        # old shotgun version emitted two (one for dangerous API, one for
-        # network + dangerous API) for the same payload — the LLM only
-        # needs one.
-        if has_dangerous_sink or has_process_injection:
-            # Pick the best source hint. If we have a network tag, prefer
-            # the first network-ish API (recv, recvfrom) since that's the
-            # actual taint source. Otherwise fall back to the first
-            # dangerous sink so the taint engine has a real entry point.
-            source = None
-            if has_network:
-                for candidate in ("recv", "recvfrom", "InternetReadFile",
-                                  "InternetOpenUrl", "ReadFile"):
-                    if candidate in api_calls:
-                        source = candidate
-                        break
-            if not source:
-                # Prefer the first dangerous sink we recognise; only as a
-                # last resort fall back to the first API we saw.
-                for s in api_calls:
-                    if s in dangerous_sinks:
-                        source = s
-                        break
-            if not source:
-                source = api_calls[0] if api_calls else "recv"
-            suggestions.append({
-                "tool": "taint",
-                "arguments": {"action": "trace", "addr": target_addr,
-                               "source": source},
-                "reason": (
-                    "process-injection capability"
-                    if has_process_injection
-                    else ("network input + dangerous sink"
-                          if has_network
-                          else "dangerous API in decompiled function")
-                ),
-            })
-
-        if any("crypto" in str(t).lower() for t in behavior_tags):
-            suggestions.append({
-                "tool": "crypto_id",
-                "arguments": {"action": "identify", "addr": target_addr},
-                "reason": "crypto pattern detected",
-            })
-
-        if not suggestions:
-            suggestions.append({
-                "tool": "code",
-                "arguments": {"action": "xrefs_to", "addr": target_addr},
-                "reason": "see what calls this function",
-            })
-
-    # ---- taint:trace / taint:report with vulns ----
-    elif last_tool == "taint" and last_action in ("trace", "report"):
-        vulns = last_payload.get("findings", last_payload.get("vulns", [])) or []
-        if vulns:
-            top = vulns[0] if isinstance(vulns[0], dict) else {}
-            sink = str(top.get("sink_addr") or (top.get("path", [""])[-1] if isinstance(top.get("path"), list) else "") or target_addr)
-            if sink:
-                suggestions.append({
-                    "tool": "code",
-                    "arguments": {"action": "explain", "addr": sink},
-                    "reason": "explain the confirmed vulnerability",
-                })
-
-    # ---- search:find / nl / behavior with results ----
-    elif last_tool == "search" and last_action in ("find", "nl", "behavior"):
-        items = last_payload.get("items", []) or []
-        if items and isinstance(items[0], dict):
-            top_addr = str(items[0].get("addr") or items[0].get("address") or items[0].get("ea") or "")
-            if top_addr:
-                suggestions.append({
-                    "tool": "code",
-                    "arguments": {"action": "smart_decompile", "addrs": top_addr},
-                    "reason": "decompile the top result",
-                })
-
-    # ---- blackboard:frontier ----
-    elif last_tool == "blackboard" and last_action == "frontier":
-        items = last_payload.get("items", []) or []
-        if items and isinstance(items[0], dict):
-            top_addr = str(items[0].get("addr", ""))
-            if top_addr:
-                suggestions.append({
-                    "tool": "code",
-                    "arguments": {"action": "smart_decompile", "addrs": top_addr},
-                    "reason": "highest-priority frontier target",
-                })
-
-    # ---- blackboard:coverage with low coverage ----
-    elif last_tool == "blackboard" and last_action == "coverage":
-        pct = last_payload.get("coverage_pct", 100)
-        unvisited = last_payload.get("unvisited", 0)
-        if pct < 30 and unvisited > 0:
-            suggestions.append({
-                "tool": "blackboard",
-                "arguments": {"action": "frontier", "limit": 10},
-                "reason": "get ranked frontier targets",
-            })
-
-    # ---- idb:overview with firmware_detected ----
-    elif last_tool == "idb" and last_action == "overview":
-        if last_payload.get("firmware_detected"):
-            suggestions.append({
-                "tool": "firmware_view",
-                "arguments": {"action": "triage_snapshot"},
-                "reason": "firmware-like binary — start with one-shot orientation",
-            })
-
-    # ---- firmware_view:scan_region with regions found ----
-    elif last_tool == "firmware_view" and last_action == "scan_region":
-        regions = last_payload.get("regions", []) or []
-        if regions:
-            suggestions.append({
-                "tool": "firmware_view",
-                "arguments": {"action": "carve_plan"},
-                "reason": "plan retyping before applying changes",
-            })
-
-    # ---- firmware_view:carve_plan ----
-    elif last_tool == "firmware_view" and last_action == "carve_plan":
-        suggestions.append({
-            "tool": "firmware_view",
-            "arguments": {"action": "smart_carve", "apply": False},
-            "reason": "dry-run the carve plan first",
-        })
-
-    # ---- firmware_view:smart_carve / auto_retype ----
-    elif last_tool == "firmware_view" and last_action in ("smart_carve", "auto_retype"):
-        if last_payload.get("applied"):
-            suggestions.append({
-                "tool": "search",
-                "arguments": {"action": "func_by_sig", "pattern": "no_callers"},
-                "reason": "find interrupt handlers / entry points after retyping",
-            })
-
-    # ---- packer:detect with do_not_unpack recommendation ----
-    elif last_tool == "packer" and last_action == "detect":
-        if last_payload.get("recommendation") == "do_not_unpack":
-            suggestions.append({
-                "tool": "search",
-                "arguments": {"action": "find", "query": "cheat anticheat hook"},
-                "reason": "confirm which anti-cheat strings are present",
-            })
-
-    if not suggestions:
-        return {
-            "ok": True,
-            "suggestions": [],
-            "reason": (
-                "no obvious next step from this tool+action. "
-                "try ida_session_state or ida_next_target"
-            ),
-        }
-
-    return {
-        "ok": True,
-        "based_on": {
-            "tool": last_tool or None,
-            "action": last_action or None,
-            "addr": target_addr or None,
-        },
-        "suggestions": suggestions[:3],
-    }
-
-
 def _invalidate_tool_cache() -> None:
     """Drop cached @idaread responses after the index changes on disk.
 
@@ -599,9 +339,6 @@ def intelligence(
             db_path = idb_path + ".embeddings.db"
             return FunctionEmbeddingIndex(db_path, embedder), db_path
 
-        def _persist_embedder_state(idx, action_name: str, thresholds: dict | None = None):
-            return {"persisted": False, "embedding_state_id": ""}
-
         if action in ("intelligence_status", "embedder_status", "reranker_status"):
             classifier = _classifier()
             est = embedder.status(probe=bool(kwargs.get("probe", False)), deep_hash=bool(kwargs.get("deep_hash", False)))
@@ -620,11 +357,6 @@ def intelligence(
                 idx, idx_path = _index_for_current_idb()
                 idx_count = int(idx.size)
                 active_indexes = 1 if idx_path else 0
-            except Exception:
-                pass
-            try:
-                if idx_count > 0:
-                    _persist_embedder_state(idx, "intelligence_status")
             except Exception:
                 pass
             return {
@@ -734,7 +466,6 @@ def intelligence(
                     "Embedding backend unavailable; the function was not indexed.",
                     hint="Configure bge-code-v1 and llama-server, then retry indexing.",
                 )
-            _persist_embedder_state(idx, "index_function")
             _invalidate_tool_cache()
             return {
                 "ok": True,
@@ -853,7 +584,6 @@ def intelligence(
                 except (ValueError, TypeError):
                     configured_pass_size = 0
                 limit = max(1, min(64, configured_pass_size or min(32, max(8, available_cpus * 2))))
-            action_label = action
 
             idx, db_path = _index_for_current_idb()
             started_at = time.monotonic()
@@ -1002,7 +732,6 @@ def intelligence(
             # functions (e.g. 30/40 done). Report the retry cursor so the
             # background orchestrator resumes from before the failed batch
             # instead of treating a partial index as a total failure.
-            _persist_embedder_state(idx, action_label)
             _invalidate_tool_cache()
             quality_counts = idx.quality_counts()
             if use_decompile:
@@ -1082,11 +811,6 @@ def intelligence(
             metadata["source_chars"] = len(pseudo)
             idx.index_async(hex(ea), qname, document, metadata)
             similar = idx.similar(document, top_k=top_k, exclude_ea=hex(ea), threshold=threshold)
-            _persist_embedder_state(
-                idx,
-                "similar_functions",
-                thresholds={"similarity_threshold": float(threshold)},
-            )
             return {
                 "ok": True,
                 "query_addr": hex(ea),
@@ -1108,11 +832,6 @@ def intelligence(
                     hint="Index your functions first:\n  index_fast:  seconds, disassembly-based (good for quick triage)\n  index_batch: minutes, decompile-based (best quality embeddings)",
                 )
             rows = idx.search(str(query), top_k=top_k, threshold=threshold)
-            _persist_embedder_state(
-                idx,
-                "semantic_search",
-                thresholds={"semantic_threshold": float(threshold)},
-            )
             return {
                 "ok": True,
                 "query": str(query),
@@ -1155,7 +874,6 @@ def intelligence(
                 meta = idx.metadata()
             except Exception:
                 meta = {}
-            _persist_embedder_state(idx, "export_index_summary")
             return {
                 "ok": True,
                 "index": {
@@ -1211,11 +929,6 @@ def intelligence(
                 address_ranges=address_ranges,
                 name_filter=str(kwargs.get("name_filter") or kwargs.get("query") or ""),
                 limit=limit,
-            )
-            _persist_embedder_state(
-                idx,
-                "function_families",
-                thresholds={"min_similarity": float(min_similarity), "min_size": float(min_size)},
             )
 
             # Group mark_examined: record every family member as examined in one

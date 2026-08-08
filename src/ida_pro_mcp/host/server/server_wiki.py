@@ -14,6 +14,7 @@ from ..config import (
     MAX_WIKI_RESULTS,
     WIKI_SEMANTIC_GROUPS,
     _bounded_int,
+    _coerce_bool,
     _parse_line_range,
 )
 from ..errors import MCPError, make_error
@@ -96,13 +97,14 @@ class ServerWikiMixin:
             vec = embedder.embed_vector(key)
         except Exception:
             return None
-        if len(self._wiki_embed_cache) >= self._wiki_embed_cache_max:
-            # simple FIFO-ish eviction
-            try:
-                self._wiki_embed_cache.pop(next(iter(self._wiki_embed_cache)))
-            except Exception:
-                self._wiki_embed_cache.clear()
-        self._wiki_embed_cache[key] = vec
+        with self._wiki_cache_lock:
+            if len(self._wiki_embed_cache) >= self._wiki_embed_cache_max:
+                # simple FIFO-ish eviction
+                try:
+                    self._wiki_embed_cache.pop(next(iter(self._wiki_embed_cache)))
+                except Exception:
+                    self._wiki_embed_cache.clear()
+            self._wiki_embed_cache[key] = vec
         return vec
 
     def _wiki_expand_semantic_terms(self, query_tokens: list[str]) -> set[str]:
@@ -174,12 +176,13 @@ class ServerWikiMixin:
     def _wiki_get_index(self, wiki_root: str, force: bool = False) -> dict:
         now = time.time()
         cache = self._wiki_cache
-        if (
-            not force
-            and cache.get("root") == wiki_root
-            and now < float(cache.get("expires", 0.0))
-        ):
-            return cache
+        with self._wiki_cache_lock:
+            if (
+                not force
+                and cache.get("root") == wiki_root
+                and now < float(cache.get("expires", 0.0))
+            ):
+                return cache
 
         topics: dict[str, list[str]] = {}
         pages: list[dict] = []
@@ -236,14 +239,15 @@ class ServerWikiMixin:
             topics[category] = sorted(set(topics[category]))
         pages.sort(key=lambda p: p["topic"])
 
-        cache.update(
-            {
-                "root": wiki_root,
-                "expires": now + self._wiki_cache_ttl,
-                "topics": topics,
-                "pages": pages,
-            }
-        )
+        with self._wiki_cache_lock:
+            cache.update(
+                {
+                    "root": wiki_root,
+                    "expires": now + self._wiki_cache_ttl,
+                    "topics": topics,
+                    "pages": pages,
+                }
+            )
         return cache
 
     def _wiki_normalize_topic(
@@ -622,7 +626,7 @@ class ServerWikiMixin:
         topics: dict[str, list[str]] = wiki_index.get("topics", {})
         pages: list[dict] = wiki_index.get("pages", [])
 
-        verbose = bool(args.get("verbose", False))
+        verbose = _coerce_bool(args.get("verbose"), False)
         default_limit = (
             self.default_wiki_read_limit if action == "read" and not verbose else 0
         )
@@ -636,7 +640,7 @@ class ServerWikiMixin:
         context_lines = _bounded_int(
             args.get("context_lines", 2), 2, min_value=0, max_value=10
         )
-        include_snippets = bool(args.get("include_snippets", False))
+        include_snippets = _coerce_bool(args.get("include_snippets"), False)
         category_filter = args.get("category")
         max_results = _bounded_int(
             args.get("max_results", 20 if verbose else 8),
@@ -644,9 +648,9 @@ class ServerWikiMixin:
             min_value=1,
             max_value=MAX_WIKI_RESULTS,
         )
-        fuzzy = bool(args.get("fuzzy", True))
-        strict_topic = bool(args.get("strict_topic", False))
-        include_related = bool(args.get("include_related", bool(verbose)))
+        fuzzy = _coerce_bool(args.get("fuzzy"), True)
+        strict_topic = _coerce_bool(args.get("strict_topic"), False)
+        include_related = _coerce_bool(args.get("include_related"), bool(verbose))
 
         if action == "list_topics":
             if topics:
@@ -730,6 +734,56 @@ class ServerWikiMixin:
                 "count": len(matches),
             }
             return response
+
+        if action == "suggest":
+            # Distinct from read/search: returns fuzzy topic suggestions for a
+            # query without requiring the topic to exist. Previously the action
+            # was declared in the schema but fell through to the read flow and
+            # returned a read-style page (or a not-found error) instead.
+            query = (args.get("query") or args.get("topic") or "").strip()
+            if not query:
+                return make_error(MCPError.INVALID_ARGS, "query required for suggest")
+            suggestions: list[dict] = []
+            if pages:
+                matches = self._wiki_search_pages(
+                    pages,
+                    query,
+                    max_results=max_results,
+                    category_filter=category_filter,
+                    include_snippets=False,
+                    context_lines=0,
+                    fuzzy=True,
+                )
+                suggestions = [
+                    {
+                        "topic": m["topic"],
+                        "title": m["title"],
+                        "category": m["category"],
+                        "score": m["score"],
+                    }
+                    for m in matches
+                ]
+            else:
+                q_lower = query.lower()
+                for tool_name in TOOLS:
+                    text = self._wiki_generated_tool_doc(tool_name) or ""
+                    if q_lower in tool_name.lower() or q_lower in text.lower():
+                        suggestions.append(
+                            {
+                                "topic": f"tools/{tool_name}",
+                                "title": f"{tool_name.upper()} Tool Manual",
+                                "category": "tools",
+                                "score": 1,
+                            }
+                        )
+                suggestions = suggestions[:max_results]
+            return {
+                "ok": True,
+                "action": "suggest",
+                "query": query,
+                "suggestions": suggestions,
+                "count": len(suggestions),
+            }
 
         topic_name, topic_err = self._wiki_normalize_topic(args.get("topic"))
         if topic_err:

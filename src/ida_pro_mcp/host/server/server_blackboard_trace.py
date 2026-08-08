@@ -12,6 +12,8 @@ import json
 import re
 from typing import Any
 
+from ..errors import is_error_result
+
 _ADDR_RE = re.compile(r"\b0x[0-9a-fA-F]{4,16}\b")
 _SYMBOL_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{3,63}\b")
 _ADDR_NAME_RE = re.compile(
@@ -100,6 +102,10 @@ class ServerBlackboardTraceMixin:
             tags = []
         new_tags = [t for t in tags if not str(t).startswith("status:")]
         new_tags.append(f"status:{status}")
+        # The payload's status is the authoritative record; the store unions
+        # tags, so status tags accumulate and cannot express replacement.
+        payload = dict(payload or {})
+        payload["status"] = status
         store.update(entry.get("id"), tags=new_tags, content=json.dumps(payload, ensure_ascii=True))
 
     def _auto_proposals_from_trace(self, store, trace_entry_id: str, pairs: list[dict[str, str]]) -> int:
@@ -148,9 +154,9 @@ class ServerBlackboardTraceMixin:
                 try:
                     xr = self._execute_tool(
                         "graph",
-                        {"action": "influence", "addr": addr, "depth": depth, "limit": 12, "include_items": True},
+                        {"action": "xref_graph", "addr": addr, "depth": depth, "format": "json", "max_items": 12},
                     )
-                    if isinstance(xr, dict):
+                    if isinstance(xr, dict) and not is_error_result(xr):
                         collected.append({"kind": "xref", "addr": addr, "result": xr})
                 except Exception as exc:
                     collected.append({"kind": "xref_error", "addr": addr, "error": str(exc)})
@@ -158,12 +164,12 @@ class ServerBlackboardTraceMixin:
             if hasattr(self, "_execute_tool"):
                 try:
                     sr = self._execute_tool("search", {"action": "find", "query": sym, "limit": 5})
-                    if isinstance(sr, dict):
+                    if isinstance(sr, dict) and not is_error_result(sr):
                         collected.append({"kind": "symbol", "symbol": sym, "result": sr})
                 except Exception as exc:
                     collected.append({"kind": "symbol_error", "symbol": sym, "error": str(exc)})
 
-        # Derive additional addr->name pairs from simplistic evidence text
+        # Derive additional addr->name pairs from evidence text
         for item in collected:
             text = json.dumps(item, ensure_ascii=True)
             parsed = self._extract_trace_entities(text)
@@ -171,27 +177,33 @@ class ServerBlackboardTraceMixin:
                 if pair not in pairs:
                     pairs.append(pair)
 
+        evidence_ok = [c for c in collected if c.get("kind") in ("xref", "symbol")]
         derived_summary = {
             "trace_task_id": entry.get("id"),
-            "evidence_count": len(collected),
+            "evidence_count": len(evidence_ok),
             "addrs": addrs[:limit],
             "symbols": symbols[:8],
             "pairs": pairs[:20],
         }
-        store.write(
-            title=f"trace evidence {entry.get('id')}",
-            content=json.dumps(derived_summary, ensure_ascii=True),
-            category="hypothesis",
-            addr=(addrs or [""])[0],
-            tags=["trace_derived", "evidence"],
-            confidence=0.62,
-            source="trace_run",
-            source_type="trace",
-        )
+        # Only record an evidence entry when something was actually gathered,
+        # and keep it out of the hypothesis lane: it is an evidence record,
+        # never a user-facing claim, and `_memory_compile` would otherwise
+        # count each one as an open hypothesis forever.
+        if evidence_ok:
+            store.write(
+                title=f"trace evidence {entry.get('id')}",
+                content=json.dumps(derived_summary, ensure_ascii=True),
+                category="trace_evidence",
+                addr=(addrs or [""])[0],
+                tags=["trace_derived", "evidence"],
+                confidence=0.62,
+                source="trace_run",
+                source_type="trace",
+            )
         proposal_count = self._auto_proposals_from_trace(store, str(entry.get("id")), pairs[:20])
         return {
             "ok": True,
-            "evidence_count": len(collected),
+            "evidence_count": len(evidence_ok),
             "derived_pairs": len(pairs),
             "proposals_created": proposal_count,
         }

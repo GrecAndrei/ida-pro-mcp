@@ -426,6 +426,9 @@ class FunctionEmbeddingIndex:
         self._cache: dict[str, list[float]] = {}  # ea_hex -> embedding
         self._cache_lock = threading.Lock()
         self._db_mtime_ns = 0
+        # Bounded fire-and-forget queue: cap concurrent background index
+        # threads so a large index_async burst cannot spawn unbounded threads.
+        self._async_gate = threading.Semaphore(4)
 
         try:
             from ..config import CACHE_DIR
@@ -481,8 +484,12 @@ class FunctionEmbeddingIndex:
         self._load_cache()
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
+        # timeout gives the writer a grace window when another thread (e.g. the
+        # background _persist thread or a batch index) holds the write lock, so
+        # concurrent enrichment does not drop rows with an immediate SQLITE_BUSY.
+        conn = sqlite3.connect(self._db_path, timeout=5.0)
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
         return conn
 
     def _init_db(self) -> None:
@@ -653,7 +660,7 @@ class FunctionEmbeddingIndex:
         """Return most recently indexed function refs for state tracking."""
         rows: list[dict[str, Any]] = []
         try:
-            with self._conn() as conn:
+            with closing(self._conn()) as conn:
                 for row in conn.execute(
                     """
                     SELECT ea, name, indexed_at, signature_hash
@@ -678,7 +685,7 @@ class FunctionEmbeddingIndex:
     def quality_counts(self) -> dict[str, int]:
         """Return persisted function counts by indexing quality."""
         try:
-            with self._conn() as conn:
+            with closing(self._conn()) as conn:
                 rows = conn.execute(
                     "SELECT COALESCE(index_quality, 'unknown'), COUNT(*) FROM func_embeddings GROUP BY index_quality"
                 ).fetchall()
@@ -777,7 +784,7 @@ class FunctionEmbeddingIndex:
         try:
             with self._cache_lock:
                 self._cache.clear()
-            with self._conn() as conn:
+            with closing(self._conn()) as conn:
                 for row in conn.execute("SELECT ea, vec_blob FROM func_embeddings"):
                     ea, blob = row
                     with self._cache_lock:
@@ -814,7 +821,7 @@ class FunctionEmbeddingIndex:
             return {}
         rows: dict[str, dict[str, Any]] = {}
         try:
-            with self._conn() as conn:
+            with closing(self._conn()) as conn:
                 ph = ",".join("?" * len(eas))
                 for row in conn.execute(
                     f"SELECT ea, name, signature_text, indexed_at FROM func_embeddings WHERE ea IN ({ph})",
@@ -842,7 +849,7 @@ class FunctionEmbeddingIndex:
             return {}
         out: dict[str, str] = {}
         try:
-            with self._conn() as conn:
+            with closing(self._conn()) as conn:
                 ph = ",".join("?" * len(eas))
                 for row in conn.execute(
                     f"SELECT ea, document_text FROM func_embeddings WHERE ea IN ({ph})",
@@ -870,7 +877,7 @@ class FunctionEmbeddingIndex:
         indexed = 0
         failed = 0
         try:
-            with self._conn() as conn:
+            with closing(self._conn()) as conn:
                 for func_ea, name, pseudocode, metadata in functions:
                     ph = self._phash(pseudocode)
                     signature_text = _extract_signature_text(pseudocode, max_tokens=256)
@@ -883,14 +890,16 @@ class FunctionEmbeddingIndex:
                     incoming_quality = str(md.get("index_quality") or "unknown")
                     stored_quality = str(row[4] or "unknown") if row else "unknown"
                     if row and _INDEX_QUALITY_RANK.get(stored_quality, 0) > _INDEX_QUALITY_RANK.get(incoming_quality, 0):
-                        conn.execute(
-                            "UPDATE func_embeddings SET name=?, func_size=?, bb_count=?, has_loops=?, api_count=?, string_count=?, segment=?, is_thunk=?, cyclomatic=? WHERE ea=?",
-                            (
-                                name, md.get("func_size", 0), md.get("bb_count", 0), md.get("has_loops", 0),
-                                md.get("api_count", 0), md.get("string_count", 0), md.get("segment", ""),
-                                md.get("is_thunk", 0), md.get("cyclomatic", 0), func_ea,
-                            ),
-                        )
+                        # The stored row is higher quality: keep it intact.  Only
+                        # refresh the name when the incoming row carries one (a
+                        # user/analysis rename).  Never clobber the stored
+                        # structural metadata with empty/default values from a
+                        # metadata-less caller (e.g. a modify.py re-index).
+                        if name and name != (row[1] or ""):
+                            conn.execute(
+                                "UPDATE func_embeddings SET name=? WHERE ea=?",
+                                (name, func_ea),
+                            )
                         indexed += 1
                         continue
                     if row and row[0] == ph:
@@ -957,7 +966,7 @@ class FunctionEmbeddingIndex:
             return {"indexed": indexed, "failed": failed, "resume_after_ea": None}
 
         try:
-            with self._conn() as conn:
+            with closing(self._conn()) as conn:
                 for entry, vec in ready:
                     md = entry["metadata"]
                     conn.execute(
@@ -1026,7 +1035,12 @@ class FunctionEmbeddingIndex:
         return result
 
     def index_async(self, func_ea: str, name: str, pseudocode: str, metadata: dict | None = None) -> None:
-        """Non-blocking index: fire-and-forget in background thread."""
+        """Non-blocking index: fire-and-forget in background thread.
+
+        Concurrency is bounded by ``_async_gate``: when the gate is saturated
+        the index runs inline (synchronous) rather than spawning an unbounded
+        number of threads.
+        """
         ph = self._phash(pseudocode)
         signature_text = _extract_signature_text(pseudocode, max_tokens=256)
         signature_hash = self._phash(signature_text or pseudocode)
@@ -1035,7 +1049,7 @@ class FunctionEmbeddingIndex:
         if cached_vec is not None:
             # Check if we already have this exact pseudocode
             try:
-                with self._conn() as conn:
+                with closing(self._conn()) as conn:
                     row = conn.execute(
                         "SELECT pseudo_hash, name, signature_hash, signature_text FROM func_embeddings WHERE ea=?",
                         (func_ea,),
@@ -1044,7 +1058,18 @@ class FunctionEmbeddingIndex:
                         return
             except Exception:
                 pass
-        t = threading.Thread(target=self.index, args=(func_ea, name, pseudocode, metadata), daemon=True)
+        if not self._async_gate.acquire(blocking=False):
+            # Saturated: run inline so the caller is not dropped on the floor.
+            self.index(func_ea, name, pseudocode, metadata)
+            return
+
+        def _run() -> None:
+            try:
+                self.index(func_ea, name, pseudocode, metadata)
+            finally:
+                self._async_gate.release()
+
+        t = threading.Thread(target=_run, daemon=True)
         t.start()
 
     def _similarity_candidates(
@@ -1160,7 +1185,7 @@ class FunctionEmbeddingIndex:
 
         raw_rows: list[tuple[str, str, str, Any, set[str], str]] = []
         try:
-            with self._conn() as conn:
+            with closing(self._conn()) as conn:
                 for row in conn.execute(
                     "SELECT ea, name, signature_text, indexed_at FROM func_embeddings"
                 ):
@@ -1430,7 +1455,7 @@ class FunctionEmbeddingIndex:
 
         rows = []
         try:
-            with self._conn() as conn:
+            with closing(self._conn()) as conn:
                 for row in conn.execute(sql, params):
                     rows.append({
                         "ea": str(row[0]),
@@ -1454,7 +1479,7 @@ class FunctionEmbeddingIndex:
             for r in rows:
                 # Check if any requested API appears in the function's signature
                 try:
-                    with self._conn() as conn:
+                    with closing(self._conn()) as conn:
                         sig_row = conn.execute("SELECT signature_text FROM func_embeddings WHERE ea=?", (r["ea"],)).fetchone()
                         sig = str(sig_row[0] or "") if sig_row else ""
                         if any(api.lower() in sig.lower() for api in apis):

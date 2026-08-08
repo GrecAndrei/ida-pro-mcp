@@ -52,12 +52,14 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
     matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
     ranked_heap = []
     heap_cap = max(_FIND_INSTRUCTION_CAP, limit * _FIND_INSTRUCTION_LIMIT_MULTIPLIER)
+    heap_seq = 0
     timer = SearchTimeout(timeout_ms)
     timed_out = False
     name_hits = 0
 
     def add_find(kind, ea, line, score, name="", sem_text=None, bonus=0.0, cap=None):
-        nonlocal name_hits
+        nonlocal name_hits, heap_seq
+        heap_seq += 1
         key = (float(score), int(ea))
         record = {
             "type": kind,
@@ -72,10 +74,13 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
         }
         if kind in ("names", "imports", "strings"):
             name_hits += 1
+        # The monotonic heap_seq makes (key, seq, record) tuples unique even
+        # when two hits share the same (score, ea), so heapq never falls
+        # through to comparing the dict records (TypeError on duplicates).
         if len(ranked_heap) < heap_cap:
-            heapq.heappush(ranked_heap, (key, record))
+            heapq.heappush(ranked_heap, (key, heap_seq, record))
         elif key > ranked_heap[0][0]:
-            heapq.heapreplace(ranked_heap, (key, record))
+            heapq.heapreplace(ranked_heap, (key, heap_seq, record))
 
     # 1. Xrefs for address patterns
     if looks_like_address(pattern):
@@ -222,7 +227,7 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
                     )
                     instruction_hits += 1
 
-    ranked = [item[1] for item in ranked_heap]
+    ranked = [item[2] for item in ranked_heap]
     _rescore_find_ranked(ranked, pattern)
     page, total, is_truncated = paginate_records(
         ranked, offset, limit, sort_key=lambda r: (r["score"], r["address_ea"])
@@ -483,12 +488,6 @@ def search_api(pattern, include_context, offset, limit, include_items, include_b
         key=lambda x: x["xref_count"], reverse=True,
     )
 
-    if not api_summary:
-        return make_error(
-            MCPError.NO_RESULTS,
-            "No imported API matching pattern",
-            "Check imports with data(action='imports') or search(action='find').",
-        )
     result = build_response(
         [r["line"] for r in page], offset, limit, total, is_truncated,
         api=api_summary[0]["api"], api_addr=api_summary[0]["address"], action="api",
@@ -937,10 +936,8 @@ def search_xrefs_to_string(pattern, include_context=False, offset=0, limit=100, 
                 refs.append(entry)
         merged[te_a] = {"string_ea": hex(te_a), "value": clip_text(s_value, 200), "xref_count": len(refs), "xrefs": refs}
 
-    if not merged:
-        return {"ok": True, "query": raw, "results": "", "count": 0, "items": [],
-                "note": "String(s) found but no code xrefs to them."}
-
+    # merged is keyed by every element of target_eas (guaranteed non-empty
+    # above), so it is always populated by the time we reach this point.
     rows = sorted(merged.values(), key=lambda r: r["xref_count"], reverse=True)
     page, total, truncated = paginate_records(rows, offset, limit)
 

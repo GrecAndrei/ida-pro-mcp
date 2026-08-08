@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+import zipfile
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Iterable
 
 
 class SourceParser(ABC):
@@ -60,6 +61,27 @@ class SourceParser(ABC):
     def _post_download(self, fpath: str, dest_dir: str) -> None:  # noqa: B027
         """Hook for post-download processing (e.g. zip extraction). Override if needed."""
 
+    @staticmethod
+    def _safe_extract(zf: zipfile.ZipFile, dest_dir: str, members: Iterable[str] | None = None) -> None:
+        """Extract archive members without zip-slip path traversal.
+
+        Rejects absolute member paths and any member that resolves outside
+        ``dest_dir`` after normalisation (``..`` hops).  Mirrors the standard
+        zipfile guard: ``_is_safe_path`` + ``os.path.realpath`` containment.
+        """
+        dest_abs = os.path.realpath(dest_dir)
+        selected = members if members is not None else zf.namelist()
+        for member in selected:
+            arcname = member.replace("\\", "/")
+            if arcname.startswith(("/", "\\\\", "//")):
+                raise zipfile.BadZipFile(f"absolute member path in archive: {member!r}")
+            target = os.path.realpath(os.path.join(dest_dir, *arcname.split("/")))
+            if os.path.commonpath([dest_abs, target]) != dest_abs:
+                raise zipfile.BadZipFile(f"archive member escapes destination: {member!r}")
+        # All members checked; now extract the filtered set.
+        filtered = [m for m in selected if _member_is_safe(m)]
+        zf.extractall(dest_dir, members=filtered)
+
     def fingerprint(self, data_dir: str) -> str:
         """SHA-256 over source files to detect changes."""
         h = hashlib.sha256()
@@ -79,3 +101,12 @@ class SourceParser(ABC):
                     h.update(fname.encode("utf-8"))
                     h.update(b"MISSING")
         return h.hexdigest()[:32]
+
+
+def _member_is_safe(member: str) -> bool:
+    """Basic sanity filter mirroring _safe_extract's checks."""
+    arcname = member.replace("\\", "/")
+    if arcname.startswith(("/", "\\\\", "//")):
+        return False
+    # Reject any hop that would escape the destination root.
+    return ".." not in arcname.split("/")

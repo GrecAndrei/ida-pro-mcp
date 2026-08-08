@@ -108,7 +108,7 @@ _MAX_FIELD_LEN = 4000
 _TRUNC_SUFFIX = "..."
 
 _YARA_RULE_RE = re.compile(
-    r"^\s*(?:private|global\s+)?rule\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{",
+    r"^\s*(?:(?:private|global)\s+)?rule\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{",
     re.MULTILINE,
 )
 _YARA_META_KV_RE = re.compile(
@@ -499,9 +499,9 @@ def compute_source_fingerprint(
                     h.update(str(st.st_size).encode("utf-8"))
                     h.update(str(int(st.st_mtime)).encode("utf-8"))
                     count += 1
-                    if count >= 1000:
+                    if count >= _YARA_RULE_DIR_MAX_RULES:
                         break
-                if count >= 1000:
+                if count >= _YARA_RULE_DIR_MAX_RULES:
                     break
             h.update(str(count).encode("utf-8"))
         except OSError:
@@ -673,7 +673,17 @@ class ThreatCorpus:
             return []
         results: list[dict[str, Any]] = []
         for e in self.entries.get(source, []):
-            text = " ".join(str(v) for v in e.values() if isinstance(v, str)).lower()
+            parts: list[str] = []
+            for v in e.values():
+                if isinstance(v, str):
+                    parts.append(v)
+                elif isinstance(v, list):
+                    # Flatten list-valued fields (aliases, tags, techniques,
+                    # commands) so they are searchable via the generic path.
+                    for item in v:
+                        if item is not None:
+                            parts.append(str(item))
+            text = " ".join(parts).lower()
             if q in text:
                 results.append(e)
                 if len(results) >= limit:
@@ -815,8 +825,9 @@ def save_corpus(corpus: ThreatCorpus) -> str:
     os.makedirs(CORPUS_CACHE_DIR, exist_ok=True)
     manifest_sources: dict[str, dict[str, Any]] = {}
     for source_name, entries in corpus.entries.items():
-        if not entries:
-            continue
+        # Persist empty sources too (count 0): the manifest then records which
+        # sources were attempted, so load_corpus can distinguish "source empty"
+        # from "source absent" instead of silently masking ingestion failures.
         fingerprint = corpus.source_fingerprints.get(source_name, "")
         cache_path = _source_cache_path(source_name)
         _atomic_write_json(cache_path, {
@@ -929,8 +940,10 @@ def _build_from_sources(download_result: dict[str, Any]) -> ThreatCorpus | None:
             parsed = source.parse(data_dir)
         except Exception:
             parsed = []
-        if not parsed:
-            continue
+        # Record even empty sources: a source that was downloaded but parsed
+        # nothing must remain distinguishable from a source that was never
+        # attempted, so ingestion failures survive a save/load round-trip.
+        fingerprints[source.name] = source.fingerprint(data_dir)
 
         if source.is_multi_type:
             buckets: dict[str, list[dict[str, Any]]] = {}
@@ -943,9 +956,7 @@ def _build_from_sources(download_result: dict[str, Any]) -> ThreatCorpus | None:
                 else:
                     entries[bucket] = bucket_entries
         else:
-            entries[source.name] = parsed
-
-        fingerprints[source.name] = source.fingerprint(data_dir)
+            entries.setdefault(source.name, []).extend(parsed)
 
     if not entries:
         return None

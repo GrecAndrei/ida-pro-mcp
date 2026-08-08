@@ -51,7 +51,10 @@ def _stub_reranker(**attrs) -> rerank_mod.Reranker:
     obj._last_batch_timeout = False
     obj._last_recycle_reason = ""
     obj._identity_cache = None
-    obj._server_started_at = 0.0
+    # Clearly outside the activation-grace window. 0.0 was a trap: on a fresh
+    # CI runner monotonic() < 60s would read it as "inside grace" and flake
+    # tests that assume the grace window elapsed.
+    obj._server_started_at = time.monotonic() - 3600.0
     obj._idle_lock = threading.Lock()
     obj._idle_timer = None
     obj._idle_generation = 0
@@ -513,8 +516,13 @@ class TestRecycleAndLimits:
         monkeypatch.setattr(rerank_mod, "RERANK_MAX_REQUESTS", 1000)
         written: list = []
         monkeypatch.setattr(obj, "_write_lease", written.append)
+        t0 = time.time()
         obj._record_success_and_maybe_recycle()
-        assert written == [dict(lease, request_count=2, rss=25, updated_at=written[0]["updated_at"])]
+        out = written[0]
+        assert {k: out[k] for k in lease} == dict(lease, request_count=2, rss=25)
+        # updated_at is stamped with the current wall clock, not carried over.
+        assert abs(out["updated_at"] - time.time()) < 5.0
+        assert out["updated_at"] >= t0
 
     def test_record_success_recycles_on_request_limit(self, monkeypatch):
         obj = _stub_reranker()

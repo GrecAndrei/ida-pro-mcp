@@ -147,11 +147,26 @@ def bench_accuracy(embedder, corpus: dict, gap: float = 0.0) -> dict:
         )
         return sims[:k]
 
-    # 1) leave-one-out self-retrieval: query = own pseudocode, exclude self.
+    # Query text is a short behavioral description; embed as a *query*.
+    def embed_query_text(text: str):
+        r = embedder.embed_query(text)
+        return r.vector if getattr(r, "ok", True) else None
+
+    # 1) leave-one-out self-retrieval: query with each doc's own pseudocode,
+    # freshly embedded as a *query* (not the stored corpus vector), and check
+    # the stored vector for that doc is retrieved at rank 1.  Reusing the
+    # stored vector as the query was a tautology (cos(v, v) == 1.0 always
+    # wins) that even a fully collapsed embedder passed; re-embedding gives
+    # the sanity check actual signal.
     hit1 = 0
-    for i, v in enumerate(vectors):
-        ranked = [idx for _, idx in topk(v, k=2)]
-        if ranked and ranked[0] == i and len(ranked) > 1 and ranked[1] != i:
+    for i, doc in enumerate(docs):
+        qvec = embed_query_text(doc)
+        if gap:
+            time.sleep(gap)
+        if qvec is None:
+            continue
+        ranked = [idx for _, idx in topk(qvec, k=1)]
+        if ranked and ranked[0] == i:
             hit1 += 1
     self_recall = hit1 / max(1, len(vectors))
 
@@ -165,11 +180,6 @@ def bench_accuracy(embedder, corpus: dict, gap: float = 0.0) -> dict:
     if not qa:
         # fall back to generic queries keyed by function name
         qa = _auto_queries(funcs)
-
-    # Query text is a short behavioral description; embed as a *query*.
-    def embed_query_text(text: str):
-        r = embedder.embed_query(text)
-        return r.vector if getattr(r, "ok", True) else None
 
     target_map = {fn["ea"]: i for i, fn in enumerate(funcs)}
     rr_at5 = 0.0

@@ -44,7 +44,6 @@ jobs:
 
       - name: Verify llama.cpp pin matches build script
         run: |
-          grep -q "LLAMA_CPP_COMMIT: \"$LLAMA_CPP_COMMIT\"" .github/workflows/native-build.yml
           grep -q 'LLAMA_CPP_COMMIT="${LLAMA_CPP_COMMIT:-'$LLAMA_CPP_COMMIT'}"' scripts/build_native_llama.sh
 
       - name: Install build deps
@@ -79,6 +78,18 @@ jobs:
           PY
 
       - name: Smoke-test mcp_quantize
+        shell: bash
         run: |
+          set -euo pipefail
           test -x /tmp/llama.cpp/build-mcp/mcp_quantize
-          /tmp/llama.cpp/build-mcp/mcp_quantize 2>&1 | head -1
+          # mcp_quantize prints usage and exits 2 when invoked with no args.
+          # Asserting that exact exit code is what catches a freshly built
+          # binary that crashes or segfaults at startup — a bare pipeline to
+          # `head` always reports success regardless of the real status.
+          if out="$(/tmp/llama.cpp/build-mcp/mcp_quantize 2>&1)"; then
+            rc=0
+          else
+            rc=$?
+          fi
+          test "$rc" -eq 2 || { printf 'mcp_quantize exited %s (expected 2); output:\n%s\n' "$rc" "$out"; exit 1; }
+          grep -q 'usage:' <<< "$out" || { printf 'expected usage output, got:\n%s\n' "$out"; exit 1; }

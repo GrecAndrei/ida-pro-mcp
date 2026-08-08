@@ -3,6 +3,7 @@ import copy
 import json
 import re
 import secrets
+import threading
 import time
 from collections import deque
 from typing import Any
@@ -16,19 +17,24 @@ _TOKEN_TTL_SEC = 600  # 10 minutes
 
 _TRUNCATION_STORE: dict[str, dict[str, Any]] = {}
 _TRUNCATION_ORDER: deque[str] = deque()
+# Guards the two module-level stores above.  Truncation tokens are created and
+# consumed from concurrently dispatched tool calls (ida_continue / search),
+# so mutation must be serialized to avoid lost updates and partial entries.
+_STORE_LOCK = threading.Lock()
 
 
 def _prune_expired() -> None:
     """Remove tokens older than _TOKEN_TTL_SEC."""
-    now = time.time()
-    expired = []
-    for tok, entry in _TRUNCATION_STORE.items():
-        if now - entry.get("created_at", 0) > _TOKEN_TTL_SEC:
-            expired.append(tok)
-    for tok in expired:
-        _TRUNCATION_STORE.pop(tok, None)
-        with contextlib.suppress(ValueError):
-            _TRUNCATION_ORDER.remove(tok)
+    with _STORE_LOCK:
+        now = time.time()
+        expired = []
+        for tok, entry in _TRUNCATION_STORE.items():
+            if now - entry.get("created_at", 0) > _TOKEN_TTL_SEC:
+                expired.append(tok)
+        for tok in expired:
+            _TRUNCATION_STORE.pop(tok, None)
+            with contextlib.suppress(ValueError):
+                _TRUNCATION_ORDER.remove(tok)
 
 
 def _store_truncation(
@@ -39,17 +45,18 @@ def _store_truncation(
 ) -> str:
     _prune_expired()
     token = secrets.token_urlsafe(16)
-    _TRUNCATION_STORE[token] = {
-        "response": response,
-        "fields": fields,
-        "session_id": session_id or "",
-        "owner_id": owner_id or "",
-        "created_at": time.time(),
-    }
-    _TRUNCATION_ORDER.append(token)
-    while len(_TRUNCATION_ORDER) > _MAX_TRUNCATION_STORE:
-        oldest = _TRUNCATION_ORDER.popleft()
-        _TRUNCATION_STORE.pop(oldest, None)
+    with _STORE_LOCK:
+        _TRUNCATION_STORE[token] = {
+            "response": response,
+            "fields": fields,
+            "session_id": session_id or "",
+            "owner_id": owner_id or "",
+            "created_at": time.time(),
+        }
+        _TRUNCATION_ORDER.append(token)
+        while len(_TRUNCATION_ORDER) > _MAX_TRUNCATION_STORE:
+            oldest = _TRUNCATION_ORDER.popleft()
+            _TRUNCATION_STORE.pop(oldest, None)
     return token
 
 
@@ -70,6 +77,33 @@ def _get_entry(token: str, session_id: str = "", owner_id: str = "") -> dict[str
     if entry_owner and owner_id != entry_owner:
         return None
     return entry
+
+
+def _get_nested(container: Any, field: str) -> Any:
+    """Resolve a dotted field path inside a nested response structure.
+
+    ``field`` may be a top-level key (``"code"``) or a dotted path into nested
+    lists and dicts (``"results.3.code"``).  List indices are parsed as ints;
+    any unresolvable hop returns None rather than raising, so callers degrade
+    to a clean "field not found" error instead of a 500.
+    """
+    if not isinstance(container, (dict, list)) or not field:
+        return None
+    if isinstance(container, dict) and field in container:
+        return container[field]
+    parts = field.split(".")
+    current: Any = container
+    for part in parts:
+        if isinstance(current, list):
+            try:
+                current = current[int(part)]
+            except (ValueError, IndexError, TypeError):
+                return None
+        elif isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            return None
+    return current
 
 
 def _resolve_field(
@@ -113,7 +147,9 @@ def _resolve_field(
         ), None
 
     response = entry.get("response", {})
-    value = response.get(field)
+    # Dotted-path resolution: the continuation field may name a nested list
+    # element (e.g. "results.3.code") rather than a bare top-level key.
+    value = _get_nested(response, field)
     if value is None:
         return None, make_error(
             MCPError.TRUNCATION_FIELD_MISSING,
@@ -289,7 +325,7 @@ def search_truncated(
 
     matches = []
     for fname in search_fields:
-        value = response.get(fname)
+        value = _get_nested(response, fname)
         if value is None:
             continue
         if isinstance(value, list):

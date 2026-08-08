@@ -35,6 +35,11 @@ except ImportError:
         MAGIC_CONSTANTS as _MAGIC_CONSTANTS,
     )
 
+# DANGEROUS_APIS keys are mixed-case (VirtualAlloc, ShellExecuteA, ...) while
+# IDA-imported callee names can arrive lowercased or mangled, so match
+# case-insensitively (mirrors the data.py fix).
+_DANGEROUS_APIS_LOW = {k.lower(): v for k, v in _DANGEROUS_APIS.items()}
+
 
 def _get_func_callees_with_addr(func_ea):
     """Return list of (call_addr, callee_name) for actual CALL instructions only."""
@@ -129,7 +134,33 @@ def _set_inline_comment(addr: int, comment: str, dry_run: bool) -> None:
     idc.set_cmt(addr, new_cmt, 0)
 
 
-def _auto_comment_one(addr_ea: int, prefix: str, dry_run: bool = False) -> dict:
+def _classify_crypto_function(func_ea: int) -> Optional[str]:
+    """Return the crypto algorithm label for a function, or None.
+
+    Hoists the decompile + BehaviorClassifier + _detect_crypto_algorithm
+    work that auto_comment_function previously repeated for every
+    instruction in the function.
+    """
+    try:
+        from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
+        pseudo = ""
+        try:
+            pseudo = str(idaapi.decompile(func_ea) or "")
+        except Exception:
+            pseudo = ""
+        if not pseudo:
+            return None
+        clf = BehaviorClassifier.instance(BgeCodeEmbedder())
+        hits = clf.classify(pseudo, threshold=0.25, top_k=3, block=False)
+        if any("crypto" in str(h.get("behavior", "")).lower() for h in hits):
+            return _detect_crypto_algorithm(func_ea)
+    except Exception:
+        pass
+    return None
+
+
+def _auto_comment_one(addr_ea: int, prefix: str, dry_run: bool = False,
+                      crypto_map: Optional[dict] = None) -> dict:
     mnem = (idc.print_insn_mnem(addr_ea) or "").lower()
     comment = ""
     reason = ""
@@ -177,21 +208,28 @@ def _auto_comment_one(addr_ea: int, prefix: str, dry_run: bool = False) -> dict:
     if not comment:
         fn = idaapi.get_func(addr_ea)
         if fn:
-            try:
-                from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
-                pseudo = ""
+            if crypto_map is not None:
+                # Precomputed per-function classification (auto_comment_function)
+                alg = crypto_map.get(fn.start_ea)
+                if alg:
+                    comment = f"{prefix}CRYPTO: {alg}"
+                    reason = "crypto"
+            else:
                 try:
-                    pseudo = str(idaapi.decompile(fn.start_ea) or "")
-                except Exception:
+                    from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
                     pseudo = ""
-                if pseudo:
-                    clf = BehaviorClassifier.instance(BgeCodeEmbedder())
-                    hits = clf.classify(pseudo, threshold=0.25, top_k=3, block=False)
-                    if any("crypto" in str(h.get("behavior", "")).lower() for h in hits):
-                        comment = f"{prefix}CRYPTO: {_detect_crypto_algorithm(fn.start_ea)}"
-                        reason = "crypto"
-            except Exception:
-                pass
+                    try:
+                        pseudo = str(idaapi.decompile(fn.start_ea) or "")
+                    except Exception:
+                        pseudo = ""
+                    if pseudo:
+                        clf = BehaviorClassifier.instance(BgeCodeEmbedder())
+                        hits = clf.classify(pseudo, threshold=0.25, top_k=3, block=False)
+                        if any("crypto" in str(h.get("behavior", "")).lower() for h in hits):
+                            comment = f"{prefix}CRYPTO: {_detect_crypto_algorithm(fn.start_ea)}"
+                            reason = "crypto"
+                except Exception:
+                    pass
 
     if not comment:
         return {"ok": True, "addr": hex(addr_ea), "applied": False, "reason": "no_interesting_signal"}
@@ -274,6 +312,7 @@ def annotation(
     items: Annotated[Optional[str], "JSON list of {addr, text} for bulk_set"] = None,
     path: Annotated[Optional[str], "File path for import/export"] = None,
     fmt: Annotated[Optional[str], "Comment format: plain|markdown|structured (alias: format)"] = None,
+    value: Annotated[Optional[str], "Proposed comment text to validate (for validate action)"] = None,
 ) -> dict:
     """
     Intelligent bulk annotation tool optimized for LLMs.
@@ -383,11 +422,16 @@ def annotation(
                 return err
             fn = ida_funcs.get_func(ea)
             fname = idc.get_func_name(ea)
+            # Classify crypto behavior once per function instead of once per
+            # instruction (decompile + embedder/classifier instantiation).
+            crypto_alg = _classify_crypto_function(fn.start_ea)
+            crypto_map = {fn.start_ea: crypto_alg} if crypto_alg else {}
             annotations = []
             for head in idautils.Heads(fn.start_ea, fn.end_ea):
                 if len(annotations) >= limit:
                     break
-                one = _auto_comment_one(head, prefix=prefix, dry_run=dry_run)
+                one = _auto_comment_one(head, prefix=prefix, dry_run=dry_run,
+                                        crypto_map=crypto_map)
                 if one.get("applied"):
                     annotations.append(one)
 
@@ -506,7 +550,10 @@ def annotation(
                     if len(warnings) >= limit:
                         break
                     base = _strip_api_suffix(callee_name)
-                    reason = _DANGEROUS_APIS.get(callee_name) or _DANGEROUS_APIS.get(base)
+                    reason = (
+                        _DANGEROUS_APIS_LOW.get(callee_name.lower())
+                        or _DANGEROUS_APIS_LOW.get(base.lower())
+                    )
                     if reason:
                         cmt = f"{prefix}WARNING: {callee_name} - {reason}"
                         fname = idc.get_func_name(func_ea)
@@ -868,7 +915,7 @@ def annotation(
             ea, err = validate_addr(addr)
             if err:
                 return err
-            proposed = kwargs.get("value", "")
+            proposed = value or ""
             if not proposed:
                 return make_error(MCPError.INVALID_ARGS, "value (proposed comment) required for validate")
 
@@ -1110,7 +1157,9 @@ def _annotation_comment_mgr_action(action, addr, text, items, path, fmt):
                 imported += 1
             except Exception as e:
                 errors.append({"addr": addr_str, "error": str(e)})
-        return {"ok": True, "imported": True, "count": imported, "errors": len(errors)}
+        return {"ok": True, "imported": True, "count": imported,
+                "error_count": len(errors),
+                "errors": errors[:10] if errors else None}
 
     if action == "summary":
         _func_limit = 10000

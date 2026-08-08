@@ -230,8 +230,24 @@ class ServerResponseMixin(ServerResponseCompactMixin):
 
     # Tools that are the workspace itself, or that carry no address the
     # analyst is reasoning about. Recalling into these is noise or recursion.
+    # Agent-surface (public) operations are listed alongside their legacy
+    # names so the exemption holds regardless of the configured surface.
     _RECALL_EXEMPT_TOOLS = frozenset(
-        {"session", "blackboard", "batch", "truncation", "wiki", "workflow"}
+        {
+            "session", "blackboard", "batch", "truncation", "wiki", "workflow",
+            "ida_batch", "ida_help",
+            "ida_open_binary", "ida_open_background",
+            "ida_session_state", "ida_session_status", "ida_session_health",
+            "ida_close_session", "ida_session_get", "ida_session_list",
+            "ida_session_switch",
+        }
+    )
+
+    # Tools that render code for an address. The legacy surface names the
+    # tool "code"; these are its agent-surface equivalents. Used to gate the
+    # code-anchor / address-patch / decompile-digest enrichment.
+    _CODE_RENDERING_TOOLS = frozenset(
+        {"code", "ida_decompile", "ida_disassemble"}
     )
 
     # Where rendered code lives in a payload, and which anchor kind it forms.
@@ -263,7 +279,11 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         every time code is shown for an address, its digest is compared with
         the one recorded when claims about that address were written.
         """
-        if tool_name != "code" or action not in {"decompile", "semantic_decompile", "disasm"}:
+        if tool_name not in self._CODE_RENDERING_TOOLS or action not in {
+            "decompile",
+            "semantic_decompile",
+            "disasm",
+        }:
             return
         addr = self._first_addr(call_args)
         if not addr:
@@ -346,8 +366,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         """
         if not isinstance(payload, dict) or is_error_result(payload):
             return
-        if tool_name in {"session", "blackboard", "batch", "truncation", "wiki",
-                         "workflow"}:
+        if tool_name in self._RECALL_EXEMPT_TOOLS:
             return
 
         try:
@@ -456,6 +475,13 @@ class ServerResponseMixin(ServerResponseCompactMixin):
     def _apply_output_filters(self, payload: Any, opts: dict) -> Any:
         """Apply universal output filtering (grep, head, tail, skip, path, pluck)."""
         import re as _re
+
+        # Errors carry their own contract (the make_error envelope). Filtering
+        # them here can destroy the error body (e.g. output_path on an error
+        # dict yields {}); pass them through unchanged like the post-processing
+        # pipeline does.
+        if is_error_result(payload):
+            return payload
 
         # Path extraction: extract a nested field from a dict
         path = opts.get("output_path")
@@ -650,11 +676,16 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             target_val = val
             is_rva = False
 
-            # Check if val is likely an RVA (i.e. smaller than imagebase).
-            # Only rebase when the imagebase is genuinely known (guaranteed
-            # here) — and never when the value already lives at/above the
-            # image base, which is the normal case for loaded addresses.
-            if val < imagebase:
+            # Only reinterpret a sub-imagebase value as an RVA when the image
+            # base itself fits in 32 bits. With a 64-bit base (e.g.
+            # 0x140000000) the entire low address space is ambiguous: a
+            # legitimate 32-bit absolute address (a stored dword pointer, a
+            # constant) is indistinguishable from an RVA, and rebasing it to
+            # imagebase+value fabricates a bogus address — the exact garbage
+            # this function was rewritten to avoid. For a 32-bit base, values
+            # below it are almost always section RVAs. Values at/above the
+            # image base are always kept absolute.
+            if val < imagebase < 0x1_0000_0000:
                 rebased_val = imagebase + val
                 target_val = rebased_val
                 is_rva = True
@@ -693,9 +724,23 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         tool_name: str = "",
         call_args: Any = None,
     ) -> Any:
-        include_pointer_note = self._should_include_pointer_note(
-            tool_name, call_args, payload
-        )
+        # Per-call truncation overrides are set by dispatch for the executed
+        # tool. Consume them once here and clear them so a response that does
+        # not run dispatch (a validation error, help response, or a batch
+        # aggregate) never inherits a previous call's truncation controls.
+        _tc = getattr(self, "_pending_truncation", None) or {}
+        self._pending_truncation = {}
+
+        full_mode = opts.get("mode") == "full"
+        # The pointer-note signal/throttle is only consumed in full mode
+        # (address-lockstep warnings). Compute it there on the pre-filter
+        # payload; in compact mode it has no effect on the output, so skip the
+        # whole computation rather than mutating shared throttle state.
+        include_pointer_note = False
+        if full_mode:
+            include_pointer_note = self._should_include_pointer_note(
+                tool_name, call_args, payload
+            )
         action_name = ""
         if isinstance(call_args, dict):
             action_name = str(call_args.get("action") or "")
@@ -709,17 +754,22 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         # When a background-loaded session's analysis completes, the next
         # response for that session carries the transition warning exactly
         # once ('the agent is auto moved to the new one with a warning').
+        # The notice is only consumed when the payload can carry it (a dict);
+        # a list/scalar payload leaves it pending for the next response.
         try:
             notices = getattr(self, "_pending_session_notices", None)
             current = getattr(self, "current_session", None)
-            if isinstance(notices, dict) and current is not None:
+            if (
+                isinstance(notices, dict)
+                and current is not None
+                and isinstance(payload, dict)
+            ):
                 notice = notices.pop(current.session_id, None)
-                if notice is not None and isinstance(payload, dict):
+                if notice is not None:
                     payload = dict(payload)
                     payload["warning"] = notice
         except Exception:
             pass
-        full_mode = opts.get("mode") == "full"
         if full_mode:
             if isinstance(payload, dict):
                 payload = dict(payload)
@@ -738,7 +788,6 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             budget = int(opts.get("char_budget", 0) or 0)
             if budget > 0 and isinstance(compacted, dict):
                 # Check per-call truncation overrides
-                _tc = getattr(self, "_pending_truncation", None) or {}
                 if _tc.get("no_truncate"):
                     pass  # skip truncation
                 else:
@@ -805,7 +854,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
 
             # ---- Address Patching: annotate rip-relative in disasm/pseudo ----
             try:
-                if tool_name == "code" and action_name in ("decompile", "semantic_decompile", "disasm"):
+                if tool_name in self._CODE_RENDERING_TOOLS and action_name in ("decompile", "semantic_decompile", "disasm"):
                     from .response_enrichment import patch_addresses
                     if "pseudocode" in compacted:
                         pseudo_key = "pseudocode"
@@ -814,7 +863,17 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                     else:
                         pseudo_key = "disassembly"
                     if pseudo_key in compacted:
-                        compacted[pseudo_key] = patch_addresses(compacted[pseudo_key])
+                        # patch_addresses' LEA/generic base+offset branches only
+                        # fire when the base register is in base_registers, so
+                        # feed it the session's real imagebase (rip-relative in
+                        # x86-64 pseudo/disasm). _get_session_imagebase never
+                        # fabricates a default, so unknown sessions stay plain.
+                        _patch_sid = ""
+                        if getattr(self, "current_session", None) is not None:
+                            _patch_sid = str(getattr(self.current_session, "session_id", "") or "")
+                        _imgbase = self._get_session_imagebase(_patch_sid or None)
+                        _base_registers = {"rip": _imgbase} if _imgbase else None
+                        compacted[pseudo_key] = patch_addresses(compacted[pseudo_key], _base_registers)
             except Exception:
                 pass
 
@@ -831,7 +890,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             )
             if self.enable_response_enrichment and not _safe_mode_active:
                 try:
-                    if tool_name == "code" and action_name in ("decompile", "semantic_decompile"):
+                    if tool_name in self._CODE_RENDERING_TOOLS and action_name in ("decompile", "semantic_decompile"):
                         from .response_enrichment import digest_decompiled
                         if "pseudocode" in compacted:
                             pseudo_key = "pseudocode"
@@ -849,7 +908,7 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                                         schema_attrs = func_data
                             except Exception:
                                 pass
-                            digest = digest_decompiled(compacted[pseudo_key], func_addr=addr, schema_attrs=schema_attrs)
+                            digest = digest_decompiled(compacted[pseudo_key], schema_attrs=schema_attrs)
                             if digest and any(digest.values()):
                                 compacted["_digest"] = digest
                 except Exception:

@@ -44,18 +44,20 @@ TAINT_SOURCES: frozenset[str] = frozenset({
 
 # ── DANGEROUS_SINKS: Functions dangerous when fed tainted data ───────────────
 # Maps API name → vulnerability category string.
+#
+# Bounded variants (strncpy, strncat, snprintf) are intentionally NOT listed
+# as sinks: they take explicit size limits and are credited as mitigations in
+# MITIGATION_CHECKS["safe_functions"]. Listing them as both sink and
+# mitigation would produce contradictory findings.
 
 DANGEROUS_SINKS: dict[str, str] = {
     # Memory corruption
     "memcpy": "buffer_overflow",
     "memmove": "buffer_overflow",
     "strcpy": "buffer_overflow",
-    "strncpy": "buffer_overflow",
     "strcat": "buffer_overflow",
-    "strncat": "buffer_overflow",
     "sprintf": "format_string",
     "vsprintf": "format_string",
-    "snprintf": "format_string_candidate",
     "gets": "buffer_overflow",
     "scanf": "buffer_overflow",
     "sscanf": "buffer_overflow",
@@ -128,7 +130,7 @@ DANGEROUS_APIS_CATEGORIZED: dict[str, list[str]] = {
     "format_string": sorted(k for k, v in DANGEROUS_SINKS.items()
                              if "format" in v),
     "command_injection": sorted(k for k, v in DANGEROUS_SINKS.items()
-                                 if "command" in v or "injection" in v),
+                                 if v == "command_injection"),
     "memory_unsafe": sorted(k for k, v in DANGEROUS_SINKS.items()
                              if "memory" in v),
     "deprecated_crypto": ["MD5Init", "MD5Update", "SHA1Init",

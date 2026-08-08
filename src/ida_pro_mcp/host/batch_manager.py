@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import contextlib
 import json
 import os
@@ -15,10 +16,16 @@ from .errors import MCPError, make_error
 
 _MAX_TASK_HISTORY = 1000
 _DEFAULT_MAX_WORKERS = int(os.environ.get("IDA_MCP_BATCH_MAX_WORKERS", "4"))
-_PERSIST_PATH = os.path.join(
-    os.environ.get("IDA_MCP_BATCH_STATE_DIR", os.path.join(os.path.expanduser("~"), ".ida-mcp-batch")),
-    "tasks.json",
+# Base directory for per-instance task persistence. Each BatchManager writes
+# only its own file (tasks-<instance>.json), so concurrent connections/processes
+# never clobber each other's persisted task state.
+_PERSIST_STATE_DIR = os.environ.get(
+    "IDA_MCP_BATCH_STATE_DIR",
+    os.path.join(os.path.expanduser("~"), ".ida-mcp-batch"),
 )
+# How long cancel() waits for a cooperative worker to honour the cancellation
+# before reporting the transient state (a running worker cannot be aborted).
+_CANCEL_GRACE_SECONDS = 1.0
 _MAX_PERSIST_RESULT_BYTES = 10_000
 _MAX_PERSIST_FIELDS = {"task_id", "session_id", "action", "args", "state", "created_at", "started_at", "finished_at", "result", "error"}
 
@@ -66,8 +73,13 @@ class BatchManager:
     def __init__(self, max_workers: int = _DEFAULT_MAX_WORKERS):
         self._lock = threading.Lock()
         self._tasks: dict[str, BatchTask] = {}
+        self._instance_id = uuid.uuid4().hex[:12]
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="batch-")
         self._load_persisted()
+        # No host teardown path calls shutdown(), so the executor's non-daemon
+        # worker threads were never explicitly reclaimed. Joining them at
+        # interpreter exit prevents orphaned workers after a stdio/daemon exit.
+        atexit.register(self.shutdown)
 
     def submit(
         self,
@@ -88,24 +100,39 @@ class BatchManager:
 
     def _run_task(self, task: BatchTask, run_fn: Callable[[BatchTask], Any] | None) -> None:
         try:
-            task.started_at = time.time()
-            task.state = "running"
+            with self._lock:
+                task.started_at = time.time()
+                task.state = "running"
             if task._cancel_event.is_set():
-                task.state = "cancelled"
-                task.finished_at = time.time()
+                with self._lock:
+                    task.state = "cancelled"
+                    task.finished_at = time.time()
                 return
             result = run_fn(task) if run_fn is not None else {"status": "completed", "action": task.action}
             if task._cancel_event.is_set():
-                task.state = "cancelled"
-                task.finished_at = time.time()
-                return
-            task.result = result
-            task.state = "done"
+                if result is None or (isinstance(result, dict) and result.get("cancelled")):
+                    # The worker honoured the cancellation and aborted early
+                    # (semantic-index jobs return {"cancelled": True, ...}).
+                    # Preserve its payload (e.g. a resume cursor) instead of
+                    # silently discarding the completed work.
+                    with self._lock:
+                        task.result = result
+                        task.state = "cancelled"
+                        task.finished_at = time.time()
+                    return
+                # The worker ran to completion despite the cancel request; the
+                # work actually happened (e.g. a rename/patch), so report it as
+                # done with its result rather than as a false cancellation.
+            with self._lock:
+                task.result = result
+                task.state = "done"
         except Exception as exc:
-            task.error = str(exc)
-            task.state = "failed"
+            with self._lock:
+                task.error = str(exc)
+                task.state = "failed"
         finally:
-            task.finished_at = time.time()
+            with self._lock:
+                task.finished_at = time.time()
             self._save_persisted()
 
     def status(self, task_id: str | None = None) -> list[dict[str, Any]]:
@@ -128,19 +155,29 @@ class BatchManager:
     def cancel(self, task_id: str) -> dict[str, Any]:
         with self._lock:
             task = self._tasks.get(task_id)
-        if task is None:
-            return make_error(MCPError.NOT_FOUND, f"task {task_id} not found")
-        if task.state in ("done", "failed", "cancelled"):
-            return make_error(
-                MCPError.INVALID_ARGS,
-                f"task {task_id} already {task.state}",
-                hint="Cancellation only applies to pending or running tasks.",
-            )
-        task._cancel_event.set()
-        if task._future and not task._future.done():
-            task._future.cancel()
-        task.state = "cancelled"
-        task.finished_at = time.time()
+            if task is None:
+                return make_error(MCPError.NOT_FOUND, f"task {task_id} not found")
+            # Check-and-set under the lock so a worker that just completed is
+            # never flipped from 'done' to 'cancelled' (TOCTOU).
+            if task.state in ("done", "failed", "cancelled"):
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    f"task {task_id} already {task.state}",
+                    hint="Cancellation only applies to pending or running tasks.",
+                )
+            task._cancel_event.set()
+            queued_aborted = bool(task._future is not None and task._future.cancel())
+            if queued_aborted:
+                # The worker never picked the task up: it is genuinely cancelled.
+                task.state = "cancelled"
+                task.finished_at = time.time()
+        if not queued_aborted and task._future is not None:
+            # A running task cannot be interrupted; cooperative workers abort on
+            # the next cancel check. Give them a short grace window so the
+            # reported state reflects the true outcome instead of claiming
+            # 'cancelled' while the worker is still executing.
+            with contextlib.suppress(Exception):
+                task._future.result(timeout=_CANCEL_GRACE_SECONDS)
         self._save_persisted()
         return task.to_dict()
 
@@ -165,11 +202,16 @@ class BatchManager:
 
     def _trim_history(self) -> None:
         if len(self._tasks) > _MAX_TASK_HISTORY:
-            oldest = sorted(
-                self._tasks.values(),
-                key=lambda t: t.created_at,
-                reverse=False,
-            )[: len(self._tasks) - _MAX_TASK_HISTORY]
+            # Never evict a task that is still pending or running: dropping it
+            # would make status/result/cancel return NOT_FOUND while its future
+            # is still executing in the pool.
+            evictable = [
+                t for t in self._tasks.values()
+                if t.state not in ("pending", "running")
+            ]
+            oldest = sorted(evictable, key=lambda t: t.created_at)[
+                : len(self._tasks) - _MAX_TASK_HISTORY
+            ]
             for t in oldest:
                 del self._tasks[t.task_id]
 
@@ -177,13 +219,14 @@ class BatchManager:
         self._executor.shutdown(wait=wait)
 
     def _persist_path(self) -> str:
-        os.makedirs(os.path.dirname(_PERSIST_PATH), exist_ok=True)
-        return _PERSIST_PATH
+        state_dir = os.environ.get("IDA_MCP_BATCH_STATE_DIR") or _PERSIST_STATE_DIR
+        os.makedirs(state_dir, exist_ok=True)
+        return os.path.join(state_dir, f"tasks-{self._instance_id}.json")
 
     def _save_persisted(self) -> None:
         try:
-            data = []
             with self._lock:
+                data = []
                 for t in list(self._tasks.values()):
                     if t.state in ("done", "failed", "cancelled"):
                         d = t.to_dict()
@@ -196,17 +239,25 @@ class BatchManager:
                             except Exception:
                                 d["result"] = str(r)[:_MAX_PERSIST_RESULT_BYTES]
                         data.append({k: v for k, v in d.items() if k in _MAX_PERSIST_FIELDS})
-            if data:
-                with open(self._persist_path(), "w") as f:
-                    json.dump(data[-_MAX_TASK_HISTORY:], f, default=str)
+                if data:
+                    path = self._persist_path()
+                    payload = json.dumps(data[-_MAX_TASK_HISTORY:], default=str)
+                    # Atomic write (temp file + rename) so a concurrent reader
+                    # never observes a truncated JSON file; the lock above also
+                    # serialises writers on this instance's path.
+                    tmp_path = f"{path}.tmp"
+                    with open(tmp_path, "w") as f:
+                        f.write(payload)
+                    os.replace(tmp_path, path)
         except Exception:
             pass
 
     def _load_persisted(self) -> None:
-        if not os.path.exists(_PERSIST_PATH):
+        path = self._persist_path()
+        if not os.path.exists(path):
             return
         try:
-            with open(_PERSIST_PATH) as f:
+            with open(path) as f:
                 data = json.load(f)
             for d in data:
                 t = BatchTask(

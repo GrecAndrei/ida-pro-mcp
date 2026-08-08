@@ -132,13 +132,13 @@ def apply_grep(items: list, pp: dict) -> list:
         def match_fn(texts):
             return any(rx.search(t) for t in texts)
     else:
+        # Case sensitivity is fully handled below (needle is pre-lowered and
+        # texts are lowered when not case-sensitive), so a single matcher
+        # serves both branches.
         needle = pattern if case_sensitive else pattern.lower()
-        if case_sensitive:
-            def match_fn(texts):
-                return any(needle in t for t in texts)
-        else:
-            def match_fn(texts):
-                return any(needle in t for t in texts)
+
+        def match_fn(texts):
+            return any(needle in t for t in texts)
 
     result = []
     for item in items:
@@ -232,6 +232,17 @@ def apply_post_processing(
 
     field = pp_params.get("field")
     items, used_field = resolve_list_field(payload, field)
+
+    if (
+        field
+        and isinstance(payload, dict)
+        and used_field in payload
+        and not isinstance(payload[used_field], (list, str))
+    ):
+        # The explicit field exists but is not list-shaped (e.g. a dict or an
+        # int). There is nothing to post-process; leave the payload untouched
+        # rather than overwriting the value with an empty list.
+        return payload
 
     # 1. Grep
     if pp_params.get("grep"):

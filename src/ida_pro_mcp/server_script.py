@@ -152,8 +152,15 @@ def _try_load_single_tool(name):
     try:
         spec = importlib.util.spec_from_file_location(canonical, module_path, **module_kwargs)
         module = importlib.util.module_from_spec(spec)
+        # Preserve any real module the flat name would shadow (e.g. stdlib
+        # 'types'/'code') so a lazy load cannot break later imports.
+        prior = sys.modules.get(canonical)
         sys.modules[canonical] = module
-        spec.loader.exec_module(module)
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            if prior is not None:
+                sys.modules[canonical] = prior
         if hasattr(module, canonical):
             tool_func = getattr(module, canonical)
             TOOLS[canonical] = tool_func
@@ -171,18 +178,31 @@ def load_tools():
         # available in the IDA process and would crash every tool load.
         import importlib
         import importlib.util
-        for f in os.listdir(tools_dir):
-            if f.endswith(".py") and f != "__init__.py":
-                name = f[:-3]
-                try:
-                    spec = importlib.util.spec_from_file_location(
-                        name, os.path.join(tools_dir, f)
-                    )
-                    module = importlib.util.module_from_spec(spec)
-                    sys.modules[name] = module          # flat name so intra-tool imports work
-                    spec.loader.exec_module(module)
-                    if hasattr(module, name): TOOLS[name] = getattr(module, name)
-                except Exception as e: log_ev(f"Load error {name}: {e}")
+        # Tool files can shadow real modules (tools/types.py vs stdlib
+        # 'types'). Registering flatly would overwrite sys.modules['types'],
+        # which breaks the later zeromcp import (`from types import
+        # UnionType`) and silently disables the startup reanalysis in
+        # __main__. Snapshot the modules we shadow so we can restore them.
+        shadowed = {}
+        try:
+            for f in os.listdir(tools_dir):
+                if f.endswith(".py") and f != "__init__.py":
+                    name = f[:-3]
+                    if name in sys.modules and name not in shadowed:
+                        shadowed[name] = sys.modules[name]
+                    try:
+                        spec = importlib.util.spec_from_file_location(
+                            name, os.path.join(tools_dir, f)
+                        )
+                        module = importlib.util.module_from_spec(spec)
+                        sys.modules[name] = module          # flat name so intra-tool imports work
+                        spec.loader.exec_module(module)
+                        if hasattr(module, name): TOOLS[name] = getattr(module, name)
+                    except Exception as e: log_ev(f"Load error {name}: {e}")
+        finally:
+            # Put the real modules back so stdlib imports still resolve.
+            for name, orig in shadowed.items():
+                sys.modules[name] = orig
         # Register aliases only if target exists
         for alias, target in TOOL_ALIASES.items():
             if target in TOOLS:
@@ -247,23 +267,41 @@ def process_single(r):
     if not isinstance(r, dict):
         return _build_error("bridge", "Invalid request format", code="INVALID_REQUEST")
 
-    if _SESSION_TOKEN:
-        provided = str(r.get("session_token") or "")
-        if not provided or not hmac.compare_digest(provided, _SESSION_TOKEN):
-            return _build_error(
-                "auth",
-                "Unauthorized session token",
-                code="UNAUTHORIZED",
-                hint="Use the host-managed authenticated session runtime.",
-            )
-
     if r.get("type") == "ping":
-        # Report the actual bound port so the host can self-heal if we had
-        # to fall back to an ephemeral port (the pre-allocated one was taken).
+        # Ping is intentionally unauthenticated: it is a liveness / port
+        # discovery probe (the host pings before routing a real request).
         return {"pong": True, "port": _BOUND_PORT}
+
+    # Session-token auth is mandatory, never optional-on-empty: the host
+    # injects a token for every managed session (server_runtime.py), and a
+    # bridge launched without one must refuse tool calls instead of leaving
+    # arbitrary tool execution (incl. python code exec) open to any local
+    # process that can reach the RPC socket.
+    if not _SESSION_TOKEN:
+        return _build_error(
+            "auth",
+            "No session token configured; refusing unauthenticated request",
+            code="UNAUTHORIZED",
+            hint="Launch via the host-managed session runtime, which sets IDA_MCP_SESSION_TOKEN.",
+        )
+    provided = str(r.get("session_token") or "")
+    if not provided or not hmac.compare_digest(provided, _SESSION_TOKEN):
+        return _build_error(
+            "auth",
+            "Unauthorized session token",
+            code="UNAUTHORIZED",
+            hint="Use the host-managed authenticated session runtime.",
+        )
 
     tool_name = r.get("tool")
     args = r.get("args", {})
+    if not isinstance(tool_name, str) or not tool_name:
+        return _build_error(
+            "bridge",
+            "Invalid request: 'tool' must be a non-empty string",
+            code="INVALID_REQUEST",
+            details={"tool": type(tool_name).__name__},
+        )
     log_ev(f"Calling tool: {tool_name}")
     try:
         canonical_tool = _canonical_tool_name(tool_name)
@@ -335,15 +373,17 @@ def process_single(r):
         return res
     except Exception as e:
         # Attach helpful hints for common arg mistakes
-        tool_func = TOOLS.get(tool_name)
+        tool_func = TOOLS.get(tool_name) if isinstance(tool_name, str) else None
         siginfo = _tool_signature_info(tool_func) if tool_func else {"params": [], "required": [], "actions": []}
         msg = str(e)
         details = {"available_args": siginfo.get("params", [])}
         hint = None
+        is_user_error = False
 
         # Unexpected keyword argument
         m = re.search(r"unexpected keyword argument '([^']+)'", msg)
         if m:
+            is_user_error = True
             bad_arg = m.group(1)
             suggestion = _suggest_choice(bad_arg, siginfo.get("params", []))
             details["unexpected_arg"] = bad_arg
@@ -354,12 +394,20 @@ def process_single(r):
         # Missing required positional argument
         m = re.search(r"missing .* required positional argument: '([^']+)'", msg)
         if m:
+            is_user_error = True
             missing_arg = m.group(1)
             details["required_args"] = siginfo.get("required", [])
             details["missing_arg"] = missing_arg
             hint = "Provide the missing required argument."
 
-        return _build_error(tool_name, msg, details=details, hint=hint)
+        # Only argument-parsing failures are user errors.  Everything else — a
+        # decompiler exception, an IDA SDK error, or a genuine tool bug — must
+        # not be mislabeled INVALID_ARGS (which would send the agent back to
+        # re-check its arguments); classify it as an internal failure instead.
+        code = "INVALID_ARGS" if is_user_error else "UNKNOWN_ERROR"
+        if not is_user_error:
+            hint = "Internal server error — not caused by your request arguments."
+        return _build_error(tool_name, msg, code=code, details=details, hint=hint)
 
 
 def _recv_exact(conn, length):
@@ -576,6 +624,40 @@ def _apply_pre_analysis_options():
         except Exception as e:
             warnings_list.append(f"endian={endian}: {e}")
 
+    # Stack size (best-effort before auto-analysis)
+    stack_size = opts.get("stack_size")
+    if stack_size is not None:
+        try:
+            if hasattr(ida_ida, "inf_set_ssize"):
+                ida_ida.inf_set_ssize(int(stack_size))
+                changed.append(f"stack_size={stack_size}")
+            else:
+                warnings_list.append("inf_set_ssize unavailable")
+        except Exception as e:
+            warnings_list.append(f"stack_size={stack_size}: {e}")
+
+    # Processor options (e.g. ARM CPU type or MIPS ISA variant). Applied via
+    # idc.set_processor_options — the same call arch_utils._apply_riscv_gp uses
+    # for the RISC-V GP base, which the processor plugin actually reads.
+    processor_options = opts.get("processor_options")
+    if processor_options:
+        try:
+            if hasattr(idc, "set_processor_options"):
+                idc.set_processor_options(str(processor_options))
+                changed.append(f"processor_options={processor_options}")
+            else:
+                warnings_list.append("set_processor_options unavailable")
+        except Exception as e:
+            warnings_list.append(f"processor_options: {e}")
+
+    # memory_model: NOT applied here. The host open_binary contract documents
+    # 0=flat / 1=16-bit segmented / 2=32-bit segmented, but IDA's inf mtype uses
+    # the MT_* encoding (MT_1=0, MT_2=1, MT_4=2, ... MT_FLAT=6), so the
+    # documented values do not map onto ida_ida.inf_set_mtype() directly and
+    # applying them would set a wrong memory model. TODO: define an explicit
+    # host encoding -> MT_* mapping and validate against a live IDA before
+    # wiring this up.
+
     # Loader options (best-effort before auto_wait)
     if loader_options and loader:
         try:
@@ -669,7 +751,9 @@ if __name__ == "__main__":
     # arm64-v8a) that only produced PLT stubs on initial load. The MCP
     # host's startup ping timeout (IDA_MCP_STARTUP_TIMEOUT, default 240s)
     # accommodates this blocking wait. Every subsequent session reuse
-    # skips this entirely since the IDB is already built.
+    # skips this entirely since the IDB is already built (the host sets
+    # IDA_MCP_USE_EXISTING_IDB=1 on reuse spawns).
+    _is_reuse_spawn = os.environ.get("IDA_MCP_USE_EXISTING_IDB") == "1"
     try:
         import ida_auto as _ida_auto
 
@@ -678,41 +762,47 @@ if __name__ == "__main__":
             _ida_auto.auto_wait()
         log_ev("Initial auto-analysis complete.")
 
-        try:
-            from ida_pro_mcp.ida_mcp.tools.analysis import (
-                _auto_reanalyze_text_segments,
-                _ensure_entry_point_functions,
-            )
-            rean = _auto_reanalyze_text_segments(wait_seconds=120.0)
-            if rean.get("scheduled", 0):
-                log_ev(
-                    f"Auto-reanalysis: {rean.get('scheduled', 0)} range(s); "
-                    f"funcs {rean.get('functions_before', 0)} -> {rean.get('functions_after', 0)}, "
-                    f"code bytes {rean.get('defined_code_bytes_before', 0)} -> "
-                    f"{rean.get('defined_code_bytes_after', 0)} "
-                    f"(coverage {rean.get('coverage_pct_before', 0.0):.1f}% -> "
-                    f"{rean.get('coverage_pct_after', 0.0):.1f}%)"
+        if _is_reuse_spawn:
+            # IDB is already built and was upgraded by the original session;
+            # re-running reanalysis + a full save on every reuse is wasted I/O
+            # and can add minutes to reuse startup on large binaries.
+            log_ev("IDB reuse detected; skipping startup reanalysis and save.")
+        else:
+            try:
+                from ida_pro_mcp.ida_mcp.tools.analysis import (
+                    _auto_reanalyze_text_segments,
+                    _ensure_entry_point_functions,
                 )
-            _ensure_entry_point_functions()
-        except Exception as _e:
-            log_ev(f"Auto-reanalysis skipped: {_e}")
+                rean = _auto_reanalyze_text_segments(wait_seconds=120.0)
+                if rean.get("scheduled", 0):
+                    log_ev(
+                        f"Auto-reanalysis: {rean.get('scheduled', 0)} range(s); "
+                        f"funcs {rean.get('functions_before', 0)} -> {rean.get('functions_after', 0)}, "
+                        f"code bytes {rean.get('defined_code_bytes_before', 0)} -> "
+                        f"{rean.get('defined_code_bytes_after', 0)} "
+                        f"(coverage {rean.get('coverage_pct_before', 0.0):.1f}% -> "
+                        f"{rean.get('coverage_pct_after', 0.0):.1f}%)"
+                    )
+                _ensure_entry_point_functions()
+            except Exception as _e:
+                log_ev(f"Auto-reanalysis skipped: {_e}")
 
-        # Persist the upgraded IDB at the canonical session path so the
-        # MCP host and reuse spawns find it via session.idb_path. Saving at
-        # the empty string path writes next to the source binary which
-        # leaves the sessions-dir metadata idb_exists=false and breaks
-        # reuse detection.
-        try:
-            import ida_loader as _ida_loader
-            _idb_target = os.environ.get("IDA_MCP_IDB_PATH", "")
-            if _idb_target:
-                _ida_loader.save_database(_idb_target, 0)
-                log_ev(f"IDB saved to {_idb_target} after reanalysis.")
-            else:
-                _ida_loader.save_database("", 0)
-                log_ev("IDB saved (default path) after reanalysis.")
-        except Exception as _e:
-            log_ev(f"save_database after reanalysis failed: {_e}")
+            # Persist the upgraded IDB at the canonical session path so the
+            # MCP host and reuse spawns find it via session.idb_path. Saving at
+            # the empty string path writes next to the source binary which
+            # leaves the sessions-dir metadata idb_exists=false and breaks
+            # reuse detection.
+            try:
+                import ida_loader as _ida_loader
+                _idb_target = os.environ.get("IDA_MCP_IDB_PATH", "")
+                if _idb_target:
+                    _ida_loader.save_database(_idb_target, 0)
+                    log_ev(f"IDB saved to {_idb_target} after reanalysis.")
+                else:
+                    _ida_loader.save_database("", 0)
+                    log_ev("IDB saved (default path) after reanalysis.")
+            except Exception as _e:
+                log_ev(f"save_database after reanalysis failed: {_e}")
     except ImportError:
         log_ev("idaapi/ida_auto not importable; skipping reanalysis.")
 

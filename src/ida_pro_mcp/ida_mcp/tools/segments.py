@@ -131,7 +131,9 @@ def _seg_density_analysis(seg):
     def _per_kb(val):
         return round(val / size_kb, 2) if size_kb > 0 else 0.0
 
-    code_data_ratio = round(code_count / data_count, 2) if data_count else (float("inf") if code_count else 0.0)
+    # Use the JSON-safe sentinel "inf" instead of float("inf"): a code-only
+    # segment would otherwise emit Infinity, which breaks strict JSON-RPC.
+    code_data_ratio = round(code_count / data_count, 2) if data_count else ("inf" if code_count else 0.0)
 
     return {
         "name": ida_segment.get_segm_name(seg),

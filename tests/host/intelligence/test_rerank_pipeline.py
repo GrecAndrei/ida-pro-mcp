@@ -4,6 +4,7 @@ non-discriminating behaviour is deterministic)."""
 
 from __future__ import annotations
 
+import contextlib
 import sys
 import types
 
@@ -318,26 +319,52 @@ def test_expand_mode_auto_reranks_with_bounded_pool():
 # Reranker.reset — model switching without process restart
 # ---------------------------------------------------------------------------
 
-def test_reset_swaps_the_singleton_without_leaving_a_stale_instance():
+def _reset_singleton():
+    """Null out the reranker singleton and return (rerank_mod, old_instance).
+
+    reset() replaces ``Reranker._instance`` and never restores it; without
+    saving/restoring here, the disabled-state instance leaks into later tests
+    in the same process.
+    """
     import ida_pro_mcp.host.intelligence.rerank as rerank_mod
 
-    first = rerank_mod.Reranker.reset("/nonexistent/reranker.gguf")
-    assert isinstance(first, rerank_mod.Reranker)
-    assert first._use_llama is False  # bogus path -> not enabled
+    old = rerank_mod.Reranker._instance
+    rerank_mod.Reranker._instance = None
+    return rerank_mod, old
 
-    second = rerank_mod.Reranker.reset("/nonexistent/reranker.gguf")
-    assert second is not first  # a reset always builds a fresh singleton
+
+def _restore_singleton(rerank_mod, old):
+    inst = rerank_mod.Reranker._instance
+    if inst is not None and inst is not old:
+        with contextlib.suppress(Exception):
+            inst.stop()
+    rerank_mod.Reranker._instance = old
+
+
+def test_reset_swaps_the_singleton_without_leaving_a_stale_instance():
+    rerank_mod, old_instance = _reset_singleton()
+    try:
+        first = rerank_mod.Reranker.reset("/nonexistent/reranker.gguf")
+        assert isinstance(first, rerank_mod.Reranker)
+        assert first._use_llama is False  # bogus path -> not enabled
+
+        second = rerank_mod.Reranker.reset("/nonexistent/reranker.gguf")
+        assert second is not first  # a reset always builds a fresh singleton
+    finally:
+        _restore_singleton(rerank_mod, old_instance)
 
 
 def test_reset_default_ctx_is_bounded_by_profile_max():
-    import ida_pro_mcp.host.intelligence.rerank as rerank_mod
-
-    rr = rerank_mod.Reranker.reset("/nonexistent/reranker.gguf")
-    assert rr._ctx <= rr._profile.max_context
-    assert rr._ctx >= 1024
-    # A pair is a bounded document + query; 4096 covers every pair without a
-    # laptop-sized KV cache.
-    assert rr._ctx <= 4096
+    rerank_mod, old_instance = _reset_singleton()
+    try:
+        rr = rerank_mod.Reranker.reset("/nonexistent/reranker.gguf")
+        assert rr._ctx <= rr._profile.max_context
+        assert rr._ctx >= 1024
+        # A pair is a bounded document + query; 4096 covers every pair without
+        # a laptop-sized KV cache.
+        assert rr._ctx <= 4096
+    finally:
+        _restore_singleton(rerank_mod, old_instance)
 
 
 def test_rpc_dispatcher_forwards_rerank_tristate_to_search_nl():

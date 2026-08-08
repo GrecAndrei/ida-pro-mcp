@@ -19,19 +19,24 @@ def _gather_governance_metadata(action: str, ea: int, value: str) -> dict:
     """Gather IDA-specific metadata for governance checks."""
     metadata: dict = {}
 
-    if action == "patch_asm":
-        # Check if address is in import/plt section
+    if action in ("patch_asm", "patch_bytes"):
+        # Check if address is in import/plt section or executable code
         seg = ida_segment.getseg(ea)
         if seg:
             sname = ida_segment.get_segm_name(seg)
             metadata["section_type"] = sname or ""
             metadata["is_import_addr"] = sname in (".idata", ".plt", ".edata", ".iat")
+            # Patching bytes in an executable section rewrites code flow.
+            executable = (getattr(seg, "perm", 0) & getattr(ida_segment, "SEGPERM_X", 1)) != 0
+            if executable or sname in (".text", ".code"):
+                metadata["modifies_control_flow"] = True
 
-    elif action == "rename":
+    elif action in ("rename", "rename_local"):
         fn = ida_funcs.get_func(ea)
         if fn:
+            # FLIRT-identified library functions are marked FUNC_LIB; FUNC_THUNK
+            # only denotes jump stubs (which are not FLIRT matches).
             metadata["is_library_function"] = (fn.flags & ida_funcs.FUNC_LIB) != 0
-            metadata["is_flirt_identified"] = (fn.flags & ida_funcs.FUNC_THUNK) != 0
             # Gather API calls for misleading rename check
             api_calls = []
             for head in idautils.Heads(fn.start_ea, fn.end_ea):
@@ -65,7 +70,7 @@ def _persist_symbol_knowledge(func_ea: int, name: str) -> None:
         from ida_pro_mcp.services import SymbolDB
     except Exception:
         try:
-            from host.symbol_db import SymbolDB  # type: ignore
+            from host.stores.symbol_db import SymbolDB  # type: ignore
         except Exception:
             return
     fn = ida_funcs.get_func(func_ea)
@@ -159,9 +164,16 @@ def modify(
                 value = type_str
             elif action == "patch_asm" and asm:
                 value = asm
+            elif action == "patch_bytes" and kwargs.get("hex_bytes"):
+                value = kwargs["hex_bytes"]
+            elif action == "rename_local" and kwargs.get("new_name"):
+                value = kwargs["new_name"]
 
         if not value:
-            return make_error(MCPError.INVALID_ARGS, f"value parameter required (or use {action}-specific alias: name/text/type_str/asm)")
+            # patch_bytes via nop-only and rename_local carry their own args;
+            # their branches validate the specifics.
+            if not (action == "patch_bytes" and kwargs.get("nop")):
+                return make_error(MCPError.INVALID_ARGS, f"value parameter required (or use {action}-specific alias: name/text/type_str/asm)")
 
         ea, error = validate_addr(addr)
         if error:
@@ -173,9 +185,11 @@ def modify(
         if governed:
             op_type_map = {
                 "rename": "rename",
+                "rename_local": "rename",
                 "comment": "comment",
                 "set_type": "type_change",
                 "patch_asm": "patch",
+                "patch_bytes": "patch",
             }
             op_type = op_type_map.get(action)
             if op_type:
@@ -192,7 +206,7 @@ def modify(
                     return make_error(
                         MCPError.GOVERNANCE_BLOCKED,
                         f"Governance blocked {action}: {gov_result['verdict']}",
-                        {
+                        details={
                             "violations": gov_result["violations"],
                             "ontology_class": gov_result.get("ontology_class"),
                             "axiom_score": gov_result.get("axiom_score"),
@@ -225,10 +239,13 @@ def modify(
                 result = {"ok": True, "addr": addr, "name": value}
                 if gov_warnings:
                     result["governance_warnings"] = gov_warnings
-                # Decompiler feedback loop: re-embed this function and propagate
-                # semantic understanding to callees in the background.
-                _trigger_rename_propagation(ea, value)
+                # Cross-session side effect beyond the acknowledged IDB write:
+                # the rename is upserted into the symbol database. Report it so
+                # the caller knows the ack covers more than the IDB.
                 _persist_symbol_knowledge(ea, value)
+                result["side_effects"] = {
+                    "symbol_db": "cross-session symbol DB upsert (beyond the acknowledged IDB write)",
+                }
                 return result
             return make_error(MCPError.IDA_ERROR, "Failed to rename", "Check if name is valid C identifier and not duplicate")
 
@@ -398,133 +415,6 @@ def modify(
         return handle_error(e)
 
 
-def _trigger_rename_propagation(func_ea: int, new_name: str) -> None:
-    """
-    Decompiler feedback loop: after a rename, re-embed the function and
-    propagate semantic understanding to its callees.
-
-    Algorithm:
-      1. Re-decompile and re-embed the renamed function (now has a meaningful name)
-      2. Find all callees (functions this one calls)
-      3. For each unnamed callee, check if the new embedding suggests a name
-         (cosine similarity against the updated index)
-      4. Write propagation suggestions to the blackboard for the LLM to review
-
-    Runs in a background thread — never blocks the rename response.
-    """
-    import threading
-
-    def _propagate():
-        try:
-            from ida_pro_mcp.services import BgeCodeEmbedder, FunctionEmbeddingIndex  # noqa: F401
-        except ImportError:
-            try:
-                from host.intelligence.core import (  # type: ignore
-                    BgeCodeEmbedder,
-                    FunctionEmbeddingIndex,
-                )
-            except ImportError:
-                return
-        try:
-            import ida_funcs as _ida_funcs
-            import ida_hexrays as _ida_hexrays
-            import idautils as _idautils
-            import idc as _idc
-
-            idb_path = _idc.get_idb_path() or ""
-            if not idb_path:
-                return
-
-            embedder = BgeCodeEmbedder()
-            idx = FunctionEmbeddingIndex(idb_path + ".embeddings.db", embedder)
-
-            # Step 1: Re-embed the renamed function
-            pseudo = None
-            try:
-                cfunc = _ida_hexrays.decompile(func_ea)
-                if cfunc:
-                    pseudo = str(cfunc)
-            except Exception:
-                pass
-            if pseudo:
-                idx.index(hex(func_ea), new_name, pseudo)
-
-            # Step 2: Find callees
-            callees = []
-            for item in _idautils.FuncItems(func_ea):
-                for xref in _idautils.XrefsFrom(item, 0):
-                    if xref.type in (17, 18):  # fl_CF, fl_CN
-                        callee_fn = _ida_funcs.get_func(xref.to)
-                        if callee_fn and callee_fn.start_ea != func_ea:
-                            callees.append(callee_fn.start_ea)
-
-            if not callees or not pseudo:
-                return
-
-            # Skip similarity if index is empty
-            if idx.size == 0:
-                _result["embedding_suggestions"] = []
-                _result["embedding_note"] = "No index — run intelligence(action='index_fast') for rename suggestions."
-                return
-
-            # Step 3: For each unnamed callee, check embedding similarity
-            suggestions = []
-            for callee_ea in set(callees[:20]):
-                callee_name = _idc.get_func_name(callee_ea) or ""
-                if not callee_name.startswith("sub_"):
-                    continue  # already named
-                callee_pseudo = None
-                try:
-                    cfunc = _ida_hexrays.decompile(callee_ea)
-                    if cfunc:
-                        callee_pseudo = str(cfunc)
-                except Exception:
-                    pass
-                if not callee_pseudo:
-                    continue
-                similar = idx.similar(callee_pseudo, top_k=8, exclude_ea=hex(callee_ea), threshold=0.0)
-                named = [s for s in similar if not s["name"].startswith("sub_") and not s["name"].startswith("0x")]
-                if named:
-                    vals = sorted(float(s.get("similarity", 0.0) or 0.0) for s in named)
-                    q50 = vals[len(vals) // 2]
-                    q75 = vals[min(len(vals) - 1, int(round((len(vals) - 1) * 0.75)))]
-                    gate = q50 + max(0.0, q75 - q50)
-                    named = [s for s in named if float(s.get("similarity", 0.0) or 0.0) >= gate]
-                if named:
-                    suggestions.append({
-                        "callee_addr": hex(callee_ea),
-                        "callee_current": callee_name,
-                        "suggested_name": named[0]["name"],
-                        "confidence": named[0]["similarity"],
-                        "reason": f"callee of {new_name}, similar to {named[0]['name']}",
-                    })
-
-            # Step 4: Write propagation suggestions to blackboard
-            if suggestions:
-                try:
-                    from ida_pro_mcp.ida_mcp.tools.blackboard import BlackboardStore
-                except ImportError:
-                    try:
-                        from blackboard import BlackboardStore  # type: ignore
-                    except ImportError:
-                        return
-                store = BlackboardStore()
-                for s in suggestions:
-                    store.write(
-                        title=f"Rename suggestion: {s['callee_addr']} → {s['suggested_name']}",
-                        content=f"Callee of {new_name}. Confidence: {s['confidence']:.2f}. {s['reason']}",
-                        category="rename_suggestion",
-                        addr=s["callee_addr"],
-                        tags=["auto", "propagation", "rename"],
-                        confidence=s["confidence"],
-                        source="rename_propagation",
-                    )
-        except Exception:
-            pass
-
-    threading.Thread(target=_propagate, daemon=True, name="rename-propagation").start()
-
-
 # ============================================================================
-# 8. MISC - Python exec, signatures, bookmarks, undo, stack
+# End of MODIFY tool module
 # ============================================================================

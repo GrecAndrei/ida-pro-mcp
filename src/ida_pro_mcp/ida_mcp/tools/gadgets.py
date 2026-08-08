@@ -428,6 +428,15 @@ def _find_stack_pivot(addr, limit, max_insns, query):
             # in mov/xchg/add/sub/lea instructions
             if ml in ("xchg",) and any(sp in disasm for sp in sp_regs):
                 is_pivot = True
+            elif ml == "leave":
+                # leave == mov esp/rsp, ebp/rbp; pop ebp — the canonical
+                # frame-pointer restore is also a valid stack pivot.
+                is_pivot = True
+            elif ml == "pop":
+                # pop rsp/esp loads the new stack pointer from the old one.
+                disasm_nospace = disasm.replace(" ", "")
+                if any(disasm_nospace.startswith(f"pop{sp}") for sp in sp_regs):
+                    is_pivot = True
             elif ml in ("mov", "lea", "add", "sub", "addi", "addiu", "daddiu"):
                 disasm_nospace = disasm.replace(" ", "")
                 for sp in sp_regs:
@@ -839,6 +848,7 @@ def gadgets(
     limit: Annotated[int, "Max gadgets to return"] = 50,
     max_insns: Annotated[int, "Max instructions per gadget"] = 5,
     query: Annotated[Optional[str], "Filter gadgets by mnemonic pattern (regex/glob/substring/semantic auto-detected)"] = None,
+    auto_blackboard: Annotated[bool, "Store mitigation/exploit findings in the blackboard (opt-in; default keeps read actions pure)"] = False,
 ) -> dict:
     """
     LLM-optimized ROP/JOP/COP gadget and exploit primitive discovery.
@@ -871,10 +881,12 @@ def gadgets(
 
         if action == "mitigations":
             mits = _detect_mitigations(addr, limit, max_insns, query)
-            # Auto-write missing mitigations to blackboard
+            # Auto-write missing mitigations to blackboard — opt-in only.
+            # This is a read-classified operation, so it must not persist
+            # findings without an explicit auto_blackboard=True.
             if isinstance(mits, dict):
                 missing = [k for k, v in mits.items() if v is False]
-                if missing:
+                if missing and auto_blackboard:
                     try:
                         from blackboard import BlackboardStore  # type: ignore
                         import time as _time
@@ -929,7 +941,7 @@ def gadgets(
             # Semantic exploit primitive classification using BehaviorClassifier.
             # Takes a list of gadget strings (or addresses) and classifies the chain's
             # exploit potential: stack_pivot, write_what_where, code_exec, rop_chain, etc.
-            return _classify_gadget_chain(addr, limit, max_insns, query)
+            return _classify_gadget_chain(addr, limit, max_insns, query, auto_blackboard)
 
         handler = _ACTIONS.get(action)
         if not handler:
@@ -1021,7 +1033,7 @@ def _score_gadgets_behavior(gadgets: list, action: str) -> Optional[dict]:
         return None
 
 
-def _classify_gadget_chain(addr, limit, max_insns, query) -> dict:
+def _classify_gadget_chain(addr, limit, max_insns, query, auto_blackboard: bool = False) -> dict:
     """
     Full exploit chain classification: collect all gadget types, embed the
     combined chain, and return a structured exploit primitive assessment.
@@ -1081,7 +1093,6 @@ def _classify_gadget_chain(addr, limit, max_insns, query) -> dict:
         classifier.clear_cache()
 
     # Assess exploitability
-    list(all_gadgets.keys())
     has_pivot = bool(all_gadgets.get("stack_pivot"))
     has_www = bool(all_gadgets.get("write_what_where"))
     has_rop = bool(all_gadgets.get("rop"))
@@ -1096,8 +1107,10 @@ def _classify_gadget_chain(addr, limit, max_insns, query) -> dict:
     else:
         assessment = "MINIMAL: Limited gadget surface"
 
-    # Auto-write exploit findings to blackboard
-    if has_rop or has_pivot or has_www:
+    # Auto-write exploit findings to blackboard — opt-in only. This is a
+    # read-classified operation, so it must not persist findings without an
+    # explicit auto_blackboard=True.
+    if (has_rop or has_pivot or has_www) and auto_blackboard:
         try:
             from blackboard import BlackboardStore  # type: ignore
             import time as _time

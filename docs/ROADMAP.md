@@ -17,14 +17,20 @@ surface or documentation source.
 
 ## Product surface tiers
 
-The exposed tool surface is split into tiers so agents get a focused
-`tools/list` while every capability stays callable by exact name:
+The default agent surface (`tool_surface == "agent"`) advertises every `ida_*`
+operation from the catalog in `tools/list` — currently all 67 operations,
+built from `list_agent_operations()`. There is no hidden default subset: what
+a fresh agent sees is the full catalog.
 
-- **Tier A** — the default `tools/list` surface (`ADVERTISED_TOOLS` in
-  `host/schemas_data.py`, ~17 tools). This is what a fresh agent sees.
+The tiering below applies only to the legacy `IDA_MCP_TOOL_SURFACE=legacy`
+backend:
+
+- **Tier A** — the legacy `tools/list` surface (`ADVERTISED_TOOLS` in
+  `host/schemas_data.py`, ~17 tools). This is what a fresh agent sees on the
+  legacy surface.
 - **Tier B** — the full legacy `TOOLS` registry. Every Tier B tool remains
   callable by its exact name (backward compatible) but is hidden from the
-  default `tools/list`.
+  legacy `tools/list` (via `HIDDEN_TOOLS_IN_LIST`).
 - **Tier C** — compact action enums (`ADVERTISED_ACTIONS`). High-cardinality
   tools advertise a reduced action set in lean/ultra schema mode; the full
   `TOOL_ACTIONS` enum is still accepted for exact-name calls.

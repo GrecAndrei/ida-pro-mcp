@@ -194,10 +194,11 @@ def main() -> None:
         emb.stop()
 
     print("\n=== comparison ===")
+    pool_key = f"pool_{args.max_candidates}"
     print(f"{'backend':<8}{'index(s)':<10}{'docs/s':<9}{'cold(s)':<9}"
-          f"{'pool-16(s)':<11}{'r@1 rec':<9}{'r@1 rer':<9}{'peakRSS(MB)':<12}")
+          f"{f'pool-{args.max_candidates}(s)':<11}{'r@1 rec':<9}{'r@1 rer':<9}{'peakRSS(MB)':<12}")
     for r in runs:
-        pool_s = r["latency_ms"].get("pool_16", 0) / 1000
+        pool_s = r["latency_ms"].get(pool_key, 0) / 1000
         print(f"{r['backend']:<8}{r['index_seconds']:<10.1f}{r['docs_per_s']:<9.3f}"
               f"{r['cold_construct_s']:<9.1f}{pool_s:<11.1f}"
               f"{r['recall']['recall@1']:<9.2f}{r['rerank']['recall@1'] if r['rerank_used'] else '-':<9}"

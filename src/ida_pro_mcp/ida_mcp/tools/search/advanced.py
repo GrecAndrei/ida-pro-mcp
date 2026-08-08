@@ -340,6 +340,8 @@ def search_constants(pattern, range_start, range_end, include_context, offset, l
                 curr += insn.size
             else:
                 curr = idc.next_head(curr, seg_end)
+                if curr == idaapi.BADADDR:
+                    break
 
     page, total, is_truncated = paginate_records(
         found_rows, offset, limit, sort_key=lambda r: r["address_ea"], reverse=False
@@ -384,7 +386,10 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
         max_functions = min(max_functions, 128)
     sample = bool(kwargs.get("sample", False))
 
-    preview_lines = max(0, min(int(kwargs.get("preview_lines", 0)), 10))
+    try:
+        preview_lines = max(0, min(int(kwargs.get("preview_lines", 0)), 10))
+    except (ValueError, TypeError):
+        preview_lines = 0
 
     target_funcs = []
     scope_func = None
@@ -696,6 +701,10 @@ def search_structured(constraints, pattern, range_start, range_end, include_cont
     query = pattern if pattern else None
     rows = idx.search_structured(query_constraints, query=query, top_k=limit + offset)
 
+    # The index caps results at top_k=limit+offset, so that bound is the best
+    # available total; truncation is reported whenever the window is full.
+    matched_total = len(rows)
+
     # Apply offset
     rows = rows[offset:offset + limit]
 
@@ -721,10 +730,11 @@ def search_structured(constraints, pattern, range_start, range_end, include_cont
             "cyclomatic": r["cyclomatic"],
         })
 
-    return {
-        "ok": True, "action": "structured", "constraints": constraints,
-        "matches": "\n".join(results), "count": len(results),
-        "items": items,
-        "note": f"Structured search via embedding index ({'semantic ranking' if query else 'structural only'}).",
-        "index_used": True,
-    }
+    result = build_response(
+        results, offset, limit, matched_total, matched_total > offset + len(rows),
+        action="structured", constraints=constraints,
+        note=f"Structured search via embedding index ({'semantic ranking' if query else 'structural only'}).",
+        index_used=True,
+    )
+    result["items"] = items
+    return result

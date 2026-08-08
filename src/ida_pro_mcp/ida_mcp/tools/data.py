@@ -109,9 +109,14 @@ def data(
                 # zero callers. Pre-filtering here means agents don't pay
                 # the cost of paginating junk results.
                 if min_xrefs is not None:
-                    xref_count = sum(
-                        1 for _ in zip(idautils.XrefsTo(ea), range(999), strict=False)
-                    )
+                    # Count only up to the requested threshold: gives an exact
+                    # ">= min_xrefs" answer without paying for every xref on the
+                    # hottest functions (no 999 cap, so min_xrefs > 999 works).
+                    xref_count = 0
+                    for _ in idautils.XrefsTo(ea):
+                        xref_count += 1
+                        if xref_count >= min_xrefs:
+                            break
                     if xref_count < min_xrefs:
                         continue
 
@@ -237,7 +242,10 @@ def data(
                             pass
 
                         if include_xrefs:
-                            parts.append(f"xrefs={len(list(idautils.XrefsTo(ea)))}")
+                            # Cap at 999 like functions/strings — globals can have
+                            # tens of thousands of refs; avoid building the full list.
+                            xrefs_count = sum(1 for _ in zip(idautils.XrefsTo(ea), range(999), strict=False))
+                            parts.append(f"xrefs={xrefs_count}")
 
                         glob_lines.append("  ".join(parts))
 
@@ -266,7 +274,7 @@ def data(
                     if isinstance(_c, bytes):
                         _c = _c.decode("utf-8", errors="replace")
                     if _c and len(_c) < 20:
-                        _a = sum(1 for _ch in _c if _ch.isalnum() or _ch in " ._-/:=()[]{}\\n\\t")
+                        _a = sum(1 for _ch in _c if _ch.isalnum() or _ch in " ._-/:=()[]{}\n\t")
                         ratio_samples.append(_a / max(1, len(_c)))
                     _n += 1
             except Exception:
@@ -303,7 +311,7 @@ def data(
 
                         if len(content) < 20:
                             alnum_count = sum(
-                                1 for c in content if c.isalnum() or c in " ._-/:=()[]{}\\n\\t"
+                                1 for c in content if c.isalnum() or c in " ._-/:=()[]{}\n\t"
                             )
                             if (alnum_count / len(content)) < printable_gate:
                                 continue
@@ -341,7 +349,7 @@ def data(
 
                                 if len(s) < 20:
                                     alnum_count = sum(
-                                        1 for c in s if c.isalnum() or c in " ._-/:=()[]{}\\n\\t"
+                                        1 for c in s if c.isalnum() or c in " ._-/:=()[]{}\n\t"
                                     )
                                     if (alnum_count / len(s)) < printable_gate:
                                         continue
@@ -522,6 +530,18 @@ def data(
             # Build capability matrix from imports and function API usage
             matrix = dict.fromkeys(API_CATEGORIES, 0)
             risk_indicators = []
+            # DANGEROUS_APIS keys are mixed-case (VirtualAlloc, ShellExecuteA, ...);
+            # match case-insensitively so imports with any casing are flagged.
+            _danger_low = {api.lower() for api in DANGEROUS_APIS}
+            _suffixes = ("a", "w", "@plt")
+
+            def _is_dangerous(low: str) -> bool:
+                if low in _danger_low:
+                    return True
+                return any(
+                    low.endswith(s) and low[: len(low) - len(s)] in _danger_low
+                    for s in _suffixes
+                )
 
             # Analyze imports
             imports = {}
@@ -541,7 +561,7 @@ def data(
                             matrix[cat] += 1
                             break
                 # Risk indicators
-                if low in DANGEROUS_APIS or any(low.endswith(s) for s in ("A", "W", "@plt", "@PLT") if low[:-len(s)] in DANGEROUS_APIS):
+                if _is_dangerous(low):
                     risk_indicators.append(name)
 
             # Analyze functions for API calls (sample first 200)
@@ -563,7 +583,7 @@ def data(
                                     if api.lower() in low:
                                         matrix[cat] += 1
                                         break
-                            if low in DANGEROUS_APIS:
+                            if _is_dangerous(low):
                                 risk_indicators.append(callee)
 
             # Sort categories by count

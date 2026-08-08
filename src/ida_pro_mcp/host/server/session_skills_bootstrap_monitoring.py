@@ -168,7 +168,7 @@ class SessionBootstrapMonitoringMixin:
                 return make_error(
                     MCPError.NOT_IMPLEMENTED,
                     "Bootstrap not initialized",
-                    hint="Initialize the bootstrap first (see skills/session bootstrap tool).",
+                    hint="Initialize the bootstrap first (session tool action 'bootstrap_init').",
                 )
             snaps = bootstrap.setdefault("metric_snapshots", [])
             snap_id = f"bsnap_{uuid.uuid4().hex[:8]}"
@@ -337,6 +337,19 @@ class SessionBootstrapMonitoringMixin:
                 baseline_res = self.bootstrap_update_baseline(sid, window=max(30, window))
                 if is_error_result(baseline_res):
                     return baseline_res
+                if not baseline_res.get("enough_data"):
+                    # No real baseline could be established (fewer than 5
+                    # snapshots). Do not fall back to default thresholds and
+                    # report enough_data — downstream mitigation would then
+                    # emit steady-state actions on the strength of defaults.
+                    return {
+                        "ok": True,
+                        "enough_data": False,
+                        "alerts": [],
+                        "severity": "none",
+                        "message": "Need at least 5 snapshots to establish a baseline",
+                        "snapshot_count": int(baseline_res.get("count", len(snaps))),
+                    }
                 data = self._load_skills(sid)
                 bootstrap = data.get("bootstrap") or {}
                 baseline = bootstrap.get("baseline") or {}

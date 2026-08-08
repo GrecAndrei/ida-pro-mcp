@@ -14,6 +14,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .intelligence.helpers import coerce_int
+
 # ============================================================================
 # Address Patching
 # ============================================================================
@@ -23,24 +25,9 @@ _BASE_OFFSET_RE = re.compile(
     r'(rip|rsp|rbp|rsi|rdi|r[89]|r1[0-5]|gs|fs|cs|ds)\s*([+\-])\s*(0x[0-9a-fA-F]+|\d+)',
     re.IGNORECASE,
 )
-# Matches direct address references in pseudocode
-_DIRECT_ADDR_RE = re.compile(
-    r'&\w+\s*\[\s*(0x[0-9a-fA-F]+)\s*\]|address\s+(0x[0-9a-fA-F]+)|\bat\s+(0x[0-9a-fA-F]+)',
-    re.IGNORECASE,
-)
-# Matches string assignments that reveal address info
-_STRING_ADDR_RE = re.compile(
-    r'"([^"]*)"\s*(?:@|at|located at|stored at|address)\s*(0x[0-9a-fA-F]+)',
-    re.IGNORECASE,
-)
 # Matches load effective address patterns in x86
 _LEA_RE = re.compile(
     r'lea\s+(\w+)\s*,\s*\[(\w+)\s*([+\-])\s*(0x[0-9a-fA-F]+)\]',
-    re.IGNORECASE,
-)
-# Matches mov with displacement
-_MOV_DISP_RE = re.compile(
-    r'mov\s+(\w+)\s*,\s*(?:qword|dword|word|byte)\s+ptr\s*\[(\w+)\s*([+\-])\s*(0x[0-9a-fA-F]+)\]',
     re.IGNORECASE,
 )
 
@@ -59,6 +46,10 @@ def patch_addresses(text: str, base_registers: dict[str, int] | None = None) -> 
     patched_lines = []
 
     for line in lines:
+        # References already annotated by the LEA pass, keyed by (base, offset),
+        # so the generic pass does not double-annotate the same reference.
+        covered: set[tuple[str, int]] = set()
+
         # rip-relative LEA
         for match in _LEA_RE.finditer(line):
             base = match.group(2)
@@ -71,22 +62,32 @@ def patch_addresses(text: str, base_registers: dict[str, int] | None = None) -> 
                 base_val = base_registers[base]
                 abs_addr = base_val + (offset if op == "+" else -offset)
                 line = line.replace(match.group(0), f"{match.group(0)}  ; -> {hex(abs_addr)}")
+                covered.add((base, offset))
 
-        # Generic base+offset
-        if "rip" in line.lower() or "base+" in line.lower():
-            for match in _BASE_OFFSET_RE.finditer(line):
-                base_name = match.group(1)
-                offset_str = match.group(3)
-                try:
-                    from .intelligence.helpers import coerce_int
-                    offset = coerce_int(offset_str)
-                except (ValueError, ImportError):
-                    continue
-                if base_name in base_registers:
-                    base_val = base_registers[base_name]
-                    resolved = hex(base_val + offset)
-                    if "; ->" not in line:
-                        line = f"{line}  ; {match.group(0)} -> {resolved}"
+        # Generic base+offset. There is no enclosing "rip"/"base+" gate — the
+        # regex already requires a +/- offset, so a bare register mention
+        # ("push rsp") never matches, while rsp/rbp/gs/fs references that
+        # base_registers supplies are honored. The sign of the offset is
+        # respected (rip-0x10 resolves to base-0x10, not base+0x10), and
+        # per-reference dedupe lets a line with several base+offset references
+        # be fully annotated (the old "; ->" guard stopped at the first).
+        for match in _BASE_OFFSET_RE.finditer(line):
+            base_name = match.group(1)
+            op = match.group(2)
+            offset_str = match.group(3)
+            try:
+                offset = coerce_int(offset_str)
+            except (ValueError, TypeError):
+                continue
+            if base_name not in base_registers:
+                continue
+            if (base_name, offset) in covered:
+                continue
+            covered.add((base_name, offset))
+            resolved = hex(
+                base_registers[base_name] + (offset if op == "+" else -offset)
+            )
+            line = f"{line}  ; {match.group(0)} -> {resolved}"
 
         patched_lines.append(line)
 
@@ -112,7 +113,6 @@ _WIN32_API_PATTERN = re.compile(
     r'AdjustTokenPrivileges|LookupPrivilegeValue|SetWindowsHookEx|'
     r'GetAsyncKeyState|GetForegroundWindow|GetWindowText|'
     r'CryptEncrypt|CryptDecrypt|CryptAcquireContext|CryptGenKey|'
-    r'Certificate|X509|SSL|TLS|RSA|AES|MD5|SHA|'
     r'FindFirstFile|FindNextFile|DeleteFile|MoveFile|CopyFile|'
     r'GetTickCount|QueryPerformanceCounter|Sleep|GetSystemTime|'
     r'RtlDecompressBuffer|NtQuerySystemInformation|NtQueryInformationProcess)\b',
@@ -129,7 +129,7 @@ _ANTIDEBUG_RE = re.compile(
     re.IGNORECASE,
 )
 _ANTIVM_RE = re.compile(
-    r'cpuid|in\s+eax,\s*dx|sidt|sgdt|sldt|str|smsw|rdtsc|icebp|int\s+3|'
+    r'cpuid|in\s+eax,\s*dx|sidt|sgdt|sldt|\bstr\b|smsw|rdtsc|icebp|int\s+3|'
     r'int\s+1|int\s+0x2d',
     re.IGNORECASE,
 )
@@ -146,10 +146,13 @@ _STRING_IN_CODE_RE = re.compile(
     r'(?:push|mov|lea).*(?:offset\s+)?(?:a[A-Z]\w+|off_[0-9A-F]+|byte_[0-9A-F]+)',
     re.IGNORECASE,
 )
+# Identifier followed by "(" — used to count call-like invocations in
+# Hex-Rays pseudocode instead of the old paren-halving fabrication.
+_CALL_EXPR_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\s*\(")
+_CTRL_KEYWORDS = frozenset({"if", "for", "while", "switch", "return", "sizeof"})
 
 
-def digest_decompiled(pseudocode: str, func_name: str = "", func_addr: str = "",
-                       schema_attrs: dict | None = None) -> dict:
+def digest_decompiled(pseudocode: str, schema_attrs: dict | None = None) -> dict:
     """Parse decompiled pseudocode and extract a structured summary.
 
     Returns:
@@ -228,10 +231,31 @@ def digest_decompiled(pseudocode: str, func_name: str = "", func_addr: str = "",
             if api in apis:
                 digest["api_categories"].add(cat)
 
-    digest["complexity"]["calls"] = pseudocode.count("(") // 2  # rough
-    digest["complexity"]["branches"] = pseudocode.count("if ") + pseudocode.count("if(")
+    # Schema-verified APIs are merged into api_calls AND api_categories here so
+    # they drive the same behavior_tags/security_notes as regex-detected APIs
+    # (a schema-verified network API must produce a "network" tag).
+    sb_apis = schema_attrs.get("apis", [])
+    if isinstance(sb_apis, list):
+        for api in sb_apis:
+            if api not in digest["api_calls"]:
+                digest["api_calls"].append(api)
+            for cat, apis in _API_CATEGORIES.items():
+                if api in apis:
+                    digest["api_categories"].add(cat)
+
+    # Structural counters over Hex-Rays pseudocode. Hex-Rays canonicalizes
+    # control flow to "if (", "for (", "while (", "do {" (with spaces), so the
+    # spaceless variants never occur in real output. Calls count identifier-(
+    # invocations (excluding control-flow keywords) — the old "("//2 halving
+    # was the same class of made-up metric this module already removed.
+    digest["complexity"]["branches"] = pseudocode.count("if (")
     digest["complexity"]["loops"] = (
-        pseudocode.count("for(") + pseudocode.count("while(") + pseudocode.count("do{")
+        pseudocode.count("for (") + pseudocode.count("while (") + pseudocode.count("do {")
+    )
+    digest["complexity"]["calls"] = sum(
+        1
+        for m in _CALL_EXPR_RE.finditer(pseudocode)
+        if m.group(0).rstrip(" (") not in _CTRL_KEYWORDS
     )
 
     if _XOR_LOOP_RE.search(pseudocode):
@@ -266,7 +290,7 @@ def digest_decompiled(pseudocode: str, func_name: str = "", func_addr: str = "",
         digest["behavior_tags"].append("anti_analysis")
     if "persistence" in api_cats:
         digest["behavior_tags"].append("persistence")
-    if "file" in api_cats and "registry" in api_cats:
+    if "file" in api_cats:
         digest["behavior_tags"].append("file_io")
 
     if schema_attrs:
@@ -283,11 +307,6 @@ def digest_decompiled(pseudocode: str, func_name: str = "", func_addr: str = "",
         if sb_xrefs:
             digest["complexity"]["xref_count"] = sb_xrefs
 
-        sb_apis = schema_attrs.get("apis", [])
-        if isinstance(sb_apis, list):
-            for api in sb_apis:
-                if api not in digest["api_calls"]:
-                    digest["api_calls"].append(api)
         if schema_attrs.get("has_crypto_constants"):
             digest["patterns"].append("Crypto constants (verified by structural analysis)")
             if "crypto" not in digest["behavior_tags"]:

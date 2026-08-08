@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sqlite3
+import threading
 import time
 from typing import Any
 
@@ -18,17 +20,21 @@ def _default_db_path() -> str:
 
 class SymbolDB:
     _initialized_paths = set()
+    # Guards _initialized_paths across concurrent SymbolDB() constructions;
+    # without it two threads can race both calling _init_db on a fresh DB.
+    _init_lock = threading.Lock()
 
     def __init__(self, db_path: str | None = None):
         self.db_path = db_path or _default_db_path()
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        if (
-            self.db_path not in SymbolDB._initialized_paths
-            or not os.path.exists(self.db_path)
-            or os.path.getsize(self.db_path) == 0
-        ):
-            self._init_db()
-            SymbolDB._initialized_paths.add(self.db_path)
+        with SymbolDB._init_lock:
+            if (
+                self.db_path not in SymbolDB._initialized_paths
+                or not os.path.exists(self.db_path)
+                or os.path.getsize(self.db_path) == 0
+            ):
+                self._init_db()
+                SymbolDB._initialized_paths.add(self.db_path)
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -97,7 +103,7 @@ class SymbolDB:
         }
         if not payload["symbol_name"] or not payload["fingerprint"]:
             return 0
-        with self._conn() as conn:
+        with contextlib.closing(self._conn()) as conn:
             existing = conn.execute(
                 "SELECT id FROM symbols WHERE symbol_name=? AND fingerprint=?",
                 (payload["symbol_name"], payload["fingerprint"]),
@@ -151,7 +157,7 @@ class SymbolDB:
 
     def query_symbols(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
         q = f"%{str(query or '').strip()}%"
-        with self._conn() as conn:
+        with contextlib.closing(self._conn()) as conn:
             rows = conn.execute(
                 """
                 SELECT symbol_name, source_binary, source_addr, chip_family, fingerprint, callgraph_hash, strings_json, confidence
@@ -179,7 +185,7 @@ class SymbolDB:
         return out
 
     def lookup_by_fingerprint(self, fingerprint: str, limit: int = 5) -> list[dict[str, Any]]:
-        with self._conn() as conn:
+        with contextlib.closing(self._conn()) as conn:
             rows = conn.execute(
                 """
                 SELECT symbol_name, source_binary, source_addr, chip_family, fingerprint, callgraph_hash, strings_json, embedding_json, confidence
@@ -208,7 +214,7 @@ class SymbolDB:
         return out
 
     def stats_by_chip(self) -> list[dict[str, Any]]:
-        with self._conn() as conn:
+        with contextlib.closing(self._conn()) as conn:
             rows = conn.execute(
                 "SELECT chip_family, COUNT(*) FROM symbols GROUP BY chip_family ORDER BY COUNT(*) DESC"
             ).fetchall()
@@ -228,7 +234,7 @@ class SymbolDB:
         if not binary_hash or not hypothesis_text:
             return 0
         now = time.time()
-        with self._conn() as conn:
+        with contextlib.closing(self._conn()) as conn:
             existing = conn.execute(
                 "SELECT id FROM hypotheses WHERE binary_hash=? AND addr_offset=? AND hypothesis_text=?",
                 (str(binary_hash), int(addr_offset), str(hypothesis_text)),
@@ -284,9 +290,9 @@ class SymbolDB:
         params.append(int(limit))
         sql = (
             "SELECT binary_hash, chip_family, addr_offset, hypothesis_text, confidence, source_session, source_binary, created_at "
-            f"FROM hypotheses WHERE {' OR '.join(where)} ORDER BY confidence DESC, created_at DESC LIMIT ?"
+            f"FROM hypotheses WHERE {' AND '.join(where)} ORDER BY confidence DESC, created_at DESC LIMIT ?"
         )
-        with self._conn() as conn:
+        with contextlib.closing(self._conn()) as conn:
             rows = conn.execute(sql, tuple(params)).fetchall()
         out: list[dict[str, Any]] = []
         for r in rows:

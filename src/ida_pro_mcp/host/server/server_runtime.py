@@ -54,6 +54,20 @@ def _resolve_max_rpc_bytes() -> int:
 MAX_RPC_REQUEST_SIZE = _resolve_max_rpc_bytes()
 
 
+def _resolve_startup_timeout() -> int:
+    """Resolve the IDA startup grace period, falling back to 240s on bad input.
+
+    Mirrors the tolerant parsing used for other host env knobs so a typo like
+    ``IDA_MCP_STARTUP_TIMEOUT=300s`` degrades to the default instead of raising
+    a bare ValueError mid-launch.
+    """
+    try:
+        timeout = int(os.environ.get("IDA_MCP_STARTUP_TIMEOUT", "240"))
+    except (TypeError, ValueError):
+        timeout = 240
+    return max(1, timeout)
+
+
 class RpcQueueTimeout(TimeoutError):
     """Raised when a session's RPC lane stays busy past the queue bound.
 
@@ -88,6 +102,8 @@ def _kill_process_tree(proc: subprocess.Popen, grace_seconds: float = 2.0) -> No
     On POSIX, ``os.killpg`` against a process started in a new process group
     will signal the whole tree.
     """
+    if proc is None:
+        return
     pid = proc.pid
     if pid is None:
         return
@@ -113,11 +129,23 @@ def _kill_process_tree(proc: subprocess.Popen, grace_seconds: float = 2.0) -> No
         return
     except Exception as exc:
         log_rpc(f"killpg(SIGTERM) failed for pid {pid}: {exc}")
-    try:
-        proc.wait(timeout=grace_seconds)
-        return
-    except Exception:
-        pass
+    # The direct idat launcher can exit in milliseconds while ida.exe /
+    # llama-server keep running in the same process group, so waiting only on
+    # the direct child is not enough: the SIGKILL escalation below would never
+    # run for survivors. Poll the process group (killpg(pid, 0) is a liveness
+    # probe on the group) until it drains or the grace budget is exhausted,
+    # reaping the direct child opportunistically along the way.
+    deadline = time.time() + grace_seconds
+    while time.time() < deadline:
+        try:
+            os.killpg(pid, 0)
+        except ProcessLookupError:
+            return  # group drained
+        except Exception:
+            return  # cannot probe group; best-effort done
+        with contextlib.suppress(Exception):
+            proc.wait(timeout=0.05)  # reap the direct child if it has exited
+        time.sleep(0.05)
     try:
         os.killpg(pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -326,8 +354,6 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 if resolved and self._is_executable_file(resolved):
                     return os.path.realpath(resolved)
 
-            if not self.ida_dir:
-                return ""
             return ""
 
     def _tail_text_file(self, path: str | None, tail_lines: int = 40) -> str:
@@ -349,7 +375,9 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             err_log = stderr_log
             if err_log is None and out_log:
                 # Best effort: derive sibling stderr path for per-session logs.
-                err_guess = out_log.replace("ida_stdout_", "ida_stderr_")
+                # Handles both the legacy "ida_stdout_<sid>.log" form and the
+                # current "ida_stdout.log" / "ida_stderr.log" names.
+                err_guess = out_log.replace("ida_stdout", "ida_stderr")
                 if err_guess != out_log:
                     err_log = err_guess
             out_tail = self._tail_text_file(out_log, tail_lines=tail_lines)
@@ -415,9 +443,13 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         try:
                             import resource  # POSIX
                             ru = resource.getrusage(resource.RUSAGE_CHILDREN)
-                            snapshot["process_cpu_user_sec"] = round(ru.ru_utime, 2)
-                            snapshot["process_cpu_sys_sec"] = round(ru.ru_stime, 2)
-                            snapshot["process_rss_kb"] = int(ru.ru_maxrss)
+                            # RUSAGE_CHILDREN is cumulative across every reaped
+                            # child of the whole host process — not specific to
+                            # this session. Label the keys host-wide so callers
+                            # reading session(status) are not misled.
+                            snapshot["host_rusage_cpu_user_sec"] = round(ru.ru_utime, 2)
+                            snapshot["host_rusage_cpu_sys_sec"] = round(ru.ru_stime, 2)
+                            snapshot["host_rusage_maxrss_kb"] = int(ru.ru_maxrss)
                         except Exception:
                             pass
                         try:
@@ -439,7 +471,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
         if not stderr_log and isinstance(runtime, dict):
             stderr_log = runtime.get("stderr_log")
         if not stderr_log and stdout_log:
-            err_guess = stdout_log.replace("ida_stdout_", "ida_stderr_")
+            err_guess = stdout_log.replace("ida_stdout", "ida_stderr")
             if err_guess != stdout_log:
                 stderr_log = err_guess
         if stdout_log:
@@ -793,6 +825,10 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             # Reserved for server-managed script/log/output IDB wiring.
             forbidden_prefixes = ("-S", "-L", "-o")
             for arg in parts:
+                # shlex.split can emit empty entries for quoted-empty args
+                # (e.g. 'a "" b'), so reject them here for both input forms.
+                if arg == "":
+                    raise ValueError("ida_args cannot include empty entries")
                 if "\x00" in arg:
                     raise ValueError("ida_args cannot include null bytes")
                 # Args are passed via subprocess list (no shell), so metacharacters aren't interpreted.
@@ -952,9 +988,17 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 or result.get("query")
                 or result.get("pattern"),
             }
-            self._activity_log.append(entry)
-            if len(self._activity_log) > self._activity_log_max:
-                self._activity_log = self._activity_log[-self._activity_log_max :]
+            lock = getattr(self, "_activity_log_lock", None)
+            if lock is None:
+                lock = threading.Lock()
+                self._activity_log_lock = lock
+            with lock:
+                # Append by rebuilding the list rather than mutating it in
+                # place: concurrent readers (e.g. session get_activity_log)
+                # copy/iterate the current object and must never observe an
+                # in-place resize, and the lock prevents lost updates between
+                # concurrent writers.
+                self._activity_log = (self._activity_log + [entry])[-self._activity_log_max :]
 
             # Also persist into session skill/activity store so dashboard counters,
             # phase progression, and dead-end detection reflect real tool usage.
@@ -983,7 +1027,15 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             n = _bounded_int(n, 20, min_value=1, max_value=200)
             entries: list[dict[str, Any]] = []
             seen = set()
-            for row in reversed(self._activity_log):
+            lock = getattr(self, "_activity_log_lock", None)
+            if lock is None:
+                lock = threading.Lock()
+                self._activity_log_lock = lock
+            with lock:
+                # Snapshot under the same lock the writer uses so a concurrent
+                # append/replace cannot resize the list mid-iteration.
+                activity_rows = list(reversed(self._activity_log))
+            for row in activity_rows:
                 if row.get("session_id") != sid:
                     continue
                 key = (
@@ -1075,76 +1127,6 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             except Exception:
                 pass
 
-    def _collect_idle_index_targets(self, session_id: str, limit: int = 16) -> list[str]:
-            targets: list[str] = []
-            seen = set()
-            for row in reversed(self._activity_log):
-                if row.get("session_id") != session_id:
-                    continue
-                for addr in row.get("addresses") or []:
-                    if not isinstance(addr, str):
-                        continue
-                    norm = addr.lower()
-                    if not norm.startswith("0x") or norm in seen:
-                        continue
-                    seen.add(norm)
-                    targets.append(norm)
-                    if len(targets) >= limit:
-                        return targets
-            return targets
-
-    def _seed_idle_index_targets(self, session_id: str, server_port: int, limit: int = 12) -> list[str]:
-            targets: list[str] = []
-            seen = set()
-
-            def _push(addr: Any) -> None:
-                if isinstance(addr, int):
-                    norm = hex(addr).lower()
-                elif isinstance(addr, str):
-                    match = re.search(r"0x[0-9a-fA-F]+", addr)
-                    if not match:
-                        return
-                    norm = match.group(0).lower()
-                else:
-                    return
-                if norm in seen:
-                    return
-                seen.add(norm)
-                targets.append(norm)
-
-            try:
-                res = self._send_rpc_raw(
-                    {"tool": "idb", "args": {"action": "entrypoints"}},
-                    server_port,
-                    timeout=float(self._idle_index_rpc_timeout),
-                )
-                if isinstance(res, dict) and not is_error_result(res):
-                    for entry in res.get("entrypoints") or []:
-                        if not isinstance(entry, dict):
-                            continue
-                        _push(entry.get("addr"))
-                        if len(targets) >= limit:
-                            return targets
-            except Exception as e:
-                log_rpc(f"[idle-index] entrypoint seed failed for {session_id}: {e}")
-
-            try:
-                res = self._send_rpc_raw(
-                    {
-                        "tool": "data",
-                        "args": {"action": "functions", "count": limit},
-                    },
-                    server_port,
-                    timeout=float(self._idle_index_rpc_timeout),
-                )
-                if isinstance(res, dict) and not is_error_result(res):
-                    for line in str(res.get("functions") or "").splitlines():
-                        _push(line)
-                        if len(targets) >= limit:
-                            return targets
-            except Exception as e:
-                log_rpc(f"[idle-index] function seed failed for {session_id}: {e}")
-            return targets
     def _stop_idle_index_worker(self, session_id: str, join_timeout: float = 1.0) -> None:
             with self._idle_index_lock:
                 stop_event = self._idle_index_stop_events.pop(session_id, None)
@@ -1262,12 +1244,19 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                             verdict = "analyzing"
                         if stall_since is not None:
                             stall_sec = now - stall_since
-                            if stall_sec >= stall_threshold:
+                            # analysis.active (from the idb state RPC) means
+                            # IDA's auto-analysis worker is actively running a
+                            # pass. Legitimate passes (FLIRT signature
+                            # matching, struct/TAIL layout, decompilation) can
+                            # run for minutes without adding a single function,
+                            # so a flat function count is only "stalled" when
+                            # analysis is NOT actively running.
+                            if stall_sec >= stall_threshold and not active:
                                 verdict = "stalled"
                                 log_rpc(
                                     f"[watchdog] {session_id} STALLED: no "
                                     f"function-count progress for {int(stall_sec)}s "
-                                    f"(funcs={funcs_i})"
+                                    f"(funcs={funcs_i}, active={active})"
                                 )
 
                     last_funcs = funcs_i
@@ -1326,12 +1315,6 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             if isinstance(value, set):
                 return [self._json_safe_value(v) for v in value]
             return value
-
-    def _serialize_payload(self, payload: Any, opts: dict) -> str:
-            payload = self._json_safe_value(payload)
-            if opts.get("mode") == "full":
-                return json.dumps(payload, ensure_ascii=False, indent=2)
-            return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
     def _render_payload_text(self, payload: Any) -> str:
             """Render a JSON-safe result as readable text without JSON escaping.
@@ -1676,7 +1659,17 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         )
                     else:
                         try:
-                            os.killpg(os.getpgid(pid), signal.SIGTERM)
+                            # Only signal the whole group when the process leads
+                            # its own process group (started via
+                            # start_new_session). A stale process that shares
+                            # another group (e.g. launched manually from a
+                            # shell) must not have that group killed — killpg
+                            # would take out the MCP server or the whole
+                            # terminal session.
+                            if os.getpgid(pid) == pid:
+                                os.killpg(pid, signal.SIGTERM)
+                            else:
+                                os.kill(pid, signal.SIGTERM)
                         except Exception:
                             with contextlib.suppress(ProcessLookupError):
                                 os.kill(pid, signal.SIGTERM)
@@ -1806,7 +1799,10 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             env["IDA_MCP_PORT_FILE"] = port_file
             session_token = secrets.token_urlsafe(32)
             env["IDA_MCP_SESSION_TOKEN"] = session_token
-            env["IDA_MCP_BYPASS_SYNC"] = "1"
+            # Note: IDA_MCP_BYPASS_SYNC is intentionally NOT set globally — it
+            # disables the @idaread/@idawrite execute_sync safety wrapper for
+            # every call. Server code that must run off the main thread opts in
+            # via the scoped bypass_sync() context manager (server_script.py).
             env["IDA_MCP_SESSION_ID"] = session.session_id
             env["IDA_MCP_CACHE_DIR"] = self.cache_dir
             env["IDA_MCP_IDB_PATH"] = session.idb_path
@@ -1873,6 +1869,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             stdout_fh = open(stdout_log, "a", encoding="utf-8")
             stderr_fh = open(stderr_log, "a", encoding="utf-8")
             _handles_transferred = False
+            server_process = None
             try:
                 server_process = subprocess.Popen(
                     cmd,
@@ -1883,7 +1880,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 )
 
                 # WAIT FOR STARTUP using ping
-                startup_timeout = int(os.environ.get("IDA_MCP_STARTUP_TIMEOUT", "240"))
+                startup_timeout = _resolve_startup_timeout()
                 start_time = time.time()
                 ida_crashed = False
                 exit_code = None
@@ -1982,8 +1979,9 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 if not _handles_transferred:
                     with contextlib.suppress(OSError):
                         os.remove(port_file)
-                    with contextlib.suppress(Exception):
-                        _kill_process_tree(server_process)
+                    if server_process is not None:
+                        with contextlib.suppress(Exception):
+                            _kill_process_tree(server_process)
                     for fh in (stdout_fh, stderr_fh):
                         with contextlib.suppress(Exception):
                             fh.close()
@@ -2010,7 +2008,8 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             env["IDA_MCP_PORT_FILE"] = port_file
             session_token = secrets.token_urlsafe(32)
             env["IDA_MCP_SESSION_TOKEN"] = session_token
-            env["IDA_MCP_BYPASS_SYNC"] = "1"
+            # IDA_MCP_BYPASS_SYNC is intentionally NOT set globally; scoped
+            # callers opt in via the bypass_sync() context manager.
             env["IDA_MCP_SESSION_ID"] = session.session_id
             env["IDA_MCP_CACHE_DIR"] = self.cache_dir
             env["IDA_MCP_IDB_PATH"] = session.idb_path
@@ -2056,6 +2055,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             stdout_fh = open(stdout_log, "a", encoding="utf-8")
             stderr_fh = open(stderr_log, "a", encoding="utf-8")
             _handles_transferred = False
+            server_process = None
             try:
                 server_process = subprocess.Popen(
                     cmd,
@@ -2065,7 +2065,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     **_popen_new_session_kwargs(),
                 )
 
-                startup_timeout = int(os.environ.get("IDA_MCP_STARTUP_TIMEOUT", "240"))
+                startup_timeout = _resolve_startup_timeout()
                 start_time = time.time()
                 actual_port = 0
                 while time.time() - start_time < startup_timeout:
@@ -2133,8 +2133,9 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 if not _handles_transferred:
                     with contextlib.suppress(OSError):
                         os.remove(port_file)
-                    with contextlib.suppress(Exception):
-                        _kill_process_tree(server_process)
+                    if server_process is not None:
+                        with contextlib.suppress(Exception):
+                            _kill_process_tree(server_process)
                     for fh in (stdout_fh, stderr_fh):
                         with contextlib.suppress(Exception):
                             fh.close()
@@ -2166,6 +2167,22 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             else:
                 log_rpc("Detected startup failure - attempting recovery...")
             self._cleanup_runtime(session.session_id)
+            # The failed launch never registered a runtime, so _cleanup_runtime
+            # released the exclusive ownership lease (it only keeps it while a
+            # runtime exists in session_runtimes). Re-claim it before relaunching
+            # so a second MCP client cannot claim the same IDB while this
+            # recovery is in flight — the guard the .owner.json lease exists for.
+            ownership_path = self._claim_runtime_ownership(session.session_id)
+            if not ownership_path:
+                return make_error(
+                    MCPError.FILE_LOCKED,
+                    "This session became active in another MCP client during recovery.",
+                    hint=(
+                        "Close the other client, then retry opening the binary "
+                        "in this client."
+                    ),
+                    details={"session_id": session.session_id},
+                )
             time.sleep(1)
 
             backup_path = None
@@ -2258,6 +2275,18 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 if is_error_result(apply_res):
                     return apply_res
                 result["current_options"] = apply_res.get("current_options")
+                # Recovered sessions need the same host-side services as a fresh
+                # launch (analysis watchdog + semantic-index reuse); the normal
+                # path starts them from _start_server_inner only, so do it here.
+                try:
+                    self._start_session_background_services(
+                        session, runtime.get("port")
+                    )
+                except Exception as exc:
+                    log_rpc(
+                        f"[recovery] background services failed for "
+                        f"{session.session_id}: {exc}"
+                    )
 
             if backup_path:
                 result["backup"] = backup_path

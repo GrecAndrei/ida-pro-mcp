@@ -13,17 +13,6 @@ from ida_pro_mcp.host.agent_operations import (
 SKILL_NAME = "ida-pro-mcp"
 
 
-def generate_skills(category_filter: list[str] | None = None) -> dict[str, str]:
-    """Return the one portable skill; category filtering is obsolete.
-
-    The argument remains accepted so older installer callers do not fail, but
-    the MCP operation registry—not a hand-curated category split—is the
-    contract every agent receives.
-    """
-    del category_filter
-    return {SKILL_NAME: render_agent_skill_markdown()}
-
-
 def install_skills(
     target_dirs: list[Path],
     dry_run: bool = False,
@@ -40,7 +29,10 @@ def install_skills(
             reference_file.parent.mkdir(parents=True, exist_ok=True)
             skill_file.write_text(render_agent_skill_markdown(), encoding="utf-8")
             reference_file.write_text(render_agent_operations_markdown(), encoding="utf-8")
+        # Report both files so callers count (and back up / roll back) the
+        # reference document too, not just SKILL.md.
         written[SKILL_NAME].append(skill_file)
+        written[SKILL_NAME].append(reference_file)
     return written
 
 

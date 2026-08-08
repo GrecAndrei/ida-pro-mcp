@@ -15,28 +15,6 @@ import ida_loader
 import ida_segment
 import ida_entry
 
-_infer_arch = None  # type: ignore[misc]
-"""Optional helper for refining filetype. Reserved for future arch
-inference; not currently implemented. See _safe_infer_arch() for the
-defensive call site."""
-
-
-def _safe_infer_arch(binary_path: str) -> dict:
-    """Best-effort call to optional `_infer_arch`; returns {} on absence.
-
-    Earlier revisions of this module referenced ``callable(_infer_arch)``
-    in analysis(action='get_options') which raised NameError when the
-    helper was undefined. Guard the call site so the absence is a no-op.
-    """
-    fn = globals().get("_infer_arch")
-    if not callable(fn):
-        return {}
-    try:
-        return fn(binary_path) or {}
-    except Exception:
-        return {}
-
-
 # ============================================================================
 # ANALYSIS - Loader/processor options and reanalysis
 # ============================================================================
@@ -130,29 +108,6 @@ def analysis(
             return None
 
         if action == "get_options":
-            inf = None
-            try:
-                if hasattr(idaapi, "get_inf_structure"):
-                    inf = idaapi.get_inf_structure()
-            except Exception:
-                inf = None
-
-            def safe_inf_attr(attr, default=None):
-                try:
-                    if inf is not None and hasattr(inf, attr):
-                        return getattr(inf, attr)
-                except Exception:
-                    pass
-                return default
-            def safe_idc_attr(name, default=None):
-                key = getattr(idc, name, None)
-                if key is None:
-                    return default
-                try:
-                    return idc.get_inf_attr(key)
-                except Exception:
-                    return default
-
             procname = _inf_procname()
             filetype = _inf_filetype_id()
             is_64bit = _inf_bitness() == 64
@@ -164,20 +119,6 @@ def analysis(
             ft_name = _filetype_name(filetype)
             ft_effective = ft_name
             ft_note = None
-            binary_path = None
-            try:
-                if hasattr(ida_nalt, "get_input_file_path"):
-                    binary_path = ida_nalt.get_input_file_path()
-                elif hasattr(idaapi, "get_input_file_path"):
-                    binary_path = idaapi.get_input_file_path()
-            except Exception:
-                pass
-            if ft_name == "obj" and binary_path:
-                inf_result = _safe_infer_arch(binary_path)
-                if inf_result.get("file_kind") == "raw":
-                    ft_effective = "raw"
-                    ft_note = "IDA loader reports obj for plain binaries; effective kind is raw."
-
             return {
                 "ok": True,
                 "procname": procname,
@@ -223,7 +164,8 @@ def analysis(
                     current_baseaddr = None
                 if current_baseaddr is None:
                     try:
-                        current_baseaddr = int(_safe_inf_get("baseaddr", 0) or 0)
+                        if hasattr(ida_ida, "inf_get_baseaddr"):
+                            current_baseaddr = int(ida_ida.inf_get_baseaddr() or 0)
                     except Exception:
                         current_baseaddr = None
 
@@ -377,7 +319,7 @@ def analysis(
                 os.makedirs(fallback_dir, exist_ok=True)
                 key_src = f"{loader_name}|{opts}|{idaapi.get_input_file_path() if hasattr(idaapi, 'get_input_file_path') else ''}"
                 key = hashlib.sha1(key_src.encode("utf-8", errors="ignore")).hexdigest()[:10]
-                out_path = os.path.join(fallback_dir, f"loader_options_{int(time.time())}_{os.getpid()}_{key}.json")
+                out_path = os.path.join(fallback_dir, f"loader_options_{key}.json")
                 payload = {
                     "loader": loader_name,
                     "value": opts,
@@ -534,6 +476,13 @@ def analysis(
             return {"ok": True, "applied": applied}
 
         if action in ("reanalyze", "run", "analyze"):
+            # start without end (or vice versa) silently fell through to a
+            # whole-image reanalysis and reported success — reject it.
+            if bool(start) != bool(end):
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "start and end must be provided together for reanalyze (or both omitted for whole-image)",
+                )
             if start and end:
                 s_ea, err = validate_addr(start)
                 if err: return err
@@ -569,7 +518,8 @@ def analysis(
                     idaapi.auto_mark_range(s_ea, e_ea, idaapi.AU_FINAL)
                     mode = "idaapi.auto_mark_range"
                 range_label = "explicit"
-            blocking = kwargs.get("blocking") or kwargs.get("wait") or False
+            # `pump` is accepted in TOOL_ARG_SCHEMAS as a blocking alias; honor it.
+            blocking = kwargs.get("blocking") or kwargs.get("wait") or kwargs.get("pump") or False
             poll_timeout = 10.0
             if "poll_timeout" in kwargs and kwargs["poll_timeout"] is not None:
                 poll_timeout = float(kwargs["poll_timeout"] or 0.0)
@@ -598,7 +548,9 @@ def analysis(
                 # Explicit range: poll auto_is_ok() for the budget.
                 start_time = time.time()
                 import ida_auto as _ida_auto
-                if hasattr(_ida_auto, "auto_wait"):
+                if hasattr(idaapi, "auto_is_ok") and bool(idaapi.auto_is_ok()):
+                    waited = time.time() - start_time
+                elif hasattr(_ida_auto, "auto_wait"):
                     _ida_auto.auto_wait()
                     waited = time.time() - start_time
                 else:
@@ -1085,14 +1037,13 @@ def _find_text_segments() -> list[tuple[int, int, str]]:
 
 def _auto_reanalyze_text_segments(
     wait_seconds: float = 60.0,
-    *,
-    min_coverage_pct: float = 1.0,
 ) -> dict:
     """Best-effort: schedule ``ida_auto.plan_range`` over all eligible
-    executable segments and ``auto_wait``. Use as a fallback when the
-    initial auto-analysis left the code section unanalyzed (e.g. the
-    ELF loader created 8-byte PLT stubs but never created any real
-    functions in ``.text``).
+    executable segments and wait (bounded by ``wait_seconds``) for the
+    auto-analyzer to drain. Use as a fallback when the initial
+    auto-analysis left the code section unanalyzed (e.g. the ELF loader
+    created 8-byte PLT stubs but never created any real functions in
+    ``.text``).
 
     Returns a dict with coverage before/after, number of functions
     created, ranges scheduled, and the wall-clock time spent waiting.
@@ -1133,11 +1084,23 @@ def _auto_reanalyze_text_segments(
     started = time.time()
     if scheduled > 0 and wait_seconds > 0:
         try:
-            if hasattr(_ida_auto, "auto_wait"):
+            if hasattr(idaapi, "auto_is_ok") and bool(idaapi.auto_is_ok()):
+                pass  # analyzer already drained; don't block at all
+            elif hasattr(_ida_auto, "auto_wait"):
+                # Pump the analyzer once; auto_wait() drains the queue and
+                # returns (it has no timeout, so only call it when work is
+                # actually pending — otherwise it defeats the poll budget).
                 _ida_auto.auto_wait()
-            waited = time.time() - started
+            else:
+                # No auto_wait binding: poll auto_is_ok() bounded by the
+                # caller's budget instead of blocking indefinitely.
+                while time.time() - started < wait_seconds:
+                    if hasattr(idaapi, "auto_is_ok") and bool(idaapi.auto_is_ok()):
+                        break
+                    time.sleep(0.2)
         except Exception:
-            waited = time.time() - started
+            pass
+        waited = time.time() - started
     after_funcs = 0
     after_defined = 0
     after_total = 0

@@ -35,6 +35,7 @@ dev = [
     "pytest>=9.1.1",
     "pytest-timeout>=2.4.0",
     "ruff>=0.15.0",
+    "pyyaml>=6.0",  # tests/test_ci_workflows.py guards parse .github/workflows YAML
 ]
 
 [project.urls]
@@ -50,8 +51,11 @@ ida-pro-mcp = "ida_pro_mcp.host.server:main"
 ida-pro-mcp-cli = "ida_pro_mcp.cli:main"
 ida-pro-mcp-install = "ida_pro_mcp.installer.main:main"
 
-[tool.pyright]
-include = ["src/ida_pro_mcp"]
+# No [tool.pyright] section. The host dispatch/audit layer is deliberately
+# untyped, so the checker reports ~800 errors in src/ida_pro_mcp/host/server
+# alone and no CI job can gate on it; a baseline that large would be inert and
+# immediately stale. Re-add type checking (with a baseline) once the central
+# call_tool/_execute_tool/_session_action_* surface is annotated.
 
 [tool.ruff]
 exclude = ["src/ida_pro_mcp/ida_mcp/zeromcp/*.py"]

@@ -156,13 +156,6 @@ API_CATEGORIES = {
     ],
 }
 
-# Build reverse lookup: api_name -> category
-API_TO_CATEGORY = {}
-for _cat, _apis in API_CATEGORIES.items():
-    for _api in _apis:
-        API_TO_CATEGORY[_api.lower()] = _cat
-
-
 # ============================================================================
 # Dangerous APIs (used by annotation and search)
 # ============================================================================

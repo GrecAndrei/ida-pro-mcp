@@ -99,45 +99,24 @@ class ServerSemanticMixin:
         )
 
     def _semantic_extract_gadget_rows(
-        self, action: str, payload: Any
+        self, payload: Any
     ) -> list[tuple[str, int, str]]:
         """Extract normalized (addr, insns, gadget text) rows from gadget tool payloads."""
         rows: list[tuple[str, int, str]] = []
         if not isinstance(payload, dict):
             return rows
         gadgets = payload.get("gadgets")
-        if isinstance(gadgets, list):
-            for item in gadgets:
-                if not isinstance(item, dict):
-                    continue
-                addr = str(item.get("addr") or "").strip()
-                text = str(item.get("gadget") or "").strip()
-                if not addr or not text:
-                    continue
-                insns = _bounded_int(item.get("insns", 0), 0, min_value=0, max_value=4096)
-                rows.append((addr, insns, text))
+        if not isinstance(gadgets, list):
             return rows
-        if action == "pivot_chains":
-            categories = payload.get("categories")
-            if not isinstance(categories, dict):
-                return rows
-            for cat_payload in categories.values():
-                if not isinstance(cat_payload, dict):
-                    continue
-                cat_gadgets = cat_payload.get("gadgets")
-                if not isinstance(cat_gadgets, list):
-                    continue
-                for item in cat_gadgets:
-                    if not isinstance(item, dict):
-                        continue
-                    addr = str(item.get("addr") or "").strip()
-                    text = str(item.get("gadget") or "").strip()
-                    if not addr or not text:
-                        continue
-                    insns = _bounded_int(
-                        item.get("insns", 0), 0, min_value=0, max_value=4096
-                    )
-                    rows.append((addr, insns, text))
+        for item in gadgets:
+            if not isinstance(item, dict):
+                continue
+            addr = str(item.get("addr") or "").strip()
+            text = str(item.get("gadget") or "").strip()
+            if not addr or not text:
+                continue
+            insns = _bounded_int(item.get("insns", 0), 0, min_value=0, max_value=4096)
+            rows.append((addr, insns, text))
         return rows
 
     def _semantic_index_rebuild(
@@ -170,7 +149,7 @@ class ServerSemanticMixin:
                 )
                 continue
             for addr, insns, gadget_text in self._semantic_extract_gadget_rows(
-                source_action, result
+                result
             ):
                 norm_text = re.sub(r"\s+", " ", gadget_text.lower()).strip()
                 tokens = sorted(set(re.findall(r"[a-z0-9_]+", norm_text)))
@@ -198,7 +177,7 @@ class ServerSemanticMixin:
         if not indexed_rows and errors:
             first_error = errors[0]
             return make_error(
-                str(first_error.get("code") or MCPError.RPC_CONNECTION_ERROR),
+                str(first_error.get("code") or MCPError.INTERNAL),
                 str(first_error.get("message") or "Semantic gadget index rebuild failed"),
                 details={
                     "source_actions": source_actions,
@@ -339,7 +318,6 @@ class ServerSemanticMixin:
         query_tokens = set(re.findall(r"[a-z0-9_]+", query_lower))
 
         ranked: list[tuple[float, tuple[Any, Any, Any, Any, Any, Any]]] = []
-        embedding_failed = False
         query_vec: list[float] | None = None
         embedder = None
         if EMBEDDING_FIRST_MODE:
@@ -348,7 +326,9 @@ class ServerSemanticMixin:
                 embedder = BgeCodeEmbedder()
                 query_vec = embedder.embed_vector(query)
             except Exception:
-                embedding_failed = True
+                # Embedding is best-effort: fall through to token matching.
+                embedder = None
+                query_vec = None
         for row in rows:
             norm_text = str(row[4] or "")
             sim = 0.0
@@ -360,7 +340,7 @@ class ServerSemanticMixin:
                     sim = float(embedder.cosine(query_vec, row_vec))
                 except Exception:
                     sim = 0.0
-            elif not embedding_failed:
+            elif embedder is None or query_vec is None:
                 token_blob = str(row[5] or "")
                 row_tokens = set(token_blob.split(",")) if token_blob else set()
                 inter = len(query_tokens.intersection(row_tokens))

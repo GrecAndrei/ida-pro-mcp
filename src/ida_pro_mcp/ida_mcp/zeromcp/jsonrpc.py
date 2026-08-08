@@ -58,17 +58,30 @@ class JsonRpcRegistry:
         except Exception as e:
             return self._error(None, -32700, "JSON parse error", str(e))
 
+        # JSON-RPC 2.0 (section 4.2): a Request object without an "id" member
+        # is a Notification, and the server MUST NOT reply to it — including
+        # when it is structurally invalid. Determine this up front so the
+        # validation errors below are suppressed for notifications; only
+        # genuinely unparseable input (non-object) still gets an error
+        # response with id null (per section 5, "invalid Request" detection).
+        request_id: JsonRpcId = request.get("id")
+        is_notification = "id" not in request
+
         if request.get("jsonrpc") != "2.0":
+            if is_notification:
+                return None
             return self._error(None, -32600, "Invalid request: 'jsonrpc' must be '2.0'")
 
         method = request.get("method")
         if method is None:
+            if is_notification:
+                return None
             return self._error(None, -32600, "Invalid request: 'method' is required")
         if not isinstance(method, str):
+            if is_notification:
+                return None
             return self._error(None, -32600, "Invalid request: 'method' must be a string")
 
-        request_id: JsonRpcId = request.get("id")
-        is_notification = "id" not in request
         params: JsonRpcParams = request.get("params")
         try:
             result = self._call(method, params)
@@ -112,15 +125,32 @@ class JsonRpcRegistry:
             hints = get_type_hints(func)
             hints.pop("return", None)
 
-            # Determine required vs optional parameters
+            # Determine required vs optional parameters. *args/**kwargs are
+            # never "required": their default is always empty, so counting
+            # them here would make tools/call fail with -32602 for every
+            # tool whose signature ends in **kwargs (nearly all of ours,
+            # e.g. `def calc(action, expr=None, **kwargs)`).
             required_params = []
             for param_name, param in sig.parameters.items():
+                if param.kind in (
+                    inspect.Parameter.VAR_POSITIONAL,
+                    inspect.Parameter.VAR_KEYWORD,
+                ):
+                    continue
                 if param.default is inspect.Parameter.empty:
                     required_params.append(param_name)
 
             self._cache[func] = (sig, hints, required_params)
 
         sig, hints, required_params = self._cache[func]
+
+        # A **kwargs parameter means callers may pass arbitrary extra keyword
+        # arguments, so the "no extra params" validation below must not
+        # reject keys the signature does not declare.
+        has_var_keyword = any(
+            p.kind is inspect.Parameter.VAR_KEYWORD
+            for p in sig.parameters.values()
+        )
 
         # Handle None params
         if params is None:
@@ -153,13 +183,15 @@ class JsonRpcRegistry:
                     f"Invalid params: missing required parameters: {list(missing)}"
                 )
 
-            # Check no extra params
-            extra = set(params.keys()) - set(sig.parameters.keys())
-            if extra:
-                raise JsonRpcException(
-                    -32602,
-                    f"Invalid params: unexpected parameters: {list(extra)}"
-                )
+            # Check no extra params (extra kwargs are allowed only when the
+            # function declares **kwargs; they flow into it below)
+            if not has_var_keyword:
+                extra = set(params.keys()) - set(sig.parameters.keys())
+                if extra:
+                    raise JsonRpcException(
+                        -32602,
+                        f"Invalid params: unexpected parameters: {list(extra)}"
+                    )
 
             validated_params = {}
             for param_name, value in params.items():

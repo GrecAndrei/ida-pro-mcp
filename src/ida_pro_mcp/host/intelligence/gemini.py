@@ -151,6 +151,11 @@ class GeminiEmbedBackend:
         self._mode = "unset"
         self._api_key = ""
         self._env_token = ""
+        # Vertex ADC token cache: the resolved token plus its expiry so
+        # _auth_headers does not re-run google.auth.default + a network
+        # refresh on every embedding request.
+        self._adc_token_cache = ""
+        self._adc_expiry = 0.0
         self._state_vertex_project = str(state.get("gemini_vertex_project") or "")
         self._state_vertex_location = str(state.get("gemini_vertex_location") or "")
         self._project = ""
@@ -213,6 +218,7 @@ class GeminiEmbedBackend:
                 return
             self._env_token = ""
             token, err = self._adc_token()
+            self._adc_token_cache = token
             if token:
                 self._ready = True
                 self._error = ""
@@ -260,6 +266,14 @@ class GeminiEmbedBackend:
         try:
             request = google.auth.transport.requests.Request()
             creds.refresh(request)
+            # Some credential sources (e.g. some metadata flows) report no
+            # expiry; fall back to a short default TTL so we still refresh
+            # rather than pin a possibly-revoked token forever.
+            self._adc_expiry = (
+                creds.expiry.timestamp()
+                if getattr(creds, "expiry", None) is not None
+                else time.time() + 300.0
+            )
             return creds.token, ""
         except Exception as exc:  # noqa: BLE001
             return "", f"ADC token refresh failed: {exc}"
@@ -270,10 +284,30 @@ class GeminiEmbedBackend:
             if self._api_key:
                 headers["x-goog-api-key"] = self._api_key
         elif self._mode == "vertex":
-            token = self._env_token or self._adc_token()[0]
+            token = self._env_token or self._adc_token_cached()
             if token:
                 headers["Authorization"] = f"Bearer {token}"
         return headers
+
+    def _adc_token_cached(self) -> str:
+        """Return a cached ADC token, refreshing only when it nears expiry.
+
+        Resolving ADC runs ``google.auth.default`` plus a full network
+        refresh; without caching, an embedding batch chunked at 16 would pay
+        one refresh per request.
+        """
+        now = time.time()
+        if self._adc_token_cache and self._adc_expiry > now + 60.0:
+            return self._adc_token_cache
+        token, err = self._adc_token()
+        if token:
+            self._adc_token_cache = token
+            self._error = ""
+        else:
+            self._adc_token_cache = ""
+            self._adc_expiry = 0.0
+            self._error = err
+        return self._adc_token_cache
 
     # ── HTTP ──────────────────────────────────────────────────────────────
 
@@ -329,6 +363,15 @@ class GeminiEmbedBackend:
     def _task_present(body: dict, task_in: str | None) -> bool:
         if task_in == "instances":
             return any("task_type" in inst for inst in body.get("instances", []))
+        if task_in == "requests":
+            # AI Studio batchEmbedContents nests taskType inside each
+            # request's embedContentConfig.
+            return any(
+                isinstance(req, dict)
+                and isinstance(req.get("embedContentConfig"), dict)
+                and "taskType" in req["embedContentConfig"]
+                for req in body.get("requests", [])
+            )
         cfg = body.get("embedContentConfig")
         return isinstance(cfg, dict) and "taskType" in cfg
 
@@ -338,6 +381,11 @@ class GeminiEmbedBackend:
         if task_in == "instances":
             for inst in out.get("instances", []):
                 inst.pop("task_type", None)
+            return out
+        if task_in == "requests":
+            for req in out.get("requests", []):
+                if isinstance(req, dict) and isinstance(req.get("embedContentConfig"), dict):
+                    req["embedContentConfig"].pop("taskType", None)
             return out
         cfg = out.get("embedContentConfig")
         if isinstance(cfg, dict):
@@ -395,6 +443,7 @@ class GeminiEmbedBackend:
                 headers,
                 {"requests": requests_payload},
                 timeout,
+                task_in="requests",
             )
             return self._extract_list(data.get("embeddings"), len(texts))
 

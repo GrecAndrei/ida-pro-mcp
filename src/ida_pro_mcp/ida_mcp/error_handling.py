@@ -297,6 +297,55 @@ ERROR_HINTS: Dict[str, str] = {
 }
 
 
+# Coarse categories for the error envelope, mirroring ``host/errors.py``
+# (user / runtime / policy / internal). Clients match on ``error.category``
+# instead of parsing the code, so the IDA-side envelope must carry one too —
+# the RPC path passes these dicts through to the wire verbatim.
+_CATEGORY_USER = frozenset({
+    MCPError.INVALID_ARGS, MCPError.NOT_FOUND, MCPError.TOOL_NOT_FOUND,
+    MCPError.ACTION_NOT_FOUND, MCPError.MISSING_REQUIRED_ARG,
+    MCPError.INVALID_ARG_TYPE, MCPError.INVALID_ARG_VALUE,
+    MCPError.INVALID_ARG_COMBINATION, MCPError.MUTUALLY_EXCLUSIVE_ARGS,
+    MCPError.FILE_NOT_FOUND, MCPError.PATH_TRAVERSAL, MCPError.FILE_READ_ERROR,
+    MCPError.FILE_WRITE_ERROR, MCPError.FILE_PERMISSION_DENIED,
+    MCPError.FILE_TOO_LARGE, MCPError.FILE_ENCODING_ERROR,
+    MCPError.DIRECTORY_NOT_FOUND, MCPError.FILE_ALREADY_EXISTS,
+    MCPError.INVALID_FILE_FORMAT,
+    MCPError.ADDRESS_INVALID, MCPError.ADDRESS_NOT_MAPPED,
+    MCPError.ADDRESS_NOT_CODE, MCPError.ADDRESS_NOT_DATA,
+    MCPError.ADDRESS_ALIGNMENT, MCPError.FUNCTION_NOT_FOUND,
+    MCPError.FUNCTION_ALREADY_EXISTS, MCPError.FUNCTION_OVERLAP,
+    MCPError.FUNCTION_TOO_LARGE, MCPError.SEGMENT_NOT_FOUND,
+    MCPError.SEGMENT_OVERLAP, MCPError.TYPE_ERROR,
+    MCPError.TYPE_PARSE_ERROR, MCPError.TYPE_APPLY_ERROR, MCPError.NAME_CONFLICT,
+    MCPError.NAME_INVALID, MCPError.STRUCT_NOT_FOUND,
+    MCPError.STRUCT_MEMBER_ERROR, MCPError.XREF_NOT_FOUND,
+    MCPError.SIZE_LIMIT_EXCEEDED, MCPError.RESULT_TOO_LARGE,
+    MCPError.DEPTH_LIMIT_EXCEEDED, MCPError.ITERATION_LIMIT,
+    MCPError.RECURSION_LIMIT, MCPError.RATE_LIMIT, MCPError.PATTERN_INVALID,
+    MCPError.PATTERN_TOO_SHORT, MCPError.REGEX_ERROR, MCPError.NO_RESULTS,
+    MCPError.FORMAT_UNSUPPORTED, MCPError.PLUGIN_NOT_FOUND,
+    MCPError.BATCH_EMPTY, MCPError.BATCH_TOO_LARGE,
+    MCPError.TRUNCATION_TOKEN_EXPIRED, MCPError.TRUNCATION_TOKEN_INVALID,
+    MCPError.TRUNCATION_FIELD_MISSING, MCPError.PAGINATION_OUT_OF_RANGE,
+    MCPError.BOOKMARK_NOT_FOUND, MCPError.BOOKMARK_DUPLICATE,
+    MCPError.COMMENT_TOO_LONG, MCPError.COMPARE_INCOMPATIBLE,
+    MCPError.DIFF_NO_CHANGES, MCPError.YARA_COMPILE_ERROR,
+})
+_CATEGORY_POLICY = frozenset({
+    MCPError.GOVERNANCE_BLOCKED,
+})
+
+
+def _category_for_code(code: str) -> str:
+    """Map an error code to its coarse envelope category."""
+    if code in _CATEGORY_USER:
+        return "user"
+    if code in _CATEGORY_POLICY:
+        return "policy"
+    return "runtime"
+
+
 def make_error(
     code: str,
     message: str,
@@ -309,6 +358,10 @@ def make_error(
     If *hint* is not provided, the default from ``ERROR_HINTS`` is used so every
     error automatically carries a recovery suggestion.
 
+    Every envelope carries a ``category`` (user/runtime/policy/internal) so
+    clients can branch on it without parsing the code, matching the host-side
+    contract in ``host/errors.py``.
+
     The *recoverable* flag is accepted for parity with
     :func:`ida_pro_mcp.host.errors.make_error`; the ida_mcp tool layer does
     not consume it today, so it is currently only stored when the caller
@@ -317,6 +370,7 @@ def make_error(
     result: Dict[str, Any] = {
         "error": True,
         "code": code,
+        "category": _category_for_code(code),
         "message": message,
     }
     if recoverable:
@@ -396,7 +450,13 @@ def parse_address_safe(addr_str: str | int) -> Tuple[Optional[int], Optional[Dic
         return addr_str, None
 
     if isinstance(addr_str, float):
-        return int(addr_str), None
+        # A float address (e.g. 0x401000.9) is almost certainly a caller
+        # bug; silently truncating could target the wrong address.
+        return None, make_error(
+            MCPError.ADDRESS_INVALID,
+            f"Invalid address: {addr_str!r} (float). Addresses must be hex strings or integers.",
+            hint="Provide the 'address' parameter as hex (0x401000) or a symbol name (e.g. 'main').",
+        )
 
     try:
         if isinstance(addr_str, str):
@@ -607,7 +667,7 @@ def require_one_of(**kwargs) -> Optional[Dict]:
         err = require_one_of(addr=addr, name=name, expr=expr)
         if err: return err
     """
-    for _key, value in kwargs.items():
+    for value in kwargs.values():
         if value is not None and (not isinstance(value, str) or value.strip()):
             return None
     names = ", ".join(f"'{k}'" for k in kwargs)

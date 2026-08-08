@@ -96,7 +96,15 @@ def _normalize_semantic_token(token: str) -> str:
     tok = token.lower().strip()
     if not tok:
         return tok
-    for suffix in ("ing", "ers", "ies", "ied", "er", "ed", "es", "s"):
+    # Words ending in "-sis" (analysis, synthesis, basis): the trailing 's' is
+    # part of the root, so stripping it leaves a mangled "analysi".  Strip
+    # "is" instead to reach the clean stem "analys".
+    if len(tok) > 4 and tok.endswith("sis"):
+        return _SEMANTIC_CANONICALS.get(tok[:-2], tok[:-2])
+    # Strip plurals ("es"/"s") BEFORE agent-noun suffixes ("ers"/"er") so
+    # "decompilers" becomes "decompiler" (a canonical key → "decompile")
+    # rather than "decompil", which is not in _SEMANTIC_CANONICALS.
+    for suffix in ("ing", "ies", "ied", "es", "s", "ers", "er", "ed"):
         if len(tok) > 4 and tok.endswith(suffix):
             tok = tok[:-3] + "y" if suffix in ("ies", "ied") else tok[:-len(suffix)]
             break
@@ -131,9 +139,6 @@ def _compile_semantic_matcher(pattern: str, *, fuzzy_cutoff: float = _SEMANTIC_F
     query_set = set(query_tokens)
     pathlike_query = len(query_set) == 2 and bool(re.search(r"[./\\:_-]", pattern))
     overlap_needed = 2 if pathlike_query else max(1, (len(query_set) + 1) // 2)
-    fuzzy_tokens = [
-        tok for tok in query_set if len(tok) >= _SEMANTIC_SINGLE_TOKEN_MIN_LEN
-    ]
 
     def _semantic_matches(text: str) -> bool:
         text_tokens = set(_semantic_tokenize(text))
@@ -142,6 +147,13 @@ def _compile_semantic_matcher(pattern: str, *, fuzzy_cutoff: float = _SEMANTIC_F
         overlap = len(query_set.intersection(text_tokens))
         if overlap >= overlap_needed:
             return True
+        # Only fuzzy-match tokens that are NOT already exact matches — a token
+        # in `overlap` would otherwise be double-counted by best_match (ratio
+        # 1.0 >= cutoff), silently defeating the overlap_needed threshold.
+        fuzzy_tokens = [
+            tok for tok in query_set if tok not in text_tokens
+            and len(tok) >= _SEMANTIC_SINGLE_TOKEN_MIN_LEN
+        ]
         if not fuzzy_tokens:
             return False
         from ..intelligence.helpers import best_match
@@ -164,11 +176,18 @@ def _is_regex(pattern):
     for ind in (r"\d", r"\w", r"\s", r"\b", r"\D", r"\W", r"\S", r"\B"):
         if ind in pattern:
             return True
+    # Literal queries frequently contain regex metacharacters that are NOT
+    # regex constructs: "foo[0]", "v3 + 0x10", "func()".  Only treat the
+    # pattern as a regex when it carries unambiguous regex syntax — an anchor
+    # at the start (^) or end ($), a backslash escape of a punctuation char
+    # (\., \\, \*), or a bracket expression that is a genuine character class
+    # (contains a class range like [a-z] or a negation [^…]).  A bare '+',
+    # '()', '{}', '[]' or '|' is more likely literal text than regex.
+    if pattern.startswith("^") or pattern.endswith("$"):
+        return True
     if re.search(r"\\[.^$*+?{}()|[\]\\]", pattern):
         return True
-    if set("^$+{}()|").intersection(pattern):
-        return True
-    return bool(re.search(r"\[.+\]", pattern))
+    return bool(re.search(r"\[\^[^\[\]]*\]|\[[^\[\]]+-[^\[\]]+\]", pattern))
 
 
 @lru_cache(maxsize=1024)
@@ -215,6 +234,13 @@ def _compile_smart_pattern_uncached(
         return lambda _t, _r=regex: bool(_r.search(_t))
     if "*" in pattern or "?" in pattern:
         pl = pattern.lower()
+        # A bare '?' without '*' is far more likely a literal character — the
+        # leading '?' of MSVC-mangled C++ symbols — than a single-char glob
+        # wildcard.  Escape it so '?str@std@@' matches literally instead of
+        # matching any one character.  Skip when bracket classes are present
+        # ('[?]' would corrupt them).
+        if "?" in pl and "*" not in pl and "[" not in pl and "]" not in pl:
+            pl = pl.replace("?", "[?]")
         return lambda _t, _p=pl: fnmatch.fnmatch(_t.lower(), _p)
     if case_sensitive:
         return lambda _t, _p=pattern: _p in _t

@@ -47,7 +47,6 @@ __all__ = [
     "download_bron_corpus",
     "BRON_SOURCES",
     "default_sources_dir",
-    "default_corpus_cache_path",
 ]
 
 
@@ -59,12 +58,6 @@ _DEFAULT_USER_AGENT = "ida-pro-mcp-installer/bron-corpus"
 
 def default_sources_dir() -> str:
     return os.path.join(CACHE_DIR, "threat_corpus_sources")
-
-
-def default_corpus_cache_path() -> str:
-    from ..host.intelligence.threat_corpus import corpus_cache_path
-
-    return corpus_cache_path()
 
 
 BRON_SOURCES: dict[str, dict[str, Any]] = {

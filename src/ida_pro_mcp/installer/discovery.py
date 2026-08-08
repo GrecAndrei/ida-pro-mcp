@@ -20,7 +20,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 VERSION_TUPLE = tuple[int, int, int]
-_VERSION_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
 # IDA build version: e.g. 9.3.260421.be7de18d  (major.minor.YYMMDD.shorthash)
 _BUILD_VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d{6})\.([0-9a-f]{6,8})")
 _VERSION_DIGITS_RE = re.compile(r"\d+")
@@ -203,6 +202,37 @@ def _binary_arch(binary: Path) -> str:
     return "unknown"
 
 
+def _scan_binary_for_version(binary: Path) -> tuple[VERSION_TUPLE, str] | None:
+    """Search a binary's raw bytes for the embedded IDA build string.
+
+    IDA stores the build tag (e.g. '9.3.260421.be7de18d') as a plain ASCII
+    string, which is exactly what ``strings -n 5`` would surface — without
+    depending on the external ``strings`` binary (not guaranteed on Windows,
+    where the previous subprocess call silently no-op'd and every candidate
+    reported version (0, 0)).  The file is scanned in overlapping chunks so
+    memory stays bounded on large binaries.
+    """
+    chunk_size = 1 << 20  # 1 MiB
+    overlap = 64
+    prefix = b""
+    try:
+        with binary.open("rb") as f:
+            while True:
+                data = f.read(chunk_size)
+                if not data:
+                    break
+                text = (prefix + data).decode("latin-1", errors="replace")
+                m = _BUILD_VERSION_RE.search(text)
+                if m:
+                    version = (int(m.group(1)), int(m.group(2)))
+                    build = f"{m.group(3)}.{m.group(4)}"
+                    return (version, build)
+                prefix = text[-overlap:]
+    except OSError:
+        return None
+    return None
+
+
 def _detect_version(binary: Path) -> tuple[VERSION_TUPLE, str] | None:
     """Try to extract (version, build) from an IDA binary.
 
@@ -225,6 +255,12 @@ def _detect_version(binary: Path) -> tuple[VERSION_TUPLE, str] | None:
         seen.add(cand)
         if not cand.is_file():
             continue
+        # In-process byte scan first: cross-platform, no external tooling.
+        matched = _scan_binary_for_version(cand)
+        if matched:
+            return matched
+        # Fallback: the external `strings` tool when available (some Unix
+        # systems decode additional encodings that a raw byte scan misses).
         try:
             result = subprocess.run(
                 ["strings", "-n", "5", str(cand)],

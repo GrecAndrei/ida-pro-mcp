@@ -15,6 +15,7 @@ import contextlib
 import json
 import os
 import time
+from typing import Dict, List
 
 try:
     from ..support.firmware_heuristics import (
@@ -200,10 +201,14 @@ def _profile_range(s_ea: int, e_ea: int, ptr_size: int) -> dict:
         scanned += 1
         ea += ptr_size
     ptr_density = (ptr_hits / max(1, scanned)) if scanned else 0.0
-    # classify content mix (item-kind based)
+    # classify content mix (item-kind based). Bound the scan to the same
+    # window the byte stats were sampled over (_read_bytes_safe caps at 1MiB),
+    # so unknown_ratio cannot contradict entropy/ascii on larger regions and
+    # the per-byte get_flags work stays bounded.
     unknown = code = data = strings = 0
     ea = s_ea
-    while ea < e_ea:
+    scan_end = min(e_ea, s_ea + len(raw))
+    while ea < scan_end:
         k = _item_kind(ea)
         if k == "unknown":
             unknown += 1
@@ -234,12 +239,6 @@ def _profile_range(s_ea: int, e_ea: int, ptr_size: int) -> dict:
 # =============================================================================
 # Chip-aware post-load bootstrap helpers (formerly firmware_bootstrap.py)
 # =============================================================================
-
-
-try:
-    from typing import Dict, List
-except ImportError:  # Python 3.9+
-    pass
 
 
 def _fwb_safe_bounds() -> tuple[int, int]:
@@ -286,10 +285,60 @@ def _fwb_annotate_mmio(peripherals: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def _fwb_define_ascii_strings(limit: int = 256) -> Dict[str, Any]:
-    with contextlib.suppress(Exception):
-        idaapi.build_strlist()
-    defined = idaapi.get_strlist_qty() if hasattr(idaapi, "get_strlist_qty") else 0
-    return {"strings_defined": min(defined, limit)}
+    """Create ASCII string literals over printable NUL-terminated unknown runs.
+
+    ``idaapi.build_strlist()`` only refreshes the strlist cache over string
+    literals that already exist in the IDB; it never creates new ones. On a raw
+    blob with no defined strings that action was a no-op while reporting the
+    database-wide string quantity. This walks the image and actually creates
+    strings, bounded to the first MiB of unknown runs so a huge raw blob cannot
+    stall bootstrap.
+    """
+    defined = 0
+    skipped = 0
+    try:
+        mn, mx = _fwb_safe_bounds()
+    except Exception:
+        mn, mx = 0, 0
+    if mn >= mx:
+        return {"strings_defined": 0, "skipped": 0}
+    ea = mn
+    work = 0
+    while ea < mx and work < (1 << 20):
+        flags = ida_bytes.get_flags(ea)
+        if ida_bytes.is_code(flags) or ida_bytes.is_data(flags):
+            # Defined items already exist; skip past them rather than re-scanning.
+            sz = idc.get_item_size(ea)
+            ea += max(1, sz)
+            work += 1
+            continue
+        # Only start a string on unknown bytes so we never overwrite code/data.
+        run_start = ea
+        run_len = 0
+        while ea < mx and run_len < 96:
+            if _item_kind(ea) != "unknown":
+                run_len = 0
+                break
+            b = ida_bytes.get_byte(ea)
+            if b == 0:
+                break
+            if b < 0x20 or b > 0x7E:
+                run_len = 0
+                break
+            run_len += 1
+            ea += 1
+        if run_len >= 6 and ea < mx and ida_bytes.get_byte(ea) == 0:
+            if _create_ascii_string(run_start, run_len + 1):
+                defined += 1
+                if defined >= limit:
+                    break
+            else:
+                skipped += 1
+            ea += 1
+        else:
+            ea = run_start + 1
+        work += 1
+    return {"strings_defined": defined, "skipped": skipped}
 
 
 def _fwb_run_vector_bootstrap() -> Dict[str, Any]:
@@ -389,8 +438,6 @@ def _fwb_run_vector_bootstrap() -> Dict[str, Any]:
                         import logging
                         logging.getLogger(__name__).debug("idc.create_insn failed for %s: %s", hex(h), _e)
                 if not created_insn:
-                    code_failures.append(hex(h))
-                if not created_insn:
                     try:
                         ida_bytes.del_items(h, ida_bytes.DELIT_SIMPLE, 16)
                         if hasattr(ida_auto, "auto_make_code"):
@@ -404,6 +451,10 @@ def _fwb_run_vector_bootstrap() -> Dict[str, Any]:
                         created_insn = insn_len > 0
                     except Exception:
                         created_insn = idc.create_insn(h) > 0
+                # Only record a failure once the del_items+auto_make_code retry
+                # also failed, so a recovered entry is not reported as broken.
+                if not created_insn:
+                    code_failures.append(hex(h))
 
     add_func_results = []
     for h, vec in handler_addrs:
@@ -632,8 +683,13 @@ def firmware_view(
             run_start = None
             run_len = 0
             long_runs = []
+            # Bound the per-byte item-kind scan so a multi-MB range does not
+            # trigger millions of get_flags calls; the reported ratios then
+            # describe the sampled prefix (see "scanned_bytes").
+            scan_budget = 1 << 20
+            scanned = 0
             ea = s_ea
-            while ea < e_ea:
+            while ea < e_ea and scanned < scan_budget:
                 kind = _item_kind(ea)
                 if kind == "unknown":
                     unknown += 1
@@ -654,6 +710,7 @@ def firmware_view(
                 if len(sample) < 64 and kind == "unknown":
                     sample.append(hex(ea))
                 ea += 1
+                scanned += 1
             if run_start is not None and run_len >= min_run:
                 long_runs.append((run_start, run_len))
 
@@ -676,6 +733,7 @@ def firmware_view(
                     "data": data,
                     "strings": strings,
                     "unknown_ratio": round(unknown_ratio, 3),
+                    "scanned_bytes": scanned,
                     "long_unknown_runs": [{"start": hex(x), "len": l} for x, l in long_runs[:limit]],
                 },
                 "strategy": strategy,
@@ -1205,6 +1263,12 @@ def firmware_view(
                 run = []
                 cur = ea
                 while cur < e_ea and len(run) < 96:
+                    # Refuse to span a run into defined code/data: a printable
+                    # run that reaches a defined item is not a string candidate,
+                    # so make_string can never overwrite existing items mid-run.
+                    if _item_kind(cur) != "unknown":
+                        run = []
+                        break
                     b = ida_bytes.get_byte(cur)
                     if b == 0:
                         break
@@ -1526,6 +1590,11 @@ def firmware_view(
 
             def _normalize_handler(raw_v: int):
                 """Map vector value to IDB EA when possible, including base-normalized raw blobs."""
+                if raw_v in (0, idaapi.BADADDR):
+                    # Zero/unused/reserved vector entries are not handlers; mapping
+                    # them would alias address 0 (or the image base) and, in a raw
+                    # blob loaded at 0, the Initial_SP slot.
+                    return None, None
                 tgt = raw_v & ~1
                 if min_ea <= tgt < max_ea:
                     return tgt, None
@@ -1633,8 +1702,9 @@ def firmware_view(
                                 "type": "function_pointer",
                             })
 
-            # Write entry points to blackboard
-            if vectors:
+            # Write entry points to blackboard (opt-in: auto_blackboard=False
+            # must not persist findings from a read-only detection pass).
+            if vectors and auto_blackboard:
                 try:
                     from blackboard import BlackboardStore as _BBStore  # type: ignore
                     store = _BBStore()
@@ -1741,6 +1811,8 @@ def firmware_view(
                         break
 
             code_bytes_found = False
+            code_bytes_scanned = 0
+            insn_count = 0
             # Pass 1: scan decoded instruction operands (post-analysis binaries)
             import ida_ua
             for seg_ea in idautils.Segments():
@@ -1752,6 +1824,8 @@ def firmware_view(
                     flags = ida_bytes.get_flags(ea)
                     if ida_bytes.is_code(flags):
                         code_bytes_found = True
+                        code_bytes_scanned += idc.get_item_size(ea)
+                        insn_count += 1
                         insn = ida_ua.insn_t()
                         if ida_ua.decode_insn(insn, ea) > 0:
                             for op in insn.ops:
@@ -1801,8 +1875,9 @@ def firmware_view(
                 chip_votes[fam] = chip_votes.get(fam, 0) + p["access_count"]
             likely_chip = max(chip_votes, key=chip_votes.get) if chip_votes else "unknown"
 
-            # Write to knowledge graph
-            if peripherals:
+            # Write to knowledge graph (opt-in: auto_blackboard=False must not
+            # persist IOC entries from a read-only detection pass).
+            if peripherals and auto_blackboard:
                 try:
                     from blackboard import BlackboardStore as _BBStore  # type: ignore
                     store = _BBStore()
@@ -1828,8 +1903,9 @@ def firmware_view(
                 "likely_chip_family": likely_chip,
                 "peripheral_count": len(peripherals),
                 "scan_coverage": {
-                    "bytes_scanned": int(scan_limit if not code_bytes_found else binary_size),
+                    "bytes_scanned": int(scan_limit if not code_bytes_found else code_bytes_scanned),
                     "bytes_total": int(binary_size),
+                    "instructions_decoded": insn_count,
                     "mode": "raw_word_scan" if not code_bytes_found else "decoded_operands",
                 },
                 "peripherals": peripherals[:20],

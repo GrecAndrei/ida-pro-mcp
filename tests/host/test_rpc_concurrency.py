@@ -51,11 +51,14 @@ def _register_runtime(harness, sid: str, port: int) -> threading.Lock:
     return lock
 
 
-def _local_echo_server(port: int, hold: float = 0.0, concurrency_counter=None):
+def _local_echo_server(port: int = 0, hold: float = 0.0, concurrency_counter=None):
     """A minimal TCP server that replies with a canned JSON payload.
 
     If concurrency_counter is given, it records concurrent entry so tests can
     assert serialization/parallelism. The server must be closed by the caller.
+    ``port`` defaults to 0 (ephemeral) so parallel/leftover runs never collide
+    on a fixed port; the caller reads the allocated port from the returned
+    ``(srv, stop, port)`` triple.
     """
     import json
     import socket
@@ -66,6 +69,7 @@ def _local_echo_server(port: int, hold: float = 0.0, concurrency_counter=None):
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind(("127.0.0.1", port))
+    port = srv.getsockname()[1]
     srv.listen(16)
     srv.settimeout(5.0)
     stop = threading.Event()
@@ -109,7 +113,7 @@ def _local_echo_server(port: int, hold: float = 0.0, concurrency_counter=None):
 
     thread = threading.Thread(target=_serve, daemon=True)
     thread.start()
-    return srv, stop
+    return srv, stop, port
 
 
 @pytest.fixture
@@ -120,15 +124,15 @@ def harness():
 def test_same_session_rpc_lane_serializes(harness):
     """Two concurrent RPCs to one session must never overlap on the bridge."""
     counter = {"active": 0, "max": 0, "lock": threading.Lock()}
-    srv, stop = _local_echo_server(19021, hold=0.25, concurrency_counter=counter)
-    _register_runtime(harness, "AAAA1111", 19021)
+    srv, stop, port = _local_echo_server(0, hold=0.25, concurrency_counter=counter)
+    _register_runtime(harness, "AAAA1111", port)
     try:
         results = {}
 
         def _call(tag):
             results[tag] = harness._send_rpc_raw(
                 {"tool": "funcs", "args": {"action": "list"}},
-                19021,
+                port,
                 timeout=5,
                 recv_timeout=10,
             )
@@ -153,10 +157,10 @@ def test_same_session_rpc_lane_serializes(harness):
 def test_different_session_lanes_run_in_parallel(harness):
     """RPCs to different sessions must overlap on their separate lanes."""
     counter = {"active": 0, "max": 0, "lock": threading.Lock()}
-    srv_a, stop_a = _local_echo_server(19022, hold=0.4, concurrency_counter=counter)
-    srv_b, stop_b = _local_echo_server(19023, hold=0.4, concurrency_counter=counter)
-    _register_runtime(harness, "AAAA1111", 19022)
-    _register_runtime(harness, "BBBB2222", 19023)
+    srv_a, stop_a, port_a = _local_echo_server(0, hold=0.4, concurrency_counter=counter)
+    srv_b, stop_b, port_b = _local_echo_server(0, hold=0.4, concurrency_counter=counter)
+    _register_runtime(harness, "AAAA1111", port_a)
+    _register_runtime(harness, "BBBB2222", port_b)
     try:
         results = {}
 
@@ -169,8 +173,8 @@ def test_different_session_lanes_run_in_parallel(harness):
             )
 
         threads = [
-            threading.Thread(target=_call, args=("a", 19022)),
-            threading.Thread(target=_call, args=("b", 19023)),
+            threading.Thread(target=_call, args=("a", port_a)),
+            threading.Thread(target=_call, args=("b", port_b)),
         ]
         for t in threads:
             t.start()
@@ -305,8 +309,8 @@ def test_health_reports_rpc_queue_depth(tmp_path, monkeypatch):
 
 def test_unbounded_queue_waits_for_lane(harness):
     """queue_timeout=None (legacy default) blocks until the lane frees."""
-    lock = _register_runtime(harness, "AAAA1111", 19025)
-    srv, stop = _local_echo_server(19025, hold=0.2)
+    srv, stop, port = _local_echo_server(0, hold=0.2)
+    lock = _register_runtime(harness, "AAAA1111", port)
     lock.acquire()
 
     def _release_later():
@@ -317,7 +321,7 @@ def test_unbounded_queue_waits_for_lane(harness):
     try:
         result = harness._send_rpc_raw(
             {"tool": "funcs", "args": {"action": "list"}},
-            19025,
+            port,
             timeout=5,
             recv_timeout=10,
         )

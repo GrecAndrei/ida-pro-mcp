@@ -36,17 +36,25 @@ class LolbasSource(SourceParser):
 
         entries: list[dict[str, Any]] = []
         for item in data if isinstance(data, list) else []:
+            if not isinstance(item, dict):
+                continue
             name = item.get("Name", "")
             if not name:
                 continue
+            commands = item.get("Commands")
+            commands = commands if isinstance(commands, list) else []
             techniques: list[str] = []
-            for cmd in item.get("Commands", []):
+            for cmd in commands:
+                if not isinstance(cmd, dict):
+                    continue
                 for tc in (cmd.get("MitreID") or "").split(","):
                     tc = tc.strip()
                     if tc and tc not in techniques:
                         techniques.append(tc)
             usecases: list[str] = []
-            for cmd in item.get("Commands", []):
+            for cmd in commands:
+                if not isinstance(cmd, dict):
+                    continue
                 uc = cmd.get("Category") or cmd.get("Usecase") or ""
                 if uc and uc not in usecases:
                     usecases.append(uc)
@@ -64,7 +72,8 @@ class LolbasSource(SourceParser):
                         "privilege": c.get("Privilege", ""),
                         "description": c.get("Description", ""),
                     }
-                    for c in (item.get("Commands") or [])[:8]
+                    for c in commands[:8]
+                    if isinstance(c, dict)
                 ],
                 "source": "lolbas",
             })

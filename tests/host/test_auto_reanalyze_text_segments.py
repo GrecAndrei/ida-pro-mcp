@@ -28,249 +28,91 @@ process required. They pin the contract for ``.text`` reanalysis.
 Implementation note: the helpers live in
 ``ida_pro_mcp.ida_mcp.tools.analysis`` and importing that module triggers
 the full tool import chain (``zeromcp``, ``ida_kernwin``, etc.). The tests
-extract the helper source verbatim into a stand-alone test module so they
-run without booting the rest of the tool layer. This is brittle if the
-helpers change shape, but the existing test suite follows the same pattern
-(e.g. ``test_var_rename_hints_no_hex_leak.py``).
+exec the *live* helper source sliced out of ``analysis.py`` at import time
+(see ``_extract_helpers_src``), so they run without booting the rest of the
+tool layer while still exercising the shipped code — a frozen copy of the
+helpers drifted from production and let these tests pass against stale
+logic.
 """
 from __future__ import annotations
 
+import ast
+import importlib.util
 import os
-import sys
-import textwrap
 import time
 from unittest.mock import MagicMock
 
-ROOT = os.path.dirname(os.path.dirname(__file__))
-SRC = os.path.join(ROOT, "src")
-if SRC not in sys.path:
-    sys.path.insert(0, SRC)
+
+def _analysis_helpers_path() -> str:
+    """Locate the installed analysis.py without importing the IDA tool chain."""
+    spec = importlib.util.find_spec("ida_pro_mcp")
+    if spec is None or not spec.submodule_search_locations:
+        raise RuntimeError("could not resolve the installed ida_pro_mcp package")
+    root = spec.submodule_search_locations[0]
+    return os.path.join(root, "ida_mcp", "tools", "analysis.py")
 
 
-_HELPERS_SRC = textwrap.dedent('''
-    _BADADDR = 0xFFFFFFFFFFFFFFFF
+def _extract_helpers_src() -> str:
+    """Slice the live helper source out of production analysis.py.
 
-    _SKIP_SEGMENT_NAMES = {
-        ".plt", ".plt.got", ".plt.sec", ".plt.bnd",
-        ".init", ".fini", ".init_array", ".fini_array",
-        ".plt_indirect", ".plt_resolve",
-        ".got", ".got.plt", ".got.off", ".got.sec",
+    The helpers run inside IDA's SDK, so importing the module in a plain
+    pytest process is impossible.  Instead of a hand-maintained frozen copy,
+    exec the actual production source: any change to analysis.py is then
+    exercised by these tests immediately (no drift window).
+    """
+    analysis_path = _analysis_helpers_path()
+    with open(analysis_path, encoding="utf-8") as f:
+        src = f.read()
+    tree = ast.parse(src)
+    helper_names = {
+        "_SKIP_SEGMENT_NAMES",
+        "_segment_code_score",
+        "_find_text_segments",
+        "_auto_reanalyze_text_segments",
+        "_entry_point_addrs",
+        "_ensure_entry_point_functions",
     }
-
-
-    def _segment_code_score(seg, idaapi, ida_bytes, idc):
-        """Return (defined_code_bytes, total_code_bytes, code_head_count)."""
-        defined = 0
-        total = 0
-        heads = 0
-        if seg is None:
-            return 0, 0, 0
-        try:
-            if not (seg.perm & idaapi.SEGPERM_EXEC):
-                return 0, 0, 0
-        except Exception:
-            return 0, 0, 0
-        total = int(seg.end_ea) - int(seg.start_ea)
-        if total <= 0:
-            return 0, 0, 0
-        head = int(seg.start_ea)
-        end_ea = int(seg.end_ea)
-        while head < end_ea:
-            try:
-                flags = ida_bytes.get_flags(head)
-            except Exception:
-                break
-            try:
-                if ida_bytes.is_code(flags):
-                    defined += int(idc.get_item_size(head))
-                    heads += 1
-            except Exception:
-                pass
-            try:
-                nxt = idc.next_head(head, end_ea)
-            except Exception:
-                break
-            if nxt == idaapi.BADADDR or nxt <= head:
-                break
-            head = int(nxt)
-        return defined, total, heads
-
-
-    def _find_text_segments(idaapi, idautils, ida_segment):
-        """Return [(start, end, name), ...] for segments to re-analyze."""
-        out = []
-        seen = set()
-        for seg_ea in idautils.Segments():
-            seg = idaapi.getseg(seg_ea)
-            if not seg:
-                continue
-            try:
-                if not (seg.perm & idaapi.SEGPERM_EXEC):
-                    continue
-            except Exception:
-                continue
-            s = int(seg.start_ea)
-            e = int(seg.end_ea)
-            if e - s < 0x100:
-                continue
-            name = ""
-            try:
-                name = ida_segment.get_segm_name(seg)
-            except Exception:
-                name = ""
-            if name in _SKIP_SEGMENT_NAMES:
-                continue
-            key = (s, e)
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append((s, e, name))
-        out.sort(key=lambda t: t[0])
-        return out
-
-
-    def _auto_reanalyze_text_segments(
-        wait_seconds,
-        *,
-        idaapi,
-        idautils,
-        ida_bytes,
-        idc,
-        ida_segment,
-        ida_funcs,
-        ida_auto,
-        time_mod,
-        log,
-    ):
-        ranges = _find_text_segments(idaapi, idautils, ida_segment)
-        before_funcs = 0
-        before_defined = 0
-        before_total = 0
-        try:
-            before_funcs = int(idaapi.get_func_qty())
-        except Exception:
-            pass
-        for s, e, _name in ranges:
-            try:
-                d, t, _h = _segment_code_score(idaapi.getseg(s), idaapi, ida_bytes, idc)
-                before_defined += d
-                before_total += t
-            except Exception:
-                pass
-        scheduled = 0
-        for s, e, _name in ranges:
-            try:
-                if hasattr(ida_auto, "plan_range"):
-                    ida_auto.plan_range(s, e)
-                elif hasattr(ida_auto, "auto_mark_range"):
-                    ida_auto.auto_mark_range(s, e, getattr(ida_auto, "AU_FINAL", 0))
-                elif hasattr(idaapi, "auto_mark_range"):
-                    idaapi.auto_mark_range(s, e, idaapi.AU_FINAL)
-                else:
-                    continue
-                scheduled += 1
-            except Exception:
-                continue
-        waited = 0.0
-        started = time_mod.time()
-        if scheduled > 0 and wait_seconds > 0:
-            try:
-                if hasattr(ida_auto, "auto_wait"):
-                    ida_auto.auto_wait()
-                waited = time_mod.time() - started
-            except Exception:
-                waited = time_mod.time() - started
-        after_funcs = 0
-        after_defined = 0
-        after_total = 0
-        after_heads = 0
-        try:
-            after_funcs = int(idaapi.get_func_qty())
-        except Exception:
-            pass
-        for s, e, _name in ranges:
-            try:
-                d, t, h = _segment_code_score(idaapi.getseg(s), idaapi, ida_bytes, idc)
-                after_defined += d
-                after_total += t
-                after_heads += h
-            except Exception:
-                pass
-        coverage_before = (
-            round(before_defined / before_total * 100, 2) if before_total else 0.0
+    spans: list[tuple[int, int]] = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            name = node.name
+        elif isinstance(node, ast.Assign):
+            name = next((t.id for t in node.targets if isinstance(t, ast.Name)), None)
+        else:
+            name = None
+        if name in helper_names:
+            spans.append((node.lineno, getattr(node, "end_lineno", node.lineno)))
+    if len(spans) != len(helper_names):
+        raise RuntimeError(
+            f"could not locate all analysis helpers in {analysis_path}: found {spans}"
         )
-        coverage_after = (
-            round(after_defined / after_total * 100, 2) if after_total else 0.0
-        )
-        eligible = [
-            {"start": hex(s), "end": hex(e), "name": name}
-            for s, e, name in ranges
-        ]
-        return {
-            "eligible_ranges": eligible,
-            "scheduled": scheduled,
-            "functions_before": before_funcs,
-            "functions_after": after_funcs,
-            "functions_added": max(0, after_funcs - before_funcs),
-            "defined_code_bytes_before": before_defined,
-            "defined_code_bytes_after": after_defined,
-            "total_code_bytes": after_total,
-            "code_heads_after": after_heads,
-            "coverage_pct_before": coverage_before,
-            "coverage_pct_after": coverage_after,
-            "waited_seconds": round(waited, 2),
-            "reanalysis_triggered": (
-                after_funcs > before_funcs or after_defined > before_defined
-            ),
-        }
-
-
-    def _entry_point_addrs(ida_entry, idaapi):
-        out = set()
-        try:
-            qty = int(ida_entry.get_entry_qty())
-            for i in range(qty):
-                ord_val = ida_entry.get_entry_ordinal(i)
-                ea = int(ida_entry.get_entry(ord_val))
-                if ea and ea != idaapi.BADADDR:
-                    out.add(ea)
-        except Exception:
-            pass
-        return sorted(out)
-
-
-    def _ensure_entry_point_functions(
-        *,
-        ida_entry,
-        idaapi,
-        ida_funcs,
+    lines = src.splitlines()
+    body = "\n".join(lines[min(s[0] for s in spans) - 1 : max(s[1] for s in spans)])
+    # The helpers import IDA SDK modules from the running interpreter; in the
+    # test namespace those resolve to the stubs built by _build_namespace.
+    # Fail loudly if production changes these lines so the test is updated
+    # with the shape change instead of silently passing stale logic.
+    for old, new in (
+        (
+            "    import idc as _idc\n",
+            "    _idc = globals()['idc']  # bound from test namespace\n",
+        ),
+        (
+            "    import ida_auto as _ida_auto\n",
+            "    _ida_auto = globals()['ida_auto']  # bound from test namespace\n",
+        ),
+        (
+            "    import ida_funcs\n",
+            "    ida_funcs = globals()['ida_funcs']  # bound from test namespace\n",
+        ),
     ):
-        created = []
-        skipped = []
-        failed = []
-        for ea in _entry_point_addrs(ida_entry, idaapi):
-            try:
-                if idaapi.get_func(ea):
-                    skipped.append(hex(ea))
-                    continue
-                ok = False
-                try:
-                    ok = bool(ida_funcs.add_func(ea))
-                except Exception:
-                    ok = False
-                if ok:
-                    created.append(hex(ea))
-                else:
-                    failed.append(hex(ea))
-            except Exception:
-                failed.append(hex(ea))
-        return {
-            "entry_points_total": len(created) + len(skipped) + len(failed),
-            "created": created,
-            "skipped_already_func": skipped,
-            "failed": failed,
-        }
-''')
+        if old not in body:
+            raise RuntimeError(
+                f"analysis.py helper shape changed; expected `{old.strip()}` "
+                f"inside the sliced helpers of {analysis_path}"
+            )
+        body = body.replace(old, new)
+    return body
 
 
 def _build_namespace():
@@ -341,10 +183,9 @@ def _build_namespace():
         get_entry=lambda _o: 0,
         get_entry_name=lambda _o: "",
     )
-    time_mod = types.SimpleNamespace(time=time.time)
-    log = types.SimpleNamespace(info=lambda *a, **k: None, debug=lambda *a, **k: None)
 
     ns.update(
+        time=time,
         idaapi=idaapi,
         idautils=idautils,
         ida_bytes=ida_bytes,
@@ -353,11 +194,9 @@ def _build_namespace():
         ida_funcs=ida_funcs,
         ida_auto=ida_auto,
         ida_entry=ida_entry,
-        time_mod=time_mod,
-        log=log,
     )
 
-    exec(compile(_HELPERS_SRC, "<analysis.py:helpers>", "exec"), ns)
+    exec(compile(_extract_helpers_src(), "<analysis.py:helpers>", "exec"), ns)
     return ns
 
 
@@ -428,7 +267,7 @@ def test_find_text_segments_skips_plt_and_tiny_trampolines():
     # Wire get_segm_name through the segmap's name attribute
     ida_segment.get_segm_name = lambda s: s.name
 
-    ranges = _find_text_segments(idaapi, idautils, ida_segment)
+    ranges = _find_text_segments()
 
     starts = [r[0] for r in ranges]
     names = [r[2] for r in ranges]
@@ -463,12 +302,7 @@ def test_auto_reanalyze_text_segments_schedules_per_range():
     idaapi = _NS["idaapi"]
     idautils = _NS["idautils"]
     ida_segment = _NS["ida_segment"]
-    ida_bytes = _NS["ida_bytes"]
-    idc = _NS["idc"]
-    ida_funcs = _NS["ida_funcs"]
     ida_auto = _NS["ida_auto"]
-    time_mod = _NS["time_mod"]
-    log = _NS["log"]
 
     idautils.Segments = lambda: iter(segmap.keys())
     idaapi.getseg = _make_getseg(segmap)
@@ -491,19 +325,10 @@ def test_auto_reanalyze_text_segments_schedules_per_range():
 
     ida_auto.auto_wait = fake_auto_wait
     idaapi.get_func_qty = fake_get_func_qty
+    # The analyzer has not drained yet, so the wait path must run auto_wait.
+    idaapi.auto_is_ok = lambda: False
 
-    result = _auto_reanalyze_text_segments(
-        wait_seconds=0.1,
-        idaapi=idaapi,
-        idautils=idautils,
-        ida_bytes=ida_bytes,
-        idc=idc,
-        ida_segment=ida_segment,
-        ida_funcs=ida_funcs,
-        ida_auto=ida_auto,
-        time_mod=time_mod,
-        log=log,
-    )
+    result = _auto_reanalyze_text_segments(wait_seconds=0.1)
 
     # Two eligible ranges were scheduled
     assert len(plan_calls) == 2, f"expected 2 plan_range calls, got {plan_calls}"
@@ -530,13 +355,7 @@ def test_auto_reanalyze_text_segments_handles_no_eligible_ranges():
     """If there are no eligible segments, no plan_range calls happen."""
     idaapi = _NS["idaapi"]
     idautils = _NS["idautils"]
-    ida_segment = _NS["ida_segment"]
-    ida_bytes = _NS["ida_bytes"]
-    idc = _NS["idc"]
-    ida_funcs = _NS["ida_funcs"]
     ida_auto = _NS["ida_auto"]
-    time_mod = _NS["time_mod"]
-    log = _NS["log"]
 
     idautils.Segments = lambda: iter([])
     idaapi.getseg = lambda _ea: None
@@ -545,18 +364,7 @@ def test_auto_reanalyze_text_segments_handles_no_eligible_ranges():
     plan_calls = []
     ida_auto.plan_range = lambda *a, **k: plan_calls.append(a)
 
-    result = _auto_reanalyze_text_segments(
-        wait_seconds=0.0,
-        idaapi=idaapi,
-        idautils=idautils,
-        ida_bytes=ida_bytes,
-        idc=idc,
-        ida_segment=ida_segment,
-        ida_funcs=ida_funcs,
-        ida_auto=ida_auto,
-        time_mod=time_mod,
-        log=log,
-    )
+    result = _auto_reanalyze_text_segments(wait_seconds=0.0)
 
     assert result["scheduled"] == 0
     assert result["functions_before"] == 0
@@ -587,9 +395,7 @@ def test_ensure_entry_point_functions_creates_missing():
         return True
     ida_funcs.add_func = fake_add_func
 
-    result = _ensure_entry_point_functions(
-        ida_entry=ida_entry, idaapi=idaapi, ida_funcs=ida_funcs
-    )
+    result = _ensure_entry_point_functions()
 
     # _entry_point_addrs sorts the deduped EAs ascending; add_func calls
     # follow that sort order.
@@ -617,9 +423,7 @@ def test_ensure_entry_point_functions_skips_existing():
     add_func_calls = []
     ida_funcs.add_func = lambda *a, **k: add_func_calls.append(a) or True
 
-    result = _ensure_entry_point_functions(
-        ida_entry=ida_entry, idaapi=idaapi, ida_funcs=ida_funcs
-    )
+    result = _ensure_entry_point_functions()
 
     assert result["created"] == []
     assert result["skipped_already_func"] == [hex(0x39E60)]
@@ -638,9 +442,7 @@ def test_ensure_entry_point_functions_records_failures():
     idaapi.get_func = lambda _ea: None
     ida_funcs.add_func = lambda *a, **k: False
 
-    result = _ensure_entry_point_functions(
-        ida_entry=ida_entry, idaapi=idaapi, ida_funcs=ida_funcs
-    )
+    result = _ensure_entry_point_functions()
 
     assert result["created"] == []
     assert result["failed"] == [hex(0x39E60)]
@@ -648,27 +450,22 @@ def test_ensure_entry_point_functions_records_failures():
 
 def test_entry_point_addrs_dedupes_and_sorts():
     """Duplicate entry EAs collapse; result is sorted ascending."""
-    idaapi = _NS["idaapi"]
     ida_entry = _NS["ida_entry"]
 
     ida_entry.get_entry_qty = lambda: 4
     ida_entry.get_entry_ordinal = lambda i: [0, 1, 2, 3][i]
     ida_entry.get_entry = lambda o: [0x431F4, 0x39E60, 0x431F4, 0x3BAD0][o]
 
-    addrs = _entry_point_addrs(ida_entry, idaapi)
+    addrs = _entry_point_addrs()
 
     assert addrs == [0x39E60, 0x3BAD0, 0x431F4]
 
 
 def test_segment_code_score_skips_non_exec_segments():
     """A segment without SEGPERM_EXEC must score 0/0/0 even if huge."""
-    idaapi = _NS["idaapi"]
-    ida_bytes = _NS["ida_bytes"]
-    idc = _NS["idc"]
-
     # .rodata: large but read-only
     rodata = _Seg(0x1A1980, 0x1D0CD9, ".rodata", 1)  # SEGPERM_READ=1, no EXEC
-    d, t, h = _segment_code_score(rodata, idaapi, ida_bytes, idc)
+    d, t, h = _segment_code_score(rodata)
     assert d == 0
     assert t == 0
     assert h == 0
@@ -708,7 +505,7 @@ def test_segment_code_score_counts_code_heads():
     idc.get_item_size = fake_get_item_size
     idc.next_head = fake_next_head
 
-    d, t, h = _segment_code_score(text, idaapi, ida_bytes, idc)
+    d, t, h = _segment_code_score(text)
 
     # Total: 0x2000 - 0x1000 = 0x1000
     assert t == 0x1000
