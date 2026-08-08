@@ -5,7 +5,7 @@ import math
 from typing import Dict, List
 
 try:
-    from ida_pro_mcp.services import quantile  # noqa: F401
+    from ida_pro_mcp.services import quantile as _quantile
 except ImportError:
     def _quantile(vals, q, default=0.0):
         if not vals:
@@ -354,8 +354,14 @@ def apply_fingerprint_boost(regions: List[Dict], fp_rank: List[Dict], boost_cap:
         nr = dict(r)
         fp = str(nr.get("fingerprint") or "")
         base = float(nr.get("priority_score") or 0.0)
-        signal = fp_map.get(fp, 0.0)
-        signal_norm = _robust_norm(signal, score_vals, default_span=1.0)
+        # Only boost regions with actual fingerprint corpus evidence. An
+        # absent fingerprint maps to 0.0, which _robust_norm would still turn
+        # into a nonzero logistic value against all-positive samples — the
+        # opposite of "use prior fingerprint corpus evidence".
+        signal_norm = (
+            _robust_norm(fp_map[fp], score_vals, default_span=1.0)
+            if fp in fp_map else 0.0
+        )
         dynamic_cap = max(0.0, float(boost_cap))
         boost = dynamic_cap * signal_norm
         if boost > 0:

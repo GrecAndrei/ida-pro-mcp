@@ -13,7 +13,8 @@ grace / request-lock / recycling machinery, on its own lease file, so two
 MCP hosts sharing one install do not fight over the reranker any more than
 they do over the embedder.
 
-Configuration (env, with ``reranker.json`` state file overrides):
+Configuration (env, with the ``rerank`` section of the install
+``embedder.json`` state file as override — see ``_read_rerank_state``):
   IDA_MCP_RERANK_DISABLED   set to 1/true to disable reranking entirely
   IDA_MCP_RERANK_ENABLED    set to 1/true to force-enable (default: on when
                             a rerank GGUF is installed)
@@ -80,7 +81,6 @@ from .rerank_profiles import (
     profile_from_rerank_model,
 )
 
-RERANKER_STATE_FILE = "reranker.json"
 RERANK_LEASE_FILE = os.path.join(CACHE_DIR, "ida-mcp-rerank-server-lease.json")
 _RERANK_LEASE_SCHEMA = 1
 
@@ -369,7 +369,7 @@ class Reranker:
                 )
                 obj._identity_cache = None
                 obj._ctx = min(
-                    _safe_int_env("IDA_MCP_RERANK_CTX", "1024"),
+                    max(512, _safe_int_env("IDA_MCP_RERANK_CTX", "1024")),
                     obj._profile.max_context,
                 )
             cls._instance = obj
@@ -404,8 +404,11 @@ class Reranker:
         # 1024 keeps the KV cache and the physical batch small on CPU.  The
         # profile max would size the compute buffers for 8k tokens and waste
         # gigabytes on a laptop.
+        # Clamp the env var to a sane floor (mirrors native.py) so a mis-set
+        # IDA_MCP_RERANK_CTX=0/negative does not pass --ctx-size 0 /
+        # --ubatch-size 0 to llama-server.
         self._ctx = min(
-            _safe_int_env("IDA_MCP_RERANK_CTX", "1024"),
+            max(512, _safe_int_env("IDA_MCP_RERANK_CTX", "1024")),
             self._profile.max_context,
         )
 

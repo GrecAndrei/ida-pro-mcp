@@ -10,6 +10,7 @@ except ImportError:
 from .core import (
     CALL_XREF_TYPES,
     SearchTimeout,
+    _match_size_rule,
     build_response,
     iter_code,
     iter_segments,
@@ -233,22 +234,21 @@ def search_func_by_sig(pattern, offset, limit, timeout_ms=0):
             # All active filters must be satisfied (AND logic)
             matched = True
             if "size" in active_filters:
-                size_ok = False
+                # All size rules must hold (AND logic); a range bound never
+                # silences a comparator on the same rule.
+                size_ok = True
                 for op, val1, val2 in size_rules:
-                    if op == ">" and size > val1:
-                        size_ok = True
-                        reason.append(f"size={size}>{val1}")
-                    elif op == "<" and size < val1:
-                        size_ok = True
-                        reason.append(f"size={size}<{val1}")
-                    elif val2 is not None and val1 <= size <= val2:
-                        size_ok = True
-                        reason.append(f"size={size} in [{val1},{val2}]")
-                    elif op in ("", "=") and val2 is None and size == val1:
-                        size_ok = True
-                        reason.append(f"size={size}")
-                    if size_ok:
+                    if not _match_size_rule(size, op, val1, val2):
+                        size_ok = False
                         break
+                    if val2 is not None:
+                        reason.append(f"size={size} in [{val1},{val2}]")
+                    elif op == ">":
+                        reason.append(f"size={size}>{val1}")
+                    elif op == "<":
+                        reason.append(f"size={size}<{val1}")
+                    else:
+                        reason.append(f"size={size}")
                 if not size_ok:
                     matched = False
 

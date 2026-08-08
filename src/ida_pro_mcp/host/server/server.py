@@ -49,11 +49,6 @@ from ..schemas import (  # noqa: E402
     _resolve_tool_alias,
 )
 from ..stores.insight_index import InsightIndex  # noqa: E402
-
-# Compatibility anchor for source-based regression tests.
-# if addr and tool_name in ("code", "data", "search"):
-# Import truncation middleware
-from ..stores.truncation import continue_truncated, peek_truncated, search_truncated, summary_truncated, truncate_response  # noqa: F401,E402
 from .audit import AuditLogger  # noqa: E402
 from .rate_limit import RateLimiter  # noqa: E402
 from .server_args import ServerArgsMixin  # noqa: E402
@@ -99,6 +94,12 @@ class IDAMCPServer(
     _blackboard_module = None
     _blackboard_store = None
 
+    # Cap on per-session InsightIndex instances kept in memory. When exceeded
+    # the oldest (by dict insertion order) index is persisted and evicted so a
+    # long-lived daemon process does not accumulate one unbounded index per
+    # session forever.
+    _MAX_INSIGHT_INDEXES = 32
+
     @property
     def _last_spawn_error(self):
         return self._client_request_state().last_spawn_error
@@ -119,9 +120,20 @@ class IDAMCPServer(
         if sid not in indexes:
             index_dir = os.path.join(self.cache_dir, "insight_indexes")
             os.makedirs(index_dir, exist_ok=True)
-            indexes[sid] = InsightIndex(
-                persistence_path=os.path.join(index_dir, f"{sid}.json")
-            )
+            with self._insight_index_lock:
+                # Re-check under the lock: another thread may have created it.
+                if sid not in indexes:
+                    # Evict the oldest cached index when at the cap so a
+                    # long-lived daemon does not accumulate unbounded
+                    # per-session state.
+                    while len(indexes) >= self._MAX_INSIGHT_INDEXES:
+                        _oldest_sid, _oldest = next(iter(indexes.items()))
+                        with contextlib.suppress(Exception):
+                            _oldest.save()
+                        del indexes[_oldest_sid]
+                    indexes[sid] = InsightIndex(
+                        persistence_path=os.path.join(index_dir, f"{sid}.json")
+                    )
         return indexes[sid]
 
     @property
@@ -388,6 +400,9 @@ class IDAMCPServer(
             log_rpc(f"Auto session prune failed: {e}")
         self.bookmark_mgr = BookmarkManager(self.session_mgr.session_dir)
         self.audit = AuditLogger(base_dir=os.path.join(self.cache_dir, "audit"))
+        # AuditLogger.close() is idempotent, so registering it atexit covers
+        # every exit path (normal shutdown, exceptions, os._exit paths).
+        atexit.register(self.audit.close)
         self.rate_limiter = RateLimiter()
         from ..intelligence.context import get_assembler  # lazy: break circular import
         self.assembler = get_assembler()  # bge-code-v1 intelligence layer
@@ -431,6 +446,7 @@ class IDAMCPServer(
             "pages": [],
         }
         self._wiki_cache_ttl = 5.0
+        self._wiki_cache_lock = threading.Lock()
         self._wiki_embed_cache: dict[str, list[float]] = {}
         self._wiki_embed_cache_max = 512
         self._tools_list_cache: dict[str, tuple] = {}
@@ -443,6 +459,7 @@ class IDAMCPServer(
         )
         # L1 / L2 memory tiers
         self._insight_indexes: dict[str, InsightIndex] = {}
+        self._insight_index_lock = threading.Lock()
         self._global_facts = GlobalFactsDatabase(
             db_path=os.path.join(self.cache_dir, "global_facts.db")
         )
@@ -601,7 +618,7 @@ class IDAMCPServer(
                 "id": rid,
                 "result": {
                     "tools": tools_page,
-                    "mode": "agent" if self.tool_surface == "agent" else mode,
+                    "mode": mode,
                     "surface": self.tool_surface,
                     "total": total,
                     "offset": offset,
@@ -859,6 +876,11 @@ class IDAMCPServer(
                 if not chunk:
                     break
                 buf += chunk
+                # Bound the receive buffer: a peer that streams a gigantic
+                # newline-less blob must not grow memory without limit.
+                if len(buf) > _MAX_DAEMON_LINE_BYTES:
+                    log_rpc("Daemon client line exceeded buffer cap; closing connection")
+                    break
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
                     if line.strip():
@@ -913,48 +935,15 @@ class IDAMCPServer(
             pass
 
 
-def _trigger_session_diff(old_idb: str, new_idb: str) -> None:
-    import threading
-    def _diff():
-        try:
-            from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex
-        except ImportError:
-            return
-        try:
-            embedder = BgeCodeEmbedder()
-            new_idx = FunctionEmbeddingIndex(new_idb + ".embeddings.db", embedder)
-            old_idx = FunctionEmbeddingIndex(old_idb + ".embeddings.db", embedder)
-            if new_idx.size == 0 or old_idx.size == 0:
-                return
-            new_only = []
-            for ea, vec in list(new_idx._cache.items())[:200]:
-                matches = old_idx.similar_vec(vec, top_k=1, threshold=0.0)
-                if not matches:
-                    new_only.append(ea)
-            if new_only:
-                try:
-                    from .blackboard_store import BlackboardStore
-                    store = BlackboardStore()
-                    store.write(
-                        title=f"Session diff: {len(new_only)} new/changed functions vs previous session",
-                        content=str(new_only[:20]),
-                        category="session_diff",
-                        tags=["auto", "diff", "session"],
-                        confidence=0.8,
-                        source="session_diff",
-                    )
-                except Exception:
-                    pass
-        except Exception:
-            pass
-    threading.Thread(target=_diff, daemon=True, name="session-diff").start()
-
-
 _real_stdout = sys.stdout  # overwritten by ida_mcp_stdio shim; binary mode on Windows
 
 
 DAEMON_SOCKET = os.path.join(tempfile.gettempdir(), "ida-mcp-daemon.sock")
 DAEMON_PIDFILE = os.path.join(tempfile.gettempdir(), "ida-mcp-daemon.pid")
+
+# Cap on a single daemon-client line (bytes buffered before a newline) so a
+# peer streaming an unbounded newline-less blob cannot exhaust memory.
+_MAX_DAEMON_LINE_BYTES = 4 * 1024 * 1024
 
 
 def _write_pidfile() -> None:

@@ -873,11 +873,22 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
                     observed=obs,
                     skill_id=None,
                     delay_seconds=0,
+                    truncate_outcomes=False,
                 )
                 if is_error_result(out):
+                    bootstrap = data.get("bootstrap")
+                    if bootstrap is not None:
+                        bootstrap["outcomes"] = (bootstrap.get("outcomes") or [])[-1000:]
+                        bootstrap["updated_at"] = datetime.now().isoformat()
                     self._save_skills(sid, data)
                     return out
                 brier_sum += float(out.get("brier", 0.0))
+            # Apply the bounded-history truncation and updated_at once instead
+            # of on every simulated outcome.
+            bootstrap = data.get("bootstrap")
+            bootstrap["outcomes"] = (bootstrap.get("outcomes") or [])[-1000:]
+            bootstrap["updated_at"] = datetime.now().isoformat()
+            data["bootstrap"] = bootstrap
             self._save_skills(sid, data)
             return {
                 "ok": True,
@@ -1114,6 +1125,7 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
         observed: int,
         skill_id: str | None = None,
         delay_seconds: int = 0,
+        truncate_outcomes: bool = True,
     ) -> dict:
         bootstrap = data.get("bootstrap")
         if not bootstrap:
@@ -1161,7 +1173,6 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
                     "reward": round(reward, 4),
                 }
 
-        bootstrap["updated_at"] = datetime.now().isoformat()
         bootstrap.setdefault("outcomes", []).append(
             {
                 "timestamp": datetime.now().isoformat(),
@@ -1172,7 +1183,12 @@ class SessionBootstrapMixin(SessionBootstrapMonitoringMixin):
                 "delay_seconds": max(0, int(delay_seconds)),
             }
         )
-        bootstrap["outcomes"] = bootstrap["outcomes"][-1000:]
+        # Batch simulation opts out of the per-outcome truncation and timestamp
+        # (both are applied once after the loop) to avoid an O(n*1000) list copy
+        # and a redundant datetime() format on every simulated outcome.
+        if truncate_outcomes:
+            bootstrap["outcomes"] = bootstrap["outcomes"][-1000:]
+            bootstrap["updated_at"] = datetime.now().isoformat()
         data["bootstrap"] = bootstrap
         return {
             "ok": True,

@@ -1,7 +1,9 @@
-"""SEARCH.SEMANTIC — Single orchestration point for ALL embedding/behavior search.
+"""SEARCH.SEMANTIC — Orchestration point for embedding/behavior NL search.
 
-This module is the ONLY place that calls FunctionEmbeddingIndex and BehaviorClassifier.
-All semantic/behavior NL actions in the search tool delegate here.
+All semantic/behavior NL actions in the search tool delegate here.  Other
+tool modules (gadgets, modify, intelligence) also call
+FunctionEmbeddingIndex / BehaviorClassifier directly, so this module is a
+convenience orchestrator, not the sole caller.
 
 Architecture:
   get_backend()         — resolves (index, classifier, idb_path) with graceful error

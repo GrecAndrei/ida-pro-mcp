@@ -14,7 +14,7 @@ from typing import Any
 from ..config import _bounded_int
 from ..errors import MCPError, is_error_result, make_error
 from ..intelligence.helpers import parse_str_list
-from ..stores.blackboard_store import STRATEGIES as BB_STRATEGIES
+from ..stores.blackboard_store import STRATEGIES as BB_STRATEGIES, is_auto_name
 from ..stores.symbol_db import SymbolDB
 from .server_blackboard_idb import ServerBlackboardIdbMixin
 from .server_blackboard_phase import ServerBlackboardPhaseMixin
@@ -124,13 +124,16 @@ def _target_collection_summary(targets: list[dict[str, Any]]) -> dict[str, Any]:
         return {"count": 0, "briefs": []}
     briefs = []
     for target in targets[:10]:
-        addr = str(target.get("addr") or "").strip()
+        addr = str(target.get("addr") or target.get("address") or "").strip()
         title = str(target.get("title") or target.get("name") or "").strip()
         parts = [addr or "no-addr", title or "unnamed"]
         if target.get("confidence") is not None:
             parts.append(f"conf={float(target.get('confidence') or 0.0):.2f}")
-        if target.get("priority_score") is not None:
-            parts.append(f"priority={float(target.get('priority_score') or 0.0):.3f}")
+        priority = target.get("priority_score")
+        if priority is None:
+            priority = target.get("priority")
+        if priority is not None:
+            parts.append(f"priority={float(priority or 0.0):.3f}")
         if target.get("semantic_similarity") is not None:
             parts.append(f"semantic={float(target.get('semantic_similarity') or 0.0):.3f}")
         if target.get("xref_count") is not None:
@@ -146,7 +149,7 @@ def _target_collection_summary(targets: list[dict[str, Any]]) -> dict[str, Any]:
     best = targets[0]
     return {
         "count": len(targets),
-        "best_addr": best.get("addr"),
+        "best_addr": best.get("addr") or best.get("address"),
         "best_title": best.get("title"),
         "briefs": briefs,
     }
@@ -157,7 +160,7 @@ def _frontier_collection_summary(results: list[dict[str, Any]]) -> dict[str, Any
         return {"count": 0, "briefs": []}
     briefs = []
     for row in results[:10]:
-        addr = str(row.get("addr") or "").strip()
+        addr = str(row.get("addr") or row.get("address") or "").strip()
         name = str(row.get("name") or row.get("title") or "").strip()
         pieces = [addr or "no-addr", name or "unnamed"]
         if row.get("score") is not None:
@@ -198,10 +201,6 @@ def _coerce_str_list(value: Any) -> list[str]:
     if isinstance(value, str):
         return [p.strip() for p in value.split("|") if p.strip()]
     return []
-
-
-_ADDR_RE = re.compile(r"\b0x[0-9a-fA-F]{4,16}\b")
-_SYMBOL_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{3,63}\b")
 
 
 class ServerBlackboardMixin(
@@ -359,7 +358,7 @@ class ServerBlackboardMixin(
             return {"ok": False, "reason": "no_addr_or_runtime"}
         pulls = []
         probes = [
-            ("graph", {"action": "influence", "addr": addr, "depth": 2, "limit": 8}),
+            ("graph", {"action": "xref_graph", "addr": addr, "depth": 2, "max_items": 8}),
             ("code", {"action": "callers", "addr": addr, "limit": 8}),
             ("code", {"action": "callees", "addr": addr, "limit": 8}),
             ("code", {"action": "strings_in_func", "addr": addr, "limit": 8}),
@@ -434,7 +433,6 @@ class ServerBlackboardMixin(
             eid = str(e.get("id") or "")
             addr = str(e.get("addr") or "")
             cat = str(e.get("category") or "")
-            str(e.get("title") or "")
             if addr:
                 quests.append({"quest_type": "trace_caller", "entry_id": eid, "addr": addr, "call": {"tool": "trace_ingest", "args": {"entry_id": eid}}})
                 quests.append({"quest_type": "verify_this", "entry_id": eid, "addr": addr, "call": {"tool": "search", "args": {"query": addr}}})
@@ -553,9 +551,11 @@ class ServerBlackboardMixin(
                 lines = [
                     "# Memory Compiler Snapshot",
                     "",
-                    f"- phase_quality_score: {compiled['phase_quality']['score']}",
-                    f"- contradictions: {compiled['phase_quality']['contradictions']}",
-                    f"- quest_completion_rate: {compiled['quest_metrics']['completion_rate']}",
+                    # Compiler metadata, deliberately NOT bullet-prefixed so a
+                    # notes_import round-trip does not re-ingest it as findings.
+                    f"phase_quality_score: {compiled['phase_quality']['score']}",
+                    f"contradictions: {compiled['phase_quality']['contradictions']}",
+                    f"quest_completion_rate: {compiled['quest_metrics']['completion_rate']}",
                     "",
                     "## Facts",
                 ]
@@ -910,7 +910,7 @@ class ServerBlackboardMixin(
                 if not line.startswith("- "):
                     continue
                 text = line[2:].strip()
-                if not text or text.startswith("(empty)"):
+                if not text or text.startswith(("(empty)", "(none)")):
                     continue
                 title = text[:140]
                 if store.exists_similar("", category, title):
@@ -997,18 +997,79 @@ class ServerBlackboardMixin(
         entries = store.list(category="proposal", include_resolved=True, include_contradicted=True, limit=limit)
         if status:
             status = status.strip().lower()
-            filtered = []
-            for e in entries:
-                tags = e.get("tags") or []
-                if isinstance(tags, list) and f"status:{status}" in tags:
-                    filtered.append(e)
-            return filtered
+            return [e for e in entries if self._proposal_status(e) == status]
         return entries
 
     def _proposal_status_replace(self, tags: list[str], new_status: str) -> list[str]:
         clean = [t for t in tags if not str(t).startswith("status:")]
         clean.append(f"status:{new_status}")
         return clean
+
+    def _proposal_status(self, entry: dict[str, Any]) -> str:
+        """Effective lifecycle status of a proposal.
+
+        proposal_create/accept/reject write the status into the JSON payload,
+        which is authoritative. The ``status:*`` tags are only advisory: the
+        store unions tags, so they accumulate and cannot express replacement.
+        """
+        payload = {}
+        try:
+            payload = json.loads(str(entry.get("content") or "{}"))
+        except Exception:
+            payload = {}
+        content_status = str(payload.get("status") or "").strip().lower()
+        if content_status:
+            return content_status
+        tags = entry.get("tags") or []
+        if isinstance(tags, list):
+            statuses = [t.split(":", 1)[1] for t in tags if str(t).startswith("status:")]
+            for st in ("verified", "failed", "accepted", "rejected"):
+                if st in statuses:
+                    return st
+            if statuses:
+                return statuses[0]
+        return "proposed"
+
+    def _symbol_at(self, addr: str) -> str:
+        """Read the symbol currently applied at an address, if a runtime is live."""
+        if not hasattr(self, "_execute_tool"):
+            return ""
+        try:
+            res = self._execute_tool("data", {"action": "lookup", "query": addr})
+            if isinstance(res, dict) and not is_error_result(res):
+                return str(res.get("name") or "")
+        except Exception:
+            pass
+        return ""
+
+    def _proposal_verify(self, proposal_type: str, spec: dict[str, Any]) -> dict[str, Any]:
+        """Verify a proposal spec before execution.
+
+        Rename proposals additionally check the live symbol table when an IDB
+        hook is available: a name an analyst applied (not an auto-name) is
+        never overwritten. Patch/type proposals are verified structurally.
+        """
+        checks = []
+        problems = []
+        if proposal_type == "rename":
+            for row in (spec or {}).get("renames", []):
+                addr = str((row or {}).get("addr") or "").strip()
+                name = str((row or {}).get("name") or "").strip()
+                if not addr or not name:
+                    problems.append(f"rename row missing addr/name: {row!r}")
+                    continue
+                checks.append({"kind": "symbol_name_match", "addr": addr, "name": name})
+                current = self._symbol_at(addr)
+                if current and not is_auto_name(current):
+                    problems.append(f"{addr} is already named {current!r}; refusing to overwrite")
+        else:
+            checks.append({"kind": "spec_structure", "proposal_type": proposal_type})
+        return {
+            "ok": not problems,
+            "checks": checks[:20],
+            "problems": problems[:20],
+            "note": "Verification passed." if not problems else "Verification failed: " + "; ".join(problems[:5]),
+        }
 
     def _proposal_execute(self, proposal_type: str, spec: dict[str, Any]) -> dict[str, Any]:
         if not hasattr(self, "_execute_tool"):
@@ -1421,7 +1482,7 @@ class ServerBlackboardMixin(
                         "proposal_id": e.get("id"),
                         "title": e.get("title"),
                         "confidence": e.get("confidence"),
-                        "status": next((t.split(":", 1)[1] for t in (e.get("tags") or []) if str(t).startswith("status:")), "unknown"),
+                        "status": self._proposal_status(e),
                         "proposal_type": payload.get("proposal_type") or "unknown",
                         "spec": payload.get("spec") or {},
                     }
@@ -1450,14 +1511,13 @@ class ServerBlackboardMixin(
                 tags = []
             if dry_run:
                 verify = self._proposal_verify(proposal_type, spec)
-                new_tags = self._proposal_status_replace(tags, "accepted")
-                store.update(proposal_id, tags=new_tags)
                 return {
                     "ok": True,
                     "proposal_id": proposal_id,
                     "status": "accepted",
                     "dry_run": True,
                     "verification": verify,
+                    "note": "Preview only; the proposal was not modified.",
                 }
             verify = self._proposal_verify(proposal_type, spec)
             if verify.get("ok"):
@@ -1511,7 +1571,13 @@ class ServerBlackboardMixin(
             if not isinstance(tags, list):
                 tags = []
             new_tags = self._proposal_status_replace(tags, "rejected")
-            ok = store.update(proposal_id, tags=new_tags)
+            meta = {}
+            try:
+                meta = json.loads(str(entry.get("content") or "{}"))
+            except Exception:
+                meta = {}
+            meta["status"] = "rejected"
+            ok = store.update(proposal_id, tags=new_tags, content=json.dumps(meta, ensure_ascii=True))
             if not ok:
                 return make_error(MCPError.IO_ERROR, f"Failed to reject proposal '{proposal_id}'")
             store.write(
@@ -1548,8 +1614,6 @@ class ServerBlackboardMixin(
                 include_contradicted=True,
                 limit=limit,
             )
-            if status:
-                tasks = [t for t in tasks if f"status:{status}" in (t.get("tags") or [])]
             summaries = []
             for t in tasks:
                 payload = {}
@@ -1557,11 +1621,14 @@ class ServerBlackboardMixin(
                     payload = json.loads(str(t.get("content") or "{}"))
                 except Exception:
                     payload = {}
+                task_status = str(payload.get("status") or "").strip().lower()
+                if status and task_status != status:
+                    continue
                 summaries.append(
                     {
                         "trace_task_id": t.get("id"),
                         "title": t.get("title"),
-                        "status": next((x.split(":", 1)[1] for x in (t.get("tags") or []) if str(x).startswith("status:")), "unknown"),
+                        "status": task_status or "unknown",
                         "addrs": (payload.get("entities") or {}).get("addrs", [])[:10],
                         "symbols": (payload.get("entities") or {}).get("symbols", [])[:10],
                         "result": payload.get("result") or {},
@@ -1570,15 +1637,20 @@ class ServerBlackboardMixin(
             return {"ok": True, "count": len(summaries), "tasks": summaries, "phase": self._phase_snapshot(phase_state, store)}
         if action == "trace_run":
             limit = _bounded_int(args.get("limit", 3), 3, min_value=1, max_value=20)
-            pending = [
-                e for e in store.list(
-                    category="trace_task",
-                    include_resolved=True,
-                    include_contradicted=True,
-                    limit=200,
-                )
-                if isinstance(e.get("tags"), list) and "status:pending" in e.get("tags")
-            ]
+            pending = []
+            for e in store.list(
+                category="trace_task",
+                include_resolved=True,
+                include_contradicted=True,
+                limit=200,
+            ):
+                payload = {}
+                try:
+                    payload = json.loads(str(e.get("content") or "{}"))
+                except Exception:
+                    payload = {}
+                if str(payload.get("status") or "").strip().lower() == "pending":
+                    pending.append(e)
             ran = []
             for entry in pending[:limit]:
                 payload = {}
@@ -1680,7 +1752,7 @@ class ServerBlackboardMixin(
         if action == "read":
             entry = store.read(str(args.get("entry_id") or ""))
             if entry is None:
-                return make_error(MCPError.INVALID_ARGS, "Entry not found")
+                return make_error(MCPError.NOT_FOUND, "Entry not found")
             return {"ok": True, "entry": entry, "summary": _entry_brief(entry)}
         if action == "update":
             entry_id = str(args.get("entry_id") or "").strip()
@@ -1701,10 +1773,22 @@ class ServerBlackboardMixin(
             reason = str(updates.pop("reason", "") or "").strip()
             if status:
                 try:
-                    entry = store.transition(entry_id, status=status, reason=reason, **updates)
+                    transition_fields = {
+                        field: updates.pop(field)
+                        for field in ("content", "confidence", "priority", "tags")
+                        if field in updates
+                    }
+                    entry = store.transition(entry_id, status=status, reason=reason, **transition_fields)
                 except ValueError as exc:
                     return make_error(MCPError.INVALID_ARGS, str(exc))
-                return {"ok": True, "action": "update", "entry": entry} if entry else make_error(MCPError.NOT_FOUND, f"Entry '{entry_id}' not found")
+                if entry is None:
+                    return make_error(MCPError.NOT_FOUND, f"Entry '{entry_id}' not found")
+                if updates:
+                    # Remaining fields (category, addr, kind, ...) are not part
+                    # of the transition contract; apply them via update.
+                    store.update(entry_id, embed=False, **updates)
+                    entry = store.read(entry_id)
+                return {"ok": True, "action": "update", "entry": entry}
             ok = store.update(entry_id, embed=False, **updates)
             return {"ok": ok, "action": "update", "entry": store.read(entry_id)} if ok else make_error(MCPError.NOT_FOUND, f"Entry '{entry_id}' not found or no valid fields")
         if action == "delete":
@@ -1715,6 +1799,20 @@ class ServerBlackboardMixin(
             return {"ok": True, "deleted": count}
         if action == "stats":
             return {"ok": True, **store.stats()}
+        if action == "coverage":
+            st = store.stats()
+            analyzed = int((st.get("coverage") or {}).get("examined", 0))
+            total = int(st.get("total_entries", 0))
+            unvisited = max(0, total - analyzed)
+            coverage_pct = round(analyzed / max(1, total) * 100.0, 1) if total else 0.0
+            return {
+                "ok": True,
+                "coverage_pct": coverage_pct,
+                "total_entries": total,
+                "analyzed": analyzed,
+                "unvisited": unvisited,
+                "note": "Workspace coverage based on recorded findings and examinations.",
+            }
         if action == "merge":
             result = store.auto_merge(
                 addr=str(args.get("addr") or "").strip(),
@@ -1784,7 +1882,10 @@ class ServerBlackboardMixin(
         if action == "frontier":
             limit = _bounded_int(args.get("limit", 20), 20, min_value=1, max_value=200)
             rpc_fn = self._idb_rpc()
-            targets_res = store.next_target(strategy="frontier", limit=limit, query=args.get("query"), rpc_fn=rpc_fn)
+            try:
+                targets_res = store.targets("frontier", limit=limit, query=args.get("query"), rpc_fn=rpc_fn)
+            except ValueError as exc:
+                return make_error(MCPError.INVALID_ARGS, str(exc))
             results = targets_res.get("targets", [])
             return {
                 "ok": True,

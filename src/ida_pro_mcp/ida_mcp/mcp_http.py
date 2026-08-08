@@ -60,13 +60,36 @@ def handle_enabled_tools(registry: McpRpcRegistry, config_key: str):
 DEFAULT_CORS_POLICY = "local"
 
 
+# Snapshot of the tool registry at import time. It is only the *base* for the
+# config page: tools registered after this module is imported are merged back
+# in at request time (see _all_known_tools), so they neither vanish from the
+# page nor get wiped by the next /config POST.
 ORIGINAL_TOOLS = handle_enabled_tools(MCP_SERVER.tools, "enabled_tools")
+
+
+def _all_known_tools() -> dict:
+    """Union of the import-time tool set and tools registered later.
+
+    The config page and /config POST must never operate on a frozen
+    import-time snapshot, or post-import tools would disappear from the page
+    and be dropped from the registry on the next save.
+    """
+    merged = dict(ORIGINAL_TOOLS)
+    merged.update(MCP_SERVER.tools.methods)
+    return merged
 
 
 class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
     def __init__(self, request, client_address, server):
         super().__init__(request, client_address, server)
         self.update_cors_policy()
+        # Bound how long a single client connection can sit idle, so a hung
+        # or slow client cannot block a request thread (and the config body
+        # read below) indefinitely.
+        try:
+            self.connection.settimeout(30)
+        except (AttributeError, OSError):
+            pass
 
     def update_cors_policy(self):
         match config_json_get("cors_policy", DEFAULT_CORS_POLICY):
@@ -99,14 +122,34 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
     def server_port(self) -> int:
         return cast(HTTPServer, self.server).server_port
 
+    def _local_endpoints(self) -> tuple[str, ...]:
+        """The only hosts/origins this server accepts: loopback v4, hostname,
+        and loopback v6 (``[::1]``), always with the actual server port."""
+        port = self.server_port
+        return (
+            f"127.0.0.1:{port}",
+            f"localhost:{port}",
+            f"[::1]:{port}",
+        )
+
     def _check_origin(self) -> bool:
         """
         Prevents CSRF and DNS rebinding attacks by ensuring POST requests
         originate from pages served by this server, not external websites.
+
+        A missing Origin header is allowed: browsers always send Origin on
+        cross-origin POSTs, so only non-browser clients (curl, MCP, scripts)
+        omit it — and they have no CSRF context. IPv6 loopback is accepted so
+        localhost resolving to ``[::1]`` keeps working.
         """
         origin = self.headers.get("Origin")
-        port = self.server_port
-        if origin not in (f"http://127.0.0.1:{port}", f"http://localhost:{port}"):
+        if origin is None:
+            return True
+        try:
+            parts = urlparse(origin)
+        except ValueError:
+            parts = None
+        if parts is None or parts.scheme != "http" or parts.netloc not in self._local_endpoints():
             self.send_error(403, "Invalid Origin")
             return False
         return True
@@ -117,8 +160,7 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
         resolves to 127.0.0.1, allowing their page to read localhost resources.
         """
         host = self.headers.get("Host")
-        port = self.server_port
-        if host not in (f"127.0.0.1:{port}", f"localhost:{port}"):
+        if host not in self._local_endpoints():
             self.send_error(403, "Invalid Host")
             return False
         return True
@@ -288,7 +330,7 @@ input[type="submit"]:hover {
 
         body += "<h2>Enabled Tools</h2>"
         body += quick_select
-        for name, func in ORIGINAL_TOOLS.items():
+        for name, func in _all_known_tools().items():
             description = (
                 (func.__doc__ or "No description").strip().splitlines()[0].strip()
             )
@@ -309,8 +351,19 @@ input[type="submit"]:hover {
             self.send_error(400, f"Unsupported Content-Type: {content_type}")
             return
 
-        # Parse the form data
-        length = int(self.headers.get("content-length", "0"))
+        # Parse the form data (cap the body so a bogus content-length cannot
+        # force an unbounded read). Mirror zeromcp do_POST: reject a
+        # non-integer Content-Length outright, and reject negative values
+        # (rfile.read(-1) would read the whole stream).
+        try:
+            length = int(self.headers.get("content-length", "0"))
+        except (TypeError, ValueError):
+            self.send_error(400, "Invalid Content-Length")
+            return
+        if length < 0:
+            self.send_error(400, "Invalid Content-Length")
+            return
+        length = min(length, 1_048_576)
         postvars = parse_qs(self.rfile.read(length).decode("utf-8"))
 
         # Update CORS policy
@@ -318,11 +371,13 @@ input[type="submit"]:hover {
         config_json_set("cors_policy", cors_policy)
         self.update_cors_policy()
 
-        # Update the server's tools
-        enabled_tools = {name: name in postvars for name in ORIGINAL_TOOLS}
+        # Update the server's tools, over the full known tool set (including
+        # any tools registered after this module was imported).
+        all_tools = _all_known_tools()
+        enabled_tools = {name: name in postvars for name in all_tools}
         self.mcp_server.tools.methods = {
             name: func
-            for name, func in ORIGINAL_TOOLS.items()
+            for name, func in all_tools.items()
             if enabled_tools.get(name)
         }
         config_json_set("enabled_tools", enabled_tools)

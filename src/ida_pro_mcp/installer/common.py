@@ -36,6 +36,7 @@ class InstallerOptions:
     rerank_profile: str = "qwen3-reranker-0.6b"  # qwen3-reranker-0.6b | qwen3-reranker-4b | bge-reranker-v2-gemma | bge-reranker-v2-m3
     rerank_model_path: str = ""
     download_rerank_model: bool = False
+    rerank_disabled: bool = False  # user explicitly declined the reranker; emit IDA_MCP_RERANK_DISABLED=1
     embedder_doctor: bool = False
     setup_embedder: bool = False
     only: set[str] = field(default_factory=set)

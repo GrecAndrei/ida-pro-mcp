@@ -8,6 +8,7 @@ tool calls (e.g. decompile) to the session that owns a given symbol.
 
 from __future__ import annotations
 
+import threading
 import uuid
 from typing import Any
 
@@ -45,9 +46,18 @@ class ServerMultiSessionMixin:
     _session_groups: dict[str, SessionGroup]
 
     def _init_multi_session(self) -> None:
-        """Initialize multi-session state. Call from server __init__."""
+        """Initialize multi-session state. Call from server __init__.
+
+        ``_session_groups`` is guarded by ``_session_groups_lock``: daemon mode
+        serves each connection in its own thread, and the create/remove/list/
+        cross_* handlers mutate or iterate the dict (and group.links) without
+        any other synchronization, which can raise ``RuntimeError: dictionary
+        changed size during iteration`` under concurrent access.
+        """
         if not hasattr(self, "_session_groups"):
             self._session_groups = {}
+        if not hasattr(self, "_session_groups_lock"):
+            self._session_groups_lock = threading.RLock()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -71,6 +81,36 @@ class ServerMultiSessionMixin:
                 hint="Use multi_session(action='group_list') to see available groups.",
             )
         return group, None
+
+    def _drop_sid_from_groups(self, sid: str) -> None:
+        """Remove *sid* from every group (membership + link table).
+
+        Called when a session is deleted so groups never retain references to
+        nonexistent sessions — otherwise ``cross_*`` operations dispatch to
+        sessions that no longer exist.
+        """
+        if not hasattr(self, "_session_groups"):
+            return
+        lock = getattr(self, "_session_groups_lock", None)
+        if lock is None:
+            return
+        with lock:
+            for group in list(self._session_groups.values()):
+                if sid in group.session_ids:
+                    group.session_ids = [s for s in group.session_ids if s != sid]
+                if any(
+                    link.get("provider_sid") == sid
+                    for link in group.links.values()
+                ):
+                    group.links = {
+                        name: link for name, link in group.links.items()
+                        if link.get("provider_sid") != sid
+                    }
+                for link in group.links.values():
+                    if sid in link.get("importer_sids", []):
+                        link["importer_sids"] = [
+                            s for s in link["importer_sids"] if s != sid
+                        ]
 
     def _dispatch_to_session(self, session_id: str, tool: str, tool_args: dict) -> dict:
         """Dispatch a tool call to a specific session's IDA runtime.
@@ -141,23 +181,25 @@ class ServerMultiSessionMixin:
         name = str(args.get("name") or "").strip()
         group_id = str(args.get("group_id") or "").strip() or str(uuid.uuid4())[:8]
 
-        if group_id in self._session_groups:
-            return make_error(
-                MCPError.INVALID_ARGS,
-                f"Group '{group_id}' already exists. Use group_remove first or pick a new id.",
-            )
+        with self._session_groups_lock:
+            if group_id in self._session_groups:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    f"Group '{group_id}' already exists. Use group_remove first or pick a new id.",
+                )
 
-        group = SessionGroup(group_id=group_id, name=name or group_id)
-        group.session_ids = valid_sids
-        if args.get("metadata") and isinstance(args["metadata"], dict):
-            group.metadata = args["metadata"]
+            group = SessionGroup(group_id=group_id, name=name or group_id)
+            group.session_ids = valid_sids
+            if args.get("metadata") and isinstance(args["metadata"], dict):
+                group.metadata = args["metadata"]
 
-        self._session_groups[group_id] = group
+            self._session_groups[group_id] = group
         return {"ok": True, "group": group.to_dict()}
 
     def _ms_group_list(self, args: dict) -> dict:
         """List all session groups."""
-        groups = [g.to_dict() for g in self._session_groups.values()]
+        with self._session_groups_lock:
+            groups = [g.to_dict() for g in self._session_groups.values()]
         return {"ok": True, "groups": groups, "count": len(groups)}
 
     def _ms_group_link(self, args: dict) -> dict:
@@ -197,33 +239,37 @@ class ServerMultiSessionMixin:
         links_built = 0
         import_errors: list[dict[str, str]] = []
 
-        for sid in group.session_ids:
-            result = self._dispatch_to_session(sid, "imports_deep", {"action": "resolve"})
-            if isinstance(result, dict) and result.get("error"):
-                import_errors.append({"session_id": sid, "error": str(result.get("message", ""))})
-                continue
-            imports = []
-            if isinstance(result, dict):
-                imports = result.get("imports") or result.get("entries") or result.get("symbols") or []
-            for imp in imports:
-                if not isinstance(imp, dict):
+        # group.links is mutated below; hold the group lock so a concurrent
+        # cross_resolve/status/cross_decompile reading the link table never
+        # observes a half-built entry or mutates mid-iteration.
+        with self._session_groups_lock:
+            for sid in group.session_ids:
+                result = self._dispatch_to_session(sid, "imports_deep", {"action": "resolve"})
+                if isinstance(result, dict) and result.get("error"):
+                    import_errors.append({"session_id": sid, "error": str(result.get("message", ""))})
                     continue
-                name = str(imp.get("name") or "").strip()
-                if not name:
-                    continue
-                # Match against known exports (skip self-references)
-                provider = exports_map.get(name)
-                if provider and provider["provider_sid"] != sid:
-                    if name not in group.links:
-                        group.links[name] = {
-                            "provider_sid": provider["provider_sid"],
-                            "export_ea": provider["export_ea"],
-                            "importer_sids": [],
-                        }
-                    link = group.links[name]
-                    if sid not in link["importer_sids"]:
-                        link["importer_sids"].append(sid)
-                        links_built += 1
+                imports = []
+                if isinstance(result, dict):
+                    imports = result.get("imports") or result.get("entries") or result.get("symbols") or []
+                for imp in imports:
+                    if not isinstance(imp, dict):
+                        continue
+                    name = str(imp.get("name") or "").strip()
+                    if not name:
+                        continue
+                    # Match against known exports (skip self-references)
+                    provider = exports_map.get(name)
+                    if provider and provider["provider_sid"] != sid:
+                        if name not in group.links:
+                            group.links[name] = {
+                                "provider_sid": provider["provider_sid"],
+                                "export_ea": provider["export_ea"],
+                                "importer_sids": [],
+                            }
+                        link = group.links[name]
+                        if sid not in link["importer_sids"]:
+                            link["importer_sids"].append(sid)
+                            links_built += 1
 
         return {
             "ok": True,
@@ -240,7 +286,8 @@ class ServerMultiSessionMixin:
         group_id = str(args.get("group_id") or "").strip()
         if not group_id:
             return make_error(MCPError.INVALID_ARGS, "group_id required")
-        removed = self._session_groups.pop(group_id, None)
+        with self._session_groups_lock:
+            removed = self._session_groups.pop(group_id, None)
         if removed is None:
             return make_error(MCPError.NOT_FOUND, f"Group '{group_id}' not found")
         return {"ok": True, "removed": removed.to_dict()}
@@ -254,14 +301,15 @@ class ServerMultiSessionMixin:
         if not symbol:
             return make_error(MCPError.INVALID_ARGS, "symbol (or name) required")
 
-        link = group.links.get(symbol)
-        if link is None:
-            # Try case-insensitive search
-            for lname, ldata in group.links.items():
-                if lname.lower() == symbol.lower():
-                    link = ldata
-                    symbol = lname
-                    break
+        with self._session_groups_lock:
+            link = group.links.get(symbol)
+            if link is None:
+                # Try case-insensitive search
+                for lname, ldata in group.links.items():
+                    if lname.lower() == symbol.lower():
+                        link = ldata
+                        symbol = lname
+                        break
 
         if link is None:
             return make_error(
@@ -294,12 +342,13 @@ class ServerMultiSessionMixin:
             group_id = str(args.get("group_id") or "").strip()
             if not group_id:
                 # Find any group that has this symbol
-                for g in self._session_groups.values():
-                    if symbol in g.links or any(
-                        k.lower() == symbol.lower() for k in g.links
-                    ):
-                        group_id = g.group_id
-                        break
+                with self._session_groups_lock:
+                    for g in self._session_groups.values():
+                        if symbol in g.links or any(
+                            k.lower() == symbol.lower() for k in g.links
+                        ):
+                            group_id = g.group_id
+                            break
             if not group_id:
                 return make_error(
                     MCPError.NOT_FOUND,
@@ -310,12 +359,13 @@ class ServerMultiSessionMixin:
             if group is None:
                 return make_error(MCPError.NOT_FOUND, f"Group '{group_id}' not found")
 
-            link = group.links.get(symbol)
-            if link is None:
-                for lname, ldata in group.links.items():
-                    if lname.lower() == symbol.lower():
-                        link = ldata
-                        break
+            with self._session_groups_lock:
+                link = group.links.get(symbol)
+                if link is None:
+                    for lname, ldata in group.links.items():
+                        if lname.lower() == symbol.lower():
+                            link = ldata
+                            break
             if link is None:
                 return make_error(
                     MCPError.NOT_FOUND,
@@ -359,13 +409,14 @@ class ServerMultiSessionMixin:
             return make_error(MCPError.INVALID_ARGS, "symbol (or name) required")
 
         # Check link table
-        link = group.links.get(symbol)
-        if link is None:
-            for lname, ldata in group.links.items():
-                if lname.lower() == symbol.lower():
-                    link = ldata
-                    symbol = lname
-                    break
+        with self._session_groups_lock:
+            link = group.links.get(symbol)
+            if link is None:
+                for lname, ldata in group.links.items():
+                    if lname.lower() == symbol.lower():
+                        link = ldata
+                        symbol = lname
+                        break
 
         if link is None:
             return make_error(
@@ -410,21 +461,22 @@ class ServerMultiSessionMixin:
         # If no group_id, return summary of all groups
         if not group_id:
             summaries = []
-            for g in self._session_groups.values():
-                providers = set()
-                importers = set()
-                for link in g.links.values():
-                    providers.add(link.get("provider_sid", ""))
-                    for imp in link.get("importer_sids", []):
-                        importers.add(imp)
-                summaries.append({
-                    "group_id": g.group_id,
-                    "name": g.name,
-                    "session_count": len(g.session_ids),
-                    "link_count": len(g.links),
-                    "provider_count": len(providers),
-                    "importer_count": len(importers),
-                })
+            with self._session_groups_lock:
+                for g in self._session_groups.values():
+                    providers = set()
+                    importers = set()
+                    for link in g.links.values():
+                        providers.add(link.get("provider_sid", ""))
+                        for imp in link.get("importer_sids", []):
+                            importers.add(imp)
+                    summaries.append({
+                        "group_id": g.group_id,
+                        "name": g.name,
+                        "session_count": len(g.session_ids),
+                        "link_count": len(g.links),
+                        "provider_count": len(providers),
+                        "importer_count": len(importers),
+                    })
             return {"ok": True, "groups": summaries, "total_groups": len(summaries)}
 
         group, err = self._require_group(args)
@@ -434,21 +486,22 @@ class ServerMultiSessionMixin:
         # Detailed stats for a single group
         providers: dict[str, int] = {}
         importers: dict[str, int] = {}
-        for link in group.links.values():
-            psid = link.get("provider_sid", "")
-            providers[psid] = providers.get(psid, 0) + 1
-            for imp in link.get("importer_sids", []):
-                importers[imp] = importers.get(imp, 0) + 1
-
-        # Sample links for display
         sample_links = []
-        for name, link in list(group.links.items())[:20]:
-            sample_links.append({
-                "symbol": name,
-                "provider_sid": link["provider_sid"],
-                "export_ea": link["export_ea"],
-                "importer_count": len(link.get("importer_sids", [])),
-            })
+        with self._session_groups_lock:
+            for link in group.links.values():
+                psid = link.get("provider_sid", "")
+                providers[psid] = providers.get(psid, 0) + 1
+                for imp in link.get("importer_sids", []):
+                    importers[imp] = importers.get(imp, 0) + 1
+
+            # Sample links for display
+            for name, link in list(group.links.items())[:20]:
+                sample_links.append({
+                    "symbol": name,
+                    "provider_sid": link["provider_sid"],
+                    "export_ea": link["export_ea"],
+                    "importer_count": len(link.get("importer_sids", [])),
+                })
 
         return {
             "ok": True,

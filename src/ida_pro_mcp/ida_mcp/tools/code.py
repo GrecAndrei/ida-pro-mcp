@@ -56,6 +56,39 @@ except ImportError:
         _trace_argument_origin,
     )
 
+def _decompile_error_entry(addr, dec_err):
+    """Normalize a per-address decompile failure into the host error envelope.
+
+    The ida-side ``_decompile_with_diagnostics`` returns error dicts built by
+    ``make_error`` (which sets ``error: True`` but never ``category``). Every
+    per-address failure must carry ``error: True`` so host plumbing
+    (server_dispatch / server_multi_session / postprocess) recognizes it as a
+    failure rather than a success entry, plus a non-null ``category`` for
+    consistency with sibling actions.
+    """
+    if isinstance(dec_err, dict):
+        entry: dict = {
+            "error": True,
+            "addr": addr,
+            "code": dec_err.get("code") or MCPError.DECOMPILER_FAILED,
+            "category": dec_err.get("category") or "runtime",
+            "message": dec_err.get("message", "Decompilation failed"),
+        }
+        if dec_err.get("hint"):
+            entry["hint"] = dec_err["hint"]
+        if dec_err.get("details"):
+            entry["details"] = dec_err["details"]
+        return entry
+    return {
+        "error": True,
+        "addr": addr,
+        "code": MCPError.DECOMPILER_FAILED,
+        "category": "runtime",
+        "message": "Decompilation failed",
+        "hint": ERROR_HINTS.get(MCPError.DECOMPILER_FAILED),
+    }
+
+
 @tool
 @idaread
 def code(
@@ -81,7 +114,6 @@ def code(
     window: Annotated[Optional[int], "Disasm: number of instructions BEFORE and AFTER the start address (centered view). Overrides function-bounded default."] = None,
     field_name: Annotated[Optional[str], "Struct field name (for xrefs_to_field)"] = None,
     target: Annotated[Optional[str], "Target address (for find_paths)"] = None,
-    comment: Annotated[Optional[str], "Comment text (for annotate action)"] = None,
     details: Annotated[bool, "Include verbose enrichment fields in decompile output: var_rename_hints, annotated_code, complexity, callers/callees/strings lists, dataflow graph. Default False — omit to keep response compact."] = False,
     **kwargs
 ) -> list[dict] | dict:
@@ -134,11 +166,20 @@ def code(
         Returns: [{addr, blocks: "start-end  succs=[...]  preds=[...]\\n...", count}]
         Example: code(action="blocks", addrs="0x401000")
 
-    analyze - Comprehensive analysis (decompile + callees + callers + strings)
+    smart_decompile - Best single call for understanding a function
         Params: addrs (REQUIRED)
-        Returns: [{addr, pseudocode, prototype, callees, callers, strings}]
-        Example: code(action="analyze", addrs="main")
+        Returns: [{addr, pseudocode, behavior_tags, api_calls, crypto_hints,
+                   dangerous_patterns, var_rename_hints, callers, callees,
+                   strings, blackboard_context, complexity,
+                   suggested_next_actions}]
+        Example: code(action="smart_decompile", addrs="main")
         Best for: Getting full context about a function in one call
+
+    explain - Plain-English structured summary of what a function does
+        Params: addrs (REQUIRED)
+        Returns: [{addr, name, summary, purpose, api_calls, dangerous_calls,
+                   strings, complexity, callers, callees}]
+        Example: code(action="explain", addrs="main")
 
     callgraph - Generate call graph from starting function (compact text)
         Params: addrs (REQUIRED), max_depth (default 5)
@@ -184,6 +225,21 @@ def code(
         Example: code(action="trace_argument_origin", addrs="0x401000", arg_index=2)
         Best for: Finding where a specific value (e.g., a key, buffer size, or flag) originates.
 
+    export - Export function info
+        Params: addrs (REQUIRED), format (json|c_header|prototypes)
+        Returns: [{addr, name, prototype, start, end}] or {header}/{prototype}
+        Example: code(action="export", addrs="main", format="c_header")
+
+    xrefs_to_field - Find code that accesses a struct field by offset
+        Params: addrs (REQUIRED), field_name (REQUIRED, e.g. "struct_name.field" or bare field name)
+        Returns: [{field, struct, offset, xrefs: [{ea, func, func_name, disasm}], count}]
+        Example: code(action="xrefs_to_field", addrs="main", field_name="pkt_hdr.len")
+
+    decompile_all - Decompile many functions (optionally filtered by a name pattern)
+        Params: max_items/limit (bound the number of functions returned)
+        Returns: {results: [{addr, name, code, prototype}], count, total_functions}
+        Example: code(action="decompile_all", limit=50)
+
     detect - Custom per-session vulnerability/pattern detector (LLM-defined rules)
         rule_type: api_chain | string_ref | type_match | xor_threshold | caller_of | callee_of
         For api_chain: apis=['recv','memcpy'], strict_order=true — finds functions calling APIs in sequence
@@ -199,6 +255,16 @@ def code(
         # decompile_all doesn't need addrs — it uses a name filter
         if action == "decompile_all":
             query = kwargs.get("query")
+            # Bound the decompile set with max_items/limit (the host schema
+            # strips `query`, so without this the action would decompile every
+            # function unbounded and return an unbounded payload).
+            budget = limit if isinstance(limit, int) else max_items
+            if not isinstance(budget, int):
+                try:
+                    budget = int(budget)
+                except (TypeError, ValueError):
+                    budget = 1000
+            budget = max(budget, 1)
             matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
             all_funcs = []
             for func_ea in idautils.Functions():
@@ -206,6 +272,8 @@ def code(
                 if matcher and not matcher(name):
                     continue
                 all_funcs.append(func_ea)
+                if len(all_funcs) >= budget:
+                    break
             if not all_funcs:
                 return {"ok": True, "results": [], "count": 0,
                         "note": f"No functions matching '{query}'."}
@@ -222,17 +290,18 @@ def code(
                             "prototype": get_prototype(idaapi.get_func(func_ea)),
                         })
                     else:
-                        all_results.append({
-                            "addr": hex_ea(func_ea),
-                            "name": ida_funcs.get_func_name(func_ea) or "",
-                            "error": dec_err.get("message", "Decompilation failed") if isinstance(dec_err, dict) else "Decompilation failed",
-                        })
+                        entry = _decompile_error_entry(hex_ea(func_ea), dec_err)
+                        entry["name"] = ida_funcs.get_func_name(func_ea) or ""
+                        all_results.append(entry)
                 except Exception as e:
-                    all_results.append({
-                        "addr": hex_ea(func_ea),
-                        "name": ida_funcs.get_func_name(func_ea) or "",
-                        "error": str(e),
+                    entry = _decompile_error_entry(hex_ea(func_ea), {
+                        "code": MCPError.DECOMPILER_FAILED,
+                        "category": "runtime",
+                        "message": f"Decompilation exception: {e}",
+                        "hint": ERROR_HINTS.get(MCPError.DECOMPILER_FAILED),
                     })
+                    entry["name"] = ida_funcs.get_func_name(func_ea) or ""
+                    all_results.append(entry)
             return {"ok": True, "results": all_results, "count": len(all_results),
                     "query": query or "", "total_functions": len(all_funcs)}
 
@@ -338,10 +407,10 @@ def code(
                                 include_switch_cases=False,
                                 api_limit=12,
                             )
-                            # Always include: api_calls, dangerous_patterns, crypto_hints
-                            # — actionable signal an agent needs immediately.
-                            _ALWAYS_FIELDS = {"api_calls", "dangerous_patterns", "crypto_hints"}
-                            # Opt-in via details=True: verbose/duplicate fields
+                            # Opt-in via details=True: verbose/duplicate fields.
+                            # Always-on keys (api_calls, dangerous_patterns,
+                            # crypto_hints) are the implicit default — keys not
+                            # listed here pass through regardless of details.
                             _DETAILS_FIELDS = {
                                 "var_rename_hints", "complexity", "blackboard_context",
                             }
@@ -369,45 +438,17 @@ def code(
                             pass
                         results.append(result_entry)
                     else:
-                        # Aggregate errors per-address carry `code`, `category`,
-                        # `message`, and `hint` so per-batch decomp failures
-                        # match the host error-envelope contract.
-                        code_val = (
-                            dec_err.get("code")
-                            if isinstance(dec_err, dict)
-                            else MCPError.DECOMPILER_FAILED
-                        )
-                        entry: dict = {
-                            "addr": addr,
-                            "code": code_val,
-                            "category": (
-                                dec_err.get("category")
-                                if isinstance(dec_err, dict)
-                                else "runtime"
-                            ),
-                            "message": (
-                                dec_err.get("message", "Decompilation failed")
-                                if isinstance(dec_err, dict)
-                                else "Decompilation failed"
-                            ),
-                        }
-                        if isinstance(dec_err, dict):
-                            if dec_err.get("hint"):
-                                entry["hint"] = dec_err["hint"]
-                            if dec_err.get("details"):
-                                entry["details"] = dec_err["details"]
-                        else:
-                            entry["hint"] = ERROR_HINTS.get(MCPError.DECOMPILER_FAILED)
-                        results.append(entry)
+                        # Aggregate errors per-address carry the host
+                        # error-envelope fields so per-batch decomp failures
+                        # are recognized as errors by host plumbing.
+                        results.append(_decompile_error_entry(addr, dec_err))
                 except Exception as e:
-                    entry = {
-                        "addr": addr,
+                    results.append(_decompile_error_entry(addr, {
                         "code": MCPError.DECOMPILER_FAILED,
                         "category": "runtime",
                         "message": f"Decompilation exception: {e}",
                         "hint": ERROR_HINTS.get(MCPError.DECOMPILER_FAILED),
-                    }
-                    results.append(entry)
+                    }))
 
             elif action == "decompile_chain":
                 func = idaapi.get_func(ea)
@@ -426,48 +467,57 @@ def code(
                     cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
                     main_pseudo = str(cfunc) if cfunc else ""
                     main_proto = get_prototype(func)
-                    # Collect callers (compact: name + first 5 lines of pseudocode)
+                    # Collect callers (compact: name + first 8 lines of pseudocode).
+                    # caller_count reflects every unique caller found; only the
+                    # first chain_depth get their pseudocode decompiled into
+                    # callers_context.
                     callers_ctx = []
-                    caller_addrs = set()
-                    for i, xref in enumerate(idautils.CodeRefsTo(func.start_ea, 0)):
-                        if i >= 20:  # scan at most 20 xrefs
-                            break
+                    decompiled_callers = set()
+                    all_caller_addrs = set()
+                    for xref in idautils.CodeRefsTo(func.start_ea, 0):
                         caller_fn = ida_funcs.get_func(xref)
-                        if caller_fn and caller_fn.start_ea not in caller_addrs:
-                            caller_addrs.add(caller_fn.start_ea)
-                            ccfunc, _ = _decompile_with_diagnostics(caller_fn.start_ea)
-                            if ccfunc:
-                                pseudo_lines = str(ccfunc).splitlines()
-                                callers_ctx.append({
-                                    "addr": hex_ea(caller_fn.start_ea),
-                                    "name": ida_funcs.get_func_name(caller_fn.start_ea),
-                                    # First 8 lines only — enough for call context
-                                    "pseudocode_head": "\n".join(pseudo_lines[:8]),
-                                    "total_lines": len(pseudo_lines),
-                                })
-                            if len(callers_ctx) >= chain_depth:
-                                break
+                        if not caller_fn:
+                            continue
+                        all_caller_addrs.add(caller_fn.start_ea)
+                        if len(callers_ctx) >= chain_depth:
+                            continue
+                        if caller_fn.start_ea in decompiled_callers:
+                            continue
+                        decompiled_callers.add(caller_fn.start_ea)
+                        ccfunc, _ = _decompile_with_diagnostics(caller_fn.start_ea)
+                        if ccfunc:
+                            pseudo_lines = str(ccfunc).splitlines()
+                            callers_ctx.append({
+                                "addr": hex_ea(caller_fn.start_ea),
+                                "name": ida_funcs.get_func_name(caller_fn.start_ea),
+                                # First 8 lines only — enough for call context
+                                "pseudocode_head": "\n".join(pseudo_lines[:8]),
+                                "total_lines": len(pseudo_lines),
+                            })
                     # Collect callees (compact)
                     callees_ctx = []
-                    callee_addrs = set()
+                    decompiled_callees = set()
+                    all_callee_addrs = set()
                     for item in idautils.FuncItems(func.start_ea):
                         for ref in idautils.CodeRefsFrom(item, 0):
                             callee_fn = ida_funcs.get_func(ref)
-                            if callee_fn and callee_fn.start_ea not in callee_addrs:
-                                callee_addrs.add(callee_fn.start_ea)
-                                ccfunc, _ = _decompile_with_diagnostics(callee_fn.start_ea)
-                                if ccfunc:
-                                    pseudo_lines = str(ccfunc).splitlines()
-                                    callees_ctx.append({
-                                        "addr": hex_ea(callee_fn.start_ea),
-                                        "name": ida_funcs.get_func_name(callee_fn.start_ea),
-                                        "pseudocode_head": "\n".join(pseudo_lines[:8]),
-                                        "total_lines": len(pseudo_lines),
-                                    })
-                                if len(callees_ctx) >= chain_depth:
-                                    break
-                        if len(callees_ctx) >= chain_depth:
-                            break
+                            if not callee_fn:
+                                continue
+                            all_callee_addrs.add(callee_fn.start_ea)
+                            if len(callees_ctx) >= chain_depth:
+                                continue
+                            if callee_fn.start_ea in decompiled_callees:
+                                continue
+                            decompiled_callees.add(callee_fn.start_ea)
+                            ccfunc, _ = _decompile_with_diagnostics(callee_fn.start_ea)
+                            if ccfunc:
+                                pseudo_lines = str(ccfunc).splitlines()
+                                callees_ctx.append({
+                                    "addr": hex_ea(callee_fn.start_ea),
+                                    "name": ida_funcs.get_func_name(callee_fn.start_ea),
+                                    "pseudocode_head": "\n".join(pseudo_lines[:8]),
+                                    "total_lines": len(pseudo_lines),
+                                })
                     results.append({
                         "ok": True,
                         "addr": hex_ea(func.start_ea),
@@ -476,15 +526,15 @@ def code(
                         "pseudocode": main_pseudo,
                         "callers_context": callers_ctx,
                         "callees_context": callees_ctx,
-                        "caller_count": len(caller_addrs),
-                        "callee_count": len(callee_addrs),
+                        "caller_count": len(all_caller_addrs),
+                        "callee_count": len(all_callee_addrs),
                         "note": "callers/callees show first 8 lines only. Use code(action='decompile') for full pseudocode.",
                     })
                 except Exception as e:
                     results.append(
                         make_error(
                             MCPError.IDA_ERROR,
-                            f"callgraph collection failed at {addr}: {type(e).__name__}: {e}",
+                            f"decompile_chain collection failed at {addr}: {type(e).__name__}: {e}",
                             details={"addr": addr, "exception_type": type(e).__name__},
                         )
                     )
@@ -504,6 +554,16 @@ def code(
                 # centered on `ea`. Wins over function-bounded extraction so
                 # that a caller with a known hot address gets exactly the slice
                 # they asked for without paging through the rest of the body.
+                # `structured` only applies to range-based disasm; reject the
+                # combination instead of silently returning text.
+                if window is not None and structured:
+                    results.append(make_error(
+                        MCPError.INVALID_ARGS,
+                        "window and structured cannot be combined",
+                        hint="Use structured=true without window, or window=N for a text slice.",
+                        details={"window": window, "structured": structured},
+                    ))
+                    continue
                 if window is not None:
                     try:
                         radius = int(window)
@@ -875,11 +935,17 @@ def code(
                                         succs.append(tf.start_ea)
 
                     for s in succs:
-                        if s not in visited:
+                        if s == target_ea:
+                            # Do not mark the target visited: each distinct
+                            # route to it is a separate path. The target is
+                            # never expanded (it short-circuits above), so this
+                            # cannot loop.
+                            queue.append((s, path + [hex(s)]))
+                        elif s not in visited:
                             visited.add(s)
                             queue.append((s, path + [hex(s)]))
 
-                results.append({"from": addr, "to": target, "paths": paths})
+                results.append({"ok": True, "from": addr, "to": target, "paths": paths})
 
             elif action == "strings_in_func":
                 func = idaapi.get_func(ea)
@@ -952,32 +1018,7 @@ def code(
                     continue
                 cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
                 if not cfunc:
-                    err_entry: dict = {
-                        "addr": addr,
-                        "code": (
-                            dec_err.get("code")
-                            if isinstance(dec_err, dict)
-                            else MCPError.DECOMPILER_FAILED
-                        ),
-                        "category": (
-                            dec_err.get("category")
-                            if isinstance(dec_err, dict)
-                            else "runtime"
-                        ),
-                        "message": (
-                            dec_err.get("message", "Decompilation failed")
-                            if isinstance(dec_err, dict)
-                            else "Decompilation failed"
-                        ),
-                    }
-                    if isinstance(dec_err, dict):
-                        if dec_err.get("hint"):
-                            err_entry["hint"] = dec_err["hint"]
-                        if dec_err.get("details"):
-                            err_entry["details"] = dec_err["details"]
-                    else:
-                        err_entry["hint"] = ERROR_HINTS.get(MCPError.DECOMPILER_FAILED)
-                    results.append(err_entry)
+                    results.append(_decompile_error_entry(addr, dec_err))
                     continue
                 pseudo = str(cfunc)
                 cfg_semantics = _compute_cfg_semantics(func)
@@ -1002,32 +1043,7 @@ def code(
                     continue
                 cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
                 if not cfunc:
-                    err_entry = {
-                        "addr": addr,
-                        "code": (
-                            dec_err.get("code")
-                            if isinstance(dec_err, dict)
-                            else MCPError.DECOMPILER_FAILED
-                        ),
-                        "category": (
-                            dec_err.get("category")
-                            if isinstance(dec_err, dict)
-                            else "runtime"
-                        ),
-                        "message": (
-                            dec_err.get("message", "Decompilation failed")
-                            if isinstance(dec_err, dict)
-                            else "Decompilation failed"
-                        ),
-                    }
-                    if isinstance(dec_err, dict):
-                        if dec_err.get("hint"):
-                            err_entry["hint"] = dec_err["hint"]
-                        if dec_err.get("details"):
-                            err_entry["details"] = dec_err["details"]
-                    else:
-                        err_entry["hint"] = ERROR_HINTS.get(MCPError.DECOMPILER_FAILED)
-                    results.append(err_entry)
+                    results.append(_decompile_error_entry(addr, dec_err))
                     continue
                 flow = _build_decompiler_dataflow(cfunc, max_items=max(200, min(1600, int(max_items))))
                 edge_lines = [
@@ -1056,10 +1072,7 @@ def code(
                     continue
                 cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
                 if not cfunc:
-                    results.append({
-                        "addr": addr,
-                        "error": dec_err.get("message", "Decompilation failed") if isinstance(dec_err, dict) else "Decompilation failed",
-                    })
+                    results.append(_decompile_error_entry(addr, dec_err))
                     continue
 
                 pseudo = str(cfunc)
@@ -1094,41 +1107,15 @@ def code(
 
                 suggested = []
                 if dangerous:
-                    # Actual taint trace when network input is present
+                    # Taint-trace next step: the standalone `security` module was
+                    # deleted (commit b191581), so surface a static suggestion.
                     active_sources = [a for a in found_apis if a in TAINT_SOURCES]
                     if active_sources:
-                        try:
-                            from security import taint as _taint  # type: ignore
-                            taint_result = _taint(
-                                action="trace",
-                                addr=hex_ea(func.start_ea),
-                                source=active_sources[0],
-                                max_depth=4,
-                            )
-                            taint_paths = taint_result.get("paths", [])
-                            taint_vulns = taint_result.get("vulns", [])
-                            if taint_paths or taint_vulns:
-                                suggested.append({
-                                    "action": "taint(trace) — COMPLETED",
-                                    "addr": hex_ea(func.start_ea),
-                                    "source": active_sources[0],
-                                    "paths_found": len(taint_paths),
-                                    "vulns_found": len(taint_vulns),
-                                    "top_path": taint_paths[0] if taint_paths else None,
-                                    "top_vuln": taint_vulns[0] if taint_vulns else None,
-                                })
-                            else:
-                                suggested.append({
-                                    "action": "taint(trace)",
-                                    "addr": hex_ea(func.start_ea),
-                                    "reason": f"Network input ({active_sources[0]}) present — no direct sink path found at depth 4, try taint(action='paths') for deeper search",
-                                })
-                        except Exception:
-                            suggested.append({
-                                "action": "taint(trace)",
-                                "addr": hex_ea(func.start_ea),
-                                "reason": f"Network input ({', '.join(active_sources)}) reaches dangerous patterns — trace data flow",
-                            })
+                        suggested.append({
+                            "action": "taint(trace)",
+                            "addr": hex_ea(func.start_ea),
+                            "reason": f"Network input ({', '.join(active_sources)}) reaches dangerous patterns — trace data flow",
+                        })
                     else:
                         suggested.append({"action": "taint(trace)", "reason": "Dangerous patterns — trace data flow"})
                 if crypto_hints:
@@ -1179,20 +1166,9 @@ def code(
                     continue
                 cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
                 if not cfunc:
-                    err_entry = {
-                        "addr": addr,
-                        "code": MCPError.DECOMPILER_FAILED,
-                        "category": "runtime",
-                        "message": "Decompilation failed — cannot explain",
-                    }
-                    if isinstance(dec_err, dict):
-                        if dec_err.get("hint"):
-                            err_entry["hint"] = dec_err["hint"]
-                        if dec_err.get("details"):
-                            err_entry["details"] = dec_err["details"]
-                    else:
-                        err_entry["hint"] = ERROR_HINTS.get(MCPError.DECOMPILER_FAILED)
-                    results.append(err_entry)
+                    entry = _decompile_error_entry(addr, dec_err)
+                    entry["message"] = "Decompilation failed — cannot explain"
+                    results.append(entry)
                     continue
 
                 pseudo = str(cfunc)
@@ -1319,7 +1295,7 @@ def code(
 
 
 # ============================================================================
-# 3. DATA - Functions, Globals, Strings, Imports
+# Argument origin tracing
 # ============================================================================
 
 

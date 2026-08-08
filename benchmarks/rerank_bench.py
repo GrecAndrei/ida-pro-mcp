@@ -36,6 +36,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 # that must survive a slow run BEFORE importing the intelligence modules.
 os.environ.setdefault("IDA_MCP_RERANK_TIMEOUT", "300")
 os.environ.setdefault("IDA_MCP_RERANK_BATCH_TIMEOUT", "600")
+# Embed server knobs too: the cold embed server times out large first batches
+# (known weak spot), so raise the batch timeout and disable idle shutdown so a
+# warm server survives a long reranker pool call (default 15s idle window).
+os.environ.setdefault("IDA_MCP_EMBED_BATCH_REQUEST_TIMEOUT", "180")
+os.environ.setdefault("IDA_MCP_EMBED_IDLE_TIMEOUT", "0")
+os.environ.setdefault("IDA_MCP_EMBED_DISABLED", "")
 
 from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder  # noqa: E402
 from ida_pro_mcp.host.intelligence.embeddings import FunctionEmbeddingIndex  # noqa: E402
@@ -50,8 +56,11 @@ CORPUS = Path(__file__).resolve().parent / "corpus_libgpu_aux.json"
 # (query, expected name substring) — the function names are the ground truth.
 GOLD_QUERIES: list[tuple[str, str]] = [
     ("create and initialize a new gpu aux context", "GpuAuxCreateContext"),
-    ("prepare an ANativeWindowBuffer for conversion", "prepare"),
-    ("perform the pixel format conversion if needed", "DoConversionIfNeed"),
+    # Gold substrings must resolve to exactly ONE corpus function; 'prepare'
+    # and 'DoConversionIfNeed' alone match 7 and 3 functions respectively, so
+    # chance-level top-1 hits would inflate recall/MRR.  Use full unique names.
+    ("prepare an ANativeWindowBuffer for conversion", "GPUAUXContext::prepare(ANativeWindowBuffer*)"),
+    ("perform the pixel format conversion if needed", "GpuAuxDoConversionIfNeedV2"),
     ("set the crop size of the source buffer", "SetBufferCropSize"),
     ("get information about the source image buffer", "GetBufferInfo"),
     ("destroy the gpu aux context and free its resources", "DestoryContext"),
@@ -106,15 +115,10 @@ def _profile_key_for_path(path: str) -> str:
 
 
 def _embed_corpus(corpus: dict, max_candidates: int) -> tuple[FunctionEmbeddingIndex, list[dict]]:
-    # The cold embed server times out large first batches (known weak spot), so
-    # warm it up and chunk.  Batch timeout is raised so a real CPU-bound batch
-    # finishes instead of tripping the recycle path.  Idle shutdown is disabled
-    # so the embed server stays warm across the whole benchmark (a reranker
-    # pool call can take longer than the default 15s idle window, and a warm
-    # server must not idle out mid-run).
-    os.environ.setdefault("IDA_MCP_EMBED_BATCH_REQUEST_TIMEOUT", "180")
-    os.environ.setdefault("IDA_MCP_EMBED_IDLE_TIMEOUT", "0")
-    os.environ.setdefault("IDA_MCP_EMBED_DISABLED", "")
+    # The embed env knobs (batch timeout raised, idle shutdown disabled) are
+    # set at module top, because the module constants read them at import time
+    # — setting them here would be a no-op.  Warm the server up and chunk so a
+    # real CPU-bound first batch does not trip the recycle path.
     embedder = BgeCodeEmbedder()
     if not embedder.ensure_ready():
         raise RuntimeError("embedding backend unavailable; cannot build recall baseline")
@@ -174,7 +178,10 @@ def _run_one_model(profile_key: str, idx: FunctionEmbeddingIndex, funcs: list[di
     ea_to_name = {f["ea"]: f["name"] for f in funcs}
     by_ea = {f["ea"]: f for f in funcs}
 
-    print(f"\n=== {rr.status().get('profile_name')} ({profile_key}) ===")
+    # Snapshot the display name before stop(); a 'custom-rerank' profile key is
+    # not in RERANK_MODEL_PROFILES, so get_rerank_model_profile() would be None.
+    profile_display = rr.status().get("profile_name") or profile_key
+    print(f"\n=== {profile_display} ({profile_key}) ===")
     if not rr.ensure_ready():
         return {"profile": profile_key, "ok": False, "error": "server did not start"}
 
@@ -251,7 +258,7 @@ def _run_one_model(profile_key: str, idx: FunctionEmbeddingIndex, funcs: list[di
 
     summary = {
         "profile": profile_key,
-        "profile_name": get_rerank_model_profile(profile_key).display_name if profile_key else "?",
+        "profile_name": profile_display,
         "ok": True,
         "queries": len(queries),
         "queries_run": len(rows),
@@ -311,6 +318,12 @@ def main() -> None:
         corpus = json.load(cfh)
     models = args.models or _available_rerank_models()
     queries = GOLD_QUERIES[: args.queries] if args.queries > 0 else GOLD_QUERIES
+    # Each gold substring must resolve to exactly one corpus function; an
+    # ambiguous gold turns chance-level top-1 hits into "correct" retrievals.
+    for _, gold in queries:
+        hits = sum(1 for nm in (f["name"] for f in corpus["functions"]) if gold.lower() in nm.lower())
+        if hits != 1:
+            print(f"  [warn] gold {gold!r} matches {hits} corpus function(s)")
     if not models:
         print("No rerank models found on disk. Download one, e.g.:")
         print("  https://huggingface.co/ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF")

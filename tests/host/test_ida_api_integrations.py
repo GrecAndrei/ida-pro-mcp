@@ -402,7 +402,7 @@ class TestFuncsInfoStructuredParams(unittest.TestCase):
                 return self._params[i]
 
         class FakeTinfo:
-            def get_numbered_type(self, til, ordinal):
+            def is_func(self):
                 return True
             def get_func_details(self, func_data):
                 func_data._params = [
@@ -427,6 +427,8 @@ class TestFuncsInfoStructuredParams(unittest.TestCase):
                       "ida_hexrays", "ida_frame", "ida_struct", "ida_ua",
                       "ida_kernwin", "ida_loader", "ida_dbg"):
             sys.modules[name] = _make_minimal_module(name)
+        # funcs.info retrieves the function's type via ida_nalt.get_tinfo.
+        sys.modules["ida_nalt"].get_tinfo = lambda tif, ea: True
         # idautils needs Chunks
         idautils = _make_minimal_module("idautils")
         idautils.Chunks = lambda ea: iter([(0x401000, 0x401100)])

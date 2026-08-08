@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import struct
+import time
 
 from ida_pro_mcp.host.intelligence import core
 from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder
@@ -102,7 +103,9 @@ def test_zembed_sends_query_and_document_prompts_to_the_embedding_server(monkeyp
     embedder._consecutive_rpc_failures = 0
     embedder._max_rpc_failures = 2
     embedder._last_batch_timeout = False
-    embedder._server_started_at = 0.0  # not in the activation-grace window
+    # Clearly outside the activation-grace window (0.0 would read as "inside
+    # grace" on a fresh runner where monotonic() < 60s).
+    embedder._server_started_at = time.monotonic() - 3600.0
     embedder._last_recycle_reason = ""
     embedder._model_path = ""
     embedder._server_bin = ""

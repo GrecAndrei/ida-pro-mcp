@@ -231,6 +231,11 @@ def _build_action_aliases() -> dict[str, dict[str, str]]:
     for tool_name, actions in TOOL_ACTIONS.items():
         alias_map: dict[str, str] = {}
         for action in actions:
+            # Action entries of the form "(...)" are documentation placeholders
+            # (e.g. batch's "(pass calls array)"), not real dispatch actions —
+            # skip them so they don't pollute the alias map.
+            if action.startswith("("):
+                continue
             candidates = _snake_variants(action).union(_camel_variants(action))
             candidates.update(_ACTION_ALIAS_HINTS.get(action, set()))
             candidates.update(

@@ -60,7 +60,9 @@ class ContextDensityOptimizer:
         """Remove XML/HTML wrappers such as <tool_use>...</tool_use>."""
         if not isinstance(text, str):
             return text
-        return re.sub(r'<[^>]+>', '', text)
+        # Preserve address-like content: "<0x401000>" is an address, not a tag.
+        # The module's contract is to keep exact addresses and offsets intact.
+        return re.sub(r'<(?!0x[0-9a-fA-F]+>)[^>]+>', '', text)
 
     def compress_code_blocks(self, text: str, max_lines: int | None = None) -> str:
         """Collapse fenced code blocks longer than max_lines+1 to a preview."""
@@ -292,9 +294,12 @@ class ContextDensityOptimizer:
 
         if isinstance(data, list):
             compacted = [self._compact_recursive(item, budget_tokens) for item in data]
-            # Budget-aware list truncation
+            # Budget-aware list truncation.  max_xref_items is the cap: the
+            # token budget may only tighten it (tight budget → keep fewer),
+            # never widen it — otherwise the knob is a no-op for any budget
+            # above max_xref_items*100.
             if len(compacted) > self.max_xref_items * 2:
-                target = max(self.max_xref_items, budget_tokens // 100)
+                target = max(1, min(self.max_xref_items, budget_tokens // 100))
                 if len(compacted) > target:
                     half = target // 2
                     return (
@@ -328,8 +333,21 @@ class ContextDensityOptimizer:
         text = '\n'.join(truncated)
 
         text = re.sub(r'\n{3,}', '\n\n', text)
-        text = re.sub(r'[ \t]+', ' ', text)
-        return text.strip()
+        # Collapse runs of spaces/tabs to a single space — but preserve the
+        # column alignment of hex-dump lines (an address followed by 4+ byte
+        # columns, matching compress_hex_dumps's own hex_line_re).  Collapsing
+        # those erases the 8-byte/16-byte grouping the module's contract
+        # promises to keep intact.
+        _hex_dump_re = re.compile(
+            r'^\s*(?:0x[0-9a-fA-F]{4,16}|[0-9a-fA-F]{8,16})\s+(?:[0-9a-fA-F]{2}\s+){4,}'
+        )
+        preserved: list[str] = []
+        for line in text.split('\n'):
+            if _hex_dump_re.match(line):
+                preserved.append(line)
+            else:
+                preserved.append(re.sub(r'[ \t]+', ' ', line))
+        return '\n'.join(preserved).strip()
 
     # ------------------------------------------------------------------
     # Legacy compatibility shim (matches reference implementation)

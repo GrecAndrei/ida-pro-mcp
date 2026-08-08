@@ -8,7 +8,7 @@ Extended schema supports:
   - dependency   : "must understand X before Y" task graph
   - data_flow    : register/variable state at a function boundary
   - contradiction: marks a prior entry as contradicted with reason
-  - hypothesis   : auto-generated from BehaviorClassifier
+  - hypothesis   : a claim to verify (written explicitly or auto-proposed from trace/crawler)
   - cluster      : behavioral cluster summaries
   - rename_suggestion : propagated rename candidates
   - pointer/string/entropy/address/pointer_chain/deref : auto-captured
@@ -513,42 +513,6 @@ def blackboard(
             evidence=evidence or [], source_type=source_type or "manual",
             entropy=entropy, xref_count=xref_count,
         )
-        # Async label propagation: only when inside IDA (idc module available)
-        # and confidence is high enough to be worth propagating
-        if addr and confidence >= 0.6 and source_type not in ("propagated", "engine_frontier"):
-            try:
-                import threading as _thr
-
-                import idc as _idc_check  # noqa: F401 — only start thread if IDA is available
-                def _propagate():
-                    try:
-                        from ida_pro_mcp.services import FrontierEngine
-                    except ImportError:
-                        try:
-                            from host.frontier import FrontierEngine  # type: ignore
-                        except ImportError:
-                            return
-                    try:
-                        idb_path = ""
-                        try:
-                            import idc as _idc
-                            idb_path = _idc.get_idb_path() or ""
-                        except Exception:
-                            pass
-                        if not idb_path:
-                            return  # no IDB path — skip propagation
-                        emb_db = idb_path + ".embeddings.db"
-                        import os as _os
-                        if not _os.path.exists(emb_db):
-                            return  # no embeddings indexed yet — skip
-                        fe = FrontierEngine(emb_db, store.db_path)
-                        if fe.refresh() >= 3:
-                            fe.propagate_labels()
-                    except Exception:
-                        pass
-                _thr.Thread(target=_propagate, daemon=True, name="bb-propagate").start()
-            except ImportError:
-                pass  # not inside IDA — skip propagation
         return {"ok": True, "entry_id": eid}
 
     elif action == "read":
@@ -909,12 +873,16 @@ def blackboard(
 
     elif action == "coverage":
         st = store.stats()
+        analyzed = int((st.get("coverage") or {}).get("examined", 0))
+        total = int(st.get("total_entries", 0))
+        unvisited = max(0, total - analyzed)
+        coverage_pct = round(analyzed / max(1, total) * 100.0, 1) if total else 0.0
         return {
             "ok": True,
-            "coverage_pct": 0.0,
-            "total_entries": st.get("total_entries", 0),
-            "analyzed": st.get("total_examined", 0),
-            "unvisited": st.get("total_entries", 0) - st.get("total_examined", 0),
+            "coverage_pct": coverage_pct,
+            "total_entries": total,
+            "analyzed": analyzed,
+            "unvisited": unvisited,
             "note": "Workspace coverage based on recorded findings and examinations.",
         }
 
@@ -923,7 +891,7 @@ def blackboard(
             "ok": True,
             "propagated": 0,
             "entries": [],
-            "note": "Label propagation engine disabled.",
+            "note": "Label propagation engine not installed; label propagation is disabled.",
         }
     elif action == "export_symbols":
         try:

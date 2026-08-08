@@ -1355,7 +1355,13 @@ class BgeCodeEmbedder:
                 # same activation grace as a locally-started process.
                 self._server_started_at = time.monotonic()
                 return True
-            if lease:
+            # Only retire a peer lease when we hold a real identity to compare
+            # it against.  When our own model/server paths are unresolved the
+            # mismatch means "we cannot validate the peer yet", not "the peer
+            # is stale" — retiring it then could kill a valid server that
+            # belongs to another process.  The path re-check below happens
+            # regardless.
+            if lease and (self._model_path and self._server_bin):
                 self._retire_lease_process(lease, "stale or incompatible lease")
             # Re-check paths: they may not have been available at init
             # (e.g. embedder.json written after singleton creation).
@@ -2077,7 +2083,9 @@ class BehaviorClassifier:
                     continue
             sim = BgeCodeEmbedder.cosine(query_vec, anchor)
             min_thr = float(threshold or 0.0) if threshold is not None else 0.0
-            if threshold >= 0.20:
+            # Guard on the resolved threshold so a None threshold (raw cosine,
+            # no floor) cannot crash or be forced above the per-behavior floor.
+            if min_thr >= 0.20:
                 min_thr = max(min_thr, float(self.ANCHOR_MIN_CONFIDENCE.get(behavior, 0.30)))
             if sim >= min_thr:
                 results.append({"behavior": behavior, "confidence": round(sim, 4)})

@@ -73,16 +73,18 @@ class UrlhausSource(SourceParser):
             import zipfile
 
             with zipfile.ZipFile(fpath) as zf:
-                zf.extractall(dest_dir)
+                self._safe_extract(zf, dest_dir)
         # Rename if needed — the downloaded file may not have .zip extension
         elif not fpath.endswith(".json"):
-            # Try reading as zip anyway
-            try:
-                import zipfile
+            # Try reading as zip anyway.  A corrupt/truncated download (or a
+            # plain file that merely lacks the extension) is expected here, so
+            # treat an unreadable archive as a non-zip rather than an error.
+            import zipfile
 
+            try:
                 with zipfile.ZipFile(fpath) as zf:
-                    zf.extractall(dest_dir)
-            except Exception:
+                    self._safe_extract(zf, dest_dir)
+            except (zipfile.BadZipFile, OSError, ValueError):
                 pass
 
     @staticmethod
@@ -97,7 +99,11 @@ class UrlhausSource(SourceParser):
     def _find_json(data_dir: str) -> str | None:
         if not os.path.isdir(data_dir):
             return None
-        for f in os.listdir(data_dir):
-            if f.endswith(".json"):
-                return os.path.join(data_dir, f)
+        # Walk recursively: the archive may nest the JSON one level deep
+        # (e.g. urlhaus-abuse.ch-<date>/json/...).  Depth-first, deterministic
+        # order so repeated parses pick the same file.
+        for root, _dirs, files in os.walk(data_dir):
+            for f in sorted(files):
+                if f.endswith(".json"):
+                    return os.path.join(root, f)
         return None

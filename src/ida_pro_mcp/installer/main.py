@@ -445,7 +445,9 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
                     "  bash scripts/build_native_llama.sh")
     if opts.embed_backend != "gemini" and auto_embed_model:
         ui.ok(f"Detected embedding model: {auto_embed_model}")
-        opts.embed_auto = _prompt_yes_no("Enable semantic embedding model for MCP clients?", default=True)
+        # Honor an explicit --no-embed-auto: the prompt default reflects the
+        # current flag so a bare Enter cannot silently flip an opt-out back on.
+        opts.embed_auto = _prompt_yes_no("Enable semantic embedding model for MCP clients?", default=opts.embed_auto)
         if opts.embed_auto:
             opts.embed_model_path = auto_embed_model
             if auto_embed_server:
@@ -489,13 +491,31 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
             "Semantic search uses two models: an embedding model (already configured above) "
             "and a reranker (cross-encoder) that re-scores results for precision."
         )
+        _rerank_choices = {
+            "qwen3-reranker-0.6b (recommended, ~0.6B)": "qwen3-reranker-0.6b",
+            "qwen3-reranker-4b (higher quality, larger)": "qwen3-reranker-4b",
+            "bge-reranker-v2-gemma": "bge-reranker-v2-gemma",
+            "bge-reranker-v2-m3": "bge-reranker-v2-m3",
+        }
+        current_rerank = opts.rerank_profile if opts.rerank_profile in _rerank_choices.values() else "qwen3-reranker-0.6b"
+        default_rerank_label = next(k for k, v in _rerank_choices.items() if v == current_rerank)
+        opts.rerank_profile = _rerank_choices[
+            _prompt_choice(
+                "Reranker model",
+                list(_rerank_choices.keys()),
+                default_rerank_label,
+            )
+        ]
         auto_rerank_model = find_rerank_model(opts.install_root or get_install_root(), opts.rerank_profile)
         if auto_rerank_model:
             ui.ok(f"Detected reranker: {auto_rerank_model}")
-            if not _prompt_yes_no("Enable reranker for improved semantic search precision?", default=True):
-                auto_rerank_model = ""
-            else:
+            if _prompt_yes_no("Enable reranker for improved semantic search precision?", default=True):
                 opts.rerank_model_path = auto_rerank_model
+            else:
+                # An explicit 'No' must stick: remember the opt-out and don't
+                # let the default profile leak into state / client env.
+                opts.rerank_disabled = True
+                opts.rerank_model_path = ""
         else:
             ui.warn(f"No {opts.rerank_profile} reranker model found.")
             if _prompt_yes_no(
@@ -503,6 +523,8 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
                 default=True,
             ):
                 opts.download_rerank_model = True
+            else:
+                opts.rerank_disabled = True
         ui.info(
             "Rerank tuning knobs (optional env vars): IDA_MCP_RERANK_POOL "
             "(recall pool, default 12), IDA_MCP_RERANK_DOC_BUDGET_CHARS "
@@ -522,7 +544,7 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
     )
     opts.disable_policy = _prompt_yes_no(
         "Disable ALL policy gates (strict-blackboard, phase choreography, ack requirements)?",
-        default=False,
+        default=opts.disable_policy,
     )
     if opts.disable_policy:
         ui.warn("Policy gates DISABLED — all tools run without restrictions.")
@@ -728,6 +750,12 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         action="store_true",
         help="do not prompt for IDA install selection; pick highest-version automatically",
     )
+    parser.add_argument(
+        "--disable-policy",
+        action="store_true",
+        help="disable ALL policy gates (strict-blackboard, phase choreography, ack requirements); "
+        "sets IDA_MCP_POLICY_MODE=off in the spawned server",
+    )
     args = parser.parse_args(argv)
     opts = InstallerOptions(
         dry_run=args.dry_run,
@@ -761,6 +789,7 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         download_rerank_model=args.download_rerank_model,
 
         only=set(args.only),
+        disable_policy=args.disable_policy,
     )
     if opts.setup_embedder:
         opts.embed_auto = True
@@ -945,6 +974,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                     gemini_vertex_location=opts.gemini_vertex_location,
                     ida_install=getattr(opts, "_ida_install", None),
                     disable_policy=opts.disable_policy,
+                    rerank_disabled=opts.rerank_disabled,
                 )
                 configured = configure_clients(
                     source_root=source_root,
@@ -1018,15 +1048,20 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                 if (embed_model or embed_server or rerank_model) and not opts.dry_run:
                     try:
                         from ida_pro_mcp.host.intelligence.core import write_embedder_state
+                        # An explicit decline (opts.rerank_disabled) must not
+                        # pin any rerank profile into state — that would make
+                        # the host resolve the default profile and silently
+                        # activate the reranker whenever a GGUF exists.
                         rerank_state = {"profile": opts.rerank_profile}
                         if rerank_model:
                             rerank_state["model_path"] = rerank_model
+                        rerank_arg = None if opts.rerank_disabled else (rerank_state if (rerank_model or opts.rerank_profile) else None)
                         state_path = write_embedder_state(
                             install_root,
                             model_path=embed_model,
                             server_bin=embed_server,
                             profile=opts.embed_profile,
-                            rerank=rerank_state if (rerank_model or opts.rerank_profile) else None,
+                            rerank=rerank_arg,
                         )
                         report.metadata["embedder_state"] = str(state_path)
                     except Exception as exc:
@@ -1041,6 +1076,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                     rerank_profile=opts.rerank_profile,
                     ida_install=getattr(opts, "_ida_install", None),
                     disable_policy=opts.disable_policy,
+                    rerank_disabled=opts.rerank_disabled,
                 )
                 configured = configure_clients(
                     source_root=source_root,

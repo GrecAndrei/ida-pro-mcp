@@ -30,6 +30,11 @@ def test_portable_installer_writes_the_skill_and_reference_together(tmp_path):
     written = install_skills([tmp_path])
 
     installed = tmp_path / "ida-pro-mcp"
-    assert written["ida-pro-mcp"] == [installed / "SKILL.md"]
+    # Both files are reported so caller bookkeeping (counts, backup, rollback)
+    # covers the reference document too, not just SKILL.md.
+    assert written["ida-pro-mcp"] == [
+        installed / "SKILL.md",
+        installed / "references" / "operations.md",
+    ]
     assert (installed / "SKILL.md").is_file()
     assert (installed / "references" / "operations.md").is_file()

@@ -84,9 +84,16 @@ class ToolResultCache:
             self._cache[key] = (time.time(), self._write_generation, result)
 
     def invalidate_all(self) -> None:
-        """Invalidate all cached entries (called on write operations)."""
+        """Invalidate all cached entries (called on write operations).
+
+        Entries are physically dropped rather than merely generation-stamped:
+        after a write the cache holds no live entries, ``stats()["entries"]``
+        reports 0, and stale large results are released instead of lingering
+        in the LRU until a ``get`` happens to observe the new generation.
+        """
         with self._lock:
             self._write_generation += 1
+            self._cache.clear()
 
     def stats(self) -> Dict[str, Any]:
         """Return cache statistics."""

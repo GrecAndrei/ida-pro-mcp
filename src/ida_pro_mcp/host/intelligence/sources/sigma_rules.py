@@ -82,4 +82,4 @@ class SigmaRulesSource(SourceParser):
             import zipfile
 
             with zipfile.ZipFile(fpath) as zf:
-                zf.extractall(dest_dir)
+                self._safe_extract(zf, dest_dir)

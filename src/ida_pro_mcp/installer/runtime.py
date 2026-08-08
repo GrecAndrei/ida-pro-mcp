@@ -121,8 +121,7 @@ def kill_ida_processes(binary_path: str | Path | None = None) -> None:
     user's unrelated long-running IDA on a different binary — see §6.2.
 
     On failure to enumerate processes (missing pgrep/tasklist, permission
-    error) this function silently returns; the installer prints its own
-    warning when ida_processes_running() still reports True afterwards.
+    error) this function silently returns.
     """
     target_resolved: str | None = None
     if binary_path:
@@ -209,20 +208,6 @@ def kill_ida_processes(binary_path: str | Path | None = None) -> None:
 
     for name in ["idat", "idat64", "ida", "ida64"]:
         subprocess.run(["pkill", "-x", name], capture_output=True)
-
-
-def ida_processes_running() -> bool:
-    if sys.platform == "win32":
-        result = subprocess.run(["tasklist"], capture_output=True, text=True)
-        if result.returncode != 0:
-            return False
-        out = (result.stdout or "").lower()
-        return any(name in out for name in ["idat.exe", "idat64.exe", "ida.exe", "ida64.exe"])
-    for name in ["idat", "idat64", "ida", "ida64"]:
-        check = subprocess.run(["pgrep", "-x", name], capture_output=True)
-        if check.returncode == 0:
-            return True
-    return False
 
 
 def choose_runtime_source(runtime_source: str, source_root: Path) -> str:
@@ -874,7 +859,6 @@ def _write_dev_pth(venv_dir: Path, source_root: Path, dry_run: bool, report: Ins
     if stale_pkg_dir.is_dir():
         shutil.rmtree(stale_pkg_dir)
         report.add_step("dev_pth", "cleanup", f"removed stale {stale_pkg_dir}")
-    site_packages / "ida_pro_mcp-*.dist-info"
     for p in site_packages.glob("ida_pro_mcp-*.dist-info"):
         if p.is_dir():
             shutil.rmtree(p)
@@ -981,6 +965,7 @@ def build_stdio_config(
     gemini_vertex_location: str = "",
     ida_install: object | None = None,
     disable_policy: bool = False,
+    rerank_disabled: bool = False,
 ) -> dict:
     """Build the stdio MCP server config for a specific IDA install.
 
@@ -1006,6 +991,13 @@ def build_stdio_config(
             idadir = str(detected)
 
     env: dict[str, str] = {
+        # Point the spawned server at the same install root the installer
+        # wrote its state files (embedder.json, ida-install.json,
+        # install-report.json) under.  Without this, a custom --install-root
+        # is invisible to the host's get_install_root and installer-selected
+        # values that only live in state (e.g. --gemini-model / rerank
+        # profile) are silently dropped.
+        "IDA_PRO_MCP_HOME": str(install_root),
         "IDA_MCP_RESPONSE_MODE": "compact",
         "IDA_MCP_QOL_MODE": "balanced",
         "IDA_MCP_TOOL_SURFACE": "agent",
@@ -1030,7 +1022,12 @@ def build_stdio_config(
         env["IDA_MCP_EMBED_PROFILE"] = embed_profile
     if rerank_model:
         env["IDA_MCP_RERANK_MODEL"] = rerank_model
-    if rerank_profile:
+    if rerank_disabled:
+        # User explicitly declined the reranker in the wizard; make the opt-out
+        # effective at runtime instead of silently activating it whenever a
+        # matching GGUF exists on disk.
+        env["IDA_MCP_RERANK_DISABLED"] = "1"
+    elif rerank_profile:
         env["IDA_MCP_RERANK_PROFILE"] = rerank_profile
     if str(embed_backend or "").lower() == "gemini":
         env["IDA_MCP_EMBED_BACKEND"] = "gemini"

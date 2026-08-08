@@ -26,8 +26,10 @@ _EMB_CACHE_MAX = 1024
 # CPU latency bounded on shared machines.
 _DECISIVE_SCORE = 105.0
 # Deterministic scores below this mean the texts are essentially unrelated.
-# Embedding is only attempted when one side looks like a phrase, where token
-# overlap is a poor proxy for meaning.
+# Embedding runs when the cheap score lands in the ambiguous band
+# [30, 105): either because one side looks like a phrase (token overlap is a
+# poor proxy for meaning there) or because the cheap score itself is already
+# inside the band, even for short identifier-like text.
 _EMBED_FLOOR = 30.0
 # Texts at/above this length (or containing whitespace) count as phrase-like.
 _MIN_PHRASE_LEN = 24
@@ -135,10 +137,11 @@ def semantic_score(
 ) -> float:
     """Compute semantic similarity score (higher is better, 0..120 scale).
 
-    Deterministic scoring runs first.  Native embedding is only consulted in
-    the ambiguous band (neither decisive nor clearly unrelated) for
-    phrase-like text, so short identifier/action matching stays fast while
-    natural-language matching keeps embedding quality.
+    Deterministic scoring runs first.  Native embedding is consulted when the
+    cheap score lands in the ambiguous band (neither decisive nor clearly
+    unrelated): for phrase-like text, or when the cheap score itself is high
+    enough (>= ``_EMBED_FLOOR``) that a short identifier/action could still
+    benefit from embedding.
     """
     if not query or not candidate:
         return {"score": 0.0, "method": "exact"} if return_detail else 0.0
@@ -224,8 +227,9 @@ def semantic_scores(
     2. For phrase-like queries, the top ``top_n`` candidates are re-embedded
        in a single batched call and their scores become embedding-first.
 
-    Identifier-like queries skip phase 2 entirely: token/ngram overlap is
-    already decisive there, and the smart matcher filtered candidates first.
+    Identifier-like queries skip phase 2 entirely (unless ``force_embed`` is
+    set): token/ngram overlap is already decisive there, and the smart matcher
+    filtered candidates first.
     """
     if not candidates:
         return []
@@ -365,8 +369,11 @@ def normalize_action(
 
     best = fallback
     best_score = 0.0
-    pool = [(cand, cand) for cand in action_set]
-    pool.extend((alias, mapped) for alias, mapped in aliases.items())
+    # Sort the pool deterministically: on equal scores the first entry wins,
+    # and set iteration order is nondeterministic across processes
+    # (PYTHONHASHSEED), which would otherwise make the fallback unreliable.
+    pool = [(cand, cand) for cand in sorted(action_set)]
+    pool.extend((alias, mapped) for alias, mapped in sorted(aliases.items()))
     labels = [label for label, _ in pool]
     scores = semantic_scores(
         action,

@@ -229,6 +229,8 @@ def search_immediate(pattern, range_start, range_end, include_context, offset, l
                 curr += insn.size
             else:
                 curr = idc.next_head(curr, seg_end)
+                if curr == idaapi.BADADDR:
+                    break
             if truncated:
                 break
 

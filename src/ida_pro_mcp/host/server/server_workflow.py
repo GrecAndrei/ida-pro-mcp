@@ -15,6 +15,7 @@ from ..schemas import (
     HIDDEN_TOOLS_IN_LIST,
     TOOL_ACTIONS,
     TOOLS,
+    _resolve_tool_alias,
     build_input_schema_lean,
     build_input_schema_ultra,
     build_tool_description_lean,
@@ -168,7 +169,9 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 if normalize_err or not isinstance(name, str) or not name.strip() or not isinstance(call_args, dict):
                     invalid_calls.append(idx)
                     continue
-                n = name.strip()
+                # Resolve tool aliases the way _execute_tool does, so audit_plan
+                # and execute_plan agree on what constitutes a valid plan.
+                n = str(_resolve_tool_alias(name.strip()) or "").strip()
                 a = str(call_args.get("action") or "").strip()
                 if n not in TOOL_ACTIONS:
                     invalid_calls.append(idx)
@@ -186,7 +189,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                     duplicate_keys[key_str] = int(duplicate_keys.get(key_str, 1)) + 1
                 else:
                     seen_keys.add(key)
-                if n == "search" and a in {"malware", "vuln", "api_hashing", "vulnerable"}:
+                if n == "search" and a == "vulnerable":
                     risk_hints.append(f"high-risk step present: {key_str}")
 
             warnings: list[str] = []
@@ -297,7 +300,11 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 name, call_args, normalize_err = self._normalize_batch_call(call, idx)
                 if normalize_err or not isinstance(name, str) or not name.strip() or not isinstance(call_args, dict):
                     continue
-                normalized_calls.append({"name": name.strip(), "arguments": call_args})
+                # Resolve aliases the same way _execute_tool does so the plan
+                # name always maps to a canonical tool.
+                normalized_calls.append(
+                    {"name": str(_resolve_tool_alias(name.strip()) or "").strip(), "arguments": call_args}
+                )
 
             requested_steps = len(normalized_calls)
             truncated = False
@@ -315,27 +322,20 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
             step_results: list[dict] = []
             calls_out: list[dict] = []
             completed = 0
-            blocked = False
             for idx, step in enumerate(normalized_calls):
                 name = str(step.get("name") or "").strip()
                 call_args = step.get("arguments") if isinstance(step.get("arguments"), dict) else {}
-                if blocked:
-                    step_results.append(
-                        {
-                            "index": idx,
-                            "tool": name,
-                            "args": call_args,
-                            "outcome": "skipped",
-                            "elapsed_ms": 0,
-                            "recovery_hint": "Previous dependency-like step failed; rerun after fixing earlier error.",
-                        }
-                    )
-                    continue
                 t0 = time.time()
                 try:
                     res = self._execute_tool(name, dict(call_args))
                 except Exception as e:
-                    res = {"error": True, "message": str(e)}
+                    # Never put a bare error dict on the wire: match the host
+                    # error envelope so code/category/hint are always present.
+                    res = make_error(
+                        MCPError.INTERNAL,
+                        f"Step execution failed for '{name}': {e}",
+                        hint="Retry the step manually or check the tool arguments.",
+                    )
                 elapsed_ms = int((time.time() - t0) * 1000)
                 is_err = is_error_result(res)
                 calls_out.append({"name": name, "arguments": call_args, "result": res})
@@ -354,9 +354,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                     }
                 )
                 if is_err:
-                    # Conservative dependency gate for clearly chained operations.
-                    if name in {"query", "batch"}:
-                        blocked = True
                     if not continue_on_error:
                         break
                 else:
@@ -785,10 +782,10 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                     "plan requires workflow_action",
                     hint="Example: workflow(action='plan', workflow_action='recon_sweep', profile='deep')",
                 )
-            if target_action == "plan":
+            if target_action in {"plan", "explain", "estimate", "compose", "prioritize", "execute_plan", "audit_plan", "catalog"}:
                 return make_error(
                     MCPError.INVALID_ARGS,
-                    "plan cannot target plan",
+                    "plan target must be executable workflow",
                     hint="Use workflow_action as one of: triage_fast, malware_deep, vuln_audit, recon_sweep, patch_review",
                 )
             plan_args = dict(args)

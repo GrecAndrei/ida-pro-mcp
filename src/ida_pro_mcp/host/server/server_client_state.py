@@ -66,6 +66,10 @@ class _ClientRequestState:
 
     current_session: Any = None
     pending_post_process: dict[str, Any] = field(default_factory=dict)
+    # Normalized, PP-stripped tool args snapshot for the current dispatch; lets
+    # _execute_tool cache a continuation token with the exact args a replay
+    # will use (never the raw caller args that still carry head/grep/limit).
+    pending_tool_args: dict[str, Any] = field(default_factory=dict)
     pending_truncation: dict[str, Any] = field(default_factory=dict)
     last_spawn_error: Any = None
     vertex_compat: bool = False
@@ -367,6 +371,16 @@ class ServerClientStateMixin:
         )
 
     @property
+    def _pending_tool_args(self) -> dict[str, Any]:
+        return self._client_request_state().pending_tool_args
+
+    @_pending_tool_args.setter
+    def _pending_tool_args(self, value: Any) -> None:
+        self._client_request_state().pending_tool_args = (
+            value if isinstance(value, dict) else {}
+        )
+
+    @property
     def _pending_truncation(self) -> dict[str, Any]:
         return self._client_request_state().pending_truncation
 
@@ -446,16 +460,23 @@ class ServerClientStateMixin:
                 activated_at=now,
                 logged_in={},
             )
+        sso_payload: dict[str, Any] = {
+            "active": True,
+            "agents": clean,
+            "activated_at": now,
+            "secret_generated": not secret_provided and not env_secret,
+            "secret_from_env": env_secret and not secret_provided,
+        }
+        if not secret_provided and not env_secret:
+            # The auto-generated secret is otherwise undisclosed anywhere, so
+            # the realm it created could never be authenticated to — every
+            # mint_agent_ticket/agent_login round would fail HMAC verification.
+            # Return it to the orchestrator that activated the realm.
+            sso_payload["secret"] = secret
         return (
             {
                 "ok": True,
-                "sso": {
-                    "active": True,
-                    "agents": clean,
-                    "activated_at": now,
-                    "secret_generated": not secret_provided and not env_secret,
-                    "secret_from_env": env_secret and not secret_provided,
-                },
+                "sso": sso_payload,
             },
             None,
         )
@@ -605,7 +626,13 @@ class ServerClientStateMixin:
                 "SSO realm is not activated. The orchestrator must call "
                 "session action=sso_activate first.",
             )
-        entry = (realm.get("logged_in") or {}).get(agent)
+        # Read the login record under the realm lock: login/logout mutate
+        # realm['logged_in'] under that lock, so an unlocked read could observe
+        # a half-removed entry (agent briefly treated as logged in) or a login
+        # before conn_id is set — inconsistent identity enforcement on a
+        # multi-connection daemon.
+        with realm["lock"]:
+            entry = (realm.get("logged_in") or {}).get(agent)
         if not entry:
             return make_error(
                 MCPError.POLICY_DENIED,

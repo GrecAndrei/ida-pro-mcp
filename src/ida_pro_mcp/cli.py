@@ -87,11 +87,23 @@ class MCPStdioClient:
             raise SystemExit("MCP process pipes are unavailable")
         self.proc.stdin.write(json.dumps(request, separators=(",", ":")) + "\n")
         self.proc.stdin.flush()
-        line = self.proc.stdout.readline()
-        if not line:
-            method = str(request.get("method", "request"))
-            self._raise_closed(method)
-        return json.loads(line)
+        rid = request.get("id")
+        # The server can emit unsolicited notifications (e.g. usage
+        # `notifications/message`) on the same stdout stream.  Only a response
+        # carrying our request id is a valid reply; skip anything else so a
+        # stray notification is never misread as the answer.
+        while True:
+            line = self.proc.stdout.readline()
+            if not line:
+                method = str(request.get("method", "request"))
+                self._raise_closed(method)
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rid is not None and msg.get("id") != rid:
+                continue
+            return msg
 
     def call(self, method: str, params: Any = None, *, request_id: int | None = None) -> dict:
         if not method or not isinstance(method, str):
@@ -174,7 +186,21 @@ def _daemon_is_running() -> bool:
 
 
 def _start_daemon() -> None:
+    # _daemon_is_running() uses a short 0.3s connect timeout, so a healthy but
+    # momentarily saturated daemon can produce a false negative.  Never unlink
+    # a socket a daemon might still be serving on — that would orphan the live
+    # daemon (it can never accept again) while a second one starts.
+    if _daemon_is_running():
+        return
     if os.path.exists(_DAEMON_SOCKET):
+        try:
+            probe = _socket_mod.socket(_socket_mod.AF_UNIX, _socket_mod.SOCK_STREAM)
+            probe.settimeout(1.0)
+            probe.connect(_DAEMON_SOCKET)
+            probe.close()
+            return  # a daemon answered the slower probe; leave it alone
+        except Exception:
+            pass
         os.unlink(_DAEMON_SOCKET)
     subprocess.Popen(
         [sys.executable, "-m", "ida_pro_mcp.host.server", "--daemon"],
@@ -190,7 +216,7 @@ def _start_daemon() -> None:
         time.sleep(0.1)
 
 
-def _daemon_call(tool_name: str, args: dict[str, Any]) -> dict:
+def _daemon_call(tool_name: str, args: dict[str, Any], *, timeout: float | None = 30.0) -> dict:
     request = {
         "jsonrpc": "2.0",
         "id": 2,
@@ -208,9 +234,13 @@ def _daemon_call(tool_name: str, args: dict[str, Any]) -> dict:
         },
     }
     s = _socket_mod.socket(_socket_mod.AF_UNIX, _socket_mod.SOCK_STREAM)
-    s.settimeout(15.0)
+    s.settimeout(10.0)  # connect deadline
     try:
         s.connect(_DAEMON_SOCKET)
+        # The daemon handles requests synchronously and can block for the
+        # caller-supplied timeout (e.g. `background wait timeout=120`), so
+        # widen the recv window after connect; timeout=None means block.
+        s.settimeout(timeout)
         payload = (
             json.dumps(initialize, separators=(",", ":")) + "\n" +
             json.dumps(request, separators=(",", ":")) + "\n"
@@ -268,7 +298,21 @@ def _handle_background_mode(args):
     if not _daemon_is_running():
         _start_daemon()
 
-    response = _daemon_call("background", tool_args)
+    if action == "wait":
+        # `background wait` blocks on the daemon up to the user-supplied
+        # timeout, so the CLI socket must outlive it (plus a small grace for
+        # the daemon to write the response).  With no timeout the daemon waits
+        # until the task finishes, so the CLI blocks too (timeout=None).
+        try:
+            user_to = tool_args.get("timeout")
+            wait_timeout: float | None = (
+                float(user_to) + 30.0 if user_to not in (None, "") else None
+            )
+        except (TypeError, ValueError):
+            wait_timeout = None
+        response = _daemon_call("background", tool_args, timeout=wait_timeout)
+    else:
+        response = _daemon_call("background", tool_args)
     _print_json(_normalize_tool_result(response), pretty=args.pretty)
     return 0
 
@@ -283,7 +327,7 @@ def main(argv: list[str] | None = None) -> int:
             "  ida-pro-mcp-cli tool session '{\"action\":\"status\"}'\n"
             "  ida-pro-mcp-cli raw '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}'\n"
             "  ida-pro-mcp-cli intelligence status\n"
-            "  ida-pro-mcp-cli background submit '{\"script\":\"print(idc.get_idb_path())\"}'\n"
+            "  ida-pro-mcp-cli background submit '{\"tool_call\":{\"tool\":\"session\",\"args\":{\"action\":\"status\"}}}'\n"
             "  ida-pro-mcp-cli background status\n"
             "  ida-pro-mcp-cli background result '{\"task_id\":\"abc123\"}'\n"
         ),
@@ -328,12 +372,13 @@ def main(argv: list[str] | None = None) -> int:
         dest="session_id",
         help="IDA session ID for background tasks",
     )
-    parser.add_argument(
-        "extra",
-        nargs="*",
-        help="Additional args",
-    )
     args = parser.parse_args(argv)
+
+    # background mode talks only to the daemon socket; it never touches the
+    # stdio client, so dispatch it before spawning a throwaway server
+    # subprocess (which would otherwise boot the whole host on every call).
+    if args.mode == "background":
+        return _handle_background_mode(args)
 
     payload = None
     if args.stdin_json:
@@ -399,18 +444,26 @@ def main(argv: list[str] | None = None) -> int:
                 "doctor": "embedder_status",
             }
             mapped = action_map.get(action, action)
+            # Must mirror the action Literal in ida_mcp/tools/intelligence.py
+            # exactly; drift here makes valid actions impossible via the CLI
+            # while advertising actions the tool rejects.
             if mapped not in {
                 "intelligence_status",
                 "embedder_status",
+                "reranker_status",
                 "anchor_status",
                 "refresh_anchors",
                 "classify_text",
                 "classify_function",
                 "index_function",
                 "index_batch",
+                "index_fast",
+                "index_range",
                 "similar_functions",
+                "semantic_search",
+                "blackboard_search",
                 "export_index_summary",
-                "evidence_card",
+                "function_families",
             }:
                 raise SystemExit(f"unsupported intelligence action: {action}")
             tool_args = payload if isinstance(payload, dict) else {}
@@ -426,9 +479,6 @@ def main(argv: list[str] | None = None) -> int:
             )
             _print_json(_normalize_tool_result(response), pretty=args.pretty)
             return 0
-
-        if args.mode == "background":
-            return _handle_background_mode(args)
 
         raise SystemExit(f"unsupported mode: {args.mode}")
     finally:

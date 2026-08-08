@@ -174,6 +174,8 @@ def _ctree_build_dominance_map(cfunc, max_nodes=600):
         def __init__(self):
             ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
             self.count = 0
+            # IDA 9.x dropped ctree_visitor_t.level; track nesting depth manually.
+            self.depth = 0
 
         def visit_insn(self, i):
             if self.count >= max_nodes:
@@ -196,11 +198,17 @@ def _ctree_build_dominance_map(cfunc, max_nodes=600):
                     {
                         "id": f"cond_{len(conditions)}",
                         "ea": hex(int(getattr(i, "ea", idaapi.BADADDR))),
-                        "depth": int(getattr(self, "level", 0)),
+                        "depth": int(self.depth),
                         "op": ida_hexrays.get_ctype_name(i.op),
                         "expr": expr,
                     }
                 )
+            self.depth += 1
+            return 0
+
+        def leave_insn(self, i):
+            if self.depth > 0:
+                self.depth -= 1
             return 0
 
     try:
@@ -263,6 +271,8 @@ def _ctree_build_logic_graph(cfunc, max_nodes=1200):
             ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
             self.count = 0
             self.control_stack = []
+            # IDA 9.x dropped ctree_visitor_t.level; track nesting depth manually.
+            self.depth = 0
 
         def _control_parent(self):
             return self.control_stack[-1] if self.control_stack else None
@@ -271,7 +281,8 @@ def _ctree_build_logic_graph(cfunc, max_nodes=1200):
             if self.count >= max_nodes:
                 return 1
             op = i.op
-            depth = int(getattr(self, "level", 0))
+            depth = int(self.depth)
+            self.depth += 1
 
             if op == ida_hexrays.cit_if:
                 cond = "complex_expression"
@@ -314,19 +325,27 @@ def _ctree_build_logic_graph(cfunc, max_nodes=1200):
             if i.op in [ida_hexrays.cit_if, ida_hexrays.cit_while, ida_hexrays.cit_for, ida_hexrays.cit_do]:
                 if self.control_stack:
                     self.control_stack.pop()
+            if self.depth > 0:
+                self.depth -= 1
             return 0
 
         def visit_expr(self, e):
             if self.count >= max_nodes:
                 return 1
             if e.op == ida_hexrays.cot_call:
-                depth = int(getattr(self, "level", 0))
+                depth = int(self.depth)
                 txt = "call"
                 with contextlib.suppress(Exception):
                     txt = ida_lines.tag_remove(e.print1(None))
                 nid = _add_node(getattr(e, "ea", idaapi.BADADDR), "call", txt, depth)
                 _add_edge(self._control_parent(), nid, "contains_call")
                 self.count += 1
+            self.depth += 1
+            return 0
+
+        def leave_expr(self, e):
+            if self.depth > 0:
+                self.depth -= 1
             return 0
 
     try:
@@ -461,7 +480,20 @@ def ctree(
             return {"ok": True, "function": func_name, "calls": "\n".join(call_lines), "count": len(call_lines)}
 
         elif action == "find_vars":
-            var_lines = [f"{v.name}  {str(v.type())}  {'arg' if v.is_arg_var else 'local'}" for v in cfunc.lvars]
+            var_lines = []
+            for v in cfunc.lvars:
+                # lvar_t.type is a bound method in SWIG bindings — call it to get
+                # the tinfo_t object, then stringify that (see _extract_var_rename_hints).
+                tinfo_attr = getattr(v, "type", None)
+                if callable(tinfo_attr):
+                    try:
+                        tinfo_attr = tinfo_attr()
+                    except Exception:
+                        tinfo_attr = None
+                var_lines.append(
+                    f"{v.name}  {str(tinfo_attr) if tinfo_attr is not None else '?'}  "
+                    f"{'arg' if v.is_arg_var else 'local'}"
+                )
             use_lines = []
             class VarUseVisitor(ida_hexrays.ctree_visitor_t):
                 def __init__(self):

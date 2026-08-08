@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-Smoke-test EVERY ACTION of EVERY ida-pro-mcp tool against real IDA Pro, over
-the real MCP JSON-RPC stdio protocol.
+Smoke-test every advertised action of every advertised ida-pro-mcp tool against
+real IDA Pro, over the real MCP JSON-RPC stdio protocol.
 
 Companion to smoke_mcp_all_tools.py (which tests one curated action per tool).
-This one enumerates the `action` enum from each tool's inputSchema and drives
-every action, so a silent crash in any handler branch (like the funcs.info /
-packer.detect / data_ops.make_string bugs) is surfaced.
+This one enumerates the `action` enum from each advertised tool's inputSchema
+(compact ADVERTISED_ACTIONS for session/search/intelligence/blackboard/code/
+funcs/misc, the full enum for the rest) and drives every action, so a silent
+crash in any handler branch (like the funcs.info / packer.detect /
+data_ops.make_string bugs) is surfaced.
 
 Classification is the same as the per-tool smoke:
 
@@ -28,7 +30,7 @@ Usage:
   python scripts/smoke_mcp_all_actions.py
   python scripts/smoke_mcp_all_actions.py --binary /path/to/foo.exe
   python scripts/smoke_mcp_all_actions.py --timeout 150
-  python scripts/smoke_mcp_all_actions.py --only funcs,code,data_ops
+  python scripts/smoke_mcp_all_actions.py --only funcs,code,data
 """
 from __future__ import annotations
 
@@ -147,9 +149,6 @@ ACTION_ARGS: dict[tuple[str, str], dict] = {
     ("graph", "dependency_graph"): {"addr": "__ADDR__"},
     ("graph", "recursive"):       {"addr": "__ADDR__"},
     ("graph", "xref_graph"):      {"addr": "__ADDR__"},
-    ("graph", "dead_functions"):  {},
-    ("graph", "hub_functions"):    {},
-    ("graph", "leaf_functions"):  {},
     # hooks
     ("hooks", "suggest"):         {"addr": "__ADDR__"},
     ("hooks", "generate_frida"):   {"addr": "__ADDR__"},
@@ -177,8 +176,6 @@ ACTION_ARGS: dict[tuple[str, str], dict] = {
     # search
     ("search", "find"):           {"query": "main", "limit": 3},
     ("search", "nl"):             {"query": "entry point"},
-    ("search", "semantic"):       {"query": "entry point"},
-    ("search", "smart_bundle"):   {"query": "main"},
     ("search", "api"):            {"pattern": "Write"},
     ("search", "decompiled"):     {"query": "main", "limit": 3},
     ("search", "name"):           {"pattern": "main"},
@@ -196,7 +193,6 @@ ACTION_ARGS: dict[tuple[str, str], dict] = {
     ("search", "fingerprint"):    {"addr": "__ADDR__"},
     ("search", "behavior"):       {"query": "crypto"},
     ("search", "bool"):           {"query": "(api:Write*)"},
-    ("search", "hunt"):           {"recipe": "list"},
     ("search", "vulnerable"):     {},
     ("search", "regex"):          {"pattern": "^main$"},
     ("search", "func_by_sig"):    {"query": "void main()"},
@@ -566,7 +562,7 @@ SKIP_ACTIONS: set[tuple[str, str]] = {
     ("session", "confirm_hypothesis"), ("session", "refute_hypothesis"),
     ("session", "advance_phase"), ("session", "notebook_append"),
     ("session", "notebook_section"), ("session", "macro_set"), ("session", "macro_get"),
-    ("session", "macro_delete"), ("session", "macro_run"), ("session", "tag"),
+    ("session", "macro_delete"), ("session", "macro_run"),
     ("history", "undo"), ("history", "redo"), ("history", "restore"),
     ("modify", "patch_asm"),           # rewrites instruction bytes
     ("data_ops", "undefine"),          # destroys definitions used elsewhere
@@ -635,7 +631,6 @@ SKIP_ACTIONS: set[tuple[str, str]] = {
     ("blackboard", "kg_gaps"), ("blackboard", "kg_structs"),
     ("blackboard", "kg_state_machines"), ("blackboard", "kg_attack_surface"),
     ("blackboard", "kg_peripherals"),
-    ("session", "create"),
 }
 
 
@@ -689,7 +684,7 @@ def fallback_args_for_action(schema: dict, action: str, addr: str, addr2: str, i
 def main() -> int:
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("--binary", default=S.DEFAULT_BINARY)
+    ap.add_argument("--binary", default=None, help="Path to a binary to analyze (required; no fixture ships in the repo)")
     ap.add_argument("--timeout", type=int, default=S.DEFAULT_TIMEOUT)
     ap.add_argument("--only", help="comma-separated tool names to run")
     ap.add_argument("--skip-clean", action="store_true", help="don't print CLEAN rows")
@@ -697,6 +692,9 @@ def main() -> int:
 
     if not os.path.isfile(S.VENV_PY):
         print(f"FATAL: venv python not found: {S.VENV_PY}", file=sys.stderr)
+        return 2
+    if not args_cli.binary:
+        print("FATAL: --binary is required (no test-fixture binary ships in the repo).", file=sys.stderr)
         return 2
     if not os.path.isfile(args_cli.binary):
         print(f"FATAL: binary not found: {args_cli.binary}", file=sys.stderr)

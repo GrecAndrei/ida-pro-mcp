@@ -21,8 +21,13 @@ if str(REPO_ROOT) not in sys.path:
 
 
 def _mk_server():
+    # ida_mcp_stdio swaps sys.stdout -> sys.stderr at import time to isolate
+    # the MCP protocol stream; restore it so this script's own prints stay on
+    # stdout.
+    _orig_stdout = sys.stdout
     import ida_mcp_stdio as host
 
+    sys.stdout = _orig_stdout
     orig_detect = host.IDAMCPServer._detect_ida_dir
     orig_find = host.IDAMCPServer._find_idat
     host.IDAMCPServer._detect_ida_dir = lambda self: ""
@@ -216,49 +221,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-# Tool sweep test plan generator
-# This script generates a minimal safe call for each tool.
-
-
-TEST_ARGS = {
-    "session": {"action": "status"},
-    "idb": {"action": "overview"},
-    "data": {"action": "functions", "count": 1},
-    "code": {"action": "disasm", "addr": "0x140001000", "limit": 1},
-    "search": {"action": "find", "pattern": "main"},
-    "analysis": {"action": "get_options"},
-    "imports_deep": {"action": "thunks"},
-    "symbols": {"action": "status"},
-    "patterns": {"action": "list_sigs"},
-    "types": {"action": "list"},
-    "memory": {"action": "read", "addr": "0x140001000", "size": 8},
-    "calc": {"action": "eval", "expr": "0x10 + 0x20"},
-    "nav": {"action": "cursor"},
-    "binary_info": {"action": "headers"},
-    "export": {"action": "headers"},
-    "history": {"action": "list"},
-    "segments": {"action": "list"},
-    "funcs": {"action": "create", "addr": "0x140001000"},
-    "graph": {"action": "callgraph", "addr": "0x140001000", "format": "dot"},
-    "ctree": {"action": "get", "addr": "0x140001000", "depth": 1},
-    "bookmarks": {"action": "list"},
-    "bulk": {"action": "export_annotations"},
-    "debug": {"action": "threads"},
-    "compare": {"action": "constants", "addr": "0x140001000", "addr2": "0x140001010"},
-    "misc": {"action": "health"},
-    "project": {"action": "list_recent"},
-    "governance": {"action": "stats"},
-    "annotation": {"action": "auto_comment", "addr": "0x140001000", "dry_run": True},
-    "batch": {"calls": ["data:functions"]},
-    "string_ops": {"action": "find_urls", "limit": 1},
-    "blackboard": {"action": "list"},
-    "cfg_analysis": {"action": "complexity", "addr": "0x140001000"},
-    "summarize": {"action": "binary"},
-    "classify": {"action": "binary"},
-    "gadgets": {"action": "mitigations"},
-    "xref_analysis": {"action": "stats"},
-    "coverage": {"action": "report"},
-    "trace_analysis": {"action": "analyze_coverage"},
-}
-
-print(json.dumps(TEST_ARGS, indent=2))

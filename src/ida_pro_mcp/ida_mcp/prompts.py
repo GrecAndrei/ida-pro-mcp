@@ -32,7 +32,7 @@ def quickref() -> list[dict]:
 
 @prompt
 def workflow(
-    task: Annotated[str, "The analysis task: triage|vuln_hunt|malware|compare|debug|crypto|protocol|exploit|deobfuscate|firmware"] = "triage"
+    task: Annotated[str, "The analysis task: triage|vuln_hunt|malware|diff|debug|crypto|protocol|exploit|deobfuscate|firmware"] = "triage"
 ) -> list[dict]:
     """Get a step-by-step workflow guide for a specific analysis task."""
     workflows = {
@@ -189,7 +189,7 @@ WORKFLOW_DIFF = """\
 # Binary Diff Workflow
 
 1. **Compare Functions**: `code(action="diff_functions", addrs=["0x401000", "0x402000"])`
-2. **Use Compare**: `compare(action="functions", addrs=["0x401000","0x402000"])`
+2. **Compare Memory Regions**: `memory(action="compare", addr="0x401000", end_addr="0x402000")`
 3. **Check Patched Functions**: Look at similarity scores < 1.0
 4. **Analyze Changes**: Decompile both versions of changed functions
 5. **Document**: Comment the differences found
@@ -198,14 +198,18 @@ WORKFLOW_DIFF = """\
 WORKFLOW_DEBUG = """\
 # Debugging Workflow
 
-1. **Start Debugger**: `debug(action="start")`
-2. **Set Breakpoints**: `debug(action="add_bp", addr="main")`
-3. **Run to Break**: `debug(action="continue")`
-4. **Check Registers**: `debug(action="regs")`
-5. **Step Through**: `debug(action="step_into")` or `debug(action="step_over")`
+IDA MCP has no dedicated debugger/trace tool — drive the debugger through
+`misc(action="python", code="<snippet>")` (authorization required) using the
+idc/ida_dbg helpers, and read live memory with `memory(action="read", ...)`.
+
+1. **Start Debugger**: `misc(action="python", code="idc.start_process(\"\", \"\", \"\")")`
+2. **Set Breakpoints**: `misc(action="python", code="idc.add_bpt(0x401000)")`
+3. **Run to Break**: `misc(action="python", code="idc.run_to(0x401000)")`
+4. **Step Through**: `misc(action="python", code="idc.step_into()")` or `idc.step_over()`
+5. **Read Registers**: `misc(action="python", code="idc.get_reg_value(\"rip\")")`
 6. **Read Memory**: `memory(action="read", addr="0x401000", size=64)`
-7. **Check Stack**: `debug(action="callstack")`
-8. **Trace Execution**: `trace(action="get")` → `trace_analysis(action="analyze_coverage")`
+7. **Check Stack**: `memory(action="read", addr="<rsp>", size=256)`
+8. **Continue Execution**: `misc(action="python", code="idc.continue_process()")`
 """
 
 WORKFLOW_CRYPTO = """\

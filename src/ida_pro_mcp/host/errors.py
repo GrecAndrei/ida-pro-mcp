@@ -61,6 +61,7 @@ class MCPError:
     SIZE_LIMIT_EXCEEDED = "SIZE_LIMIT_EXCEEDED"
     RATE_LIMIT = "RATE_LIMIT"
     STUCK_LOOP = "STUCK_LOOP"
+    INTERNAL = "INTERNAL"
 
 
 # Code → category. Codes absent from this map fall back to "internal".
@@ -147,9 +148,6 @@ _RECOVERY_ACTIONS: dict[str, list[dict]] = {
     ],
     MCPError.ADDRESS_INVALID: [
         {"tool": "ida_calc_convert", "args": {"value": "$addr"}, "note": "Verify address is valid hex"},
-    ],
-    MCPError.TRUNCATION_TOKEN_EXPIRED: [
-        {"tool": "ida_continue", "args": {"token": "$token"}, "note": "Check if token still exists"},
     ],
     MCPError.IDA_TIMEOUT: [
         {"tool": "ida_session_health", "args": {}, "note": "Check IDA health"},

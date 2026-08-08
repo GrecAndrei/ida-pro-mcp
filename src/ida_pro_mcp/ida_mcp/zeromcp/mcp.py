@@ -72,6 +72,11 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
     server_version = "zeromcp/1.4.0"
     error_message_format = "%(code)d - %(message)s"
     error_content_type = "text/plain"
+    # Bound each blocking socket operation (StreamRequestHandler.setup()
+    # calls connection.settimeout() with this value) so a stalled or
+    # slowloris client cannot pin a handler thread forever waiting on a
+    # request line, headers, or body that never fully arrives.
+    timeout = 60
 
     def __init__(self, request, client_address, server):
         self.mcp_server: "McpServer" = getattr(server, "mcp_server")
@@ -104,8 +109,14 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
                 self.send_header("Access-Control-Allow-Private-Network", "true")
 
     def send_error(self, code, message=None, explain=None):
+        # Always close the connection on an error response. BaseHTTPRequestHandler's
+        # default send_error() does this too; without it a 413 (or any error) on a
+        # kept-alive HTTP/1.1 connection leaves an unread request body behind, which
+        # the server would then misparse as the client's next request line.
+        self.close_connection = True
         self.send_response(code)
         self.send_header("Content-Type", "text/plain")
+        self.send_header("Connection", "close")
         self.send_cors_headers()
         self.end_headers()
         self.wfile.write(f"{message}\n".encode("utf-8"))
@@ -114,8 +125,8 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         """Override to add error handling for connection errors"""
         try:
             super().handle()
-        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
-            # Client disconnected - normal, suppress traceback
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, TimeoutError):
+            # Client disconnected or stalled (socket timeout) - normal, suppress traceback
             pass
 
     def do_GET(self):
@@ -128,10 +139,23 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
                 self.send_error(404, "Not Found")
 
     def do_POST(self):
-        # Read request body
-        content_length = int(self.headers.get("Content-Length", 0))
+        # Read request body. A non-numeric or negative Content-Length is a
+        # protocol error, not an exception: reject it with a clean 400 instead
+        # of letting int() crash the handler thread.
+        raw_length = self.headers.get("Content-Length")
+        try:
+            content_length = int(raw_length) if raw_length is not None else 0
+        except (TypeError, ValueError):
+            self.send_error(400, "Invalid Content-Length")
+            return
+        if content_length < 0:
+            self.send_error(400, "Invalid Content-Length")
+            return
 
         if content_length > self.mcp_server.post_body_limit:
+            # send_error() closes the connection, so the unread over-limit body
+            # is discarded with the socket rather than desyncing a kept-alive
+            # connection.
             self.send_error(413, f"Payload Too Large: exceeds {self.mcp_server.post_body_limit} bytes")
             return
 
@@ -190,28 +214,30 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             self.send_error(400, "Missing ?session for SSE POST")
             return
 
+        # Resolve and validate the SSE session BEFORE dispatching. A request
+        # carrying an unknown or stale session id must never execute a tool
+        # (which may mutate the IDB); previously the tool ran and the bogus
+        # session was only noticed afterwards, discarding the result.
+        sse_conn = self.mcp_server._sse_connections.get(session_id)
+        if sse_conn is None or not sse_conn.alive:
+            self.send_error(400, f"No active SSE connection found for session {session_id}")
+            return
+
         # Dispatch to MCP registry
         setattr(self.mcp_server._protocol_version, "data", "2024-11-05")
         response = self.mcp_server.registry.dispatch(body)
 
-        # Send SSE response if necessary
+        # Send response via SSE event stream if there is one
         if response is not None:
-            sse_conn = self.mcp_server._sse_connections.get(session_id)
-            if sse_conn is None or not sse_conn.alive:
-                # No SSE connection found
-                self.send_error(400, f"No active SSE connection found for session {session_id}")
-                return
-
-            # Send response via SSE event stream
             sse_conn.send_event("message", response)
 
-        # Return 202 Accepted to acknowledge POST
+        # Return 202 Accepted to acknowledge POST. The body is intentionally
+        # empty: echoing the raw request body (which may not even be JSON)
+        # back with Content-Type: application/json is not valid.
         self.send_response(202)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Length", "0")
         self.send_cors_headers()
         self.end_headers()
-        self.wfile.write(body)
 
     def _handle_mcp_post(self, body: bytes):
         # Dispatch to MCP registry
@@ -228,7 +254,13 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
 
         # Check if notification (returns None)
         if response is None:
-            send_response(202, b"Accepted")
+            # MCP Streamable HTTP requires an empty 202 body for a
+            # notification ("Accepted" is not valid JSON despite the
+            # application/json content type).
+            self.send_response(202)
+            self.send_header("Content-Length", "0")
+            self.send_cors_headers()
+            self.end_headers()
         else:
             send_response(200, json.dumps(response).encode("utf-8"))
 
@@ -441,17 +473,46 @@ class McpServer:
             }
 
         result = tool_response.get("result")
-        
-        # Apply Token-Aware Truncation if middleware is available
-        try:
-            from ..truncation import truncate_response
-            if isinstance(result, dict):
-                result = truncate_response(result)
-        except Exception:
-            pass
 
-        # Inject execution timing for LLM awareness
+        # ida_mcp tools report failures as a *result* dict built by
+        # error_handling.make_error ({error: True, code, message, hint, ...}),
+        # matching host.errors.is_error_result (which also treats {"ok": False}
+        # as an error). Detect those so clients branching on isError can see
+        # the failure instead of treating a failed IDA call as a success.
+        if isinstance(result, dict) and (result.get("error") or result.get("ok") is False):
+            error = result
+            message = error.get("message") or "Unknown error"
+            code = error.get("code")
+            hint = error.get("hint")
+            data = error.get("details") or error.get("data")
+
+            text_parts = []
+            if code is not None:
+                text_parts.append(f"[code {code}] {message}")
+            else:
+                text_parts.append(message)
+            if hint:
+                text_parts.append(f"Hint: {hint}")
+            if data:
+                try:
+                    text_parts.append(json.dumps(data, indent=2))
+                except TypeError:  # json.dumps raises TypeError on non-serializable objects
+                    text_parts.append(str(data))
+
+            return {
+                "content": [{"type": "text", "text": "\n".join(text_parts)}],
+                "structuredContent": {"error": error},
+                "isError": True,
+            }
+
+        # Copy the tool result before decorating it. @idaread/@idawrite
+        # (sync.py) store the exact dict a tool returns in TOOL_CACHE and
+        # return that same object on hits, so injecting _elapsed_ms in place
+        # would leak the timing key into cached results (and any caller-side
+        # mutation of the returned dict would poison later cache hits). The
+        # copy keeps the cache object pristine and gives the client its own.
         if isinstance(result, dict):
+            result = dict(result)
             result["_elapsed_ms"] = elapsed_ms
 
         content = result if isinstance(result, str) else json.dumps(result, indent=2)
@@ -502,9 +563,18 @@ class McpServer:
 
         # Try to match URI against all registered resource patterns
         for pattern, name, _ in self._enumerate_resources():
-            # Convert pattern to regex, replacing {param} with named capture groups
-            regex_pattern = re.sub(r"\{(\w+)\}", r"(?P<\1>[^/]+)", pattern)
-            regex_pattern = f"^{regex_pattern}$"
+            # Convert the URI template to a regex, replacing {param} with
+            # named capture groups. The literal parts must be re.escape()d so
+            # regex-special characters ('.', '+', '(', ...) in a registered
+            # URI cannot act as wildcards and match unintended URIs.
+            regex_parts = []
+            offset = 0
+            for m in re.finditer(r"\{(\w+)\}", pattern):
+                regex_parts.append(re.escape(pattern[offset:m.start()]))
+                regex_parts.append(f"(?P<{m.group(1)}>[^/]+)")
+                offset = m.end()
+            regex_parts.append(re.escape(pattern[offset:]))
+            regex_pattern = f"^{''.join(regex_parts)}$"
 
             match = re.match(regex_pattern, uri)
             if match:

@@ -234,7 +234,7 @@ def _embedding_rename_suggestions(
     threshold: Optional[float] = None,
     nearest_top_k: int = 8,
 ) -> dict:
-    """Shared embedding-backed rename suggestion engine used by funcs/agent."""
+    """Shared embedding-backed rename suggestion engine used by funcs/suggest_names."""
     try:
         from ida_pro_mcp.services import BgeCodeEmbedder, FunctionEmbeddingIndex, _extract_signature
     except ImportError:
@@ -521,11 +521,7 @@ def _funcs_impl(
             if err: return err
             fn = ida_funcs.get_func(ea)
             if not fn:
-                func = ida_funcs.get_func(ea)
-                if func:
-                    fn = func
-                else:
-                    return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at or containing {hex(ea)}")
+                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at or containing {hex(ea)}")
             fname = ida_funcs.get_func_name(fn.start_ea)
             info = {
                 "addr": hex(fn.start_ea),
@@ -558,7 +554,9 @@ def _funcs_impl(
                 # Add structured parameter list using ida_typeinf
                 try:
                     tinfo = ida_typeinf.tinfo_t()
-                    if tinfo.get_numbered_type(idaapi.get_idb(), fn.start_ea):
+                    # Retrieve the function's type via the address (get_numbered_type
+                    # takes a til handle + ordinal, not an IDB path + EA).
+                    if ida_nalt.get_tinfo(tinfo, fn.start_ea) and tinfo.is_func():
                         func_data = ida_typeinf.func_type_data_t()
                         if tinfo.get_func_details(func_data):
                             params = []
@@ -594,11 +592,7 @@ def _funcs_impl(
             if err: return err
             fn = ida_funcs.get_func(ea)
             if not fn:
-                func = ida_funcs.get_func(ea)
-                if func:
-                    fn = func
-                else:
-                    return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at or containing {hex(ea)}")
+                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at or containing {hex(ea)}")
             insn_count = 0
             bb_count = 0
             edges = 0

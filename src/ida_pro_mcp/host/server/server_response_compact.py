@@ -308,10 +308,6 @@ class ServerResponseCompactMixin:
                     "count"
                 ):
                     out.pop("limit", None)
-                if isinstance(out.get("items"), list) and out.get("next_offset") == len(
-                    out["items"]
-                ):
-                    out.pop("next_offset", None)
                 if isinstance(out.get("results"), list) and out.get("count") == len(
                     out["results"]
                 ):

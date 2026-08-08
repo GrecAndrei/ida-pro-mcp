@@ -112,7 +112,6 @@ except (ImportError, ValueError):
 try:
     from ..support._api_categories import (
         API_CATEGORIES,
-        API_TO_CATEGORY,
         API_TO_TAG,
         DANGEROUS_APIS,
         MAGIC_CONSTANTS,
@@ -121,7 +120,6 @@ try:
 except ImportError:
     from support._api_categories import (  # type: ignore[import-not-found]
         API_CATEGORIES,
-        API_TO_CATEGORY,
         API_TO_TAG,
         DANGEROUS_APIS,
         MAGIC_CONSTANTS,
@@ -438,7 +436,7 @@ __all__ = [
     "validate_addr", "validate_range", "check_debugger", "validate_path_safe",
     "require_arg", "require_one_of", "validate_action", "validate_count",
     # Centralized API categories
-    "API_CATEGORIES", "API_TO_CATEGORY", "DANGEROUS_APIS",
+    "API_CATEGORIES", "DANGEROUS_APIS",
     "TAG_CATEGORIES", "API_TO_TAG", "MAGIC_CONSTANTS",
     # Canonical taint registry
     "TAINT_SOURCES", "DANGEROUS_SINKS", "DANGEROUS_SINK_NAMES",

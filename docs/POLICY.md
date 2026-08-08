@@ -16,6 +16,7 @@ The host policy model is intentionally simple:
 
 | Mode | Behavior |
 | --- | --- |
+| `off` | Disables policy gating entirely; every call dispatches without risk checks or acknowledgement requirements (operator baseline). |
 | `permissive` | Allow calls, but warn/audit high-risk actions. |
 | `assist` | Default public-friendly mode. Read-only calls pass; high-risk calls require explicit acknowledgement. |
 | `enforce` | Blocks disallowed purposes and requires acknowledgement for risky/unknown actions. |

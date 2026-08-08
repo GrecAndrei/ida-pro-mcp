@@ -24,6 +24,35 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
 
+class _ToolClient:
+    """Uniform ``call_tool(tool, args) -> payload dict`` adapter.
+
+    ``ida_pro_mcp.cli.MCPStdioClient`` speaks raw JSON-RPC (``call(method,
+    params)``) and returns the top-level response; the scripts/ helper client
+    (``mcp_client.MCPClient``) already unwraps the tool payload from the MCP
+    result.  This wrapper hides both shapes from the rest of the smoke.
+    """
+
+    def __init__(self, client, *, payload: bool = True):
+        self._client = client
+        self._payload = payload
+
+    def call_tool(self, tool: str, args: dict) -> dict:
+        if not self._payload:
+            return self._client.call(tool, args)
+        resp = self._client.call("tools/call", {"name": tool, "arguments": args})
+        if not isinstance(resp, dict) or "result" not in resp:
+            return resp if isinstance(resp, dict) else {"error": "no response"}
+        result = resp["result"]
+        content = result.get("content") or []
+        if content and isinstance(content[0], dict):
+            try:
+                return json.loads(content[0].get("text", "{}"))
+            except (TypeError, ValueError):
+                return {"_raw": str(content[0].get("text", ""))[:500]}
+        return result
+
+
 def _call(client, tool: str, args: dict, label: str) -> dict:
     t0 = time.time()
     res = client.call_tool(tool, args)
@@ -49,14 +78,25 @@ def main() -> int:
         print(f"binary not found: {binary}", file=sys.stderr)
         return 2
 
-    # Prefer package CLI client if present; fall back to scripts helper.
+    # Prefer the package CLI client; fall back to the scripts/ helper client.
+    # Both are wrapped so the rest of the script only sees call_tool(tool, args).
     try:
-        from ida_pro_mcp.cli import MCPClient  # type: ignore
-        client = MCPClient()
+        from ida_pro_mcp.cli import MCPStdioClient
+        raw = MCPStdioClient([sys.executable, "-m", "ida_pro_mcp.host.server"])
+        raw.call(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "smoke_core_path"},
+            },
+        )
+        client = _ToolClient(raw)
     except Exception:
         try:
-            from scripts.mcp_client import MCPClient  # type: ignore
-            client = MCPClient()
+            from mcp_client import MCPClient  # scripts/ helper (scripts/ is on sys.path)
+
+            client = _ToolClient(MCPClient())
         except Exception as e:
             print(
                 "No MCP client available. Run against a live host via your MCP client, "
@@ -73,7 +113,15 @@ def main() -> int:
             {"binary_path": str(binary)},
             "ida_open_binary",
         )
-        created.get("session_id") or created.get("sid")
+        created_sid = created.get("session_id") or created.get("sid")
+        if not created_sid:
+            # Session may still be active (ida_session_state targets it), so
+            # this is a diagnostic warning, not a hard failure.
+            print(
+                "WARNING: ida_open_binary returned no session id: "
+                f"{json.dumps(created, default=str)[:300]}",
+                file=sys.stderr,
+            )
 
         _call(client, "ida_session_state", {}, "ida_session_state")
 

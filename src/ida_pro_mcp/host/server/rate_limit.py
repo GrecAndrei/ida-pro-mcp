@@ -8,8 +8,11 @@ Two scopes:
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
+
+from ..config import RATE_LIMIT_BURST, RATE_LIMIT_GLOBAL, RATE_LIMIT_PER_TOOL
 
 
 class TokenBucket:
@@ -32,6 +35,11 @@ class TokenBucket:
             if self.tokens >= tokens:
                 self.tokens -= tokens
                 return True, 0.0
+            if self.rate <= 0:
+                # Rate of 0 means "never refill": once the initial burst is
+                # spent the bucket stays empty. Avoid the ZeroDivisionError and
+                # return a clean denial (the caller formats it as RATE_LIMIT).
+                return False, float("inf")
             wait = (tokens - self.tokens) / self.rate
             return False, wait
 
@@ -58,20 +66,21 @@ class RateLimiter:
         global_rate: float | None = None,
         burst: int | None = None,
     ):
-        import os
         # Allow tests to disable rate limiting
         if os.environ.get("IDA_MCP_DISABLE_RATE_LIMIT") == "1":
             self.per_tool_rate = float("inf")
             self.global_rate = float("inf")
             self.burst = 999999
         else:
-            self.per_tool_rate = per_tool_rate or float(
-                os.environ.get("IDA_MCP_RATE_LIMIT_PER_TOOL", "10")
+            # `is not None` (not `or`): an explicit 0 is a legitimate operator
+            # choice (hard-block a tool) and must not be replaced by the default.
+            self.per_tool_rate = (
+                per_tool_rate if per_tool_rate is not None else RATE_LIMIT_PER_TOOL
             )
-            self.global_rate = global_rate or float(
-                os.environ.get("IDA_MCP_RATE_LIMIT_GLOBAL", "30")
+            self.global_rate = (
+                global_rate if global_rate is not None else RATE_LIMIT_GLOBAL
             )
-            self.burst = burst or int(os.environ.get("IDA_MCP_RATE_LIMIT_BURST", "20"))
+            self.burst = burst if burst is not None else RATE_LIMIT_BURST
         self._tool_buckets: dict[str, TokenBucket] = {}
         self._global_bucket = TokenBucket(self.global_rate, self.burst)
         self._lock = threading.Lock()

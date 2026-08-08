@@ -198,7 +198,7 @@ TOOL_DESCRIPTIONS = {
     "code": "Decompilation, disassembly, and code analysis (≈ IDA View menu / F5/Tab). smart_decompile: best first call — pseudocode + behavior tags + callers/callees + crypto hints + suggested next actions. decompile: pseudocode only. disasm: assembly listing. detect: custom per-session detector — define rules at runtime (api_chain, string_ref, type_match, xor_threshold, caller_of, callee_of). register persistent detectors with register=true. Actions: smart_decompile, decompile, disasm, detect, decompile_chain, semantic_decompile, diff_functions, trace_argument_origin, explain, decompile_all, xrefs_to, xrefs_from, xrefs_to_field, callees, callers, blocks, callgraph, find_paths, strings_in_func, decomp_dataflow, export.",
 
     "ctree": "Query and traverse the Hex-Rays decompiler ctree AST for a function. Actions: get, traverse, find_calls, find_vars, find_strings, find_conditions, get_logic_flow, dominance_map, var_dependency_graph.",
-    "data": "Retrieve core IDB data. functions: list all functions — always includes xref count (capped 999). globals: global variables. strings: string literals — always includes xref count. imports: imported modules and functions. exports: exported entry points. lookup: resolve name↔address. bulk_query: multiple queries in one call. capability_matrix: binary capability matrix from imports + function classifications. string_xrefs: ranked string-to-function xref map with module clustering.",
+    "data": "Retrieve core IDB data. functions: list all functions — always includes xref count (capped 999). globals: global variables. strings: string literals — always includes xref count. imports: imported modules and functions. exports: exported entry points. annotations: all named items and comments. read_bytes: raw bytes at an address. lookup: resolve name↔address. bulk_query: multiple queries in one call. capability_matrix: binary capability matrix from imports + function classifications. string_xrefs: ranked string-to-function xref map with module clustering.",
     "firmware_view": "Firmware triage: region scanning, pointer sweeps, table carving, deterministic detection logic, multi-region campaigns, and bootstrap orchestration. Actions: scan_region, auto_retype, pointer_sweep, recommend, table_candidates, smart_carve, rollback_last, review_contradictions, region_profile, pointer_clusters, carve_plan, campaign, segment_sweep, multi_region_campaign, detect_load_address, detect_vector_table, detect_mmio, rtos_scan, triage_snapshot, bootstrap.",
     "funcs": "Function boundary management (≈ IDA P/Delete keys). create: define a function at addr (≡ pressing P in IDA). change: set the current function end (≡ IDA Set function end). delete: remove function definition. info: full function metadata — pass include_xrefs/include_prototype/include_stack for richer output. metrics: size/complexity/call counts. find_similar: structural similarity search. suggest_names: name candidates from heuristics. list: paginated function listing (like data(functions)) with structured output. Note: regex-based filters live in search, while renames and comments live on modify. Actions: create, change, delete, set_flags, info, metrics, find_similar, suggest_names, list.",
     "gadgets": "Find ROP/JOP/COP gadgets, stack pivots, and classify exploit chains. Actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains, classify_chain.",
@@ -210,13 +210,13 @@ TOOL_DESCRIPTIONS = {
     "knowledge": "Cross-session chip/symbol knowledge base (not the analysis notebook). For findings and hypotheses use blackboard. Actions: chip_identify, symbol_lookup, import_symbols, export_session, chip_families.",
 
     "memory": "Read, write, and inspect raw memory/bytes in the binary or debuggee. search: set literal=true to bypass integer detection for digit-only patterns. compare: returns hamming_distance for large inputs, edit_distance for small. Actions: read, write, hexdump, search, compare, pointers, entropy, strings, struct_walk, histogram.",
-    "misc": "Utility grab-bag: run scripts (python/idc), load signatures, inspect cache stats, read/write files on the host filesystem, and reload IDA-side tool modules without restarting. reload: pass module='funcs' or modules='funcs,search' (or 'all') to pick up source changes instantly — no opencode restart needed for IDA-side changes. Actions: python, idc, load_sig, cache_stats, plugin_list, plugin_run, read_file, write_file, health, reload. (analysis(action='plugin_run') and memory read/write live alongside here.)",
-    "modify": "Apply edits to the IDB: rename symbols, add comments (regular/repeatable/anterior/posterior), set types, and patch assembly (multi-line instructions separated by semicolons). Actions: rename, comment, set_type, patch_asm.",
+    "misc": "Utility grab-bag: run scripts (python/idc), load/list/apply signatures, inspect cache stats, read/write files on the host filesystem, and reload IDA-side tool modules without restarting. reload: pass module='funcs' or modules='funcs,search' (or 'all') to pick up source changes instantly — no opencode restart needed for IDA-side changes. Actions: python, idc, load_sig, list_sigs, cache_stats, plugin_list, plugin_run, read_file, write_file, health, reload.",
+    "modify": "Apply edits to the IDB: rename symbols, add comments (regular/repeatable/anterior/posterior), set types, patch bytes/assembly, and rename local variables in a decompiled function. All actions run a governance pre-check by default (governed=True); patch_asm/patch_bytes into executable segments are blocked unless explicitly acknowledged. Actions: rename, comment, set_type, patch_bytes, patch_asm, rename_local.",
 
 
     "search": "Primary discovery tool. find: unified names (incl. demangled)+strings+imports+comments+xrefs (+insns unless identifier-like). Always returns items[].addr. nl: embedding search (index_fast first; mode=quick|expand). analyze: unified structural analysis (neighborhood/outlier/similar/vulnerable/semantic scopes, uses embedding index + cached call graph). symbol/symbol_info: resolve names/addresses. api/callers/callees/xrefs_to_string: refs. string/bytes for raw patterns. Results always include results text + items with addr/name/type/score. Actions (core): find, nl, string, bytes, api, callers, callees, xrefs_to_string, symbol, symbol_info, decompiled, behavior, analyze.",
     "segments": "List, create, modify, and analyze binary segments and their permissions/attributes. Actions: list, add, delete, set_attr, set_perms, move, info, analyze, find_code, find_data, compare, merge.",
-     "session": "Full session lifecycle. Prefer: create/switch/close/list/status/state/logs/health. state: analysis snapshot (binary, coverage, blackboard summary) — call at turn start. logs: tail IDA stdout/stderr without RPC when IDA is busy. narrative: structured chronological log of all tool calls and findings for context recovery. Advanced session notebook/hypothesis/macro actions remain callable by name. Actions (core): create, switch, close, list, status, state, logs, health, narrative, kill.",
+     "session": "Full session lifecycle. Prefer: create/switch/close/list/status/state/logs/health. state: analysis snapshot (binary, coverage, blackboard summary) — call at turn start. logs: tail IDA stdout/stderr without RPC when IDA is busy. Actions (core): create, switch, close, list, status, state, logs, health, kill.",
     "stack_analysis": "Analyze stack frames: buffer sizes, canaries, alignment, spills, variables, and uninitialized regions. Actions: frame, buffers, canary, alignment, spills, usage, variables, arrays, uninitialized, summary.",
     "symbols": "Loads and manages debug symbols (PDB/DWARF) for the current binary. Actions: load_pdb, load_dwarf, status, apply, export.",
     "multi_session": "Multi-binary session groups — link IDA sessions for cross-binary import/export resolution, cross-session decompilation, and cross-binary xref queries. Actions: group_create, group_list, group_link, group_remove, cross_resolve, cross_decompile, cross_xrefs, status.",
@@ -304,58 +304,11 @@ TOOL_ARG_SCHEMAS = {
         },
         "name": {
             "type": "string",
-            "description": "Name for macro_* actions or rename action.",
-        },
-        "macro": {
-            "type": "string",
-            "description": "Alias for macro name in macro_* actions.",
-        },
-        "data": {"type": "object", "description": "Macro payload for macro_set."},
-        "macro_data": {
-            "type": "object",
-            "description": "Alias for macro payload in macro_set.",
-        },
-        "run_action": {
-            "type": "string",
-            "description": "Session action to execute for macro_run (default from macro or create).",
-        },
-        "n": {
-            "type": "integer",
-            "description": "Count for recent/oldest/recent_workset actions.",
-        },
-        "include_bookmarks": {
-            "type": "boolean",
-            "description": "Include bookmark entries in recent_workset.",
-        },
-        "include_items": {
-            "type": "boolean",
-            "description": "Include structured items in recent_workset response.",
+            "description": "New name for the session rename action.",
         },
         "verbose": {
             "type": "boolean",
             "description": "Include per-runtime details for health action.",
-        },
-        "context": {
-            "type": "string",
-            "description": "Optional context search/intent string to compute novelty against.",
-        },
-        "library_idbs": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Optional list of absolute historical library IDB paths to match against.",
-        },
-        "threshold_cosine": {
-            "type": "number",
-            "description": "Minimum cosine similarity threshold (default: 0.85).",
-        },
-        "threshold_structural": {
-            "type": "number",
-            "description": "Minimum structural ratio similarity threshold (default: 0.70).",
-        },
-        "mappings": {
-            "type": "array",
-            "items": {"type": "object"},
-            "description": "List of mapping objects to apply, where each object contains addr, name (optional), and comment (optional).",
         },
         "agents": {
             "type": "array",
@@ -467,13 +420,7 @@ TOOL_ARG_SCHEMAS = {
             ],
         },
         "size": {"type": "integer"},
-        "data": {"type": "string"},
-        "path": {"type": "string", "description": "File path for read_file/write_file"},
-        "content": {"type": "string", "description": "Content to write for write_file"},
-        "encoding": {
-            "type": "string",
-            "description": "File encoding (default: utf-8). Use 'binary' for hex-encoded binary data.",
-        },
+        "data": {"type": "string", "description": "Hex-encoded bytes to write for the write action"},
         # Region end + search/compare knobs. `end_addr` is a named handler
         # param; without schema admission it was always None, so search
         # always scanned a fixed ea+0x10000 window and compare could never
@@ -516,8 +463,6 @@ TOOL_ARG_SCHEMAS = {
         "end": {"type": "string"},
         "name": {"type": "string", "description": "Plugin name for plugin_run"},
         "arg": {"type": "integer", "description": "Plugin argument for plugin_run"},
-        "timeout": {"type": "number"},
-        "max_wait": {"type": "number"},
         # Blocking / observe knobs for run+wait. Previously NOT admitted by the
         # schema, so the dispatch arg-filter silently stripped them: callers
         # passing blocking=true/pump=true got silent non-blocking behavior with
@@ -578,6 +523,7 @@ TOOL_ARG_SCHEMAS = {
         "constraints": {"type": "object", "description": "Schema constraints for structured search"},
         # Combinator / NL kwargs (must be admitted — host rejects unknown keys)
         "mode": {"type": "string", "description": "nl mode: quick|expand (default expand)"},
+        "rerank": {"type": "boolean", "description": "Re-score recalled candidates with the cross-encoder reranker (auto in expand mode, off in quick; no-op when no rerank model is installed)."},
 
         "target": {"type": "string", "description": "Alias for pattern/addr for ref searches"},
         "ea": {"type": "string", "description": "Address alias for pattern/addr"},
@@ -706,6 +652,9 @@ TOOL_ARG_SCHEMAS = {
         "include_strings": {"type": "boolean", "description": "Include string refs in results"},
         "include_resolved": {"type": "boolean"},
         "similar_top_k": {"type": "integer"},
+        "min_similarity": {"type": "number", "description": "Cosine threshold for 'lookalike' (default 0.85)."},
+        "mark_examined": {"type": "boolean", "description": "Record every family member as examined in one call (default false)."},
+        "verdict": {"type": "string", "description": "Verdict used when mark_examined is true (default boring)."},
     },
 
     "idb": {
@@ -729,6 +678,7 @@ TOOL_ARG_SCHEMAS = {
         "limit": {"type": "integer"},
         "field_name": {"type": "string"},
         "target": {"type": "string"},
+        "query": {"type": "string", "description": "decompile_all: budget/clamp query text or a filter expression to narrow the decompile set."},
         "details": {"type": "boolean", "description": "decompile: include verbose enrichment (var_rename_hints, annotated_code, complexity, dataflow top_hubs). Default false."},
         "window": {"type": "integer", "description": "disasm: ±N instructions around the start address."},
         "structured": {"type": "boolean", "description": "disasm: return per-instruction JSON instead of text."},
@@ -763,6 +713,7 @@ TOOL_ARG_SCHEMAS = {
         "action": {"type": "string", "enum": TOOL_ACTIONS["gadgets"]},
         "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
         "query": {"type": "string"},
+        "auto_blackboard": {"type": "boolean", "description": "Store mitigation/exploit findings in the blackboard (opt-in; default keeps read actions pure)."},
         "limit": {"type": "integer"},
         "max_insns": {"type": "integer"},
         "source_actions": {"type": ["array", "string"], "items": {"type": "string"}},

@@ -37,9 +37,15 @@ from .tool_registry import register_tool_actions
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# TTL cache for the `ida_session_state` coverage block (expensive: calls data/functions).
-_SESSION_STATE_CACHE: dict[str, Any] = {}
+# TTL cache for the `ida_session_state` coverage block (expensive: calls
+# data/functions). The cache dict is instance- and session-scoped and
+# lock-guarded (see _get_cached_coverage); this constant is just the TTL.
 _SESSION_STATE_CACHE_TTL = 30.0  # seconds
+
+# In-flight session-diff dedup: pair -> active diff thread, guarded by a
+# module lock. See _trigger_session_diff.
+_SESSION_DIFF_INFLIGHT: set[tuple[str, str]] = set()
+_SESSION_DIFF_LOCK = threading.Lock()
 
 # Keys that count as an architecture/loader preload request when opening a
 # binary; shared by the reuse-decision logic in create/create_background.
@@ -118,6 +124,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
     @staticmethod
     def _trigger_session_diff(old_idb: str, new_idb: str) -> None:
         import threading
+
         def _diff():
             try:
                 from ida_pro_mcp.host.intelligence.core import BgeCodeEmbedder, FunctionEmbeddingIndex
@@ -138,6 +145,17 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                     log_rpc(f"[session-diff] {len(new_only)} new functions in rebuilt IDB")
             except Exception:
                 pass
+            finally:
+                with _SESSION_DIFF_LOCK:
+                    _SESSION_DIFF_INFLIGHT.discard((old_idb, new_idb))
+
+        # Dedup concurrent identical diffs: frequent session switches each
+        # start a thread that builds two embedding indexes into RAM, so two
+        # rapid A->B->A switches must not run three overlapping diffs.
+        with _SESSION_DIFF_LOCK:
+            if (old_idb, new_idb) in _SESSION_DIFF_INFLIGHT:
+                return
+            _SESSION_DIFF_INFLIGHT.add((old_idb, new_idb))
         threading.Thread(target=_diff, daemon=True).start()
 
     _SESSION_ACTIONS: dict[str, Any] = {
@@ -159,15 +177,24 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         "untag": ("dict", "untag_session", _sess_coerce_untag),
         "add_note": ("dict", "add_note", _sess_coerce_note),
         "clear_notes": ("dict", "clear_notes", _sess_coerce_none),
-        "search_notes": ("list", "search_notes", _sess_coerce_query),
+        "search_notes": "_session_action_search_notes",
         "snapshot": "_session_action_snapshot",
         "restore_snapshot": "_session_action_restore_snapshot",
         "kill": "_session_action_kill",
         "state": "_session_action_state",
         "logs": "_session_action_logs",
+        "cleanup_stale": "_session_action_cleanup_stale",
+        "idle_purge": "_session_action_idle_purge",
         "sso_activate": "_session_action_sso_activate",
         "agent_login": "_session_action_agent_login",
         "agent_logout": "_session_action_agent_logout",
+        # Local-skills / strategy session actions
+        "rate_skill": "_session_action_rate_skill",
+        "list_skills": "_session_action_list_skills",
+        "suggest_triage": "_session_action_suggest_triage",
+        "suggest_strategy": "_session_action_suggest_strategy",
+        "get_phase": "_session_action_get_phase",
+        "dashboard": "_session_action_dashboard",
     }
 
     def _handle_session(self, args: dict) -> dict:
@@ -972,6 +999,13 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                         self._wait_for_idb(session, timeout=120)
             finally:
                 reloading.discard(sid)
+            # The background load is done — clear the flag so a later status
+            # poll (which may confirm completion before/after the watcher)
+            # does not trigger a second reload, and so _maybe_resolve_analysis_state
+            # uses the same reload decision the watcher made.
+            bg_loads = getattr(self, "_background_loads", None)
+            if isinstance(bg_loads, dict):
+                bg_loads[sid] = False
         self._mark_analysis_complete(session)
         notices = getattr(self, "_pending_session_notices", None)
         if not isinstance(notices, dict):
@@ -1018,7 +1052,16 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 and "error" not in state_res
                 and state_res.get("analysis_complete") is True
             ):
-                self._on_analysis_complete(session, reload=False)
+                # Match the watcher's decision: background-load sessions are
+                # reloaded against the completed IDB, everything else just has
+                # safe mode lifted. Hardcoding reload=False here would lift the
+                # gate on the pre-reload runtime while the watcher kills and
+                # restarts it underneath the agent.
+                bg_loads = getattr(self, "_background_loads", {}) or {}
+                self._on_analysis_complete(
+                    session,
+                    reload=bool(bg_loads.get(sid, False)),
+                )
         except Exception:
             pass
 
@@ -1260,6 +1303,32 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             "limit": limit,
         }
 
+    def _session_action_search_notes(self, args: dict) -> dict:
+        """Search session notes, scoped to sessions this connection may see.
+
+        ``search_notes`` is the only bulk session read that enumerates every
+        session's notes, so on a multiplexed connection it must honor the
+        ownership model every other session read applies: only sessions this
+        client owns, or that no live owner is running, are returned — an agent
+        must never read another agent's notes by search.
+        """
+        query = args.get("query", "")
+        if not query:
+            return make_error(MCPError.INVALID_ARGS, "query required")
+        owned = getattr(self, "_client_owns_session", None)
+        busy = getattr(self, "_session_is_busy", None)
+        visible = []
+        for s in self.session_mgr.search_notes(query):
+            sid = getattr(s, "session_id", None)
+            if not sid:
+                continue
+            if callable(owned) and owned(sid):
+                visible.append(s)
+                continue
+            if callable(busy) and not busy(sid):
+                visible.append(s)
+        return {"ok": True, "sessions": [s.to_dict() for s in visible], "count": len(visible)}
+
     def _session_action_switch(self, args: dict) -> dict:
         old_idb = getattr(self.current_session, "idb_path", None) if self.current_session else None
         reopen = bool(args.get("reopen") or args.get("restart"))
@@ -1316,6 +1385,12 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             reopen or not runtime_alive
         ) and os.path.isfile(getattr(session, "binary_path", "") or "")
         if should_spawn and hasattr(self, "_start_server"):
+            # A fresh idat runs auto-analysis from the moment it spawns; re-enter
+            # safe mode so full-binary operations stay gated until a live
+            # runtime confirms completion. Every open/rebuild path re-enters
+            # pending state (see the module comment on safe mode); switch with a
+            # dead runtime or reopen=true is no exception.
+            self._mark_analysis_pending(session)
             try:
                 start_res = self._start_server(session)
                 if isinstance(start_res, dict) and "error" not in start_res:
@@ -1344,6 +1419,8 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             "ok": True,
             "session": self.current_session.to_dict(),
             "runtime_attached": runtime_attached,
+            "safe_mode": self._safe_mode_active(sid),
+            "analysis_complete": self._analysis_is_complete(sid),
         }
         idb_path = getattr(session, "idb_path", None)
         if idb_path and not os.path.isfile(idb_path) and not runtime_attached:
@@ -1429,7 +1506,10 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                         if name.startswith(sid_prefix) and (
                             name.endswith((".id0", ".nam"))
                         ):
-                            return name  # any component signals presence
+                            # Absolute path, not the bare listdir entry: the
+                            # callers below test os.path.isfile(existing) and
+                            # store the result back into session.idb_path.
+                            return os.path.join(idb_dir or ".", name)
                 except OSError:
                     pass
             return None
@@ -1487,6 +1567,8 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             and self.current_session.session_id == sid
         ):
             self.current_session = None
+        if closed:
+            self._drop_sid_from_groups(sid)
         return {"ok": closed, "session_id": sid}
 
     def _session_target(self, args: dict) -> tuple[Any, dict | None]:
@@ -1528,6 +1610,14 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         session, target_error = self._session_target(args)
         if target_error:
             return target_error
+        if session is None:
+            # No active session and no explicit target: an empty state payload
+            # would mislead a caller into thinking a session is open.
+            return make_error(
+                MCPError.SESSION_NOT_FOUND,
+                "No active session to report state for",
+                hint="Create or switch to a session first, or pass session_id/idb to target one.",
+            )
         try:
             state_value = self._build_state_payload()
             # Always wrap in a uniform envelope so callers can reliably
@@ -1550,6 +1640,75 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             return {"ok": True, "state": state_value}
         except Exception as e:
             return make_error(MCPError.IDA_ERROR, f"state failed: {e}")
+
+    def _get_cached_coverage(self, sid: str) -> dict:
+        """Coverage for *sid*, cached with a 30s TTL.
+
+        The ``data/{action:functions}`` RPC is expensive on large binaries, so
+        ``ida_session_state`` caches the result. The cache is per-instance,
+        keyed by session id, and lock-guarded: the former module-level cache
+        was keyed by ``id(self._execute_tool)`` — a freshly-allocated bound
+        method on every access — so it never hit (re-running the RPC each
+        call) while growing a new entry per call, and it served coverage
+        computed for a different session when ids collided. ``data`` returns
+        the compact text under ``functions`` and the structured records under
+        ``items`` only when ``structured=True`` is requested, so this passes
+        it and parses the text as a fallback for older IDA-side builds.
+        """
+        cache = getattr(self, "_session_state_cache", None)
+        if not isinstance(cache, dict):
+            self._session_state_cache = {}
+            cache = self._session_state_cache
+        lock = getattr(self, "_session_state_cache_lock", None)
+        # ``threading.RLock`` is a factory function on some CPython builds,
+        # so isinstance() against it is not portable; probe the protocol instead.
+        if not (lock is not None and hasattr(lock, "acquire") and hasattr(lock, "release")):
+            self._session_state_cache_lock = threading.RLock()
+            lock = self._session_state_cache_lock
+        now = time.time()
+        with lock:
+            cached = cache.get(sid)
+            if cached and now - cached["_ts"] < _SESSION_STATE_CACHE_TTL:
+                return cached["coverage"]
+        try:
+            funcs = self._execute_tool(
+                "data", {"action": "functions", "count": 5000, "structured": True}
+            )
+            func_list = funcs.get("items") if isinstance(funcs, dict) else []
+            if not func_list and isinstance(funcs, dict):
+                # Older build without structured items: parse the compact
+                # newline-joined text (fields: addr  size  xrefs=N  name).
+                func_list = []
+                for line in str(funcs.get("functions") or "").splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parts = line.split()
+                    func_list.append(
+                        {"addr": parts[0] if parts else "", "name": parts[-1] if parts else ""}
+                    )
+            total = len(func_list)
+            named = sum(
+                1 for f in func_list
+                if not (str(f.get("name", "")).startswith("sub_")
+                        or str(f.get("name", "")).startswith("j_")))
+            coverage = {
+                "total_functions": total,
+                "named_functions": named,
+                "unnamed_functions": total - named,
+                "pct_named": round(named / total * 100, 1) if total else 0,
+            }
+        except Exception:
+            coverage = {}
+        with lock:
+            cache[sid] = {"coverage": coverage, "_ts": time.time()}
+            if len(cache) > 128:
+                # Bound the cache against session churn; never evict the
+                # just-written entry for the session being served.
+                overflow = [s for s in cache if s != sid][:len(cache) - 128]
+                for old_sid in overflow:
+                    cache.pop(old_sid, None)
+        return coverage
 
     def _build_state_payload(self):
         """Build the analysis-state payload for `ida_session_state`.
@@ -1608,28 +1767,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             is_firmware = False
 
         # 2. Coverage (cached with 30s TTL — expensive on large binaries)
-        cache_key = f"coverage_{id(self._execute_tool)}"
-        cached = _SESSION_STATE_CACHE.get(cache_key)
-        if cached and time.time() - cached["_ts"] < _SESSION_STATE_CACHE_TTL:
-            state["coverage"] = cached["coverage"]
-        else:
-            try:
-                funcs = self._execute_tool("data", {"action": "functions", "count": 5000})
-                func_list = funcs.get("functions", []) if isinstance(funcs, dict) else []
-                total = len(func_list)
-                named = sum(1 for f in func_list
-                            if not (f.get("name", "").startswith("sub_")
-                                    or f.get("name", "").startswith("j_")))
-                coverage = {
-                    "total_functions": total,
-                    "named_functions": named,
-                    "unnamed_functions": total - named,
-                    "pct_named": round(named / total * 100, 1) if total else 0,
-                }
-                state["coverage"] = coverage
-                _SESSION_STATE_CACHE[cache_key] = {"coverage": coverage, "_ts": time.time()}
-            except Exception:
-                state["coverage"] = {}
+        state["coverage"] = self._get_cached_coverage(
+            getattr(self.current_session, "session_id", None) or ""
+        )
 
         # 3. Blackboard summary
         try:
@@ -1955,7 +2095,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         return {
             "ok": True,
             "session": result,
-            "total_sessions": len(self.session_mgr.sessions),
+            # Use the locked manager method, not direct dict access (the
+            # list action documents the same convention).
+            "total_sessions": self.session_mgr.count(),
         }
 
     def _session_action_kill(self, args: dict) -> dict:
@@ -2151,6 +2293,20 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         data = args.get("data")
         if not data or not isinstance(data, dict):
             return make_error(MCPError.INVALID_ARGS, "data dict required")
+        data = dict(data)
+        # Sanitize agent-supplied ida_args through the same CLI guard used by
+        # create/create_background: it rejects server-reserved flags (-S/-L/-o),
+        # null bytes, control characters and empty entries before the values
+        # could ever be stitched into an idat Popen launch on the next tool
+        # call. binary_path/idb_path/analysis_options are validated downstream
+        # when the imported session is opened.
+        if "ida_args" in data:
+            normalize = getattr(self, "_normalize_ida_args", None)
+            if callable(normalize):
+                try:
+                    data["ida_args"] = normalize(data.get("ida_args"))
+                except ValueError as e:
+                    return make_error(MCPError.INVALID_ARGS, str(e))
         result = self.session_mgr.import_session(data)
         return {"ok": True, "session": result.to_dict()}
 
@@ -2179,15 +2335,28 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                         sid = sid.upper()
                     else:
                         continue
+                # Never delete another client's session (multiplexed
+                # connections enforce subagent isolation) — only sessions this
+                # connection owns qualify for orphan pruning.
+                if self._require_owned_session_id(sid):
+                    continue
                 binary = raw.get("binary_path") or ""
                 idb = raw.get("idb_path") or ""
                 bin_missing = bool(binary) and not os.path.isfile(binary)
                 idb_missing = bool(idb) and not os.path.isfile(idb)
                 # Only prune when both reference paths have gone; we don't
-                # want to nuke a session that's mid-save.
+                # want to nuke a session that's mid-save. Tear down any
+                # runtime first so we don't orphan a live idat whose scratch
+                # paths were reaped.
                 if bin_missing and idb_missing:
+                    with contextlib.suppress(Exception):
+                        self._cleanup_runtime(sid)
                     if self.session_mgr.delete_session(sid):
                         also_pruned_orphans.append(sid)
+                        self._drop_sid_from_groups(sid)
+        # Keep _session_groups consistent with the age-stale deletions too.
+        for sid in deleted:
+            self._drop_sid_from_groups(sid)
 
         return {
             "ok": True,
@@ -2312,16 +2481,25 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 sid = _normalize_session_id(raw.get("session_id") or "")
                 if not sid:
                     continue
+                # Same ownership rule as the closed loop above.
+                if self._require_owned_session_id(sid):
+                    continue
                 binary = raw.get("binary_path") or ""
                 idb = raw.get("idb_path") or ""
                 bin_missing = bool(binary) and not os.path.isfile(binary)
                 idb_missing = bool(idb) and not os.path.isfile(idb)
                 if bin_missing and idb_missing:
                     try:
+                        with contextlib.suppress(Exception):
+                            self._cleanup_runtime(sid)
                         if self.session_mgr.delete_session(sid):
                             orphan_sids.append(sid)
+                            self._drop_sid_from_groups(sid)
                     except Exception:
                         continue
+        # Keep _session_groups consistent with the closed sessions too.
+        for sid in closed_sids:
+            self._drop_sid_from_groups(sid)
 
         return {
             "ok": True,
@@ -2424,6 +2602,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             and self.current_session.session_id in cleaned_sids
         ):
             self.current_session = None
+        # Keep multi-session groups consistent with the deletions.
+        for sid in cleaned_sids:
+            self._drop_sid_from_groups(sid)
         return {"ok": True, "results": results}
 
     def _session_action_bulk_tag(self, args: dict) -> dict:
@@ -2472,10 +2653,14 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         snapshot_id = args.get("snapshot_id")
         if not snapshot_id:
             return make_error(MCPError.INVALID_ARGS, "snapshot_id required")
+        if not self.session_mgr.session_exists(sid):
+            return make_error(
+                MCPError.SESSION_NOT_FOUND, f"Session '{sid}' not found"
+            )
         result = self.session_mgr.restore_snapshot(sid, snapshot_id)
         if result is None:
             return make_error(
-                MCPError.SESSION_NOT_FOUND,
+                MCPError.NOT_FOUND,
                 f"Snapshot '{snapshot_id}' not found for session '{sid}'",
             )
         return {"ok": True, "session": result.to_dict()}
@@ -2543,6 +2728,27 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         else:
             limit = 5
         return self.session_mgr.suggest_triage(sid, context=context, limit=limit)
+
+    def _session_action_suggest_strategy(self, args: dict) -> dict:
+        sid, sid_err = self._require_session_sid(args)
+        if sid_err:
+            return sid_err
+        context = args.get("context")
+        if context is not None:
+            context = str(context)
+        return self.session_mgr.suggest_strategy(sid, context=context)
+
+    def _session_action_get_phase(self, args: dict) -> dict:
+        sid, sid_err = self._require_session_sid(args)
+        if sid_err:
+            return sid_err
+        return self.session_mgr.get_phase(sid)
+
+    def _session_action_dashboard(self, args: dict) -> dict:
+        sid, sid_err = self._require_session_sid(args)
+        if sid_err:
+            return sid_err
+        return self.session_mgr.dashboard(sid)
 
     def _session_action_suggest_analogy(self, args: dict) -> dict:
         sid, sid_err = self._require_session_sid(args)
@@ -2875,7 +3081,10 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         results = []
         for i, call in enumerate(calls):
             if not isinstance(call, dict):
-                results.append({"step": i, "error": True, "message": "step must be a dict"})
+                results.append({
+                    "step": i,
+                    "result": make_error(MCPError.INVALID_ARGS, "step must be a dict"),
+                })
                 continue
             # Check conditional
             condition = call.get("if")
@@ -2902,7 +3111,10 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             tool = str(_substitute_params(call.get("tool", "session"), params))
             action = str(_substitute_params(call.get("action", ""), params))
             if not action:
-                results.append({"step": i, "error": True, "message": "action required"})
+                results.append({
+                    "step": i,
+                    "result": make_error(MCPError.INVALID_ARGS, "action required"),
+                })
                 continue
             call_args = {"action": action}
             for k, v in call.items():

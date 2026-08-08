@@ -11,6 +11,7 @@ import contextlib
 import hashlib
 import json
 import os
+import sys
 import threading
 import time
 from datetime import UTC, datetime
@@ -60,6 +61,12 @@ class AuditLogger:
             if total <= self.max_bytes:
                 return
             month_dirs.sort()
+            # Never prune the currently-open month: unlink()-ing the file this
+            # logger still holds open orphans the fd (Linux), so the rest of the
+            # month's records would vanish on close. If the current month alone
+            # exceeds the cap it simply stays until it rotates.
+            current_month = datetime.now(UTC).strftime("%Y-%m")
+            month_dirs = [d for d in month_dirs if os.path.basename(d) != current_month]
             while total > self.max_bytes and month_dirs:
                 oldest = month_dirs.pop(0)
                 for f in os.listdir(oldest):
@@ -82,40 +89,55 @@ class AuditLogger:
         guardrail_blocked: bool = False,
         error: str | None = None,
     ) -> None:
-        """Write a single audit record."""
-        with self._lock:
-            now = datetime.now(UTC)
-            record: dict[str, Any] = {
-                "ts": now.isoformat(),
-                "unix_ms": int(time.time() * 1000),
-                "session_id": session_id,
-                "tool": tool,
-                "action": action,
-                # Hash args to detect tampering without logging sensitive values
-                "args_hash": hashlib.sha256(
-                    json.dumps(args, sort_keys=True, default=str).encode()
-                ).hexdigest()[:16],
-                "args_keys": sorted(args.keys()) if isinstance(args, dict) else [],
-                "latency_ms": round(latency_ms, 3),
-                "guardrail_mode": guardrail_mode,
-                "guardrail_blocked": guardrail_blocked,
-                "error": error,
-                "result_type": type(result).__name__,
-                "result_size": len(json.dumps(result, default=str)) if result is not None else 0,
-            }
-            # Include truncated args for non-sensitive tools (no paths, no raw bytes)
-            if tool not in {"blackboard", "session", "batch"} and isinstance(args, dict):
-                safe_args = {k: v for k, v in args.items() if k not in {"raw_bytes", "binary_path", "idb_path", "path"}}
-                record["args_preview"] = json.dumps(safe_args, default=str)[:500]
+        """Write a single audit record.
 
-            f = self._open_for_date(now)
-            line = json.dumps(record, default=str, ensure_ascii=False) + "\n"
-            f.write(line)
-            f.flush()
-            self._total_written += len(line)
-            if self._total_written > 1024 * 1024:
-                self._maybe_prune_old()
-                self._total_written = 0
+        Best-effort: a disk-full / permission / serialization failure (open,
+        write, json.dumps on a circular result) is reported to stderr and
+        swallowed so it can never fail the tool call that already produced a
+        valid result.
+        """
+        with self._lock:
+            try:
+                now = datetime.now(UTC)
+                record: dict[str, Any] = {
+                    "ts": now.isoformat(),
+                    "unix_ms": int(time.time() * 1000),
+                    "session_id": session_id,
+                    "tool": tool,
+                    "action": action,
+                    # Hash args to detect tampering without logging sensitive values
+                    "args_hash": hashlib.sha256(
+                        json.dumps(args, sort_keys=True, default=str).encode()
+                    ).hexdigest()[:16],
+                    "args_keys": sorted(args.keys()) if isinstance(args, dict) else [],
+                    "latency_ms": round(latency_ms, 3),
+                    "guardrail_mode": guardrail_mode,
+                    "guardrail_blocked": guardrail_blocked,
+                    "error": error,
+                    "result_type": type(result).__name__,
+                    "result_size": len(json.dumps(result, default=str)) if result is not None else 0,
+                }
+                # Include truncated args for non-sensitive tools (no paths, no raw bytes).
+                # `idb` carries a full session/IDB path for host-side tools
+                # (wiki/blackboard/session/gadgets), which return before the
+                # dispatcher pops it — it belongs in the no-paths set too.
+                if tool not in {"blackboard", "session", "batch"} and isinstance(args, dict):
+                    safe_args = {k: v for k, v in args.items() if k not in {"idb", "raw_bytes", "binary_path", "idb_path", "path"}}
+                    record["args_preview"] = json.dumps(safe_args, default=str)[:500]
+
+                f = self._open_for_date(now)
+                line = json.dumps(record, default=str, ensure_ascii=False) + "\n"
+                f.write(line)
+                f.flush()
+                self._total_written += len(line)
+                if self._total_written > 1024 * 1024:
+                    self._maybe_prune_old()
+                    self._total_written = 0
+            except Exception as exc:
+                with contextlib.suppress(Exception):
+                    sys.stderr.write(
+                        f"[ida-pro-mcp] audit log write failed for {tool}/{action}: {exc}\n"
+                    )
 
     def close(self) -> None:
         with self._lock:

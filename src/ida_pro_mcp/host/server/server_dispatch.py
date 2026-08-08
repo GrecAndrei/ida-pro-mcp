@@ -35,7 +35,12 @@ from ..schemas import (
     TOOLS,
     _resolve_tool_alias,
 )
-from .postprocess import apply_post_processing, extract_post_process_params, has_post_process
+from .postprocess import (
+    PP_KEYS,
+    apply_post_processing,
+    extract_post_process_params,
+    has_post_process,
+)
 from .rpc_args import prepare_rpc_args
 from .server_client_state import ServerClientStateMixin
 from .server_response import truncate_response
@@ -92,8 +97,6 @@ LONG_RUNNING_ACTIONS: set[tuple[str, str]] = {
     # session — bulk housekeeping / full-program operations
     ("session", "idle_purge"),
     ("session", "cleanup_stale"),
-    ("session", "macro_run"),
-    ("session", "rate_skill"),
 
     ("workflow", "execute_plan"),
     ("workflow", "plan"),
@@ -115,6 +118,9 @@ SAFE_MODE_BLOCKED_ACTIONS: set[tuple[str, str]] = {
     ("analysis", "reanalyze"),
     ("analysis", "run"),
     ("analysis", "analyze"),
+    # plugin_run executes arbitrary IDA plugin code — same capability as the
+    # blocked misc/plugin_run, just routed via the analysis tool.
+    ("analysis", "plugin_run"),
     # decompile-everything indexing / semantic products over partial data
     ("intelligence", "index_fast"),
     ("intelligence", "index_batch"),
@@ -356,6 +362,11 @@ class ServerDispatchMixin(ServerClientStateMixin):
                 )
 
             _rpc_sock_timeout = None
+            # Defensive defaults: the wall-clock watchdog below must be safe to
+            # consult from the outer exception handler even if the RPC setup
+            # raised before these were assigned inside the try.
+            _rpc_started = 0.0
+            _wallclock_cap = 900.0
             try:
                 # Reject unknown keys instead of silently stripping them.
                 # Silent strip made tuned tool calls look successful while
@@ -407,7 +418,13 @@ class ServerDispatchMixin(ServerClientStateMixin):
                 # serialize on its rpc_lock below.
                 inflight = getattr(self, "_session_inflight_calls", None)
                 if isinstance(inflight, dict):
-                    inflight[_sid] = int(inflight.get(_sid, 0) or 0) + 1
+                    # Guard the read-modify-write: this runs on request threads
+                    # AND batch/index worker threads concurrently, and handle_request
+                    # mutates the same dict under _runtime_lock. Without the lock a
+                    # lost update inflates the count and the paired decrement can
+                    # pop a counter still owned by another live call.
+                    with self._runtime_lock:
+                        inflight[_sid] = int(inflight.get(_sid, 0) or 0) + 1
                 try:
                     res = self._send_rpc_with_retry(
                         {"tool": tool_name, "args": rpc_args}, port,
@@ -434,7 +451,12 @@ class ServerDispatchMixin(ServerClientStateMixin):
                             "tool": tool_name,
                         },
                     )
-                except (ConnectionRefusedError, EOFError) as exc:
+                except (
+                    ConnectionRefusedError,
+                    ConnectionResetError,
+                    ConnectionAbortedError,
+                    EOFError,
+                ) as exc:
                     # Connection-layer failure that exhausted retries. Surface as
                     # runtime error so the agent can decide to restart.
                     return make_error(
@@ -444,11 +466,12 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     )
                 finally:
                     if isinstance(inflight, dict):
-                        remaining = int(inflight.get(_sid, 0) or 0) - 1
-                        if remaining > 0:
-                            inflight[_sid] = remaining
-                        else:
-                            inflight.pop(_sid, None)
+                        with self._runtime_lock:
+                            remaining = int(inflight.get(_sid, 0) or 0) - 1
+                            if remaining > 0:
+                                inflight[_sid] = remaining
+                            else:
+                                inflight.pop(_sid, None)
                 # Wall-clock watchdog: only force-kill when the RPC path itself
                 # exceeded the cap *and* we somehow still returned without a
                 # usable result. Successful payloads must not be discarded.
@@ -551,6 +574,39 @@ class ServerDispatchMixin(ServerClientStateMixin):
                                 runtime.get("stdout_log"),
                                 runtime.get("stderr_log"),
                             )
+                        },
+                    )
+                # Wall-clock hard cap on the RPC path itself. The watchdog block
+                # above only fires when a dict actually came back over the wire;
+                # a hung IDA raises socket.timeout out of _send_rpc_with_retry,
+                # which lands here. The cap must still apply, or a whitelisted
+                # long action with a generous recv timeout would run past the
+                # documented cap with the process left alive.
+                if time.time() - _rpc_started >= _wallclock_cap:
+                    try:
+                        if proc is not None and hasattr(proc, "poll"):
+                            if proc.poll() is None and hasattr(proc, "terminate"):
+                                proc.terminate()
+                                try:
+                                    proc.wait(timeout=2.0)
+                                except Exception:
+                                    if hasattr(proc, "kill"):
+                                        proc.kill()
+                    except Exception as _kill_e:
+                        import logging
+                        logging.getLogger(__name__).debug(
+                            "wallclock watchdog term failed: %s", _kill_e
+                        )
+                    return make_error(
+                        MCPError.IDA_TIMEOUT,
+                        f"Tool call exceeded wall-clock cap of {_wallclock_cap:.0f}s "
+                        f"(IDA_MCP_RPC_HARD_WALLCLOCK_SEC). The IDA process was "
+                        "terminated — the next call will re-spawn it.",
+                        recoverable=True,
+                        details={
+                            "tool": tool_name,
+                            "wallclock_cap_sec": _wallclock_cap,
+                            "elapsed_sec": round(time.time() - _rpc_started, 2),
                         },
                     )
                 # Process is still alive (poll() is None): the RPC raised, most
@@ -850,17 +906,56 @@ class ServerDispatchMixin(ServerClientStateMixin):
                 arg = int(arg) if arg is not None else 0
             except (TypeError, ValueError):
                 return make_error(MCPError.INVALID_ARGS, f"arg must be int, got {type(arg).__name__}")
-            runtime = self.session_runtimes.get(self.current_session.session_id) if self.current_session else None
+            # Resolve the session the plugin actually runs in. Every other tool
+            # honors args.get('idb') via call_tool's _resolve_session_from_idb_ref;
+            # on a shared MCP connection a call aimed at another session must run
+            # there — not in the shared active session — and must pass the same
+            # ownership guard call_tool enforces.
+            target = self.current_session if self.current_session else None
+            idb_ref = args.get("idb")
+            if idb_ref:
+                resolved = self._resolve_session_from_idb_ref(idb_ref)
+                if resolved is None:
+                    return make_error(
+                        MCPError.FILE_NOT_FOUND,
+                        f"No session found for idb reference: {idb_ref}",
+                        hint="Use session_id, SID_* IDB id, binary/idb path, or create/switch a session first.",
+                    )
+                ownership_error = self._ensure_client_owns_session(resolved)
+                if ownership_error:
+                    return ownership_error
+                target = resolved
+            if target is None:
+                return make_error(
+                    MCPError.IDA_CRASHED,
+                    "plugin_run requires a live IDA session; none is active.",
+                    hint="Open a session first with ida_open_binary(binary_path='...').",
+                )
+            runtime = self.session_runtimes.get(target.session_id)
             if not self._runtime_alive(runtime):
                 return make_error(
                     MCPError.IDA_CRASHED,
                     "plugin_run requires a live IDA session; none is active.",
                     hint="Open a session first with ida_open_binary(binary_path='...').",
                 )
-            return self._send_rpc_raw(
+            result = self._send_rpc_raw(
                 {"tool": "misc", "args": {"action": "plugin_run", "name": name, "arg": arg}},
                 runtime.get("port"),
             )
+            # Stamp arbitrary-code responses with the session they ran in, so a
+            # call aimed at the wrong session self-identifies instead of silently
+            # attributing code to the shared active session.
+            if isinstance(result, dict):
+                try:
+                    _img_base = self._get_session_imagebase(target.session_id)
+                except Exception:
+                    _img_base = None
+                result["_executed_in"] = {
+                    "session_id": target.session_id,
+                    "idb_path": getattr(target, "idb_path", None),
+                    "image_base": hex(_img_base) if _img_base else None,
+                }
+            return result
 
     def _handle_bookmarks(self, args: dict) -> dict:
             if not self.current_session:
@@ -981,7 +1076,8 @@ class ServerDispatchMixin(ServerClientStateMixin):
         needs to pass ``next_token``.
         """
         self._prune_next_cache()
-        entry = self._next_cache.get(token)
+        with self._next_cache_lock():
+            entry = self._next_cache.get(token)
         if not entry:
             return make_error(
                 MCPError.TRUNCATION_TOKEN_INVALID,
@@ -999,12 +1095,40 @@ class ServerDispatchMixin(ServerClientStateMixin):
         base_args = dict(entry.get("args") or {})
         base_args["action"] = entry.get("action")
 
-        # Merge cached PP params with caller overrides (except next_token).
+        # Two token flavours share this cache:
+        #   * PP-pagination tokens (minted by _cache_post_process_next) carry a
+        #     "post_process" entry; the host re-fetches the full result and
+        #     advances the host-side slice.
+        #   * tool-level tokens (minted by _cache_next_page for a server-side
+        #     truncated result) carry no "post_process" entry; the tool itself
+        #     paginates, so the advanced offset must be forwarded as a real
+        #     tool arg instead of being applied as a host-side slice.
+        tool_level_token = "post_process" not in entry
         cached_pp = dict(entry.get("post_process") or {})
-        cached_pp["offset"] = entry.get("next_offset", 0)
+        if tool_level_token:
+            if entry.get("next_offset") is not None:
+                base_args["offset"] = entry.get("next_offset")
+        else:
+            cached_pp["offset"] = entry.get("next_offset", 0)
         for k, v in pp_params.items():
             if k != "next_token" and v is not None:
                 cached_pp[k] = v
+
+        # Never replay post-processing keys as real IDA args: prepare_rpc_args
+        # rejects keys absent from the tool schema (head/grep/tail/pick/field),
+        # and limit/offset would be double-applied if they reached the tool.
+        # PP tokens strip all of them (they are driven host-side via cached_pp);
+        # tool-level tokens keep schema-backed limit/offset (the tool's own
+        # cursor) and strip only the rest.
+        schema = TOOL_ARG_SCHEMAS.get(tool_name, {}) or {}
+        if tool_level_token:
+            for k in list(base_args.keys()):
+                if k in PP_KEYS and k not in schema:
+                    base_args.pop(k, None)
+        else:
+            for k in list(base_args.keys()):
+                if k in PP_KEYS:
+                    base_args.pop(k, None)
 
         # Execute the original tool action — re-run policy so continuation
         # pages cannot bypass the preflight gates that protected page 1.
@@ -1053,8 +1177,33 @@ class ServerDispatchMixin(ServerClientStateMixin):
         if is_error_result(result):
             return result
 
-        result = apply_post_processing(result, cached_pp)
-        result = self._cache_post_process_next(tool_name, base_args, cached_pp, result)
+        if tool_level_token:
+            # Tool-level pagination: the tool drives its own cursor, so a
+            # host-side slice would double-skip. Mint the next token from the
+            # raw offset/count the tool reported on this page, preserving the
+            # (already PP-stripped) tool args for the next replay.
+            if isinstance(result, dict) and _coerce_bool(result.get("truncated"), False):
+                try:
+                    _off = int(result.get("offset", 0) or 0)
+                    _cnt = int(result.get("count", 0) or 0)
+                except Exception:
+                    _off = _cnt = 0
+                if _cnt > 0 and _off + _cnt > _off:
+                    self._prune_next_cache()
+                    _t2 = uuid.uuid4().hex[:12].upper()
+                    with self._next_cache_lock():
+                        self._next_cache[_t2] = {
+                            "tool": tool_name,
+                            "action": base_args.get("action"),
+                            "args": {k: v for k, v in base_args.items() if k != "action"},
+                            "next_offset": _off + _cnt,
+                            "created_at": time.time(),
+                        }
+                    result["next_token"] = _t2
+                    result["next_offset"] = _off + _cnt
+        else:
+            result = apply_post_processing(result, cached_pp)
+            result = self._cache_post_process_next(tool_name, base_args, cached_pp, result)
         if isinstance(result, dict):
             result["continued_from"] = token
         return result
@@ -1087,14 +1236,15 @@ class ServerDispatchMixin(ServerClientStateMixin):
         token = uuid.uuid4().hex[:12].upper()
         effective_page = int(page_size) if page_size else count
 
-        self._next_cache[token] = {
-            "tool": tool_name,
-            "action": base_args.get("action"),
-            "args": {k: v for k, v in base_args.items() if k != "action"},
-            "post_process": {k: v for k, v in pp_params.items() if k != "next_token"},
-            "next_offset": current_offset + effective_page,
-            "created_at": time.time(),
-        }
+        with self._next_cache_lock():
+            self._next_cache[token] = {
+                "tool": tool_name,
+                "action": base_args.get("action"),
+                "args": {k: v for k, v in base_args.items() if k != "action"},
+                "post_process": {k: v for k, v in pp_params.items() if k != "next_token"},
+                "next_offset": current_offset + effective_page,
+                "created_at": time.time(),
+            }
         result["next_token"] = token
         return result
 
@@ -1129,13 +1279,22 @@ class ServerDispatchMixin(ServerClientStateMixin):
             if pp_params and has_post_process(pp_params) and not is_error_result(result):
                 try:
                     result = apply_post_processing(result, pp_params)
+                    # Cache the args that will actually be replayed by a
+                    # continuation (normalized, PP keys stripped). Using the raw
+                    # caller args here would replay head/grep/limit into call_tool
+                    # on page 2, where prepare_rpc_args rejects them or the tool
+                    # double-applies the slice.
+                    cache_args = getattr(self, "_pending_tool_args", None)
+                    if not isinstance(cache_args, dict):
+                        cache_args = args
                     result = self._cache_post_process_next(
-                        resolved_tool, args, pp_params, result
+                        resolved_tool, cache_args, pp_params, result
                     )
                 except Exception as _pp_err:
                     import logging
                     logging.getLogger(__name__).debug("post-process pipeline failed: %s", _pp_err)
             self._pending_pp = {}
+            self._pending_tool_args = {}
 
             sid = getattr(self.current_session, "session_id", None) if self.current_session else None
             latency_ms = (time.perf_counter() - start_ts) * 1000.0
@@ -1152,7 +1311,22 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     )
                     error_str = str(err)[:500]
                 elif err is not None:
-                    error_str = str(err)[:500]
+                    # make_error-style envelope: {"error": True, "code": ...,
+                    # "message": ...} lands here because `err` is the boolean
+                    # True and code/message live on the envelope itself.
+                    code = result.get("code")
+                    message = result.get("message")
+                    if (
+                        code == MCPError.INVALID_ARGS
+                        and "guardrail" in str(message or "").lower()
+                    ):
+                        guardrail_blocked = True
+                    if code is not None or message is not None:
+                        error_str = str(
+                            {"code": code, "message": message}
+                        )[:500]
+                    else:
+                        error_str = str(err)[:500]
                 elif result.get("ok") is False:
                     if (
                         result.get("code") == MCPError.INVALID_ARGS
@@ -1165,17 +1339,24 @@ class ServerDispatchMixin(ServerClientStateMixin):
                             "message": result.get("message"),
                         }
                     )[:500]
-            self.audit.log(
-                tool=resolved_tool,
-                action=action_name,
-                args=args if isinstance(args, dict) else {},
-                result=result,
-                latency_ms=latency_ms,
-                session_id=sid,
-                guardrail_mode=guardrail_mode,
-                guardrail_blocked=guardrail_blocked,
-                error=error_str,
-            )
+            # Audit logging is best-effort: a disk/permission/serialization
+            # failure must never fail a tool call that already produced a valid
+            # result. AuditLogger.log() is itself resilient, but guard here too
+            # so the policy-audit and usage-intel paths stay consistent.
+            try:
+                self.audit.log(
+                    tool=resolved_tool,
+                    action=action_name,
+                    args=args if isinstance(args, dict) else {},
+                    result=result,
+                    latency_ms=latency_ms,
+                    session_id=sid,
+                    guardrail_mode=guardrail_mode,
+                    guardrail_blocked=guardrail_blocked,
+                    error=error_str,
+                )
+            except Exception as e:
+                log_rpc(f"Audit logging failed for {resolved_tool}: {e}")
             # Live observation for usage intelligence
             if self._usage_intel and sid:
                 try:
@@ -1229,12 +1410,27 @@ class ServerDispatchMixin(ServerClientStateMixin):
                 "trunc_limit": _bounded_int(_trunc_limit, 0, min_value=1, max_value=50000) if _trunc_limit is not None else None,
             }
 
+            # Snapshot the exact args that will reach call_tool (normalized,
+            # PP keys and host-only control keys already stripped) so a page-1
+            # continuation token can replay them without re-introducing keys
+            # IDA would reject or double-apply. Consumed by _execute_tool's
+            # post-processing pipeline when it caches the next_token.
+            self._pending_tool_args = dict(args)
+
             # ---- next_token continuation (auto-recovers action from cache) ----
             next_token = self._pending_pp.get("next_token")
             if next_token and isinstance(next_token, str) and next_token.strip():
-                return self._handle_next_continuation(
+                continuation = self._handle_next_continuation(
                     tool_name, next_token.strip(), self._pending_pp
                 )
+                # The continuation already ran the post-processing pipeline and
+                # cached its own next token. Clear the pending state so
+                # _execute_tool does not re-apply PP / re-cache the result (a
+                # second pass would mint a broken token that clobbers the good
+                # one and breaks the pagination chain).
+                self._pending_pp = {}
+                self._pending_tool_args = {}
+                return continuation
 
             sid = getattr(self.current_session, "session_id", None) if self.current_session else None
             # Capture ack before the policy block pops _risk_ack below. The
@@ -1247,59 +1443,64 @@ class ServerDispatchMixin(ServerClientStateMixin):
             _risk_ack_passed = bool(_coerce_bool(args.get("_risk_ack"), False)) or _coerce_bool(args.get("_guardrail_ack"), False)
 
             # ---- Deterministic policy preflight ----
-            if tool_name not in {"blackboard", "background"}:
-                try:
-                    policy_result = evaluate_policy(
-                        tool_name,
-                        args.get("action"),
-                        mode=self._resolve_policy_mode(),
-                        purpose=args.get("_purpose"),
-                        ack=_coerce_bool(args.get("_risk_ack"), False)
-                        or _coerce_bool(args.get("_guardrail_ack"), False),
+            # Runs for every tool, including blackboard/background: the policy
+            # registry classifies blackboard as WRITE_IDB (and script/plugin_run
+            # pairs as LOCAL_CODE_EXEC), so exempting them here made those
+            # classifications unreachable at dispatch (a caller could
+            # clear/delete a blackboard or queue a script with no ack and no
+            # policy audit record).
+            try:
+                policy_result = evaluate_policy(
+                    tool_name,
+                    args.get("action"),
+                    mode=self._resolve_policy_mode(),
+                    purpose=args.get("_purpose"),
+                    ack=_coerce_bool(args.get("_risk_ack"), False)
+                    or _coerce_bool(args.get("_guardrail_ack"), False),
+                )
+                policy_audit = build_audit_record(policy_result, session_id=sid)
+                policy_details = policy_result.to_dict()
+                if (
+                    policy_result.decision != PolicyDecision.ALLOW
+                    or policy_result.risk.value != "read"
+                    or policy_result.reasons
+                    or policy_result.flags
+                ):
+                    try:
+                        self.audit.log(
+                            tool=tool_name,
+                            action=str(args.get("action") or ""),
+                            args=policy_audit,
+                            result=policy_details,
+                            latency_ms=0.0,
+                            session_id=sid,
+                        )
+                    except Exception as e:
+                        log_rpc(f"Policy audit logging failed for {tool_name}: {e}")
+                if policy_result.decision == PolicyDecision.BLOCK:
+                    return make_error(
+                        MCPError.POLICY_DENIED,
+                        "Policy blocked this tool action",
+                        hint="Use an allowed purpose and verify the workflow is authorized.",
+                        details=policy_details,
                     )
-                    policy_audit = build_audit_record(policy_result, session_id=sid)
-                    policy_details = policy_result.to_dict()
-                    if (
-                        policy_result.decision != PolicyDecision.ALLOW
-                        or policy_result.risk.value != "read"
-                        or policy_result.reasons
-                        or policy_result.flags
-                    ):
-                        try:
-                            self.audit.log(
-                                tool=tool_name,
-                                action=str(args.get("action") or ""),
-                                args=policy_audit,
-                                result=policy_details,
-                                latency_ms=0.0,
-                                session_id=sid,
-                            )
-                        except Exception as e:
-                            log_rpc(f"Policy audit logging failed for {tool_name}: {e}")
-                    if policy_result.decision == PolicyDecision.BLOCK:
-                        return make_error(
-                            MCPError.POLICY_DENIED,
-                            "Policy blocked this tool action",
-                            hint="Use an allowed purpose and verify the workflow is authorized.",
-                            details=policy_details,
-                        )
-                    if policy_result.decision == PolicyDecision.REQUIRE_ACK:
-                        return make_error(
-                            MCPError.POLICY_DENIED,
-                            "Policy requires explicit acknowledgement for this tool action",
-                            hint="Retry with _risk_ack=true after verifying the action is authorized.",
-                            details=policy_details,
-                        )
-                except Exception as e:
-                    log_rpc(f"Policy evaluation failed for {tool_name}: {e}")
-                    mode = self._resolve_policy_mode()
-                    if str(mode or "").strip().lower() not in {"off", "permissive"}:
-                        return make_error(
-                            MCPError.POLICY_DENIED,
-                            "Policy evaluation failed; refusing tool call",
-                            hint="Fix policy configuration or set IDA_MCP_POLICY_MODE=permissive to bypass.",
-                            details={"exception": str(e), "tool": tool_name},
-                        )
+                if policy_result.decision == PolicyDecision.REQUIRE_ACK:
+                    return make_error(
+                        MCPError.POLICY_DENIED,
+                        "Policy requires explicit acknowledgement for this tool action",
+                        hint="Retry with _risk_ack=true after verifying the action is authorized.",
+                        details=policy_details,
+                    )
+            except Exception as e:
+                log_rpc(f"Policy evaluation failed for {tool_name}: {e}")
+                mode = self._resolve_policy_mode()
+                if str(mode or "").strip().lower() not in {"off", "permissive"}:
+                    return make_error(
+                        MCPError.POLICY_DENIED,
+                        "Policy evaluation failed; refusing tool call",
+                        hint="Fix policy configuration or set IDA_MCP_POLICY_MODE=permissive to bypass.",
+                        details={"exception": str(e), "tool": tool_name},
+                    )
             args.pop("_purpose", None)
             args.pop("_risk_ack", None)
 
@@ -1333,6 +1534,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
             # Skipped on _risk_ack=true: explicit ack supersedes the strict
             # blackboard evidence chain requirement.
             # Skipped when policy mode is OFF: all gates disabled.
+            _policy_mode_cached = ""
             try:
                 _policy_mode_cached = self._resolve_policy_mode()
                 if _policy_mode_cached == "off":
@@ -1400,32 +1602,15 @@ class ServerDispatchMixin(ServerClientStateMixin):
 
 
 
-            # ---- Silent Tool Rerouting ----
-            action = args.get("action", "")
-            try:
-                from .auto_nudge import get_reroute
-                reroute = get_reroute(tool_name, str(action) if action else "", args)
-                if reroute:
-                    new_tool, new_args = reroute
-                    new_args["_rerouted_from"] = f"{tool_name}.{action}"
-                    tool_name = new_tool
-                    args = new_args
-                    action = new_args.get("action", "")
-                    # Wire preference feedback: mark this reroute as successful
-                    try:
-                        from .auto_nudge import record_tool_call as nudge_record
-                        idb_key = (self.current_session.idb_path if self.current_session else "")
-                        nudge_record(idb_key, "_reroute", f"{tool_name}.{action}",
-                                    addr=args.get("addr"), query=args.get("query"))
-                    except Exception as _e:
-                        import logging
-                        logging.getLogger(__name__).debug("nudge record failed: %s", _e)
-            except Exception as _e:
-                import logging
-                logging.getLogger(__name__).debug("tool reroute failed: %s", _e)
-
             # ---- Stuck Detection (UsageIntelligence DriftDetector) ----
+            # The drift signal is advisory by default: LOOP is emitted as a
+            # warning notification (usage.py) but is NOT a hard block, because
+            # a call-stream heuristic cannot reliably distinguish a stuck agent
+            # from a legitimate worklist (e.g. decompiling N functions, or an
+            # address-less detector re-run).  Set IDA_MCP_STUCK_LOOP_BLOCK=1 to
+            # opt the hard block back in.
             action = args.get("action", "")
+            _stuck_loop_block = os.environ.get("IDA_MCP_STUCK_LOOP_BLOCK") == "1"
             try:
                 sid_for_drift = (getattr(self.current_session, "session_id", None)
                                  if self.current_session else None)
@@ -1434,7 +1619,9 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     signals = ui.drift.check(sid_for_drift)
                     # Only block on LOOP — other signals are warnings, not blockers
                     for sig in signals:
-                        if sig.get("type") == "LOOP" and sig.get("severity") == "warning":
+                        if (_stuck_loop_block
+                                and sig.get("type") == "LOOP"
+                                and sig.get("severity") == "warning"):
                             err = make_error(
                                 MCPError.STUCK_LOOP,
                                 sig.get("message") or "Repeated identical analysis steps detected.",
@@ -1538,6 +1725,12 @@ class ServerDispatchMixin(ServerClientStateMixin):
                 return self._handle_workflow(args)
 
             if tool_name == "blackboard":
+                # Restore the captured risk-ack: the policy block above pops
+                # `_risk_ack` from args (line ~1507), but the blackboard handler
+                # legitimately gates host-side IDB writes on it (e.g. the
+                # publish_findings dry-run gate). Underscore meta keys are
+                # skipped by RPC admission, so this never leaks to the IDA side.
+                args["_risk_ack"] = _risk_ack_passed
                 return self._handle_blackboard(args)
 
             if tool_name == "gadgets" and str(args.get("action") or "").strip() == "semantic_find":

@@ -288,15 +288,31 @@ def get_config_paths(source_root: Path) -> dict[str, Path]:
     return out
 
 
-def update_json_config(path: Path, server_name: str, server_cfg: dict, report: InstallReport, dry_run: bool) -> bool:
+def update_json_config(
+    path: Path,
+    server_name: str,
+    server_cfg: dict,
+    report: InstallReport,
+    dry_run: bool,
+    *,
+    top_level_key: str = "mcpServers",
+    server_type: str = "",
+) -> bool:
     _prepare_config_path(path, report, dry_run)
     try:
         config = _load_json_config(path, allow_comments=True)
     except ConfigParseError as exc:
         report.add_error(str(exc))
         return False
-    config.setdefault("mcpServers", {})
-    _upsert_server_entry(config["mcpServers"], server_name, server_cfg)
+    # Some Copilot-family clients (VS Code Copilot Chat, Copilot CLI) use a
+    # "servers" top-level key instead of the classic "mcpServers", and expect
+    # local servers to declare "type": "stdio".  Writing under the wrong key
+    # makes the server silently invisible to the client.
+    config.setdefault(top_level_key, {})
+    entry = dict(server_cfg)
+    if server_type:
+        entry["type"] = server_type
+    _upsert_server_entry(config[top_level_key], server_name, entry)
     if not dry_run:
         _atomic_write_text(path, json.dumps(config, indent=2))
     report.add_modified(path)
@@ -361,6 +377,11 @@ def update_toml_config(path: Path, server_name: str, server_cfg: dict, report: I
     return True
 
 
+def _client_meta(source_root: Path) -> dict[str, dict]:
+    """Return per-client metadata from client_configs.json keyed by client name."""
+    return {name: (meta or {}) for name, meta in load_client_map(source_root).items()}
+
+
 def configure_clients(
     source_root: Path,
     server_cfg: dict,
@@ -369,6 +390,7 @@ def configure_clients(
     server_name: str = "ida-pro-mcp",
 ) -> list[str]:
     configured: list[str] = []
+    meta_by_client = _client_meta(source_root)
     for client, path in get_config_paths(source_root).items():
         try:
             if client == "OpenCode":
@@ -376,7 +398,16 @@ def configure_clients(
             elif path.suffix == ".toml":
                 ok = update_toml_config(path, server_name, server_cfg, report, dry_run)
             else:
-                ok = update_json_config(path, server_name, server_cfg, report, dry_run)
+                json_meta = (meta_by_client.get(client, {}) or {}).get("json") or {}
+                ok = update_json_config(
+                    path,
+                    server_name,
+                    server_cfg,
+                    report,
+                    dry_run,
+                    top_level_key=str(json_meta.get("top_level_key") or "mcpServers"),
+                    server_type=str(json_meta.get("type") or ""),
+                )
             if ok:
                 configured.append(client)
         except Exception as exc:

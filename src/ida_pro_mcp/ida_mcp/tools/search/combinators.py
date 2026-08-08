@@ -27,6 +27,7 @@ except ImportError:
 
 from .core import (
     CALL_XREF_TYPES,
+    _match_size_rule,
     resolve_target,
 )
 from .advanced import _coerce_ea
@@ -170,7 +171,10 @@ def _prim_funcs_by_mnem(pattern: str) -> set[int]:
                 if matcher(mnem):
                     out.add(int(ea))
                     break
-                cur = idc.next_head(cur, end)
+                nxt = idc.next_head(cur, end)
+                if nxt == idaapi.BADADDR:
+                    break
+                cur = nxt
         except Exception:
             continue
     return out
@@ -221,10 +225,10 @@ def _prim_size(pattern: str) -> set[int]:
             if not func:
                 continue
             size = func.end_ea - func.start_ea
-            for op, val1, val2 in size_rules:
-                if op == ">" and size > val1 or op == "<" and size < val1 or val2 is not None and val1 <= size <= val2 or op in ("", "=") and val2 is None and size == val1:
-                    out.add(int(ea))
-                    break
+            # All parsed size rules must hold (AND logic), and a comparator is
+            # honored even when a range bound is present.
+            if all(_match_size_rule(size, op, val1, val2) for op, val1, val2 in size_rules):
+                out.add(int(ea))
         except Exception:
             continue
     return out
@@ -584,7 +588,7 @@ def search_path(src: str, dst: str, max_depth: int) -> dict:
     items = [{"addr": hex(a), "name": _func_name(a)} for a in path]
     text = "\n".join(
         f"{i}. {hex(a)}  {_func_name(a)}{'  <-- dst' if i == len(items) - 1 else '  -->'}"
-        for i, (a, _) in enumerate([(it['addr'], it) for it in items])
+        for i, a in enumerate(path)
     )
     return {
         "ok": True,
@@ -1110,7 +1114,7 @@ def search_analyze(
                     }
                 except Exception as e:
                     return make_error(
-                        MCPError.UNKNOWN_ERROR,
+                        MCPError.UNKNOWN,
                         f"Could not compute {metric} outliers: {e}",
                     )
             return make_error(

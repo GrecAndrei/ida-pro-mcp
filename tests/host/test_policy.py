@@ -35,11 +35,15 @@ def test_local_code_execution_requires_ack_in_assist_mode():
     assert result.reasons
 
 
-def test_background_script_is_local_code_execution():
-    result = evaluate_policy("background", "script", purpose="firmware_analysis")
-
-    assert result.decision == PolicyDecision.REQUIRE_ACK
-    assert result.risk == RiskTier.LOCAL_CODE_EXEC
+def test_misc_plugin_run_is_local_code_execution():
+    # `background/script` was never a real backend action; plugin execution is
+    # reached through analysis/plugin_run -> misc/plugin_run, both of which must
+    # be tiered as LOCAL_CODE_EXEC (not WRITE_IDB or UNKNOWN).
+    for tool, action in (("analysis", "plugin_run"), ("misc", "plugin_run")):
+        result = evaluate_policy(tool, action, purpose="firmware_analysis")
+        assert result.decision == PolicyDecision.REQUIRE_ACK, f"{tool}/{action} was {result.decision}"
+        assert result.risk == RiskTier.LOCAL_CODE_EXEC, f"{tool}/{action} risk was {result.risk}"
+        assert result.requires_ack is True
 
 
 def test_local_code_execution_allowed_with_ack():
@@ -177,13 +181,21 @@ def test_off_mode_bypasses_all_gates():
         ("funcs", "create"),
         ("segments", "add"),
         ("bookmarks", "delete"),
+        ("search", "strings"),
     ]:
         result = evaluate_policy(tool, action, mode=PolicyMode.OFF)
         assert result.decision == PolicyDecision.ALLOW, f"{tool}/{action} was {result.decision}"
-        assert result.risk == RiskTier.READ, f"{tool}/{action} risk was {result.risk}"
         assert result.requires_ack is False
         assert result.reasons == ()
         assert result.flags == ()
+        # OFF still reports the real tier so the audit trail is honest.
+        assert result.risk == classify_tool_action(tool, action), (
+            f"{tool}/{action} risk was {result.risk}, expected {classify_tool_action(tool, action)}"
+        )
+
+    # Sanity: the reported risks are not all flattened to READ.
+    risks = {evaluate_policy(t, a, mode=PolicyMode.OFF).risk for t, a in [("misc", "python"), ("bookmarks", "delete")]}
+    assert risks == {RiskTier.LOCAL_CODE_EXEC, RiskTier.DESTRUCTIVE}
 
 
 def test_off_mode_bypasses_disallowed_purpose_block():

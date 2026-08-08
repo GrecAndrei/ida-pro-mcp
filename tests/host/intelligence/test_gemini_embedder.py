@@ -392,5 +392,5 @@ def test_write_embedder_state_gemini_never_stores_key(tmp_path):
 
 
 def test_write_embedder_state_rejects_unknown_backend(tmp_path):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="unknown embedding backend"):
         write_embedder_state(tmp_path, backend="nonsense")

@@ -7,7 +7,14 @@ from ida_pro_mcp.host.server.server_runtime_leases import ServerRuntimeLeasesMix
 
 
 def test_kill_process_tree_terminates_group_after_direct_launcher_exits(monkeypatch):
-    """A surviving child in the launcher's group must not be orphaned."""
+    """A surviving child in the launcher's group must not be orphaned.
+
+    The direct idat launcher exits quickly while descendants may still be
+    alive in the same process group. The function must wait for the group to
+    drain (killpg(pid, 0) liveness probe) rather than returning the moment the
+    direct child exits, and must not escalate to SIGKILL once the group is
+    confirmed gone.
+    """
 
     class ExitedLauncher:
         pid = 4242
@@ -22,10 +29,55 @@ def test_kill_process_tree_terminates_group_after_direct_launcher_exits(monkeypa
             return 0
 
     monkeypatch.setattr(server_runtime.sys, "platform", "linux")
-    with mock.patch.object(server_runtime.os, "killpg") as killpg:
-        server_runtime._kill_process_tree(ExitedLauncher())
+    calls = []
 
-    killpg.assert_called_once_with(4242, server_runtime.signal.SIGTERM)
+    def _killpg(pgid, sig):
+        calls.append(sig)
+        if sig == server_runtime.signal.SIGTERM:
+            return None
+        # Liveness probe on the (draining) group: already gone, so the
+        # launcher's descendants exited and no SIGKILL escalation is needed.
+        raise ProcessLookupError()
+
+    monkeypatch.setattr(server_runtime.os, "killpg", _killpg)
+    server_runtime._kill_process_tree(ExitedLauncher())
+
+    assert calls == [
+        server_runtime.signal.SIGTERM,
+        0,  # process-group liveness probe
+    ]
+    assert server_runtime.signal.SIGKILL not in calls
+
+
+def test_kill_process_tree_escalates_to_sigkill_when_group_never_drains(monkeypatch):
+    """Descendants that ignore SIGTERM must still be SIGKILLed."""
+
+    class StubbornLauncher:
+        pid = 4242
+
+        @staticmethod
+        def poll():
+            return 0
+
+        @staticmethod
+        def wait(*, timeout):
+            assert timeout > 0
+            return 0
+
+    monkeypatch.setattr(server_runtime.sys, "platform", "linux")
+    calls = []
+    # The process group never drains (the liveness probe keeps succeeding), so
+    # after the grace budget the function must escalate to SIGKILL.
+    monkeypatch.setattr(
+        server_runtime.os,
+        "killpg",
+        lambda pgid, sig: calls.append(sig) or None,
+    )
+    server_runtime._kill_process_tree(StubbornLauncher(), grace_seconds=0.2)
+
+    assert calls[0] == server_runtime.signal.SIGTERM
+    assert 0 in calls  # liveness probes ran while waiting for the drain
+    assert calls[-1] == server_runtime.signal.SIGKILL
 
 
 def test_termination_signal_runs_cleanup_before_forced_exit():

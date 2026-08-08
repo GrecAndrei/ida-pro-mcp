@@ -54,9 +54,19 @@ class ContextAssembler:
         # Per-binary embedding indexes keyed by idb_path
         self._indexes: dict[str, FunctionEmbeddingIndex] = {}
         self._idx_lock   = threading.Lock()
+        # Bounded LRU for _indexes so long-running sessions cannot pin an
+        # unbounded number of embedding indexes (and their in-memory caches)
+        # in RAM.
+        self._max_indexes = 4
+        self._idx_last_access: dict[str, float] = {}
         # Activity tracking for stuck detection (in-memory, per session)
         self._activity: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self._activity_lock = threading.Lock()
+        # Last-seen wall-clock per session, used to prune stale per-session
+        # state (activity, related graphs, retrieval metrics) so long-running
+        # servers do not accumulate unbounded per-session memory.
+        self._session_last_seen: dict[str, float] = {}
+        self._session_last_seen_lock = threading.Lock()
         self._related_addr_graph: dict[str, dict[str, set]] = defaultdict(lambda: defaultdict(set))
         self._related_addr_lock = threading.Lock()
         self._retrieval_metrics: dict[str, dict[str, int]] = defaultdict(dict)
@@ -97,9 +107,20 @@ class ContextAssembler:
 
     def _get_index(self, idb_path: str) -> FunctionEmbeddingIndex:
         with self._idx_lock:
+            now = time.time()
+            self._idx_last_access[idb_path] = now
             if idb_path not in self._indexes:
                 db = idb_path + ".embeddings.db"
                 self._indexes[idb_path] = FunctionEmbeddingIndex(db, self._embedder)
+            if len(self._indexes) > self._max_indexes:
+                # Evict least-recently-used indexes, keeping the current one.
+                candidates = sorted(
+                    (p for p in self._indexes if p != idb_path),
+                    key=lambda p: self._idx_last_access.get(p, 0.0),
+                )
+                for evict in candidates[: (len(self._indexes) - self._max_indexes)]:
+                    self._indexes.pop(evict, None)
+                    self._idx_last_access.pop(evict, None)
         return self._indexes[idb_path]
 
     # ── blackboard retrieval ──────────────────────────────────────────────
@@ -288,6 +309,33 @@ class ContextAssembler:
                                     break
                                 drop_budget -= len(nbrs)
                                 graph.pop(node, None)
+                # Drop per-session state for sessions idle longer than
+                # 10 minutes so long-running servers do not accumulate
+                # unbounded per-session memory.
+                stale_cutoff = now - 600.0
+                stale_sessions = [
+                    sid
+                    for sid, last in self._session_last_seen.items()
+                    if last < stale_cutoff
+                ]
+                for sid in stale_sessions:
+                    self._session_last_seen.pop(sid, None)
+                    with self._activity_lock:
+                        self._activity.pop(sid, None)
+                    with self._related_addr_lock:
+                        self._related_addr_graph.pop(sid, None)
+                    with self._retrieval_metrics_lock:
+                        self._retrieval_metrics.pop(sid, None)
+                    with self._semantic_threshold_lock:
+                        self._session_semantic_threshold.pop(sid, None)
+                    with self._circuit_breaker_lock:
+                        self._semantic_circuit_breaker_until.pop(sid, None)
+                    with self._semantic_budget_lock:
+                        self._semantic_budget_cache.pop(sid, None)
+                    with self._perf_lock:
+                        self._perf_buckets.pop(sid, None)
+                    with self._stats_cache_lock:
+                        self._session_stats_cache.pop(sid, None)
         except Exception:
             pass
         finally:
@@ -510,6 +558,8 @@ class ContextAssembler:
     # ── stuck detection ──────────────────────────────────────────────────
 
     def record_call(self, session_id: str, tool: str, action: str, addr: str) -> None:
+        with self._session_last_seen_lock:
+            self._session_last_seen[session_id] = time.time()
         with self._activity_lock:
             log = self._activity[session_id]
             log.append({"tool": tool, "action": action, "addr": addr, "ts": time.time()})
@@ -698,10 +748,10 @@ class ContextAssembler:
         Decompile-specific enrichment.  Deterministic first, embeddings second.
 
         Priority order:
-          1. Deterministic API call extraction from pseudocode text (instant, high signal)
-          2. Schemaboot structural attributes (fast SQL — xor_count, entropy, xrefs)
-          3. Blackboard addr-match (fast SQL — past findings at this address)
-          4. Function embedding + similarity search (slow, grows over session)
+          1. Behavior classification via the shared zero-shot classifier (full mode)
+          2. Rule-based next actions from API patterns + structural attrs (full mode)
+          3. Function embedding + similarity search (slow, grows over session)
+          4. Cross-address blackboard retrieval (callgraph-linked, fast SQL)
           5. Semantic blackboard retrieval (slow, only if bb_store populated)
         """
         _full = mode == "full"
@@ -756,6 +806,17 @@ class ContextAssembler:
                 def _persist(ea=addr, name=func_name, b=blob, p=ph, v=query_vec):
                     try:
                         with idx._conn() as conn:
+                            # Never clobber a higher-quality stored embedding:
+                            # this path carries no structural metadata, so an
+                            # upsert here would erase full-quality rows (their
+                            # func_size/bb_count/quality fields) written by
+                            # index_many.  Only write when the stored row is
+                            # absent or strictly lower quality.
+                            row = conn.execute(
+                                "SELECT index_quality FROM func_embeddings WHERE ea=?", (ea,)
+                            ).fetchone()
+                            if row and str(row[0] or "unknown") in ("full", "fast", "fast_fallback"):
+                                return
                             conn.execute(
                                 """INSERT INTO func_embeddings
                                    (ea, name, dim, vec_blob, pseudo_hash, indexed_at, signature_text, signature_hash)

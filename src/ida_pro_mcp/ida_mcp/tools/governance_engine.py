@@ -582,25 +582,27 @@ class GovernanceEngine:
         if base:
             properties.add(base)
 
-        # Metadata -> properties — must match ontology axiom names
+        # Metadata -> properties — values MUST match the ontology axiom names
+        # declared in REOntology.ontology_classes, or classification silently
+        # never fires (e.g. DangerousCodeSectionPatch's existential axioms).
         meta_map = {
             "is_import_addr": "targets_import_section",
             "section_type": lambda v: "targets_import_section" if v in (".idata", ".edata", ".iat", ".plt")
                                      else ("targets_executable_section" if v in (".text", ".code") else None),
-            "targets_stack": lambda v: "targets_stack_frame" if v else None,
-            "changes_frame_size": lambda v: "changes_frame" if v else None,
+            "targets_stack": lambda v: "targets_stack" if v else None,
+            "changes_frame_size": lambda v: "changes_frame_size" if v else None,
             "invalidates_locals": lambda v: "invalidates_locals" if v else None,
-            "breaks_calling_convention": lambda v: "breaks_cc" if v else None,
+            "breaks_calling_convention": lambda v: "breaks_calling_convention" if v else None,
             "unknown_origin": lambda v: "unknown_origin" if v else None,
-            "writes_to_disk": lambda v: "writes_disk" if v else None,
+            "writes_to_disk": lambda v: "writes_to_disk" if v else None,
             "opens_socket": lambda v: "opens_socket" if v else None,
-            "calls_encryption": lambda v: "calls_encryption_op" if v else None,
-            "modifies_system_state": lambda v: "modifies_system" if v else None,
-            "contradicts_api": lambda v: "api_contradiction" if v else None,
-            "incorrect_prototype": lambda v: "wrong_prototype" if v else None,
-            "false_security_claim": lambda v: "false_security" if v else None,
-            "modifies_control_flow": lambda v: "modifies_control_flow" if v else None,
-            "bypasses_security_check": lambda v: "bypasses_security" if v else None,
+            "calls_encryption": lambda v: "calls_encryption" if v else None,
+            "modifies_system_state": lambda v: "modifies_system_state" if v else None,
+            "contradicts_api": lambda v: "contradicts_api_evidence" if v else None,
+            "incorrect_prototype": lambda v: "implies_incorrect_prototype" if v else None,
+            "false_security_claim": lambda v: "suggests_false_security" if v else None,
+            "modifies_control_flow": lambda v: "modifies_code_flow" if v else None,
+            "bypasses_security_check": lambda v: "bypasses_security_check" if v else None,
         }
 
         for key, mapping in meta_map.items():
@@ -886,8 +888,8 @@ def governance_engine(
                   total_violations}
 
     Example:
-        governance(action="check", operation_type="comment",
-                   proposed_value="C2 at 192.168.1.1")
+        governance_engine(action="check", operation_type="comment",
+                          proposed_value="C2 at 192.168.1.1")
         # -> {verdict: "redacted", violations: [...]}
     """
     try:

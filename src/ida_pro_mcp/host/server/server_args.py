@@ -10,6 +10,7 @@ import contextlib
 import json
 import re
 import shlex
+import threading
 import time
 import uuid
 from typing import Any
@@ -31,18 +32,37 @@ from ..schemas import (
 class ServerArgsMixin:
     """Mixin for noisy-client argument normalization."""
 
+    def _next_cache_lock(self) -> threading.Lock:
+        """Per-instance lock guarding the next_token continuation cache.
+
+        The cache is written/read from request threads, batch workers and
+        daemon connections concurrently; a prune iterating the dict while
+        another thread inserts would raise RuntimeError and could evict a
+        just-inserted token, breaking the continuation contract.
+
+        Stored under ``_next_cache_lock_obj`` — never shadowing this method
+        name, or ``getattr(self, ...)`` would resolve to the bound method and
+        return it as the "lock".
+        """
+        lock = getattr(self, "_next_cache_lock_obj", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._next_cache_lock_obj = lock
+        return lock
+
     def _prune_next_cache(self):
         if not self._next_cache:
             return
         now = time.time()
-        expired = [
-            token
-            for token, row in self._next_cache.items()
-            if (now - float(row.get("created_at", 0.0)))
-            > float(self._next_cache_ttl_seconds)
-        ]
-        for token in expired:
-            self._next_cache.pop(token, None)
+        with self._next_cache_lock():
+            expired = [
+                token
+                for token, row in self._next_cache.items()
+                if (now - float(row.get("created_at", 0.0)))
+                > float(self._next_cache_ttl_seconds)
+            ]
+            for token in expired:
+                self._next_cache.pop(token, None)
 
     def _parse_action_tail_tokens(self, tail: str) -> dict:
         parsed: dict[str, Any] = {}
@@ -146,8 +166,15 @@ class ServerArgsMixin:
                 if inner and "," not in inner:
                     normalized[key] = _strip_balanced_wrappers(inner)
             if key in int_like_fields and isinstance(value, str):
+                # Parse as decimal, except explicit 0x/0X hex (addresses like
+                # baseaddr="0x401000"). int(value, 0) would silently reinterpret
+                # a leading-zero numeric string as octal ("010" -> 8, "08" -> ValueError).
                 with contextlib.suppress(Exception):
-                    normalized[key] = int(value, 0)
+                    text_value = value.strip()
+                    if text_value.lower().startswith("0x"):
+                        normalized[key] = int(text_value, 16)
+                    else:
+                        normalized[key] = int(text_value, 10)
         # For array-like address fields, gracefully normalize common malformed scalar wrappers.
         if "addrs" in normalized and isinstance(normalized["addrs"], str):
             text = normalized["addrs"].strip()
@@ -267,10 +294,29 @@ class ServerArgsMixin:
             return payload
         if not _coerce_bool(payload.get("truncated"), False):
             return payload
+        # Post-processed results already have their continuation token managed
+        # by _cache_post_process_next, which is PP-aware (slices the fetched
+        # list rather than trusting the tool's raw pre-slice counters). A raw
+        # tool-level token computed here from count/total would clobber that
+        # token or double-mint one, silently skipping items. The same applies
+        # to any payload that already carries a token.
+        if payload.get("_post_processed"):
+            return payload
+        existing_token = payload.get("next_token")
+        if isinstance(existing_token, str) and existing_token.strip():
+            return payload
         try:
-            offset = int(payload.get("offset", args.get("offset", 0)) or 0)
-            count = int(payload.get("count", 0) or 0)
-            total = int(payload.get("total", 0) or 0)
+            # `dict.get` returns the args fallback only when the key is absent;
+            # a tool that echoes ``"offset": null`` (JSON null for "no offset")
+            # must not collapse the caller's real page offset to 0.
+            offset_v = payload.get("offset")
+            if offset_v is None:
+                offset_v = args.get("offset", 0)
+            count_v = payload.get("count")
+            total_v = payload.get("total")
+            offset = int(offset_v or 0)
+            count = int(count_v or 0)
+            total = int(total_v or 0)
         except Exception:
             return payload
         next_offset = payload.get("next_offset")
@@ -292,13 +338,14 @@ class ServerArgsMixin:
         cache_args.pop("next_token", None)
         cache_args.pop("token", None)
         cache_args.pop("cursor", None)
-        self._next_cache[token] = {
-            "tool": tool_name,
-            "action": action,
-            "args": cache_args,
-            "next_offset": next_offset,
-            "created_at": time.time(),
-        }
+        with self._next_cache_lock():
+            self._next_cache[token] = {
+                "tool": tool_name,
+                "action": action,
+                "args": cache_args,
+                "next_offset": next_offset,
+                "created_at": time.time(),
+            }
         out = dict(payload)
         out["next_token"] = token
         out["next_offset"] = next_offset

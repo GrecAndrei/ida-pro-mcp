@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import hashlib
 import os
@@ -11,7 +12,7 @@ from typing import Any
 from ..batch_manager import BatchManager
 from ..errors import MCPError, is_error_result, make_error
 from ..policy import PolicyDecision, evaluate_policy
-from .server_client_state import ServerClientStateMixin
+from .server_client_state import ServerClientStateMixin, _ClientRequestState
 
 _BACKGROUND_ACTIONS = {
     "submit": "_bg_submit",
@@ -31,18 +32,38 @@ class BackgroundMixin(ServerClientStateMixin):
 
         def bound(task):
             def inner():
-                if session is not None:
-                    # Ensure the job session is owned even if the copied
-                    # ContextVar was empty (harness / stdio edge cases).
-                    state_fn = getattr(self, "_client_request_state", None)
-                    if callable(state_fn):
-                        state = state_fn()
+                state_fn = getattr(self, "_client_request_state", None)
+                if callable(state_fn):
+                    parent = state_fn()
+                    # copy_context copies bindings, not values: the worker would
+                    # otherwise share the client's _ClientRequestState object, so
+                    # its current_session / pending_* writes would leak into
+                    # concurrent requests on the same connection (and vice
+                    # versa). Run the task against a private copy instead.
+                    var = self._state_var()
+                    worker = _ClientRequestState(
+                        vertex_compat=bool(getattr(self, "default_vertex_compat", False)),
+                    )
+                    worker.owned_session_ids = set(getattr(parent, "owned_session_ids", set()) or set())
+                    worker.owned_sessions_by_agent = {
+                        name: set(ids)
+                        for name, ids in (getattr(parent, "owned_sessions_by_agent", {}) or {}).items()
+                    }
+                    worker.current_session_by_agent = dict(
+                        getattr(parent, "current_session_by_agent", {}) or {}
+                    )
+                    if session is not None:
                         sid = str(getattr(session, "session_id", "") or "")
                         if sid:
-                            state.owned_session_ids.add(sid)
-                        state.current_session = session
-                    else:
-                        self.current_session = session
+                            # Keep the client's ownership grant so it can later
+                            # retrieve the task's status/result via _bg_*.
+                            parent.owned_session_ids.add(sid)
+                            worker.owned_session_ids.add(sid)
+                        worker.current_session = session
+                    var.set(worker)
+                elif session is not None:
+                    # Fallback when the connection-state helper is unavailable.
+                    self.current_session = session
                 return run_fn(task)
 
             return ctx.run(inner)
@@ -89,7 +110,7 @@ class BackgroundMixin(ServerClientStateMixin):
             if not os.path.isfile(path):
                 return 0, 0
             try:
-                with sqlite3.connect(path) as conn:
+                with contextlib.closing(sqlite3.connect(path)) as conn:
                     total = int(conn.execute("SELECT COUNT(*) FROM func_embeddings").fetchone()[0])
                     columns = {
                         str(row[1]) for row in conn.execute("PRAGMA table_info(func_embeddings)")
@@ -149,7 +170,10 @@ class BackgroundMixin(ServerClientStateMixin):
             }
         full, total, source_session, source_db = max(candidates, key=lambda row: (row[0], row[1]))
         os.makedirs(os.path.dirname(target_db) or ".", exist_ok=True)
-        with sqlite3.connect(source_db) as source, sqlite3.connect(target_db) as target:
+        # The sqlite connection context manager commits/rolls back but never
+        # closes; wrap in closing() so the connections are explicitly released
+        # (close() also rolls back any uncommitted work on an error path).
+        with contextlib.closing(sqlite3.connect(source_db)) as source, contextlib.closing(sqlite3.connect(target_db)) as target:
             source.backup(target)
             if os.path.isfile(session.idb_path):
                 idb_stat = os.stat(session.idb_path)
@@ -197,7 +221,7 @@ class BackgroundMixin(ServerClientStateMixin):
             "binary_sha256": target_digest,
         }
 
-    def _semantic_index_job_state(self) -> tuple[threading.RLock, dict[str, str]]:
+    def _semantic_index_job_state(self) -> tuple[Any, dict[str, str]]:
         lock = getattr(self, "_semantic_index_jobs_lock", None)
         if lock is None:
             lock = threading.RLock()
@@ -222,7 +246,7 @@ class BackgroundMixin(ServerClientStateMixin):
                 return make_error(MCPError.INVALID_ARGS, f"{name} must be greater than zero")
             return None
 
-        for field in ("limit", "_index_slice_size", "radius", "min_size", "max_size"):
+        for field in ("limit", "_index_total_limit", "_index_slice_size", "radius", "min_size", "max_size"):
             if error := _positive(field, allow_zero=field in {"min_size", "max_size"}):
                 return error
         if args.get("radius") is not None and not args.get("addr"):
@@ -600,35 +624,30 @@ class BackgroundMixin(ServerClientStateMixin):
         policy_error = self._background_policy_preflight(script=script, tool_call=tool_call)
         if policy_error:
             return policy_error
-        action = "script" if script else "tool_call"
+        # Scripts are always rejected by _background_policy_preflight above, so
+        # only tool_call tasks ever reach the pool.
+        action = "tool_call"
 
         def _run(task):
-            prev_session = getattr(self, "current_session", None)
-            try:
-                if task.session_id and hasattr(self, "session_mgr"):
-                    try:
-                        target = self.session_mgr.get_session(task.session_id)
-                        if target:
-                            self.current_session = target
-                    except Exception:
-                        pass
-                if task.args.get("script"):
-                    return make_error(
-                        getattr(MCPError, "GOVERNANCE_BLOCKED", MCPError.INVALID_ARGS),
-                        "background script execution is disabled",
-                        hint="Use background tool_call for auditable work.",
+            # The worker runs against a private _ClientRequestState (see
+            # _bind_background_run), so pointing current_session at the task's
+            # target session cannot leak into the client's active session.
+            if task.session_id and hasattr(self, "session_mgr"):
+                try:
+                    target = self.session_mgr.get_session(task.session_id)
+                    if target:
+                        self.current_session = target
+                except Exception:
+                    pass
+            tc = task.args.get("tool_call")
+            if tc and isinstance(tc, dict):
+                if hasattr(self, "_execute_tool"):
+                    return self._execute_tool(
+                        tc.get("tool", "") or tc.get("name", ""),
+                        tc.get("args", {}) or tc.get("arguments", {}),
                     )
-                elif task.args.get("tool_call"):
-                    tc = task.args["tool_call"]
-                    if hasattr(self, "_execute_tool"):
-                        return self._execute_tool(
-                            tc.get("tool", "") or tc.get("name", ""),
-                            tc.get("args", {}) or tc.get("arguments", {}),
-                        )
-                    return {"status": "ok", "tool_call": tc}
-                return {"status": "unknown"}
-            finally:
-                self.current_session = prev_session
+                return {"status": "ok", "tool_call": tc}
+            return {"status": "unknown"}
 
         task_id = self._batch_manager.submit(
             action=action,
@@ -734,5 +753,12 @@ class BackgroundMixin(ServerClientStateMixin):
             return denied
         timeout = args.get("timeout")
         if timeout is not None:
-            timeout = float(timeout)
+            try:
+                timeout = float(timeout)
+            except (TypeError, ValueError):
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "timeout must be a number",
+                    hint="Provide a numeric timeout in seconds, e.g. timeout=30.",
+                )
         return self._batch_manager.wait(str(task_id), timeout=timeout)

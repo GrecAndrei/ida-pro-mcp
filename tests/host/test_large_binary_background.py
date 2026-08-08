@@ -10,7 +10,6 @@ available.
 
 from __future__ import annotations
 
-import os
 import threading
 import time
 
@@ -112,15 +111,20 @@ def test_large_binary_background_open_returns_immediately(tmp_path, server):
 def test_background_open_spawns_runtime_in_a_thread(tmp_path, server):
     """The runtime is spawned on a daemon thread, not inline.
 
-    _start_server blocks until released; if the open were synchronous the
-    request would not return until the release fires (~0.3s later).
+    _start_server blocks on release_spawn (never set during _open); if the
+    open were synchronous the request would not return until the release
+    fires, so the test would deadlock until pytest-timeout fails it.  This
+    replaces an earlier hard wall-clock bound (elapsed < 0.25s) that flaked
+    on loaded CI runners.
     """
     binary = tmp_path / "mid.bin"
     binary.write_bytes(b"\x00" * 4096)
     started: list[str] = []
+    spawn_threads: list[threading.Thread] = []
     release_spawn = threading.Event()
 
     def _start_server(session):
+        spawn_threads.append(threading.current_thread())
         started.append(session.session_id)
         release_spawn.wait(timeout=5)
         return {"ok": True}
@@ -129,19 +133,17 @@ def test_background_open_spawns_runtime_in_a_thread(tmp_path, server):
     # Restore the real ensure path so the background thread reaches _start_server.
     server._ensure_runtime_and_idb = IDAMCPServer._ensure_runtime_and_idb.__get__(server)
 
-    timer = threading.Timer(0.3, release_spawn.set)
-    timer.start()
-    t0 = time.monotonic()
     result = _open(server, "ida_open_background", {"binary_path": str(binary)})
-    elapsed = time.monotonic() - t0
-    timer.cancel()
+    # The request returned while the spawn was still pending: release it only
+    # now, then wait for the background thread to drain and verify it ran.
     release_spawn.set()
+    for t in spawn_threads:
+        t.join(timeout=5)
 
     assert result.get("ok") is True
     assert result.get("background") is True
-    # The request returned while the spawn was still pending.
-    assert elapsed < 0.25
     assert started == [result["session_id"]]
+    assert spawn_threads and not any(t.is_alive() for t in spawn_threads)
 
 
 def test_background_open_reuses_persisted_session(tmp_path, server):
@@ -195,7 +197,6 @@ def test_background_load_error_surfaces_in_status(tmp_path, server):
 
     result = _open(server, "ida_open_background", {"binary_path": str(binary)})
     sid = result["session_id"]
-    import time
 
     deadline = time.time() + 5
     while time.time() < deadline and sid not in errors:
@@ -211,13 +212,20 @@ def test_background_load_error_surfaces_in_status(tmp_path, server):
 
 
 def test_large_binary_threshold_respects_env(tmp_path, monkeypatch, server):
+    import importlib
+
     from ida_pro_mcp.host.server import server_session
 
+    # Reload config with the override set so the threshold comes from the
+    # real env parse path in config.py, not a copy of the formula here.
     monkeypatch.setenv("IDA_MCP_LARGE_BINARY_MB", "1")
+    import ida_pro_mcp.host.config as config
+
+    importlib.reload(config)
     monkeypatch.setattr(
         server_session,
         "LARGE_BINARY_THRESHOLD_BYTES",
-        max(1, int(os.environ.get("IDA_MCP_LARGE_BINARY_MB", "50"))) * 1024 * 1024,
+        config.LARGE_BINARY_THRESHOLD_BYTES,
     )
     big = tmp_path / "just-over-1mb.bin"
     big.write_bytes(b"\x00" * (1024 * 1024 + 1))
@@ -231,3 +239,6 @@ def test_large_binary_threshold_respects_env(tmp_path, monkeypatch, server):
     assert "auto_backgrounded" not in _open(
         server, "ida_open_binary", {"binary_path": str(small)}
     )
+    # Restore config to the default threshold for later tests.
+    monkeypatch.delenv("IDA_MCP_LARGE_BINARY_MB", raising=False)
+    importlib.reload(config)

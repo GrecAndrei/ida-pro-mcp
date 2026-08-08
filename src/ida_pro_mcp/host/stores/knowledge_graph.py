@@ -13,6 +13,7 @@ All tables live in the same .blackboard.db file so joins work.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sqlite3
@@ -57,7 +58,7 @@ class KnowledgeGraph:
     # ── schema ────────────────────────────────────────────────────────────────
 
     def _init_tables(self):
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             c.executescript("""
                 CREATE TABLE IF NOT EXISTS kg_systems (
                     id          TEXT PRIMARY KEY,
@@ -171,7 +172,7 @@ class KnowledgeGraph:
                    confidence: float = 0.5) -> str:
         sid = uuid.uuid4().hex[:10]
         now = _now()
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             c.execute(
                 "INSERT INTO kg_systems VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (sid, name, description, _j(members),
@@ -194,19 +195,19 @@ class KnowledgeGraph:
             if k in updates:
                 updates[k] = _j(updates[k])
         sets = ", ".join(f"{k}=?" for k in updates)
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             n = c.execute(f"UPDATE kg_systems SET {sets} WHERE id=?",
                           (*updates.values(), sid)).rowcount
             c.commit()
         return n > 0
 
     def get_system(self, sid: str) -> dict | None:
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             row = c.execute("SELECT * FROM kg_systems WHERE id=?", (sid,)).fetchone()
         return self._sys_row(row) if row else None
 
     def list_systems(self) -> list[dict]:
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             rows = c.execute("SELECT * FROM kg_systems ORDER BY confidence DESC").fetchall()
         return [self._sys_row(r) for r in rows]
 
@@ -242,7 +243,7 @@ class KnowledgeGraph:
                    confidence: float = 0.5) -> str:
         sid = uuid.uuid4().hex[:10]
         now = _now()
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             c.execute(
                 "INSERT INTO kg_structs VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (sid, name, size_bytes, _j(members), _j([]), _j([]),
@@ -253,7 +254,7 @@ class KnowledgeGraph:
 
     def record_struct_access(self, struct_id: str, addr: str,
                               access_type: str, offset: int) -> bool:
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             row = c.execute("SELECT seen_at FROM kg_structs WHERE id=?",
                             (struct_id,)).fetchone()
             if not row:
@@ -267,7 +268,7 @@ class KnowledgeGraph:
         return True
 
     def get_struct(self, struct_id: str) -> dict | None:
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             row = c.execute("SELECT * FROM kg_structs WHERE id=?",
                             (struct_id,)).fetchone()
         if not row:
@@ -278,7 +279,7 @@ class KnowledgeGraph:
         return d
 
     def list_structs(self) -> list[dict]:
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             rows = c.execute("SELECT * FROM kg_structs ORDER BY confidence DESC").fetchall()
         result = []
         for r in rows:
@@ -337,7 +338,7 @@ class KnowledgeGraph:
                            system_id: str = "") -> str:
         sid = uuid.uuid4().hex[:10]
         now = _now()
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             c.execute(
                 "INSERT INTO kg_state_machines VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (sid, name, state_var, _j(states), _j([]),
@@ -348,7 +349,7 @@ class KnowledgeGraph:
 
     def add_transition(self, sm_id: str, from_state: Any, to_state: Any,
                         trigger_addr: str, condition: str = "") -> bool:
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             row = c.execute("SELECT transitions FROM kg_state_machines WHERE id=?",
                             (sm_id,)).fetchone()
             if not row:
@@ -363,7 +364,7 @@ class KnowledgeGraph:
         return True
 
     def get_state_machine(self, sm_id: str) -> dict | None:
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             row = c.execute("SELECT * FROM kg_state_machines WHERE id=?",
                             (sm_id,)).fetchone()
         if not row:
@@ -375,7 +376,7 @@ class KnowledgeGraph:
         return d
 
     def list_state_machines(self) -> list[dict]:
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             rows = c.execute("SELECT * FROM kg_state_machines ORDER BY confidence DESC").fetchall()
         result = []
         for r in rows:
@@ -395,7 +396,7 @@ class KnowledgeGraph:
                 binary_type: str = "") -> str:
         gid = uuid.uuid4().hex[:10]
         now = _now()
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             c.execute(
                 "INSERT INTO kg_gaps VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (gid, expected, why, _j(hints), _j([]),
@@ -405,7 +406,7 @@ class KnowledgeGraph:
         return gid
 
     def fill_gap(self, gap_id: str, filled_by: str) -> bool:
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             n = c.execute(
                 "UPDATE kg_gaps SET filled_by=?, resolved=1, updated_at=? WHERE id=?",
                 (filled_by, _now(), gap_id)
@@ -414,7 +415,7 @@ class KnowledgeGraph:
         return n > 0
 
     def add_gap_candidate(self, gap_id: str, addr: str) -> bool:
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             row = c.execute("SELECT candidates FROM kg_gaps WHERE id=?",
                             (gap_id,)).fetchone()
             if not row:
@@ -428,7 +429,7 @@ class KnowledgeGraph:
         return True
 
     def list_gaps(self, resolved: bool = False) -> list[dict]:
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             rows = c.execute(
                 "SELECT * FROM kg_gaps WHERE resolved=? ORDER BY priority DESC",
                 (1 if resolved else 0,)
@@ -450,7 +451,7 @@ class KnowledgeGraph:
                             confidence: float = 0.5) -> str:
         aid = uuid.uuid4().hex[:10]
         now = _now()
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             c.execute(
                 "INSERT INTO kg_attack_surface VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (aid, entry_point, name, reachable_from, input_type,
@@ -461,7 +462,7 @@ class KnowledgeGraph:
         return aid
 
     def list_attack_surface(self) -> list[dict]:
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             rows = c.execute(
                 "SELECT * FROM kg_attack_surface ORDER BY fuzz_priority DESC"
             ).fetchall()
@@ -485,7 +486,7 @@ class KnowledgeGraph:
             if k in updates:
                 updates[k] = _j(updates[k])
         sets = ", ".join(f"{k}=?" for k in updates)
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             n = c.execute(f"UPDATE kg_attack_surface SET {sets} WHERE id=?",
                           (*updates.values(), aid)).rowcount
             c.commit()
@@ -499,7 +500,7 @@ class KnowledgeGraph:
                         confidence: float = 0.5) -> str:
         pid = uuid.uuid4().hex[:10]
         now = _now()
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             # Don't duplicate
             existing = c.execute(
                 "SELECT id FROM kg_peripherals WHERE base_addr=?", (base_addr,)
@@ -518,7 +519,7 @@ class KnowledgeGraph:
     def record_peripheral_access(self, base_addr: str, driver_addr: str,
                                    offset: int, access_type: str = "rw") -> str:
         """Record that driver_addr accesses peripheral at base_addr+offset."""
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             row = c.execute(
                 "SELECT id, registers, drivers FROM kg_peripherals WHERE base_addr=?",
                 (base_addr,)
@@ -546,7 +547,7 @@ class KnowledgeGraph:
         return pid
 
     def list_peripherals(self) -> list[dict]:
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             rows = c.execute(
                 "SELECT * FROM kg_peripherals ORDER BY confidence DESC"
             ).fetchall()
@@ -562,7 +563,7 @@ class KnowledgeGraph:
     # ── summary ───────────────────────────────────────────────────────────────
 
     def summary(self) -> dict:
-        with self._conn() as c:
+        with contextlib.closing(self._conn()) as c:
             n_sys = c.execute("SELECT COUNT(*) FROM kg_systems").fetchone()[0]
             n_struct = c.execute("SELECT COUNT(*) FROM kg_structs").fetchone()[0]
             n_sm = c.execute("SELECT COUNT(*) FROM kg_state_machines").fetchone()[0]

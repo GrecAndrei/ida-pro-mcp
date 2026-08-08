@@ -305,7 +305,7 @@ def live_context(tmp_path_factory: pytest.TempPathFactory) -> LiveContext:
         yield LiveContext(client=client, binary=binary)
     finally:
         with contextlib.suppress(Exception):
-            _assert_ok(client.call("ida_close_session", {}), "ida_close_session")
+            _assert_ok(client.call("ida_close_session", {"risk_ack": True}), "ida_close_session")
         client.stop()
 
 
@@ -491,7 +491,7 @@ def test_live_index_fails_honestly_when_embeddings_are_disabled(
         assert "embedding" in str(payload.get("message")).lower(), payload
     finally:
         with contextlib.suppress(Exception):
-            _assert_ok(client.call("ida_close_session", {}), "ida_close_session (no embeddings)")
+            _assert_ok(client.call("ida_close_session", {"risk_ack": True}), "ida_close_session (no embeddings)")
         client.stop()
 
 
@@ -513,5 +513,5 @@ def test_live_continuation_reads_a_real_truncated_response(tmp_path_factory: pyt
         assert resumed.get("count", 0) > 0
     finally:
         with contextlib.suppress(Exception):
-            _assert_ok(client.call("ida_close_session", {}), "ida_close_session (truncation)")
+            _assert_ok(client.call("ida_close_session", {"risk_ack": True}), "ida_close_session (truncation)")
         client.stop()

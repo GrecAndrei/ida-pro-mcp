@@ -14,6 +14,8 @@ This folder is the canonical documentation source for `ida-pro-mcp`.
   - `wiki/QuickStart.md` — concise operational quickstart
   - `wiki/INDEX.md` — index of available wiki topics (hand-authored)
   - `wiki/tools/*.md` — per-tool manuals (hand-authored)
+- `reference/IDA_Headless_Scripting.txt` — background reference on IDA 9.2
+  headless automation and the IDAPython module surface
 
 ## Regeneration
 

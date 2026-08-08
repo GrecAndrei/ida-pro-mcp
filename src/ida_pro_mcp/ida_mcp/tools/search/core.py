@@ -304,6 +304,28 @@ def paginate_records(records, offset: int, limit: int, sort_key=None, reverse: b
     return page, total, is_truncated
 
 
+def _match_size_rule(size: int, op: str, val1: int, val2) -> bool:
+    """True if a function of ``size`` bytes satisfies one parsed size rule.
+
+    A parsed size rule is ``(op, val1, val2)`` where ``op`` is one of
+    ``"==", ">", "<"`` and ``val2`` is an upper bound for range rules or
+    ``None``.  Range bounds only apply when no comparator is present, so a
+    comparator is never silently dropped (e.g. ``>100-200`` stays a ``>``
+    rule spanning ``(val1, val2)``).
+    """
+    if op == ">":
+        if val2 is not None:
+            return val1 < size < val2
+        return size > val1
+    if op == "<":
+        if val2 is not None:
+            return val2 < size < val1
+        return size < val1
+    if val2 is not None:
+        return val1 <= size <= val2
+    return size == val1
+
+
 def xref_count_limited(ea: int, max_count: int = 256) -> int:
     count = 0
     for _ in idautils.XrefsTo(ea, 0):

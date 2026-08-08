@@ -92,7 +92,11 @@ def prefer_native_embed() -> bool:
     Explicit ``IDA_MCP_BACKEND=native`` forces it; ``=http``/``=llama``/etc.
     disables it.  Otherwise the ``IDA_MCP_NATIVE`` flag (set by the host
     bootstrap) opts in when the library is present and embedding is not
-    disabled.  Tests never set the flag, so they stay on the HTTP path.
+    disabled.  A user who explicitly chose the cloud backend
+    (``IDA_MCP_EMBED_BACKEND=gemini`` or ``embedder.json`` backend) is never
+    routed to native — the gemini branch in ``BgeCodeEmbedder._init`` is
+    consulted only when this returns False.  Tests never set the flag, so
+    they stay on the HTTP path.
     """
     requested = _backend_requested()
     if requested and requested not in ("auto",):
@@ -101,6 +105,13 @@ def prefer_native_embed() -> bool:
         return False
     if os.environ.get("IDA_MCP_EMBED_DISABLED", "").strip().lower() in _TRUE:
         return False
+    try:
+        from .core import _resolve_backend
+
+        if _resolve_backend() == "gemini":
+            return False
+    except Exception:
+        pass
     return native_embedder_available()
 
 
@@ -401,14 +412,17 @@ class NativeEmbedder:
         return bool(self._ready)
 
     def stop(self) -> None:
-        if self._handle:
-            lib = _NativeLib()
-            if lib.lib is not None:
-                with __import__("contextlib").suppress(Exception):
-                    lib.mcp_embed_free(self._handle)
-        self._handle = None
-        self._ready = False
-        self._use_native = False
+        # Take the encode lock so a background thread mid-_encode cannot read
+        # the handle, then have it freed underneath llama.cpp (use-after-free).
+        with self._lock:
+            if self._handle:
+                lib = _NativeLib()
+                if lib.lib is not None:
+                    with __import__("contextlib").suppress(Exception):
+                        lib.mcp_embed_free(self._handle)
+            self._handle = None
+            self._ready = False
+            self._use_native = False
         with self._vec_cache_lock:
             self._vec_cache.clear()
 
@@ -538,6 +552,16 @@ class NativeReranker:
                     obj._model_path,
                     str(os.environ.get("IDA_MCP_RERANK_PROFILE") or ""),
                 )
+                # _init computed _ctx from the default-discovered model's
+                # profile; recompute against the override so a custom profile
+                # with a smaller max_context actually caps the buffer.
+                obj._ctx = max(
+                    512,
+                    min(
+                        _safe_int_env("IDA_MCP_RERANK_CTX", "1024"),
+                        obj._profile.max_context,
+                    ),
+                )
                 obj._open()
             cls._instance = obj
             return obj
@@ -636,14 +660,17 @@ class NativeReranker:
         return bool(self._ready)
 
     def stop(self) -> None:
-        if self._handle:
-            lib = _NativeLib()
-            if lib.lib is not None:
-                with __import__("contextlib").suppress(Exception):
-                    lib.mcp_rerank_free(self._handle)
-        self._handle = None
-        self._ready = False
-        self._use_native = False
+        # Take the score lock so a background thread mid-_score cannot read the
+        # handle, then have it freed underneath llama.cpp (use-after-free).
+        with self._lock:
+            if self._handle:
+                lib = _NativeLib()
+                if lib.lib is not None:
+                    with __import__("contextlib").suppress(Exception):
+                        lib.mcp_rerank_free(self._handle)
+            self._handle = None
+            self._ready = False
+            self._use_native = False
 
     def _score(self, query: str, docs: list[str]) -> list[float] | None:
         if not docs or not self._use_native or not self._handle:

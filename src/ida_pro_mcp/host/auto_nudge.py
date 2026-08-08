@@ -20,11 +20,10 @@ All removed. Kept:
 from __future__ import annotations
 
 import os
-import threading
 
 # Silent action rewrites for tools LLMs commonly get wrong. These are
 # deterministic and well-tested; the rule-based ones below are gated by
-# the IDA_MCP_ENABLE_REROUTE_RULES env var (default on) so the static map
+# the IDA_MCP_DISABLE_REROUTE_RULES env var (default on) so the static map
 # can be disabled independently if it causes false positives.
 _REROUTE_MAP: dict[tuple[str, str], tuple[str, str]] = {
     ("search", "bytes"): ("search", "string"),
@@ -73,20 +72,14 @@ def get_reroute(tool: str, action: str, args: dict) -> tuple[str, dict] | None:
 # Tool call recording — feeds UsageIntelligence. Cheap, side-effect free.
 # ----------------------------------------------------------------------------
 
-_recorder_lock = threading.Lock()
-_recent_tools: dict[str, list] = {}  # sid -> [(tool, action), ...]
-_RECENT_TOOLS_LIMIT = 16
-
 
 def record_tool_call(idb: str, tool: str, action: str,
                      addr: str | None = None,
                      query: str | None = None) -> None:
-    """Record a tool call. Feeds UsageIntelligence via its own observer;
-    recording is intentionally idempotent and side-effect free.
+    """Record a tool call. Kept as a no-op for API stability.
+
+    server_runtime calls this only when no UsageIntelligence observer is
+    available; when present, UsageIntelligence.observe() is used instead and
+    this fallback records nothing. The previous in-module `_recent_tools`
+    ring buffer was never read by any consumer, so it was removed.
     """
-    key = idb or "_global"
-    with _recorder_lock:
-        recent = _recent_tools.setdefault(key, [])
-        recent.append((tool, action or ""))
-        if len(recent) > _RECENT_TOOLS_LIMIT:
-            del recent[: len(recent) - _RECENT_TOOLS_LIMIT]  # ring-buffer trim

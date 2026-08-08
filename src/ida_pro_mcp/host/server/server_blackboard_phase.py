@@ -9,10 +9,17 @@ This mixin provides:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 from typing import Any
 
 from ..errors import MCPError, make_error
+
+#: funcs tool actions that mutate the IDB; the tool exposes read-only actions
+#: (info/metrics/find_similar) alongside these, so phase gates must not treat
+#: every funcs call as a write. Kept local because funcs.py imports the IDA
+#: SDK and cannot be imported here.
+_FUNCS_WRITE_ACTIONS = frozenset({"create", "change", "delete", "set_flags"})
 
 
 class ServerBlackboardPhaseMixin:
@@ -85,7 +92,13 @@ class ServerBlackboardPhaseMixin:
             return False
         tail = recent[-6:]
         uniq = set(tail)
-        return len(uniq) <= 2 and tail.count(tail[-1]) >= 3
+        if len(uniq) == 1:
+            return True
+        if len(uniq) > 2:
+            return False
+        # Two distinct actions: a genuine loop repeats the latest action in
+        # immediate succession; a clean A/B alternation is a scan, not a loop.
+        return tail.count(tail[-1]) >= 3 and tail[-1] == tail[-2]
 
     def _phase_contracts(self, phase: str) -> dict[str, Any]:
         phase = str(phase or "scout")
@@ -162,7 +175,10 @@ class ServerBlackboardPhaseMixin:
         }
 
     def _phase_has_prove_receipts(self, store) -> bool:
-        cards = store.list(category="hypothesis", include_resolved=True, include_contradicted=False, limit=80)
+        # Scan every decision card regardless of lane: the working_set hint
+        # recommends `lane_now`, which stores cards under category wm_now, not
+        # hypothesis. Filtering on the decision_card tag catches all lanes.
+        cards = store.list(tag="decision_card", include_resolved=True, include_contradicted=False, limit=80)
         has_evidence_card = False
         for c in cards:
             tags = c.get("tags") or []
@@ -182,6 +198,12 @@ class ServerBlackboardPhaseMixin:
         for t in tasks:
             tags = t.get("tags") or []
             if isinstance(tags, list) and "status:done" in tags:
+                return True
+            try:
+                payload = json.loads(str(t.get("content") or "{}"))
+            except Exception:
+                payload = {}
+            if str(payload.get("status") or "").strip().lower() == "done":
                 return True
         return False
 
@@ -210,7 +232,12 @@ class ServerBlackboardPhaseMixin:
         proposal_type = str(args.get("proposal_type") or args.get("type") or "").strip().lower()
         if action in {"proposal_create", "proposal_accept"} and phase in {"scout", "commit"}:
             if proposal_type in {"rename", "patch"} or action in {"proposal_accept"}:
-                self._phase_transition(state, "commit", f"auto: {action} requested")
+                if phase == "scout" and not self._phase_has_prove_receipts(store):
+                    # Route through the prove gate instead of jumping straight
+                    # to commit: proposal ops need evidence receipts first.
+                    self._phase_transition(state, "prove", f"auto: {action} requested without evidence")
+                else:
+                    self._phase_transition(state, "commit", f"auto: {action} requested")
         if action in {"memory_compile", "phase_finalize"}:
             self._phase_transition(state, "finalize", f"auto: {action} requested")
 
@@ -255,6 +282,23 @@ class ServerBlackboardPhaseMixin:
 
     # ── Pre-flight / follow-up gates ─────────────────────────────────────────
 
+    @staticmethod
+    def _phase_write_call(tool_name: str, action: str) -> bool:
+        """True when a tool call mutates the IDB (a write-surface call).
+
+        funcs exposes read-only actions (info/metrics/find_similar) next to
+        its writes, so only the write actions are gated; ``modify``,
+        ``segments``, and ``annotation`` are treated as write tools. This one
+        classification is shared by the prove and commit branches so both
+        gate the same calls.
+        """
+        tool = str(tool_name or "").strip().lower()
+        if tool in {"modify", "segments", "annotation"}:
+            return True
+        if tool == "funcs":
+            return str(action or "").strip().lower() in _FUNCS_WRITE_ACTIONS
+        return False
+
     def _phase_preflight_for_tool(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any] | None:
         try:
             if str(tool_name or "").strip().lower() == "blackboard":
@@ -274,8 +318,7 @@ class ServerBlackboardPhaseMixin:
             if phase == "scout":
                 return None
             if phase == "prove":
-                risky = {"modify", "segments", "funcs", "annotation"}
-                if str(tool_name or "") in risky and not self._phase_has_prove_receipts(store):
+                if self._phase_write_call(tool_name, action) and not self._phase_has_prove_receipts(store):
                     return make_error(
                         MCPError.INVALID_ARGS,
                         "prove phase requires evidence cards and completed trace tasks before write-surface tools",
@@ -283,7 +326,7 @@ class ServerBlackboardPhaseMixin:
                     )
                 return None
             if phase == "commit":
-                if str(tool_name or "") == "modify":
+                if self._phase_write_call(tool_name, action):
                     ack = bool((args or {}).get("_phase_commit_ack", False))
                     if not ack:
                         return make_error(
@@ -365,8 +408,21 @@ class ServerBlackboardPhaseMixin:
         markers = state.get("policy_markers")
         if not isinstance(markers, list):
             markers = []
-        markers.append(str(marker or ""))
+        call_count = int(state.get("last_call_count_at_update", 0))
+        markers.append(f"{marker}@{call_count}")
         state["policy_markers"] = markers[-50:]
+
+    @staticmethod
+    def _marker_call(markers: list[Any], name: str) -> int:
+        """Latest call count at which a named marker was recorded (0 if never)."""
+        best = 0
+        prefix = f"{name}@"
+        for m in markers or []:
+            s = str(m)
+            if s.startswith(prefix) and len(s) > len(prefix):
+                with contextlib.suppress(ValueError):
+                    best = max(best, int(s.split("@", 1)[1]))
+        return best
 
     def _bb_policy_snapshot(self, state: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -386,20 +442,36 @@ class ServerBlackboardPhaseMixin:
 
     def _bb_policy_check(self, state: dict[str, Any]) -> dict[str, Any]:
         reasons = []
+        markers = state.get("policy_markers") or []
+        current_call = int(state.get("last_call_count_at_update", 0))
+        max_stale = max(1, int(state.get("max_staleness_calls", 6)))
+        ok = True
         if bool(state.get("require_working_set", True)):
-            reasons.append("require_working_set=True")
+            last_ws = self._marker_call(markers, "working_set")
+            if current_call - last_ws > max_stale:
+                ok = False
+                reasons.append("require_working_set: no working_set call within max_staleness_calls")
         if bool(state.get("require_decision_or_write", True)):
-            reasons.append("require_decision_or_write=True")
-        staleness = int(state.get("max_staleness_calls", 6))
+            last_dw = max(self._marker_call(markers, "decision"), self._marker_call(markers, "write"))
+            if current_call - last_dw > max_stale:
+                ok = False
+                reasons.append("require_decision_or_write: no decision/write within max_staleness_calls")
+        staleness = max_stale
         if staleness < 3:
             reasons.append(f"max_staleness_calls={staleness} (minimum 3 recommended)")
         strict = bool(state.get("strict_mode", False))
         if strict:
             reasons.append("strict_mode enabled — phase gates are enforced")
+        if not ok:
+            reasons.append("Call working_set, then write a decision card or finding, before retrying the gated action.")
         return {
-            "ok": True,
+            "ok": ok,
             "strict_mode": strict,
             "enforce_phases": list(state.get("enforce_phases") or []),
             "reasons": reasons[:10],
-            "recommendation": "Set strict_mode=false or expand enforce_phases if gates are too aggressive.",
+            "recommendation": (
+                "Set strict_mode=false or expand enforce_phases if gates are too aggressive."
+                if ok
+                else "Call working_set and write a decision card or finding before retrying."
+            ),
         }

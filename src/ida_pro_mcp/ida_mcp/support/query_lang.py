@@ -62,6 +62,17 @@ except ImportError:
     except ImportError:
         pass
 
+# The support package has no _common.py, so the star-import above normally
+# falls back to stubs.  Pull in the real error envelope from error_handling
+# (pure stdlib, no IDA SDK dependency) so every error response honors the
+# {error: True, code, message, hint} contract instead of a bare dict.  The
+# relative import resolves against whatever parent package hosts this module
+# (ida_pro_mcp.ida_mcp in the venv, ida_mcp in standalone IDA mode).
+try:
+    from ..error_handling import ERROR_HINTS, MCPError, make_error  # noqa: F401
+except (ImportError, ValueError):
+    pass
+
 if "tool" not in globals():
     def tool(f):
         return f  # type: ignore
@@ -72,7 +83,7 @@ if "IDAError" not in globals():
     IDAError = Exception  # type: ignore
 if "make_error" not in globals():
     def make_error(code, msg, **kw):
-        return {"error": msg, **kw}  # type: ignore
+        return {"error": True, "code": code, "message": msg, **kw}  # type: ignore
 if "MCPError" not in globals():
     class MCPError:
         INVALID_ARGS = "INVALID_ARGS"
@@ -84,7 +95,8 @@ _TOOL_CACHE: Dict[str, Any] = {}
 def _get_tool(name: str):
     if name not in _TOOL_CACHE:
         try:
-            mod = importlib.import_module(f".{name}", package=__package__)
+            # Tool modules live in the sibling tools package, not support/.
+            mod = importlib.import_module(f"..tools.{name}", package=__package__)
             _TOOL_CACHE[name] = getattr(mod, name)
         except (ImportError, AttributeError):
             _TOOL_CACHE[name] = None

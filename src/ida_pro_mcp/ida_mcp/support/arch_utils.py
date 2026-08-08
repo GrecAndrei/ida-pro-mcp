@@ -206,8 +206,8 @@ RETURN_MNEMONICS = {
     "c.jr",     # compressed return: c.jr ra
     "c.jalr",   # compressed return-and-link (rare but valid as ret when rd=ra)
     # SPARC
-    "retl", # SuperH
-    "rts",
+    "retl",
+    "rts",     # SuperH return (also SPARC's non-leaf return)
     # 68k
     "rte", "rtd",
     # Xtensa
@@ -513,6 +513,9 @@ def get_callee_saved_registers(arch=None):
         arch = get_arch()
     _map = {
         "x86": {"ebp", "ebx", "edi", "esi"},
+        # x64 assumes the Windows x64 ABI (rdi/rsi are callee-saved there).
+        # On the SysV ABI (Linux/macOS/BSD) rdi/rsi are volatile argument
+        # registers; callers analyzing SysV binaries should drop them.
         "x64": {"rbp", "rbx", "rdi", "rsi", "r12", "r13", "r14", "r15"},
         "arm": {"r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "lr", "fp"},
         "arm64": {"x19", "x20", "x21", "x22", "x23", "x24", "x25",
@@ -907,6 +910,12 @@ def detect_riscv_gp():
                 if mnem == "auipc" and op0 in ("gp", "x3"):
                     # auipc gp, imm  =>  gp = PC + (imm << 12)
                     imm = idc.get_operand_value(ea, 1)
+                    # sign-extend the 20-bit immediate, mirroring the addi
+                    # handling below: a %pcrel_hi with bit 19 set (negative
+                    # displacement, e.g. __global_pointer$ below _start) must
+                    # not be treated as a large positive.
+                    if imm & 0x80000:
+                        imm -= 0x100000
                     prev_auipc_val = ea + (imm << 12)
                 elif mnem == "addi" and op0 in ("gp", "x3") and prev_auipc_val is not None:
                     # addi gp, gp, imm  =>  gp = prev + sign_extend(imm, 12)

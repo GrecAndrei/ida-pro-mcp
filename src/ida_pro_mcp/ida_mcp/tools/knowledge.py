@@ -11,9 +11,9 @@ except ImportError:
 try:
     from ida_pro_mcp.services import SymbolDB, get_chip_family_catalog, infer_binary_arch_profile
 except ImportError:
-    from host.arch_profile import infer_binary_arch_profile  # type: ignore[import-not-found]
-    from host.chip_db import get_chip_family_catalog  # type: ignore[import-not-found]
-    from host.symbol_db import SymbolDB  # type: ignore[import-not-found]
+    from host.analysis.arch_profile import infer_binary_arch_profile  # type: ignore[import-not-found]
+    from host.stores.chip_db import get_chip_family_catalog  # type: ignore[import-not-found]
+    from host.stores.symbol_db import SymbolDB  # type: ignore[import-not-found]
 
 
 def _collect_string_refs(func_ea: int, limit: int = 24) -> List[str]:

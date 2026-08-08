@@ -2,6 +2,89 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-08-08 — swarm/agent-blitz: contract hardening, security, coverage (67-agent wave)
+
+~360 audit findings verified and fixed across a 17-agent fixer fleet (disjoint file
+ownership), 16 cross-package integration handoffs, and a 5-package testbench/scripts/
+CI/docs pass. Branch `swarm/agent-blitz`.
+
+### Security & hardening
+- **Bridge session-token auth is now mandatory**: `server_script.py` previously
+  accepted tool calls when no token was configured, leaving arbitrary tool
+  execution (incl. python code exec) open to any local process that could reach
+  the RPC socket. An unconfigured bridge now refuses every tool call with
+  `UNAUTHORIZED`.
+- **Tool loader can no longer clobber stdlib imports**: `tools/types.py` and
+  `tools/code.py` were registered flat in `sys.modules`, shadowing stdlib
+  `types`/`code` and silently breaking later `from types import UnionType`
+  imports. The loader snapshots and restores shadowed modules.
+- **MCP HTTP hardening** (`ida_mcp/zeromcp/mcp.py`): 60s socket timeout against
+  slowloris/stalled clients; non-numeric/negative `Content-Length` → clean 400;
+  `send_error` closes the connection so an over-limit body can't desync a
+  kept-alive connection; SSE session is validated *before* dispatch so a bogus
+  session id can never execute a tool; notification `202` returns a valid empty
+  body; URI-template matching `re.escape`s literal parts.
+- **Failed IDA calls surface as MCP errors**: the zero-mcp layer detects the
+  `{error: True, ...}` envelope and returns `isError: true` with
+  `structuredContent`, so clients branching on `isError` see failures instead of
+  a "successful" call.
+- **Pre-analysis options now reach the IDA side**: `stack_size` and
+  `processor_options` from `IDA_MCP_PRE_ANALYSIS_OPTS` are applied post-load
+  (`inf_set_ssize` / `set_processor_options`); `memory_model` left as a documented
+  TODO until the host encoding → `MT_*` mapping is validated live.
+
+### Correctness
+- **STUCK_LOOP drift detector no longer hard-blocks by default**: the
+  `is_running()` activation gated legitimate repeated reads; the block is now
+  opt-in via `IDA_MCP_STUCK_LOOP_BLOCK=1`, with the drift signal/notification
+  staying advisory.
+- **Blackboard publish ack restored**: `_publish_findings` requires `_risk_ack`,
+  but the dispatcher popped it before routing — the ack gate now reaches the
+  handler; `blackboard/coverage` is implemented host-side and classified as a
+  read-tier action.
+- **Tool-result caches no longer poisoned**: `_elapsed_ms` injection and
+  `@idaread`/`@idawrite` cache reads now copy the dict, so caller mutation can't
+  leak into later cache hits.
+- **Stack-analysis heuristics**: store-type mnemonic allowlist (a
+  `cmp [rbp-8], 0` read no longer marks a local initialized); shared
+  buffer/array size heuristics so `buffers`/`arrays`/`summary` agree on the same
+  frame.
+- **Session actions rewired**: `rate_skill`, `list_skills`, `suggest_triage`,
+  `suggest_strategy`, `get_phase`, `dashboard` wired into the dispatch surface
+  with thin session-manager handlers; dead `_ANALYSIS_PHASES` and stale
+  LONG_RUNNING_ACTIONS entries removed.
+- **Policy gaps closed**: `types/import_header` + `types/propagate` classify as
+  WRITE_IDB; `ida_batch` classifies WRITE_IDB (was UNKNOWN); blackboard reads
+  are read-tier; `modify` governance doc updated (executable-segment patches are
+  blocked unless acknowledged).
+- **~400 lines of dead code removed** (`ida_mcp/utils.py` unreferenced TypedDicts
+  and helpers); `annotation.py` danger-API lookup is now case-insensitive.
+
+### Tests & coverage
+- 21 new test files + expansions across host dispatch, policy classification,
+  session fixes, runtime leases/recovery, response formatting, skills, workflow
+  batch, blackboard, and intelligence (embeddings, threat corpus, truncation,
+  patterns, symbol DB).
+- Live-agent-surface integration tests now pass `risk_ack` where
+  `ida_close_session` requires it.
+- Test-quality pass (wave B): `test_auto_reanalyze_text_segments` now exercises
+  the *live* `analysis.py` helpers instead of a stale exec'd copy; ephemeral
+  ports replace hard-coded ones in RPC concurrency tests; busy-wait loops
+  replaced with `threading.Event` in batch-manager tests.
+
+### Scripts, benchmarks, CI, docs (wave B)
+- Smoke/report scripts hardened (`smoke_core_path`, `smoke_mcp_all_tools`,
+  `smoke_mcp_all_actions`, `test_live_ida_crystallize`, occupancy reports);
+  benchmark scripts (`rerank_bench`, `embed_bench`, `native_bench`,
+  `ab_interleave`) fixed; `pyyaml` added to dev deps so `test_ci_workflows` runs
+  on CI; docs content updated (ROADMAP, LIVE_IDA_TESTING, POLICY, wiki tools).
+  A proposed CI coverage gate was measured (39% — dominated by IDA-runtime code)
+  and deliberately rejected as arbitrary churn.
+
+### Notes
+- Test suite must run with `--basetemp` on `/home` — the `/tmp` tmpfs fills
+  (`ENOSPC`).
+
 ## 2026-08-07 — intelligence control-plane coverage + reranker busy-queue fix
 
 - **Reranker lock contention retired a healthy shared server**: the

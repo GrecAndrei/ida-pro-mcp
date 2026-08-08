@@ -53,6 +53,8 @@ def search_insns(pattern, range_start, range_end, include_context, offset, limit
                             truncated = True
                             break
             ea = idc.next_head(ea, seg_end)
+            if ea == idaapi.BADADDR:
+                break
 
     return build_response(results, offset, limit, matches_seen, truncated, pattern=pattern)
 
@@ -177,6 +179,8 @@ def search_comment(pattern, case_sensitive, range_start, range_end, offset, limi
                         truncated = True
                         break
             ea = idc.next_head(ea, seg_end)
+            if ea == idaapi.BADADDR:
+                break
 
     result = build_response(results, offset, limit, matches_seen, truncated, pattern=pattern)
     if timed_out:

@@ -21,6 +21,7 @@ import os
 import re
 import shutil
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
@@ -38,48 +39,6 @@ from ..config import (
     log_rpc,
 )
 from ..errors import MCPError, is_error_result, make_error
-
-# ============================================================================
-# ANALYSIS PHASES
-# ============================================================================
-
-_ANALYSIS_PHASES = {
-    "triage": {
-        "order": 0,
-        "threshold": {"functions_listed": 1, "strings_listed": 1, "imports_listed": 1},
-        "suggested_tools": ["idb.summary", "data.imports", "data.strings"],
-        "description": "Initial triage: identify binary type, imports, and suspicious strings.",
-    },
-    "import_analysis": {
-        "order": 1,
-        "threshold": {"imports_categorized": 20, "api_patterns_detected": 1},
-        "suggested_tools": ["imports_deep.thunks", "data.imports"],
-        "description": "Categorize imports and detect API usage patterns.",
-    },
-    "deep_analysis": {
-        "order": 2,
-        "threshold": {"functions_decompiled": 10, "function_attrs_indexed": 1},
-        "suggested_tools": ["code.decompile", "ctree.get"],
-        "description": "Deep decompilation and semantic analysis.",
-    },
-    "behavior_mapping": {
-        "order": 3,
-        "threshold": {"functions_analyzed": 50, "xrefs_traced": 30},
-        "description": "Map control flow and cross-reference chains.",
-    },
-    "vulnerability": {
-        "order": 4,
-        "threshold": {"functions_analyzed": 100, "dangerous_apis_identified": 5},
-        "suggested_tools": ["gadgets.find", "stack_analysis.analyze_frame"],
-        "description": "Vulnerability and exploit analysis.",
-    },
-    "reporting": {
-        "order": 5,
-        "threshold": {"bookmarks_created": 5},
-        "suggested_tools": ["blackboard.export", "session.notebook"],
-        "description": "Compile findings and produce report.",
-    },
-}
 
 # ============================================================================
 # SESSION
@@ -379,7 +338,11 @@ class SessionManager(SessionSkillsMixin):
 
     def _save_metadata(self, session: Session):
         path = self._get_metadata_path(session.session_id)
-        tmp = path + ".tmp"
+        # Scope the tmp name by pid so two hosts sharing one durable cache
+        # writing the same session never truncate the same tmp file and
+        # interleave JSON into metadata.json. os.replace is atomic, so each
+        # writer's complete file wins wholesale.
+        tmp = f"{path}.{os.getpid()}.tmp"
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(tmp, "w", encoding="utf-8") as f:
@@ -546,8 +509,30 @@ class SessionManager(SessionSkillsMixin):
             session = self.sessions.get(sid)
             if session:
                 session.update_access()
+                self._maybe_persist_access(session)
                 return copy.deepcopy(session)
             return None
+
+    def _maybe_persist_access(self, session: Session, throttle_seconds: float = 60.0) -> None:
+        """Persist ``last_accessed`` for *session*, throttled.
+
+        ``get_session`` bumps the in-memory timestamp on every read; without a
+        matching on-disk update, restart-time prune guards (``auto_prune`` /
+        ``cleanup_stale``, which load ``last_accessed`` from disk) can delete a
+        session the user actively used right before a crash — exactly the
+        failure mode the ``min_idle_days`` guard exists to prevent. Writing
+        metadata on every read would thrash the disk, so only write when the
+        last persisted value is older than the throttle window.
+        """
+        saved = getattr(self, "_last_accessed_saved", None)
+        if not isinstance(saved, dict):
+            self._last_accessed_saved = {}
+            saved = self._last_accessed_saved
+        last = saved.get(session.session_id)
+        now = time.time()
+        if last is None or now - last >= throttle_seconds:
+            saved[session.session_id] = now
+            self._save_metadata(session)
 
     def find_session_by_path(self, path: str) -> Session | None:
         with self._lock:
@@ -622,6 +607,16 @@ class SessionManager(SessionSkillsMixin):
                     deleted = True
                 except Exception as e:
                     log_rpc(f"Failed to delete {cache_path}: {e}")
+        # Runtime lease file lives in runtime_leases/ (not the cache root the
+        # globs above cover); drop it so no stale lease claims a deleted
+        # session and later confuses ownership forensics or lease adoption.
+        lease_path = os.path.join(self.cache_dir, "runtime_leases", f"SID_{sid}.lease.json")
+        if os.path.exists(lease_path):
+            try:
+                os.remove(lease_path)
+                deleted = True
+            except Exception as e:
+                log_rpc(f"Failed to delete {lease_path}: {e}")
         return bool(session) or deleted
 
     def delete_session(self, sid: str) -> bool:
@@ -657,6 +652,10 @@ class SessionManager(SessionSkillsMixin):
             new_sid = self._new_session_id()
             # Generate a NEW IDB path for the duplicate to avoid corruption
             idb_base = os.path.basename(session.binary_path or f"session_{new_sid}")
+            # Strip .i64 extension from base to avoid double extension
+            # (SID_xxx_foo.i64.i64) — matches create_session.
+            if idb_base.endswith(".i64"):
+                idb_base = idb_base[:-4]
             new_idb = os.path.join(self.session_dir, f"SID_{new_sid}", f"SID_{new_sid}_{idb_base}.i64")
             new_session = Session(
                 new_sid, new_idb, session.binary_path,
@@ -707,7 +706,24 @@ class SessionManager(SessionSkillsMixin):
             skills_import = data_copy.pop("_skills", None)
             activity_import = data_copy.pop("_activity_log", None)
             hypotheses_import = data_copy.pop("_hypotheses", None)
+            # Give the imported session its OWN IDB path under its new SID
+            # directory. Reusing the source's exported idb_path would alias
+            # two sessions onto one IDB file (duplicate_session deliberately
+            # regenerates it "to avoid corruption") and make both runtimes
+            # contend for the same IDB lock.
+            binary = str(data_copy.get("binary_path") or "")
+            idb_base = os.path.basename(binary) if binary else f"session_{new_sid}"
+            # Strip .i64 extension to avoid double extension (SID_xxx_foo.i64.i64).
+            if idb_base.endswith(".i64"):
+                idb_base = idb_base[:-4]
+            data_copy["idb_path"] = os.path.join(
+                self.session_dir, f"SID_{new_sid}", f"SID_{new_sid}_{idb_base}.i64"
+            )
             session = Session.from_dict(data_copy)
+            # Fresh timestamps: a just-imported session is not idle, so
+            # auto-prune/cleanup_stale must not treat it as stale immediately.
+            session.created_at = datetime.now()
+            session.last_accessed = datetime.now()
             self.sessions[new_sid] = session
             self._save_metadata(session)
             if skills_import:
@@ -1043,18 +1059,29 @@ class SessionManager(SessionSkillsMixin):
                     break
             if not snap:
                 return None
-            # Restore metadata
-            meta = snap.get("metadata", {})
             session = self.sessions.get(sid)
-            if session:
-                for key, val in meta.items():
-                    if key not in ("session_id", "_snapshot_id", "_snapshot_time", "_message"):
-                        if hasattr(session, key):
-                            if key in ("created_at", "last_accessed") and isinstance(val, str):
-                                with contextlib.suppress(Exception):
-                                    val = datetime.fromisoformat(val)
-                            setattr(session, key, val)
-                self._save_metadata(session)
+            if session is None:
+                # Nothing to restore into — a deleted session has no live
+                # record, so writing its skills/notebook back would only
+                # create orphaned artifacts. The caller reports the miss.
+                return None
+            # Restore only user-facing metadata; keep runtime-critical paths
+            # and analysis/launch flags on the LIVE session. A snapshot must
+            # not re-point the session at a stale binary/IDB path, resurrect
+            # an old policy mode, or roll back the analysis flags.
+            keep_current = {
+                "session_id", "idb_path", "binary_path", "analysis_options",
+                "analysis_applied", "ida_args", "packed_idb", "policy_mode",
+                "created_at", "last_accessed",
+            }
+            meta = snap.get("metadata", {})
+            for key, val in meta.items():
+                if key.startswith("_") or key in keep_current:
+                    continue
+                if hasattr(session, key):
+                    setattr(session, key, val)
+            session.update_access()
+            self._save_metadata(session)
             # Restore skills
             skills = snap.get("skills", {})
             if skills:
@@ -1090,7 +1117,9 @@ class SessionManager(SessionSkillsMixin):
 
     def _save_snapshots(self, sid: str, snapshots: list[dict]):
         path = self._get_snapshots_path(sid)
-        tmp = path + ".tmp"
+        # Pid-scoped tmp so concurrent hosts sharing the cache never write
+        # into one another's temp file.
+        tmp = f"{path}.{os.getpid()}.tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(snapshots, f, indent=2)
@@ -1122,7 +1151,9 @@ class SessionManager(SessionSkillsMixin):
 
     def _save_notebook(self, sid: str, content: str):
         path = self._get_notebook_path(sid)
-        tmp = path + ".tmp"
+        # Pid-scoped tmp so concurrent hosts sharing the cache never write
+        # into one another's temp file.
+        tmp = f"{path}.{os.getpid()}.tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write(content)
@@ -1187,6 +1218,37 @@ class SessionManager(SessionSkillsMixin):
 # ============================================================================
 
 
+def _coerce_bookmark_tags(tags: Any) -> list[str]:
+    """Normalize a caller- or storage-supplied tags value into a list of str.
+
+    Callers may pass a list, a single string (parsed like the create path), a
+    bare scalar (e.g. a JSON number), or nothing. A non-list scalar stored
+    verbatim would later crash ``BookmarkManager.list``/``find``/``export``,
+    which iterate ``tags``, so coerce defensively on both write and read.
+    """
+    if tags is None:
+        return []
+    if isinstance(tags, str):
+        return parse_str_list(tags)
+    if isinstance(tags, list):
+        return [str(t) for t in tags if t is not None]
+    return [str(tags)]
+
+
+def _bookmark_sort_key(b: dict) -> int:
+    """Sort key for ``BookmarkManager.export``.
+
+    A stored ``priority`` may be a non-integer (legacy rows, hostile input);
+    ``sorted`` compares keys directly, so a bare ``x.get("priority")`` would
+    raise ``TypeError`` on int-vs-str comparison before the per-row star
+    computation could guard it.
+    """
+    try:
+        return int(b.get("priority", 3))
+    except (TypeError, ValueError):
+        return 3
+
+
 class BookmarkManager:
     def __init__(self, session_dir: str):
         self.session_dir = session_dir
@@ -1211,7 +1273,9 @@ class BookmarkManager:
 
     def save(self, sid: str, bookmarks: list[dict]) -> dict:
         path = self._get_path(sid)
-        tmp = path + ".tmp"
+        # Pid-scoped tmp so concurrent hosts sharing the cache never write
+        # into one another's temp file.
+        tmp = f"{path}.{os.getpid()}.tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(bookmarks, f, indent=2)
@@ -1227,14 +1291,18 @@ class BookmarkManager:
                 return make_error(MCPError.INVALID_ARGS, "addr required")
             bookmarks = self.load(sid)
             max_id = max([b.get("id", 0) for b in bookmarks]) if bookmarks else 0
-            tags = data.get("tags", [])
-            if isinstance(tags, str):
-                tags = parse_str_list(tags)
+            tags = _coerce_bookmark_tags(data.get("tags", []))
+            try:
+                priority = int(data.get("priority", 3))
+            except (TypeError, ValueError):
+                # A non-integer priority must not crash the whole tool call;
+                # fall back to the default instead of propagating.
+                priority = 3
             new_bm = {
                 "id": max_id + 1, "addr": data.get("addr"),
                 "name": data.get("name", f"Mark at {data.get('addr')}"),
                 "notes": data.get("notes", ""), "category": data.get("category", "general"),
-                "priority": int(data.get("priority", 3)), "tags": tags,
+                "priority": priority, "tags": tags,
                 "timestamp": datetime.now().isoformat(),
             }
             for i, bm in enumerate(bookmarks):
@@ -1262,7 +1330,10 @@ class BookmarkManager:
                 filtered = [b for b in filtered if cat_matcher(b.get("category", ""))]
             if f_tag:
                 tag_matcher = compile_smart_pattern(f_tag, case_sensitive=False)
-                filtered = [b for b in filtered if any(tag_matcher(t) for t in b.get("tags", []))]
+                filtered = [
+                    b for b in filtered
+                    if any(tag_matcher(t) for t in _coerce_bookmark_tags(b.get("tags", [])))
+                ]
             if f_pri:
                 with contextlib.suppress(ValueError, TypeError):
                     filtered = [b for b in filtered if b.get("priority", 0) >= int(f_pri)]
@@ -1306,8 +1377,13 @@ class BookmarkManager:
                     for key in ["name", "notes", "category", "priority", "tags", "addr"]:
                         if key in data:
                             val = data[key]
-                            if key == "tags" and isinstance(val, str):
-                                val = parse_str_list(val)
+                            if key == "tags":
+                                val = _coerce_bookmark_tags(val)
+                            elif key == "priority":
+                                try:
+                                    val = int(val)
+                                except (TypeError, ValueError):
+                                    val = 3
                             bookmarks[i][key] = val
                     res = self.save(sid, bookmarks)
                     return res if is_error_result(res) else {"ok": True, "bookmark": bm}
@@ -1323,7 +1399,8 @@ class BookmarkManager:
             bookmarks = self.load(sid)
             matcher = compile_smart_pattern(query, case_sensitive=False)
             results = [b for b in bookmarks if matcher(b.get("name", "")) or matcher(b.get("notes", ""))
-                       or any(matcher(t) for t in b.get("tags", [])) or matcher(b.get("addr", "")) or matcher(b.get("category", ""))]
+                       or any(matcher(t) for t in _coerce_bookmark_tags(b.get("tags", [])))
+                       or matcher(b.get("addr", "")) or matcher(b.get("category", ""))]
             return {"ok": True, "results": results, "count": len(results)}
 
     def export(self, sid: str) -> dict:
@@ -1332,12 +1409,16 @@ class BookmarkManager:
             if not bookmarks:
                 return {"ok": True, "report": "No bookmarks found."}
             lines = [f"# Forensic Research Report - Session {sid}", ""]
-            for b in sorted(bookmarks, key=lambda x: x.get("priority", 3)):
-                prio = "*" * (6 - b.get("priority", 3))
+            for b in sorted(bookmarks, key=_bookmark_sort_key):
+                try:
+                    prio = "*" * (6 - int(b.get("priority", 3)))
+                except (TypeError, ValueError):
+                    prio = ""
                 lines.append(f"## [{b['id']}] {b['name']} @ {b['addr']} {prio}")
                 lines.append(f"- **Category**: {b.get('category', 'general')}")
-                if b.get("tags"):
-                    lines.append(f"- **Tags**: {', '.join(b['tags'])}")
+                tags = _coerce_bookmark_tags(b.get("tags", []))
+                if tags:
+                    lines.append(f"- **Tags**: {', '.join(tags)}")
                 lines.append(f"- **Time**: {b.get('timestamp')}")
                 lines.append("")
                 lines.append(b.get("notes", "No notes provided."))

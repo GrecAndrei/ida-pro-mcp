@@ -44,6 +44,10 @@ def _make_assembler(**attrs) -> ContextAssembler:
     obj._perf_lock = threading.Lock()
     obj._semantic_budget_cache = {}
     obj._semantic_budget_lock = threading.Lock()
+    obj._max_indexes = 4
+    obj._idx_last_access = {}
+    obj._session_last_seen = {}
+    obj._session_last_seen_lock = threading.Lock()
     for key, value in attrs.items():
         setattr(obj, key if key.startswith("_") else f"_{key}", value)
     return obj

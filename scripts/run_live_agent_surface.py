@@ -23,8 +23,8 @@ def main() -> int:
     parser.add_argument("--idat", help="Explicit idat/idat64 executable")
     parser.add_argument("--binary", help="Optional binary; otherwise compile the deterministic fixture")
     parser.add_argument(
-        "--embed-profile", choices=["bge-code-v1", "zembed-1"],
-        help="Optional local embedding profile for semantic coverage",
+        "--embed-profile", choices=["qwen3-embedding-0.6b", "bge-code-v1", "zembed-1"],
+        help="Optional local embedding profile for semantic coverage (default: qwen3-embedding-0.6b)",
     )
     parser.add_argument("--embed-model", help="Optional GGUF model path for semantic coverage")
     parser.add_argument("--embed-server-bin", help="Optional llama-server path for semantic coverage")

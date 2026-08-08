@@ -362,17 +362,37 @@ def _parse_line_range(value: Any) -> tuple[int | None, int | None]:
     if value is None:
         return (None, None)
     if isinstance(value, (list, tuple)) and len(value) == 2:
-        return (int(value[0]) if value[0] is not None else None,
-                int(value[1]) if value[1] is not None else None)
+        start = _parse_int(value[0])
+        end = _parse_int(value[1])
+        return (start, end)
     s = str(value).strip()
     if not s:
         return (None, None)
     if "-" in s:
         parts = s.split("-", 1)
-        start = int(parts[0]) if parts[0].strip() else None
-        end = int(parts[1]) if parts[1].strip() else None
+        start = _parse_int(parts[0]) if parts[0].strip() else None
+        end = _parse_int(parts[1]) if parts[1].strip() else None
         return (start, end)
-    return (int(s), None)
+    return (_parse_int(s), None)
+
+
+def _parse_int(value: Any) -> int | None:
+    """Parse an integer-like value, returning None instead of raising.
+
+    Used by _parse_line_range so that non-numeric user input (e.g.
+    lines="oops") degrades to "no line window" rather than crashing the
+    request handler.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value).strip())
+    except (ValueError, TypeError):
+        return None
 
 
 def _normalize_session_id(value: Any) -> str | None:

@@ -52,6 +52,22 @@ Input schema:
         "loader_options": {
           "type": "string",
           "description": "Raw loader options string."
+        },
+        "arch": {
+          "type": "string",
+          "description": "Alias for processor."
+        },
+        "proc": {
+          "type": "string",
+          "description": "Alias for processor."
+        },
+        "bits": {
+          "type": "integer",
+          "description": "Alias for bitness."
+        },
+        "endianness": {
+          "type": "string",
+          "description": "Alias for endian."
         }
       }
     },
@@ -205,6 +221,22 @@ Input schema:
         "loader_options": {
           "type": "string",
           "description": "Raw loader options string."
+        },
+        "arch": {
+          "type": "string",
+          "description": "Alias for processor."
+        },
+        "proc": {
+          "type": "string",
+          "description": "Alias for processor."
+        },
+        "bits": {
+          "type": "integer",
+          "description": "Alias for bitness."
+        },
+        "endianness": {
+          "type": "string",
+          "description": "Alias for endian."
         }
       }
     },
@@ -398,8 +430,15 @@ Input schema:
 ```json
 {
   "type": "object",
-  "properties": {},
-  "required": [],
+  "properties": {
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this session teardown is intended."
+    }
+  },
+  "required": [
+    "risk_ack"
+  ],
   "additionalProperties": false
 }
 ```
@@ -408,7 +447,9 @@ Example:
 ```json
 {
   "name": "ida_close_session",
-  "arguments": {}
+  "arguments": {
+    "risk_ack": true
+  }
 }
 ```
 
@@ -1516,18 +1557,8 @@ Input schema:
         "not",
         "shl",
         "shr"
-      ]
-    },
-    "op": {
-      "type": "string",
-      "enum": [
-        "and",
-        "or",
-        "xor",
-        "not",
-        "shl",
-        "shr"
-      ]
+      ],
+      "description": "Bitwise operation to apply (and, or, xor, not, shl, shr)."
     },
     "intent": {
       "type": "string"
@@ -2619,9 +2650,15 @@ Input schema:
     "idb": {
       "type": "string",
       "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
     }
   },
-  "required": [],
+  "required": [
+    "risk_ack"
+  ],
   "additionalProperties": false
 }
 ```
@@ -2630,7 +2667,9 @@ Example:
 ```json
 {
   "name": "ida_save_idb",
-  "arguments": {}
+  "arguments": {
+    "risk_ack": true
+  }
 }
 ```
 
@@ -2654,10 +2693,15 @@ Input schema:
     "idb": {
       "type": "string",
       "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
     }
   },
   "required": [
-    "address"
+    "address",
+    "risk_ack"
   ],
   "additionalProperties": false
 }
@@ -2668,7 +2712,8 @@ Example:
 {
   "name": "ida_make_code",
   "arguments": {
-    "address": "0x401234"
+    "address": "0x401234",
+    "risk_ack": true
   }
 }
 ```
@@ -2693,10 +2738,15 @@ Input schema:
     "idb": {
       "type": "string",
       "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
     }
   },
   "required": [
-    "address"
+    "address",
+    "risk_ack"
   ],
   "additionalProperties": false
 }
@@ -2708,7 +2758,8 @@ Example:
   "name": "ida_undefine",
   "arguments": {
     "address": "0x401234",
-    "size": 4
+    "size": 4,
+    "risk_ack": true
   }
 }
 ```
@@ -3038,7 +3089,7 @@ Example:
 
 ## `ida_set_segment_attrs`
 
-Update a segment's name, permissions (rwx), class, bitness, or type.
+Update one segment attribute: name, align, comb, perm, bitness, type, or color. Pass the segment's start address plus attr and value. For permissions use attr='perm' with value like 'rwx' or an integer bitmap.
 
 Input schema:
 ```json
@@ -3049,21 +3100,13 @@ Input schema:
       "type": "string",
       "description": "Function name or hexadecimal address, for example 0x401000."
     },
-    "name": {
+    "attr": {
       "type": "string",
-      "description": "New segment name."
+      "description": "Segment attribute to change: name, align, comb, perm, bitness, type, or color."
     },
-    "perms": {
+    "value": {
       "type": "string",
-      "description": "Permission string, e.g. 'rwx', 'r-x', 'rw-'."
-    },
-    "sclass": {
-      "type": "string",
-      "description": "Segment class: CODE, DATA, BSS, etc."
-    },
-    "bitness": {
-      "type": "integer",
-      "description": "0=16-bit, 1=32-bit, 2=64-bit."
+      "description": "New value for the attribute (e.g. 'rwx' or an integer bitmap such as '0x7' for perm)."
     },
     "risk_ack": {
       "type": "boolean",
@@ -3076,6 +3119,8 @@ Input schema:
   },
   "required": [
     "address",
+    "attr",
+    "value",
     "risk_ack"
   ],
   "additionalProperties": false
@@ -3088,8 +3133,8 @@ Example:
   "name": "ida_set_segment_attrs",
   "arguments": {
     "address": "0x40000000",
-    "perms": "rwx",
-    "sclass": "CODE",
+    "attr": "perm",
+    "value": "rwx",
     "risk_ack": true
   }
 }

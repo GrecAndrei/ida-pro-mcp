@@ -53,6 +53,39 @@ _ANALYSIS_PHASES = {
 }
 
 
+def _activity_result_scalar(result: object) -> str:
+    """Reduce a persisted activity result to a stable scalar identity.
+
+    Live callers persist the tool result as a JSON blob (e.g. ``json.dumps(
+    {"addresses": [...], "topic": ..., "target": ...})``), so dead-end
+    detection cannot compare the raw string — two identical queries with
+    different result addresses would never match, and the warning fields
+    would hand the LLM a serialized blob as a function/query name. Prefer the
+    search target, then the first address, then the topic, then the raw text.
+    """
+    obj = result
+    if isinstance(result, str):
+        stripped = result.strip()
+        if stripped.startswith("{"):
+            try:
+                obj = json.loads(result)
+            except (json.JSONDecodeError, TypeError):
+                obj = result
+    if isinstance(obj, dict):
+        target = obj.get("target")
+        if isinstance(target, str) and target.strip():
+            return target
+        addrs = obj.get("addresses")
+        if isinstance(addrs, list) and addrs:
+            first = addrs[0]
+            if isinstance(first, str) and first.strip():
+                return first
+        topic = obj.get("topic")
+        if isinstance(topic, str) and topic.strip():
+            return topic
+    return str(result)[:200]
+
+
 class SessionSkillsMixin(SessionBootstrapMixin):
     def _get_skills_path(self, sid: str) -> str:
         safe_sid = str(sid).replace("/", "_").replace("\\", "_")
@@ -143,10 +176,13 @@ class SessionSkillsMixin(SessionBootstrapMixin):
             matrix = self._bootstrap_plan_matrix()
 
             implemented_actions = set()
-            # Session manager methods present at runtime.
+            # Session manager methods present at runtime. Only methods that
+            # actually exist count toward plan coverage; names that were never
+            # implemented must surface as missing so the readiness gate cannot
+            # pass on phantom items.
             for phase_items in matrix.values():
                 for item in phase_items:
-                    if item in ("suggest_strategy_blended", "predictor_suggest_next_tool_blended") or hasattr(self, item):
+                    if hasattr(self, item):
                         implemented_actions.add(item)
 
             phase_rows = []
@@ -491,10 +527,14 @@ class SessionSkillsMixin(SessionBootstrapMixin):
             data["q_table"][skill_id] = round(new_q, 4)
             skill["q_value"] = round(new_q, 4)
             skill["last_used"] = datetime.now().isoformat()
+            # Skills load from an arbitrary on-disk skills.json and may be
+            # merged in from other sessions without schema validation, so the
+            # counters can be absent — use defensive .get() like the bootstrap
+            # outcome path does.
             if reward > 0:
-                skill["success_count"] += 1
+                skill["success_count"] = int(skill.get("success_count", 0)) + 1
             else:
-                skill["failure_count"] += 1
+                skill["failure_count"] = int(skill.get("failure_count", 0)) + 1
             self._save_skills(sid, data)
             # L3 -> L2 promotion if Q-value exceeds 0.8
             result = {"ok": True, "skill_id": skill_id, "q_value": skill["q_value"], "reward": reward}
@@ -588,6 +628,9 @@ class SessionSkillsMixin(SessionBootstrapMixin):
 
             # Global skills
             global_skills = self._find_global_skills(context=context, limit=10)
+            # Blend weights for global candidates are constant (session_samples=0);
+            # compute once instead of re-reading/re-parsing skills.json per skill.
+            global_blend = self.bootstrap_compute_blend(sid, session_samples=0)
             for gs in global_skills:
                 if gs["skill_id"] not in data["skills"]:
                     base_score = float(gs.get("q_value", 0.5))
@@ -604,7 +647,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
                         elif ctx_lower and any(word in desc for word in ctx_lower.split()):
                             context_relevance = 0.5
                     score = ((base_score + context_relevance) / 2.0) if ctx_has_text else base_score
-                    weights = (self.bootstrap_compute_blend(sid, session_samples=0) or {}).get("weights") or {
+                    weights = (global_blend or {}).get("weights") or {
                         "bootstrap": 0.5,
                         "session": 0.5,
                     }
@@ -694,8 +737,15 @@ class SessionSkillsMixin(SessionBootstrapMixin):
         if len(activity_log) < 10:
             return None
         recent = activity_log[-20:]
+        # Persisted results are JSON blobs; reduce them to a stable scalar
+        # (target/address/query) so matching and the warning fields use real
+        # function names and search queries rather than serialized dicts.
         # Pattern 1: Same function decompiled >4 times in a row
-        decompile_targets = [e.get("result") for e in recent if e.get("action") == "decompile" and e.get("result")]
+        decompile_targets = [
+            _activity_result_scalar(e.get("result"))
+            for e in recent
+            if e.get("action") == "decompile" and e.get("result")
+        ]
         if len(decompile_targets) >= 5 and len(set(decompile_targets[-5:])) == 1:
             return {
                 "type": "repeated_decompile",
@@ -704,7 +754,11 @@ class SessionSkillsMixin(SessionBootstrapMixin):
                 "suggestion": "Try looking at callers, callees, or xrefs of this function instead of redecompiling.",
             }
         # Pattern 2: Same search query >3 times
-        searches = [e.get("result") for e in recent if e.get("action") in ("find", "search") and e.get("result")]
+        searches = [
+            _activity_result_scalar(e.get("result"))
+            for e in recent
+            if e.get("action") in ("find", "search") and e.get("result")
+        ]
         if searches:
             last_search = searches[-1]
             if searches.count(last_search) >= 4:

@@ -318,9 +318,11 @@ def test_session(binary_path, timeout=30):
 if __name__ == "__main__":
     import argparse
 
+    # No test-fixture binary ships in the repo; this is a repo-relative default
+    # that the user must override with --binary for --test session/all.
     default_binary = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "tests", "data", "test_binary.exe"
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "tests", "data", "test_binary.exe",
     )
 
     parser = argparse.ArgumentParser(description="IDA Pro MCP Test Client")
@@ -330,8 +332,14 @@ if __name__ == "__main__":
 
     if args.test == "basic":
         test_basic()
-    elif args.test == "session":
-        test_session(args.binary)
-    elif args.test == "all":
-        test_basic()
+    elif args.test in ("session", "all"):
+        if not os.path.isfile(args.binary):
+            print(
+                f"ERROR: binary not found: {args.binary}\n"
+                "No test-fixture binary ships in the repo; pass --binary with a real target.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if args.test == "all":
+            test_basic()
         test_session(args.binary)

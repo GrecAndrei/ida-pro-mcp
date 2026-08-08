@@ -30,8 +30,8 @@ The suite verifies the complete public operation set:
 - strict invalid-argument handling and a real continuation token round trip.
 
 Semantic coverage uses the configured local embedding profile. By default this
-is `bge-code-v1`; an explicit Zembed run can be selected without changing the
-installed client configuration:
+is `qwen3-embedding-0.6b`; an explicit Zembed run can be selected without
+changing the installed client configuration:
 
 ```bash
 python scripts/run_live_agent_surface.py --ida-dir /path/to/ida \

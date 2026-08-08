@@ -220,7 +220,7 @@ class MacroDSLInterpreter:
                 try:
                     result = tool_func(**args)
                 except Exception as e:
-                    result = make_error("TOOL_ERROR", f"{tool_name} failed: {e}")
+                    result = handle_error(e, context=f"{tool_name}")
             self.results.append({"tool": tool_name, "args": args, "result": result})
             return result
         if expr in self.vars:
@@ -308,7 +308,7 @@ class MacroDSLInterpreter:
 _BATCH_TEMPLATES = {
     "analyze_function": [
         {"tool": "code", "action": "decompile", "addr": "$addr"},
-        {"tool": "data", "action": "strings_in_func", "addr": "$addr"},
+        {"tool": "code", "action": "strings_in_func", "addr": "$addr"},
         {"tool": "code", "action": "xrefs_from", "addr": "$addr"},
     ],
     "map_binary": [
@@ -481,7 +481,7 @@ def batch(
     calls: Annotated[list[dict], "List of tool calls: [{tool: str, action: str, ...params}]"] = None,
     stop_on_error: Annotated[bool, "Stop executing remaining calls if one fails"] = False,
     dry_run: Annotated[bool, "Validate all calls without executing"] = False,
-    template: Annotated[Optional[str], "Use a predefined template (analyze_function, find_vulns_quick, map_binary, deep_function_audit, crypto_hunt, c2_investigation)"] = None,
+    template: Annotated[Optional[str], "Use a predefined template (analyze_function, map_binary, deep_function_audit, crypto_hunt, network_protocol_hunt)"] = None,
     template_vars: Annotated[Optional[dict], "Variables for template expansion (e.g., {addr: '0x401000'})"] = None,
     script: Annotated[Optional[str], "Macro DSL script for complex multi-step workflows. Alternative to 'calls'."] = None,
     **kwargs

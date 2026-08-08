@@ -17,12 +17,15 @@ operation.
 runs arbitrary code inside IDA, so it requires `risk_ack: true`, is gated by
 safe mode, and is subject to operator policy.
 
-When several agents share one MCP connection there is no per-agent identity,
-so the connection-wide active session is a shared default. Pass
+When several agents share one MCP connection there is no per-agent identity by
+default, so the connection-wide active session is a shared default. Pass
 `idb=<session_id>` (or an IDB/binary path) to `ida_python` to execute inside a
 specific session; without it, the code runs in whichever session opened last.
-The safe-mode gate follows the target: `ida_python` is blocked only while the
-session it is aimed at is still analyzing.
+An orchestrator can opt into **Agent SSO** (`session action=sso_activate`) to
+give each agent a distinct identity and isolated active session — see
+[Sessions](../core/sessions.md). The safe-mode gate follows the target:
+`ida_python` is blocked only while the session it is aimed at is still
+analyzing.
 
 Every code-execution response carries a `_executed_in` block so the caller can
 see at a glance where the code actually ran:

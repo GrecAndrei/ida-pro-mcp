@@ -101,6 +101,7 @@ def graph(
             func = ida_funcs.get_func(ea)
             if not func:
                 return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
+            max_items = min(max(1, int(max_items)), 500)
             fc = ida_gdl.FlowChart(func)
             id_by_start = {}
             nodes = []
@@ -109,6 +110,8 @@ def graph(
 
             blocks = list(fc)
             for i, b in enumerate(blocks):
+                if len(nodes) >= max_items:
+                    break
                 bid = f"B{i}"
                 id_by_start[b.start_ea] = bid
                 insn_count = 0
@@ -134,10 +137,14 @@ def graph(
 
             for b in blocks:
                 src = id_by_start.get(b.start_ea)
+                if not src:
+                    continue
                 succs = list(b.succs())
                 for _idx, s in enumerate(succs):
+                    if len(edges) >= max_items:
+                        break
                     dst = id_by_start.get(s.start_ea)
-                    if not src or not dst:
+                    if not dst:
                         continue
                     etype = "branch" if len(succs) > 1 else "fall_through"
                     edges.append({"from": src, "to": dst, "type": etype})
@@ -355,8 +362,3 @@ def _format_graph(nodes, edges, format, cycle_nodes=None):
         return {"ok": True, "format": "json", "nodes": node_rows,
                 "edges": edge_rows,
                 "node_count": len(nodes), "edge_count": len(edges)}
-
-
-# ============================================================================
-# 20. BULK - Bulk operations for LLMs (multi-target rename/comment/type)
-# ============================================================================

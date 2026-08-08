@@ -8,6 +8,7 @@ Pure-python helpers (no IDA imports) so host + server_script can share logic.
 from __future__ import annotations
 
 import math
+import re
 import struct
 from dataclasses import dataclass, field
 from typing import Any
@@ -90,13 +91,23 @@ def normalize_arch_options(options: dict[str, Any]) -> tuple[dict[str, Any], dic
         raw = out.get(key)
         if isinstance(raw, int):
             continue
+        text = str(raw).strip()
+        coerced = None
         try:
-            coerced = int(str(raw), 0)
+            coerced = int(text, 0)
         except Exception:
+            # int(s, 0) treats a leading zero as octal and fails on e.g.
+            # "00401000" (contains '8').  Hex-looking strings without a 0x
+            # prefix are common LLM/tool output, so fall back to base 16.
+            if re.fullmatch(r"[0-9][0-9a-fA-F]*", text):
+                try:
+                    coerced = int(text, 16)
+                except Exception:
+                    coerced = None
+        if coerced is None or coerced == raw:
             continue
-        if coerced != raw:
-            out[key] = coerced
-            meta["normalizations"].append(f"{key}:coerced=int")
+        out[key] = coerced
+        meta["normalizations"].append(f"{key}:coerced=int")
 
     return out, meta
 
@@ -280,7 +291,11 @@ def _raw_arch_candidates(data: bytes) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for blended, arch in rows[:4]:
         meta = arch_meta[arch]
-        conf = max(0.01, min(0.95, blended / (top_blended + 1e-9) * top_blended))
+        # Relative-to-best ratio: the /top_blended and *top_blended cancelled
+        # out before, so each candidate reported its absolute blended score.
+        # Divide by top_blended only — the top candidate gets ~1.0 (capped at
+        # 0.95) and runners-up get a true relative confidence.
+        conf = max(0.01, min(0.95, blended / (top_blended + 1e-9)))
         out.append(
             {
                 "processor": meta["processor"],
