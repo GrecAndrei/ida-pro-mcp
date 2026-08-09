@@ -130,6 +130,15 @@ green. Branch `swarm/session-blitz`.
 ### Notes
 - Host suite runs with `--basetemp` on `/home` (the `/tmp` tmpfs fills, `ENOSPC`).
 
+### Regression fix
+- **install.py crash (`can only concatenate str (not "bytes") to str`)** — the
+  IDA version scanner carried its chunk-boundary overlap as a decoded `str`
+  while concatenating it onto the next raw `bytes` chunk. Introduced by the
+  agent-blitz merge (`ca9aee9`). Now carries the raw tail bytes
+  (`data[-overlap:]`), so version strings split at a chunk boundary still
+  resolve. `python install.py` completes end-to-end again (IDA 9.3 detected,
+  14 clients configured, exit 0).
+
 ## 2026-08-08 — swarm/agent-blitz: contract hardening, security, coverage (67-agent wave)
 
 ~360 audit findings verified and fixed across a 17-agent fixer fleet (disjoint file
