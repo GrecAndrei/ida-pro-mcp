@@ -139,6 +139,27 @@ green. Branch `swarm/session-blitz`.
   resolve. `python install.py` completes end-to-end again (IDA 9.3 detected,
   14 clients configured, exit 0).
 
+### CI fixes (pre-merge green, 2026-08-09)
+- **Standalone Tests ruff `UP037` (16×)** on `types.py`'s
+  `Annotated[Literal[...]]` action enum: the strings are VALUE members of the
+  IDA dispatch contract, not forward refs. The dev group floats `ruff>=0.15.0`,
+  so CI drifted to a release that flags them under `from __future__ import
+  annotations` (added by agent-blitz). UP037 is now in the documented ruff
+  ignore list rather than scattered noqa.
+- **Standalone Tests Python 3.11/3.12 collection** — `TestCtreeDecompileFailure`
+  failed importing `ctree` because `utils.py`'s `get_prototype(fn:
+  ida_funcs.func_t)` annotation is evaluated eagerly on py<=3.13 against the
+  test's bare `ida_funcs` stub (no `func_t`). Local verify ran on 3.14, where
+  PEP 649 defers annotations by default, so the failure only surfaced in CI.
+  Root fix: `from __future__ import annotations` in `utils.py`.
+- **CodeQL "3 new alerts"** — two were `hashlib.md5` content fingerprints in
+  `host/intelligence/{context,embeddings}.py` (pre-existing on master, re-flagged
+  because the wave shifted surrounding lines); swapped to `sha256` (identical at
+  the `[:16]` truncation width, no crypto semantics). The third was
+  `test_swarm_f10_stores.py`'s `(a+)+$`, an *intentional* catastrophic pattern
+  used to assert `search_truncated` rejects ReDoS — dismissed as a false
+  positive.
+
 ## 2026-08-08 — swarm/agent-blitz: contract hardening, security, coverage (67-agent wave)
 
 ~360 audit findings verified and fixed across a 17-agent fixer fleet (disjoint file
