@@ -227,7 +227,11 @@ def _scan_binary_for_version(binary: Path) -> tuple[VERSION_TUPLE, str] | None:
                     version = (int(m.group(1)), int(m.group(2)))
                     build = f"{m.group(3)}.{m.group(4)}"
                     return (version, build)
-                prefix = text[-overlap:]
+                # Carry the raw tail BYTES into the next chunk so a version
+                # string split across a chunk boundary is still matched. latin-1
+                # decodes 1 byte -> 1 char, so this equals text[-overlap:] but
+                # stays bytes for the next `prefix + data` concatenation.
+                prefix = data[-overlap:]
     except OSError:
         return None
     return None
