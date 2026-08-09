@@ -181,12 +181,12 @@ class ContextAssembler:
         for existing in pack.get("related_findings", []):
             e = dict(existing)
             e.setdefault("retrieval_source", "address_linked")
-            merged[str(e.get("id") or hashlib.md5(json.dumps(e, sort_keys=True).encode()).hexdigest())] = e
+            merged[str(e.get("id") or hashlib.sha256(json.dumps(e, sort_keys=True).encode()).hexdigest())] = e
         for entry in filtered_entries:
             e = dict(entry)
             e["retrieval_source"] = source
             e["retrieval_weight"] = round(weight, 3)
-            key = str(e.get("id") or hashlib.md5(json.dumps(e, sort_keys=True).encode()).hexdigest())
+            key = str(e.get("id") or hashlib.sha256(json.dumps(e, sort_keys=True).encode()).hexdigest())
             prev = merged.get(key)
             if prev is None:
                 merged[key] = e
@@ -850,7 +850,7 @@ class ContextAssembler:
                 blob = idx._pack(query_vec)
                 ph   = idx._phash(pseudocode)
                 sig  = _extract_signature(pseudocode, max_idents=64) or ""
-                sig_hash = hashlib.md5((sig or pseudocode).encode("utf-8", errors="replace")).hexdigest()[:16]
+                sig_hash = hashlib.sha256((sig or pseudocode).encode("utf-8", errors="replace")).hexdigest()[:16]
                 def _persist(ea=addr, name=func_name, b=blob, p=ph, v=query_vec):
                     try:
                         with idx._conn() as conn:

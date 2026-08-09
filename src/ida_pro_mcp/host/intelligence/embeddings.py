@@ -830,7 +830,10 @@ class FunctionEmbeddingIndex:
         return _unpack_floats(blob)
 
     def _phash(self, text: str) -> str:
-        return hashlib.md5(text.encode("utf-8", errors="replace")).hexdigest()[:16]
+        # sha256, not md5: this is a content fingerprint for dedup/caching, but
+        # CodeQL flags md5 as a weak hash; sha256 is semantically identical at
+        # the [:16] truncation width and keeps code-scanning clean.
+        return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:16]
 
     def _row_meta_for_eas(self, eas: list[str]) -> dict[str, dict[str, Any]]:
         if not eas:

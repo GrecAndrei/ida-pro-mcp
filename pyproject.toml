@@ -73,6 +73,7 @@ line-length = 200
 # across ~240 sites; the chains are intentional, not a style slip.
 ignore = [
     "UP006", "UP035",  # typing.Dict/List/Optional — codebase uses typing.* consistently; switching to built-ins is bikeshedding.
+    "UP037",  # quoted-Literal action enums under `from __future__ import annotations`: the strings are VALUES (action names in the IDA dispatch contract), not forward refs — unquoting turns them into bare names and breaks the annotation. Newer ruff flags these; disable rather than scatter noqa.
     "RET504", "RET505", "RET507", "RET508", "RET503",
     "PLC0415",  # imports inside functions (validate against runtime state, IDA SDK presence, optional deps)
     "PIE790",  # unnecessary-placeholder (we use real names everywhere)
