@@ -99,12 +99,13 @@ def imports_deep(
                                 parts = name.split('_')
                                 if len(parts) >= 2:
                                     dll = parts[0]
-                                    if dll not in delay_imports:
-                                        delay_imports[dll] = []
-                                    delay_imports[dll].append(f"{hex(ea)}  {name}")
-                                    _delay_items += 1
-                                    if _delay_items >= _DELAY_MAX:
-                                        break
+                                    if (not query_matcher) or query_matcher(dll) or query_matcher(name):
+                                        if dll not in delay_imports:
+                                            delay_imports[dll] = []
+                                        delay_imports[dll].append(f"{hex(ea)}  {name}")
+                                        _delay_items += 1
+                                        if _delay_items >= _DELAY_MAX:
+                                            break
                             ea = idc.next_head(ea, seg.end_ea)
                             if ea == idaapi.BADADDR:
                                 break
@@ -127,6 +128,8 @@ def imports_deep(
                 if name and '.' in name:
                     parts = name.split('.')
                     if len(parts) == 2:
+                        if query_matcher and not query_matcher(name):
+                            return True
                         fwd_lines.append(f"{hex(ea)}  {name}  -> {parts[1]}")
                 return True
 
@@ -167,16 +170,19 @@ def imports_deep(
             for i in range(nimps):
                 mod_name = ida_nalt.get_import_module_name(i)
                 if mod_name and mod_name.lower().startswith('api-ms-'):
-                    actual = "kernel32.dll"
-                    if 'win-core' in mod_name.lower():
-                        actual = "kernelbase.dll"
-                    elif 'crt' in mod_name.lower():
+                    if query_matcher and not query_matcher(mod_name):
+                        continue
+                    # Most api-ms-* virtual DLLs redirect to kernelbase; the
+                    # CRT family resolves to ucrtbase. Heuristic, not exact.
+                    actual = "kernelbase.dll"
+                    if 'crt' in mod_name.lower():
                         actual = "ucrtbase.dll"
 
                     set_lines.append(f"{mod_name}  -> {actual}")
 
             page = set_lines[offset:offset + count] if count != 0 else set_lines[offset:]
-            return {"ok": True, "api_sets": "\n".join(page), "total": len(set_lines), "offset": offset, "count": len(page)}
+            return {"ok": True, "api_sets": "\n".join(page), "total": len(set_lines), "offset": offset, "count": len(page),
+                    "note": "API Set targets are a heuristic guess, not exact apisetschema resolution"}
 
         elif action == "resolve":
             if not addr:

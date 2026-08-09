@@ -191,20 +191,19 @@ def is_sparc_family(arch=None):
 # Architecture-specific instruction sets
 # ============================================================================
 
-# Return / function-exit mnemonics
+# Return / function-exit mnemonics.
+#
+# Register-indirect branch mnemonics (bx, jr, jalr, c.jr, c.jalr) are NOT in
+# this set: they only act as returns for specific target registers (bx lr,
+# jr $ra, jalr x0/ra) and otherwise encode indirect calls or jumps.  The
+# operand-aware is_return_mnemonic() classifies them correctly; the raw sets
+# group them under UNCONDITIONAL_JUMP_MNEMONICS so TERMINATOR_MNEMONICS still
+# treats them as block terminators (no fall-through).
 RETURN_MNEMONICS = {
     # x86/x64
     "ret", "retn",
-    # ARM / AArch64  (bx lr is handled specially; pop {pc} via disasm)
-    "bx",
-    # MIPS
-    "jr",
     # PowerPC
     "blr",
-    # RISC-V standard + compressed C extension
-    "jalr",     # jalr x0, ra, 0  is the canonical return
-    "c.jr",     # compressed return: c.jr ra
-    "c.jalr",   # compressed return-and-link (rare but valid as ret when rd=ra)
     # SPARC
     "retl",
     "rts",     # SuperH return (also SPARC's non-leaf return)
@@ -220,21 +219,33 @@ RETURN_MNEMONICS = {
     "rtsd",
 }
 
-# Unconditional branch / jump mnemonics
+# Unconditional branch / jump mnemonics.
+#
+# Register-indirect branches (bx, jr, jalr, br, c.jr, c.jalr) unconditionally
+# transfer control to a register; they are grouped here rather than under
+# RETURN_MNEMONICS because they only act as returns for specific target
+# registers (bx lr, jr $ra, jalr x0/ra).  is_return_mnemonic() applies that
+# operand-aware classification.
 UNCONDITIONAL_JUMP_MNEMONICS = {
     # x86
     "jmp",
-    # ARM
+    # ARM (bx rN is a register branch; bx lr is the return form)
     "b",
-    # AArch64
+    "bx",
+    # AArch64 (br xN is a register branch; br x30 is the return form)
     "br",
-    # MIPS
-    "j", # PowerPC
+    # MIPS (jr rN is a register branch; jr $ra is the return form)
+    "j",
+    "jr",
+    # PowerPC
     "ba",
     # RISC-V standard + compressed C extension
     "jal",
+    "jalr",     # register-indirect: rd=ra is a call, rs1=ra a return
     "c.j",      # compressed unconditional jump
+    "c.jr",     # compressed register branch (c.jr ra is the return form)
     "c.jal",    # compressed call (RV32C only; encodes jal ra, offset)
+    "c.jalr",   # compressed register link-jump (c.jalr ra is the return form)
     # SPARC
     # SuperH
     "bra",
@@ -756,6 +767,13 @@ def get_tail_call_mnemonics(arch=None):
     return _map.get(arch, {"jmp", "b", "j"})
 
 
+# GP value already applied to the RISC-V processor plugin this session.  The
+# entry-point probe (_detect_riscv_gp) runs on every disasm call, so memoizing
+# here avoids re-setting processor options and re-queueing a full-address-space
+# reanalysis on every call.
+_APPLIED_RISCV_GP: int | None = None
+
+
 def _apply_riscv_gp(gp_val: int):
     """Set GP in the RISC-V processor plugin and queue reanalysis.
 
@@ -765,7 +783,16 @@ def _apply_riscv_gp(gp_val: int):
     RISC-V processor plugin the GP base so it can resolve gp-relative operands
     into real data xrefs.  idc.set_reg_value() only sets a hint at a specific
     address and is NOT read by the processor plugin for xref resolution.
+
+    Reanalysis is queued (plan_range) but never awaited: this runs inside an
+    MCP RPC request, and blocking on auto_wait() for a full-binary reanalysis
+    can exceed the socket timeout.  Once a GP value has been applied this
+    session the whole apply + reanalysis is skipped on subsequent calls.
     """
+    global _APPLIED_RISCV_GP
+    if gp_val == _APPLIED_RISCV_GP:
+        return True, None, False
+
     try:
         import idc as _idc
         import idaapi as _idaapi
@@ -791,8 +818,9 @@ def _apply_riscv_gp(gp_val: int):
         except Exception:
             pass
 
-    # Queue reanalysis over the full address space with AU_FINAL so IDA
-    # re-evaluates every gp-relative load/store and creates data xrefs
+    # Queue reanalysis over the full address space so IDA re-evaluates every
+    # gp-relative load/store and creates data xrefs.  Deliberately does NOT
+    # call auto_wait() — see docstring.
     if applied:
         try:
             import ida_auto as _ida_auto
@@ -803,10 +831,12 @@ def _apply_riscv_gp(gp_val: int):
                 _ida_auto.plan_range(min_ea, max_ea)
             elif hasattr(_ida_auto, "auto_mark_range"):
                 _ida_auto.auto_mark_range(min_ea, max_ea, _ida_auto.AU_FINAL)
-            _ida_auto.auto_wait()
             reanalysis_queued = True
         except Exception:
             pass
+
+    if applied:
+        _APPLIED_RISCV_GP = gp_val
 
     return applied, apply_error, reanalysis_queued
 
@@ -817,13 +847,14 @@ def _riscv_gp_note(gp_val: int, detected_at: int, applied: bool, apply_error, re
     if applied and reanalysis_queued:
         return (
             f"RISC-V: GP (x3) = {gp_hex} detected at {at_hex}, applied via "
-            f"set_processor_options and reanalysis complete — GP-relative xrefs now resolved."
+            f"set_processor_options and reanalysis queued in the background — "
+            f"GP-relative xrefs will resolve shortly."
         )
     if applied:
         return (
             f"RISC-V: GP (x3) = {gp_hex} detected at {at_hex}, applied via "
-            f"set_processor_options (reanalysis did not complete — "
-            f'run analysis(action="reanalyze") to create GP-relative xrefs).'
+            f"set_processor_options (no reanalysis queued on this call — "
+            f'run analysis(action="reanalyze") if GP-relative xrefs are missing).'
         )
     return (
         f"RISC-V: GP (x3) = {gp_hex} detected at {at_hex} but auto-apply failed "

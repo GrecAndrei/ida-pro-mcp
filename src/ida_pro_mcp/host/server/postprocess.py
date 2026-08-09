@@ -16,6 +16,7 @@ import re
 from typing import Any
 
 from ..config import _bounded_int, _coerce_bool
+from ..errors import MCPError, is_error_result, make_error
 
 # Keys recognized as post-processing parameters.
 PP_KEYS = frozenset({
@@ -212,10 +213,11 @@ def apply_post_processing(
     4. Pick (field projection)
     5. Build response envelope
     """
-    # Pass through error results unchanged.
-    if isinstance(payload, dict) and payload.get("ok") is False:
-        return payload
-    if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+    # Pass through error results unchanged. The canonical error envelope from
+    # make_error() is {"error": True, "code": ..., ...} — the old guards tested
+    # `ok is False` and `error` as a dict, neither of which matches, so a real
+    # error envelope would have been stamped ok:True and post-processed.
+    if isinstance(payload, dict) and is_error_result(payload):
         return payload
 
     # If no filtering is requested, return as-is (don't add metadata).
@@ -246,7 +248,17 @@ def apply_post_processing(
 
     # 1. Grep
     if pp_params.get("grep"):
-        items = apply_grep(items, pp_params)
+        try:
+            items = apply_grep(items, pp_params)
+        except ValueError as e:
+            # An invalid grep regex is a caller error, not a silent pass-through
+            # of the unfiltered result (the previous behavior: the caller's
+            # broad except swallowed it at debug level and returned everything).
+            return make_error(
+                MCPError.INVALID_ARGS,
+                f"Invalid grep pattern: {e}",
+                hint="Check the grep pattern syntax (or set grep_regex=false for a plain substring match).",
+            )
 
     # Pre-slice total: the number of items before head/tail/offset slicing.
     # Used by pagination continuation to decide whether more pages exist

@@ -20,12 +20,34 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from typing import Any
 
 import numpy as np
 
 # Chunk size for the pairwise similarity scan: bounds peak memory without
 # building the full NxN matrix at once.
 _SIM_CHUNK = 512
+
+
+def _ea_sort_key(ea: Any) -> int:
+    """Best-effort integer sort key for an EA string.
+
+    The embedding index keys functions by their EA as a string. Most are
+    ``0x``-prefixed hex, but the index format is not part of this module's
+    contract: a bare hex string, a decimal string, or a symbolic name must
+    never abort the whole clustering run. Parse leniently — Python-literal
+    syntax first, then bare hex, then decimal — and fall back to a stable
+    hash so a malformed value still sorts deterministically.
+    """
+    s = str(ea).strip()
+    if not s:
+        return 0
+    for base in (0, 16, 10):
+        try:
+            return int(s, base)
+        except ValueError:
+            continue
+    return hash(s) & 0x7FFFFFFF
 
 
 def _tokenize(text: str) -> set[str]:
@@ -132,7 +154,7 @@ def compute_function_families(
     for group in groups.values():
         if len(group) < min_size:
             continue
-        members = sorted(group, key=lambda i: int(str(eas[i]), 0))
+        members = sorted(group, key=lambda i: _ea_sort_key(eas[i]))
         sub = mat[members]
         centroid = sub.mean(axis=0)
         cn = np.linalg.norm(centroid) or 1.0
@@ -145,7 +167,7 @@ def compute_function_families(
             key=lambda k: (
                 1 if names[members[k]].startswith(("sub_", "j_", "loc_")) else 0,
                 -sims_c[k],
-                int(str(eas[members[k]]), 0),
+                _ea_sort_key(eas[members[k]]),
             ),
         )
         rep_idx = candidates[0]
@@ -183,7 +205,7 @@ def compute_function_families(
 
         families.append(
             {
-                "id": hex(int(rep_ea, 0)),
+                "id": hex(_ea_sort_key(rep_ea)),
                 "size": len(member_rows),
                 "representative": {"ea": rep_ea, "name": rep_name},
                 "centroid_similarity": round(float(max(sims_c)), 4),

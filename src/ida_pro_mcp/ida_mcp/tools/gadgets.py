@@ -106,6 +106,57 @@ def _matches_query(insns, query):
     return any(matcher(mnem) or matcher(disasm) for _, mnem, disasm in insns)
 
 
+# ---- RISC-V jalr operand classification ----
+# RISC-V `jalr rd, imm(rs1)` is overloaded: rd=ra links a return address
+# (indirect call), rd=x0 with rs1=ra returns, rd=x0 with rs1!=ra jumps.
+# IDA renders both the call form (`jalr ra, 0(t0)`) and the return form
+# (`jalr zero, 0(ra)`) with "ra" present, so a bare substring check inverts
+# the COP/ROP classification. Parse the operand shapes instead.
+
+def _riscv_jalr_operands(disasm_lower):
+    """Extract (rd, rs1) register names from a RISC-V jalr disasm line.
+
+    Accepts both common renderings:
+      jalr ra, 0(t0)      # rd=ra, rs1=t0
+      jalr ra, t0, 0      # rd=ra, rs1=t0 (rs1 before imm)
+    Returns (rd, rs1), or (None, None) when the line is not parseable.
+    """
+    if not disasm_lower:
+        return (None, None)
+    comma = disasm_lower.find(",")
+    if comma < 0:
+        return (None, None)
+    rd = disasm_lower[:comma].split()[-1].strip()
+    rest = disasm_lower[comma + 1:].strip()
+    open_p = rest.find("(")
+    if open_p >= 0:
+        close_p = rest.find(")", open_p)
+        if close_p > open_p:
+            rs1 = rest[open_p + 1:close_p].strip()
+            return (rd, rs1)
+    rs1 = rest.split(",")[0].strip()
+    return (rd, rs1)
+
+
+def _classify_riscv_jalr(disasm_lower):
+    """Classify a RISC-V jalr as a call, return, or jump by operand shape.
+
+      rd == ra/x1        -> "call"    (link saved, COP terminator)
+      rs1 == ra/x1       -> "return"  (control to saved link, ROP)
+      otherwise          -> "jump"    (JOP terminator)
+    An unparseable line defaults to "call" so a mis-parsed terminator is
+    never silently dropped from the COP results.
+    """
+    rd, rs1 = _riscv_jalr_operands(disasm_lower)
+    if rd is None:
+        return "call"
+    if rd in ("ra", "x1"):
+        return "call"
+    if rs1 in ("ra", "x1"):
+        return "return"
+    return "jump"
+
+
 # ---- ROP gadgets ----
 
 def _find_rop_gadgets(addr, limit, max_insns, query):
@@ -126,7 +177,13 @@ def _find_rop_gadgets(addr, limit, max_insns, query):
                     break
                 continue
             ml = mnem.lower()
-            is_ret = is_return_mnemonic(ml, _disasm_at(ea).lower(), arch)
+            disasm = _disasm_at(ea).lower()
+            is_ret = is_return_mnemonic(ml, disasm, arch)
+            # RISC-V jalr doubles as an indirect call (rd=ra) and a return
+            # (rs1=ra); is_return_mnemonic flags any jalr whose text mentions
+            # ra, so calls would otherwise leak into the ROP results.
+            if is_ret and is_riscv_family(arch) and ml == "jalr":
+                is_ret = _classify_riscv_jalr(disasm) == "return"
 
             if is_ret:
                 insns = _decode_backward(ea, max_insns)
@@ -183,8 +240,9 @@ def _find_jop_gadgets(addr, limit, max_insns, query):
                         is_jop = True
             elif is_riscv_family(arch):
                 if ml == "jalr":
-                    disasm = _disasm_at(ea).lower()
-                    if "ra" not in disasm:
+                    # Only rd=x0, rs1!=ra is a pure indirect jump; the call
+                    # (rd=ra) and return (rs1=ra) forms belong to COP/ROP.
+                    if _classify_riscv_jalr(_disasm_at(ea).lower()) == "jump":
                         is_jop = True
             elif is_ppc_family(arch) and ml in ("bctr",):
                 is_jop = True
@@ -240,8 +298,10 @@ def _find_cop_gadgets(addr, limit, max_insns, query):
                     is_cop = True
             elif is_riscv_family(arch):
                 if ml == "jalr":
-                    disasm = _disasm_at(ea).lower()
-                    if "ra" not in disasm:
+                    # An indirect call is the rd=ra form; the old "ra absent"
+                    # test inverted this — it reported plain jumps as COP and
+                    # dropped the actual calls.
+                    if _classify_riscv_jalr(_disasm_at(ea).lower()) == "call":
                         is_cop = True
             elif is_ppc_family(arch) and ml == "bctrl":
                 is_cop = True
@@ -842,7 +902,8 @@ _ACTIONS = {
 def gadgets(
     action: Annotated[Literal["rop", "jop", "cop", "syscall", "write_what_where",
                                "stack_pivot", "shellcode_space", "mitigations",
-                               "seh_handlers", "pivot_chains", "classify_chain"],
+                               "seh_handlers", "pivot_chains", "classify_chain",
+                               "semantic_find"],
                       "Gadget/exploit primitive action"],
     addr: Annotated[Optional[str], "Segment or address to search in"] = None,
     limit: Annotated[int, "Max gadgets to return"] = 50,
@@ -942,6 +1003,18 @@ def gadgets(
             # Takes a list of gadget strings (or addresses) and classifies the chain's
             # exploit potential: stack_pivot, write_what_where, code_exec, rop_chain, etc.
             return _classify_gadget_chain(addr, limit, max_insns, query, auto_blackboard)
+
+        if action == "semantic_find":
+            # Host-intercepted action (server_dispatch routes it to the host's
+            # per-session semantic index before this RPC is reached). The value is
+            # admitted by the action Literal for registry contract consistency, but
+            # the IDA runtime has no standalone implementation.
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "semantic_find is a host-intercepted gadgets action — route it through "
+                "the MCP host (it is served by the host-side semantic index, not the "
+                "IDA runtime).",
+            )
 
         handler = _ACTIONS.get(action)
         if not handler:

@@ -39,6 +39,7 @@ from .core import (
     paginate_records,
     resolve_target,
     safe_generate_disasm_line,
+    safe_get_strlit_contents,
     xref_count_limited,
 )
 
@@ -774,7 +775,7 @@ def search_symbol_info(pattern, include_xrefs=False):
     elif idc.is_data(flags):
         info["data"] = {
             "size": idc.get_item_size(ea),
-            "flags": _data_flags(flags),
+            "flags": _data_flags(flags, ea),
         }
     elif idc.is_code(flags):
         info["code"] = {
@@ -852,7 +853,7 @@ def _func_flags(func):
     return out
 
 
-def _data_flags(flags):
+def _data_flags(flags, ea=None):
     out = []
     if idc.is_byte(flags):
         out.append("byte")
@@ -868,8 +869,15 @@ def _data_flags(flags):
         out.append("struct")
     elif idc.is_align(flags):
         out.append("align")
-    if idc.is_comm(flags):
-        out.append("has_comment")
+    # is_comm() tests the COMMON (uninitialized) storage flag, not comments;
+    # a real comment check needs the ea. ida_bytes.has_cmt handles both
+    # regular (repeatable=0) and repeatable (repeatable=1) comments.
+    if ea is not None:
+        try:
+            if ida_bytes.has_cmt(ea, 0) or ida_bytes.has_cmt(ea, 1):
+                out.append("has_comment")
+        except Exception:
+            pass
     return out if out else ["unknown"]
 
 
@@ -911,14 +919,10 @@ def search_xrefs_to_string(pattern, include_context=False, offset=0, limit=100, 
         except TimeoutError:
             timed_out = True
             break
-        s_value = idc.get_strlit_contents(te_a)
-        if s_value:
-            try:
-                s_value = s_value.decode("utf-8", errors="replace")
-            except Exception:
-                s_value = str(s_value)
-        else:
-            s_value = ""
+        # Use the safe wrapper: it reads the item's own string type and falls
+        # back to the plain call, so wide/UTF-16 literals are not mis-decoded
+        # as UTF-8 (the plain call defaults to STRTYPE_C and returns raw bytes).
+        s_value = safe_get_strlit_contents(te_a) or ""
         refs = []
         ref_funcs = set()
         for xr in idautils.XrefsTo(te_a, 0):

@@ -109,9 +109,9 @@ def _set_to_text(items: list[dict]) -> str:
 # Primitive extractors (used by the bool parser)
 # ============================================================================
 
-def _prim_funcs_by_name(pattern: str) -> set[int]:
+def _prim_funcs_by_name(pattern: str, case_sensitive: bool = False) -> set[int]:
     """Functions whose name matches pattern (glob or substring)."""
-    matcher = compile_smart_pattern(pattern, case_sensitive=False)
+    matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
     out = set()
     for ea in idautils.Functions():
         if matcher(_func_name(ea)):
@@ -119,10 +119,15 @@ def _prim_funcs_by_name(pattern: str) -> set[int]:
     return out
 
 
-def _prim_funcs_by_string(pattern: str) -> set[int]:
+def _prim_funcs_by_string(pattern: str, case_sensitive: bool = False) -> set[int]:
     """Functions whose decompiled code contains a string literal matching pattern."""
-    import ida_hexrays
-    matcher = compile_smart_pattern(pattern, case_sensitive=False)
+    try:
+        import ida_hexrays
+    except ImportError:
+        # Hex-Rays decompiler not present in this build: string: primitives
+        # degrade to an empty set instead of raising out of search_bool.
+        return set()
+    matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
     out = set()
     for ea in idautils.Functions():
         try:
@@ -137,10 +142,10 @@ def _prim_funcs_by_string(pattern: str) -> set[int]:
     return out
 
 
-def _prim_funcs_by_api(pattern: str) -> set[int]:
+def _prim_funcs_by_api(pattern: str, case_sensitive: bool = False) -> set[int]:
     """Functions that call at least one API matching pattern (glob)."""
     import idaapi
-    matcher = compile_smart_pattern(pattern, case_sensitive=False)
+    matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
     out = set()
     for ea in idautils.Functions():
         try:
@@ -154,9 +159,9 @@ def _prim_funcs_by_api(pattern: str) -> set[int]:
     return out
 
 
-def _prim_funcs_by_mnem(pattern: str) -> set[int]:
+def _prim_funcs_by_mnem(pattern: str, case_sensitive: bool = False) -> set[int]:
     """Functions whose disassembly contains a matching mnemonic."""
-    matcher = compile_smart_pattern(pattern, case_sensitive=False)
+    matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
     out = set()
     for ea in idautils.Functions():
         try:
@@ -302,6 +307,11 @@ _BOOL_PRIMITIVES = {
     "no_callers": _prim_no_callers,
 }
 
+# Primitives whose pattern is a plain text matcher that honors case
+# sensitivity. Address/size/leaf predicates don't match text, so they are
+# deliberately excluded from this set.
+_BOOL_CASE_SENSITIVE = {"name", "string", "api", "mnem"}
+
 _BOOL_OPS = {"AND", "OR", "NOT"}
 
 
@@ -394,9 +404,10 @@ class _BoolParser:
       atom   := '(' expr ')' | primitive
     """
 
-    def __init__(self, tokens: list[str]):
+    def __init__(self, tokens: list[str], case_sensitive: bool = False):
         self.tokens = tokens
         self.pos = 0
+        self.case_sensitive = case_sensitive
 
     def peek(self) -> Optional[str]:
         return self.tokens[self.pos] if self.pos < len(self.tokens) else None
@@ -451,10 +462,12 @@ class _BoolParser:
             handler = _BOOL_PRIMITIVES.get(key)
             if not handler:
                 raise ValueError(f"Unknown primitive: {key!r} (known: {sorted(_BOOL_PRIMITIVES)})")
+            if key in _BOOL_CASE_SENSITIVE:
+                return handler(val, case_sensitive=self.case_sensitive)
             return handler(val)
         if tok.startswith("LITERAL:"):
             self.consume()
-            return _prim_funcs_by_name(tok[len("LITERAL:"):])
+            return _prim_funcs_by_name(tok[len("LITERAL:"):], case_sensitive=self.case_sensitive)
         raise ValueError(f"Unexpected token: {tok!r}")
 
 
@@ -480,7 +493,7 @@ def search_bool(expr: str, case_sensitive: bool, offset: int, limit: int) -> dic
         tokens = _tokenize_bool(expr)
         if not tokens:
             return make_error(MCPError.INVALID_ARGS, "expression parsed to zero tokens")
-        parser = _BoolParser(tokens)
+        parser = _BoolParser(tokens, case_sensitive=bool(case_sensitive))
         result_set = parser.parse_expr()
         if parser.pos < len(parser.tokens):
             return make_error(MCPError.INVALID_ARGS,
@@ -727,22 +740,33 @@ def search_noreach(depth: int, offset: int, limit: int) -> dict:
 _CALL_GRAPH_CACHE: dict[str, dict] = {}
 
 
-def _idb_fingerprint() -> str:
-    """Return a fingerprint for the current IDB to key the call graph cache.
+def _idb_cheap_key() -> str:
+    """Cheap per-call IDB key: path + file mtime/size.
 
-    The function count alone misses edits that leave the count unchanged
-    (renames, retypes, patched bytes), so the IDB file's mtime/size and the
-    total name count are folded in. Structural changes invalidate
-    immediately via the counts; saved DB edits invalidate via mtime/size.
+    os.stat is a couple of syscalls, so the warm call-graph path invalidates
+    on every saved DB edit without paying for a full-program enumeration.
     """
     try:
         path = idc.get_idb_path() if hasattr(idc, "get_idb_path") else ""
         stats = os.stat(path) if path else None
         mtime = int(stats.st_mtime) if stats else 0
         size = int(stats.st_size) if stats else 0
+        return f"{path}:{mtime}:{size}"
+    except Exception:
+        return "unknown"
+
+
+def _idb_fingerprint() -> str:
+    """Full IDB fingerprint used to key the call graph cache on rebuilds.
+
+    The cheap key alone misses edits that leave the file mtime/size unchanged
+    (unsaved renames, retypes, patched bytes), so the function and name counts
+    are folded in only when the cheap key misses and a rebuild is imminent.
+    """
+    try:
         func_count = sum(1 for _ in idautils.Functions())
         name_count = sum(1 for _ in idautils.Names())
-        return f"{path}:{func_count}:{name_count}:{mtime}:{size}"
+        return f"{_idb_cheap_key()}:{func_count}:{name_count}"
     except Exception:
         return "unknown"
 
@@ -752,9 +776,16 @@ def _get_call_graph() -> dict:
 
     Returns {"callers": {ea: set[ea]}, "callees": {ea: set[ea]}}.
     """
+    # Warm path: the cheap key (path + file mtime/size) catches every saved DB
+    # edit with a couple of os.stat syscalls — no full-program enumeration.
+    # The expensive function/name counts are folded into the fingerprint only
+    # once the cheap key misses, i.e. when a rebuild is actually imminent.
+    cheap = _idb_cheap_key()
+    if _CALL_GRAPH_CACHE.get("cheap") == cheap:
+        return _CALL_GRAPH_CACHE["graph"]
     fp = _idb_fingerprint()
-    if fp in _CALL_GRAPH_CACHE:
-        return _CALL_GRAPH_CACHE[fp]
+    if _CALL_GRAPH_CACHE.get("fp") == fp:
+        return _CALL_GRAPH_CACHE["graph"]
 
     callers: dict[int, set[int]] = defaultdict(set)
     callees: dict[int, set[int]] = defaultdict(set)
@@ -768,7 +799,9 @@ def _get_call_graph() -> dict:
     graph = {"callers": dict(callers), "callees": dict(callees)}
     # Keep only the latest graph to avoid memory bloat
     _CALL_GRAPH_CACHE.clear()
-    _CALL_GRAPH_CACHE[fp] = graph
+    _CALL_GRAPH_CACHE["cheap"] = cheap
+    _CALL_GRAPH_CACHE["fp"] = fp
+    _CALL_GRAPH_CACHE["graph"] = graph
     return graph
 
 
@@ -1087,7 +1120,8 @@ def search_analyze(
                     return {
                         "ok": True, "action": "analyze", "scope": "outlier",
                         "metric": metric, "results": "\n".join(f"{it['addr']}  {it['name']}  {metric}={it[metric]}" for it in items),
-                        "count": len(items), "total": total, "items": items,
+                        "count": len(items), "total": total,
+                        "truncated": total > offset + limit, "items": items,
                         "note": f"Outliers by {metric} from embedding index.",
                     }
                 except Exception:
@@ -1328,7 +1362,10 @@ def search_analyze(
             idx = asm._get_index(idb_path) if idb_path else None
             if not idx or idx.size == 0:
                 return make_error(MCPError.NOT_FOUND, "No functions indexed. Run intelligence(action='index_fast') first.")
-            hits = idx.hybrid_search(pattern, top_k=offset + limit, threshold=0.0)
+            # Fetch one extra row so `truncated` (len(hits) > offset + limit)
+            # can detect a next page even though hybrid_search caps its result
+            # set at top_k; `total` is then a lower bound when truncated.
+            hits = idx.hybrid_search(pattern, top_k=offset + limit + 1, threshold=0.0)
             page = hits[offset:offset + limit]
             items = []
             for h in page:

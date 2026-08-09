@@ -6,12 +6,13 @@ import json
 import os
 import re
 import sqlite3
+import threading
 import time
 from collections import Counter
 from datetime import UTC, datetime
 from typing import Any
 
-from ..config import _bounded_int
+from ..config import _bounded_int, _coerce_bool
 from ..errors import MCPError, is_error_result, make_error
 from ..intelligence.helpers import parse_str_list
 from ..stores.blackboard_store import STRATEGIES as BB_STRATEGIES, is_auto_name
@@ -223,37 +224,45 @@ class ServerBlackboardMixin(
 
         binary_path = str(getattr(session, "binary_path", "") or "").strip() if session else ""
         if binary_path and os.path.isfile(binary_path):
-            cache = getattr(self, "_blackboard_path_cache", None)
-            if not isinstance(cache, dict):
-                cache = {}
-                self._blackboard_path_cache = cache
-            try:
-                stat = os.stat(binary_path)
-                # Binary identity only — NOT the session id. The workspace is
-                # shared by every session of the same binary so findings
-                # survive session close, session rebuild, and new sessions.
-                cache_key = (
-                    os.path.realpath(binary_path),
-                    stat.st_size,
-                    stat.st_mtime_ns,
-                )
-            except OSError:
-                cache_key = (os.path.realpath(binary_path), 0, 0)
-            workspace_path = cache.get(cache_key)
-            if not workspace_path:
-                digest = self._binary_sha256(binary_path)
-                if digest:
-                    workspace_dir = os.path.join(self.cache_dir, "blackboards")
-                    os.makedirs(workspace_dir, exist_ok=True)
-                    workspace_path = os.path.join(
-                        workspace_dir,
-                        f"sha256-{digest}.db",
+            # The cache + first-open seed is a check-then-act pair: two
+            # sessions of the same binary opening concurrently must not both
+            # compute the digest and both seed/backup the same workspace.
+            lock = getattr(self, "_blackboard_path_lock", None)
+            if lock is None:
+                lock = threading.Lock()
+                self._blackboard_path_lock = lock
+            with lock:
+                cache = getattr(self, "_blackboard_path_cache", None)
+                if not isinstance(cache, dict):
+                    cache = {}
+                    self._blackboard_path_cache = cache
+                try:
+                    stat = os.stat(binary_path)
+                    # Binary identity only — NOT the session id. The workspace is
+                    # shared by every session of the same binary so findings
+                    # survive session close, session rebuild, and new sessions.
+                    cache_key = (
+                        os.path.realpath(binary_path),
+                        stat.st_size,
+                        stat.st_mtime_ns,
                     )
-                    idb_path = str(getattr(session, "idb_path", "") or "").strip()
-                    self._seed_shared_workspace(workspace_path, digest, idb_path)
-                    cache[cache_key] = workspace_path
-            if workspace_path:
-                return workspace_path
+                except OSError:
+                    cache_key = (os.path.realpath(binary_path), 0, 0)
+                workspace_path = cache.get(cache_key)
+                if not workspace_path:
+                    digest = self._binary_sha256(binary_path)
+                    if digest:
+                        workspace_dir = os.path.join(self.cache_dir, "blackboards")
+                        os.makedirs(workspace_dir, exist_ok=True)
+                        workspace_path = os.path.join(
+                            workspace_dir,
+                            f"sha256-{digest}.db",
+                        )
+                        idb_path = str(getattr(session, "idb_path", "") or "").strip()
+                        self._seed_shared_workspace(workspace_path, digest, idb_path)
+                        cache[cache_key] = workspace_path
+                if workspace_path:
+                    return workspace_path
 
         idb_path = str(getattr(session, "idb_path", "") or "").strip() if session else ""
         if idb_path:
@@ -436,7 +445,19 @@ class ServerBlackboardMixin(
             if addr:
                 quests.append({"quest_type": "trace_caller", "entry_id": eid, "addr": addr, "call": {"tool": "trace_ingest", "args": {"entry_id": eid}}})
                 quests.append({"quest_type": "verify_this", "entry_id": eid, "addr": addr, "call": {"tool": "search", "args": {"query": addr}}})
-                quests.append({"quest_type": "rename_candidate", "entry_id": eid, "addr": addr, "call": {"tool": "proposal_create", "args": {"proposal_type": "rename", "title": f"rename {addr}", "spec": {"renames": [{"addr": addr, "name": "sub_candidate"}]}}}})
+                quests.append({
+                    "quest_type": "rename_candidate",
+                    "entry_id": eid,
+                    "addr": addr,
+                    "call": {
+                        "tool": "proposal_create",
+                        "args": {
+                            "proposal_type": "rename",
+                            "title": f"rename {addr}",
+                            "spec": {"renames": [{"addr": addr, "name": "sub_candidate"}]},
+                        },
+                    },
+                })
             quests.append({"quest_type": "disprove_hypothesis", "entry_id": eid, "addr": addr, "call": {"tool": "contradict", "args": {"entry_id": eid, "reason": "counter-evidence required"}}})
             if cat in {"hypothesis", "fact"}:
                 quests.append({"quest_type": "merge_duplicate", "entry_id": eid, "addr": addr, "call": {"tool": "merge", "args": {"addr": addr, "category": cat}}})
@@ -547,6 +568,8 @@ class ServerBlackboardMixin(
         }
         notes_written = ""
         if notes_path:
+            notes_path, path_err = self._bb_confine_path(notes_path)
+        if notes_path and not path_err:
             try:
                 lines = [
                     "# Memory Compiler Snapshot",
@@ -727,6 +750,94 @@ class ServerBlackboardMixin(
             "recommended_action": fix,
         }
 
+    def _bb_path_root(self) -> str | None:
+        """Root directory that blackboard file actions may read/write.
+
+        Mirrors the memory tool's sandbox: an explicit env override, else the
+        directory of the current IDB, else the host cache dir. Every path a
+        caller passes to export / notes_import / memory_compile must resolve
+        under this root so the bridge can never read or overwrite arbitrary
+        host files.
+        """
+        env_root = os.environ.get("IDA_MCP_BLACKBOARD_ROOT")
+        if env_root:
+            try:
+                return os.path.realpath(os.path.expanduser(env_root))
+            except Exception:
+                return None
+        session = getattr(self, "current_session", None)
+        idb_path = getattr(session, "idb_path", None) if session else None
+        if idb_path:
+            try:
+                return os.path.realpath(os.path.dirname(idb_path))
+            except Exception:
+                pass
+        cache_dir = getattr(self, "cache_dir", None)
+        if cache_dir:
+            return os.path.realpath(cache_dir)
+        return None
+
+    def _bb_confine_path(self, raw_path: str) -> tuple[str, str | None]:
+        """Resolve a caller-supplied path inside the blackboard root.
+
+        Returns ``(resolved, error_envelope)``. ``resolved`` is a real path
+        under the root when OK; otherwise it is empty and the envelope explains
+        why. ``..`` traversal and symlinked components are rejected, matching
+        the memory tool's filesystem sandbox.
+        """
+        path = str(raw_path or "").strip()
+        if not path:
+            return "", make_error(MCPError.INVALID_ARGS, "path required")
+        root = self._bb_path_root()
+        if not root:
+            return "", make_error(
+                MCPError.INVALID_ARGS,
+                "blackboard file action: no allowed root configured "
+                "(set IDA_MCP_BLACKBOARD_ROOT or open a session).",
+            )
+        try:
+            canonical = os.path.realpath(os.path.join(root, path))
+        except Exception:
+            return "", make_error(MCPError.INVALID_ARGS, "blackboard file action: invalid path")
+        try:
+            common = os.path.commonpath([root, canonical])
+        except ValueError:
+            return "", make_error(
+                MCPError.INVALID_ARGS,
+                "blackboard file action: path escapes allowed root",
+            )
+        if common != root:
+            return "", make_error(
+                MCPError.INVALID_ARGS,
+                "blackboard file action: path escapes allowed root",
+            )
+        if self._bb_path_has_symlink(canonical, root):
+            return "", make_error(
+                MCPError.INVALID_ARGS,
+                "blackboard file action: symbolic links are not allowed in path",
+            )
+        return canonical, None
+
+    @staticmethod
+    def _bb_path_has_symlink(abs_path: str, allowed_root: str) -> bool:
+        if not abs_path or not allowed_root:
+            return True
+        try:
+            rel = os.path.relpath(abs_path, allowed_root)
+        except ValueError:
+            return True
+        if rel.startswith("..") or os.path.isabs(rel):
+            return True
+        parts = rel.split(os.sep)
+        current = allowed_root
+        for part in parts:
+            if not part:
+                continue
+            current = os.path.join(current, part)
+            if os.path.islink(current):
+                return True
+        return False
+
     def _findings_export(
         self,
         store,
@@ -793,7 +904,9 @@ class ServerBlackboardMixin(
         else:
             content = json.dumps(snapshot, indent=2, ensure_ascii=False)
         if path.strip():
-            out_path = os.path.abspath(path.strip())
+            out_path, path_err = self._bb_confine_path(path)
+            if path_err:
+                return path_err
             os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
             with open(out_path, "w", encoding="utf-8") as fh:
                 fh.write(content + ("\n" if fmt == "markdown" else ""))
@@ -899,6 +1012,9 @@ class ServerBlackboardMixin(
         trace_depth: int = 2,
         trace_limit: int = 8,
     ) -> dict[str, Any]:
+        notes_path, path_err = self._bb_confine_path(notes_path)
+        if path_err:
+            return path_err
         if not os.path.exists(notes_path):
             return make_error(MCPError.NOT_FOUND, f"Notes file not found: {notes_path}")
         category = _LANE_CATEGORY.get(lane, "hypothesis")
@@ -1088,11 +1204,25 @@ class ServerBlackboardMixin(
                 except Exception:
                     pass
         elif proposal_type == "patch":
-            pass
+            # Patch execution is not implemented on the host. Report the
+            # non-execution honestly so proposal_accept marks the proposal
+            # 'failed' instead of rewarding an unapplied patch as 'verified'.
+            return {
+                "ok": False,
+                "applied": 0,
+                "failed": [],
+                "note": "Patch execution is not implemented; the proposal was not applied to the IDB.",
+            }
         return {"ok": True, "applied": applied}
 
     def _get_blackboard_store(self):
-        """Return a BlackboardStore scoped to the current session workspace."""
+        """Return a BlackboardStore scoped to the current session workspace.
+
+        On failure, the underlying cause is recorded on
+        ``self._blackboard_store_error`` (cleared on success) so callers can
+        surface a real DB/lock problem instead of an opaque "unavailable".
+        """
+        self._blackboard_store_error = None
         try:
             if type(self)._blackboard_module is None:
                 import importlib.util
@@ -1112,7 +1242,8 @@ class ServerBlackboardMixin(
             if not str(db_path or "").strip():
                 return None
             return mod.BlackboardStore(db_path=db_path)
-        except Exception:
+        except Exception as exc:
+            self._blackboard_store_error = str(exc)
             return None
 
     def _binary_sha256(self, binary_path: str) -> str:
@@ -1227,7 +1358,20 @@ class ServerBlackboardMixin(
             return 0
 
     def _handle_blackboard(self, args: dict) -> dict:
-        """Host-side blackboard handler so it works without IDA runtime."""
+        """Host-side blackboard handler.
+
+        Wraps the dispatch so malformed numeric args (``int``/``float`` on
+        caller strings) surface as an INVALID_ARGS envelope instead of raising
+        a ValueError out of the dispatch layer, which would report an internal
+        error to the MCP client.
+        """
+        try:
+            return self._handle_blackboard_inner(args)
+        except (TypeError, ValueError) as exc:
+            return make_error(MCPError.INVALID_ARGS, str(exc))
+
+    def _handle_blackboard_inner(self, args: dict) -> dict:
+        """Host-side blackboard dispatch so it works without IDA runtime."""
         policy_state = self._bb_policy_bump()
         phase_state = self._phase_state()
         action = str(args.get("action") or "list").strip().lower()
@@ -1236,6 +1380,12 @@ class ServerBlackboardMixin(
         if action not in policy_only_actions:
             store = self._get_blackboard_store()
             if store is None:
+                detail = getattr(self, "_blackboard_store_error", "") or ""
+                if detail:
+                    return make_error(
+                        MCPError.DB_ERROR,
+                        f"BlackboardStore unavailable: {detail}",
+                    )
                 return make_error(MCPError.IO_ERROR, "BlackboardStore unavailable")
         self._phase_log_action(phase_state, action, addr=str(args.get("addr") or "").strip())
         if store is not None:
@@ -1248,10 +1398,10 @@ class ServerBlackboardMixin(
         if self._phase_find_loop(phase_state):
             self._phase_transition(phase_state, "prove", "auto: loop detected, injecting escape-route")
         if action == "policy_set":
-            strict_mode = bool(args.get("strict_mode", policy_state.get("strict_mode", False)))
+            strict_mode = _coerce_bool(args.get("strict_mode"), policy_state.get("strict_mode", False))
             max_age = _bounded_int(args.get("max_staleness_calls", policy_state.get("max_staleness_calls", 6)), 6, min_value=1, max_value=100)
-            require_ws = bool(args.get("require_working_set", policy_state.get("require_working_set", True)))
-            require_dw = bool(args.get("require_decision_or_write", policy_state.get("require_decision_or_write", True)))
+            require_ws = _coerce_bool(args.get("require_working_set"), policy_state.get("require_working_set", True))
+            require_dw = _coerce_bool(args.get("require_decision_or_write"), policy_state.get("require_decision_or_write", True))
             enforce_phases = args.get("enforce_phases", policy_state.get("enforce_phases", ["commit", "finalize"]))
             if isinstance(enforce_phases, str):
                 enforce_phases = parse_str_list(enforce_phases)
@@ -1278,7 +1428,7 @@ class ServerBlackboardMixin(
             phase = str(args.get("phase") or "").strip().lower()
             if phase not in {"scout", "prove", "commit", "finalize"}:
                 return make_error(MCPError.INVALID_ARGS, "phase must be one of: scout, prove, commit, finalize")
-            auto = bool(args.get("auto_transition", phase_state.get("auto_transition", True)))
+            auto = _coerce_bool(args.get("auto_transition"), phase_state.get("auto_transition", True))
             phase_state["auto_transition"] = auto
             self._phase_transition(phase_state, phase, "manual set")
             return {"ok": True, "phase": self._phase_snapshot(phase_state, store)}
@@ -1406,7 +1556,7 @@ class ServerBlackboardMixin(
                 source_type="decision_card",
             )
             self._bb_policy_mark(policy_state, "decision")
-            auto_trace = bool(args.get("auto_trace", True))
+            auto_trace = _coerce_bool(args.get("auto_trace"), True)
             trace_depth = _bounded_int(args.get("trace_depth", 2), 2, min_value=1, max_value=6)
             trace_limit = _bounded_int(args.get("trace_limit", 8), 8, min_value=1, max_value=50)
             trace_task_id = self._maybe_auto_trace_from_text(
@@ -1505,7 +1655,7 @@ class ServerBlackboardMixin(
             err = self._validate_proposal_spec(proposal_type, spec)
             if err:
                 return make_error(MCPError.INVALID_ARGS, f"Proposal spec invalid: {err}")
-            dry_run = bool(args.get("dry_run", False))
+            dry_run = _coerce_bool(args.get("dry_run"), False)
             tags = entry.get("tags") or []
             if not isinstance(tags, list):
                 tags = []
@@ -1702,15 +1852,15 @@ class ServerBlackboardMixin(
                 tag=str(args.get("tag") or "").strip(),
                 addr=str(args.get("addr") or "").strip(),
                 min_confidence=float(args.get("min_confidence", 0.0)),
-                include_resolved=bool(args.get("include_resolved", True)),
-                include_contradicted=bool(args.get("include_contradicted", True)),
+                include_resolved=_coerce_bool(args.get("include_resolved"), True),
+                include_contradicted=_coerce_bool(args.get("include_contradicted"), True),
                 limit=export_limit,
             )
         if action == "notes_import":
             notes_path = str(args.get("notes_path") or args.get("path") or "re_notes.md").strip()
             lane = str(args.get("lane") or "lane_hypotheses").strip()
             confidence = float(args.get("confidence", 0.65))
-            auto_trace = bool(args.get("auto_trace", False))
+            auto_trace = _coerce_bool(args.get("auto_trace"), False)
             trace_depth = _bounded_int(args.get("trace_depth", 2), 2, min_value=1, max_value=6)
             trace_limit = _bounded_int(args.get("trace_limit", 8), 8, min_value=1, max_value=50)
             return self._notes_import(
@@ -1730,8 +1880,8 @@ class ServerBlackboardMixin(
                 min_confidence=float(args.get("min_confidence", 0.0)),
                 limit=_bounded_int(args.get("limit", 100), 100, min_value=1, max_value=1000),
                 offset=_bounded_int(args.get("offset", 0), 0, min_value=0),
-                include_resolved=bool(args.get("include_resolved", True)),
-                include_contradicted=bool(args.get("include_contradicted", False)),
+                include_resolved=_coerce_bool(args.get("include_resolved"), True),
+                include_contradicted=_coerce_bool(args.get("include_contradicted"), False),
                 kind=str(args.get("kind") or "").strip() or None,
                 status=str(args.get("status") or "").strip() or None,
             )
@@ -1745,8 +1895,8 @@ class ServerBlackboardMixin(
                 top_k=_bounded_int(args.get("limit", 20), 20, min_value=1, max_value=500),
                 threshold=float(args.get("threshold", 0.4)),
                 category=str(args.get("category") or "").strip() or None,
-                include_resolved=bool(args.get("include_resolved", True)),
-                include_contradicted=bool(args.get("include_contradicted", False)),
+                include_resolved=_coerce_bool(args.get("include_resolved"), True),
+                include_contradicted=_coerce_bool(args.get("include_contradicted"), False),
             )
             return {"ok": True, "query": query, "entries": entries, "count": len(entries), "summary": _entry_collection_summary(entries)}
         if action == "read":
@@ -1793,10 +1943,22 @@ class ServerBlackboardMixin(
             return {"ok": ok, "action": "update", "entry": store.read(entry_id)} if ok else make_error(MCPError.NOT_FOUND, f"Entry '{entry_id}' not found or no valid fields")
         if action == "delete":
             ok = store.delete(str(args.get("entry_id") or ""))
-            return {"ok": ok, "action": "delete"}
+            return {
+                "ok": ok,
+                "action": "delete",
+                "scope": "entire_binary_workspace",
+                "note": "The workspace DB is shared by every session of this binary; "
+                "deleting an entry removes it for all sessions, not just this one.",
+            }
         if action == "clear":
             count = store.clear(category=str(args.get("category") or "").strip() or None)
-            return {"ok": True, "deleted": count}
+            return {
+                "ok": True,
+                "deleted": count,
+                "scope": "entire_binary_workspace",
+                "note": "Cleared the binary-wide workspace shared by every session of "
+                "this binary, not just the current session.",
+            }
         if action == "stats":
             return {"ok": True, **store.stats()}
         if action == "coverage":
@@ -1826,7 +1988,13 @@ class ServerBlackboardMixin(
                 min_q_value=float(args.get("min_q_value", 0.0)),
                 older_than_days=int(args.get("older_than_days", 0)),
             )
-            return {"ok": True, **result}
+            return {
+                "ok": True,
+                **result,
+                "scope": "entire_binary_workspace",
+                "note": "Pruned the binary-wide workspace shared by every session of "
+                "this binary, not just the current session.",
+            }
         if action == "contradict":
             eid = str(args.get("entry_id") or "").strip()
             reason = str(args.get("reason") or "").strip()
@@ -2000,11 +2168,6 @@ class ServerBlackboardMixin(
                     return make_error(MCPError.INVALID_ARGS, "proposal_id required")
                 ok = crawler.reject(pid)
                 return {"ok": ok} if ok else make_error(MCPError.NOT_FOUND, f"Proposal '{pid}' not found")
-        if action == "attention_status":
-            return {"ok": True, "note": "attention_kernel replaced by intelligence.py"}
-        if action == "attention_policy_upsert":
-            return {"ok": True, "action": "attention_policy_upsert",
-                    "note": "attention_kernel replaced by intelligence.py"}
         return make_error(
             MCPError.ACTION_NOT_FOUND,
             f"Unsupported blackboard action: '{action}'",

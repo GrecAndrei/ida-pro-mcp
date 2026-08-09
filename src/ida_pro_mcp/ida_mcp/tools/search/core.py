@@ -82,7 +82,11 @@ def _get_db_fingerprint() -> str:
     try:
         md5 = ida_nalt.retrieve_input_file_md5()
         if md5:
-            return md5.hex()
+            # IDAPython returns the input-file MD5 as a lowercase hex string;
+            # older bindings may yield bytes. Normalize so this fast path
+            # actually runs instead of silently falling through to a full-DB
+            # scan of every function, segment, and name on each access.
+            return md5.decode("ascii") if isinstance(md5, bytes) else str(md5)
     except Exception:
         pass
     # Fallback: count functions + segments + total names

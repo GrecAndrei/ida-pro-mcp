@@ -250,22 +250,31 @@ def modify(
             return make_error(MCPError.IDA_ERROR, "Failed to rename", "Check if name is valid C identifier and not duplicate")
 
         elif action == "comment":
+            # idc.set_cmt / ida_lines.add_extra_cmt return True on success and
+            # False on failure (comment too long, ea not writable); a falsy
+            # return must surface as an error, not an ok:true envelope.
             if comment_type == "regular":
-                idc.set_cmt(ea, value, 0)
+                ok = idc.set_cmt(ea, value, 0)
             elif comment_type == "repeatable":
-                idc.set_cmt(ea, value, 1)
+                ok = idc.set_cmt(ea, value, 1)
             else:
                 # Anterior/Posterior
                 import ida_lines
                 is_anterior = (comment_type == "anterior")
                 if hasattr(ida_lines, "add_extra_cmt"):
-                    ida_lines.add_extra_cmt(ea, is_anterior, value)
+                    ok = ida_lines.add_extra_cmt(ea, is_anterior, value)
                 else:
                     # Fallback: preserve intent in regular comment channel.
                     prefix = "[anterior] " if is_anterior else "[posterior] "
                     existing = idc.get_cmt(ea, 0) or ""
                     merged = (existing + "\n" if existing else "") + prefix + value
-                    idc.set_cmt(ea, merged, 0)
+                    ok = idc.set_cmt(ea, merged, 0)
+            if not ok:
+                return make_error(
+                    MCPError.ANNOTATION_ERROR,
+                    f"Failed to set {comment_type} comment at {addr}",
+                    "The comment may be too long or the address may not accept annotations.",
+                )
             result = {"ok": True, "addr": addr, "comment_type": comment_type, "comment": value}
             if gov_warnings:
                 result["governance_warnings"] = gov_warnings
@@ -343,10 +352,13 @@ def modify(
                     patch_size = idaapi.decode_insn(insn, ea)
                     if not patch_size:
                         patch_size = 1
-                # Use arch-appropriate NOP; fall back to x86 0x90
+                # Use arch-appropriate NOP; fall back to x86 0x90.
+                # idaapi.get_inf_structure() was removed in IDA 9 — use the
+                # portable _inf_procname() helper so ARM/RISC-V NOP bytes are
+                # still chosen on IDA 9 instead of silently writing 0x90.
                 nop_byte = 0x90
                 try:
-                    proc = idaapi.get_inf_structure().procname.lower()
+                    proc = _inf_procname().lower()
                     if "riscv" in proc:
                         # RISC-V 32-bit NOP = addi x0, x0, 0 = 0x00000013
                         nop_bytes = b"\x13\x00\x00\x00" * (patch_size // 4)

@@ -12,8 +12,6 @@ Long-term goal: every tool's ``TOOL_ACTIONS`` lives in its own file so that
 
 from __future__ import annotations
 
-from typing import Any
-
 # ---------------------------------------------------------------------------
 # Tool -> [action names]
 # ---------------------------------------------------------------------------
@@ -66,7 +64,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
 
     "firmware_view": ["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign", "detect_load_address", "detect_vector_table", "detect_mmio", "rtos_scan", "triage_snapshot", "bootstrap"],
     "funcs": ["create", "change", "delete", "set_flags", "info", "metrics", "find_similar", "suggest_names", "list"],
-    "gadgets": ["rop", "jop", "cop", "syscall", "write_what_where", "stack_pivot", "shellcode_space", "mitigations", "seh_handlers", "pivot_chains", "classify_chain"],
+    "gadgets": ["rop", "jop", "cop", "syscall", "write_what_where", "stack_pivot", "shellcode_space", "mitigations", "seh_handlers", "pivot_chains", "classify_chain", "semantic_find"],
     "governance": ["check", "redact", "list_rules", "stats"],
     "graph": ["callgraph", "cfg", "dominators", "xref_graph"],
 
@@ -130,21 +128,12 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
 
 
 # ---------------------------------------------------------------------------
-# Argument schemas  (tool -> action -> {param_name: {type, description, ...}})
+# Argument schemas / aliases
 # ---------------------------------------------------------------------------
-# Derived from TOOL_ARG_SCHEMAS in schemas_data.py.  Stub — full migration
-# underway in Phase 2B.
-ARG_SCHEMAS: dict[str, dict[str, dict[str, Any]]] = {}
-
-# ---------------------------------------------------------------------------
-# Argument aliases  (tool -> action -> {alias: canonical_param})
-# ---------------------------------------------------------------------------
-ARG_ALIASES: dict[str, dict[str, dict[str, str]]] = {}
-
-# ---------------------------------------------------------------------------
-# Action aliases  (tool -> {alias_action: canonical_action})
-# ---------------------------------------------------------------------------
-ACTION_ALIASES: dict[str, dict[str, str]] = {}
+# These live in schemas_data.py (TOOL_ARG_SCHEMAS) and schemas.py
+# (ACTION_ALIASES_BY_TOOL / ARG_ALIASES_BY_TOOL / _TOOL_SPECIFIC_ARG_ALIASES).
+# No consumer reads module-level ARG_SCHEMAS/ARG_ALIASES/ACTION_ALIASES here,
+# so they are intentionally not defined (dead stubs were removed).
 
 
 # === Public API ===========================================================

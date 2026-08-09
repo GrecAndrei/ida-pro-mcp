@@ -21,7 +21,7 @@ import json
 import os
 import threading
 import time
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
 from typing import Any
 
 # Canonical behavior tags for reverse engineering functions
@@ -60,14 +60,12 @@ class InsightIndex:
     Attributes:
         _tag_map: Dict[tag, List[func_addr]] — primary tag index.
         _func_map: Dict[func_addr, Dict[str, Any]] — per-function metadata.
-        _access_log: OrderedDict recording access counts for promotion heuristics.
         _lock: threading.RLock for thread-safe operations.
     """
 
     def __init__(self, persistence_path: str | None = None):
         self._tag_map: dict[str, list[str]] = defaultdict(list)
         self._func_map: dict[str, dict[str, Any]] = {}
-        self._access_log: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._lock = threading.RLock()
         self._persistence_path = persistence_path
         self._dirty = False
@@ -85,16 +83,19 @@ class InsightIndex:
         if s.startswith("0x"):
             raw = s[2:].lstrip("0") or "0"
             return f"0x{raw}"
+        # Bare hex (e.g. "401000") must collapse onto the same key as the
+        # 0x-prefixed form ("0x401000") so mixed-format indexing/lookup match.
+        if s and all(c in "0123456789abcdef" for c in s):
+            return f"0x{s.lstrip('0') or '0'}"
         return s
 
     def _mark_dirty(self) -> None:
         """Mark index as modified and autosave if enough time has passed."""
         with self._lock:
             self._dirty = True
-            now = time.time()
-            if self._persistence_path and now - self._last_save > 60:
-                self._last_save = now
-                self._dirty = False
+            if self._persistence_path and time.time() - self._last_save > 60:
+                # save() clears _dirty / updates _last_save only on success, so a
+                # failed autosave leaves _dirty True and is retried next window.
                 self.save()
 
     def _index_function_unlocked(self, func_addr: str, attributes: dict[str, Any]) -> None:
@@ -160,7 +161,6 @@ class InsightIndex:
         with self._lock:
             self._tag_map.clear()
             self._func_map.clear()
-            self._access_log.clear()
             for addr, attrs in functions:
                 self._index_function_unlocked(addr, attrs)
             self._mark_dirty()
@@ -176,7 +176,11 @@ class InsightIndex:
             meta = self._func_map.get(addr)
             if meta:
                 meta["access_count"] = meta.get("access_count", 0) + 1
-                return dict(meta)
+                # Shallow-copy the dict AND the mutable tags list so a caller
+                # mutating the returned metadata cannot corrupt the index.
+                out = dict(meta)
+                out["tags"] = list(meta.get("tags", []))
+                return out
             return None
 
     # ------------------------------------------------------------------
@@ -221,7 +225,11 @@ class InsightIndex:
                 for tag, addrs in tag_map.items():
                     self._tag_map[tag] = list(addrs)
         except Exception:
-            pass
+            # A corrupt index must not silently become an empty in-memory index
+            # that a later autosave writes over the only copy. Preserve the
+            # file aside so the data stays recoverable.
+            with contextlib.suppress(OSError):
+                os.replace(path, path + ".corrupt")
 
     # ------------------------------------------------------------------
     # Stats

@@ -7,7 +7,8 @@ emits notifications via notify_fn:
   - LOOP: same (tool, action) repeated without productive outcome
   - ANALYZE_WITHOUT_RECORD: many analysis calls, no blackboard writes
   - SAME_ADDR: same address analyzed multiple times
-  - HIGH_ERROR_RATE: >30% of recent calls returning errors
+  - HIGH_ERROR_RATE: elevated share of recent calls returning errors
+    (adaptive 20-40% threshold, stricter on small samples)
 
 Drift detection is a live, per-session signal fed by observe() on every tool
 call. The speculative SequenceModel / EffectivenessModel / AuditMiner that
@@ -26,9 +27,12 @@ Usage:
 from __future__ import annotations
 
 import collections
+import logging
 import threading
 import time
 from collections.abc import Callable
+
+logger = logging.getLogger(__name__)
 
 # ── Drift Detector ─────────────────────────────────────────────────────────────
 
@@ -40,13 +44,19 @@ class DriftDetector:
     - LOOP: same (tool, action) repeated N times without productive outcome
     - ANALYZE_WITHOUT_RECORD: many decompile/disasm calls, few blackboard writes
     - SAME_ADDR: same address analyzed multiple times
-    - HIGH_ERROR_RATE: >30% of recent calls returning errors
+    - HIGH_ERROR_RATE: elevated share of recent calls returning errors
+      (adaptive 20-40% threshold, stricter on small samples)
     (latencies are collected for the per-session report average; a dedicated
     LATENCY_SPIKE detector is intentionally not emitted.)
     """
 
     ANALYSIS_TOOLS = {"code", "search", "graph", "deobfuscate"}
     RECORD_TOOLS = {"blackboard", "modify", "annotation", "bookmarks"}
+    # Upper bound on per-session distinct addresses retained for REPEATED_ADDR
+    # drift detection. A long-lived session could otherwise retain an unbounded
+    # Counter of every address it ever touched; the least-common entries are
+    # trimmed once the cap is exceeded.
+    _MAX_ADDRS = 200
 
     def __init__(self, window: int = 20):
         self._window = window
@@ -100,6 +110,20 @@ class DriftDetector:
                 s["error_calls"] += 1
             if addr:
                 s["addrs_seen"][addr] += 1
+                if len(s["addrs_seen"]) > self._MAX_ADDRS:
+                    # Keep the Counter bounded by evicting the least-common
+                    # addresses, oldest-first on count ties. Evicting the
+                    # *newest* low-count address instead would drop a
+                    # freshly-repeated address before its count can grow,
+                    # silently breaking REPEATED_ADDR detection past the cap.
+                    min_count = min(s["addrs_seen"].values())
+                    excess = len(s["addrs_seen"]) - self._MAX_ADDRS
+                    for stale_addr, count in list(s["addrs_seen"].items()):
+                        if excess <= 0:
+                            break
+                        if count == min_count:
+                            del s["addrs_seen"][stale_addr]
+                            excess -= 1
             s["latencies"].append(latency_ms)
 
     def check(self, session_id: str) -> list[dict]:
@@ -169,34 +193,49 @@ class DriftDetector:
             if len(recent) >= loop_tail_len:
                 tail = recent[-loop_tail_len:]
                 if len(set(tail)) <= 2:
+                    # Sorted so the message text is deterministic across checks
+                    # (a set repr of (tool, action) tuples would otherwise
+                    # render in an arbitrary, run-to-run-varying order).
+                    repeating = sorted({f"{t}.{a}" for t, a in set(tail)})
                     signals.append({
                         "type": "LOOP",
-                        "message": f"Repeating {set(tail)} in last {loop_tail_len} calls. "
+                        "message": f"Repeating {repeating} in last {loop_tail_len} calls. "
                                    "Try a different approach or read ida_session_state.",
                         "severity": "warning",
-                        "states": [f"{t}.{a}" for t, a in set(tail)],
+                        "states": repeating,
                     })
 
         return signals
 
     def session_report(self, session_id: str) -> dict:
         with self._lock:
-            s = dict(self._session_stats.get(session_id, {}))
-        if not s:
-            return {"session_id": session_id, "total_calls": 0}
-        latencies = list(s.get("latencies", []))
+            s = self._session_stats.get(session_id)
+            if not s:
+                return {"session_id": session_id, "total_calls": 0}
+            # Snapshot all mutable state under the lock: the shallow copy alone
+            # would leave the latencies deque and addrs_seen Counter as live
+            # references that a concurrent observe() can mutate during the
+            # iteration below (RuntimeError: changed size during iteration).
+            snapshot = {
+                "total_calls": s["total_calls"],
+                "analysis_calls": s["analysis_calls"],
+                "record_calls": s["record_calls"],
+                "error_calls": s["error_calls"],
+                "latencies": list(s["latencies"]),
+                "top_addrs": dict(s["addrs_seen"].most_common(5)),
+            }
+        latencies = snapshot["latencies"]
         avg_lat = sum(latencies) / len(latencies) if latencies else 0
-        top_addrs = dict(s.get("addrs_seen", {}).most_common(5))
         return {
             "session_id": session_id,
-            "total_calls": s["total_calls"],
-            "analysis_calls": s["analysis_calls"],
-            "record_calls": s["record_calls"],
-            "error_calls": s["error_calls"],
-            "record_rate": round(s["record_calls"] / max(s["analysis_calls"], 1), 3),
-            "error_rate": round(s["error_calls"] / max(s["total_calls"], 1), 3),
+            "total_calls": snapshot["total_calls"],
+            "analysis_calls": snapshot["analysis_calls"],
+            "record_calls": snapshot["record_calls"],
+            "error_calls": snapshot["error_calls"],
+            "record_rate": round(snapshot["record_calls"] / max(snapshot["analysis_calls"], 1), 3),
+            "error_rate": round(snapshot["error_calls"] / max(snapshot["total_calls"], 1), 3),
             "avg_latency_ms": round(avg_lat, 1),
-            "top_addresses": top_addrs,
+            "top_addresses": snapshot["top_addrs"],
             "drift_signals": self.check(session_id),
         }
 
@@ -213,6 +252,16 @@ class DriftDetector:
             ]
             for sid in stale:
                 self._session_stats.pop(sid, None)
+
+    def evict_session(self, session_id: str) -> None:
+        """Drop per-session state immediately when a session is closed.
+
+        The idle sweep (prune) only reclaims sessions after a long idle gap;
+        an explicitly closed or switched-away session should not keep its
+        drift state (or keep emitting drift notifications) in the meantime.
+        """
+        with self._lock:
+            self._session_stats.pop(session_id, None)
 
 
 # ── UsageIntelligence ─────────────────────────────────────────────────────────
@@ -247,8 +296,19 @@ class UsageIntelligence:
         self._sessions_lock = threading.Lock()
 
     def start(self):
-        if self._thread and self._thread.is_alive():
-            return
+        if self._thread is not None and self._thread.is_alive():
+            if not self._stop.is_set():
+                return  # already running
+            # stop() was called but the old loop has not finished exiting
+            # yet. A bare is_alive() early-return would leave the observer
+            # permanently dead (the _stop latch stays set), so wait out the
+            # dying loop before spawning a fresh one.
+            self._thread.join(timeout=5.0)
+            if self._thread.is_alive():
+                # Loop is genuinely stuck; do not run a second concurrent
+                # loop — leave the latch set and let a later start() retry.
+                return
+            self._thread = None
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._loop, daemon=True, name="usage-intelligence"
@@ -289,6 +349,22 @@ class UsageIntelligence:
             "active_sessions": len(self._active_sessions),
         }
 
+    def evict_session(self, session_id: str) -> None:
+        """Drop a session's drift state when it is closed or abandoned.
+
+        Called on session close/switch. Without this, a closed session stays
+        'active' (and is re-checked for drift, able to emit notifications)
+        until the idle sweep reclaims it. Note: server-side session close /
+        switch paths must call this — it is a seam for the host integration.
+        """
+        self.drift.evict_session(session_id)
+        with self._sessions_lock:
+            self._active_sessions.discard(session_id)
+            self._last_seen.pop(session_id, None)
+            self._notified_signals = {
+                k for k in self._notified_signals if k[0] != session_id
+            }
+
     # ── background loop ───────────────────────────────────────────────────────
 
     def _loop(self):
@@ -299,7 +375,10 @@ class UsageIntelligence:
                     self._check_all_sessions()
                     self._last_drift_check = now
             except Exception:
-                pass
+                # A failed drift sweep must not kill the observer loop, but it
+                # also must not vanish silently: a persistent failure would
+                # otherwise retry every 30s forever with zero observability.
+                logger.exception("usage intelligence drift sweep failed")
             self._stop.wait(timeout=30)
 
     def _check_all_sessions(self):

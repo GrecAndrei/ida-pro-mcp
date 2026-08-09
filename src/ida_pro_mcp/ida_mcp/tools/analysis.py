@@ -281,6 +281,16 @@ def analysis(
                     hint="Processor changes must be compatible with the loaded file. For mismatched architectures, use a raw binary or select the processor before loading.",
                     details={"processor": processor, "flags": proc_flags, "previous": prev},
                 )
+            if not ok:
+                # set_processor_type returns success; a False return means the
+                # processor was NOT switched — report an error instead of a
+                # false-success envelope the agent would act on.
+                return make_error(
+                    MCPError.IDA_ERROR,
+                    f"Failed to set processor to {processor!r}",
+                    hint="Processor changes must be compatible with the loaded file. For mismatched architectures, use a raw binary or select the processor before loading.",
+                    details={"processor": processor, "flags": proc_flags, "previous": prev},
+                )
             return {"ok": True, "processor": processor, "previous": prev, "result": ok}
 
         if action == "set_gp":
@@ -362,6 +372,15 @@ def analysis(
                         str(e),
                         details={"loader": loader_name, "value": opts},
                     )
+            if not ok:
+                # set_loader_options returns success; a False return means the
+                # options were NOT applied — surface it instead of a
+                # false-success envelope.
+                return make_error(
+                    MCPError.IDA_ERROR,
+                    f"Failed to apply loader options for {loader_name!r}",
+                    details={"loader": loader_name, "value": opts},
+                )
             return {"ok": True, "loader": loader_name, "result": ok}
 
         if action == "set_architecture":
@@ -390,6 +409,13 @@ def analysis(
                         return make_error(
                             MCPError.IDA_ERROR,
                             str(e),
+                            hint="Processor changes must be compatible with the loaded file. For mismatched architectures, use a raw binary or select the processor before loading.",
+                            details={"processor": processor, "flags": proc_flags, "previous": prev},
+                        )
+                    if not result:
+                        return make_error(
+                            MCPError.IDA_ERROR,
+                            f"Failed to set processor to {processor!r}",
                             hint="Processor changes must be compatible with the loaded file. For mismatched architectures, use a raw binary or select the processor before loading.",
                             details={"processor": processor, "flags": proc_flags, "previous": prev},
                         )
@@ -545,21 +571,27 @@ def analysis(
                 if ep.get("created"):
                     rean["entry_point_funcs_created"] = ep
             elif blocking:
-                # Explicit range: poll auto_is_ok() for the budget.
+                # Explicit range: wait for the analyzer bounded by
+                # poll_timeout. auto_wait() drains the whole queue with no
+                # timeout, so on a large range it can block for minutes past
+                # the budget and blow the host RPC recv deadline. Pump
+                # incrementally with auto_make_step() inside a bounded poll
+                # loop so the analyzer makes progress without hanging the RPC;
+                # if the budget runs out, analysis_complete=False tells the
+                # caller to poll session status instead.
                 start_time = time.time()
                 import ida_auto as _ida_auto
-                if hasattr(idaapi, "auto_is_ok") and bool(idaapi.auto_is_ok()):
-                    waited = time.time() - start_time
-                elif hasattr(_ida_auto, "auto_wait"):
-                    _ida_auto.auto_wait()
-                    waited = time.time() - start_time
-                else:
-                    while time.time() - start_time < poll_timeout:
-                        analysis_ok = bool(idaapi.auto_is_ok()) if hasattr(idaapi, "auto_is_ok") else True
-                        if analysis_ok:
-                            break
-                        time.sleep(0.2)
-                        waited += 0.2
+                while time.time() - start_time < poll_timeout:
+                    analysis_ok = bool(idaapi.auto_is_ok()) if hasattr(idaapi, "auto_is_ok") else True
+                    if analysis_ok:
+                        break
+                    if hasattr(_ida_auto, "auto_make_step"):
+                        try:
+                            _ida_auto.auto_make_step(s_ea, e_ea)
+                        except Exception:
+                            pass
+                    time.sleep(0.1)
+                    waited += 0.1
             try:
                 func_count = sum(1 for _ in idautils.Functions())
             except Exception:
@@ -628,10 +660,25 @@ def analysis(
             import ida_loader as _ida_loader
             save_path = path or ""
             try:
-                _ida_loader.save_database(save_path, 0)
+                saved_ok = _ida_loader.save_database(save_path, 0)
             except Exception as e:
                 return make_error(MCPError.IDA_ERROR, f"save_database failed: {e}")
-            actual_path = save_path or (idaapi.get_input_file_path() if hasattr(idaapi, "get_input_file_path") else "")
+            if not saved_ok:
+                # save_database returns success; a False return means the save
+                # did not happen — report it instead of claiming success.
+                return make_error(
+                    MCPError.IDA_ERROR,
+                    "save_database reported failure",
+                    details={"path": save_path or "<in-place>"},
+                )
+            actual_path = save_path
+            if not actual_path:
+                # Report the real database file (foo.i64 / foo.idb), not the
+                # loaded input binary, when saving in place.
+                if hasattr(idc, "get_idb_path"):
+                    actual_path = idc.get_idb_path() or ""
+                elif hasattr(idaapi, "get_idb_path"):
+                    actual_path = idaapi.get_idb_path() or ""
             return {"ok": True, "saved_to": actual_path or "<current idb>"}
 
         if action == "make_code":
@@ -1084,20 +1131,21 @@ def _auto_reanalyze_text_segments(
     started = time.time()
     if scheduled > 0 and wait_seconds > 0:
         try:
-            if hasattr(idaapi, "auto_is_ok") and bool(idaapi.auto_is_ok()):
-                pass  # analyzer already drained; don't block at all
-            elif hasattr(_ida_auto, "auto_wait"):
-                # Pump the analyzer once; auto_wait() drains the queue and
-                # returns (it has no timeout, so only call it when work is
-                # actually pending — otherwise it defeats the poll budget).
-                _ida_auto.auto_wait()
-            else:
-                # No auto_wait binding: poll auto_is_ok() bounded by the
-                # caller's budget instead of blocking indefinitely.
-                while time.time() - started < wait_seconds:
-                    if hasattr(idaapi, "auto_is_ok") and bool(idaapi.auto_is_ok()):
-                        break
-                    time.sleep(0.2)
+            # Pump the analyzer within the caller's budget instead of calling
+            # auto_wait(), which drains the entire queue with no timeout — a
+            # whole-image reanalyze of a large binary could block for minutes
+            # and blow the host RPC recv deadline. Step each planned range
+            # incrementally until auto_is_ok() or the budget is spent.
+            while time.time() - started < wait_seconds:
+                if hasattr(idaapi, "auto_is_ok") and bool(idaapi.auto_is_ok()):
+                    break
+                if hasattr(_ida_auto, "auto_make_step"):
+                    try:
+                        for s, e, _n in ranges:
+                            _ida_auto.auto_make_step(s, e)
+                    except Exception:
+                        pass
+                time.sleep(0.1)
         except Exception:
             pass
         waited = time.time() - started

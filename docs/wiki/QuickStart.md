@@ -8,10 +8,12 @@ Five minutes to your first finding.
 ida_open_binary(binary_path="/path/to/sample")
 ```
 
-You get a `session_id` back. If the response says `safe_mode: true`, the
-binary is large and loaded in the background — poll `ida_session_status`
-until `safe_mode` is false. Everything below that is manual small-area work
-also works while analysis runs.
+You get a `session_id` back. If the response says `safe_mode: true`, IDA's
+auto-analysis is still running or pending — typically (but not only) when the
+binary is large and loaded in the background; a fresh open, a reuse that needs
+reanalysis, or a `force_new` rebuild can also return it. Poll
+`ida_session_status` until `safe_mode` is false. Everything below that is
+manual small-area work also works while analysis runs.
 
 ## 2. Orient
 

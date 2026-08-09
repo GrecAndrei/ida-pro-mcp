@@ -465,7 +465,13 @@ def code(
                 chain_depth = max(1, min(max_depth, 3))  # hard cap at 3
                 try:
                     cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
-                    main_pseudo = str(cfunc) if cfunc else ""
+                    if not cfunc:
+                        # Same contract as the other decompile actions: a
+                        # decompiler refusal must surface as an error entry,
+                        # not a success with an empty pseudocode body.
+                        results.append(_decompile_error_entry(addr, dec_err))
+                        continue
+                    main_pseudo = str(cfunc)
                     main_proto = get_prototype(func)
                     # Collect callers (compact: name + first 8 lines of pseudocode).
                     # caller_count reflects every unique caller found; only the

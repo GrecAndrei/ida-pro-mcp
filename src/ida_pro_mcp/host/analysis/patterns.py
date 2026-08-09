@@ -233,6 +233,10 @@ def _compile_smart_pattern_uncached(
     if regex is not None:
         return lambda _t, _r=regex: bool(_r.search(_t))
     if "*" in pattern or "?" in pattern:
+        if case_sensitive:
+            # Honor explicit case sensitivity on the glob path; fnmatch is
+            # case-sensitive natively, so match the target as-is.
+            return lambda _t, _p=pattern: fnmatch.fnmatch(_t, _p)
         pl = pattern.lower()
         # A bare '?' without '*' is far more likely a literal character — the
         # leading '?' of MSVC-mangled C++ symbols — than a single-char glob

@@ -11,6 +11,13 @@ The vendored ``ida_mcp/zeromcp`` package is from the same author and keeps
 its own LICENSE file alongside the sources.
 """
 
+# Defer annotation evaluation: utils.py is imported transitively by every IDA
+# tool module, and its signatures reference ida_* types (ida_funcs.func_t,
+# ida_typeinf.tinfo_t) that only exist inside a live IDA runtime. Python <=3.13
+# evaluates function annotations eagerly at import, so any test that stubs a
+# bare-bones ida_funcs/ida_typeinf (empty ModuleType) breaks on `import utils`.
+from __future__ import annotations
+
 import json
 import struct
 from collections.abc import Callable
@@ -132,7 +139,7 @@ def resolve_symbol(query: str) -> dict:
     Resolution order:
     1. Address literal (hex/decimal)
     2. Exact symbol name (idc.get_name_ea_simple)
-    3. Demangled C++ name (ida_name.get_ea with MNG_LONG_FORM)
+    3. Demangled C++ name (scan idautils.Names() with ida_name.demangle_name)
     4. Gives up — caller falls back to pattern matching
     """
     if query is None:
@@ -151,13 +158,19 @@ def resolve_symbol(query: str) -> dict:
     if ea != idaapi.BADADDR:
         func = idaapi.get_func(ea)
         return {"addr": hex(ea), "name": str(query), "is_func": func is not None}
-    # Try demangled C++ name (e.g. _ZTVN7android14SystemKloProxyE)
+    # Try demangled C++ name (e.g. "vtable for android::SystemKloProxy").
+    # NOTE: ida_name.get_ea's flags param is for SN_* name-search flags, not
+    # demangle-format flags — passing MNG_LONG_FORM there silently degrades to
+    # a plain (already-failed) name lookup. Scan the name table and compare
+    # the demangled form instead.
     try:
         import ida_name
-        ea = ida_name.get_ea(idaapi.BADADDR, str(query), ida_name.MNG_LONG_FORM)
-        if ea != idaapi.BADADDR:
-            func = idaapi.get_func(ea)
-            return {"addr": hex(ea), "name": str(query), "is_func": func is not None}
+        clean = str(query).strip()
+        for ea, name in idautils.Names():
+            dname = ida_name.demangle_name(name, ida_name.MNG_LONG_FORM)
+            if dname and dname == clean:
+                func = idaapi.get_func(ea)
+                return {"addr": hex(ea), "name": name, "is_func": func is not None}
     except Exception:
         pass
     # Try scanning all names for an exact match (including renamed symbols)

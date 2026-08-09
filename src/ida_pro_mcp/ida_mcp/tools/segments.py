@@ -13,6 +13,18 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+# _common does not re-export parse_address_safe (not in its __all__); import it
+# here so add/delete/move can accept unmapped destination addresses. Tried in
+# the three layouts this module is loaded under: IDA plugin package mode,
+# the host unit-test loader, and standalone IDA mode.
+try:
+    from ida_mcp.error_handling import parse_address_safe
+except ImportError:
+    try:
+        from ida_pro_mcp.ida_mcp.error_handling import parse_address_safe
+    except ImportError:
+        from error_handling import parse_address_safe  # type: ignore[import-not-found]
+
 
 # ============================================================================
 # 11. SEGMENTS - Segment management
@@ -115,8 +127,20 @@ def _seg_import_count(seg):
             nonlocal count
             if seg.start_ea <= ea < seg.end_ea:
                 count += 1
+            return True  # keep enumerating; a falsy return stops the walk
         ida_nalt.enum_import_names(mod_idx, _cb)
     return count
+
+
+def _strlit_value(head):
+    """Decode a string literal to a JSON-safe str (empty when unreadable)."""
+    val = idc.get_strlit_contents(head, -1, ida_nalt.STRTYPE_C)
+    if not val:
+        return ""
+    try:
+        return val.decode("utf-8", errors="replace")
+    except (UnicodeDecodeError, AttributeError):
+        return repr(val)
 
 
 def _seg_density_analysis(seg):
@@ -463,7 +487,10 @@ def segments(
             s_ea, err = validate_addr(start)
             if err:
                 return err
-            t_ea, err = validate_addr(end)
+            # Destination is typically a free/unmapped region (making room,
+            # compaction), so only parse it — validate_addr's is_mapped check
+            # would reject the primary use case of move_segm.
+            t_ea, err = parse_address_safe(end)
             if err:
                 return err
 
@@ -566,18 +593,12 @@ def segments(
                         "addr": hex(head),
                         "size": size,
                         "type": ida_bytes.is_strlit(flags) and "string" or "data",
-                        "value": idc.get_strlit_contents(head, -1, ida_nalt.STRTYPE_C) if ida_bytes.is_strlit(flags) else str(hex(ida_bytes.get_qword(head) if size == 8 else (ida_bytes.get_long(head) if size == 4 else (ida_bytes.get_word(head) if size == 2 else ida_bytes.get_byte(head))))),
+                        "value": _strlit_value(head) if ida_bytes.is_strlit(flags) else str(hex(ida_bytes.get_qword(head) if size == 8 else (ida_bytes.get_long(head) if size == 4 else (ida_bytes.get_word(head) if size == 2 else ida_bytes.get_byte(head))))),
                     })
                 if ida_bytes.is_strlit(flags):
-                    val = idc.get_strlit_contents(head, -1, ida_nalt.STRTYPE_C)
-                    if val:
-                        try:
-                            val = val.decode("utf-8", errors="replace")
-                        except (UnicodeDecodeError, AttributeError):
-                            val = repr(val)
                     strings.append({
                         "addr": hex(head),
-                        "value": val,
+                        "value": _strlit_value(head),
                     })
                 head = idc.next_head(head, seg.end_ea)
                 if head == idaapi.BADADDR:

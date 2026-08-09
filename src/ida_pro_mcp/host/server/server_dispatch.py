@@ -78,6 +78,7 @@ LONG_RUNNING_ACTIONS: set[tuple[str, str]] = {
     ("search", "regex"),
     ("search", "nl"),
     ("search", "path"),
+    ("search", "constants"),
     # blackboard — large semantic rebuild / trace operations
     ("blackboard", "semantic_rebuild"),
     ("blackboard", "trace_ingest"),
@@ -90,13 +91,12 @@ LONG_RUNNING_ACTIONS: set[tuple[str, str]] = {
     ("firmware_view", "region_profile"),
     ("firmware_view", "pointer_sweep"),
     ("firmware_view", "scan_region"),
+    ("firmware_view", "detect_mmio"),
+    ("firmware_view", "rtos_scan"),
     # funcs — whole-program walks
     ("funcs", "metrics"),
     ("funcs", "suggest_names"),
     ("funcs", "find_similar"),
-    # session — bulk housekeeping / full-program operations
-    ("session", "idle_purge"),
-    ("session", "cleanup_stale"),
 
     ("workflow", "execute_plan"),
     ("workflow", "plan"),
@@ -543,7 +543,13 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     pass  # skip truncation entirely
                 else:
                     _budget = _tc.get("max_tokens") or self.default_truncate_tokens
-                    _sid = getattr(self.current_session, "session_id", "") if self.current_session else ""
+                    # Scope the truncation token to the session the call
+                    # actually ran in (idb-resolved above), not the shared
+                    # active default. On a multiplexed connection the two can
+                    # differ; minting under current_session attributed the
+                    # token to the wrong session. _handle_truncation resolves
+                    # idb the same way so continuation still matches.
+                    _sid = session.session_id
                     _owner = ""
                     if hasattr(self, "_truncation_owner_id"):
                         _owner = self._truncation_owner_id()
@@ -684,6 +690,22 @@ class ServerDispatchMixin(ServerClientStateMixin):
             if action_counts:
                 max_actions_tool = max(action_counts, key=action_counts.get)
                 max_actions_count = int(action_counts.get(max_actions_tool, 0))
+            # Session-store discovery is best-effort: a corrupt session dir or
+            # an I/O error must never crash the very endpoint that exists to
+            # report unhealthy state. Surface the failure in the payload and
+            # report 0 discovered sessions instead of raising out of the
+            # envelope (call_tool's try/except does not wrap host-side session
+            # handlers).
+            session_total = 0
+            session_discovery_error = None
+            try:
+                session_total = len(self.session_mgr.discover_sessions())
+            except Exception as _discover_e:
+                import logging
+                logging.getLogger(__name__).debug(
+                    "session discovery failed during health: %s", _discover_e
+                )
+                session_discovery_error = str(_discover_e)
             payload = {
                 "ok": True,
                 "action": "health",
@@ -699,7 +721,8 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     "idat_found": idat_exists,
                 },
                 "sessions": {
-                    "total": len(self.session_mgr.discover_sessions()),
+                    "total": session_total,
+                    "discovery_error": session_discovery_error,
                     "active": self.current_session.session_id
                     if self.current_session
                     else None,
@@ -1006,15 +1029,40 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     "Invalid continuation token. Check the token value.",
                 )
             token = token.strip()
-            sid = getattr(self.current_session, "session_id", "") if self.current_session else ""
+            # Truncation tokens are minted against the idb-resolved session the
+            # original call ran in (call_tool), so resolve idb here too — falling
+            # back to the shared active default only when no idb was supplied.
+            # Without this the two would drift on a multiplexed connection and a
+            # legitimately-scoped token would fail to resolve.
+            sid = ""
+            if args.get("idb"):
+                _trunc_target = None
+                try:
+                    _trunc_target = self._resolve_session_from_idb_ref(args.get("idb"))
+                except Exception:
+                    _trunc_target = None
+                if _trunc_target is not None:
+                    sid = _trunc_target.session_id
+            if not sid:
+                sid = getattr(self.current_session, "session_id", "") if self.current_session else ""
             owner = self._truncation_owner_id() if hasattr(self, "_truncation_owner_id") else ""
-            from . import server as _server_mod
+            # Direct import: the truncation stores live in ..stores.truncation.
+            # (Previously ``from . import server as _server_mod`` then
+            # ``_server_mod.continue_truncated`` — but the server module does not
+            # re-export those functions, so every continue/peek/search/summary
+            # action raised AttributeError.)
+            from ..stores.truncation import (
+                continue_truncated,
+                peek_truncated,
+                search_truncated,
+                summary_truncated,
+            )
 
             if action == "continue":
                 field = args.get("field")
                 offset = args.get("offset")
                 count = args.get("count")
-                result = _server_mod.continue_truncated(
+                result = continue_truncated(
                     token,
                     field=field if isinstance(field, str) else None,
                     offset=_bounded_int(offset, 0, min_value=0, max_value=500000)
@@ -1027,11 +1075,11 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     owner_id=owner,
                 )
             elif action == "peek":
-                result = _server_mod.peek_truncated(token, session_id=sid, owner_id=owner)
+                result = peek_truncated(token, session_id=sid, owner_id=owner)
             elif action == "search":
                 pattern = str(args.get("pattern") or args.get("query") or "").strip()
                 field = args.get("field")
-                result = _server_mod.search_truncated(
+                result = search_truncated(
                     token,
                     pattern=pattern,
                     field=field if isinstance(field, str) else None,
@@ -1043,7 +1091,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
                 )
             elif action == "summary":
                 field = args.get("field")
-                result = _server_mod.summary_truncated(
+                result = summary_truncated(
                     token,
                     field=field if isinstance(field, str) else None,
                     limit=_bounded_int(args.get("limit", 20), 20, min_value=1, max_value=100),
@@ -1140,7 +1188,8 @@ class ServerDispatchMixin(ServerClientStateMixin):
                 purpose=base_args.get("_purpose") or pp_params.get("_purpose"),
                 ack=_coerce_bool(pp_params.get("_risk_ack"), False)
                 or _coerce_bool(pp_params.get("_guardrail_ack"), False)
-                or _coerce_bool(base_args.get("_risk_ack"), False),
+                or _coerce_bool(base_args.get("_risk_ack"), False)
+                or _coerce_bool(base_args.get("_guardrail_ack"), False),
             )
             if policy_result.decision == PolicyDecision.BLOCK:
                 return make_error(
@@ -1163,6 +1212,23 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     "Policy evaluation failed; refusing continuation",
                     details={"exception": str(e)},
                 )
+
+        # The continuation replays a prior page's tool call: enforce the same
+        # gates page 1 ran (guardrail strict write, blackboard strict, phase
+        # preflight) so a risky write cannot slip through on page 2 via token
+        # replay. Policy was re-evaluated above with the recovered acks;
+        # call_tool below re-checks safe mode and ownership.
+        _replay_ack = _coerce_bool(base_args.get("_risk_ack"), False) or _coerce_bool(
+            base_args.get("_guardrail_ack"), False
+        )
+        _gr_err = self._guardrail_strict_gate(tool_name, base_args)
+        if _gr_err is not None:
+            return _gr_err
+        _bb_phase_err = self._blackboard_and_phase_preflight(
+            tool_name, base_args, _replay_ack
+        )
+        if _bb_phase_err is not None:
+            return _bb_phase_err
 
         ip = base_args.pop(
             "idb", self.current_session.idb_path if self.current_session else None
@@ -1253,6 +1319,27 @@ class ServerDispatchMixin(ServerClientStateMixin):
             original_tool_name = tool_name
             resolved_tool = _resolve_tool_alias(tool_name)
 
+            # Resolve the session this call targets (idb= ref or the shared
+            # active default) up front, before _execute_tool_inner mutates and
+            # pops "idb" from args. Audit and usage-intel must attribute the
+            # call to the session it actually runs in — on a multiplexed
+            # connection the two can differ.
+            _target_session = None
+            if isinstance(args, dict) and args.get("idb"):
+                try:
+                    _target_session = self._resolve_session_from_idb_ref(args.get("idb"))
+                except Exception:
+                    _target_session = None
+            _exec_sid = (
+                getattr(_target_session, "session_id", None)
+                if _target_session is not None
+                else (
+                    getattr(self.current_session, "session_id", None)
+                    if self.current_session
+                    else None
+                )
+            )
+
             # ---- Rate Limiting ----
             allowed, reason = self.rate_limiter.check(resolved_tool)
             if not allowed:
@@ -1262,7 +1349,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     args=args if isinstance(args, dict) else {},
                     result=None,
                     latency_ms=0.0,
-                    session_id=getattr(self.current_session, "session_id", None) if self.current_session else None,
+                    session_id=_exec_sid,
                     error=f"rate_limited: {reason}",
                 )
                 return make_error(
@@ -1296,7 +1383,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
             self._pending_pp = {}
             self._pending_tool_args = {}
 
-            sid = getattr(self.current_session, "session_id", None) if self.current_session else None
+            sid = _exec_sid
             latency_ms = (time.perf_counter() - start_ts) * 1000.0
             action_name = str(args.get("action", "")) if isinstance(args, dict) else ""
             guardrail_mode = self._guardrail_mode_from_args(args) if isinstance(args, dict) else "assist"
@@ -1370,6 +1457,134 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     logging.getLogger(__name__).debug("usage intel observe failed: %s", _e)
             return result
 
+    def _guardrail_strict_gate(self, tool_name: str, args: dict) -> dict | None:
+        """Guardrail strict-mode risky-write gate.
+
+        Returns an error envelope to block the call, or None to allow it.
+        Factored out of ``_execute_tool_inner`` so a next_token continuation
+        (which replays a page-1 call) enforces the same gate instead of
+        re-executing a risky write without acknowledgement.
+        """
+        # _guardrail_mode_from_args lives on ServerResponseMixin; guard with
+        # getattr so partial mixin compositions (and unit-test harnesses) stay
+        # non-strict instead of raising, matching the hasattr guards used for
+        # the blackboard/phase helpers below.
+        guardrail_mode = ""
+        _mode_fn = getattr(self, "_guardrail_mode_from_args", None)
+        if callable(_mode_fn):
+            guardrail_mode = _mode_fn(args)
+        strict_guardrails = bool(getattr(self, "_guardrail_strict_writes", False)) or guardrail_mode == "enforce"
+        if not strict_guardrails:
+            return None
+        risky_tools = {"modify", "annotation", "funcs", "segments", "memory"}
+        risky_actions = {
+            "patch_asm",
+            "rename",
+            "set_type",
+            "comment",
+            "apply_type",
+            "rename_stack",
+            "write",
+            "make_code",
+            "make_data",
+            "delete",
+            "change",
+            "set_name",
+            "set_attr",
+            "set_perms",
+            "set_flags",
+        }
+        ack = _coerce_bool(args.get("_guardrail_ack"), False)
+        signal = self._compute_pointer_note_signal(tool_name, args, {})
+        act = str(args.get("action") or "").strip().lower()
+        if (
+            not ack
+            and tool_name in risky_tools
+            and (act in risky_actions or signal >= 2.0)
+        ):
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "Guardrail strict mode blocked a risky write without acknowledgement",
+                hint="Retry with _guardrail_ack=true or disable IDA_MCP_GUARDRAIL_STRICT_WRITES.",
+                details={
+                    "tool": tool_name,
+                    "action": act,
+                    "signal": round(signal, 3),
+                    "guardrail_mode": guardrail_mode,
+                },
+            )
+        return None
+
+    def _blackboard_and_phase_preflight(
+        self, tool_name: str, args: dict, risk_ack_passed: bool
+    ) -> dict | None:
+        """Blackboard strict-mode + phase-state preflight gates.
+
+        Returns an error envelope to reject the call, or None to continue.
+        Mirrors the gates run for the original (page-1) dispatch so a
+        next_token continuation cannot bypass them. Both gates are skipped on
+        explicit ack and when policy mode is OFF.
+        """
+        policy_mode = ""
+        try:
+            policy_mode = self._resolve_policy_mode()
+            if policy_mode == "off":
+                return None
+            if (tool_name != "blackboard"
+                    and not risk_ack_passed
+                    and hasattr(self, "_bb_policy_bump")
+                    and hasattr(self, "_bb_policy_check")):
+                bb_state = self._bb_policy_bump()
+                exempt_tools = {
+                    "session",
+                    "bookmarks",
+                    "background",
+                    "batch",
+                    "truncation",
+                    "blackboard",
+                }
+                phase_name = "scout"
+                if hasattr(self, "_phase_state"):
+                    try:
+                        phase_name = str((self._phase_state() or {}).get("phase") or "scout")
+                    except Exception:
+                        phase_name = "scout"
+                should_enforce = bool(bb_state.get("strict_mode"))
+                if hasattr(self, "_bb_policy_enforced_for_phase"):
+                    should_enforce = bool(self._bb_policy_enforced_for_phase(bb_state, phase_name))
+                if should_enforce and tool_name not in exempt_tools:
+                    check = self._bb_policy_check(bb_state)
+                    if not check.get("ok"):
+                        return make_error(
+                            MCPError.INVALID_ARGS,
+                            "Strict blackboard policy gate failed before tool execution",
+                            hint=json.dumps(
+                                {
+                                    "tool": tool_name,
+                                    "reasons": check.get("reasons", []),
+                                    "recommendation": check.get("recommendation", ""),
+                                },
+                                ensure_ascii=True,
+                            ),
+                            details={"policy": check.get("policy", {})},
+                        )
+        except Exception as _e:
+            import logging
+            logging.getLogger(__name__).debug("governance check failed: %s", _e)
+        try:
+            args_for_phase = args if isinstance(args, dict) else {}
+            if (tool_name != "blackboard"
+                    and not risk_ack_passed
+                    and policy_mode != "off"
+                    and hasattr(self, "_phase_preflight_for_tool")):
+                phase_block = self._phase_preflight_for_tool(tool_name, args_for_phase)
+                if isinstance(phase_block, dict) and phase_block.get("error"):
+                    return phase_block
+        except Exception as _e:
+            import logging
+            logging.getLogger(__name__).debug("phase preflight failed: %s", _e)
+        return None
+
     def _execute_tool_inner(self, tool_name, original_tool_name, args):
             if tool_name not in TOOLS:
                 return make_error(
@@ -1382,6 +1597,8 @@ class ServerDispatchMixin(ServerClientStateMixin):
             if not isinstance(args, dict):
                 return make_error(MCPError.INVALID_ARGS, "arguments must be an object")
             args = self._normalize_tool_call_args(tool_name, args)
+            if is_error_result(args):
+                return args
 
             # Agent SSO: ``agent`` is a host-level identity tag, never an IDA
             # argument. It is normally popped in the tools/call dispatcher;
@@ -1433,6 +1650,17 @@ class ServerDispatchMixin(ServerClientStateMixin):
                 return continuation
 
             sid = getattr(self.current_session, "session_id", None) if self.current_session else None
+            # Resolve the idb-targeted session up front: on a multiplexed
+            # connection it can differ from the shared active default, and
+            # audit / policy / safe-mode / drift must all attribute the call to
+            # the session it actually runs in (the same resolution call_tool
+            # performs). Falls back to current_session when no idb is supplied.
+            _gate_sid = sid
+            _idb_ref = args.get("idb")
+            if _idb_ref:
+                _gate_target = self._resolve_session_from_idb_ref(_idb_ref)
+                if _gate_target is not None:
+                    _gate_sid = _gate_target.session_id
             # Capture ack before the policy block pops _risk_ack below. The
             # phase gate at the bottom of this function wants to skip when
             # the caller already acknowledged the risk explicitly — but
@@ -1458,7 +1686,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     ack=_coerce_bool(args.get("_risk_ack"), False)
                     or _coerce_bool(args.get("_guardrail_ack"), False),
                 )
-                policy_audit = build_audit_record(policy_result, session_id=sid)
+                policy_audit = build_audit_record(policy_result, session_id=_gate_sid)
                 policy_details = policy_result.to_dict()
                 if (
                     policy_result.decision != PolicyDecision.ALLOW
@@ -1473,7 +1701,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
                             args=policy_audit,
                             result=policy_details,
                             latency_ms=0.0,
-                            session_id=sid,
+                            session_id=_gate_sid,
                         )
                     except Exception as e:
                         log_rpc(f"Policy audit logging failed for {tool_name}: {e}")
@@ -1512,95 +1740,28 @@ class ServerDispatchMixin(ServerClientStateMixin):
             # strings, xrefs, per-function decompilation) until safe mode
             # lifts automatically once analysis completes.
             #
-            # Gate on the session actually being targeted. On a shared
-            # connection the idb-targeted session can differ from the shared
-            # active default — blocking against the active session would
-            # wrongly stop python/analysis against a completed target (or
-            # wrongly allow a still-analyzing target). Ownership is still
-            # enforced downstream in call_tool.
-            _gate_sid = sid
-            _idb_ref = args.get("idb")
-            if _idb_ref:
-                _gate_target = self._resolve_session_from_idb_ref(_idb_ref)
-                if _gate_target is not None:
-                    _gate_sid = _gate_target.session_id
+            # Gate on the session actually being targeted (resolved up front
+            # into _gate_sid). On a shared connection the idb-targeted session
+            # can differ from the shared active default — blocking against the
+            # active session would wrongly stop python/analysis against a
+            # completed target (or wrongly allow a still-analyzing target).
+            # Ownership is still enforced downstream in call_tool.
             safe_gate = self._safe_mode_gate(
                 _gate_sid, tool_name, str(args.get("action") or "")
             )
             if safe_gate is not None:
                 return safe_gate
 
-            # ---- Blackboard strict policy preflight (global tool boundary) ----
+            # ---- Blackboard strict + phase-state preflight (global boundaries) ----
             # Skipped on _risk_ack=true: explicit ack supersedes the strict
-            # blackboard evidence chain requirement.
-            # Skipped when policy mode is OFF: all gates disabled.
-            _policy_mode_cached = ""
-            try:
-                _policy_mode_cached = self._resolve_policy_mode()
-                if _policy_mode_cached == "off":
-                    pass
-                elif (tool_name != "blackboard"
-                        and not _risk_ack_passed
-                        and hasattr(self, "_bb_policy_bump")
-                        and hasattr(self, "_bb_policy_check")):
-                    bb_state = self._bb_policy_bump()
-                    exempt_tools = {
-                        "session",
-                        "bookmarks",
-                        "background",
-                        "batch",
-                        "truncation",
-                        "blackboard",
-                    }
-                    phase_name = "scout"
-                    if hasattr(self, "_phase_state"):
-                        try:
-                            phase_name = str((self._phase_state() or {}).get("phase") or "scout")
-                        except Exception:
-                            phase_name = "scout"
-                    should_enforce = bool(bb_state.get("strict_mode"))
-                    if hasattr(self, "_bb_policy_enforced_for_phase"):
-                        should_enforce = bool(self._bb_policy_enforced_for_phase(bb_state, phase_name))
-                    if should_enforce and tool_name not in exempt_tools:
-                        check = self._bb_policy_check(bb_state)
-                        if not check.get("ok"):
-                            return make_error(
-                                MCPError.INVALID_ARGS,
-                                "Strict blackboard policy gate failed before tool execution",
-                                hint=json.dumps(
-                                    {
-                                        "tool": tool_name,
-                                        "reasons": check.get("reasons", []),
-                                        "recommendation": check.get("recommendation", ""),
-                                    },
-                                    ensure_ascii=True,
-                                ),
-                                details={"policy": check.get("policy", {})},
-                            )
-            except Exception as _e:
-                import logging
-                logging.getLogger(__name__).debug("governance check failed: %s", _e)
-
-            # ---- Phase-state preflight (adaptive choreography) ----
-            # Skipped when _risk_ack=true: the caller already acknowledged the
-            # risk explicitly, so demanding a blackboard evidence chain on top
-            # is redundant friction.
-            # Skipped when policy mode is OFF: all gates disabled.
-            try:
-                _args_for_phase = args if isinstance(args, dict) else {}
-                if (tool_name != "blackboard"
-                        and not _risk_ack_passed
-                        and _policy_mode_cached != "off"
-                        and hasattr(self, "_phase_preflight_for_tool")):
-                    phase_block = self._phase_preflight_for_tool(tool_name, _args_for_phase)
-                    if isinstance(phase_block, dict) and phase_block.get("error"):
-                        return phase_block
-            except Exception as _e:
-                import logging
-                logging.getLogger(__name__).debug("phase preflight failed: %s", _e)
-
-
-
+            # blackboard evidence-chain requirement. Skipped when policy mode
+            # is OFF: all gates disabled. Factored into a helper so next_token
+            # continuations enforce the same gates (see _handle_next_continuation).
+            _bb_phase_err = self._blackboard_and_phase_preflight(
+                tool_name, args, _risk_ack_passed
+            )
+            if _bb_phase_err is not None:
+                return _bb_phase_err
 
             # ---- Stuck Detection (UsageIntelligence DriftDetector) ----
             # The drift signal is advisory by default: LOOP is emitted as a
@@ -1612,8 +1773,11 @@ class ServerDispatchMixin(ServerClientStateMixin):
             action = args.get("action", "")
             _stuck_loop_block = os.environ.get("IDA_MCP_STUCK_LOOP_BLOCK") == "1"
             try:
-                sid_for_drift = (getattr(self.current_session, "session_id", None)
-                                 if self.current_session else None)
+                # Attribute the drift signal to the idb-targeted session the
+                # call actually runs in, not the shared active default — the
+                # stuck-loop lens must not see another session's calls on a
+                # multiplexed connection. _gate_sid is resolved from idb above.
+                sid_for_drift = _gate_sid
                 ui = getattr(self, "_usage_intel", None)
                 if sid_for_drift and ui and ui.is_running():
                     signals = ui.drift.check(sid_for_drift)
@@ -1642,48 +1806,9 @@ class ServerDispatchMixin(ServerClientStateMixin):
                 action = action.strip()
                 args["action"] = action
 
-            guardrail_mode = self._guardrail_mode_from_args(args)
-            strict_guardrails = self._guardrail_strict_writes or guardrail_mode == "enforce"
-            if strict_guardrails:
-                risky_tools = {"modify", "annotation", "funcs", "segments", "memory"}
-                risky_actions = {
-                    "patch_asm",
-                    "rename",
-                    "set_type",
-                    "comment",
-                    "apply_type",
-                    "rename_stack",
-                    "write",
-                    "make_code",
-                    "make_data",
-                    "delete",
-                    "change",
-                    "set_name",
-                    "set_attr",
-                    "set_perms",
-                    "set_flags",
-                }
-                ack = _coerce_bool(args.get("_guardrail_ack"), False)
-                signal = self._compute_pointer_note_signal(tool_name, args, {})
-                act = str(args.get("action") or "").strip().lower()
-                if (
-                    not ack
-                    and tool_name in risky_tools
-                    and (act in risky_actions or signal >= 2.0)
-                ):
-                    return make_error(
-                        MCPError.INVALID_ARGS,
-                        "Guardrail strict mode blocked a risky write without acknowledgement",
-                        hint="Retry with _guardrail_ack=true or disable IDA_MCP_GUARDRAIL_STRICT_WRITES.",
-                        details={
-                            "tool": tool_name,
-                            "action": act,
-                            "signal": round(signal, 3),
-                            "guardrail_mode": guardrail_mode,
-                        },
-                    )
-                if ack:
-                    pass  # guardrail ack noted
+            guardrail_err = self._guardrail_strict_gate(tool_name, args)
+            if guardrail_err is not None:
+                return guardrail_err
             if tool_name == "wiki":
                 return self._handle_wiki(args)
             if tool_name == "misc":

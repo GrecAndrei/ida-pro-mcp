@@ -165,11 +165,17 @@ class SessionBootstrapMonitoringMixin:
             data = self._load_skills(sid)
             bootstrap = data.get("bootstrap") or {}
             if not bootstrap:
-                return make_error(
-                    MCPError.NOT_IMPLEMENTED,
-                    "Bootstrap not initialized",
-                    hint="Initialize the bootstrap first (session tool action 'bootstrap_init').",
-                )
+                # NOT_IMPLEMENTED would tell the LLM the operation is unavailable
+                # in this build — it is available; the session state is simply
+                # uninitialized. Return a graceful dict like bootstrap_status and
+                # bootstrap_summary do for the same condition.
+                return {
+                    "ok": True,
+                    "initialized": False,
+                    "snapshot": None,
+                    "message": "Bootstrap lab not initialized",
+                    "hint": "Initialize the bootstrap first (session tool action 'bootstrap_init').",
+                }
             snaps = bootstrap.setdefault("metric_snapshots", [])
             snap_id = f"bsnap_{uuid.uuid4().hex[:8]}"
             row = {

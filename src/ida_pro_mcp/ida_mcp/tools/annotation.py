@@ -127,10 +127,13 @@ def _detect_crypto_algorithm(func_ea: int) -> str:
 def _set_inline_comment(addr: int, comment: str, dry_run: bool) -> None:
     if dry_run:
         return
-    existing = idc.get_cmt(addr, 0) or ""
-    if comment in existing:
+    governed = _govern_comment(comment)
+    if governed is None:
         return
-    new_cmt = f"{existing}  {comment}" if existing else comment
+    existing = idc.get_cmt(addr, 0) or ""
+    if governed in existing:
+        return
+    new_cmt = f"{existing}  {governed}" if existing else governed
     idc.set_cmt(addr, new_cmt, 0)
 
 
@@ -292,6 +295,31 @@ def _governance_check_proposed_comment(addr: int, proposed_comment: str, action_
         "violations": violations,
         "redacted_comment": gov_result.get("redacted_content", proposed_comment),
     }
+
+
+def _govern_comment(comment: str, action_type: str = "annotation") -> Optional[str]:
+    """Run a proposed comment through the governance engine before write.
+
+    The engine is the single choke point for every comment this tool
+    commits, so PII in auto-generated text (string references, imported
+    markdown, bulk text) is redacted before it touches the IDB — not only
+    surfaced by the advisory `validate` action. Uses the engine's own
+    `approved` flag (redacted comments are approved to proceed) and
+    returns the redacted text to commit, or None if the engine blocked
+    the comment outright.
+    """
+    try:
+        result = evaluate_operation(
+            operation_type=action_type,
+            proposed_value=comment,
+            context={"action": action_type},
+            metadata={},
+        )
+    except Exception:
+        return comment
+    if not result.get("approved", True):
+        return None
+    return result.get("redacted_content", comment)
 
 
 @tool
@@ -468,10 +496,12 @@ def annotation(
                             "comment": cmt,
                         })
                         if not dry_run:
-                            existing = idc.get_cmt(loop_head, 0) or ""
-                            if prefix not in existing:
-                                new_cmt = f"{existing}  {cmt}" if existing else cmt
-                                idc.set_cmt(loop_head, new_cmt, 0)
+                            governed = _govern_comment(cmt)
+                            if governed is not None:
+                                existing = idc.get_cmt(loop_head, 0) or ""
+                                if prefix not in existing:
+                                    new_cmt = f"{existing}  {governed}" if existing else governed
+                                    idc.set_cmt(loop_head, new_cmt, 0)
 
             return {"ok": True, "function": fname, "loops": "\n".join(str(x) for x in loops),
                     "count": len(loops), "dry_run": dry_run}
@@ -516,10 +546,12 @@ def annotation(
                         "comment": cmt,
                     })
                     if not dry_run:
-                        existing = idc.get_cmt(last_insn, 0) or ""
-                        if prefix not in existing:
-                            new_cmt = f"{existing}  {cmt}" if existing else cmt
-                            idc.set_cmt(last_insn, new_cmt, 0)
+                        governed = _govern_comment(cmt)
+                        if governed is not None:
+                            existing = idc.get_cmt(last_insn, 0) or ""
+                            if prefix not in existing:
+                                new_cmt = f"{existing}  {governed}" if existing else governed
+                                idc.set_cmt(last_insn, new_cmt, 0)
 
             return {"ok": True, "function": fname, "branches": "\n".join(str(x) for x in branches),
                     "count": len(branches), "dry_run": dry_run}
@@ -565,10 +597,12 @@ def annotation(
                             "comment": cmt,
                         })
                         if not dry_run:
-                            existing = idc.get_cmt(call_addr, 0) or ""
-                            if prefix not in existing:
-                                new_cmt = f"{existing}  {cmt}" if existing else cmt
-                                idc.set_cmt(call_addr, new_cmt, 0)
+                            governed = _govern_comment(cmt)
+                            if governed is not None:
+                                existing = idc.get_cmt(call_addr, 0) or ""
+                                if prefix not in existing:
+                                    new_cmt = f"{existing}  {governed}" if existing else governed
+                                    idc.set_cmt(call_addr, new_cmt, 0)
 
             return {"ok": True, "warnings": "\n".join(str(x) for x in warnings),
                     "count": len(warnings), "dry_run": dry_run}
@@ -603,10 +637,12 @@ def annotation(
                             "comment": cmt,
                         })
                         if not dry_run:
-                            existing = idc.get_cmt(head, 0) or ""
-                            if prefix not in existing:
-                                new_cmt = f"{existing}  {cmt}" if existing else cmt
-                                idc.set_cmt(head, new_cmt, 0)
+                            governed = _govern_comment(cmt)
+                            if governed is not None:
+                                existing = idc.get_cmt(head, 0) or ""
+                                if prefix not in existing:
+                                    new_cmt = f"{existing}  {governed}" if existing else governed
+                                    idc.set_cmt(head, new_cmt, 0)
                         break  # one annotation per instruction
 
             return {"ok": True, "function": fname, "constants": "\n".join(str(x) for x in constants),
@@ -653,10 +689,12 @@ def annotation(
                         "comment": cmt,
                     })
                     if not dry_run:
-                        existing = idc.get_func_cmt(func_ea, 1) or ""
-                        if prefix not in existing:
-                            new_cmt = f"{existing}\n{cmt}" if existing else cmt
-                            idc.set_func_cmt(func_ea, new_cmt, 1)
+                        governed = _govern_comment(cmt)
+                        if governed is not None:
+                            existing = idc.get_func_cmt(func_ea, 1) or ""
+                            if prefix not in existing:
+                                new_cmt = f"{existing}\n{governed}" if existing else governed
+                                idc.set_func_cmt(func_ea, new_cmt, 1)
 
             return {"ok": True, "tagged": "\n".join(str(x) for x in tagged),
                     "count": len(tagged), "dry_run": dry_run}
@@ -712,10 +750,12 @@ def annotation(
             annotations = [{"addr": hex(ea), "comment": cmt, "type": "function"}]
 
             if not dry_run:
-                existing = idc.get_func_cmt(ea, 1) or ""
-                if prefix not in existing:
-                    new_cmt = f"{existing}\n{cmt}" if existing else cmt
-                    idc.set_func_cmt(ea, new_cmt, 1)
+                governed = _govern_comment(cmt)
+                if governed is not None:
+                    existing = idc.get_func_cmt(ea, 1) or ""
+                    if prefix not in existing:
+                        new_cmt = f"{existing}\n{governed}" if existing else governed
+                        idc.set_func_cmt(ea, new_cmt, 1)
 
             return {"ok": True, "function": fname, "params": result_params,
                     "apis_used": api_usage[:10], "annotations": "\n".join(str(x) for x in annotations),
@@ -782,10 +822,12 @@ def annotation(
                             "comment": cmt,
                         })
                         if not dry_run:
-                            existing = idc.get_cmt(check_ea, 0) or ""
-                            if prefix not in existing:
-                                new_cmt = f"{existing}  {cmt}" if existing else cmt
-                                idc.set_cmt(check_ea, new_cmt, 0)
+                            governed = _govern_comment(cmt)
+                            if governed is not None:
+                                existing = idc.get_cmt(check_ea, 0) or ""
+                                if prefix not in existing:
+                                    new_cmt = f"{existing}  {governed}" if existing else governed
+                                    idc.set_cmt(check_ea, new_cmt, 0)
                         break
                     check_ea = idc.next_head(check_ea, fn.end_ea)
 
@@ -832,10 +874,12 @@ def annotation(
                 if not dry_run:
                     callee_ea = idc.get_name_ea_simple(callee_name)
                     if callee_ea != idaapi.BADADDR:
-                        existing = idc.get_func_cmt(callee_ea, 1) or ""
-                        if prefix not in existing:
-                            new_cmt = f"{existing}\n{cmt}" if existing else cmt
-                            idc.set_func_cmt(callee_ea, new_cmt, 1)
+                        governed = _govern_comment(cmt)
+                        if governed is not None:
+                            existing = idc.get_func_cmt(callee_ea, 1) or ""
+                            if prefix not in existing:
+                                new_cmt = f"{existing}\n{governed}" if existing else governed
+                                idc.set_func_cmt(callee_ea, new_cmt, 1)
 
             return {"ok": True, "function": fname, "suggestions": "\n".join(str(x) for x in suggestions),
                     "count": len(suggestions), "dry_run": dry_run}
@@ -936,7 +980,7 @@ def annotation(
         elif action in ("get_context", "set_structured", "bulk_set",
                         "export_md", "import_md", "summary"):
             return _annotation_comment_mgr_action(
-                action, addr, text, items, path, fmt,
+                action, addr, text, items, path, fmt, dry_run=dry_run,
             )
 
         else:
@@ -951,7 +995,8 @@ def annotation(
 # ============================================================================
 
 
-def _annotation_comment_mgr_action(action, addr, text, items, path, fmt):
+def _annotation_comment_mgr_action(action, addr, text, items, path, fmt,
+                                   dry_run=False):
     """
     Backbone for get_context / set_structured / bulk_set / export_md /
     import_md / summary on the annotation tool.
@@ -1042,8 +1087,14 @@ def _annotation_comment_mgr_action(action, addr, text, items, path, fmt):
         else:
             formatted = text
 
-        idc.set_cmt(ea, formatted, 0)
-        return {"ok": True, "addr": hex(ea), "format": fmt_value, "length": len(formatted)}
+        governed = _govern_comment(formatted)
+        if governed is None:
+            return make_error(MCPError.GOVERNANCE_BLOCKED,
+                              "Comment blocked by governance rules")
+        if not dry_run:
+            idc.set_cmt(ea, governed, 0)
+        return {"ok": True, "addr": hex(ea), "format": fmt_value, "length": len(governed),
+                "dry_run": dry_run}
 
     if action == "bulk_set":
         if not items:
@@ -1071,13 +1122,18 @@ def _annotation_comment_mgr_action(action, addr, text, items, path, fmt):
                 if err:
                     errors.append({"addr": item_addr, "error": "invalid address"})
                     continue
+                governed = _govern_comment(item_text)
+                if governed is None:
+                    errors.append({"addr": item_addr, "error": "blocked by governance"})
+                    continue
                 cmt_type = item.get("type", "regular")
-                if cmt_type == "repeatable":
-                    idc.set_cmt(ea, item_text, 1)
-                elif cmt_type == "func":
-                    idc.set_func_cmt(ea, item_text, 0)
-                else:
-                    idc.set_cmt(ea, item_text, 0)
+                if not dry_run:
+                    if cmt_type == "repeatable":
+                        idc.set_cmt(ea, governed, 1)
+                    elif cmt_type == "func":
+                        idc.set_func_cmt(ea, governed, 0)
+                    else:
+                        idc.set_cmt(ea, governed, 0)
                 set_count += 1
             except Exception as e:
                 errors.append({"addr": item.get("addr"), "error": str(e)})
@@ -1087,6 +1143,7 @@ def _annotation_comment_mgr_action(action, addr, text, items, path, fmt):
             "set_count": set_count,
             "error_count": len(errors),
             "errors": errors[:10] if errors else None,
+            "dry_run": dry_run,
         }
 
     if action == "export_md":
@@ -1153,13 +1210,19 @@ def _annotation_comment_mgr_action(action, addr, text, items, path, fmt):
             comment = match.group(2).strip()
             try:
                 ea = parse_address(addr_str)
-                idc.set_cmt(ea, comment, 0)
+                governed = _govern_comment(comment)
+                if governed is None:
+                    errors.append({"addr": addr_str, "error": "blocked by governance"})
+                    continue
+                if not dry_run:
+                    idc.set_cmt(ea, governed, 0)
                 imported += 1
             except Exception as e:
                 errors.append({"addr": addr_str, "error": str(e)})
         return {"ok": True, "imported": True, "count": imported,
                 "error_count": len(errors),
-                "errors": errors[:10] if errors else None}
+                "errors": errors[:10] if errors else None,
+                "dry_run": dry_run}
 
     if action == "summary":
         _func_limit = 10000

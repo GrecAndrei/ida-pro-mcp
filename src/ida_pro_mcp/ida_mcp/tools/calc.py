@@ -79,6 +79,11 @@ def _normalize_calc_action(raw_action: Optional[str], fallback: str = "eval") ->
         return fallback
     scored.sort(key=lambda x: x[0], reverse=True)
     top_score, top_act = scored[0]
+    # An all-zero score distribution means the query shares no signal with
+    # any action; the adaptive gate collapses to 0 and would pass the top
+    # tie-break. With no winner, fall back to the caller's default action.
+    if float(top_score) <= 0.0:
+        return fallback
     vals = sorted(float(x[0]) for x in scored)
     q50 = vals[len(vals) // 2]
     q75 = vals[min(len(vals) - 1, int(round((len(vals) - 1) * 0.75)))]
@@ -551,13 +556,18 @@ def calc(
             source = addr if addr is not None else value
             if source is None and nl_query:
                 source = nl_query
-            if isinstance(source, str) and source:
-                sl = source.lower()
-                if any(k in sl for k in ("foa", "file", "offset")):
-                    reverse = True
-                m = re.search(r"(0x[0-9a-fA-F_]+|\d[\d_]*)", source)
-                if m:
-                    source = m.group(1)
+                # NL-sniffing applies only to free-text intent queries. A
+                # verbatim addr/value is resolved as-is: a numeric substring
+                # inside a symbol (sub_401000) must not be mistaken for a
+                # literal value, and keywords in a name (set_file_offset)
+                # must not flip the mapping direction.
+                if isinstance(source, str) and source:
+                    sl = source.lower()
+                    if any(k in sl for k in ("foa", "file", "offset")):
+                        reverse = True
+                    m = re.search(r"(0x[0-9a-fA-F_]+|\d[\d_]*)", source)
+                    if m:
+                        source = m.group(1)
             if source is None:
                 return make_error(MCPError.INVALID_ARGS, "addr or value required")
             try:

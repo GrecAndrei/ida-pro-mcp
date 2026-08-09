@@ -70,7 +70,7 @@ QUICKREF_TEXT = """\
 - `code(action="disasm", addr="0x401000")` - Get assembly listing
 - `code(action="xrefs_to", addr="0x401000")` - Who calls this?
 - `code(action="xrefs_from", addr="0x401000")` - What does this call?
-- `agent(action="analyze_function", addr="main")` - Comprehensive analysis (decompile + callees + callers + strings + behavior tags + CFG + call-graph + rename hint)
+- `batch(template="analyze_function", template_vars={addr: "main"})` - Comprehensive analysis (decompile + strings + xrefs) in one call
 - `code(action="diff_functions", addrs=["0x401000", "0x402000"])` - Compare two functions
 
 ## Search
@@ -95,7 +95,7 @@ QUICKREF_TEXT = """\
 - `graph(action="xref_graph", addr="0x401000", direction="both")` - Cross-reference graph
 
 ## Advanced
-- `agent(action="context_pack", addr="main")` - Gather all context for a function
+- `batch(template="deep_function_audit", template_vars={addr: "main"})` - Gather all context for a function (decompile + disasm + callers + callees)
 - `calc(action="eval", expr="0x401000 + 0x100")` - Address math
 - `types(action="list")` - List type library
 - `types(action="infer", addr="0x401000")` - Infer structure layout
@@ -149,7 +149,7 @@ WORKFLOW_TRIAGE = """\
 3. **Check Imports**: `data(action="imports")` → API usage patterns
 4. **Identify Main**: Look at entrypoints, find main() or WinMain()
 5. **Decompile Entry**: `code(action="decompile", addr="main")` → understand program flow
-6. **Follow Key Calls**: `agent(action="analyze_function", addr="main")` → callees, callers, strings, behavior tags
+6. **Follow Key Calls**: `batch(template="analyze_function", template_vars={addr: "main"})` → decompile, strings, xrefs
 7. **Search for Patterns**: `search(action="vulnerable")` → security issues
 8. **Document Findings**: Use `modify(action="rename/comment")` to annotate
 """
@@ -269,5 +269,5 @@ WORKFLOW_FIRMWARE = """\
 7. **Sweep Pointers**: `firmware_view(action="pointer_sweep")` → table and vtable candidates
 8. **Dry-Run Carving**: `firmware_view(action="smart_carve", apply=false)` → safe retyping plan
 9. **Review Prior Decisions**: `blackboard(action="list", category="firmware_view")` → reuse local analysis
-10. **Continue Search**: `search(action="semantic", pattern="entry init parser")` → map the now-sharpened binary
+10. **Continue Search**: `search(action="nl", pattern="entry init parser")` → map the now-sharpened binary
 """

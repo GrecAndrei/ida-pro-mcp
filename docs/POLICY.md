@@ -68,6 +68,7 @@ Recognized legitimate purposes include:
 - `game_modding`
 - `preservation`
 - `malware_triage_defensive`
+- `defensive_triage`
 - `legacy_documentation`
 - `education`
 - `general_research`
@@ -82,7 +83,12 @@ Disallowed purposes include:
 - `credential_theft`
 - `exploit_development`
 
-In `enforce` mode, disallowed purposes should be blocked. In softer modes, they should produce warnings or acknowledgement requirements depending on the action.
+In `enforce` mode, disallowed purposes are blocked. In softer modes a
+disallowed purpose does not change the risk gate: higher-risk actions still
+produce a warning (permissive) or require acknowledgement (assist), while
+read-tier actions proceed — the disallowed purpose is recorded in the audit
+log and in the decision's `reasons` rather than surfacing as a separate
+warning decision or acknowledgement requirement.
 
 ## Semantic classification
 

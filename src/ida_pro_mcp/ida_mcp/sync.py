@@ -78,13 +78,23 @@ def _sync_timeout() -> float:
 
 # Bypass-synchronization knob. Originally a module-level constant, but a
 # constant is load-order-sensitive and defeats the @idaread/@idawrite safety
-# net for every tool call. We now check the env var at call time and expose
-# ``bypass_sync()`` so callers can scope the bypass to a specific block.
+# net for every tool call. We now check the bypass state at call time and
+# expose ``bypass_sync()`` so callers can scope the bypass to a specific block.
 BYPASS_SYNC_ENV = "IDA_MCP_BYPASS_SYNC"
+
+# Thread-local bypass flag. ``bypass_sync()`` must NOT use os.environ: the
+# background crawler (blackboard.py) holds its ``with bypass_sync(...)`` open
+# for its entire loop, so a process-global flag would make every unrelated
+# tool call on an HTTP handler thread in that window drop the execute_sync
+# safety wrapper too, running IDA APIs unsynchronized from a non-main thread.
+_bypass_local = threading.local()
 
 
 def is_bypass_sync() -> bool:
-    return os.environ.get(BYPASS_SYNC_ENV) == "1"
+    return (
+        os.environ.get(BYPASS_SYNC_ENV) == "1"
+        or bool(getattr(_bypass_local, "active", False))
+    )
 
 
 # Backwards-compat alias. Existing code that does ``from sync import
@@ -95,23 +105,23 @@ BYPASS_SYNC = is_bypass_sync()
 
 @contextmanager
 def bypass_sync(reason: str = ""):
-    """Temporarily set IDA_MCP_BYPASS_SYNC=1 for the duration of the block.
+    """Temporarily bypass the @idaread/@idawrite safety wrapper for the
+    CURRENT THREAD only.
 
     Use this only for code paths that must call into the IDA SDK from a
     non-main thread (e.g. a background crawler) and therefore cannot use
-    the @idaread/@idawrite safety wrapper.
+    the @idaread/@idawrite safety wrapper. The bypass is scoped to the
+    calling thread: other threads (e.g. HTTP handler threads serving
+    unrelated tool calls) still go through execute_sync serialization.
     """
-    prev = os.environ.get(BYPASS_SYNC_ENV)
-    os.environ[BYPASS_SYNC_ENV] = "1"
+    prev = getattr(_bypass_local, "active", False)
+    _bypass_local.active = True
     try:
         if reason:
             logger.debug("bypass_sync entered: %s", reason)
         yield
     finally:
-        if prev is None:
-            os.environ.pop(BYPASS_SYNC_ENV, None)
-        else:
-            os.environ[BYPASS_SYNC_ENV] = prev
+        _bypass_local.active = prev
 
 
 def _sync_wrapper(ff, safety_mode: IDASafety):

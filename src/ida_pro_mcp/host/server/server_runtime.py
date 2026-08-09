@@ -77,6 +77,15 @@ class RpcQueueTimeout(TimeoutError):
     instead of a false IDA_TIMEOUT/IDA_CRASHED."""
 
 
+class RpcPayloadTooLarge(ValueError):
+    """Raised when an RPC request or response exceeds MAX_RPC_REQUEST_SIZE.
+
+    Subclasses ValueError for backward compatibility with generic handlers,
+    but is catchable by its own type so the dispatch layer can surface a
+    SIZE_LIMIT_EXCEEDED user error instead of a misleading connection error.
+    """
+
+
 
 def _popen_new_session_kwargs() -> dict:
     """Return the kwargs that put a Popen child in its own process group.
@@ -534,17 +543,17 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
 
             s = None
             try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.settimeout(timeout)
-                s.connect(("127.0.0.1", port))
                 payload = dict(request) if isinstance(request, dict) else request
                 if token and isinstance(payload, dict):
                     payload["session_token"] = token
                 data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
                 if len(data) > MAX_RPC_REQUEST_SIZE:
-                    raise ValueError(
+                    raise RpcPayloadTooLarge(
                         f"RPC request exceeds {MAX_RPC_REQUEST_SIZE} byte cap"
                     )
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(timeout)
+                s.connect(("127.0.0.1", port))
                 s.sendall(len(data).to_bytes(4, "big") + data)
                 # Recv timeout: caller-supplied > env default (IDA_MCP_RPC_TIMEOUT, default 30s).
                 # Long-running actions (analysis/wait etc.) pass recv_timeout= to stay alive.
@@ -564,7 +573,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     lb += c
                 rl = int.from_bytes(lb, "big")
                 if rl > MAX_RPC_REQUEST_SIZE:
-                    raise ValueError(
+                    raise RpcPayloadTooLarge(
                         f"RPC response exceeds {MAX_RPC_REQUEST_SIZE} byte cap"
                     )
                 rd = b""
@@ -636,6 +645,20 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 # so the caller can distinguish "IDA was busy" from
                 # "IDA went away".
                 raise
+            except RpcPayloadTooLarge as exc:
+                # Not retryable: the payload exceeds the cap regardless of
+                # connection state, so retrying would only repeat the failure.
+                # Return a size-limit user error instead of letting a bare
+                # ValueError escape into the RPC_CONNECTION_ERROR classification.
+                return make_error(
+                    MCPError.SIZE_LIMIT_EXCEEDED,
+                    str(exc),
+                    hint=(
+                        f"Raise IDA_MCP_MAX_RPC_BYTES (current {MAX_RPC_REQUEST_SIZE}) "
+                        "if this payload is legitimate."
+                    ),
+                    details={"max_rpc_bytes": MAX_RPC_REQUEST_SIZE},
+                )
         # Out of attempts — surface the last transient failure.
         raise last_exc  # type: ignore[misc]
 
@@ -919,16 +942,15 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             if not isinstance(action, str):
                 action = ""
 
-            # Auto-nudge tracking — use UsageIntelligence.observe if available, else auto_nudge
+            # Auto-nudge tracking. UsageIntelligence.observe is NOT called here:
+            # the dispatch path (server_dispatch._execute_tool) already feeds the
+            # rich observation (latency + error) once per tool call, and calling
+            # it again here would double-count every call into the drift stats.
+            # This method keeps last-activity tracking (above) plus the
+            # auto_nudge fallback for builds with no usage intelligence wired.
             try:
                 ui = getattr(self, "_usage_intel", None)
-                if ui:
-                    ui.observe(
-                        tool_name, action,
-                        session_id=sid or "",
-                        addr=call_args.get("addr"),
-                    )
-                else:
+                if ui is None:
                     from .auto_nudge import record_tool_call
                     record_tool_call(
                         sid,
@@ -1738,6 +1760,25 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 # already started the runtime while we were waiting.
                 if self._runtime_alive(self.session_runtimes.get(sid)):
                     return {"ok": True, "idb_path": session.idb_path, "_already_running": True}
+                # A session close is tearing this session down from another
+                # thread (_cleanup_runtime tombstoned it). A deliberate relaunch
+                # on THIS thread (safe-mode reload, retry after a failed apply)
+                # matches the tombstone's owning thread and is allowed; an
+                # automatic restart from a different thread must not resurrect a
+                # session whose delete_session is about to orphan the runtime.
+                closing_by = getattr(self, "_session_closing", {}).get(sid)
+                if closing_by is not None and closing_by != threading.get_ident():
+                    return make_error(
+                        MCPError.IDA_BUSY,
+                        "Session is being closed; refusing to auto-restart it.",
+                        recoverable=True,
+                        hint=(
+                            "The session is being closed by another caller. "
+                            "Retry after it finishes, or open the binary again "
+                            "to create a fresh session."
+                        ),
+                        details={"session_id": sid},
+                    )
                 ownership_path = self._claim_runtime_ownership(sid)
                 if not ownership_path:
                     return make_error(
@@ -1909,6 +1950,20 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                             log_rpc(
                                 f"IDA RPC listener is ready for {session.idb_path} on port {actual_port}"
                             )
+                            # A session close may have tombstoned this sid from
+                            # another thread while IDA was starting. Registering
+                            # now would orphan the fresh runtime once close's
+                            # delete_session runs, so abort the launch instead —
+                            # _handles_transferred is still False, so the finally
+                            # below kills the process and closes the fds.
+                            closing_by = getattr(self, "_session_closing", {}).get(session.session_id)
+                            if closing_by is not None and closing_by != threading.get_ident():
+                                return make_error(
+                                    MCPError.IDA_BUSY,
+                                    "Session is being closed; aborting IDA launch.",
+                                    recoverable=True,
+                                    details={"session_id": session.session_id},
+                                )
                             runtime = {
                                 "process": server_process,
                                 "port": actual_port,
@@ -1926,7 +1981,21 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                                 os.remove(port_file)
                             self._write_runtime_lease(session.session_id, runtime)
                             _handles_transferred = True
-                            apply_res = self._apply_session_options(session, runtime)
+                            # A runtime is now live for this session — clear any
+                            # close tombstone so later restarts are not refused.
+                            getattr(self, "_session_closing", {}).pop(session.session_id, None)
+                            try:
+                                apply_res = self._apply_session_options(session, runtime)
+                            except Exception:
+                                # A runtime that dies mid-apply raises out of
+                                # _apply_session_options (the _send_rpc_raw calls
+                                # are not individually wrapped). If it escapes
+                                # here, the runtime stays registered with its log
+                                # fds open while _start_server drops the ownership
+                                # lease — an isolation hole and a 2-fd leak per
+                                # failed apply. Tear the runtime down first.
+                                self._cleanup_runtime(session.session_id)
+                                raise
                             if is_error_result(apply_res):
                                 self._cleanup_runtime(session.session_id)
                                 return apply_res
@@ -2017,7 +2086,11 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             opts = session.analysis_options or {}
             preload_keys = {"processor", "bitness", "endian", "loader", "value", "loader_options", "flags"}
             has_preload_request = any(k in opts and opts.get(k) is not None for k in preload_keys)
-            env["IDA_MCP_FORCE_PRE_ANALYSIS_OPTS"] = "1" if has_preload_request else "0"
+            # Mirror _start_server_inner: never force pre-analysis architecture
+            # overrides onto a packed .i64, or IDA aborts with "Database
+            # initialization failed with error 4" and recovery loops forever.
+            force_preload = has_preload_request and not getattr(session, "packed_idb", False)
+            env["IDA_MCP_FORCE_PRE_ANALYSIS_OPTS"] = "1" if force_preload else "0"
             # Packed .i64 databases should be opened directly as existing IDBs
             if getattr(session, "packed_idb", False):
                 use_existing_idb = True
@@ -2102,6 +2175,17 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                             log_rpc(
                                 f"IDA RPC listener is ready for {session.idb_path} on port {actual_port}"
                             )
+                            # Same abort-on-close guard as _start_server_inner: a
+                            # recovery relaunch that races a session close must
+                            # not register a runtime the close will orphan.
+                            closing_by = getattr(self, "_session_closing", {}).get(session.session_id)
+                            if closing_by is not None and closing_by != threading.get_ident():
+                                return make_error(
+                                    MCPError.IDA_BUSY,
+                                    "Session is being closed; aborting IDA launch.",
+                                    recoverable=True,
+                                    details={"session_id": session.session_id},
+                                )
                             runtime = {
                                 "process": server_process,
                                 "port": actual_port,
@@ -2119,6 +2203,9 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                                 os.remove(port_file)
                             self._write_runtime_lease(session.session_id, runtime)
                             _handles_transferred = True
+                            # A runtime is now live for this session — clear any
+                            # close tombstone so later restarts are not refused.
+                            getattr(self, "_session_closing", {}).pop(session.session_id, None)
                             return {"ok": True, "idb_path": session.idb_path, "port": actual_port}
                     except Exception:
                         pass
@@ -2271,7 +2358,14 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
 
             runtime = self.session_runtimes.get(session.session_id)
             if runtime:
-                apply_res = self._apply_session_options(session, runtime)
+                try:
+                    apply_res = self._apply_session_options(session, runtime)
+                except Exception:
+                    # Same leak as the primary launch path: an exception out of
+                    # _apply_session_options leaves the recovered runtime
+                    # registered with open fds while ownership is released.
+                    self._cleanup_runtime(session.session_id)
+                    raise
                 if is_error_result(apply_res):
                     return apply_res
                 result["current_options"] = apply_res.get("current_options")
@@ -2392,7 +2486,16 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 _record(action_args.get("action", "apply_options"), res)
 
 
-            if actions and (reanalyze is None or reanalyze):
+            # reanalyze runs on the action path unless explicitly disabled, and
+            # ALSO when it is the only requested option — analysis_options=
+            # {"reanalyze": True} alone is a legitimate "re-run auto-analysis
+            # after load" request and must not be silently dropped just because
+            # no other options produced actions.
+            want_reanalyze = (
+                (bool(actions) and (reanalyze is None or reanalyze))
+                or bool(reanalyze)
+            )
+            if want_reanalyze:
                 _progress("reanalyze", "start")
                 reanalyze_args = {"action": "reanalyze"}
                 if opts.get("start") is not None:
@@ -2563,8 +2666,18 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             self._stop_analysis_watchdog(sid, join_timeout=0.5)
             self._session_last_activity.pop(sid, None)
             self._session_inflight_calls.pop(sid, None)
+            # Tombstone the session as torn down. A concurrent _start_server
+            # from a DIFFERENT thread (a batch/index worker auto-restarting a
+            # dead runtime) sees this and refuses to launch, so a session close
+            # cannot be resurrected as an orphan IDA process after its session
+            # is deleted. A deliberate restart on the SAME thread (safe-mode
+            # reload, retry after a failed apply, recovery) is allowed and
+            # clears the tombstone when the fresh runtime is registered.
+            if not hasattr(self, "_session_closing"):
+                self._session_closing = {}
+            self._session_closing[sid] = threading.get_ident()
             with self._runtime_lock:
-                runtime = self.session_runtimes.pop(sid, None)
+                runtime = self.session_runtimes.get(sid, None)
                 self._session_startup_locks.pop(sid, None)
             self._remove_runtime_lease(sid)
             if not runtime:
@@ -2574,6 +2687,12 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             port = runtime.get("port")
             if proc:
                 with contextlib.suppress(Exception):
+                    # Send the graceful shutdown BEFORE removing the runtime
+                    # from the registry: _send_rpc_raw resolves the per-runtime
+                    # serialization lock by scanning session_runtimes, so an
+                    # early pop makes queue_timeout=0 dead code — the shutdown
+                    # would queue behind an in-flight call instead of failing
+                    # fast so we can kill directly.
                     self._send_rpc_raw(
                         {"type": "shutdown"},
                         port,
@@ -2587,6 +2706,8 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             for fh in runtime.get("log_handles", []):
                 with contextlib.suppress(Exception):
                     fh.close()
+            with self._runtime_lock:
+                self.session_runtimes.pop(sid, None)
             # Ownership is released only after the old process and its file
             # handles are gone, so another host cannot race onto the same IDB.
             self._release_runtime_ownership(sid)
@@ -2627,7 +2748,21 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             wanted = base.lower()
             if not wanted:
                 return None
-            for session in self.session_mgr.discover_sessions():
-                if os.path.basename(session.idb_path or "").lower() == wanted:
-                    return session
+            matches = [
+                session
+                for session in self.session_mgr.discover_sessions()
+                if os.path.basename(session.idb_path or "").lower() == wanted
+            ]
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                # Multiple sessions share this idb basename (e.g. the same
+                # binary opened as two SID dirs). The winner is not resolvable
+                # from a bare basename, and picking arbitrarily can route the
+                # call — or, via call_tool's auto-restart, launch IDA — against
+                # the wrong IDB. Force the caller to disambiguate instead.
+                log_rpc(
+                    f"Ambiguous idb basename {wanted!r}: matches {len(matches)} "
+                    f"sessions; require session_id/SID/path"
+                )
             return None

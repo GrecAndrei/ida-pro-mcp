@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Workflow, batch, and tools list helpers extracted from the main server."""
 
+import hashlib
+import json
 import time
 
 from ..agent_operations import list_agent_operations
@@ -24,6 +26,24 @@ from ..schemas import (
     sanitize_schema_for_vertex,
 )
 from .server_workflow_batch import ServerWorkflowBatchMixin
+
+
+def _compose_call_key(name: str, args_obj: dict) -> tuple[str, str, str]:
+    """Dedup key for composed calls.
+
+    tool+action alone is not enough: two steps can share a tool+action but
+    differ in arguments (e.g. two ``search.find`` steps with different queries),
+    and collapsing them would silently drop a workflow's distinct step. The
+    key includes a hash of the arguments so only exact duplicate calls dedup.
+    """
+    action_name = str((args_obj or {}).get("action") or "").strip()
+    try:
+        digest = hashlib.sha256(
+            json.dumps(args_obj, sort_keys=True, default=str).encode()
+        ).hexdigest()
+    except Exception:
+        digest = repr(sorted((str(k), v) for k, v in (args_obj or {}).items()))
+    return (name, action_name, digest)
 
 
 class ServerWorkflowMixin(ServerWorkflowBatchMixin):
@@ -512,8 +532,8 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 )
 
             merged_calls: list[dict] = []
-            seen_keys: set[tuple[str, str]] = set()
-            source_map: dict[tuple[str, str], list[str]] = {}
+            seen_keys: set[tuple[str, str, str]] = set()
+            source_map: dict[tuple[str, str, str], list[str]] = {}
             composed_meta: list[dict] = []
 
             for target_action in target_actions:
@@ -542,8 +562,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                         continue
                     name = str(call.get("name") or "").strip()
                     args_obj = call.get("arguments") if isinstance(call.get("arguments"), dict) else {}
-                    action_name = str((args_obj or {}).get("action") or "").strip()
-                    key = (name, action_name)
+                    key = _compose_call_key(name, args_obj)
                     source_map.setdefault(key, [])
                     if target_action not in source_map[key]:
                         source_map[key].append(target_action)
@@ -558,8 +577,7 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                     continue
                 name = str(call.get("name") or "").strip()
                 args_obj = call.get("arguments") if isinstance(call.get("arguments"), dict) else {}
-                action_name = str((args_obj or {}).get("action") or "").strip()
-                key = (name, action_name)
+                key = _compose_call_key(name, args_obj)
                 sources = source_map.get(key, [])
                 out_call = dict(call)
                 out_call["sources"] = sources

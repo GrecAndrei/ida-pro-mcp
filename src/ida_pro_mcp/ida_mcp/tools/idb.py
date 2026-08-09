@@ -170,10 +170,13 @@ def idb_meta():
     sha256 = ida_nalt.retrieve_input_file_sha256() if hasattr(ida_nalt, "retrieve_input_file_sha256") else None
     crc32 = ida_nalt.retrieve_input_file_crc32() if hasattr(ida_nalt, "retrieve_input_file_crc32") else None
 
-    # Compiler info
+    # Compiler info — ida_ida.inf_get_cc_id() returns the stored INF_CC_ID
+    # nibble, which follows the IDC constants (COMP_MS=1, COMP_BC=2,
+    # COMP_WATCOM=3, COMP_GNU=6, COMP_VISAGE=7, COMP_BP=8). GNU C++ reports 6
+    # (clang-built ELFs report 6 too); there is no stored id 4 or 9.
     comp = _safe_inf_get("cc_id", 0)
     compiler_names = {0: "unknown", 1: "visual_c", 2: "borland", 3: "watcom",
-                      6: "gnu", 7: "visual_cxx", 8: "bp", 9: "clang"}
+                      6: "gnu", 7: "visual_age", 8: "delphi"}
 
     # File type — resolve effective kind (raw vs obj discrepancy).
     file_type_id = _inf_filetype_id()
@@ -632,7 +635,7 @@ def idb_state(audit_tail: int = 5) -> dict:
     # If IDB has been touched recently (low age) IDA is active; high age is
     # either idle or stale.
     if idb_age >= 0:
-        open_seconds = max(0.0, now - max(idb_age, 60.0) + 60.0) if idb_age > 60 else 60.0
+        open_seconds = max(idb_age, 60.0)
 
     # Inventory — O(1) APIs only, no full iteration
     func_qty = -1

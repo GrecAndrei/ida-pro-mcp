@@ -90,9 +90,13 @@ class REOntology:
                 ["is_patch", "targets_import_section"],
                 []
             ),
+            # Patching an executable section is dangerous on its own; requiring
+            # an existential axiom let a sparse-metadata patch (no
+            # modifies_control_flow) fall through to CompliantOperation and get
+            # approved.
             "DangerousCodeSectionPatch": (
                 ["is_patch", "targets_executable_section"],
-                ["modifies_code_flow", "bypasses_security_check"]
+                []
             ),
             "PIIExposingComment": (
                 ["is_comment"],
@@ -621,9 +625,15 @@ class GovernanceEngine:
                 properties.add("contains_ip")
             if re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b', text):
                 properties.add("contains_email")
-            if re.search(r'(?i)(?:password|passwd|secret|token)', text):
+            # These inference regexes must match what NoPIIInCommentsRule can
+            # actually redact. A bare "password" mention (no value) or a hex
+            # run that is not exactly a 32/40/64 hash cannot be redacted, so
+            # flagging it would return a REDACTED verdict with a no-op redact
+            # and let the caller commit the original text.
+            if re.search(r'(?i)(?:password|passwd|secret|token|api[_-]?key)'
+                         r'\s*[:=]\s*\S+', text):
                 properties.add("contains_credential")
-            if re.search(r'\b[a-fA-F0-9]{32,64}\b', text):
+            if re.search(r'\b(?:[a-fA-F0-9]{32}|[a-fA-F0-9]{40}|[a-fA-F0-9]{64})\b', text):
                 properties.add("contains_hash_secret")
             if re.search(r'\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b', text):
                 properties.add("contains_domain")

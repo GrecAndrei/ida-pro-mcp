@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 import os
 import shutil
+import sys
 import tempfile
 import unittest
 
@@ -32,7 +33,15 @@ class _IdbWaitHarness(ServerSessionMixin):
         self.session_runtimes = {}
         self._runtime_alive = lambda r: True
 
+
+# The shim's module-level `sys.stdout = sys.stderr` (stream isolation) would
+# permanently redirect this pytest process's stdout if we let it leak. The
+# shim's host server captures the pre-swap stdout into `_real_stdout`, so
+# restoring sys.stdout right after the exec keeps the redirect out of the test
+# process without breaking the loaded server.
+_stdout_snapshot = sys.stdout
 ida_mcp_stdio = load_repo_module("ida_mcp_stdio.py", module_name="ida_mcp_stdio")
+sys.stdout = _stdout_snapshot
 IDAMCPServer = ida_mcp_stdio.IDAMCPServer
 Session = ida_mcp_stdio.Session
 SessionManager = ida_mcp_stdio.SessionManager
@@ -83,9 +92,16 @@ class TestSessionCreateReuseMatchingArch(_SessionReuseBase):
         second = self._create(processor="metapc", bitness=64, endian="little")
         self.assertTrue(second.get("ok"))
         self.assertEqual(second["session_id"], first_sid)
-        # The response flags reuse explicitly (note explains why)
+        # The response flags reuse explicitly. The note is "Reusing ..."
+        # unless the reused session's runtime is dead and the spawn attempt
+        # failed — in a host-side (IDA-stubbed) run that is always the case,
+        # so accept either note. The durable signal is the flag itself.
         self.assertIs(second.get("reused_existing_session"), True)
-        self.assertIn("Reusing", str(second.get("note") or ""))
+        note = str(second.get("note") or "")
+        self.assertTrue(
+            "Reusing" in note or "runtime failed to start" in note,
+            f"unexpected reuse note: {note!r}",
+        )
 
     def test_matching_arm_reuses(self):
         first = self._create(processor="arm", bitness=64, endian="little")
@@ -106,6 +122,36 @@ class TestSessionCreateReuseMatchingArch(_SessionReuseBase):
         second = self._create(processor="arm")
         self.assertTrue(second.get("ok"))
         self.assertEqual(second["session_id"], first_sid)
+
+    def test_reuse_keeps_the_existing_idb_and_reports_it_usable(self):
+        """Reuse must hand back the same usable session, not an ok-but-dead one.
+
+        With IDA detection stubbed to '', every create 'succeeds' without a
+        real runtime or IDB, so an assertion that only checks ``ok`` and
+        ``session_id`` would pass unchanged even if reuse handed back a
+        session whose IDB was never produced. Pin the usability property: the
+        IDB the original create recorded must survive reuse (same path, still
+        on disk, ``idb_exists`` True)."""
+        first = self._create(processor="arm", bitness=64, endian="little")
+        self.assertTrue(first.get("ok"))
+        first_sid = first["session_id"]
+        first_idb = first.get("idb_path")
+        self.assertTrue(first_idb, "create response must carry an idb_path")
+
+        # Simulate a completed analysis: put an IDB on disk at the session's
+        # recorded idb_path (no live idat here).
+        os.makedirs(os.path.dirname(first_idb), exist_ok=True)
+        with open(first_idb, "wb") as f:
+            f.write(b"\x7fIDB")
+
+        second = self._create(processor="arm", bitness=64, endian="little")
+        self.assertTrue(second.get("ok"))
+        self.assertEqual(second["session_id"], first_sid)
+        self.assertEqual(second.get("idb_path"), first_idb)
+        self.assertTrue(
+            second.get("idb_exists"),
+            "reuse must keep the IDB produced by the original create",
+        )
 
 
 class TestSessionCreateReuseConflict(_SessionReuseBase):
@@ -195,7 +241,18 @@ class TestSessionCreateReuseFallsThroughToSpawn(_SessionReuseBase):
         second = self._create(processor="arm", bitness=64, endian="little")
         self.assertTrue(second.get("ok"))
         self.assertEqual(second["session_id"], first_sid)
-        self.assertIn("Reusing", str(second.get("note") or ""))
+        # Reuse must be flagged. The note is "Reusing ..." unless the spawn
+        # attempt failed (always true with IDA stubbed), which overwrites it
+        # with the spawn-failure message; the flag is the durable signal.
+        self.assertIs(second.get("reused_existing_session"), True)
+        note = str(second.get("note") or "")
+        self.assertTrue(
+            "Reusing" in note or "runtime failed to start" in note,
+            f"unexpected reuse note: {note!r}",
+        )
+        # The reused path must still have attempted a spawn (reported as an
+        # error because IDA detection is stubbed, never silently skipped).
+        self.assertTrue(second.get("spawn_error"))
 
 
 class TestSessionCreateReuseMixedArch(_SessionReuseBase):

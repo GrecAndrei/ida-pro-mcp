@@ -181,12 +181,12 @@ class ContextAssembler:
         for existing in pack.get("related_findings", []):
             e = dict(existing)
             e.setdefault("retrieval_source", "address_linked")
-            merged[str(e.get("id") or hashlib.md5(json.dumps(e, sort_keys=True).encode()).hexdigest())] = e
+            merged[str(e.get("id") or hashlib.sha256(json.dumps(e, sort_keys=True).encode()).hexdigest())] = e
         for entry in filtered_entries:
             e = dict(entry)
             e["retrieval_source"] = source
             e["retrieval_weight"] = round(weight, 3)
-            key = str(e.get("id") or hashlib.md5(json.dumps(e, sort_keys=True).encode()).hexdigest())
+            key = str(e.get("id") or hashlib.sha256(json.dumps(e, sort_keys=True).encode()).hexdigest())
             prev = merged.get(key)
             if prev is None:
                 merged[key] = e
@@ -311,35 +311,68 @@ class ContextAssembler:
                                 graph.pop(node, None)
                 # Drop per-session state for sessions idle longer than
                 # 10 minutes so long-running servers do not accumulate
-                # unbounded per-session memory.
+                # unbounded per-session memory.  Snapshot under the lock:
+                # record_call updates last_seen under the same lock, so the
+                # iteration cannot race a concurrent insert.
                 stale_cutoff = now - 600.0
-                stale_sessions = [
-                    sid
-                    for sid, last in self._session_last_seen.items()
-                    if last < stale_cutoff
-                ]
+                with self._session_last_seen_lock:
+                    stale_sessions = [
+                        sid
+                        for sid, last in self._session_last_seen.items()
+                        if last < stale_cutoff
+                    ]
                 for sid in stale_sessions:
-                    self._session_last_seen.pop(sid, None)
-                    with self._activity_lock:
-                        self._activity.pop(sid, None)
-                    with self._related_addr_lock:
-                        self._related_addr_graph.pop(sid, None)
-                    with self._retrieval_metrics_lock:
-                        self._retrieval_metrics.pop(sid, None)
-                    with self._semantic_threshold_lock:
-                        self._session_semantic_threshold.pop(sid, None)
-                    with self._circuit_breaker_lock:
-                        self._semantic_circuit_breaker_until.pop(sid, None)
-                    with self._semantic_budget_lock:
-                        self._semantic_budget_cache.pop(sid, None)
-                    with self._perf_lock:
-                        self._perf_buckets.pop(sid, None)
-                    with self._stats_cache_lock:
-                        self._session_stats_cache.pop(sid, None)
+                    # Re-check under the lock (TOCTOU guard): the session may
+                    # have resumed activity between the snapshot and teardown.
+                    with self._session_last_seen_lock:
+                        if self._session_last_seen.get(sid, 0.0) >= stale_cutoff:
+                            continue
+                        self._session_last_seen.pop(sid, None)
+                    self._drop_session_state(sid)
         except Exception:
             pass
         finally:
             self._housekeeping_lock.release()
+
+    def _drop_session_state(self, session_id: str) -> None:
+        """Release all in-memory per-session state for ``session_id``.
+
+        The last-seen ledger is handled by the caller (housekeeping and
+        drop_session manage it under ``_session_last_seen_lock``) so a caller
+        already holding that lock does not re-acquire it.
+        """
+        if not session_id:
+            return
+        with self._activity_lock:
+            self._activity.pop(session_id, None)
+        with self._related_addr_lock:
+            self._related_addr_graph.pop(session_id, None)
+        with self._retrieval_metrics_lock:
+            self._retrieval_metrics.pop(session_id, None)
+        with self._semantic_threshold_lock:
+            self._session_semantic_threshold.pop(session_id, None)
+        with self._circuit_breaker_lock:
+            self._semantic_circuit_breaker_until.pop(session_id, None)
+        with self._semantic_budget_lock:
+            self._semantic_budget_cache.pop(session_id, None)
+        with self._perf_lock:
+            self._perf_buckets.pop(session_id, None)
+        with self._stats_cache_lock:
+            self._session_stats_cache.pop(session_id, None)
+
+    def drop_session(self, session_id: str) -> None:
+        """Teardown hook for a closed/abandoned session.
+
+        Removes the session's in-memory intelligence state (activity log,
+        related-address graph, retrieval metrics, adaptive semantic threshold,
+        circuit breaker, caches) so it neither leaks past the session's death
+        nor contaminates a reused session id.  Invoke from the session
+        close/abandon handlers; housekeeping prunes long-idle sessions on the
+        same path.
+        """
+        self._drop_session_state(session_id)
+        with self._session_last_seen_lock:
+            self._session_last_seen.pop(session_id, None)
 
     def _semantic_circuit_open(self, session_id: str) -> bool:
         if not session_id:
@@ -558,11 +591,20 @@ class ContextAssembler:
     # ── stuck detection ──────────────────────────────────────────────────
 
     def record_call(self, session_id: str, tool: str, action: str, addr: str) -> None:
+        # Empty/whitespace session ids must not accumulate shared per-session
+        # state; every other per-session writer already skips them.
+        if not session_id or not session_id.strip():
+            return
         with self._session_last_seen_lock:
             self._session_last_seen[session_id] = time.time()
         with self._activity_lock:
             log = self._activity[session_id]
-            log.append({"tool": tool, "action": action, "addr": addr, "ts": time.time()})
+            # Carry a monotonic per-session call sequence number so the
+            # every-5-calls target-suggestion gate in assemble() survives the
+            # 50-entry trim below (len() alone would pin at the cap).
+            n = int(log[-1].get("_n") or 0) + 1 if log else 1
+            log.append({"tool": tool, "action": action, "addr": addr,
+                        "ts": time.time(), "_n": n})
             # Keep last 50 calls
             if len(log) > 50:
                 self._activity[session_id] = log[-50:]
@@ -650,7 +692,11 @@ class ContextAssembler:
         # ── 1. Address-matched blackboard findings
         bb_addr = self._get_bb_entries(addr, bb_store)
         if bb_addr:
-            self._merge_related_findings(pack, bb_addr, "address_linked", session_id=session_id)
+            # Guarded like every other enrichment step: a malformed blackboard
+            # entry (non-numeric confidence/updated_at, un-serializable value)
+            # must not abort the whole context pack for this call.
+            with contextlib.suppress(Exception):
+                self._merge_related_findings(pack, bb_addr, "address_linked", session_id=session_id)
 
         # ── 2. Decompile-specific enrichment
         is_decompile = (tool == "code" and
@@ -713,9 +759,13 @@ class ContextAssembler:
         # Use the embedding index to recommend high-interest functions not yet seen.
         if idb_path:
             try:
-                # Only inject next_targets occasionally — every 5 calls per session
+                # Only inject next_targets occasionally — every 5 calls per
+                # session.  Count from the monotonic sequence number recorded
+                # by record_call, since len() of the activity log pins at the
+                # 50-entry cap and would otherwise fire on every call.
                 with self._activity_lock:
-                    n_calls = len(self._activity.get(session_id, []))
+                    log = self._activity.get(session_id, [])
+                    n_calls = int(log[-1].get("_n") or len(log)) if log else 0
                 if n_calls % 5 == 0 and n_calls > 0:
                     targets = self.suggest_next_targets(idb_path, limit=3)
                     if _full and targets:
@@ -749,7 +799,7 @@ class ContextAssembler:
 
         Priority order:
           1. Behavior classification via the shared zero-shot classifier (full mode)
-          2. Rule-based next actions from API patterns + structural attrs (full mode)
+          2. Suggested next actions (full mode)
           3. Function embedding + similarity search (slow, grows over session)
           4. Cross-address blackboard retrieval (callgraph-linked, fast SQL)
           5. Semantic blackboard retrieval (slow, only if bb_store populated)
@@ -773,14 +823,12 @@ class ContextAssembler:
             pack["behavior_classifications"] = behavior_hits
             pack["behavior_tags"] = [hit.get("behavior") for hit in behavior_hits if hit.get("behavior")]
 
-        # ── Step 4: Rule-based actions from API patterns + structural attrs
-        # Only surfaced in full mode, so skip the rule evaluation entirely in
-        # compact mode.
+        # ── Step 4: Next-action suggestion (full mode only).
+        # The earlier API-pattern/structural rule evaluation was removed; only
+        # the deterministic "suggest callers" action remains.
         if _full:
             actions: list[dict[str, Any]] = []
-            seen_act: set = set()
-            # Always suggest callers if we haven't already
-            if "code:callers" not in seen_act and addr:
+            if addr:
                 actions.append({
                     "tool": "code", "action": "callers", "addr": addr,
                     "reason": "See what calls this function",
@@ -802,7 +850,7 @@ class ContextAssembler:
                 blob = idx._pack(query_vec)
                 ph   = idx._phash(pseudocode)
                 sig  = _extract_signature(pseudocode, max_idents=64) or ""
-                sig_hash = hashlib.md5((sig or pseudocode).encode("utf-8", errors="replace")).hexdigest()[:16]
+                sig_hash = hashlib.sha256((sig or pseudocode).encode("utf-8", errors="replace")).hexdigest()[:16]
                 def _persist(ea=addr, name=func_name, b=blob, p=ph, v=query_vec):
                     try:
                         with idx._conn() as conn:

@@ -50,23 +50,25 @@ def _filler_entries(n):
 # ---------------------------------------------------------------------------
 
 
-def test_bootstrap_plan_status_reports_phantom_items_as_missing(tmp_path):
+def test_bootstrap_plan_status_omits_phantom_methods(tmp_path):
+    """The plan matrix lists only implemented methods: the two never-built
+    blended-strategy names are gone, so coverage reflects real methods only
+    and the readiness gate can reach 100% (see f08 phantom-matrix fix)."""
     mgr, _ = _make_manager(tmp_path)
     plan = mgr.bootstrap_plan_status("SID_TEST")
     assert plan["ok"] is True
     overall = plan["overall"]
-    # 31 plan items, only 29 real methods exist → coverage is under 100%.
-    assert overall["items"] == 31
-    assert overall["done"] == 29
-    assert overall["coverage"] < 100.0
+    # All listed plan items have a backing method -> 100% coverage.
+    assert overall["items"] == 30
+    assert overall["done"] == 30
+    assert overall["coverage"] == 100.0
 
     phase2 = next(r for r in plan["phases"] if r["phase"] == "phase2_scoring_integration")
-    assert phase2["done"] == 0
-    for phantom in _PHANTOM_PLAN_ITEMS:
-        assert phantom in phase2["missing"]
-    # The readiness gate must not pass on the strength of phantom coverage.
+    assert phase2["done"] == 1
+    # The dead names are no longer tracked (removed, not marked missing).
+    assert not any(p in phase2["missing"] for p in _PHANTOM_PLAN_ITEMS)
     gate = mgr.bootstrap_readiness_gate("SID_TEST")
-    assert gate["gates"]["phase_coverage_100"] is False
+    assert gate["gates"]["phase_coverage_100"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +233,10 @@ def test_snapshot_hint_references_reachable_action(tmp_path):
         {"skills": {}, "q_table": {}, "activity_log": [], "hypotheses": []},
     )
     res = mgr.bootstrap_snapshot("SID_TEST")
-    assert res.get("error") is True
+    # Graceful uninitialized dict (matches bootstrap_status/summary), with a
+    # hint that references a reachable action, not a non-existent tool.
+    assert res.get("error") is not True
+    assert res.get("initialized") is False
     hint = res.get("hint", "")
     assert "bootstrap_init" in hint
     assert "skills/session bootstrap tool" not in hint

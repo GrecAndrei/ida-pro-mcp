@@ -32,8 +32,34 @@ class ServerBlackboardPhaseMixin:
 
     # ── Phase lifecycle ──────────────────────────────────────────────────────
 
-    def _phase_state(self) -> dict[str, Any]:
-        state = getattr(self, "_blackboard_phase_state", None)
+    def _bb_state_key(self, sid: str | None = None) -> str:
+        """Session key used to scope phase/policy state.
+
+        State is per-session so one session's phase machine or policy markers
+        never leak into another session sharing the same host (and the same
+        binary-scoped workspace DB). An empty key is used when no session is
+        active (defensive; callers that require a session fail earlier).
+        """
+        if sid:
+            return str(sid).strip().upper()
+        session = getattr(self, "current_session", None)
+        if session is None:
+            return ""
+        return str(getattr(session, "session_id", "") or "").strip().upper()
+
+    def _phase_state(self, sid: str | None = None) -> dict[str, Any]:
+        # Back-compat: a directly-assigned legacy singleton (some callers and
+        # tests set ``_blackboard_phase_state``) is honored verbatim. Production
+        # code no longer writes it; state lives in per-session dicts instead.
+        legacy = getattr(self, "_blackboard_phase_state", None)
+        if isinstance(legacy, dict):
+            return legacy
+        key = self._bb_state_key(sid)
+        states = getattr(self, "_blackboard_phase_states", None)
+        if not isinstance(states, dict):
+            states = {}
+            self._blackboard_phase_states = states
+        state = states.get(key)
         if not isinstance(state, dict):
             state = {
                 "phase": "scout",
@@ -42,7 +68,7 @@ class ServerBlackboardPhaseMixin:
                 "seen_addrs": [],
                 "last_transition_reason": "init",
             }
-            self._blackboard_phase_state = state
+            states[key] = state
         return state
 
     def _phase_snapshot(self, state: dict[str, Any], store) -> dict[str, Any]:
@@ -384,8 +410,18 @@ class ServerBlackboardPhaseMixin:
 
     # ── Policy ───────────────────────────────────────────────────────────────
 
-    def _bb_policy_state(self) -> dict[str, Any]:
-        state = getattr(self, "_blackboard_policy_state", None)
+    def _bb_policy_state(self, sid: str | None = None) -> dict[str, Any]:
+        # Back-compat: honor a directly-assigned legacy singleton, mirroring
+        # ``_phase_state``. Per-session dicts are the default thereafter.
+        legacy = getattr(self, "_blackboard_policy_state", None)
+        if isinstance(legacy, dict):
+            return legacy
+        key = self._bb_state_key(sid)
+        states = getattr(self, "_blackboard_policy_states", None)
+        if not isinstance(states, dict):
+            states = {}
+            self._blackboard_policy_states = states
+        state = states.get(key)
         if not isinstance(state, dict):
             state = {
                 "strict_mode": False,
@@ -396,7 +432,7 @@ class ServerBlackboardPhaseMixin:
                 "last_call_count_at_update": 0,
                 "policy_markers": [],
             }
-            self._blackboard_policy_state = state
+            states[key] = state
         return state
 
     def _bb_policy_bump(self) -> dict[str, Any]:

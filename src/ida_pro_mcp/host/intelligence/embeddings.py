@@ -787,10 +787,26 @@ class FunctionEmbeddingIndex:
             with closing(self._conn()) as conn:
                 for row in conn.execute("SELECT ea, vec_blob FROM func_embeddings"):
                     ea, blob = row
+                    try:
+                        vec = _unpack_floats(blob)
+                    except Exception:
+                        # A single unreadable row (e.g. a blob written by another
+                        # host/generation with a different embedding layout) must
+                        # not abort the whole reload after the cache was cleared:
+                        # skip it so the rest of the index still serves, and
+                        # surface the row instead of failing silently.
+                        logger.warning(
+                            "skipping unreadable embedding row ea=%r in %s",
+                            ea, self._db_path,
+                        )
+                        continue
                     with self._cache_lock:
-                        self._cache[ea] = _unpack_floats(blob)
+                        self._cache[ea] = vec
         except Exception:
-            pass
+            logger.warning(
+                "failed to reload embedding cache from %s (index will be empty)",
+                self._db_path,
+            )
         self._db_mtime_ns = _file_mtime_ns(self._db_path)
 
     def db_changed_since_load(self) -> bool:
@@ -814,7 +830,10 @@ class FunctionEmbeddingIndex:
         return _unpack_floats(blob)
 
     def _phash(self, text: str) -> str:
-        return hashlib.md5(text.encode("utf-8", errors="replace")).hexdigest()[:16]
+        # sha256, not md5: this is a content fingerprint for dedup/caching, but
+        # CodeQL flags md5 as a weak hash; sha256 is semantically identical at
+        # the [:16] truncation width and keeps code-scanning clean.
+        return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:16]
 
     def _row_meta_for_eas(self, eas: list[str]) -> dict[str, dict[str, Any]]:
         if not eas:
@@ -937,9 +956,21 @@ class FunctionEmbeddingIndex:
                     self._meta_set(conn, "updated_at", _now_iso())
                 conn.commit()
         except Exception:
-            return {"indexed": 0, "failed": len(functions), "resume_after_ea": None}
+            # The DB block counts every processed row in ``indexed`` before it
+            # failed; report that real count (matching the embed-phase handler
+            # below) instead of claiming every input failed.
+            return {
+                "indexed": indexed,
+                "failed": failed + (len(functions) - indexed),
+                "resume_after_ea": None,
+            }
 
         if not prepared:
+            # The DB block refreshed rows and committed; the in-RAM cache still
+            # matches the stored vectors (metadata refreshes do not change
+            # vectors), so re-stamp the freshness marker instead of forcing the
+            # next search to reload the whole index.
+            self._db_mtime_ns = _file_mtime_ns(self._db_path)
             return {"indexed": indexed, "failed": failed}
 
         embed_batch = getattr(self._embedder, "embed_documents", None)
@@ -1019,6 +1050,11 @@ class FunctionEmbeddingIndex:
         with self._cache_lock:
             for entry, vec in ready:
                 self._cache[entry["ea"]] = vec
+        # The committed rows are now reflected in the in-RAM cache, so re-stamp
+        # the freshness marker: a write by this process must not trigger a full
+        # O(N) reload on the next search (db_changed_since_load cannot tell our
+        # own commit from another process's).
+        self._db_mtime_ns = _file_mtime_ns(self._db_path)
         result: dict[str, int | str | None] = {
             "indexed": indexed + len(ready), "failed": failed,
         }

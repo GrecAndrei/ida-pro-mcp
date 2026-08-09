@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Session skills, bootstrap, activity, and phase helpers."""
 
+import contextlib
 import json
 import math
 import os
@@ -107,13 +108,21 @@ class SessionSkillsMixin(SessionBootstrapMixin):
 
     def _save_skills(self, sid: str, data: dict):
         path = self._get_skills_path(sid)
-        tmp = path + ".tmp"
+        # Pid-scope the tmp name so two hosts sharing one durable cache writing
+        # the same session never truncate the same tmp file and interleave JSON
+        # into skills.json. os.replace is atomic, so each writer's complete file
+        # wins wholesale. Matches the sibling durable writers (_save_metadata,
+        # _save_snapshots, _save_notebook).
+        tmp = f"{path}.{os.getpid()}.tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
+                f.flush()
             os.replace(tmp, path)
         except Exception as e:
             log_rpc(f"Failed to save skills for {sid}: {e}")
+            with contextlib.suppress(OSError):
+                os.remove(tmp)
 
     def _bootstrap_plan_matrix(self) -> dict[str, list[str]]:
         return {
@@ -124,8 +133,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
                 "bootstrap_status",
             ],
             "phase2_scoring_integration": [
-                "suggest_strategy_blended",
-                "predictor_suggest_next_tool_blended",
+                "suggest_strategy",
             ],
             "phase3_outcome_dispute": [
                 "bootstrap_ingest_outcome",
@@ -693,6 +701,14 @@ class SessionSkillsMixin(SessionBootstrapMixin):
                     MCPError.INVALID_ARGS,
                     "No active IDB path associated with this session. Ingest a binary first.",
                 )
+            # Bound the caller-controlled limit: suggest_next_targets multiplies
+            # it by 4 for an embedding-index top_k query, so an unbounded value
+            # (the session schema admits a bare int with no min/max) would force
+            # a very large structured search over the index.
+            try:
+                limit = max(1, min(int(limit), 50))
+            except (TypeError, ValueError):
+                limit = 5
             try:
                 from ida_pro_mcp.host.intelligence.context import get_assembler
                 asm = get_assembler()
@@ -709,7 +725,7 @@ class SessionSkillsMixin(SessionBootstrapMixin):
 
 
     def log_activity(self, sid: str, tool: str, action: str, result: str = "") -> dict:
-        """Log activity and check for dead-end patterns."""
+        """Persist a tool activity entry for a session's skills/activity store."""
         with self._lock:
             session = self.sessions.get(sid)
             if not session:
@@ -724,13 +740,17 @@ class SessionSkillsMixin(SessionBootstrapMixin):
             data["activity_log"] = data["activity_log"][-500:]
             self._save_skills(sid, data)
             session.update_access()
-            self._save_metadata(session)
-            out = {"ok": True}
-            # Dead-end detection
-            dead_end = self._detect_dead_end(data["activity_log"])
-            if dead_end:
-                out["dead_end_warning"] = dead_end
-            return out
+            # Respect the 60s metadata persist throttle instead of rewriting
+            # metadata.json on every tool RPC — log_activity is on the hot path
+            # for the whole host (called after every successful tool call).
+            self._maybe_persist_access(session)
+            # Dead-end detection is intentionally NOT run here: the result is
+            # always discarded by the caller (server_runtime._record_activity
+            # wraps log_activity in suppress() and drops the return value), so
+            # computing it on every tool call is wasted O(window) work. The
+            # STUCK_LOOP gate uses usage.DriftDetector instead. _detect_dead_end
+            # remains available for callers with a delivery path.
+            return {"ok": True}
 
     def _detect_dead_end(self, activity_log: list[dict]) -> dict | None:
         """Detect stalled analysis patterns."""

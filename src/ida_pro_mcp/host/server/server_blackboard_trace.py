@@ -148,9 +148,10 @@ class ServerBlackboardTraceMixin:
         pairs = list(entities.get("addr_name_pairs") or [])
         depth = int(payload.get("depth") or 2)
         limit = int(payload.get("limit") or 8)
+        runtime = hasattr(self, "_execute_tool")
         collected = []
         for addr in addrs[:limit]:
-            if hasattr(self, "_execute_tool"):
+            if runtime:
                 try:
                     xr = self._execute_tool(
                         "graph",
@@ -161,7 +162,7 @@ class ServerBlackboardTraceMixin:
                 except Exception as exc:
                     collected.append({"kind": "xref_error", "addr": addr, "error": str(exc)})
         for sym in symbols[:5]:
-            if hasattr(self, "_execute_tool"):
+            if runtime:
                 try:
                     sr = self._execute_tool("search", {"action": "find", "query": sym, "limit": 5})
                     if isinstance(sr, dict) and not is_error_result(sr):
@@ -202,7 +203,11 @@ class ServerBlackboardTraceMixin:
             )
         proposal_count = self._auto_proposals_from_trace(store, str(entry.get("id")), pairs[:20])
         return {
-            "ok": True,
+            # A run that attempted probes but gathered no evidence is a failed
+            # trace: it must not satisfy the prove-phase evidence gate as a
+            # 'done' receipt. When no runtime hook exists nothing was attempted,
+            # so the run is treated as done rather than failed.
+            "ok": bool(evidence_ok) if runtime else True,
             "evidence_count": len(evidence_ok),
             "derived_pairs": len(pairs),
             "proposals_created": proposal_count,

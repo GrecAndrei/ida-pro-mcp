@@ -23,6 +23,21 @@ _BACKGROUND_ACTIONS = {
     "wait": "_bg_wait",
 }
 
+# Guards lazy initialisation of per-server background state (locks/dicts) so
+# two concurrent submit threads cannot create two different RLock objects and
+# then "protect" the same shared dict with different locks.
+_LAZY_STATE_LOCK = threading.RLock()
+
+# Upper bound on how long background(action='wait') may block the request
+# thread. A caller can pass None (wait forever) or an arbitrarily large
+# timeout, which would park a stdio request/connection thread indefinitely
+# behind a stuck worker (cancel() cannot free a running pool slot either).
+# Cap the effective wait so a stuck task degrades to a status poll instead.
+# Override with IDA_MCP_BG_WAIT_MAX_SECONDS.
+_BG_WAIT_MAX_SECONDS = max(
+    1.0, float(os.environ.get("IDA_MCP_BG_WAIT_MAX_SECONDS", "3600"))
+)
+
 
 class BackgroundMixin(ServerClientStateMixin):
 
@@ -97,8 +112,13 @@ class BackgroundMixin(ServerClientStateMixin):
     def _seed_index_from_matching_binary(self, session: Any) -> dict[str, Any]:
         lock = getattr(self, "_semantic_index_reuse_lock", None)
         if lock is None:
-            lock = threading.RLock()
-            self._semantic_index_reuse_lock = lock
+            # Double-checked initialisation under a module lock so concurrent
+            # submit threads converge on one RLock guarding the copy/backup.
+            with _LAZY_STATE_LOCK:
+                lock = getattr(self, "_semantic_index_reuse_lock", None)
+                if lock is None:
+                    lock = threading.RLock()
+                    self._semantic_index_reuse_lock = lock
         with lock:
             return self._seed_index_from_matching_binary_unlocked(session)
 
@@ -224,12 +244,22 @@ class BackgroundMixin(ServerClientStateMixin):
     def _semantic_index_job_state(self) -> tuple[Any, dict[str, str]]:
         lock = getattr(self, "_semantic_index_jobs_lock", None)
         if lock is None:
-            lock = threading.RLock()
-            self._semantic_index_jobs_lock = lock
+            # Double-checked initialisation under a module lock so concurrent
+            # submit threads converge on one RLock; otherwise two threads could
+            # create two different locks and both "guard" the same
+            # _semantic_index_tasks dict, letting two jobs for one session in.
+            with _LAZY_STATE_LOCK:
+                lock = getattr(self, "_semantic_index_jobs_lock", None)
+                if lock is None:
+                    lock = threading.RLock()
+                    self._semantic_index_jobs_lock = lock
         active = getattr(self, "_semantic_index_tasks", None)
         if active is None:
-            active = {}
-            self._semantic_index_tasks = active
+            with _LAZY_STATE_LOCK:
+                active = getattr(self, "_semantic_index_tasks", None)
+                if active is None:
+                    active = {}
+                    self._semantic_index_tasks = active
         return lock, active
 
     @staticmethod
@@ -521,6 +551,20 @@ class BackgroundMixin(ServerClientStateMixin):
                     )
                     raise
 
+            def _index_run(task):
+                try:
+                    return _run(task)
+                finally:
+                    # Drop the completed job's entry so a long-lived daemon
+                    # that opens many sessions does not retain every finished
+                    # BatchTask (and its Future/cancel event) for the server
+                    # lifetime. Only clear the entry if it still names this
+                    # task — a later submit for the same session may have
+                    # overwritten it with a newer job.
+                    with lock:
+                        if active.get(session_id) == task.task_id:
+                            active.pop(session_id, None)
+
             task_id = self._batch_manager.submit(
                 action="semantic_index",
                 args={
@@ -530,7 +574,7 @@ class BackgroundMixin(ServerClientStateMixin):
                     "scope": scope,
                 },
                 session_id=session_id,
-                run_fn=self._bind_background_run(_run, session=session),
+                run_fn=self._bind_background_run(_index_run, session=session),
             )
             active[session_id] = task_id
 
@@ -546,13 +590,21 @@ class BackgroundMixin(ServerClientStateMixin):
             "message": "Semantic indexing is running in the background; use ida_index_status with this task_id.",
         }
 
-    def _background_policy_preflight(self, *, script: Any, tool_call: Any) -> dict | None:
+    def _background_policy_preflight(
+        self, *, script: Any, tool_call: Any, purpose: Any = None
+    ) -> dict | None:
+        # Evaluate against the session's resolved policy mode (operator
+        # baseline merged with the session's policy_mode), matching the gate
+        # the synchronous dispatch path applies. Hardcoding "assist" made a
+        # background WRITE submission without ack be rejected even in a
+        # permissive deployment that would WARN-and-allow synchronously.
+        mode = self._resolve_policy_mode()
         if script:
             decision = evaluate_policy(
                 "background",
                 "script",
-                mode="assist",
-                purpose=None,
+                mode=mode,
+                purpose=purpose,
                 ack=False,
             )
             return make_error(
@@ -574,8 +626,10 @@ class BackgroundMixin(ServerClientStateMixin):
             decision = evaluate_policy(
                 tool,
                 call_args.get("action"),
-                mode="assist",
-                purpose=call_args.get("_purpose"),
+                mode=mode,
+                # A caller may set _purpose on the background request itself,
+                # not just inside tool_call.args; honour both.
+                purpose=call_args.get("_purpose") or purpose,
                 ack=bool(call_args.get("_risk_ack") or call_args.get("_guardrail_ack")),
             )
             if decision.decision in {PolicyDecision.BLOCK, PolicyDecision.REQUIRE_ACK}:
@@ -594,7 +648,7 @@ class BackgroundMixin(ServerClientStateMixin):
         return self._batch_mgr
 
     def _handle_background(self, args: dict) -> dict:
-        action = str(args.get("action") or "list").strip()
+        action = str(args.get("action") or "list").strip().lower()
         handler_name = _BACKGROUND_ACTIONS.get(action)
         if handler_name is None:
             valid = ", ".join(sorted(_BACKGROUND_ACTIONS.keys()))
@@ -607,6 +661,12 @@ class BackgroundMixin(ServerClientStateMixin):
     def _bg_submit(self, args: dict) -> dict:
         script = args.get("script")
         tool_call = args.get("tool_call")
+        if not script and not tool_call:
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "background submit requires 'script' (Python source) or 'tool_call' "
+                "(dict with 'tool', 'action', 'args' keys)",
+            )
         # Background work runs in a worker thread, which deliberately does
         # not inherit a daemon connection's context. Capture the submitting
         # client's active session now so the task stays bound to its IDA
@@ -615,13 +675,27 @@ class BackgroundMixin(ServerClientStateMixin):
         if not session_id:
             current = getattr(self, "current_session", None)
             session_id = getattr(current, "session_id", None)
-        if not script and not tool_call:
-            return make_error(
-                MCPError.INVALID_ARGS,
-                "background submit requires 'script' (Python source) or 'tool_call' "
-                "(dict with 'tool', 'action', 'args' keys)",
-            )
-        policy_error = self._background_policy_preflight(script=script, tool_call=tool_call)
+        target_session = None
+        if session_id and hasattr(self, "session_mgr"):
+            target_session = self.session_mgr.get_session(str(session_id))
+            if target_session is None:
+                return make_error(
+                    MCPError.FILE_NOT_FOUND,
+                    f"No session found for session_id: {session_id}",
+                )
+            # The worker is granted ownership of the target session (and the
+            # submitting connection keeps a grant so it can retrieve the task
+            # later), so the caller must already own it — or adopt it when no
+            # live foreign owner holds it. Without this gate,
+            # background(submit, session_id=<any>) would let a caller queue
+            # tool calls (including misc.python) against another connection's
+            # locked session.
+            ownership_error = self._ensure_client_owns_session(target_session)
+            if ownership_error:
+                return ownership_error
+        policy_error = self._background_policy_preflight(
+            script=script, tool_call=tool_call, purpose=args.get("_purpose")
+        )
         if policy_error:
             return policy_error
         # Scripts are always rejected by _background_policy_preflight above, so
@@ -656,8 +730,8 @@ class BackgroundMixin(ServerClientStateMixin):
             run_fn=self._bind_background_run(
                 _run,
                 session=(
-                    self.session_mgr.get_session(session_id)
-                    if session_id and hasattr(self, "session_mgr")
+                    target_session
+                    if target_session is not None
                     else getattr(self, "current_session", None)
                 ),
             ),
@@ -761,4 +835,13 @@ class BackgroundMixin(ServerClientStateMixin):
                     "timeout must be a number",
                     hint="Provide a numeric timeout in seconds, e.g. timeout=30.",
                 )
+        else:
+            # None previously meant "wait forever", which parks the request
+            # thread indefinitely behind a stuck worker. Treat it as the cap.
+            timeout = _BG_WAIT_MAX_SECONDS
+        # Cap a huge timeout too: an unbounded wait on a stuck worker holds a
+        # pool slot (cancel() cannot free a running one) and blocks the whole
+        # request loop. A capped wait returns the current task state and the
+        # caller can poll again.
+        timeout = min(timeout, _BG_WAIT_MAX_SECONDS)
         return self._batch_manager.wait(str(task_id), timeout=timeout)

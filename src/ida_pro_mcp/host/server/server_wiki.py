@@ -607,7 +607,20 @@ class ServerWikiMixin:
         return None
 
     def _handle_wiki(self, args: dict) -> dict:
-        args = self._normalize_wiki_args(args)
+        try:
+            args = self._normalize_wiki_args(args)
+        except ValueError:
+            # shlex.split raises on an unbalanced-quote action tail (e.g.
+            # action="read 'tools/query"). Surface an INVALID_ARGS envelope
+            # instead of letting a -32000 internal error escape the transport.
+            return make_error(
+                MCPError.INVALID_ARGS,
+                "Malformed wiki action: unbalanced quotes or invalid syntax.",
+                hint=(
+                    "Pass action as a plain action name with key=value pairs, "
+                    "e.g. wiki(action='read', topic='tools/query')."
+                ),
+            )
         action = args.get("action")
         if action not in TOOL_ACTIONS["wiki"]:
             return make_error(

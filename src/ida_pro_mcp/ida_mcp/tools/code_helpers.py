@@ -476,6 +476,33 @@ def _detect_crypto_hints(pseudo: str, *, xor_threshold: int = 4) -> tuple[list[s
     return crypto_hints, xor_count
 
 
+def _lvar_type_str(v) -> str:
+    """Return an lvar's type as a plain string.
+
+    lvar_t.type is a bound method in SWIG bindings — call it to get the
+    tinfo_t object, then stringify that. Accessing it as a property gives
+    a method repr like "<bound method lvar_t.type...>" which never matches
+    the type keywords used for taint/type analysis (see
+    _extract_var_rename_hints for the same handling).
+    """
+    try:
+        tinfo_attr = getattr(v, "type", None)
+        if callable(tinfo_attr):
+            try:
+                tinfo = tinfo_attr()
+            except Exception:
+                tinfo = None
+        else:
+            tinfo = tinfo_attr
+        if tinfo is None:
+            return ""
+        if hasattr(tinfo, "dstr"):
+            return str(tinfo.dstr()).strip()
+        return str(tinfo).strip()
+    except Exception:
+        return ""
+
+
 def _scan_ctree_vulns(cfunc) -> list[dict]:
     """Scan decompiled ctree (AST) for vulnerability patterns using IDA's Hex-Rays API.
 
@@ -494,7 +521,7 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
         for v in (cfunc.lvars or []):
             name = str(getattr(v, "name", "") or "")
             if name:
-                typ = str(getattr(v, "type", "") or "")
+                typ = _lvar_type_str(v)
                 lvar_map[name] = {
                     "type": typ,
                     "is_arg": bool(getattr(v, "is_arg_var", False)),
@@ -511,6 +538,23 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
     ALLOC_FUNCS = {"malloc", "calloc", "realloc", "VirtualAlloc", "HeapAlloc", "mmap", "LocalAlloc", "GlobalAlloc", "CoTaskMemAlloc"}
     NETWORK_SOURCES = {"recv", "recvfrom", "recvmsg", "WSARecv", "read", "fread", "recv_s", "gets"}
     FREE_FUNCS = {"free", "VirtualFree", "HeapFree", "munmap", "LocalFree", "GlobalFree", "CoTaskMemFree"}
+    # Per-function index of the size argument within ALLOC_FUNCS:
+    #   malloc(n), CoTaskMemAlloc(n)                    -> 0
+    #   calloc(nmemb, size), realloc(ptr, size)         -> 1
+    #   VirtualAlloc(addr, size, ...), mmap(addr, len)  -> 1
+    #   LocalAlloc(flags, size), GlobalAlloc(flags, sz) -> 1
+    #   HeapAlloc(heap, flags, size)                    -> 2
+    ALLOC_SIZE_INDEX = {
+        "malloc": 0,
+        "calloc": 1,
+        "realloc": 1,
+        "VirtualAlloc": 1,
+        "mmap": 1,
+        "LocalAlloc": 1,
+        "GlobalAlloc": 1,
+        "CoTaskMemAlloc": 0,
+        "HeapAlloc": 2,
+    }
     # Track freed variables for UAF detection
     freed_vars = {}  # var_name -> (ea, line_text)
     # Track allocation return values for unchecked-malloc detection
@@ -637,7 +681,7 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
                     idx = arg_expr.v.idx
                     if idx < len(cfunc.lvars or []):
                         name = str(getattr(cfunc.lvars[idx], "name", "") or "")
-                        typ = str(getattr(cfunc.lvars[idx], "type", "") or "")
+                        typ = _lvar_type_str(cfunc.lvars[idx])
                         is_arg = bool(getattr(cfunc.lvars[idx], "is_arg_var", False))
                         if is_arg and any(kw in typ.lower() for kw in ("char", "byte", "uint8", "void")):
                             return True
@@ -725,9 +769,11 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
                                      "evidence": f"{callee_name} at {hex_ea(ea)}",
                                      "detail": "gets() has no length limit — always exploitable"})
                 elif func in ("strcpy", "lstrcpy"):
-                    if args and self._is_user_tainted(args[0][0]):
+                    # strcpy(dst, src) — the source (args[1]) decides whether the
+                    # copy pulls in user-controlled data, not the destination.
+                    if len(args) >= 2 and self._is_user_tainted(args[1][0]):
                         findings.append({"severity": "critical", "pattern": "strcpy_user_input",
-                                         "evidence": f"{callee_name}({args[0][1]}) at {hex_ea(ea)}",
+                                         "evidence": f"{callee_name}({args[1][1]}) at {hex_ea(ea)}",
                                          "detail": "strcpy from user-controlled source — buffer overflow"})
                     else:
                         findings.append({"severity": "high", "pattern": "strcpy_unbounded",
@@ -763,23 +809,27 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
             # --- Format string ---
             elif func in FORMAT_FUNCS:
                 if func in ("printf", "fprintf", "dprintf", "syslog"):
-                    if args:
-                        fmt_arg = args[0][0]
+                    # printf(fmt, ...) has the format at args[0]; fprintf(fp, fmt, ...),
+                    # dprintf(fd, fmt, ...) and syslog(priority, fmt, ...) at args[1].
+                    fmt_idx = 0 if func == "printf" else 1
+                    if len(args) > fmt_idx:
+                        fmt_arg = args[fmt_idx][0]
                         if not self._is_string_literal(fmt_arg):
                             findings.append({"severity": "high", "pattern": "format_string_injection",
-                                             "evidence": f"{callee_name} format: {args[0][1]} at {hex_ea(ea)}",
+                                             "evidence": f"{callee_name} format: {args[fmt_idx][1]} at {hex_ea(ea)}",
                                              "detail": "Format string is a variable — potential format string attack"})
                         else:
                             # Check actual format string content
                             fmt_content = self._get_string_content(fmt_arg)
                             if fmt_content:
-                                self._check_format_specifiers(fmt_content, len(args) - 1, ea)
+                                self._check_format_specifiers(fmt_content, len(args) - (fmt_idx + 1), ea)
                 if func == "sprintf":
                     findings.append({"severity": "high", "pattern": "sprintf_unbounded",
                                      "evidence": f"{callee_name} at {hex_ea(ea)}",
                                      "detail": "sprintf without size limit — use snprintf"})
                 if func == "snprintf" and len(args) >= 2:
-                    size_val = self._get_numeric_value(args[0][0])
+                    # snprintf(dest, size, fmt, ...) — size is args[1].
+                    size_val = self._get_numeric_value(args[1][0])
                     if size_val is not None and size_val <= 0:
                         findings.append({"severity": "high", "pattern": "snprintf_zero_size",
                                          "evidence": f"snprintf size={size_val} at {hex_ea(ea)}",
@@ -796,12 +846,16 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
 
             # --- Allocation with user-controlled size ---
             elif func in ALLOC_FUNCS:
-                if args:
-                    size_arg = args[0][0]
+                # The size argument index varies per function; a wrong index
+                # points at a pointer/address/handle expression that is never a
+                # constant and never tainted, silently disabling the checks.
+                size_idx = ALLOC_SIZE_INDEX.get(func, 0)
+                if len(args) > size_idx:
+                    size_arg = args[size_idx][0]
                     alloc_calls[ea] = func
                     if self._is_user_tainted(size_arg):
                         findings.append({"severity": "high", "pattern": "user_controlled_alloc_size",
-                                         "evidence": f"{callee_name} size: {args[0][1]} at {hex_ea(ea)}",
+                                         "evidence": f"{callee_name} size: {args[size_idx][1]} at {hex_ea(ea)}",
                                          "detail": "Allocation size from user input — integer overflow or huge alloc DoS"})
                     elif not self._is_constant(size_arg):
                         text = ida_lines.tag_remove(size_arg.print1(None)) or ""
@@ -863,7 +917,12 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
                     if idx < len(cfunc.lvars or []):
                         name = str(getattr(cfunc.lvars[idx], "name", "") or "")
                         if rhs and rhs.op == ida_hexrays.cot_num and rhs.n.value(0) == 0:
-                            freed_vars[name] = (int(getattr(expr, "ea", 0)), "assigned NULL")
+                            # NULL-ing after free: the pointer is no longer
+                            # dangling, so drop the freed marker instead of
+                            # treating the assignment as another free. Only
+                            # free-family calls create freed markers, so a plain
+                            # `x = 0` on a normal variable never flags a UAF.
+                            freed_vars.pop(name, None)
             except Exception:
                 pass
 
@@ -1045,7 +1104,7 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
                 fc = idaapi.FlowChart(func)
                 bb_map = {}
                 for _bb in fc:
-                    bb_map[int(bb.start_ea)] = bb
+                    bb_map[int(_bb.start_ea)] = _bb
                 # Find which BBs contain dangerous calls
                 danger_bbs = []
                 for bb in fc:
@@ -1079,13 +1138,16 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
         if func_obj:
             frame = ida_funcs.get_frame(func_obj)
             if frame:
-                frame_size = int(getattr(frame, "memqty", 0) or 0)
-                # Check for large stack allocations
-                for i in range(frame_size):
-                    member = frame.get_member(i)
+                # func_frame_t is a struc_t subclass; walk its members list.
+                # get_member() takes a byte offset, not an index — iterating
+                # 0..memqty would only ever reach members at those offsets.
+                for member in (getattr(frame, "members", None) or []):
                     if member:
                         mname = ida_struct.get_member_name(member.id) or ""
-                        msize = ida_struct.get_member_size(member)
+                        try:
+                            msize = int(ida_struct.get_member_size(member) or 0)
+                        except Exception:
+                            msize = int(getattr(member, "size", 0) or 0)
                         # Large stack buffer
                         if msize > 256 and any(kw in mname.lower() for kw in ("buf", "buffer", "data", "tmp", "temp", "stack", "local")):
                             findings.append({"severity": "high", "pattern": "large_stack_buffer",
@@ -1225,6 +1287,8 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
         proc_name = idaapi.get_inf_attr(idaapi.INF_PROCNAME) if hasattr(idaapi, 'get_inf_attr') else ""
         if not proc_name:
             proc_name = str(getattr(idaapi.inf, 'procname', '') or '')
+        if isinstance(proc_name, bytes):
+            proc_name = proc_name.decode("utf-8", errors="replace")
         proc_lower = proc_name.lower()
 
         if "arm" in proc_lower or "thumb" in proc_lower:
@@ -1974,7 +2038,10 @@ def _trace_argument_origin(func, arg_index, max_depth, max_callers_per_level):
     proto = idc.get_type(target_addr)
     if proto:
         try:
-            func_type = idc.parse_decl(proto, idc.PT_SILENT)
+            parsed = idc.parse_decl(proto, idc.PT_SILENT)
+            # idc.parse_decl returns a (tinfo_t, name) tuple; tolerate a bare
+            # tinfo_t too for backends that return it directly.
+            func_type = parsed[0] if isinstance(parsed, (tuple, list)) and parsed else parsed
             if func_type:
                 func_data = ida_typeinf.func_type_data_t()
                 if func_type.get_func_details(func_data):

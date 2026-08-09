@@ -116,11 +116,18 @@ def semantic_tokens(text: str) -> list[str]:
 
 
 def _subword_tokens(text: str) -> list[str]:
-    """Split identifiers into subword tokens (snake_case + camelCase)."""
+    """Split identifiers into subword tokens (snake_case + camelCase).
+
+    Camel boundaries must be split on the original case: lowercasing first
+    (as the old code did) makes the ``[a-z0-9][A-Z]`` lookahead in
+    ``_CAMEL_BOUNDARY`` unreachable, so mixed-case identifiers like
+    ``getProcAddress`` collapsed to a single token.
+    """
     out: list[str] = []
-    for part in re.findall(r"[A-Za-z0-9_]+", text.lower()):
+    for part in re.findall(r"[A-Za-z0-9_]+", text):
         for piece in re.split(r"_+", part):
             for word in _CAMEL_BOUNDARY.sub(" ", piece).split():
+                word = word.lower()
                 if len(word) >= 2:
                     out.append(word)
     return out
@@ -154,7 +161,7 @@ def semantic_score(
         return {"score": 120.0, "method": "exact"} if return_detail else 120.0
 
     cheap = semantic_score_cheap(
-        q, c, substring_bonus=substring_bonus, include_fuzzy=include_fuzzy
+        query, candidate, substring_bonus=substring_bonus, include_fuzzy=include_fuzzy
     )
     phrase_like = _phrase_like(q) or _phrase_like(c)
     if cheap < _DECISIVE_SCORE and (phrase_like or cheap >= _EMBED_FLOOR):
@@ -187,8 +194,10 @@ def semantic_score_cheap(
     if q == c:
         return 120.0
 
-    q_tokens = _ngram_tokens(q)
-    c_tokens = _ngram_tokens(c)
+    # Tokenize from the original-case text: camel-boundary splitting is
+    # case-aware, so lowercasing first would collapse mixed-case identifiers.
+    q_tokens = _ngram_tokens(query)
+    c_tokens = _ngram_tokens(candidate)
     if q_tokens and c_tokens:
         score = _tfidf_cosine_score(q_tokens, c_tokens)
     else:
@@ -234,9 +243,10 @@ def semantic_scores(
     if not candidates:
         return []
     q = (query or "").strip().lower()
+    q_orig = (query or "").strip()
     cheap = [
         semantic_score_cheap(
-            q, str(c or ""), substring_bonus=substring_bonus, include_fuzzy=include_fuzzy
+            q_orig, str(c or ""), substring_bonus=substring_bonus, include_fuzzy=include_fuzzy
         )
         for c in candidates
     ]

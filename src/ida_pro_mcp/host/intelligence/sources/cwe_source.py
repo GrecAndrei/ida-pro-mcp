@@ -23,7 +23,10 @@ class CweSource(SourceParser):
     def parse(self, data_dir: str) -> list[dict[str, Any]]:
         from ..threat_corpus import parse_cwe_xml
 
-        xmls = glob.glob(os.path.join(data_dir, "**", "*.xml"), recursive=True)
+        # Sort so multi-XML data dirs pick a deterministic catalog instead of
+        # whatever arbitrary order glob returns (cache would otherwise differ
+        # across runs and machines).
+        xmls = sorted(glob.glob(os.path.join(data_dir, "**", "*.xml"), recursive=True))
         if not xmls:
             return []
         return parse_cwe_xml(xmls[0])

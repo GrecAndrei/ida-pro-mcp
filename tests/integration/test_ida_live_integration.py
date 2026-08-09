@@ -12,12 +12,14 @@ references, a malloc/free API chain, globals, and call-graph edges is compiled
 in a temporary directory — the same pattern the agent-surface live suite uses.
 If no C compiler is available either, all tests are skipped.
 """
+import contextlib
 import functools
 import json
 import os
 import queue
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -33,8 +35,40 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 
 
+def _find_idat() -> str | None:
+    """Locate an idat/idat64 executable the stdio server can launch.
+
+    Mirrors the IDA_DIR resolution in ``MCPIntegrationClient.start`` so the
+    availability gate and the client agree about whether IDA is present.
+    """
+    for path in (
+        os.environ.get("IDA_DIR"),
+        os.environ.get("IDADIR"),
+        os.environ.get("IDA_MCP_LIVE_IDADIR"),
+        "/home/grec-alexander/ida-pro-9.3",
+        os.path.expanduser("~/ida-pro-9.3"),
+    ):
+        if not path:
+            continue
+        for name in ("idat64", "idat"):
+            candidate = os.path.join(path, name)
+            if os.path.isfile(candidate):
+                return candidate
+    for name in ("idat64", "idat"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
 def _ida_is_available() -> bool:
-    """Check if a running IDA MCP server is available."""
+    """Check if a running IDA MCP server is available.
+
+    A C compiler is deliberately NOT accepted as evidence IDA is available:
+    on a compiler-only machine every ``@unittest.skipUnless`` class would run
+    against a stdio server that spawns no idat, and every test would hard-fail
+    instead of skipping.
+    """
     port = os.environ.get("IDA_MCP_PORT")
     if port:
         import socket
@@ -44,12 +78,10 @@ def _ida_is_available() -> bool:
             return True
         except (ConnectionRefusedError, OSError):
             pass
-    # Check if we can start one
     binary = os.environ.get("IDA_MCP_TEST_BINARY")
     if binary and os.path.isfile(binary):
         return True
-    # ... or compile the built-in rich fixture
-    return any(shutil.which(c) for c in ("cc", "gcc", "clang"))
+    return _find_idat() is not None
 
 
 _RICH_FIXTURE_SOURCE = r"""
@@ -154,6 +186,29 @@ def _parse_result(result) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def _require_session(client: "MCPIntegrationClient", binary: str | None) -> None:
+    """Create a session for *binary*, failing loudly instead of skipping.
+
+    setUpClass may only skip for a genuinely absent prerequisite (no fixture
+    binary). A create that fails — a JSON-RPC error envelope, a timeout, or
+    any non-ok result — is a real server regression and must fail the class.
+    A bare ``{"error": "timeout"}`` has no ``content``, so the old
+    ``if not result.get("content"): raise SkipTest`` silently masked protocol
+    errors and RPC hangs as 'skipped'.
+    """
+    if not binary:
+        raise unittest.SkipTest(
+            "No fixture binary available (no compiler and IDA_MCP_TEST_BINARY unset)"
+        )
+    result = client.call_tool("session", action="create", binary_path=binary)
+    parsed = _parse_result(result)
+    if parsed is None or parsed.get("ok") is not True:
+        raise AssertionError(
+            "Failed to create IDA session (real failure, not a prerequisite gap): "
+            f"{result}"
+        )
+
+
 def _wait_vulnerable_hits(client, timeout: float = 240.0) -> dict | None:
     """Poll the vulnerable scope until it returns hits (analysis settles).
 
@@ -192,13 +247,9 @@ class MCPIntegrationClient:
         # Structured results make assertions exact instead of text-scraping.
         env["IDA_MCP_STRUCTURED_CONTENT"] = "1"
         if "IDA_DIR" not in env:
-            for path in [
-                "/home/grec-alexander/ida-pro-9.3",
-                os.path.expanduser("~/ida-pro-9.3"),
-            ]:
-                if os.path.isdir(path):
-                    env["IDA_DIR"] = path
-                    break
+            idat = _find_idat()
+            if idat:
+                env["IDA_DIR"] = os.path.dirname(idat)
 
         self.proc = subprocess.Popen(
             [sys.executable, "-u", os.path.join(PROJECT_ROOT, "ida_mcp_stdio.py")],
@@ -207,6 +258,10 @@ class MCPIntegrationClient:
             stderr=subprocess.PIPE,
             env=env,
             text=True,
+            # Start the server as its own session leader so teardown can kill
+            # the whole process group (server + any idat children it spawned)
+            # instead of leaving orphan idat processes for the same fixture.
+            start_new_session=True,
         )
 
         # Reader threads
@@ -272,13 +327,39 @@ class MCPIntegrationClient:
         return {"error": "timeout"}
 
     def close(self):
-        """Shut down the server."""
-        if self.proc:
+        """Shut down the server and its whole process group.
+
+        A graceful ``session(action='close')`` lets the host tear down each
+        session's idat child cleanly; killing the process group (the server is
+        its leader via ``start_new_session=True``) is the backstop so a host
+        that does not install its own SIGTERM teardown cannot orphan idat
+        children across smoke runs — the exact bug class test_session_create_reuse
+        guards against.
+        """
+        if not self.proc:
+            return
+        try:
+            saved_timeout = self.timeout
+            self.timeout = min(self.timeout, 10)
             try:
+                with contextlib.suppress(Exception):
+                    self.call_tool("session", action="close", _risk_ack=True)
+            finally:
+                self.timeout = saved_timeout
+        except Exception:
+            pass
+        try:
+            os.killpg(self.proc.pid, signal.SIGTERM)
+        except (ProcessLookupError, OSError):
+            with contextlib.suppress(Exception):
                 self.proc.terminate()
+        try:
+            self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(Exception):
+                os.killpg(self.proc.pid, signal.SIGKILL)
+            with contextlib.suppress(Exception):
                 self.proc.wait(timeout=5)
-            except Exception:
-                self.proc.kill()
 
 
 @unittest.skipUnless(_ida_is_available(), "No IDA MCP server available")
@@ -293,12 +374,10 @@ class TestCustomDetectorIntegration(unittest.TestCase):
         if not cls.client.start():
             raise unittest.SkipTest("Failed to start IDA MCP server")
 
-        # Create a session with a test binary
-        binary = _build_fixture()
-        if binary:
-            result = cls.client.call_tool("session", action="create", binary_path=binary)
-            if not result.get("content"):
-                raise unittest.SkipTest("Failed to create IDA session")
+        # Create a session with a test binary. A create failure here is a real
+        # server regression (or an RPC hang) — fail loudly instead of masking
+        # the entire class behind unittest.SkipTest.
+        _require_session(cls.client, _build_fixture())
 
     @classmethod
     def tearDownClass(cls):

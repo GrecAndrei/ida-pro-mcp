@@ -179,15 +179,23 @@ def misc(
         except Exception as e:
             return handle_error(e, context="list_sigs")
     if action == "cache_stats":
+        # Report stats for the same ToolResultCache singleton @idaread/@idawrite
+        # use, via sync._tool_cache — the canonical resolver (sync.py tries
+        # ida_mcp.ida_mcp.cache -> cache -> ida_pro_mcp.ida_mcp.cache). A
+        # different import path would yield a second module instance with its
+        # own TOOL_CACHE, so ida_mcp_cache_stats would describe a cache the
+        # readers don't use.
         try:
-            from ida_mcp.cache import TOOL_CACHE
-            return {"ok": True, **TOOL_CACHE.stats()}
+            from ida_pro_mcp.ida_mcp.sync import _tool_cache
         except ImportError:
             try:
-                from cache import TOOL_CACHE
-                return {"ok": True, **TOOL_CACHE.stats()}
+                from ida_mcp.sync import _tool_cache  # type: ignore[import-not-found]
             except ImportError:
-                return {"ok": True, "message": "Cache not available"}
+                from sync import _tool_cache  # type: ignore[import-not-found]
+        _cache = _tool_cache()
+        if _cache is not None:
+            return {"ok": True, **_cache.stats()}
+        return {"ok": True, "message": "Cache not available"}
     if action == "read_file":
         err = require_arg(path, "path")
         if err:

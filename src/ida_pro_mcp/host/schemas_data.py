@@ -201,7 +201,7 @@ TOOL_DESCRIPTIONS = {
     "data": "Retrieve core IDB data. functions: list all functions — always includes xref count (capped 999). globals: global variables. strings: string literals — always includes xref count. imports: imported modules and functions. exports: exported entry points. annotations: all named items and comments. read_bytes: raw bytes at an address. lookup: resolve name↔address. bulk_query: multiple queries in one call. capability_matrix: binary capability matrix from imports + function classifications. string_xrefs: ranked string-to-function xref map with module clustering.",
     "firmware_view": "Firmware triage: region scanning, pointer sweeps, table carving, deterministic detection logic, multi-region campaigns, and bootstrap orchestration. Actions: scan_region, auto_retype, pointer_sweep, recommend, table_candidates, smart_carve, rollback_last, review_contradictions, region_profile, pointer_clusters, carve_plan, campaign, segment_sweep, multi_region_campaign, detect_load_address, detect_vector_table, detect_mmio, rtos_scan, triage_snapshot, bootstrap.",
     "funcs": "Function boundary management (≈ IDA P/Delete keys). create: define a function at addr (≡ pressing P in IDA). change: set the current function end (≡ IDA Set function end). delete: remove function definition. info: full function metadata — pass include_xrefs/include_prototype/include_stack for richer output. metrics: size/complexity/call counts. find_similar: structural similarity search. suggest_names: name candidates from heuristics. list: paginated function listing (like data(functions)) with structured output. Note: regex-based filters live in search, while renames and comments live on modify. Actions: create, change, delete, set_flags, info, metrics, find_similar, suggest_names, list.",
-    "gadgets": "Find ROP/JOP/COP gadgets, stack pivots, and classify exploit chains. Actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains, classify_chain.",
+    "gadgets": "Find ROP/JOP/COP gadgets, stack pivots, and classify exploit chains. Actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains, classify_chain, semantic_find.",
     "governance": "Pre-flight validation for edits: detect contradictions, PII, dangerous patches. Actions: check, redact, list_rules, stats.",
     "graph": "Generate call graphs, CFGs, dominator trees, and xref graphs for visualization. Actions: callgraph, cfg, dominators, xref_graph.",
     "idb": "Query top-level IDB metadata: binary info, segments, entrypoints, bookmarks, and architecture profile guidance for raw binaries. Actions: meta, summary, segments, entrypoints, bookmarks, overview, architecture_profile, state.",
@@ -433,6 +433,7 @@ TOOL_ARG_SCHEMAS = {
         "int_width": {"type": "integer"},
         "addr1": {"type": "string"},
         "addr2": {"type": "string"},
+        "governed": {"type": "boolean", "description": "If true, treat the region as governed (constrained) memory for scan/walk semantics"},
     },
     "misc": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["misc"]},
@@ -702,6 +703,8 @@ TOOL_ARG_SCHEMAS = {
         "list_detectors": {"type": "boolean", "description": "detect: list registered detectors"},
         "delete_detector": {"type": "boolean", "description": "detect: delete a registered detector"},
         "function": {"type": "string", "description": "detect caller_of/callee_of alias for target"},
+        "arg_index": {"type": "integer", "description": "trace_argument_origin: 1-based index of the argument to trace (default 1)"},
+        "max_callers_per_level": {"type": "integer", "description": "trace_argument_origin: cap on callers followed per recursion level"},
     },
     "ctree": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["ctree"]},

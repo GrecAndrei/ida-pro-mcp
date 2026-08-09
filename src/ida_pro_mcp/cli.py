@@ -9,9 +9,11 @@ without shell interpolation, and exits immediately after printing a response.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import socket as _socket_mod
+import stat
 import subprocess
 import sys
 import tempfile
@@ -23,6 +25,31 @@ from typing import Any
 from ida_pro_mcp import __version__
 
 _DAEMON_SOCKET = os.path.join(tempfile.gettempdir(), "ida-mcp-daemon.sock")
+
+# Must mirror the action Literal in ida_mcp/ida_mcp/tools/intelligence.py
+# exactly; drift here makes valid actions impossible via the CLI while
+# advertising actions the tool rejects.  Pinned as a module constant so a
+# regression test can compare it against the tool's Literal.
+_INTELLIGENCE_ACTIONS = frozenset(
+    {
+        "intelligence_status",
+        "embedder_status",
+        "reranker_status",
+        "anchor_status",
+        "refresh_anchors",
+        "classify_text",
+        "classify_function",
+        "index_function",
+        "index_batch",
+        "index_fast",
+        "index_range",
+        "similar_functions",
+        "semantic_search",
+        "blackboard_search",
+        "export_index_summary",
+        "function_families",
+    }
+)
 
 
 def _load_json_arg(value: str | None, *, label: str) -> Any:
@@ -101,6 +128,10 @@ class MCPStdioClient:
                 msg = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if msg.get("id") is None:
+                # A JSON-RPC notification (no id field) is unsolicited; a
+                # stray notification is never the answer to a request.
+                continue
             if rid is not None and msg.get("id") != rid:
                 continue
             return msg
@@ -109,6 +140,10 @@ class MCPStdioClient:
         if not method or not isinstance(method, str):
             raise SystemExit("method must be a non-empty string")
         rid = request_id if request_id is not None else self._next_id()
+        if request_id is not None:
+            # An explicit request id must never collide with an auto id: the
+            # counter is advanced past it so the next _next_id() is unique.
+            self._id = max(self._id, request_id)
         req = {"jsonrpc": "2.0", "id": rid, "method": method}
         if params is not None:
             req["params"] = params
@@ -172,9 +207,26 @@ def _normalize_tool_result(response: dict) -> Any:
     return {"content": normalized_items, "isError": bool(result.get("isError"))}
 
 
+def _daemon_socket_owned() -> bool:
+    """True only when the socket file is owned by the current user.
+
+    The daemon is the persistent session host, so attaching to a socket we do
+    not own would let this CLI drive another user's sessions (or a planted
+    fake).  Refuse anything not owned by the effective user; ownership is
+    verified before every connect and before any unlink.
+    """
+    try:
+        st = os.stat(_DAEMON_SOCKET)
+    except OSError:
+        return False
+    return stat.S_ISSOCK(st.st_mode) and st.st_uid == os.geteuid()
+
+
 def _daemon_is_running() -> bool:
     if not os.path.exists(_DAEMON_SOCKET):
         return False
+    if not _daemon_socket_owned():
+        return False  # a daemon we do not own is not one we may use
     try:
         s = _socket_mod.socket(_socket_mod.AF_UNIX, _socket_mod.SOCK_STREAM)
         s.settimeout(0.3)
@@ -193,6 +245,11 @@ def _start_daemon() -> None:
     if _daemon_is_running():
         return
     if os.path.exists(_DAEMON_SOCKET):
+        if not _daemon_socket_owned():
+            raise SystemExit(
+                f"Refusing to manage daemon socket {_DAEMON_SOCKET}: "
+                "missing or not owned by the current user"
+            )
         try:
             probe = _socket_mod.socket(_socket_mod.AF_UNIX, _socket_mod.SOCK_STREAM)
             probe.settimeout(1.0)
@@ -201,19 +258,41 @@ def _start_daemon() -> None:
             return  # a daemon answered the slower probe; leave it alone
         except Exception:
             pass
+        # Re-verify right before unlinking: a daemon that bound between the
+        # slower probe above and this point would be orphaned by the unlink.
+        # A successful connect now means a live daemon owns the socket, so
+        # leave it alone even though both probes failed moments ago.
+        if _daemon_is_running():
+            return
         os.unlink(_DAEMON_SOCKET)
-    subprocess.Popen(
-        [sys.executable, "-m", "ida_pro_mcp.host.server", "--daemon"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
-        close_fds=True,
-    )
-    deadline = time.time() + 10.0
-    while not _daemon_is_running():
-        if time.time() > deadline:
-            raise SystemExit("Daemon did not start within 10 seconds")
-        time.sleep(0.1)
+    # Keep the daemon's stderr instead of discarding it so a failed boot
+    # surfaces diagnostics (traceback, import error) in the timeout message.
+    fd, stderr_path = tempfile.mkstemp(prefix="ida-mcp-daemon-", suffix=".log")
+    try:
+        subprocess.Popen(
+            [sys.executable, "-m", "ida_pro_mcp.host.server", "--daemon"],
+            stdout=subprocess.DEVNULL,
+            stderr=fd,
+            stdin=subprocess.DEVNULL,
+            close_fds=True,
+        )
+        os.close(fd)
+        deadline = time.time() + 10.0
+        while not _daemon_is_running():
+            if time.time() > deadline:
+                tail = ""
+                try:
+                    with open(stderr_path, encoding="utf-8", errors="replace") as f:
+                        tail = "\n".join(f.readlines()[-20:])
+                except OSError:
+                    pass
+                raise SystemExit(f"Daemon did not start within 10 seconds\n{tail}".rstrip())
+            time.sleep(0.1)
+    finally:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        with contextlib.suppress(OSError):
+            os.unlink(stderr_path)
 
 
 def _daemon_call(tool_name: str, args: dict[str, Any], *, timeout: float | None = 30.0) -> dict:
@@ -233,10 +312,21 @@ def _daemon_call(tool_name: str, args: dict[str, Any], *, timeout: float | None 
             "clientInfo": {"name": "ida-pro-mcp-cli", "version": __version__},
         },
     }
+    rid = request["id"]
+    if not _daemon_socket_owned():
+        raise SystemExit(
+            f"Refusing to connect to daemon socket {_DAEMON_SOCKET}: "
+            "missing or not owned by the current user"
+        )
     s = _socket_mod.socket(_socket_mod.AF_UNIX, _socket_mod.SOCK_STREAM)
     s.settimeout(10.0)  # connect deadline
     try:
-        s.connect(_DAEMON_SOCKET)
+        try:
+            s.connect(_DAEMON_SOCKET)
+        except OSError as exc:
+            raise SystemExit(
+                f"Cannot connect to daemon at {_DAEMON_SOCKET}: {exc}"
+            ) from exc
         # The daemon handles requests synchronously and can block for the
         # caller-supplied timeout (e.g. `background wait timeout=120`), so
         # widen the recv window after connect; timeout=None means block.
@@ -245,20 +335,41 @@ def _daemon_call(tool_name: str, args: dict[str, Any], *, timeout: float | None 
             json.dumps(initialize, separators=(",", ":")) + "\n" +
             json.dumps(request, separators=(",", ":")) + "\n"
         )
-        s.sendall(payload.encode("utf-8"))
-        s.shutdown(_socket_mod.SHUT_WR)
+        try:
+            s.sendall(payload.encode("utf-8"))
+        except OSError as exc:
+            raise SystemExit(f"Failed to send request to daemon: {exc}") from exc
+        with contextlib.suppress(OSError):
+            s.shutdown(_socket_mod.SHUT_WR)
         data = b""
         while True:
-            chunk = s.recv(65536)
+            try:
+                chunk = s.recv(65536)
+            except TimeoutError:
+                raise SystemExit(f"Daemon did not respond within {timeout}s") from None
+            except OSError as exc:
+                raise SystemExit(f"Daemon connection failed while reading: {exc}") from exc
             if not chunk:
                 break
             data += chunk
         if not data:
             raise SystemExit("Daemon returned empty response")
-        lines = [ln.strip() for ln in data.decode("utf-8").split("\n") if ln.strip()]  # noqa: E741
-        if not lines:
-            raise SystemExit("Daemon returned no valid JSON lines")
-        return json.loads(lines[-1])
+        lines = [ln.strip() for ln in data.decode("utf-8").split("\n") if ln.strip()]
+        # The daemon answers initialize (id=1) and the tool call (id=2) and may
+        # also write unsolicited notifications (no id) on the same socket.
+        # Match the request id exactly so a trailing notification is never
+        # misread as the background tool result.
+        answer = None
+        for line in lines:
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if msg.get("id") == rid:
+                answer = msg
+        if answer is None:
+            raise SystemExit("Daemon did not return a response for the tool call")
+        return answer
     finally:
         s.close()
 
@@ -407,8 +518,11 @@ def main(argv: list[str] | None = None) -> int:
                 raise SystemExit("raw mode requires a full JSON-RPC object payload")
             if "jsonrpc" not in payload:
                 payload["jsonrpc"] = "2.0"
-            if "id" not in payload and args.request_id is not None:
-                payload["id"] = args.request_id
+            if "id" not in payload:
+                # A request without an id is a notification and gets no
+                # response; inject one so the CLI never misreads a stray
+                # notification as the answer.
+                payload["id"] = args.request_id if args.request_id is not None else client._next_id()
             response = client.send(payload)
             _print_json(response, pretty=args.pretty)
             return 0
@@ -444,27 +558,9 @@ def main(argv: list[str] | None = None) -> int:
                 "doctor": "embedder_status",
             }
             mapped = action_map.get(action, action)
-            # Must mirror the action Literal in ida_mcp/tools/intelligence.py
-            # exactly; drift here makes valid actions impossible via the CLI
-            # while advertising actions the tool rejects.
-            if mapped not in {
-                "intelligence_status",
-                "embedder_status",
-                "reranker_status",
-                "anchor_status",
-                "refresh_anchors",
-                "classify_text",
-                "classify_function",
-                "index_function",
-                "index_batch",
-                "index_fast",
-                "index_range",
-                "similar_functions",
-                "semantic_search",
-                "blackboard_search",
-                "export_index_summary",
-                "function_families",
-            }:
+            # Mirrors the action Literal in ida_mcp/tools/intelligence.py;
+            # drift here is caught by tests comparing _INTELLIGENCE_ACTIONS.
+            if mapped not in _INTELLIGENCE_ACTIONS:
                 raise SystemExit(f"unsupported intelligence action: {action}")
             tool_args = payload if isinstance(payload, dict) else {}
             tool_args = dict(tool_args)

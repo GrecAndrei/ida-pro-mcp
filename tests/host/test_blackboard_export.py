@@ -4,16 +4,21 @@ import json
 import os
 from types import SimpleNamespace
 
+import pytest
+
 from ida_pro_mcp.host.server.server_blackboard import ServerBlackboardMixin
 from ida_pro_mcp.host.stores.blackboard_store import BlackboardStore
 
 
-def _server_with_workspace(tmp_path) -> tuple[ServerBlackboardMixin, BlackboardStore]:
+def _server_with_workspace(tmp_path, monkeypatch) -> tuple[ServerBlackboardMixin, BlackboardStore]:
+    # _blackboard_module lives on IDAMCPServer, not the mixin; object.__new__
+    # skips __init__. Pinning it via monkeypatch (raising=False since the
+    # mixin never declares it) keeps the state per-test instead of leaking a
+    # permanent class attribute across the test session.
+    monkeypatch.setattr(ServerBlackboardMixin, "_blackboard_module", None, raising=False)
     binary = tmp_path / "sample.bin"
     binary.write_bytes(b"export-me")
     server = object.__new__(ServerBlackboardMixin)
-    if not hasattr(ServerBlackboardMixin, "_blackboard_module"):
-        ServerBlackboardMixin._blackboard_module = None
     server.cache_dir = str(tmp_path / "cache")
     server.current_session = None
     server.session_mgr = SimpleNamespace(get_session=lambda _sid: None)
@@ -63,8 +68,8 @@ def _server_with_workspace(tmp_path) -> tuple[ServerBlackboardMixin, BlackboardS
     return server, store
 
 
-def test_export_json_round_trips_full_fidelity(tmp_path):
-    server, store = _server_with_workspace(tmp_path)
+def test_export_json_round_trips_full_fidelity(tmp_path, monkeypatch):
+    server, store = _server_with_workspace(tmp_path, monkeypatch)
     result = server._handle_blackboard({"action": "export", "format": "json"})
 
     assert result["ok"] is True
@@ -93,8 +98,8 @@ def test_export_json_round_trips_full_fidelity(tmp_path):
     assert "norm" not in confirmed
 
 
-def test_export_markdown_groups_by_kind_and_status(tmp_path):
-    server, _ = _server_with_workspace(tmp_path)
+def test_export_markdown_groups_by_kind_and_status(tmp_path, monkeypatch):
+    server, _ = _server_with_workspace(tmp_path, monkeypatch)
     result = server._handle_blackboard({"action": "export", "format": "markdown"})
 
     assert result["ok"] is True
@@ -113,13 +118,15 @@ def test_export_markdown_groups_by_kind_and_status(tmp_path):
     assert "evidence: [call] recv @ 0x401024" in content
 
 
-def test_export_to_path_writes_file(tmp_path):
-    server, _ = _server_with_workspace(tmp_path)
+def test_export_to_path_writes_file(tmp_path, monkeypatch):
+    server, _ = _server_with_workspace(tmp_path, monkeypatch)
     out = str(tmp_path / "reports" / "findings.json")
     result = server._handle_blackboard({"action": "export", "format": "json", "path": out})
 
     assert result["ok"] is True
-    assert result["path"] == out
+    # The handler resolves the path inside the workspace root (the IDB dir for
+    # this session), not as an arbitrary absolute path.
+    assert result["path"] == os.path.realpath(out)
     assert "content" not in result
     assert result["entries"] == 3
     assert os.path.isfile(out)
@@ -128,8 +135,8 @@ def test_export_to_path_writes_file(tmp_path):
     assert len(snapshot["entries"]) == 3
 
 
-def test_export_kind_filter(tmp_path):
-    server, _ = _server_with_workspace(tmp_path)
+def test_export_kind_filter(tmp_path, monkeypatch):
+    server, _ = _server_with_workspace(tmp_path, monkeypatch)
     result = server._handle_blackboard({"action": "export", "format": "json", "kind": "finding"})
 
     snapshot = json.loads(result["content"])
@@ -137,8 +144,8 @@ def test_export_kind_filter(tmp_path):
     assert all(e["kind"] == "finding" for e in snapshot["entries"])
 
 
-def test_export_status_filter(tmp_path):
-    server, _ = _server_with_workspace(tmp_path)
+def test_export_status_filter(tmp_path, monkeypatch):
+    server, _ = _server_with_workspace(tmp_path, monkeypatch)
     result = server._handle_blackboard({"action": "export", "format": "json", "status": "rejected"})
 
     snapshot = json.loads(result["content"])
@@ -146,8 +153,8 @@ def test_export_status_filter(tmp_path):
     assert snapshot["entries"][0]["title"] == "Rejected dead end"
 
 
-def test_export_addr_and_confidence_filters(tmp_path):
-    server, _ = _server_with_workspace(tmp_path)
+def test_export_addr_and_confidence_filters(tmp_path, monkeypatch):
+    server, _ = _server_with_workspace(tmp_path, monkeypatch)
     by_addr = server._handle_blackboard({"action": "export", "format": "json", "addr": "0x401000"})
     snapshot = json.loads(by_addr["content"])
     assert len(snapshot["entries"]) == 2
@@ -158,8 +165,8 @@ def test_export_addr_and_confidence_filters(tmp_path):
     assert snapshot["entries"][0]["title"] == "recv handler parses framed input"
 
 
-def test_export_include_contradicted_flag(tmp_path):
-    server, store = _server_with_workspace(tmp_path)
+def test_export_include_contradicted_flag(tmp_path, monkeypatch):
+    server, store = _server_with_workspace(tmp_path, monkeypatch)
     target = store.list(kind="finding", limit=10)[0]["id"]
     assert store.contradict(target, "recheck") is True
 
@@ -175,8 +182,8 @@ def test_export_include_contradicted_flag(tmp_path):
     assert snapshot["entries"][0]["kind"] == "question"
 
 
-def test_export_limit_caps_entries(tmp_path):
-    server, _ = _server_with_workspace(tmp_path)
+def test_export_limit_caps_entries(tmp_path, monkeypatch):
+    server, _ = _server_with_workspace(tmp_path, monkeypatch)
     result = server._handle_blackboard({"action": "export", "format": "json", "limit": 1})
 
     snapshot = json.loads(result["content"])
@@ -184,7 +191,8 @@ def test_export_limit_caps_entries(tmp_path):
     assert snapshot["stats"]["total_entries"] == 3
 
 
-def test_export_empty_workspace(tmp_path):
+def test_export_empty_workspace(tmp_path, monkeypatch):
+    monkeypatch.setattr(ServerBlackboardMixin, "_blackboard_module", None, raising=False)
     binary = tmp_path / "empty.bin"
     binary.write_bytes(b"empty")
     server = object.__new__(ServerBlackboardMixin)
@@ -206,8 +214,8 @@ def test_export_empty_workspace(tmp_path):
     assert snapshot["stats"]["total_entries"] == 0
 
 
-def test_export_rejects_unknown_format(tmp_path):
-    server, _ = _server_with_workspace(tmp_path)
+def test_export_rejects_unknown_format(tmp_path, monkeypatch):
+    server, _ = _server_with_workspace(tmp_path, monkeypatch)
     result = server._handle_blackboard({"action": "export", "format": "yaml"})
     assert result.get("error") is True
     assert "format" in result.get("message", "")
