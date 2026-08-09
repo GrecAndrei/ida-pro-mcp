@@ -14,6 +14,11 @@ from collections import Counter
 
 MAX_HEXDUMP_SIZE = 4096
 
+# Bounded window for the read type="string" printable-run fallback (bytes
+# scanned when no string literal is defined at the address). Matches the
+# existing 65536 cap on defined string lengths.
+_STRING_FALLBACK_MAX = 65536
+
 # ----------------------------------------------------------------------------
 # Relocation (fixup) introspection
 # ----------------------------------------------------------------------------
@@ -113,15 +118,26 @@ def _extract_strings(data, min_len=4):
     return strings
 
 
-def _find_pointers(data, start_ea):
-    """Find all valid pointers in a byte sequence."""
+def _find_pointers(data, start_ea, aligned=False):
+    """Find all valid pointers in a byte sequence.
+
+    Args:
+        data: The raw bytes to scan.
+        start_ea: Address of the first byte of *data* (for relocation offsets).
+        aligned: When False (default) the scan strides by the pointer size, the
+            fast path for normally-aligned C structures. When True the scan
+            checks every byte offset (step 1) so pointers that are not
+            pointer-size-aligned — packed structs, hand-built firmware tables,
+            raw RISC-V blobs — are still found.
+    """
     is_64 = _inf_bitness() == 64
     ptr_size = 8 if is_64 else 4
     endian = ">" if _inf_is_be() else "<"
     fmt = f"{endian}Q" if is_64 else f"{endian}I"
     import struct
     pointers = []
-    for i in range(0, len(data) - ptr_size + 1, ptr_size):
+    step = 1 if aligned else ptr_size
+    for i in range(0, len(data) - ptr_size + 1, step):
         val = struct.unpack_from(fmt, data, i)[0]
         if val != 0 and ida_bytes.is_loaded(val):
             entry = {"offset": i, "target_addr": hex(val), "target_name": idc.get_name(val) or ""}
@@ -157,7 +173,6 @@ def _write_governance_metadata(ea):
 
 
 @tool
-@idawrite
 def memory(
     action: Annotated[Literal[
         "read", "write", "hexdump", "search", "compare", "pointers",
@@ -176,7 +191,11 @@ def memory(
     Read, write, search, and analyze raw memory in the database (or debugger memory if running).
 
     Actions:
-    - read: Read values from `addr`. Returns hex or native value.
+    - read: Read values from `addr`. Returns hex or native value. For
+      type='string', when no string literal is defined at the address (raw
+      blobs, unanalyzed data) the read falls back to a bounded printable-run
+      scan and the response carries `defined: false` so callers know the value
+      is a heuristic read, not a real string literal.
     - write: Patch bytes at `addr`.
     - hexdump: Formatted hex dump with ASCII sidebar (like xxd).
     - search: Search for a byte pattern, string, or regex within a region.
@@ -195,36 +214,61 @@ def memory(
     - end_addr: End address for region-based actions (search, compare, pointers, entropy, strings, histogram).
     - depth: Max recursion depth for struct_walk.
     - **kwargs: search supports regex (bool), literal (bool — bypass integer detection), int_width (int, default 4);
-      write supports governed (bool, default True — run deterministic governance pre-check on patch).
+      write supports governed (bool, default True — run deterministic governance pre-check on patch);
+      pointers supports aligned (bool, default False — also scan at every byte offset, catching
+      pointers that are not pointer-size-aligned like packed firmware tables / raw RISC-V blobs).
     """
     result = _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs)
     return result
 
 
 def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> dict:
+    # Only the write action mutates the IDB; every other action is a pure read
+    # that rides @idaread (result cache). Routing here means read actions are
+    # cached and never invalidate the cache, while the write action rides
+    # @idawrite and invalidates only the address family it touches.
+    if action == "write":
+        return _memory_write_impl(action, addr, type, size, data, end_addr, depth, **kwargs)
+    return _memory_read_impl(action, addr, type, size, data, end_addr, depth, **kwargs)
+
+
+def _coerce_memory_params(action, addr, size, depth):
+    """Shared numeric coercion + address validation for memory actions.
+
+    Returns ((ea, size, depth), None) on success, or (None, error_dict) so the
+    caller can short-circuit with the error response verbatim.
+    """
     try:
-        # Coerce numeric params that may arrive as strings from JSON-RPC
-        try:
-            size = int(size)
-        except (TypeError, ValueError):
-            return make_error(MCPError.INVALID_ARGS, f"size must be an integer, got {type(size).__name__}",
-                              hint="Provide size as an integer, e.g. size=16")
-        try:
-            depth = int(depth)
-        except (TypeError, ValueError):
-            depth = 2
+        size = int(size)
+    except (TypeError, ValueError):
+        return None, make_error(MCPError.INVALID_ARGS, f"size must be an integer, got {type(size).__name__}",
+                                hint="Provide size as an integer, e.g. size=16")
+    try:
+        depth = int(depth)
+    except (TypeError, ValueError):
+        depth = 2
 
-        ea = None
-        if addr is not None and str(addr).strip() != "":
-            ea, error = validate_addr(str(addr))
-            if error:
-                return error
+    ea = None
+    if addr is not None and str(addr).strip() != "":
+        ea, error = validate_addr(str(addr))
+        if error:
+            return None, error
 
-        # compare is the one non-search action that can legitimately run without
-        # a single `addr` (it takes addr1/addr2 instead); let its own branch
-        # validate the region endpoints.
-        if action not in ("search", "compare") and ea is None:
-            return make_error(MCPError.INVALID_ARGS, "addr required")
+    # compare is the one non-search action that can legitimately run without
+    # a single `addr` (it takes addr1/addr2 instead); let its own branch
+    # validate the region endpoints.
+    if action not in ("search", "compare") and ea is None:
+        return None, make_error(MCPError.INVALID_ARGS, "addr required")
+    return (ea, size, depth), None
+
+
+@idaread
+def _memory_read_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> dict:
+    try:
+        params, err = _coerce_memory_params(action, addr, size, depth)
+        if err:
+            return err
+        ea, size, depth = params
 
         if action == "read":
             if size > 1024 * 1024:
@@ -274,6 +318,8 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
                 is_64 = _inf_bitness() == 64
                 value = ida_bytes.get_qword(ea) if is_64 else ida_bytes.get_wide_dword(ea)
             elif type == "string":
+                value = None
+                defined = False
                 try:
                     s = idc.get_strlit_contents(ea, -1, 0)
                 except TypeError:
@@ -281,6 +327,7 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
                     # single-argument form like data.py's strings action.
                     s = idc.get_strlit_contents(ea)
                 if s:
+                    defined = True
                     if isinstance(s, bytes):
                         if len(s) > 65536:
                             s = s[:65536]
@@ -288,6 +335,24 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
                     else:
                         value = s[:65536] if len(s) > 65536 else s
                 else:
+                    # No string literal is defined at this address (raw blobs,
+                    # unanalyzed data, hand-built tables). Fall back to a bounded
+                    # printable-run scan so callers still get the text; the
+                    # `defined` marker distinguishes a heuristic read from a
+                    # real string literal.
+                    raw = ida_bytes.get_bytes(ea, _STRING_FALLBACK_MAX)
+                    if raw:
+                        chars = []
+                        for b in raw:
+                            if b == 0:
+                                break
+                            if 32 <= b <= 126:
+                                chars.append(chr(b))
+                            else:
+                                break
+                        if chars:
+                            value = "".join(chars)
+                if value is None:
                     return make_error(MCPError.ADDRESS_INVALID, f"No string found at {hex(ea)}")
             else:
                 return make_error(MCPError.INVALID_ARGS, f"Unknown type: {type}")
@@ -298,53 +363,8 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
                 resp["value_hex"] = hex(value)
             elif type == "string":
                 resp["length"] = len(value) if value is not None else 0
+                resp["defined"] = defined
             return resp
-
-        elif action == "write":
-            if not data:
-                return make_error(MCPError.INVALID_ARGS, "data required for write")
-            try:
-                bytes_data = bytes.fromhex(data.replace(" ", ""))
-            except ValueError:
-                return make_error(MCPError.INVALID_ARGS, "Invalid hex data")
-            # Deterministic governance pre-check — the same layer modify(patch_bytes)
-            # runs by default. Without it memory(write) could silently patch an
-            # executable/import section that the sibling tool would block.
-            if kwargs.get("governed", True):
-                gov_result = evaluate_operation(
-                    operation_type="patch",
-                    addr=ea,
-                    proposed_value=data,
-                    context={"tool": "memory", "action": "write"},
-                    metadata=_write_governance_metadata(ea),
-                )
-                if not gov_result["approved"]:
-                    return make_error(
-                        MCPError.GOVERNANCE_BLOCKED,
-                        f"Governance blocked write: {gov_result['verdict']}",
-                        details={
-                            "violations": gov_result["violations"],
-                            "ontology_class": gov_result.get("ontology_class"),
-                            "axiom_score": gov_result.get("axiom_score"),
-                        },
-                    )
-            # patch_bytes returns the count of bytes actually patched (0 on a
-            # failed/read-only byte); surface a partial write instead of
-            # reporting the requested size as success.
-            written = ida_bytes.patch_bytes(ea, bytes_data)
-            if written != len(bytes_data):
-                return make_error(
-                    MCPError.IDA_ERROR,
-                    f"Patch failed at {hex(ea)}: wrote {written} of {len(bytes_data)} byte(s)",
-                    details={"requested": len(bytes_data), "written": written},
-                )
-            return {
-                "ok": True,
-                "addr": addr,
-                "size": written,
-                "data": data,
-                "note": "This patched the IDA database, not live process memory. Use debug(action='write_mem') for debugger memory writes.",
-            }
 
         elif action == "hexdump":
             if size > MAX_HEXDUMP_SIZE:
@@ -566,9 +586,13 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
             raw = ida_bytes.get_bytes(ea, region_size)
             if not raw:
                 return make_error(MCPError.IDA_ERROR, f"Could not read region starting at {hex(ea)}")
-            ptrs = _find_pointers(raw, ea)
+            aligned = bool(kwargs.get("aligned", False))
+            ptrs = _find_pointers(raw, ea, aligned=aligned)
             lines = ptrs[:256]
-            return {"ok": True, "pointers": lines, "count": len(ptrs), "region": f"{hex(ea)}-{hex(ea + region_size)}"}
+            out = {"ok": True, "pointers": lines, "count": len(ptrs), "region": f"{hex(ea)}-{hex(ea + region_size)}"}
+            if aligned:
+                out["mode"] = "byte_aligned"
+            return out
 
         elif action == "entropy":
             end_ea = parse_address(end_addr) if end_addr else ea + 0x10000
@@ -649,5 +673,63 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
+    except Exception as e:
+        return handle_error(e)
+
+
+@idawrite
+def _memory_write_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> dict:
+    try:
+        params, err = _coerce_memory_params(action, addr, size, depth)
+        if err:
+            return err
+        ea, size, depth = params
+
+        if action == "write":
+            if not data:
+                return make_error(MCPError.INVALID_ARGS, "data required for write")
+            try:
+                bytes_data = bytes.fromhex(data.replace(" ", ""))
+            except ValueError:
+                return make_error(MCPError.INVALID_ARGS, "Invalid hex data")
+            # Deterministic governance pre-check — the same layer modify(patch_bytes)
+            # runs by default. Without it memory(write) could silently patch an
+            # executable/import section that the sibling tool would block.
+            if kwargs.get("governed", True):
+                gov_result = evaluate_operation(
+                    operation_type="patch",
+                    addr=ea,
+                    proposed_value=data,
+                    context={"tool": "memory", "action": "write"},
+                    metadata=_write_governance_metadata(ea),
+                )
+                if not gov_result["approved"]:
+                    return make_error(
+                        MCPError.GOVERNANCE_BLOCKED,
+                        f"Governance blocked write: {gov_result['verdict']}",
+                        details={
+                            "violations": gov_result["violations"],
+                            "ontology_class": gov_result.get("ontology_class"),
+                            "axiom_score": gov_result.get("axiom_score"),
+                        },
+                    )
+            # patch_bytes returns the count of bytes actually patched (0 on a
+            # failed/read-only byte); surface a partial write instead of
+            # reporting the requested size as success.
+            written = ida_bytes.patch_bytes(ea, bytes_data)
+            if written != len(bytes_data):
+                return make_error(
+                    MCPError.IDA_ERROR,
+                    f"Patch failed at {hex(ea)}: wrote {written} of {len(bytes_data)} byte(s)",
+                    details={"requested": len(bytes_data), "written": written},
+                )
+            return {
+                "ok": True,
+                "addr": addr,
+                "size": written,
+                "data": data,
+                "note": "This patched the IDA database, not live process memory. Use debug(action='write_mem') for debugger memory writes.",
+            }
+        return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
         return handle_error(e)

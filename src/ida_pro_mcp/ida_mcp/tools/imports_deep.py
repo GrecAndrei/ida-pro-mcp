@@ -9,6 +9,126 @@ except ImportError:
 # 32. IMPORTS_DEEP - Deep Import Analysis
 # ============================================================================
 
+# Memoized ea -> (module, name) import map. Rebuilt when the root filename or
+# the import-module count changes; bounded so a session that re-analyzes many
+# binaries does not accumulate stale entries.
+_IMPORT_MAP_CACHE: dict = {}
+_IMPORT_MAP_CACHE_MAX = 4
+
+# ELF PLT / GOT segment names.
+_ELF_PLT_PREFIX = ".plt"
+_ELF_GOT_NAMES = (".got", ".got.plt", ".got.plt.sec")
+
+
+def _import_ea_map() -> dict:
+    """Return a memoized ea -> (module, name) map for every named import.
+
+    Rebuilt lazily whenever the root filename or get_import_module_qty()
+    changes, so a resolve-with-addr lookup is O(1) instead of re-enumerating
+    every module's import table per address.
+    """
+    try:
+        root = ida_nalt.get_root_filename()
+    except Exception:
+        root = ""
+    qty = ida_nalt.get_import_module_qty()
+    key = (root, qty)
+    cached = _IMPORT_MAP_CACHE.get(key)
+    if cached is not None:
+        return cached
+    mapping: dict = {}
+    for i in range(qty):
+        mod_name = ida_nalt.get_import_module_name(i)
+        if not mod_name:
+            continue
+
+        def cb(ea, name, ordinal, _mod=mod_name, _mapping=mapping):
+            _mapping[ea] = (_mod, name or f"ordinal_{ordinal}")
+            return True
+
+        ida_nalt.enum_import_names(i, cb)
+    if len(_IMPORT_MAP_CACHE) >= _IMPORT_MAP_CACHE_MAX:
+        _IMPORT_MAP_CACHE.pop(next(iter(_IMPORT_MAP_CACHE)))
+    _IMPORT_MAP_CACHE[key] = mapping
+    return mapping
+
+
+def _iter_import_records():
+    """Yield (ea, module, name) records for every import across all modules."""
+    qty = ida_nalt.get_import_module_qty()
+    for i in range(qty):
+        mod_name = ida_nalt.get_import_module_name(i)
+        if not mod_name:
+            continue
+        records: list = []
+
+        def cb(ea, name, ordinal, _mod=mod_name, _records=records):
+            _records.append((ea, _mod, name or f"ordinal_{ordinal}"))
+            return True
+
+        ida_nalt.enum_import_names(i, cb)
+        yield from records
+
+
+def _elf_plt_thunks(query_matcher=None):
+    """Resolve ELF PLT thunks: map PLT stub addresses to their symbols.
+
+    ELF imports surface as lazy-binding stubs in .plt (and .plt.got/.plt.sec)
+    that jump through a .got.plt slot. IDA records the import entry at the
+    stub address, so every import whose address sits inside a PLT segment is a
+    thunk; the GOT slot value recovers the resolved target.  Returns a list of
+    dicts {thunk_addr, got_slot, target, name, dll}.
+    """
+    is_64 = _inf_bitness() == 64
+    stride = 8 if is_64 else 4
+    plt_ranges = []
+    got_segs = []
+    for seg_ea in idautils.Segments():
+        seg_name = (idc.get_segm_name(seg_ea) or "").lower()
+        seg = ida_segment.getseg(seg_ea)
+        if not seg:
+            continue
+        if seg_name.startswith(_ELF_PLT_PREFIX):
+            plt_ranges.append((seg.start_ea, seg.end_ea))
+        elif seg_name in _ELF_GOT_NAMES:
+            got_segs.append(seg)
+    if not plt_ranges:
+        return []
+
+    # symbol -> (got_slot_ea, target_ea). Prefer the symbol IDA attached to
+    # the GOT slot; when the slot is an off_* address, fall back to the name
+    # of the slot's pointee.
+    got_by_name: dict = {}
+    for seg in got_segs:
+        ea = seg.start_ea
+        while ea < seg.end_ea:
+            target = idc.get_qword(ea) if is_64 else idc.get_wide_dword(ea)
+            slot_name = idc.get_name(ea) or ""
+            if slot_name.startswith("off_"):
+                slot_name = ""
+            if not slot_name and target:
+                slot_name = idc.get_name(target) or ""
+            if target and slot_name:
+                got_by_name.setdefault(slot_name, (ea, target))
+            ea += stride
+
+    thunks = []
+    for ea, module, name in _iter_import_records():
+        if not any(s <= ea < e for s, e in plt_ranges):
+            continue
+        if query_matcher and not (query_matcher(name) or query_matcher(module or "")):
+            continue
+        got_slot, target = got_by_name.get(name, (None, None))
+        thunks.append({
+            "thunk_addr": hex(ea),
+            "got_slot": hex(got_slot) if got_slot else "-",
+            "target": hex(target) if target else "-",
+            "name": name,
+            "dll": module or "",
+        })
+    return thunks
+
+
 @tool
 @idaread
 def imports_deep(
@@ -48,10 +168,19 @@ def imports_deep(
     """
     try:
         query_matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
+        # -1 = qty unavailable (not a real "zero imports"); only a genuine
+        # get_import_module_qty()==0 earns the no-import-table note.
+        try:
+            _nimps = ida_nalt.get_import_module_qty()
+        except Exception:
+            _nimps = -1
+        _NO_IMPORTS_NOTE = "no import table — raw/embedded binary"
         if action == "thunks":
             thunk_lines = []
+            is_64 = _inf_bitness() == 64
+            stride = 8 if is_64 else 4
 
-            # Find IAT/thunk sections
+            # PE IAT thunk sections.
             for seg_ea in idautils.Segments():
                 seg_name = idc.get_segm_name(seg_ea)
                 if '.idata' in seg_name.lower() or 'iat' in seg_name.lower():
@@ -61,25 +190,29 @@ def imports_deep(
 
                     ea = seg.start_ea
                     while ea < seg.end_ea:
-                        is_64 = _inf_bitness() == 64
                         target = idc.get_qword(ea) if is_64 else idc.get_wide_dword(ea)
                         name = idc.get_name(ea)
 
                         if name and target:
                             if query_matcher and not query_matcher(name):
-                                ea += 8 if is_64 else 4
+                                ea += stride
                                 continue
 
                             thunk_lines.append(f"{hex(ea)}  -> {hex(target)}  {name}")
 
-                        ea += 8 if is_64 else 4
+                        ea += stride
 
-                        if count != 0 and len(thunk_lines) >= offset + count:
-                            break
+            # ELF PLT thunks (.plt -> .got.plt). No .idata exists on ELF, so
+            # without this an ELF binary's thunks would report empty.
+            for t in _elf_plt_thunks(query_matcher):
+                thunk_lines.append(f"{t['thunk_addr']}  -> {t['target']}  {t['name']}  [{t['dll']}]")
 
             total = len(thunk_lines)
             page = thunk_lines[offset:offset + count] if count != 0 else thunk_lines[offset:]
-            return {"ok": True, "thunks": "\n".join(page), "total": total, "offset": offset, "count": len(page)}
+            result = {"ok": True, "thunks": "\n".join(page), "total": total, "offset": offset, "count": len(page)}
+            if _nimps == 0:
+                result["note"] = _NO_IMPORTS_NOTE
+            return result
 
         elif action == "delay":
             delay_imports = {}
@@ -116,7 +249,10 @@ def imports_deep(
                 for f in funcs[:20]:
                     result_lines.append(f"  {f}")
             page = result_lines[offset:offset + count] if count != 0 else result_lines[offset:]
-            return {"ok": True, "delay_imports": "\n".join(page), "total": len(result_lines), "offset": offset, "count": len(page)}
+            result = {"ok": True, "delay_imports": "\n".join(page), "total": len(result_lines), "offset": offset, "count": len(page)}
+            if _nimps == 0:
+                result["note"] = _NO_IMPORTS_NOTE
+            return result
 
         elif action == "forwarded":
             fwd_lines = []
@@ -140,7 +276,11 @@ def imports_deep(
                     ida_nalt.enum_import_names(i, imp_cb)
 
             page = fwd_lines[offset:offset + count] if count != 0 else fwd_lines[offset:]
-            return {"ok": True, "forwarded": "\n".join(page), "total": len(fwd_lines), "offset": offset, "count": len(page), "note": "Limited detection - full analysis requires DLL parsing"}
+            result = {"ok": True, "forwarded": "\n".join(page), "total": len(fwd_lines), "offset": offset, "count": len(page),
+                      "note": "Limited detection - full analysis requires DLL parsing"}
+            if _nimps == 0:
+                result["note"] = _NO_IMPORTS_NOTE
+            return result
 
         elif action == "ordinal":
             ord_lines = []
@@ -161,7 +301,10 @@ def imports_deep(
                 ida_nalt.enum_import_names(i, imp_cb)
 
             page = ord_lines[offset:offset + count] if count != 0 else ord_lines[offset:]
-            return {"ok": True, "ordinal_imports": "\n".join(page), "total": len(ord_lines), "offset": offset, "count": len(page)}
+            result = {"ok": True, "ordinal_imports": "\n".join(page), "total": len(ord_lines), "offset": offset, "count": len(page)}
+            if _nimps == 0:
+                result["note"] = _NO_IMPORTS_NOTE
+            return result
 
         elif action == "api_sets":
             set_lines = []
@@ -181,62 +324,46 @@ def imports_deep(
                     set_lines.append(f"{mod_name}  -> {actual}")
 
             page = set_lines[offset:offset + count] if count != 0 else set_lines[offset:]
-            return {"ok": True, "api_sets": "\n".join(page), "total": len(set_lines), "offset": offset, "count": len(page),
-                    "note": "API Set targets are a heuristic guess, not exact apisetschema resolution"}
+            result = {"ok": True, "api_sets": "\n".join(page), "total": len(set_lines), "offset": offset, "count": len(page),
+                      "note": "API Set targets are a heuristic guess, not exact apisetschema resolution"}
+            if _nimps == 0:
+                result["note"] = _NO_IMPORTS_NOTE
+            return result
 
         elif action == "resolve":
             if not addr:
-                # Perform batch resolution of all imports
+                # Perform batch resolution of all imports from the memoized map.
                 resolve_lines = []
-                nimps = ida_nalt.get_import_module_qty()
-                for i in range(nimps):
-                    mod_name = ida_nalt.get_import_module_name(i)
-
-                    _RES_LIMIT = offset + count if count != 0 else 10000
-                    def collect_cb(ea, name, ordinal, _mod_name=mod_name, _limit=_RES_LIMIT):
-                        if len(resolve_lines) >= _limit:
-                            return False
-                        resolved_name = name or f"ordinal_{ordinal}"
-                        if query_matcher and not (
-                            query_matcher(_mod_name or "") or query_matcher(resolved_name)
-                        ):
-                            return True
-                        resolve_lines.append(f"{hex(ea)}  {_mod_name}  {resolved_name}")
-                        return True
-
-                    ida_nalt.enum_import_names(i, collect_cb)
+                for ea, (_mod_name, resolved_name) in _import_ea_map().items():
+                    if query_matcher and not (
+                        query_matcher(_mod_name or "") or query_matcher(resolved_name)
+                    ):
+                        continue
+                    resolve_lines.append(f"{hex(ea)}  {_mod_name}  {resolved_name}")
                 page = resolve_lines[offset:offset + count] if count != 0 else resolve_lines[offset:]
-                return {"ok": True, "resolved": "\n".join(page), "total": len(resolve_lines), "offset": offset, "count": len(page)}
+                result = {"ok": True, "resolved": "\n".join(page), "total": len(resolve_lines), "offset": offset, "count": len(page)}
+                if _nimps == 0:
+                    result["note"] = _NO_IMPORTS_NOTE
+                return result
 
             ea, err = validate_addr(addr)
             if err: return err
-            name = idc.get_name(ea)
+            # O(1) lookup from the memoized ea -> (module, name) map instead of
+            # re-enumerating every module's import table per address.
+            entry = _import_ea_map().get(ea)
+            module = entry[0] if entry else None
+            name = entry[1] if entry else (idc.get_name(ea) or "")
 
-            # Check what module this belongs to
-            module = None
-            nimps = ida_nalt.get_import_module_qty()
-            for i in range(nimps):
-                mod_name = ida_nalt.get_import_module_name(i)
-                found = [False]
-
-                def check_cb(imp_ea, imp_name, ordinal, _found=found):
-                    if imp_ea == ea:
-                        _found[0] = True
-                        return False
-                    return True
-
-                ida_nalt.enum_import_names(i, check_cb)
-                if found[0]:
-                    module = mod_name
-                    break
-
-            return {
+            result = {
                 "ok": True,
                 "addr": hex(ea),
                 "name": name,
                 "dll": module,
-                "type": "import" if module else "unknown"
+                "type": "import" if module else "unknown",
             }
+            if _nimps == 0:
+                result["note"] = _NO_IMPORTS_NOTE
+            return result
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

@@ -110,6 +110,29 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
         int(str(addr), 0) if addr is not None else 0,
         None,
     )
+    def _default_parse_address_canonical(addr_str):
+        # Matches the real parser's simplest behavior for isolated tests: hex
+        # strings and non-negative ints resolve, everything else is ADDRESS_INVALID.
+        if addr_str is None:
+            return None, {"error": True, "code": "MISSING_REQUIRED_ARG", "message": "Address is required", "category": "user", "recoverable": False}
+        if isinstance(addr_str, bool):
+            return None, {"error": True, "code": "ADDRESS_INVALID", "message": "Invalid address (boolean)", "category": "user", "recoverable": False}
+        if isinstance(addr_str, int) and addr_str >= 0:
+            return addr_str, None
+        if isinstance(addr_str, float):
+            return None, {"error": True, "code": "ADDRESS_INVALID", "message": "Invalid address (float)", "category": "user", "recoverable": False}
+        s = str(addr_str).strip()
+        if not s:
+            return None, {"error": True, "code": "MISSING_REQUIRED_ARG", "message": "Address is empty", "category": "user", "recoverable": False}
+        try:
+            if s.lower().startswith("0x"):
+                return int(s, 16), None
+            if s.isdigit():
+                return int(s, 16), None
+        except ValueError:
+            pass
+        return None, {"error": True, "code": "ADDRESS_INVALID", "message": f"Invalid address format: '{addr_str}'", "category": "user", "recoverable": False}
+    common.parse_address_canonical = _default_parse_address_canonical
     common.make_error = lambda code, message, **kw: {"ok": False, "code": code, "message": message, **kw}
     common.handle_error = lambda e, *a, **kw: {"ok": False, "error": str(e)}
     common.ERROR_HINTS = {}
@@ -127,6 +150,9 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
 
     class _MCPError:
         INVALID_ARGS = "INVALID_ARGS"
+        INVALID_ARG_VALUE = "INVALID_ARG_VALUE"
+        INVALID_ARG_COMBINATION = "INVALID_ARG_COMBINATION"
+        MUTUALLY_EXCLUSIVE_ARGS = "MUTUALLY_EXCLUSIVE_ARGS"
         DECOMPILER_FAILED = "DECOMPILER_FAILED"
         DECOMPILER_UNAVAILABLE = "DECOMPILER_UNAVAILABLE"
         FUNCTION_NOT_FOUND = "FUNCTION_NOT_FOUND"
@@ -135,6 +161,14 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
         NO_RESULTS = "NO_RESULTS"
         NOT_FOUND = "NOT_FOUND"
         IDA_ERROR = "IDA_ERROR"
+        ADDRESS_INVALID = "ADDRESS_INVALID"
+        ADDRESS_NOT_FOUND = "ADDRESS_NOT_FOUND"
+        ADDRESS_NOT_MAPPED = "ADDRESS_NOT_MAPPED"
+        SEGMENT_NOT_FOUND = "SEGMENT_NOT_FOUND"
+        SEGMENT_OVERLAP = "SEGMENT_OVERLAP"
+        TYPE_ERROR = "TYPE_ERROR"
+        NAME_CONFLICT = "NAME_CONFLICT"
+        XREF_NOT_FOUND = "XREF_NOT_FOUND"
 
     common.MCPError = _MCPError
 
@@ -160,6 +194,11 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
     _base_idaapi.MFF_READ = 1
     _base_idaapi.MFF_WRITE = 2
     _base_idaapi.execute_sync = lambda fn, flags=0: fn()
+    # Real IDA always defines BADADDR on idaapi; tools (e.g. code_helpers
+    # _flow_target_ea) reference it unconditionally, so the base mock must
+    # carry it from the start or tests fail under pytest's per-test
+    # sys.modules isolation (unittest leaked it from earlier test classes).
+    _base_idaapi.BADADDR = -1
     # Ensure base idc mock has commonly-used SDK functions so that
     # tools work regardless of test ordering (test_packer_detector replaces
     # idautils with a blank module; _isolate_sys_modules restores the

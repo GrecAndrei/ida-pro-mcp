@@ -115,6 +115,13 @@ def semantic_tokens(text: str) -> list[str]:
     return _subword_tokens(text)
 
 
+# Trailing digit-run on a peripheral/instance name (uart0, gpio2, spi1).  The
+# stem must be >= 3 letters so RISC-V ABI register names (x5, a0, t6) and hex
+# addresses stay intact while peripheral instances still generalize across
+# numbered units (uart0/uart1 both match a "uart" query).
+_DIGIT_SUFFIX = re.compile(r"^([a-z]{3,})(\d+)$")
+
+
 def _subword_tokens(text: str) -> list[str]:
     """Split identifiers into subword tokens (snake_case + camelCase).
 
@@ -130,6 +137,17 @@ def _subword_tokens(text: str) -> list[str]:
                 word = word.lower()
                 if len(word) >= 2:
                     out.append(word)
+                    # RISC-V ABI names: split a trailing digit suffix off a
+                    # peripheral stem so uart0 and uart2 share the "uart"
+                    # token.  Guards keep short register/ABI names (x5, a0)
+                    # and full hex addresses intact.
+                    suffix = _DIGIT_SUFFIX.match(word)
+                    if suffix is not None:
+                        stem, digits = suffix.group(1), suffix.group(2)
+                        if stem not in out:
+                            out.append(stem)
+                        if len(digits) >= 2 and digits not in out:
+                            out.append(digits)
     return out
 
 

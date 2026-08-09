@@ -109,11 +109,18 @@ class ServerClientStateMixin:
 
     def _begin_client_connection(self) -> contextvars.Token:
         """Start an isolated state scope for one daemon connection."""
-        return self._state_var().set(
-            _ClientRequestState(
-                vertex_compat=bool(getattr(self, "default_vertex_compat", False))
-            )
+        state = _ClientRequestState(
+            vertex_compat=bool(getattr(self, "default_vertex_compat", False))
         )
+        # Track the connection as live so the sticky-ownership guard
+        # (``_ensure_client_owns_session``) can tell a still-connected owner
+        # from a disconnected one when deciding whether a session is adoptable.
+        live = getattr(self, "_live_connections", None)
+        if not isinstance(live, set):
+            live = set()
+            self._live_connections = live
+        live.add(state.connection_id)
+        return self._state_var().set(state)
 
     def _end_client_connection(self, token: contextvars.Token) -> None:
         """Discard a daemon connection's state when its socket closes."""
@@ -133,18 +140,26 @@ class ServerClientStateMixin:
                         )
                         or set()
                     ):
-                        if not self._connection_is_current_owner(state, str(sid)):
+                        if not self._connection_should_teardown(state, str(sid)):
                             # A sibling connection adopted this session after
-                            # this connection's runtime died; its live runtime
-                            # must not be torn down here.
+                            # this connection's runtime died, or a sibling's
+                            # spawn is still in flight; its runtime must not be
+                            # torn down here.
                             continue
                         with contextlib.suppress(Exception):
                             cleanup(str(sid))
                 for sid in list(getattr(state, "owned_session_ids", set()) or set()):
-                    if not self._connection_is_current_owner(state, str(sid)):
+                    if not self._connection_should_teardown(state, str(sid)):
                         continue
                     with contextlib.suppress(Exception):
                         cleanup(str(sid))
+            # This connection's socket is closing: drop it from the live
+            # connection registry so sessions it recorded as owned become
+            # adoptable by a restarted client (sticky ownership only holds
+            # while the owner is actually connected).
+            live = getattr(self, "_live_connections", None)
+            if isinstance(live, set):
+                live.discard(state.connection_id)
             # Drop this connection's agents from the shared realm registry.
             realm = getattr(self, "_sso_realm_store", None)
             if isinstance(realm, dict) and isinstance(state.agents_logged_in, set):
@@ -235,6 +250,87 @@ class ServerClientStateMixin:
         if recorded is None:
             return True
         return recorded == str(getattr(state, "connection_id", ""))
+
+    def _connection_is_explicit_owner(self, state: Any, sid: str) -> bool:
+        """Whether *this* connection is the explicitly recorded owner of *sid*.
+
+        Unlike ``_connection_is_current_owner`` this has no "nobody recorded"
+        fallback — used to decide who may abort a mid-spawn runtime, where an
+        unattributed session must not be torn down by a bystander.
+        """
+        owner = getattr(self, "_session_current_owner", None)
+        if not isinstance(owner, dict):
+            return False
+        recorded = owner.get(str(sid))
+        return recorded is not None and recorded == str(
+            getattr(state, "connection_id", "")
+        )
+
+    def _connection_is_live(self, connection_id: Any) -> bool:
+        """Whether a connection with the given id is still connected."""
+        live = getattr(self, "_live_connections", None)
+        if not isinstance(live, set):
+            return False
+        return str(connection_id) in live
+
+    def _runtime_spawn_in_flight(self, sid: str) -> bool:
+        """Whether *sid*'s runtime is mid-spawn (ownership claimed, no live runtime).
+
+        ``_start_server`` claims the owner.json (``_claim_runtime_ownership``)
+        before the runtime lands in ``session_runtimes``. In that window a
+        ``_cleanup_runtime`` call from a bystander connection would release the
+        freshly-claimed owner file and tombstone the session, aborting the
+        sibling's launch.
+        """
+        runtimes = getattr(self, "session_runtimes", None) or {}
+        rec = runtimes.get(str(sid))
+        alive = getattr(self, "_runtime_alive", None)
+        if rec is not None and callable(alive):
+            try:
+                if alive(rec):
+                    return False
+            except Exception:
+                pass
+        owner_path = getattr(self, "_runtime_owner_path", None)
+        if not callable(owner_path):
+            return False
+        try:
+            return bool(owner_path(str(sid))) and os.path.exists(
+                str(owner_path(str(sid)))
+            )
+        except Exception:
+            return False
+
+    def _connection_should_teardown(self, state: Any, sid: str) -> bool:
+        """Whether this connection may tear down *sid*'s runtime on disconnect.
+
+        Two guards compose: the connection must be the recorded owner (or no
+        owner is recorded), AND — when the runtime is still mid-spawn — only
+        the explicitly recorded owner may abort it. A sibling connection's
+        in-flight launch must never be killed by an unrelated disconnect.
+        """
+        if not self._connection_is_current_owner(state, str(sid)):
+            return False
+        return not (
+            self._runtime_spawn_in_flight(str(sid))
+            and not self._connection_is_explicit_owner(state, str(sid))
+        )
+
+    def _session_has_live_owner_connection(self, state: Any, sid: str) -> bool:
+        """Whether a *different*, still-connected connection owns *sid*.
+
+        This is the sticky-ownership consent rule: a session whose recorded
+        owner connection is still open must not be silently adopted by a
+        sibling, even when its runtime has died — ownership survives a runtime
+        death until the owning connection actually disconnects.
+        """
+        owner = getattr(self, "_session_current_owner", None)
+        if not isinstance(owner, dict):
+            return False
+        recorded = owner.get(str(sid))
+        if recorded is None or recorded == str(getattr(state, "connection_id", "")):
+            return False
+        return self._connection_is_live(recorded)
 
     def _session_is_busy(self, session_id: str) -> bool:
         """Whether another live owner is actively running the session's IDA.
@@ -397,11 +493,46 @@ class ServerClientStateMixin:
                     )},
                 },
             )
-        # Nobody is running it: take it over so the rest of this request
-        # (and later ones) can use the recorded IDB. When an agent is bound,
-        # ownership is recorded under the agent so a sibling subagent cannot
-        # adopt it and the agent's own logout tears it down.
+        # Sticky ownership (D3-F10): even with no live runtime or lease, a
+        # session whose recorded owner connection is STILL CONNECTED is not
+        # adoptable by a sibling. Ownership survives a runtime death; it only
+        # releases when the owning connection's socket closes (or the owner
+        # explicitly hands the session over). This keeps a still-active client's
+        # session out of a peer's hands during transient runtime restarts while
+        # still allowing a genuinely restarted client to reclaim a disconnected
+        # owner's session below.
         state = self._client_request_state()
+        if self._session_has_live_owner_connection(state, str(sid)):
+            owner_id = getattr(self, "_session_current_owner", {}).get(str(sid))
+            sticky = {
+                "session_id": str(sid),
+                "locked": True,
+                "holder": "this-host-owner",
+                "owner_id": str(owner_id) if owner_id else None,
+                "owner_pid": os.getpid(),
+                "owner_alive": True,
+                "idat_pid": None,
+                "lease_age_seconds": None,
+                "lease_updated_at": None,
+            }
+            return make_error(
+                MCPError.FILE_LOCKED,
+                "This session is not available to the current MCP client.",
+                hint=(
+                    "The session is owned by another connection on this "
+                    "server that is still connected, even though its IDA "
+                    "runtime is not currently running. Close the session "
+                    "there, wait for that client to disconnect, or open the "
+                    "binary with force_new=true to create an independent "
+                    "session."
+                ),
+                details=sticky,
+            )
+        # Nobody is running it (and no live owner connection holds it): take
+        # it over so the rest of this request (and later ones) can use the
+        # recorded IDB. When an agent is bound, ownership is recorded under
+        # the agent so a sibling subagent cannot adopt it and the agent's own
+        # logout tears it down.
         if state.active_agent:
             state.owned_sessions_by_agent.setdefault(state.active_agent, set()).add(
                 str(sid)

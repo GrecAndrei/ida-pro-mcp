@@ -50,6 +50,12 @@ def _build_fast_signature(fea: int, func=None) -> str:
         return ida_funcs.get_func_name(fea) or hex(fea)
     name = ida_funcs.get_func_name(fea) or hex(fea)
     parts = [name]
+    # Auto-named functions (sub_*/j_*/loc_*/nullsub_* — the common case on
+    # opaque, symbol-poor firmware) carry no meaningful name signal, so the
+    # embedding must discriminate on structure: a larger code sample plus an
+    # opcode histogram and instruction-bigram lexical fingerprint give the
+    # index non-name signal without a decompile.
+    auto_named = name.startswith(("sub_", "j_", "loc_", "nullsub_", "unknown_libname_"))
     # Keep the fast-index document deliberately small.  Embedding cost is
     # proportional to tokens, while name, APIs, string references, and a
     # short instruction sample carry the useful retrieval signal.  Full
@@ -84,14 +90,42 @@ def _build_fast_signature(fea: int, func=None) -> str:
     # A few instructions distinguish otherwise similar wrappers without
     # turning index_fast into a decompiler-sized embedding request.
     insns = []
-    for head in idautils.Heads(func.start_ea, min(func.start_ea + 256, func.end_ea)):
+    sample_ea_max = func.start_ea + (512 if auto_named else 256)
+    for head in idautils.Heads(func.start_ea, min(sample_ea_max, func.end_ea)):
         dis = idc.generate_disasm_line(head, 0)
         if dis:
             insns.append(_tag_remove(dis) if _tag_remove else dis)
-        if len(insns) >= 6:
+        if len(insns) >= (12 if auto_named else 6):
             break
     if insns:
         parts.append("code:" + "; ".join(i[:56] for i in insns))
+    # Opcode histogram + instruction-bigram lexical fingerprint for
+    # auto-named functions (discriminates firmware handlers by instruction
+    # mix even when no names/strings/APIs are present).
+    if auto_named:
+        hist: dict[str, int] = {}
+        prev = None
+        ngrams: list[str] = []
+        _pn = getattr(idc, "print_insn_mnem", None)
+        for head in idautils.Heads(func.start_ea, func.end_ea):
+            if _pn is not None:
+                mnem = (_pn(head) or "").lower()
+            else:
+                dis = idc.generate_disasm_line(head, 0)
+                mnem = ((_tag_remove(dis) if _tag_remove else dis) or "").split()[0].lower() if dis else ""
+            if mnem:
+                hist[mnem] = hist.get(mnem, 0) + 1
+                if prev is not None:
+                    ngrams.append(f"{prev}:{mnem}")
+                prev = mnem
+        if hist:
+            top = ",".join(
+                f"{m}x{c}" for m, c in sorted(hist.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
+            )
+            parts.append("opcodes:" + top[:180])
+        if ngrams:
+            bigram = " ".join(sorted(set(ngrams))[:12])
+            parts.append("insns:" + bigram[:240])
     # Fast mode must remain Hex-Rays-free, but a compact CFG + call-target
     # summary carries control-flow semantics that instruction samples lose.
     try:

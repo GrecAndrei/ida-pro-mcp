@@ -8,6 +8,12 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+# ida_ua is intentionally not exported by _common.__all__ — import it directly.
+try:
+    import ida_ua  # type: ignore[import-not-found]
+except Exception:
+    ida_ua = None  # type: ignore[assignment]
+
 DISASM_MAX_LINES = 10_000
 
 
@@ -462,6 +468,110 @@ _DECOMP_KNOWN_APIS = [
 
 def _detect_api_calls(pseudo: str, *, limit: int = 15) -> list[str]:
     return [api for api in _DECOMP_KNOWN_APIS if api in pseudo][:limit]
+
+
+# Bare-metal MMIO window start: peripheral registers typically live at or above
+# this bound on RISC-V (0x40000000+) and most ARM SoCs.
+_MMIO_ADDR_THRESHOLD = 0x40000000
+
+try:
+    from .stack_analysis import _STORE_MNEMONICS as _FIRMWARE_STORE_MNEMONICS
+except Exception:  # pragma: no cover - import fallback for odd install layouts
+    _FIRMWARE_STORE_MNEMONICS = {"mov", "str", "sw", "sd", "sb", "sh", "st",
+                                 "fsw", "fsd", "fsh"}
+
+
+def _store_memory_target(ea: int) -> int | None:
+    """Return the absolute memory address a store instruction writes, or None.
+
+    Decodes the instruction (ida_ua) and looks for a memory operand
+    (o_displ/o_mem); get_operand_value resolves it to the absolute address for
+    direct stores like ``sw a0, 0x40001000`` / ``mov [0x40000000], eax``.
+    Register-relative stores whose base is not x0 (e.g. ``sw a0, 0(t0)``) return
+    the displacement only, so they are not treated as MMIO.
+    """
+    try:
+        if ida_ua is None:
+            return None
+        insn = ida_ua.insn_t()
+        if ida_ua.decode_insn(insn, ea) <= 0:
+            return None
+        o_displ = getattr(ida_ua, "o_displ", 4)
+        o_mem = getattr(ida_ua, "o_mem", 2)
+        for i in range(len(insn.ops)):
+            op = insn.ops[i]
+            if op.type in (o_displ, o_mem):
+                v = ida_ua.get_operand_value(insn, i)
+                if v and v != idaapi.BADADDR:
+                    return int(v)
+    except Exception:
+        pass
+    return None
+
+
+def _detect_firmware_signals(func_start_ea: int, pseudo: str = "") -> list[str]:
+    """Return symbol-free firmware signals for a function.
+
+    Raw/opaque device binaries (especially headerless RISC-V blobs) have no
+    libc symbols, so API-based reasoning is empty. These signals keep the
+    analysis useful regardless:
+      - ``syscall:<mnem>``      trap instructions (ecall/syscall/svc/swi/sc/sysenter)
+      - ``csr_access:<mnem>``   RISC-V CSR reads/writes (bare-metal control registers)
+      - ``mmio_store:0x...``    direct store to a peripheral-window address
+      - ``large_constant_load`` materialization of a loaded data constant
+        (lui/auipc/mov/li) — a hallmark of firmware string/table references
+    """
+    signals: list[str] = []
+    try:
+        func = ida_funcs.get_func(func_start_ea)
+        if not func:
+            return signals
+        is_rv = is_riscv_family()
+        ea = func.start_ea
+        scan_iter = 0
+        while ea < func.end_ea and ea != idaapi.BADADDR:
+            try:
+                mnem = (idc.print_insn_mnem(ea) or "").lower()
+                if not mnem:
+                    ea = idc.next_head(ea, func.end_ea)
+                    scan_iter += 1
+                    continue
+                if is_syscall_mnemonic(mnem):
+                    tag = f"syscall:{mnem}"
+                elif is_rv and mnem.startswith("csr"):
+                    tag = f"csr_access:{mnem}"
+                else:
+                    tag = ""
+                if tag and tag not in signals:
+                    signals.append(tag)
+                if mnem in _FIRMWARE_STORE_MNEMONICS:
+                    tgt = _store_memory_target(ea)
+                    if tgt is not None and tgt >= _MMIO_ADDR_THRESHOLD:
+                        tag = f"mmio_store:0x{tgt:x}"
+                        if tag not in signals:
+                            signals.append(tag)
+                elif mnem in ("lui", "auipc", "mov", "movabs", "li"):
+                    val = int(idc.get_operand_value(ea, 1) or 0)
+                    if val and val != idaapi.BADADDR and ida_bytes.is_loaded(val):
+                        tag = f"large_constant_load:0x{val:x}"
+                        if tag not in signals:
+                            signals.append(tag)
+            except Exception:
+                pass
+            ea = idc.next_head(ea, func.end_ea)
+            scan_iter += 1
+            if scan_iter >= 50000:
+                break
+        # Decompiler text fallback: high addresses referenced inline.
+        if not signals and pseudo:
+            import re as _re
+            for m in _re.finditer(r"0x([4-9a-fA-F][0-9a-fA-F]{7})", pseudo):
+                signals.append(f"constant_ref:0x{m.group(1).lower()}")
+                if len(signals) >= 8:
+                    break
+    except Exception:
+        pass
+    return signals[:12]
 
 
 def _detect_crypto_hints(pseudo: str, *, xor_threshold: int = 4) -> tuple[list[str], int]:
@@ -1373,6 +1483,21 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
     except Exception:
         pass
 
+    # Symbol-free firmware signals: MMIO stores, traps, CSR access, table
+    # constant materialization — the bare-metal analog of "dangerous patterns"
+    # for opaque device blobs that have no libc APIs to match against.
+    try:
+        fw_signals = _detect_firmware_signals(func_ea, pseudo=str(cfunc) if cfunc else "")
+        for sig in fw_signals[:6]:
+            findings.append({
+                "severity": "low",
+                "pattern": "firmware_signal",
+                "evidence": sig,
+                "detail": "Symbol-free firmware signal (bare-metal/RTOS device code)",
+            })
+    except Exception:
+        pass
+
     # Deduplicate
     seen = set()
     unique = []
@@ -1520,21 +1645,151 @@ def _collect_compact_callees(func_start_ea: int, *, result_limit: int = 8) -> li
     return callees_compact
 
 
+def _sign_extend_imm12(v: int) -> int:
+    """Sign-extend a 12-bit RISC-V immediate."""
+    v &= 0xFFF
+    return v - 0x1000 if v & 0x800 else v
+
+
+def _read_candidate_string(target: int, max_len: int = 64) -> str | None:
+    """Read bytes at ``target`` and return them as a string when they look like
+    a printable NUL-terminated C string. Returns None otherwise.
+
+    Used as a heuristic fallback for symbol-poor raw firmware where IDA has not
+    defined strlit items, so we read the bytes an instruction materializes.
+    """
+    try:
+        if target in (None, idaapi.BADADDR):
+            return None
+        if not ida_bytes.is_loaded(target):
+            return None
+        raw = ida_bytes.get_bytes(target, max_len)
+        if not raw:
+            return None
+        if isinstance(raw, str):
+            raw = raw.encode("utf-8", errors="replace")
+        end = 0
+        while end < len(raw) and raw[end] != 0:
+            end += 1
+        chunk = raw[:end]
+        if len(chunk) < 3:
+            return None
+        if all((32 <= b < 127) or b in (9, 10, 13) for b in chunk):
+            return chunk.decode("utf-8", errors="replace")[:80]
+    except Exception:
+        pass
+    return None
+
+
+def _scan_constant_load_strings(func_start_ea: int, result_limit: int = 10) -> list[dict]:
+    """Scan a function's constant-materialization instructions (lui+addi /
+    auipc+imm-load pairs, and mov/li/ldr-of-imm) and read the resolved target
+    bytes as candidate strings.
+
+    Returns [{"addr": int, "value": str}] with at most ``result_limit`` entries.
+    This is the fallback used when a function has no strlit xrefs — common on
+    opaque raw firmware where IDA never created string items.
+    """
+    results: list[dict] = []
+    try:
+        func = ida_funcs.get_func(func_start_ea)
+        if not func:
+            return results
+        regs: dict[str, int] = {}
+        candidates: list[tuple[int, int, str]] = []  # (insn_ea, target, how)
+        ea = func.start_ea
+        scan_iter = 0
+        while ea < func.end_ea and ea != idaapi.BADADDR:
+            try:
+                mnem = (idc.print_insn_mnem(ea) or "").lower()
+                if mnem in ("lui", "auipc"):
+                    rd = (idc.print_operand(ea, 0) or "").lower()
+                    imm = int(idc.get_operand_value(ea, 1) or 0) & 0xFFFFFFFFFFFFFFFF
+                    if mnem == "lui":
+                        regs[rd] = (imm << 12) & 0xFFFFFFFFFFFFFFFF
+                    else:
+                        regs[rd] = (ea + (imm << 12)) & 0xFFFFFFFFFFFFFFFF
+                elif mnem in ("addi", "add", "addiu", "addiw"):
+                    rd = (idc.print_operand(ea, 0) or "").lower()
+                    rs1 = (idc.print_operand(ea, 1) or "").lower()
+                    base = regs.get(rs1)
+                    if base is not None:
+                        imm = int(idc.get_operand_value(ea, 2) or 0)
+                        if mnem in ("addi", "addiw"):
+                            imm = _sign_extend_imm12(imm)
+                        target = (base + imm) & 0xFFFFFFFFFFFFFFFF
+                        regs[rd] = target
+                        candidates.append((ea, target, "lui_addi"))
+                elif mnem in ("lw", "ld", "lbu", "lhu", "lb", "lwu"):
+                    # auipc/li base register then imm(base) load.
+                    rs1 = (idc.print_operand(ea, 1) or "").lower()
+                    base = regs.get(rs1)
+                    if base is not None:
+                        disp = int(idc.get_operand_value(ea, 2) or 0)
+                        target = (base + disp) & 0xFFFFFFFFFFFFFFFF
+                        candidates.append((ea, target, "pcrel_load"))
+                elif mnem in ("mov", "movabs", "li", "ldr", "la", "lla"):
+                    # Generic immediate materialization; the constant is the
+                    # last operand and may be a string/table address.
+                    rd = (idc.print_operand(ea, 0) or "").lower()
+                    imm = int(idc.get_operand_value(ea, 1) or 0)
+                    if imm in (0, idaapi.BADADDR):
+                        continue
+                    imm &= 0xFFFFFFFFFFFFFFFF
+                    regs[rd] = imm
+                    candidates.append((ea, imm, "const_mov"))
+            except Exception:
+                pass
+            ea = idc.next_head(ea, func.end_ea)
+            scan_iter += 1
+            if scan_iter >= 100000:
+                break
+
+        seen_values: set[str] = set()
+        for _insn_ea, target, _how in candidates:
+            if len(results) >= result_limit:
+                break
+            s = _read_candidate_string(target)
+            if s and s not in seen_values:
+                seen_values.add(s)
+                results.append({"addr": target, "value": s})
+    except Exception:
+        pass
+    return results[:result_limit]
+
+
+def _collect_function_string_entries(func_start_ea: int, *, result_limit: int = 10) -> list[dict]:
+    """Collect (addr, value) string references for a function.
+
+    Primary path: string-literal data xrefs (IDA-defined strlit items). When a
+    function has no strlit xrefs at all — typical of symbol-poor raw firmware —
+    fall back to scanning constant materialization (lui+addi / auipc+load /
+    mov/li of a constant) and reading the resolved target bytes.
+    """
+    entries: list[dict] = []
+    try:
+        for item in idautils.FuncItems(func_start_ea):
+            for xref in idautils.XrefsFrom(item, 0):
+                if getattr(xref, "iscode", False):
+                    continue
+                s = idc.get_strlit_contents(xref.to)
+                if not s:
+                    continue
+                if isinstance(s, bytes):
+                    s = s.decode("utf-8", errors="replace")
+                entries.append({"addr": hex_ea(xref.to), "value": s[:80]})
+            if len(entries) >= result_limit:
+                break
+        if not entries:
+            for hit in _scan_constant_load_strings(func_start_ea, result_limit):
+                entries.append({"addr": hex_ea(hit["addr"]), "value": hit["value"]})
+    except Exception:
+        pass
+    return entries[:result_limit]
+
+
 def _collect_function_strings(func_start_ea: int, *, result_limit: int = 10) -> list[str]:
-    str_refs = []
-    for item in idautils.FuncItems(func_start_ea):
-        for xref in idautils.XrefsFrom(item, 0):
-            if xref.iscode:
-                continue
-            s = idc.get_strlit_contents(xref.to)
-            if not s:
-                continue
-            if isinstance(s, bytes):
-                s = s.decode("utf-8", errors="replace")
-            str_refs.append(s[:80])
-        if len(str_refs) >= result_limit:
-            break
-    return str_refs[:result_limit]
+    return [e["value"] for e in _collect_function_string_entries(func_start_ea, result_limit=result_limit)]
 
 
 def _build_decompile_enrichment(
@@ -1553,7 +1808,8 @@ def _build_decompile_enrichment(
     )
     var_hints = _extract_var_rename_hints(cfunc)
     ctx = gather_function_context(func_start_ea, max_refs=8)
-    return {
+    firmware_signals = _detect_firmware_signals(func_start_ea, pseudo)
+    enrichment = {
         "api_calls": found_apis,
         "crypto_hints": crypto_hints,
         "dangerous_patterns": dangerous,
@@ -1566,6 +1822,14 @@ def _build_decompile_enrichment(
         ),
         **ctx,
     }
+    if firmware_signals:
+        enrichment["firmware_signals"] = firmware_signals
+    if not found_apis:
+        # No libc API detected — on a symbol-poor device blob this is normal
+        # (bare-metal/RTOS), not an analysis failure. Make that explicit so the
+        # agent doesn't interpret "no APIs" as "does nothing interesting".
+        enrichment["api_note"] = "no libc APIs detected — bare-metal firmware?"
+    return enrichment
 
 
 def annotate_pseudocode(pseudo: str, func_ea: int, bb_context: list, dangerous: list, cfunc=None) -> str:
@@ -1771,30 +2035,71 @@ def _format_disasm_line(
     return line
 
 
-def _annotate_branch_target(ea: int, text: str) -> str | None:
-    """Resolve the target name for branch/call instructions."""
+def _is_flow_control_mnemonic(mnem: str, arch=None) -> bool:
+    """Return True when ``mnem`` is a control-flow instruction worth annotating.
+
+    Arch-aware classification over the shared arch_utils tables (call,
+    conditional/unconditional branch, return, syscall) plus ARM64 conditional
+    branch suffixes (b.eq/b.ne/...) that the tables do not enumerate. The old
+    substring match missed RISC-V jal/jalr/beq/bne and AArch64 b.<cond>, which
+    silently left their branch targets unannotated on opaque RISC-V firmware.
+    """
+    m = (mnem or "").lower().strip()
+    if not m:
+        return False
+    if arch is None:
+        arch = get_arch()
+    if is_call_mnemonic(m, arch=arch):
+        return True
+    if m in CONDITIONAL_BRANCH_MNEMONICS:
+        return True
+    if m in UNCONDITIONAL_JUMP_MNEMONICS:
+        return True
+    if is_return_mnemonic(m, "", arch=arch):
+        return True
+    if is_syscall_mnemonic(m, arch=arch):
+        return True
+    # AArch64 conditional branches: b.eq, b.ne, b.lt, b.hs, b.cs, ...
+    return is_arm_family(arch) and m.startswith("b.")
+
+
+def _flow_target_ea(ea: int) -> int | None:
+    """Resolve the control-flow target address for the instruction at ``ea``.
+
+    Operand order differs by arch: x86/ARM put the branch target first, RISC-V
+    conditional branches put it last (beq rs1, rs2, off). We scan operands for
+    the code-address operand types (o_near/o_far) from the last operand down so
+    RISC-V conditional branches resolve. Register-indirect flow (jalr/jr/bx/cb)
+    has no o_near operand and returns None. Returns None for any non-flow or
+    unanalyzable instruction.
+    """
     try:
-        mnem = idc.print_insn_mnem(ea) or ""
-        if not mnem:
+        if not _is_flow_control_mnemonic(idc.print_insn_mnem(ea) or ""):
             return None
-        # Only annotate flow-control instructions
-        if not any(kw in mnem for kw in ("call", "jmp", "je", "jne", "jz", "jnz",
-                                          "jg", "jl", "jge", "jle", "ja", "jb",
-                                          "jae", "jbe", "jo", "jno", "js", "jns",
-                                          "jp", "jnp", "jcxz", "jecxz", "jrcxz",
-                                          "loop", "loope", "loopne", "b.", "bl", "bx",
-                                          "ret", "br")):
-            return None
-        # Get operand value — IDA resolves the target for us
-        target = idc.get_operand_value(ea, 0)
-        if target in (0, idaapi.BADADDR):
-            return None
-        name = idc.get_name(target) or ""
-        if name:
-            return f"{name} ({hex_ea(target)})"
-        return hex_ea(target)
+        o_near = getattr(ida_ua, "o_near", 7)
+        o_far = getattr(ida_ua, "o_far", 6)
+        for i in range(5, -1, -1):
+            t = idc.get_operand_type(ea, i)
+            if t in (0, idaapi.BADADDR):
+                continue
+            if t in (o_near, o_far):
+                v = idc.get_operand_value(ea, i)
+                if v and v != idaapi.BADADDR:
+                    return int(v)
     except Exception:
         return None
+    return None
+
+
+def _annotate_branch_target(ea: int, text: str) -> str | None:
+    """Resolve the target name for branch/call instructions."""
+    target = _flow_target_ea(ea)
+    if target is None:
+        return None
+    name = idc.get_name(target) or ""
+    if name:
+        return f"{name} ({hex_ea(target)})"
+    return hex_ea(target)
 
 
 def _format_disasm_structured(ea: int) -> dict:
@@ -1814,13 +2119,11 @@ def _format_disasm_structured(ea: int) -> dict:
         "operands": operands,
         "text": text,
     }
-    # Branch target
-    if mnem and any(kw in mnem for kw in ("call", "jmp", "je", "jne", "jz", "jnz",
-                                            "jg", "jl", "jge", "jle", "ja", "jb",
-                                            "jae", "jbe", "jo", "jno", "js", "jns",
-                                            "jp", "jnp", "loop", "b.", "bl", "bx", "br")):
-        target = idc.get_operand_value(ea, 0)
-        if target and target != idaapi.BADADDR:
+    # Branch target (arch-aware operand scan; RISC-V conditional branches put
+    # the target in the last operand).
+    if _is_flow_control_mnemonic(mnem):
+        target = _flow_target_ea(ea)
+        if target is not None:
             result["branch_target"] = hex_ea(target)
             name = idc.get_name(target) or ""
             if name:
@@ -2341,8 +2644,52 @@ def _run_custom_detector(kwargs: dict, max_items: int) -> dict:
                       hint="Types: api_chain, string_ref, type_match, xor_threshold, caller_of, callee_of")
 
 
+def _function_may_reference_apis(func_ea: int, api_names: set, api_ea_set: set) -> bool:
+    """Cheap pre-filter: could this function reference any of the named APIs?
+
+    Deliberately a conservative SUPERSET of ctree detection. The cheap scan can
+    only ever produce positive evidence (a direct code xref to a resolved API
+    EA, or a flow-control operand that resolves to an API name); it can never
+    prove a negative. A register-indirect call (``jalr t0`` / ``call rax``) has
+    no resolvable o_near operand here, yet the decompiler may still name the
+    target as an API, so an inconclusive scan must fall through and let the
+    ctree detector decide. Skipping on inconclusive evidence is what silently
+    dropped legitimate api_chain matches.
+    """
+    try:
+        func = ida_funcs.get_func(func_ea)
+        if not func:
+            return True  # cannot inspect; decompile() yields no cfunc either
+        scan_count = 0
+        for item_ea in idautils.FuncItems(func.start_ea):
+            scan_count += 1
+            if scan_count > 4000:
+                return True  # too large to scan fully — cannot rule out a match
+            try:
+                if api_ea_set:
+                    for ref in idautils.CodeRefsFrom(item_ea, 0):
+                        if ref in api_ea_set:
+                            return True
+                if api_names and _is_flow_control_mnemonic(idc.print_insn_mnem(item_ea) or ""):
+                    target = _flow_target_ea(item_ea)
+                    if target is not None and (idc.get_name(target) or "") in api_names:
+                        return True
+            except Exception:
+                pass
+    except Exception:
+        return True
+    # No positive evidence — inconclusive, not a negative (see docstring).
+    return True
+
+
 def _detect_api_chains(apis: list[str], *, strict_order: bool = True, max_items: int = 100) -> list[dict]:
-    """Find functions that call APIs in the given sequence using ctree traversal."""
+    """Find functions that call APIs in the given sequence using ctree traversal.
+
+    Pre-filter: only functions that could reference an API are decompiled —
+    either through a direct code xref to a resolved API EA or a call/branch
+    whose operand resolves to an API name. Functions that can't are skipped
+    without paying the Hex-Rays decompile cost.
+    """
     matches = []
     seen = set()
 
@@ -2359,9 +2706,29 @@ def _detect_api_chains(apis: list[str], *, strict_order: bool = True, max_items:
                         self._chain.append(name)
             return 0
 
+    api_names = {a for a in apis if a}
+    api_ea_set = set()
+    for name in api_names:
+        try:
+            ea = idc.get_name_ea_simple(name)
+        except Exception:
+            ea = idaapi.BADADDR
+        if ea not in (None, idaapi.BADADDR):
+            api_ea_set.add(int(ea))
+
+    candidates_scanned = 0
     for func_ea in _iter_all_functions():
         if len(matches) >= max_items:
             break
+        candidates_scanned += 1
+        if candidates_scanned > 5000:
+            # Hard safety bound so a pathological binary can't stall the scan.
+            break
+        try:
+            if not _function_may_reference_apis(func_ea, api_names, api_ea_set):
+                continue
+        except Exception:
+            continue
         try:
             cfunc = ida_hexrays.decompile(func_ea)
             if not cfunc:

@@ -92,7 +92,6 @@ def test_safe_mode_gate_blocks_full_binary_operations(tmp_path, server):
         ("intelligence", "index_batch"),
         ("intelligence", "semantic_search"),
         ("intelligence", "similar_functions"),
-        ("firmware_view", "bootstrap"),
         ("workflow", "execute_plan"),
         ("workflow", "triage_fast"),
         ("symbols", "load_pdb"),
@@ -126,6 +125,13 @@ def test_safe_mode_allows_manual_small_area_operations(tmp_path, server):
         ("intelligence", "intelligence_status"),
         ("session", "status"),
         ("blackboard", "write"),
+        # r2 raw-binary sidecar: subprocess-only, never touches the IDB, so it
+        # must stay available while IDA auto-analysis is still running.
+        ("r2", "status"),
+        ("r2", "bininfo"),
+        ("r2", "load_hints"),
+        ("r2", "disassemble_hypothesis"),
+        ("r2", "vxrefs"),
     ]
     for tool, action in allowed:
         assert server._safe_mode_gate(sid, tool, action) is None, (
@@ -207,8 +213,13 @@ def test_kill_mid_build_keeps_safe_mode_and_surfaces_error(tmp_path, server):
     sid = session.session_id
 
     # The background spawn is stubbed, so simulate the live runtime the
-    # watcher would see before the kill.
+    # watcher would see before the kill. The revamped watcher only flags a
+    # "registered-then-dead" runtime once it has OBSERVED the runtime alive, so
+    # hold the fake runtime registered long enough for one poll to land.
     server.session_runtimes[sid] = {"process": _FakeIdaProcess()}
+    import time
+
+    time.sleep(0.2)
     # session/kill is now classified DESTRUCTIVE (it tears down the runtime),
     # so it requires explicit ack even in the test's policy mode.
     killed = _open(
@@ -270,10 +281,13 @@ def test_analysis_completion_lifts_safe_mode_and_fires_notice(tmp_path, server):
     assert not server._safe_mode_active(sid)
     assert server._analysis_is_complete(sid)
 
-    # The next response carries the one-shot warning exactly once.
+    # The next response carries the one-shot warning exactly once. It uses the
+    # generic completion message: analysis_complete means "confirmed complete
+    # at least once", not "currently idle" (idleness is analysis_ready).
     status = _open(server, "ida_session_status", {}, request_id=2)
     warning = status.get("warning")
     assert warning is not None and warning.get("code") == "analysis_complete"
+    assert warning.get("message") == "IDA auto-analysis completed."
     assert status["session"].get("safe_mode") is False
     assert status["session"].get("analysis_complete") is True
 

@@ -73,7 +73,6 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
 
 ## Complexity Hotspots
 
-- `src/ida_pro_mcp/ida_mcp/tools/firmware_view.py` — large firmware analysis campaign tool
 - `src/ida_pro_mcp/ida_mcp/tools/code_helpers.py` — shared code-analysis helpers
 - `src/ida_pro_mcp/host/server/server_workflow.py` — workflow orchestration
 - `src/ida_pro_mcp/host/server/server_runtime.py` — idat process lifecycle
@@ -81,10 +80,24 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
 
 ## Product surface policy
 
-See `docs/ROADMAP.md`. Default `tools/list` is Tier A (~17 tools). Full
-`TOOLS` remain registered for exact-name calls. Compact action enums
-(`ADVERTISED_ACTIONS`) further shrink high-cardinality tools in lean/ultra
-schema mode. RPC unknown kwargs are rejected (`INVALID_ARGS`), not stripped.
+See `docs/ROADMAP.md`. The default surface (`tool_surface == "agent"`)
+advertises the full `ida_*` operation catalog in `tools/list`, built from
+`list_agent_operations()`; a fresh agent sees every operation with its own
+exact schema, so there is no hidden default subset.
+
+The tiered surface applies only to the legacy `IDA_MCP_TOOL_SURFACE=legacy`
+backend:
+
+- **Tier A** — `ADVERTISED_TOOLS` in `host/schemas_data.py` (~17 tools) is what
+  legacy `tools/list` shows.
+- **Tier B** — the rest of `TOOLS` stays callable by exact name (backward
+  compatible) but is hidden from legacy `tools/list` via
+  `HIDDEN_TOOLS_IN_LIST` (see `host/schemas.py`).
+- **Tier C** — `ADVERTISED_ACTIONS` shrinks high-cardinality action enums in
+  lean/ultra schema mode; the full `TOOL_ACTIONS` enum is still accepted for
+  exact-name calls.
+
+RPC unknown kwargs are rejected (`INVALID_ARGS`), not stripped.
 
 ## Design Rules
 

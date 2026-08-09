@@ -103,22 +103,20 @@ def _safe_slug(text: str) -> str:
 RUBRIC = {
     # Session start (5 pts)
     "session_create_first":         (5,  "Called session(create) as first tool call"),
-    # Architecture & loading (50 pts)
+    # Architecture & loading (40 pts)
     "arch_correct":                 (20, "Correctly identified ARM Cortex-M architecture"),
     "load_address_correct":         (15, "Correctly identified load address as 0x120000"),
-    "vector_table_found":           (10, "Found and parsed the Cortex-M vector table"),
     "reset_handler_found":          (5,  "Located the Reset_Handler entry point"),
     # RTOS & stack identification (60 pts)
     "identified_rtos":              (20, "Correctly identified RTOS by name"),
     "found_rivierawaves_stack":     (30, "Found RivieraWaves/LMAC/KE stack artifacts"),
     "found_sdio_usb_transport":     (10, "Found SDIO or USB transport layer evidence"),
-    # Code analysis (60 pts)
+    # Code analysis (63 pts)
     "traced_reset_to_main":         (20, "Traced Reset_Handler → main/init call chain"),
     "named_functions_5":            (10, "Identified and named ≥5 meaningful functions"),
     "decompiled_function":          (10, "Successfully decompiled at least one function"),
     "created_handler_functions_3":  (8,  "Created ≥3 vector-handler functions via funcs(action='create')"),
     "found_mmio_3":                 (15, "Mapped ≥3 MMIO peripheral addresses"),
-    "interrupt_table_complete":     (5,  "Interrupt handler table has ≥20 entries"),
     # Data & strings (45 pts)
     "found_version_string":         (15, "Found firmware version or build string"),
     "found_wifi_stack_layers":      (15, "Identified FMAC/LMAC/PHY layer separation"),
@@ -132,7 +130,7 @@ RUBRIC = {
     # Efficiency bonus (up to 20 pts — computed at end)
     "efficiency_bonus":             (20, "Efficiency: high findings-per-tool-call ratio"),
 }
-# Total max: 5+50+60+60+45+65+20 = 305
+# Total max: 5+40+60+63+45+65+20 = 298
 
 BONUS_PTS_PER_REPORT_HIGH   = 5   # confidence: confirmed | high
 BONUS_PTS_PER_REPORT_MEDIUM = 3   # confidence: medium
@@ -143,9 +141,9 @@ def _rubric_summary() -> str:
     lines = [
         "SCORING RUBRIC (max ~300 pts — this rubric is visible to you intentionally):",
         "  Session start:       session(create) first → 5 pts",
-        "  Architecture (50):  ARM Cortex-M ID → 20 | load 0x120000 → 15 | vector table → 10 | Reset_Handler → 5",
+        "  Architecture (40):  ARM Cortex-M ID → 20 | load 0x120000 → 15 | Reset_Handler → 5",
         "  RTOS & stack (60):  RTOS name → 20 | RivieraWaves/LMAC/KE artifacts → 30 | SDIO/USB transport → 10",
-        "  Code analysis (68): Reset→main chain → 20 | ≥5 named funcs → 10 | decompile → 10 | create ≥3 handlers → 8 | ≥3 MMIO → 15 | IRQ table → 5",
+        "  Code analysis (63): Reset→main chain → 20 | ≥5 named funcs → 10 | decompile → 10 | create ≥3 handlers → 8 | ≥3 MMIO → 15",
         "  Data/strings (45):  version string → 15 | FMAC/LMAC/PHY → 15 | BT coex → 15",
         "  Synthesis (65):     purpose hypothesis → 20 | next steps → 15 | blackboard ≥3 → 10 | follow hints ≥3× → 12 | final report → 8",
         "  Efficiency bonus:   up to 20 pts based on checkpoints-earned / tool-calls ratio",
@@ -163,16 +161,14 @@ SYSTEM_PROMPT = textwrap.dedent("""\
     1. session(action="create", binary_path="<path>")  — always first
     2. Poll session(action="status") until analysis_complete=true — DO NOT call analysis(wait), it crashes IDA
     3. idb(action="overview")                          — architecture + firmware context
-    4. firmware_view(action="triage_snapshot") + firmware_view(action="detect_vector_table")
+    4. idb(action="architecture_profile")              — arch inference + raw-binary guidance
     5. Follow every _next_calls and _nudge hint in responses
 
     RAW BINARY RULE: IDA does NOT auto-create functions on raw ARM binaries.
     After session create you will see 0 functions. This is normal.
     You MUST manually create them:
-      a) firmware_view(action="bootstrap", chip_family="AIC8800D80", load_base=0x120000)
-         — creates vector-table functions synchronously (no wait needed)
-      b) Then call funcs(action="create", address=<Reset_Handler_addr>) for the reset handler
-      c) Then code(action="disasm"/"decompile") will work on those addresses
+      a) Call funcs(action="create", address=<Reset_Handler_addr>) for the reset handler
+      b) Then code(action="disasm"/"decompile") will work on those addresses
 
     WHAT TO FIND (high-value targets):
     - ARM Cortex-M architecture, load address (hint: not 0x0), vector table at start
@@ -199,7 +195,7 @@ SYSTEM_PROMPT = textwrap.dedent("""\
 
     HARD CHALLENGE OBJECTIVES:
     - Avoid call loops: do not repeat the exact same tool call >2 times unless arguments changed materially.
-    - If funcs(create) fails, immediately pivot: firmware_view(auto_retype/bootstrap) then retry create on handlers.
+    - If funcs(create) fails, set processor/bitness via analysis(action="set_architecture") then retry create on handlers.
     - Keep evidence concrete: include addresses, names, and exact strings in findings.
 """)
 
@@ -573,20 +569,12 @@ def _score_tool_result(tool: str, args: dict, result_str: str, score: Score) -> 
 
     # Architecture
     if "arm" in low and ("cortex" in low or "32" in low or "thumb" in low):
-        if tool in ("session", "idb", "analysis", "firmware_view"):
+        if tool in ("session", "idb", "analysis"):
             score.award("arch_correct", "ARM/Cortex-M in response")
 
     # Load address — match 0x120000 but NOT 0x1200000
-    if re.search(r'\b0x120000\b(?!0)', result_str, re.IGNORECASE) and tool in ("session", "idb", "firmware_view", "analysis"):
+    if re.search(r'\b0x120000\b(?!0)', result_str, re.IGNORECASE) and tool in ("session", "idb", "analysis"):
         score.award("load_address_correct", "0x120000 confirmed")
-
-    # Vector table
-    if tool == "firmware_view" and action == "detect_vector_table":
-        if "vectors" in low and ('"handler"' in low or "reset" in low):
-            score.award("vector_table_found", "vectors list returned")
-            count_m = re.search(r'"vectors_detected"\s*:\s*(\d+)', result_str)
-            if count_m and int(count_m.group(1)) >= 20:
-                score.award("interrupt_table_complete", f"{count_m.group(1)} entries")
 
     # Reset_Handler
     if "reset_handler" in low or "0x1201a8" in low:
@@ -630,13 +618,13 @@ def _score_tool_result(tool: str, args: dict, result_str: str, score: Score) -> 
            ("reset" in low or "0x1201" in low):
             score.award("traced_reset_to_main", "main/init in reset disasm")
 
-    # MMIO peripheral addresses
-    if tool == "firmware_view" and action == "detect_mmio":
+    # MMIO peripheral addresses (collected from any tool response)
+    if re.search(r'0x4[0-9a-f]{7}', low, re.IGNORECASE):
         addrs = re.findall(r'0x4[0-9a-f]{7}', result_str, re.IGNORECASE)
         for a in addrs:
             score.mmio_found.add(a.lower())
-        if len(score.mmio_found) >= 3:
-            score.award("found_mmio_3", f"{len(score.mmio_found)} MMIO addresses")
+    if len(score.mmio_found) >= 3:
+        score.award("found_mmio_3", f"{len(score.mmio_found)} MMIO addresses")
 
     # Version / build string with actual value
     if re.search(r'(version|build|fw_ver|sdk_ver)\s*[:\s=]+\s*[\d\.\-_v]+', low):

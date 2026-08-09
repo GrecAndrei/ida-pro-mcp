@@ -15,12 +15,17 @@ Covers:
   path does not re-fire a synchronous 1s RPC per code-rendering call.
 - [error_handling/low] a make_error envelope passes through post-processing
   unchanged (not stamped ``ok: True`` and post-processed).
-- [resource_leak/low] the session-resume counter is freed once the first two
-  calls have been counted, so churned sessions don't accumulate forever.
+- [resource_leak/low] the session-resume counter is a monotonic count that
+  fires only for the first two calls and is reset by the session OPEN/close
+  path (not the response path), so churned sessions don't accumulate forever
+  while re-opened sessions still get a fresh resume.
 - [error_handling/low] ``_assemble_and_inject_context`` surfaces failures in
   ``_context_error`` instead of swallowing them.
 - [dead_code/low] ``build_session_resume`` no longer carries the unused
   ``_blackboard_entries`` parameter.
+- batch output→input chaining: a step that fails to resolve a reference emits
+  an INVALID_ARGS envelope that passes through post-processing unchanged, so a
+  chained batch error reaches the client as an error, never as a false ok.
 """
 
 from __future__ import annotations
@@ -315,6 +320,24 @@ class TestErrorEnvelopePassthrough:
         assert "ok" not in out
         assert "results" not in out
 
+    def test_batch_chaining_error_envelope_passes_through_unchanged(self):
+        """An unresolved output→input step reference produces an INVALID_ARGS
+        envelope that must reach the client unmodified — the response layer
+        must never stamp a chained-batch step error ``ok: True`` or grep/filter
+        its body as if it were a successful payload."""
+        err = make_error(
+            MCPError.INVALID_ARGS,
+            "Batch step 1: unresolved result reference 'step0.result.missing'",
+        )
+        out = apply_post_processing(
+            err,
+            {"grep": "missing", "grep_regex": True, "field": "results"},
+        )
+        assert out == err, out
+        assert out.get("error") is True
+        assert out.get("code") == MCPError.INVALID_ARGS
+        assert "ok" not in out
+
 
 # ---------------------------------------------------------------------------
 # [perf/medium] imagebase probe is negative-cached
@@ -381,7 +404,7 @@ class TestSessionResumeCounter:
             call_args={"query": "x"},
         )
 
-    def test_counter_freed_after_first_two_calls(self, host):
+    def test_counter_persists_after_first_two_calls(self, host):
         b = _session_b()
         host.session_mgr = _FakeSessionMgr([b])
         host.current_session = b
@@ -397,10 +420,23 @@ class TestSessionResumeCounter:
         assert out2.get("_session_resume") is not None
 
         out3 = self._enrich(host)
-        # The counter is freed once its purpose is served; the resume no longer
-        # fires and the dict does not keep growing for churned sessions.
-        assert host._session_resume_calls == {}
+        # The counter is NOT freed: it is a monotonic count that keeps the
+        # resume from re-firing for the life of the session. Resetting is the
+        # session OPEN/close path's job (drop the key in _forget_analysis_state
+        # and on create/reuse), not the response path's.
+        assert host._session_resume_calls == {"BBBB0002": 3}
         assert out3.get("_session_resume") is None
+
+        out4 = self._enrich(host)
+        assert host._session_resume_calls == {"BBBB0002": 4}
+        assert out4.get("_session_resume") is None
+
+        # Simulating the session-close reset: once the key is dropped, a
+        # re-opened session starts from 0 and fires the resume again.
+        host._session_resume_calls.pop("BBBB0002", None)
+        out5 = self._enrich(host)
+        assert host._session_resume_calls == {"BBBB0002": 1}
+        assert out5.get("_session_resume") is not None, "re-opened session fires the resume again"
 
     def test_resume_uses_target_session_when_idb_targeted(self, host):
         a, b = _session_a(), _session_b()

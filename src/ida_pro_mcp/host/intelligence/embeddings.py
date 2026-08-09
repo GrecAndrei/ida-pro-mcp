@@ -402,6 +402,26 @@ def _extract_signature_text(pseudocode: str, max_tokens: int = 96) -> str:
     return " ".join(_tokenize_search_text(pseudocode, max_tokens=max_tokens))
 
 
+def _persist_search_tokens(name: str, signature_text: str) -> tuple[str, str]:
+    """Persist the per-row token lists search_text consumes.
+
+    Returns (search_tokens, name_tokens) as space-joined token lists.  These are
+    exactly what search_text used to recompute per row with the regex tokenizer
+    on every query; storing them lets the hot path split on whitespace instead.
+    """
+    blob = f"{name} {signature_text}".strip()
+    search_tokens = " ".join(_tokenize_search_text(blob, max_tokens=160))
+    name_tokens = " ".join(_tokenize_search_text(name or "", max_tokens=64))
+    return search_tokens, name_tokens
+
+
+def _ea_to_int(ea: Any) -> int | None:
+    try:
+        return int(str(ea), 0)
+    except (TypeError, ValueError):
+        return None
+
+
 def _clip_signature(text: str, max_len: int = 160) -> str:
     compact = re.sub(r"\s+", " ", str(text or "").strip())
     if len(compact) <= max_len:
@@ -429,6 +449,13 @@ class FunctionEmbeddingIndex:
         # Bounded fire-and-forget queue: cap concurrent background index
         # threads so a large index_async burst cannot spawn unbounded threads.
         self._async_gate = threading.Semaphore(4)
+        # Lazy one-time backfill of the lexical-search acceleration columns
+        # (search_tokens/name_tokens/ea_int) for rows written by an older index.
+        self._search_backfill_done = False
+        # IDF computed once per index build and stamped by (row count, newest
+        # indexed_at); re-derived only when the corpus changes.  Avoids the
+        # per-query full-corpus IDF pass that search_text used to run.
+        self._idf_cache: tuple[tuple[int, float], dict[str, float]] | None = None
 
         try:
             from ..config import CACHE_DIR
@@ -542,12 +569,44 @@ class FunctionEmbeddingIndex:
                 conn.execute("ALTER TABLE func_embeddings ADD COLUMN cyclomatic INTEGER DEFAULT 0")
             if "index_quality" not in cols:
                 conn.execute("ALTER TABLE func_embeddings ADD COLUMN index_quality TEXT DEFAULT 'unknown'")
+            # Lexical-search acceleration columns.  search_text used to
+            # re-tokenize every row's (name + signature) with the regex
+            # tokenizer on every query and recompute corpus IDF each time; the
+            # persisted token lists make the hot path a plain string split, and
+            # ea_int lets address-range filters move into SQL.  Rows written
+            # before this migration are backfilled lazily on first search.
+            if "ea_int" not in cols:
+                conn.execute("ALTER TABLE func_embeddings ADD COLUMN ea_int INTEGER")
+            if "search_tokens" not in cols:
+                conn.execute("ALTER TABLE func_embeddings ADD COLUMN search_tokens TEXT")
+            if "name_tokens" not in cols:
+                conn.execute("ALTER TABLE func_embeddings ADD COLUMN name_tokens TEXT")
             # Indexes for structural filters
             conn.execute("CREATE INDEX IF NOT EXISTS idx_fe_size ON func_embeddings(func_size)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_fe_bb ON func_embeddings(bb_count)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_fe_loops ON func_embeddings(has_loops)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_fe_segment ON func_embeddings(segment)")
             conn.commit()
+
+    def _backfill_search_columns(self, conn: sqlite3.Connection) -> None:
+        """Populate ea_int/search_tokens/name_tokens for legacy pre-migration rows.
+
+        Runs at most once per instance (lazily, from the search hot path) so a
+        read-only opening of the index never writes to disk.  Rows that already
+        carry search_tokens (written by the current schema) are skipped.
+        """
+        rows = conn.execute(
+            "SELECT ea, name, signature_text FROM func_embeddings WHERE search_tokens IS NULL OR search_tokens=''"
+        ).fetchall()
+        if not rows:
+            return
+        for ea, name, signature_text in rows:
+            search_tokens, name_tokens = _persist_search_tokens(str(name or ea), str(signature_text or ""))
+            conn.execute(
+                "UPDATE func_embeddings SET search_tokens=?, name_tokens=?, ea_int=? WHERE ea=?",
+                (search_tokens, name_tokens, _ea_to_int(ea), ea),
+            )
+        conn.commit()
 
     def _meta_set(self, conn: sqlite3.Connection, key: str, value: str) -> None:
         conn.execute(
@@ -915,9 +974,10 @@ class FunctionEmbeddingIndex:
                         # structural metadata with empty/default values from a
                         # metadata-less caller (e.g. a modify.py re-index).
                         if name and name != (row[1] or ""):
+                            new_search_tokens, new_name_tokens = _persist_search_tokens(name, str(row[3] or ""))
                             conn.execute(
-                                "UPDATE func_embeddings SET name=? WHERE ea=?",
-                                (name, func_ea),
+                                "UPDATE func_embeddings SET name=?, search_tokens=?, name_tokens=? WHERE ea=?",
+                                (name, new_search_tokens, new_name_tokens, func_ea),
                             )
                         indexed += 1
                         continue
@@ -935,9 +995,10 @@ class FunctionEmbeddingIndex:
                                     ),
                                 )
                         else:
+                            search_tokens, name_tokens = _persist_search_tokens(name, signature_text)
                             conn.execute(
-                                "UPDATE func_embeddings SET name=?, signature_text=?, signature_hash=?, indexed_at=? WHERE ea=?",
-                                (name, signature_text, signature_hash, time.time(), func_ea),
+                                "UPDATE func_embeddings SET name=?, signature_text=?, signature_hash=?, indexed_at=?, search_tokens=?, name_tokens=?, ea_int=? WHERE ea=?",
+                                (name, signature_text, signature_hash, time.time(), search_tokens, name_tokens, _ea_to_int(func_ea), func_ea),
                             )
                         indexed += 1
                         continue
@@ -1000,15 +1061,17 @@ class FunctionEmbeddingIndex:
             with closing(self._conn()) as conn:
                 for entry, vec in ready:
                     md = entry["metadata"]
+                    search_tokens, name_tokens = _persist_search_tokens(entry["name"], entry["signature_text"])
                     conn.execute(
                         """
                         INSERT INTO func_embeddings(
                             ea, name, dim, vec_blob, pseudo_hash, indexed_at,
                             source_kind, source_hash, signature_text, signature_hash, document_text,
                             func_size, bb_count, has_loops, api_count, string_count,
-                            segment, is_thunk, cyclomatic, index_quality
+                            segment, is_thunk, cyclomatic, index_quality,
+                            ea_int, search_tokens, name_tokens
                         )
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         ON CONFLICT(ea) DO UPDATE SET
                             name=excluded.name,
                             dim=excluded.dim,
@@ -1028,7 +1091,10 @@ class FunctionEmbeddingIndex:
                             segment=excluded.segment,
                             is_thunk=excluded.is_thunk,
                             cyclomatic=excluded.cyclomatic,
-                            index_quality=excluded.index_quality
+                            index_quality=excluded.index_quality,
+                            ea_int=excluded.ea_int,
+                            search_tokens=excluded.search_tokens,
+                            name_tokens=excluded.name_tokens
                         """,
                         (
                             entry["ea"], entry["name"], len(vec), self._pack(vec), entry["pseudo_hash"], time.time(),
@@ -1037,6 +1103,7 @@ class FunctionEmbeddingIndex:
                             md.get("func_size", 0), md.get("bb_count", 0),
                             md.get("has_loops", 0), md.get("api_count", 0), md.get("string_count", 0), md.get("segment", ""),
                             md.get("is_thunk", 0), md.get("cyclomatic", 0), md.get("index_quality", "unknown"),
+                            _ea_to_int(entry["ea"]), search_tokens, name_tokens,
                         ),
                     )
                 self._meta_set(conn, "updated_at", _now_iso())
@@ -1213,63 +1280,124 @@ class FunctionEmbeddingIndex:
         exclude_ea: str | None = None,
         address_ranges: list[tuple[int, int]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Rank indexed functions by lexical overlap over stored signatures and names."""
+        """Rank indexed functions by lexical overlap over stored signatures and names.
+
+        The expensive per-row regex tokenization and per-query corpus IDF pass
+        were replaced by persisted token columns (written at index time) plus a
+        SQL pre-filter, so the hot path only touches candidate rows.
+        """
         q_norm = _normalize_search_text(query)
         q_tokens = set(_tokenize_search_text(query, max_tokens=48))
         if not q_norm and not q_tokens:
             return []
+        # Lexical recall token set: the query tokens plus their synonym/verb
+        # expansions.  Stored search_tokens already carry per-token form
+        # variants, so matching any one of these keeps recall on a par with the
+        # old in-Python scoring (which needed at least one token intersection).
+        recall_tokens = sorted(set(q_tokens).union(_expand_query_tokens(q_tokens)))
 
-        raw_rows: list[tuple[str, str, str, Any, set[str], str]] = []
         try:
             with closing(self._conn()) as conn:
+                if not self._search_backfill_done:
+                    self._backfill_search_columns(conn)
+                    self._search_backfill_done = True
+
+                # Corpus stamp for the cached IDF: any build that adds, removes,
+                # or re-indexes a row changes either the row count or the newest
+                # indexed_at, so the stamp is a cheap proxy for "index changed".
+                stamp = conn.execute(
+                    "SELECT COUNT(*), COALESCE(MAX(indexed_at), 0.0) FROM func_embeddings"
+                ).fetchone()
+                if self._idf_cache is None or self._idf_cache[0] != (stamp[0], float(stamp[1])):
+                    docs: list[set[str]] = []
+                    for (tokens_blob,) in conn.execute(
+                        "SELECT search_tokens FROM func_embeddings WHERE search_tokens IS NOT NULL AND search_tokens != ''"
+                    ):
+                        docs.append(set(str(tokens_blob).split()))
+                    self._idf_cache = ((stamp[0], float(stamp[1])), _idf_scores(docs))
+                idf = self._idf_cache[1]
+
+                clauses: list[str] = ["1=1"]
+                params: list[Any] = []
+                if exclude_ea:
+                    clauses.append("ea != ?")
+                    params.append(str(exclude_ea))
+                if address_ranges:
+                    range_clauses = []
+                    for start, end in address_ranges:
+                        range_clauses.append("(ea_int >= ? AND ea_int < ?)")
+                        params.extend([int(start), int(end)])
+                    clauses.append(f"({' OR '.join(range_clauses)})")
+                # Recall filter (OR'd inside one AND group): a row is a
+                # candidate if it carries any query token/expansion OR the raw
+                # phrase appears verbatim in its (name + signature) text.  The
+                # phrase branch mirrors the old `q_norm in blob_norm` exact
+                # check and catches matches past the persisted-token
+                # truncation; the token branch catches everything the old
+                # in-Python scoring could reach via token overlap or prefix.
+                recall_clauses: list[str] = []
+                if recall_tokens:
+                    recall_clauses.extend("search_tokens LIKE ?" for _ in recall_tokens)
+                    params.extend(f"%{t}%" for t in recall_tokens)
+                if q_norm:
+                    esc = q_norm.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                    recall_clauses.append("(name || ' ' || signature_text) LIKE ? ESCAPE '\\'")
+                    params.append(f"%{esc}%")
+                if recall_clauses:
+                    clauses.append(f"({' OR '.join(recall_clauses)})")
+
+                rows: list[dict[str, Any]] = []
                 for row in conn.execute(
-                    "SELECT ea, name, signature_text, indexed_at FROM func_embeddings"
+                    "SELECT ea, name, signature_text, search_tokens, name_tokens, indexed_at, ea_int "
+                    "FROM func_embeddings WHERE "
+                    + " AND ".join(clauses)
+                    + " LIMIT 2000",
+                    params,
                 ):
                     ea = str(row[0])
-                    if exclude_ea and ea == exclude_ea:
-                        continue
-                    if address_ranges:
-                        try:
-                            ea_int = int(ea, 0)
-                        except (TypeError, ValueError):
-                            continue
-                        if not any(start <= ea_int < end for start, end in address_ranges):
-                            continue
                     name = str(row[1] or ea)
                     signature_text = str(row[2] or "")
+                    token_blob = str(row[3] or "")
+                    name_token_blob = str(row[4] or "")
+                    indexed_at = row[5]
+                    if ea == exclude_ea:
+                        continue
+                    if address_ranges:
+                        ea_int = row[6]
+                        if ea_int is None:
+                            try:
+                                ea_int = int(ea, 0)
+                            except (TypeError, ValueError):
+                                continue
+                        if not any(int(start) <= int(ea_int) < int(end) for start, end in address_ranges):
+                            continue
                     blob = f"{name} {signature_text}".strip()
                     if not blob:
                         continue
-                    raw_rows.append((ea, name, signature_text, row[3], set(_tokenize_search_text(blob, max_tokens=160)), blob))
-        except Exception:
-            return []
-
-        idf = _idf_scores([r[4] for r in raw_rows])
-        rows: list[dict[str, Any]] = []
-        try:
-            for ea, name, signature_text, indexed_at, row_tokens, blob in raw_rows:
-                if not row_tokens:
-                    continue
-                blob_norm = _normalize_search_text(blob)
-                token_score, matched = _weighted_token_score(q_tokens, row_tokens, idf)
-                exact = 1.0 if q_norm and q_norm in blob_norm else 0.0
-                name_norm = name.lower()
-                prefix = 0.35 if q_norm and (name_norm.startswith(q_norm) or any(tok.startswith(q_norm) for tok in row_tokens)) else 0.0
-                name_bonus = 0.25 if q_tokens and q_tokens.issubset(row_tokens.intersection(set(_tokenize_search_text(name, max_tokens=64)))) else 0.0
-                score = round((exact * 1.25) + token_score + prefix + name_bonus, 4)
-                if score < float(threshold):
-                    continue
-                rows.append(
-                    {
-                        "ea": ea,
-                        "name": name,
-                        "score": score,
-                        "exact_match": bool(exact),
-                        "matched_tokens": matched,
-                        "signature": _clip_signature(signature_text),
-                        "indexed_at": indexed_at,
-                    }
-                )
+                    row_tokens = set(token_blob.split()) if token_blob else set(_tokenize_search_text(blob, max_tokens=160))
+                    if not row_tokens:
+                        continue
+                    name_tokens = set(name_token_blob.split()) if name_token_blob else set(_tokenize_search_text(name, max_tokens=64))
+                    blob_norm = _normalize_search_text(blob)
+                    token_score, matched = _weighted_token_score(q_tokens, row_tokens, idf)
+                    exact = 1.0 if q_norm and q_norm in blob_norm else 0.0
+                    name_norm = name.lower()
+                    prefix = 0.35 if q_norm and (name_norm.startswith(q_norm) or any(tok.startswith(q_norm) for tok in row_tokens)) else 0.0
+                    name_bonus = 0.25 if q_tokens and q_tokens.issubset(row_tokens.intersection(name_tokens)) else 0.0
+                    score = round((exact * 1.25) + token_score + prefix + name_bonus, 4)
+                    if score < float(threshold):
+                        continue
+                    rows.append(
+                        {
+                            "ea": ea,
+                            "name": name,
+                            "score": score,
+                            "exact_match": bool(exact),
+                            "matched_tokens": matched,
+                            "signature": _clip_signature(signature_text),
+                            "indexed_at": indexed_at,
+                        }
+                    )
         except Exception:
             return []
 

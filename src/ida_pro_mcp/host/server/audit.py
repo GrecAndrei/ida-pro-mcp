@@ -52,6 +52,60 @@ def _bounded_result_size(result: Any) -> int:
     return 0
 
 
+def _shallow(value: Any, depth: int = 0, max_items: int = 16) -> Any:
+    """Return a canonical, bounded-depth, bounded-size JSON-serializable form.
+
+    Used for the audit args hash (so huge or oddly-typed args hash fast and
+    never raise under ``sort_keys``) and for ``args_preview`` (so the preview is
+    cheap to serialize and cannot bloat the record with a giant container).
+    Containers are truncated at ``max_items`` with a ``<+N>`` marker; arbitrary
+    objects are reduced to their repr.
+    """
+    if depth >= 3:
+        return "<truncated>"
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        count = 0
+        for k, v in value.items():
+            if count >= max_items:
+                out[f"<+{len(value) - count}>"] = True
+                break
+            out[str(k)] = _shallow(v, depth + 1, max_items)
+            count += 1
+        return out
+    if isinstance(value, (list, tuple)):
+        items = [_shallow(v, depth + 1, max_items) for v in islice(value, max_items)]
+        if len(value) > len(items):
+            items.append(f"<+{len(value) - len(items)}>")
+        return items
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, (int, float, str)):
+        return value
+    if isinstance(value, bytes):
+        return value.hex()[:128]
+    try:
+        return repr(value)
+    except Exception:
+        return "<unrepr>"
+
+
+def _canonical_args_hash(args: Any) -> str:
+    """Stable, failure-proof hash of tool args for the audit record.
+
+    Best-effort: on any unexpected failure returns the ``<unhashable>`` marker
+    so the audit record is never dropped because the args could not be hashed
+    (e.g. mixed int/str keys raise TypeError under ``sort_keys`` on the raw
+    dict; a shallow form plus ``default=str`` avoids that).
+    """
+    try:
+        return hashlib.sha256(
+            json.dumps(_shallow(args), sort_keys=True, default=str).encode()
+        ).hexdigest()[:16]
+    except Exception:
+        return "<unhashable>"
+
+
 class AuditLogger:
     """
     Per-call audit logger. Writes JSONL, rotates daily, caps total size.
@@ -67,6 +121,8 @@ class AuditLogger:
         self._file: Any | None = None
         self._current_path: str | None = None
         self._total_written = 0
+        self._pending = 0
+        self._last_flush = 0.0
 
     def _open_for_date(self, dt: datetime) -> Any:
         month_dir = os.path.join(self.base_dir, dt.strftime("%Y-%m"))
@@ -138,11 +194,13 @@ class AuditLogger:
                 "session_id": session_id,
                 "tool": tool,
                 "action": action,
-                # Hash args to detect tampering without logging sensitive values
-                "args_hash": hashlib.sha256(
-                    json.dumps(args, sort_keys=True, default=str).encode()
-                ).hexdigest()[:16],
-                "args_keys": sorted(args.keys()) if isinstance(args, dict) else [],
+                # Hash args to detect tampering without logging sensitive values.
+                # Uses a canonical shallow form (bounded depth + truncated
+                # containers) so huge or oddly-typed args (mixed int/str keys
+                # raise TypeError under sort_keys on the raw dict) hash fast and
+                # can never drop the whole audit record.
+                "args_hash": _canonical_args_hash(args),
+                "args_keys": sorted(str(k) for k in (args.keys() if isinstance(args, dict) else [])),
                 "latency_ms": round(latency_ms, 3),
                 "guardrail_mode": guardrail_mode,
                 "guardrail_blocked": guardrail_blocked,
@@ -162,7 +220,12 @@ class AuditLogger:
                     for k, v in args.items()
                     if k not in {"idb", "raw_bytes", "binary_path", "idb_path", "path", "code"}
                 }
-                record["args_preview"] = json.dumps(safe_args, default=str)[:500]
+                if safe_args:
+                    # Bounded preview over the shallow form so a huge container
+                    # arg costs O(16) items to serialize, never a full dump.
+                    record["args_preview"] = json.dumps(
+                        _shallow(safe_args), sort_keys=True, default=str
+                    )[:500]
 
             # Hold the lock only around the file write; building the record (arg
             # hashing, preview, result-size sampling) is pure computation and
@@ -171,8 +234,17 @@ class AuditLogger:
                 f = self._open_for_date(now)
                 line = json.dumps(record, default=str, ensure_ascii=False) + "\n"
                 f.write(line)
-                f.flush()
+                self._pending += 1
                 self._total_written += len(line)
+                # Coalesce small bursts: flush at most every 16 records or 1s
+                # instead of per-record, so a firehose of tiny calls never
+                # serializes the audit lock behind individual flushes. The
+                # close() path always flushes, so nothing is lost on clean exit.
+                now_mono = time.monotonic()
+                if self._pending >= 16 or (now_mono - self._last_flush) >= 1.0:
+                    f.flush()
+                    self._pending = 0
+                    self._last_flush = now_mono
                 if self._total_written > 1024 * 1024:
                     self._maybe_prune_old()
                     self._total_written = 0
@@ -185,6 +257,8 @@ class AuditLogger:
     def close(self) -> None:
         with self._lock:
             if self._file is not None:
+                with contextlib.suppress(Exception):
+                    self._file.flush()
                 with contextlib.suppress(Exception):
                     self._file.close()
                 self._file = None

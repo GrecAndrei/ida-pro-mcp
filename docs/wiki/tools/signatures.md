@@ -35,5 +35,10 @@ cover (available via `ida_python` through `ida_lumina` API calls).
 - `ida_apply_sig` requires `risk_ack: true` — applying a signature renames
   functions in the IDB permanently.
 - RISC-V `.sig` files are not included in the standard IDA distribution;
-  for RISC-V firmware, FLIRT coverage is minimal.
+  for RISC-V firmware, FLIRT coverage is minimal.  Install a RISC-V sig pack
+  with the installer: `python install.py --sigs /path/to/riscv64-sigpack`
+  (or `--only sigs --sigs <dir>`).  The flag copies every `*.sig` / `*.sig.gz`
+  under the source dir (subpaths preserved) into `<IDADIR>/sig`, where
+  `ida_list_sigs` surfaces them by basename — e.g. `riscv64_rtos.sig` becomes
+  `ida_apply_sig(name="riscv64_rtos")`.
 - Use `ida_list_sigs(query="arm")` to filter by architecture.

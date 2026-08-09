@@ -10,6 +10,10 @@ Covers the host policy classification fixes:
     multi_session reads) classify as READ and need no ack.
   - plugin_run is LOCAL_CODE_EXEC for both analysis and misc.
   - Dead tool names (crypto_id/entropy/protocol/hooks) are gone from the sets.
+  - p01 registration additions: struct/enum member editing, TIL carry, sreg_*,
+    idb events/registers, search data_value/query_lang, firmware detect_* probes,
+    and the r2 sidecar query family are tiered correctly (WRITE_IDB /
+    FILESYSTEM_WRITE / FILESYSTEM_READ / READ / DESTRUCTIVE / NETWORK_OR_PROCESS).
 """
 
 from ida_pro_mcp.host.policy import (
@@ -34,9 +38,6 @@ def test_read_only_tool_write_pairs_classify_as_write_idb():
         ("analysis", "reanalyze"),
         ("symbols", "load_pdb"),
         ("symbols", "load_dwarf"),
-        ("firmware_view", "auto_retype"),
-        ("firmware_view", "smart_carve"),
-        ("firmware_view", "rollback_last"),
         ("misc", "load_sig"),
         ("knowledge", "import_symbols"),
         ("session", "untag"),
@@ -46,6 +47,25 @@ def test_read_only_tool_write_pairs_classify_as_write_idb():
         ("session", "archive"),
         ("session", "unarchive"),
         ("session", "snapshot"),
+        # p01 registration additions: write actions on READ_ONLY_TOOLS
+        ("types", "struct_member_add"),
+        ("types", "struct_member_del"),
+        ("types", "struct_member_rename"),
+        ("types", "struct_member_set_type"),
+        ("types", "enum_member_add"),
+        ("types", "enum_member_rename"),
+        ("types", "enum_member_revalue"),
+        ("types", "til_delete"),
+        ("analysis", "add_entry"),
+        ("analysis", "snapshot"),
+        ("analysis", "restore_snapshot"),
+        # modify/segments sit in WRITE_IDB_TOOLS; keep them explicit here so a
+        # future WRITE_IDB_TOOLS edit cannot silently downgrade them.
+        ("modify", "create_data"),
+        ("modify", "create_strlit"),
+        ("modify", "undo_begin"),
+        ("modify", "undo_end"),
+        ("segments", "sreg_set"),
     ]
     for tool, action in write_pairs:
         tier = classify_tool_action(tool, action)
@@ -59,7 +79,11 @@ def test_read_only_tool_write_pairs_classify_as_write_idb():
 
 
 def test_host_filesystem_writes_classify_as_filesystem_write():
-    for tool, action in (("symbols", "export"), ("knowledge", "export_session")):
+    for tool, action in (
+        ("symbols", "export"),
+        ("knowledge", "export_session"),
+        ("types", "til_export"),
+    ):
         tier = classify_tool_action(tool, action)
         assert tier == RiskTier.FILESYSTEM_WRITE, f"{tool}/{action} was {tier}"
         result = evaluate_policy(tool, action, purpose="oss_audit")
@@ -67,10 +91,34 @@ def test_host_filesystem_writes_classify_as_filesystem_write():
 
 
 def test_filesystem_read_requires_ack():
-    assert classify_tool_action("misc", "read_file") == RiskTier.FILESYSTEM_READ
-    result = evaluate_policy("misc", "read_file", purpose="oss_audit")
-    assert result.decision == PolicyDecision.REQUIRE_ACK
+    for tool, action in (("misc", "read_file"), ("types", "til_import")):
+        tier = classify_tool_action(tool, action)
+        assert tier == RiskTier.FILESYSTEM_READ, f"{tool}/{action} was {tier}"
+        result = evaluate_policy(tool, action, purpose="oss_audit")
+        assert result.decision == PolicyDecision.REQUIRE_ACK
+        assert result.requires_ack is True
+
+
+def test_til_delete_requires_ack_not_read():
+    # types sits in READ_ONLY_TOOLS and "til_delete" is not a DESTRUCTIVE_ACTION,
+    # so the WRITE_TOOL_ACTIONS entry is what stops it falling through to READ.
+    assert classify_tool_action("types", "til_delete") == RiskTier.WRITE_IDB
+    result = evaluate_policy("types", "til_delete", purpose="oss_audit")
+    assert result.risk == RiskTier.WRITE_IDB
     assert result.requires_ack is True
+
+
+def test_r2_process_lifecycle_is_network_or_process():
+    # Forward-declared for when the r2 engine lands start/attach. The registered
+    # r2 query ops must NOT fall into this tier.
+    for action in ("start", "attach"):
+        tier = classify_tool_action("r2", action)
+        assert tier == RiskTier.NETWORK_OR_PROCESS, f"r2/{action} was {tier}"
+        result = evaluate_policy("r2", action, purpose="oss_audit")
+        assert result.risk == RiskTier.NETWORK_OR_PROCESS
+        assert result.requires_ack is True
+    for action in ("status", "bininfo", "load_hints", "disassemble_hypothesis", "vxrefs"):
+        assert classify_tool_action("r2", action) == RiskTier.READ, f"r2/{action}"
 
 
 def test_provably_read_only_pairs_are_read_tier():
@@ -101,6 +149,24 @@ def test_provably_read_only_pairs_are_read_tier():
         ("multi_session", "cross_decompile"),
         ("multi_session", "cross_xrefs"),
         ("multi_session", "status"),
+        # p01 registration additions: provably read-only pairs on WRITE_IDB /
+        # non-READ_ONLY_TOOLS tools that must not require an ack.
+        ("segments", "sreg_get"),
+        ("segments", "sreg_list"),
+        ("analysis", "auto_wait"),
+        ("idb", "events"),
+        ("idb", "registers"),
+        ("search", "data_value"),
+        ("search", "query_lang"),
+        ("firmware", "detect_vector_table"),
+        ("firmware", "detect_load_base"),
+        ("firmware", "detect_mmio"),
+        ("firmware", "rtos_scan"),
+        ("r2", "status"),
+        ("r2", "bininfo"),
+        ("r2", "load_hints"),
+        ("r2", "disassemble_hypothesis"),
+        ("r2", "vxrefs"),
     ]
     for tool, action in read_pairs:
         tier = classify_tool_action(tool, action)

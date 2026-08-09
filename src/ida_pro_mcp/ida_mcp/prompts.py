@@ -79,6 +79,9 @@ QUICKREF_TEXT = """\
 - `search(action="bytes", pattern="48 8B 05")` - Search byte patterns
 - `search(action="vulnerable")` - Find dangerous patterns (format strings, buffer overflows)
 - `search(action="constants")` - Find crypto constants and magic numbers
+- Whole-binary scans (`find`/`text`/`immediate`/`insns`/`regex`) have a bounded
+  default timeout that reports `timed_out` + partial results; pass `timeout_ms=0`
+  for the explicit no-limit behavior.
 
 ## Modification
 - `modify(action="rename", addr="0x401000", value="parse_config")` - Rename
@@ -104,12 +107,24 @@ QUICKREF_TEXT = """\
 ## Raw Binary / Firmware
 - `idb(action="summary")` - Identify format, processor, entrypoints, and image bounds
 - `segments(action="list")` - Inspect segments, permissions, and entropy
-- `firmware_view(action="triage_snapshot")` - One-shot load/vector/MMIO orientation before deeper carving
-- `firmware_view(action="scan_region")` - Profile unknown raw regions
-- `firmware_view(action="region_profile")` - Measure pointer, string, and unknown-byte density
-- `firmware_view(action="pointer_sweep")` - Find pointer-like cells and candidate tables
-- `firmware_view(action="smart_carve", apply=false)` - Dry-run safe retyping suggestions
-- `blackboard(action="list", category="firmware_view")` - Review prior conversion decisions
+- `analysis(action="set_architecture", processor="riscv", bitness=64)` - Set arch on
+  an opaque blob; riscv32/riscv64/riscv resolve to the canonical IDA `riscv` module.
+  Raw blobs carry an "arch unverified" warning in `get_options` until set explicitly.
+- Bare all-digit addresses (e.g. `80000000`) parse as HEX when they map inside the
+  image — pass an explicit `0x` prefix for values outside the image.
+
+## Raw Firmware Triage (headerless / default-off sidecar engines)
+For headerless blobs, prefer the r2 sidecar and firmware-shaping ops before IDA
+commits to an architecture/load base:
+- `ida_r2_bininfo()` - File metadata (arch/bits/entry/imports) without an IDB
+- `ida_r2_load_hints()` - Suggested load addresses / entry hypotheses
+- `ida_r2_disassemble_hypothesis(address=..., count=...)` - Test an instruction-boundary
+  or load-base guess without touching the IDB
+- `ida_fw_detect_vector_table(start=..., end=...)` - Cortex-M reset/ISR vector table
+- `ida_fw_detect_load_base()` - Preferred load base inference
+- `ida_fw_detect_mmio()` / `ida_fw_rtos_scan()` - Peripheral regions / RTOS kernels
+- `search(action="data_value", value="0xDEADBEEF")` - Locate raw values/magic strings
+- `ida_fw_carve(start=..., end=..., risk_ack=true)` - Bound a code/data region before IDA analysis
 
 ## Security Analysis
 - `search(action="vulnerable")` - Scan for dangerous patterns and APIs
@@ -261,13 +276,29 @@ WORKFLOW_DEOBFUSCATE = """\
 WORKFLOW_FIRMWARE = """\
 # Raw Binary / Firmware Workflow
 
-1. **Identify Format**: `idb(action="summary")` → format, processor, entrypoints, bounds
-2. **Inspect Sections**: `segments(action="list")` → permissions, entropy, segment layout
-4. **One-Shot Orientation**: `firmware_view(action="triage_snapshot")` → aggregate load-address, vector-table, and MMIO signals
-5. **Profile Raw Regions**: `firmware_view(action="scan_region")` → estimate code/data/unknown mix
-6. **Summarize Region**: `firmware_view(action="region_profile")` → pointer/string/unknown density
-7. **Sweep Pointers**: `firmware_view(action="pointer_sweep")` → table and vtable candidates
-8. **Dry-Run Carving**: `firmware_view(action="smart_carve", apply=false)` → safe retyping plan
-9. **Review Prior Decisions**: `blackboard(action="list", category="firmware_view")` → reuse local analysis
-10. **Continue Search**: `search(action="nl", pattern="entry init parser")` → map the now-sharpened binary
+Opaque headerless .bin blobs (especially RISC-V) need arch/load-base resolved
+BEFORE deep analysis — IDA's default metapc guess will misdecode RISC-V bytes.
+
+1. **Identify Format**: `idb(action="summary")` / `idb(action="overview")` → format,
+   processor, entrypoints, image bounds. A raw blob reports `raw_blob` /
+   `arch_unverified` and an `inferred_load_base` from the arch detector.
+2. **Set Architecture (raw blobs)**: `analysis(action="set_architecture",
+   processor="riscv", bitness=32|64, endian="le")` → RISC-V 32/64 are first-class
+   inference candidates. Re-check `analysis(action="get_options")` — raw blobs
+   carry a "raw blob; arch unverified" warning until arch is set explicitly.
+3. **GP Register (RISC-V)**: `analysis(action="set_gp")` (or the
+   `idc.set_reg_value("gp", ...)` recommendation from `idb(action="architecture_profile")`)
+   → resolves GP-relative data xrefs on bare-metal RISC-V.
+4. **Inspect Sections**: `segments(action="list")` → permissions, entropy, segment
+   layout. A CODE segment added via `segments(action="add")` gets READ|EXEC from
+   its class so analysis actually treats it as code.
+5. **Verify Analysis Coverage**: `analysis(action="reanalyze")` → on a raw blob with
+   no EXEC segment this falls back to the whole mapped range and warns instead of
+   silently no-opping. Entry points are bootstrapped from reset j/jal and ISR
+   pointer tables at open time.
+6. **Continue Search**: `search(action="nl", pattern="entry init parser")` → map the
+   now-sharpened binary. RISC-V lui+addi immediate pairs are reconstructed into
+   full 32-bit constants by `search(action="immediate"/"constants")`. Whole-binary
+   searches have a bounded default timeout that reports `timed_out` + partial
+   results (pass timeout_ms=0 for no limit).
 """

@@ -432,3 +432,94 @@ def test_intelligence_whitelist_matches_tool_literal():
     assert match is not None, "could not locate the action Literal"
     literal_members = frozenset(re.findall(r"['\"]([a-z_]+)['\"]", match.group(1)))
     assert literal_members == cli._INTELLIGENCE_ACTIONS
+
+
+# ---------------------------------------------------------------------------
+# F8: server-side daemon pidfile guard (the daemon main() path)
+# ---------------------------------------------------------------------------
+# The CLI spawns ``python -m ida_pro_mcp.host.server --daemon``. That entry
+# point now probes DAEMON_PIDFILE BEFORE unlinking DAEMON_SOCKET: a live
+# recorded pid refuses a second daemon, a stale pidfile is reclaimed, and
+# cleanup unlinks the socket only when the recorded pid is still our own.
+
+
+def test_host_daemon_pidfile_guard_refuses_second_daemon(monkeypatch, tmp_path, capsys):
+    from ida_pro_mcp.host.server import server as host_server
+
+    sock = tmp_path / "daemon.sock"
+    pidfile = tmp_path / "daemon.pid"
+    sock.write_text("live daemon socket")
+    pidfile.write_text("4242")
+    monkeypatch.setattr(host_server, "DAEMON_PIDFILE", str(pidfile))
+    monkeypatch.setattr(host_server, "DAEMON_SOCKET", str(sock))
+    monkeypatch.setattr(host_server, "_pid_is_live", lambda pid: pid == 4242)
+    monkeypatch.setattr(sys, "argv", ["ida-pro-mcp", "--daemon"])
+
+    def _boom(*a, **k):
+        raise AssertionError("must not construct a server while a daemon is live")
+
+    monkeypatch.setattr(host_server, "IDAMCPServer", _boom)
+    with pytest.raises(SystemExit) as exc:
+        host_server.main()
+    assert exc.value.code == 1
+    assert "already running" in capsys.readouterr().err
+    # A live daemon's socket and pidfile are never touched.
+    assert sock.exists()
+    assert pidfile.exists()
+
+
+def test_host_daemon_stale_pidfile_reclaimed(monkeypatch, tmp_path):
+    from ida_pro_mcp.host.server import server as host_server
+
+    sock = tmp_path / "daemon.sock"
+    pidfile = tmp_path / "daemon.pid"
+    sock.write_text("stale socket")
+    pidfile.write_text("999999999")  # a dead pid
+    monkeypatch.setattr(host_server, "DAEMON_PIDFILE", str(pidfile))
+    monkeypatch.setattr(host_server, "DAEMON_SOCKET", str(sock))
+    monkeypatch.setattr(sys, "argv", ["ida-pro-mcp", "--daemon"])
+    # Keep the host-startup native-backend bootstrap a no-op (no .so probing
+    # or env mutation in a unit test).
+    monkeypatch.setattr(
+        "ida_pro_mcp.host.intelligence.native.bootstrap_native_backend",
+        lambda: {"enabled": False},
+    )
+
+    class _FakeServer:
+        def __init__(self):
+            self.called = True
+
+        def run_daemon(self):
+            pass
+
+        def run(self):
+            pass
+
+    monkeypatch.setattr(host_server, "IDAMCPServer", _FakeServer)
+    host_server.main()
+    assert not sock.exists()
+    assert not pidfile.exists()
+
+
+def test_host_daemon_cleanup_only_unlinks_own_pid(monkeypatch, tmp_path):
+    from ida_pro_mcp.host.server import server as host_server
+
+    sock = tmp_path / "daemon.sock"
+    pidfile = tmp_path / "daemon.pid"
+    monkeypatch.setattr(host_server, "DAEMON_PIDFILE", str(pidfile))
+    monkeypatch.setattr(host_server, "DAEMON_SOCKET", str(sock))
+
+    sock.write_text("x")
+    pidfile.write_text("x")
+    monkeypatch.setattr(host_server, "_read_daemon_pidfile", os.getpid)
+    host_server.IDAMCPServer._cleanup_daemon()
+    assert not sock.exists()
+    assert not pidfile.exists()
+
+    sock.write_text("x")
+    pidfile.write_text("x")
+    monkeypatch.setattr(host_server, "_read_daemon_pidfile", lambda: 4242)
+    host_server.IDAMCPServer._cleanup_daemon()
+    assert sock.exists()
+    assert pidfile.exists()
+

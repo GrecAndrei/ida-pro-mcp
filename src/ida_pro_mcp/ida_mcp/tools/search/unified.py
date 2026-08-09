@@ -33,10 +33,10 @@ from .core import (
     get_cached_imports,
     get_cached_strings,
     iter_code,
-    iter_segments,
     looks_like_identifier,
     make_item,
     paginate_records,
+    resolve_scan_segments,
     resolve_target,
     safe_generate_disasm_line,
     safe_get_strlit_contents,
@@ -181,11 +181,18 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
     skip_insns = looks_like_identifier(pattern) and name_hits >= max(limit, 8)
     instruction_hits = 0
     pattern_lower = pattern.lower() if not case_sensitive else pattern
+    find_segs, find_seg_note, find_seg_error = (
+        resolve_scan_segments(range_start, range_end, require_exec=True)
+        if not skip_insns
+        else ([], "", "")
+    )
+    if not skip_insns and find_seg_error:
+        return make_error(MCPError.NOT_FOUND, find_seg_error)
     if not skip_insns:
-        for seg_start, seg_end in iter_segments(range_start, range_end, require_exec=True):
+        for seg_start, seg_end in find_segs:
             if instruction_hits >= _FIND_INSTRUCTION_CAP or timed_out:
                 break
-            for ea in iter_code(seg_start, seg_end):
+            for ea in iter_code(seg_start, seg_end, force=bool(find_seg_note)):
                 if instruction_hits >= _FIND_INSTRUCTION_CAP:
                     break
                 try:
@@ -260,6 +267,8 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
             "Instruction scan skipped (identifier-like query with enough symbol hits). "
             "Use action='instruction' or action='text' to force disassembly search."
         )
+    elif find_seg_note:
+        result["note"] = find_seg_note
     # Always attach structured items — agents need addr/name without parsing text
     result["items"] = [
         make_item(
@@ -516,14 +525,24 @@ def _rescore_find_ranked(ranked, pattern):
     """Batch-embed the top-ranked pool, then compose per-kind bonuses/caps.
 
     Phase 1 (the loops) scores every match deterministically; this phase
-    re-embeds at most ``DEFAULT_RESCORE_TOP_N`` candidates in one batched
-    call, keeping per-candidate native-embedding cost bounded.
+    re-embeds a bounded slice of the pool in one batched call.  For
+    phrase-like queries the cheap lexical pass over instruction text is
+    weaker, so a wider pool (closer to ``DEFAULT_RESCORE_TOP_N``) is
+    re-embedded to give the cross-attention model real candidates to rank;
+    identifier queries keep the tighter 24-candidate budget.
     """
     if not ranked:
         return
+    phrase_like = bool(
+        " " in (pattern or "").strip() or len((pattern or "").strip()) >= 24
+    )
+    if phrase_like:
+        rescore_top = min(DEFAULT_RESCORE_TOP_N, len(ranked))
+    else:
+        rescore_top = min(24, len(ranked))
     pool = [r.get("_sem") or r.get("line") or "" for r in ranked]
     scores = semantic_scores(
-        pattern, pool, top_n=min(DEFAULT_RESCORE_TOP_N, 24), substring_bonus=SCORE_SUBSTRING
+        pattern, pool, top_n=max(8, rescore_top), substring_bonus=SCORE_SUBSTRING
     )
     for record, score in zip(ranked, scores, strict=False):
         final = float(score) + float(record.get("_bonus") or 0.0)

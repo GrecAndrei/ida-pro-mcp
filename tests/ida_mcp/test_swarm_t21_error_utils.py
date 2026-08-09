@@ -86,6 +86,17 @@ class TestPromptsNoDeadToolCalls(unittest.TestCase):
         self.assertIn('batch(template="analyze_function"', text)
         self.assertIn('batch(template="deep_function_audit"', text)
 
+    def test_quickref_includes_raw_firmware_triage_guidance(self):
+        text = self.mod.QUICKREF_TEXT
+        # p01 registration: the quickref must steer headerless-blob work to the
+        # r2 sidecar + firmware-shaping ops that replaced the dead tool surface.
+        self.assertIn("Raw Firmware Triage", text)
+        self.assertIn("ida_r2_bininfo", text)
+        self.assertIn("ida_r2_load_hints", text)
+        self.assertIn("ida_fw_detect_vector_table", text)
+        self.assertIn('search(action="data_value"', text)
+        self.assertIn("ida_fw_carve", text)
+
     def test_triage_workflow_uses_batch_template_not_dead_agent_tool(self):
         text = self.mod.WORKFLOW_TRIAGE
         self.assertNotIn("agent(action=", text)
@@ -225,3 +236,45 @@ class TestErrorHandlingMakeError(unittest.TestCase):
         err = self.mod.make_error(self.mod.MCPError.NO_RESULTS, "none")
         self.assertNotIn("ok", err)
         self.assertIs(err["error"], True)
+
+
+class TestVestigialHintSurface(unittest.TestCase):
+    """The DEBUGGER_*/EMULATION_*/BOOKMARK_* codes are vestigial: no public
+    debugger/emulation op exists, so their hints must state the honest path
+    (misc(action='python') / ida_dbg, or the host ida_r2_* namespace) and must
+    not claim an absent tool."""
+
+    VESTIGIAL_CODES = [
+        "DEBUGGER_NOT_RUNNING",
+        "DEBUGGER_ACTIVE",
+        "DEBUGGER_BREAKPOINT_ERROR",
+        "DEBUGGER_MEMORY_ERROR",
+        "DEBUGGER_REGISTER_ERROR",
+        "DEBUGGER_STEP_ERROR",
+        "DEBUGGER_PROCESS_ERROR",
+        "DEBUGGER_THREAD_ERROR",
+        "EMULATION_ERROR",
+        "EMULATION_TIMEOUT",
+        "BOOKMARK_NOT_FOUND",
+        "BOOKMARK_DUPLICATE",
+    ]
+
+    @classmethod
+    def setUpClass(cls):
+        install_common_stub()
+        cls.mod = load_ida_module("error_handling")
+        cls.hints = cls.mod.ERROR_HINTS
+
+    def test_vestigial_codes_kept_and_hints_state_honest_path(self):
+        for code in self.VESTIGIAL_CODES:
+            self.assertIn(code, self.hints, f"{code} removed from ERROR_HINTS")
+            hint = self.hints[code]
+            # Honest path: no public op; script via misc(action='python').
+            self.assertIn("public", hint, code)
+            self.assertIn("misc(action=", hint, code)
+
+    def test_no_claimed_but_absent_tool_in_vestigial_hints(self):
+        for code in self.VESTIGIAL_CODES:
+            hint = self.hints[code]
+            self.assertNotIn("ida_python", hint, (code, hint))
+            self.assertNotIn("max_steps", hint, (code, hint))

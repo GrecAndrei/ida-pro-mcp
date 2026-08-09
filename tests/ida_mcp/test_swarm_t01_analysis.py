@@ -13,6 +13,9 @@ Covers (each maps to a confirmed finding in the t01 audit):
 - analysis reanalyze (blocking): the wait is bounded by poll_timeout — it never
   calls the unbounded ida_auto.auto_wait(), and reports analysis_complete=False
   (instead of hanging the RPC) when the budget runs out.
+- analysis auto_wait: the new bounded auto-analysis wait action obeys the same
+  invariant as reanalyze — it pumps auto_make_step() in slices and never calls
+  the unbounded ida_auto.auto_wait(), reporting still-running on timeout.
 - ctree: decompile/init failures are distinguished — a genuine decompile
   failure surfaces the hexrays_failure_t message under DECOMPILER_FAILED
   instead of the misleading "Decompiler required for CTree".
@@ -64,6 +67,76 @@ def _make_idaapi(**extra):
     for k, v in extra.items():
         setattr(mod, k, v)
     return mod
+
+
+class TestGetOptionsRawWarning(unittest.TestCase):
+    """get_options must warn that a raw blob's bytes may misdecode (q01)."""
+
+    def setUp(self):
+        # f_BIN raw blob; the analysis module's underscore helpers are skipped
+        # by the isolated stub's star import (no __all__), so they are bound
+        # directly on the loaded module as production's real __all__ would.
+        self.idaapi = _make_idaapi(
+            inf_get_start_ea=lambda: 0x1000,
+            inf_get_min_ea=lambda: 0x1000,
+            inf_get_max_ea=lambda: 0x2000,
+        )
+        sys.modules["idaapi"] = self.idaapi
+        sys.modules["idc"] = types.ModuleType("idc")
+        _blank_modules(["ida_ida", "ida_entry", "ida_auto", "ida_segment",
+                        "ida_loader", "ida_nalt", "ida_bytes", "ida_funcs",
+                        "ida_hexrays", "ida_lines", "idautils"])
+        self.mod = load_tool_module("analysis", common_overrides=_real_eh_overrides())
+        self.mod._inf_procname = lambda: "RISCV:RVA"
+        self.mod._inf_filetype_id = lambda: 17
+        self.mod._inf_bitness = lambda: 32
+        self.mod._inf_is_be = lambda: False
+        self.mod._inf_is_64bit = lambda: False
+        self.mod._filetype_name = lambda ft: "raw" if ft == 17 else f"type_{ft}"
+        self.idaapi.f_BIN = 17
+        self.idaapi.f_BINARY = 17
+
+    def test_raw_blob_get_options_carries_warning(self):
+        res = self.mod.analysis(action="get_options")
+        self.assertEqual(res.get("ok"), True)
+        self.assertEqual(res["file_type_info"]["loader"], "raw")
+        self.assertTrue(res.get("warnings"), res)
+        self.assertIn("raw blob", res["warnings"][0])
+        self.assertIn("set_architecture", res["warnings"][0])
+
+
+class TestSetArchitectureRiscvHints(unittest.TestCase):
+    """set_architecture must emit RISC-V arch hints (GP/alignment note)."""
+
+    def setUp(self):
+        self.inf = types.SimpleNamespace(procname="", is_64bit=lambda: False, filetype=17)
+        self.idaapi = _make_idaapi(
+            get_inf_structure=lambda: self.inf,
+            set_processor_type=lambda proc, flags: True,
+        )
+        sys.modules["idaapi"] = self.idaapi
+        sys.modules["idc"] = types.ModuleType("idc")
+        _blank_modules(["ida_ida", "ida_entry", "ida_auto", "ida_segment",
+                        "ida_loader", "ida_nalt", "ida_bytes", "ida_funcs",
+                        "ida_hexrays", "ida_lines", "idautils"])
+        self.mod = load_tool_module("analysis", common_overrides=_real_eh_overrides())
+        self.mod._inf_is_64bit = lambda: False
+
+    def test_riscv32_arch_hints(self):
+        res = self.mod.analysis(action="set_architecture", processor="riscv:rv32", bitness=32)
+        self.assertEqual(res.get("ok"), True)
+        hints = res["applied"].get("arch_hints", {})
+        self.assertEqual(hints.get("ptr_size"), 4)
+        self.assertEqual(hints.get("default_int_width"), 4)
+        self.assertIn("riscv_note", hints)
+        self.assertIn("set_gp", hints["riscv_note"])
+
+    def test_riscv64_arch_hints_ptr_size_8(self):
+        self.mod._inf_is_64bit = lambda: True
+        res = self.mod.analysis(action="set_architecture", processor="riscv:rv64", bitness=64)
+        self.assertEqual(res.get("ok"), True)
+        hints = res["applied"].get("arch_hints", {})
+        self.assertEqual(hints.get("ptr_size"), 8)
 
 
 class TestSetProcessorNoFalseSuccess(unittest.TestCase):
@@ -259,6 +332,74 @@ class TestReanalyzeBlockingBounded(unittest.TestCase):
         self.assertEqual(res.get("ok"), True)
         self.assertIs(res.get("analysis_complete"), True)
         self.assertGreaterEqual(self.auto_make_step_calls, 2)
+        self.assertEqual(self.auto_wait_calls, 0)
+
+
+class TestAutoWaitActionBounded(unittest.TestCase):
+    """The analysis auto_wait action (WO-S3) must obey the same boundedness
+    invariant as blocking reanalyze: it pumps auto_make_step() in 50ms slices
+    and never calls the unbounded ida_auto.auto_wait(), reporting still-running
+    (timed_out=true) instead of hanging the RPC when the budget runs out."""
+
+    def setUp(self):
+        self.auto_wait_calls = 0
+        self.auto_make_step_calls = 0
+        self.auto_ok_state = {"n": 0, "flip_after": None}
+
+        def auto_is_ok():
+            self.auto_ok_state["n"] += 1
+            if self.auto_ok_state["flip_after"] is None:
+                return False
+            return self.auto_ok_state["n"] > self.auto_ok_state["flip_after"]
+
+        def auto_make_step(*args):
+            self.auto_make_step_calls += 1
+            return True
+
+        def auto_wait():
+            self.auto_wait_calls += 1
+            return True
+
+        ida_auto = types.ModuleType("ida_auto")
+        ida_auto.auto_is_ok = auto_is_ok
+        ida_auto.auto_make_step = auto_make_step
+        ida_auto.auto_wait = auto_wait
+        sys.modules["ida_auto"] = ida_auto
+
+        # analysis.py binds ida_entry / ida_loader at import time.
+        ida_entry = types.ModuleType("ida_entry")
+        ida_entry.add_entry = lambda *a, **k: True
+        ida_entry.get_entry_qty = lambda: 0
+        sys.modules["ida_entry"] = ida_entry
+
+        ida_loader = types.ModuleType("ida_loader")
+        ida_loader.save_snapshot = lambda *a, **k: True
+        ida_loader.restore_snapshot = lambda *a, **k: True
+        sys.modules["ida_loader"] = ida_loader
+
+        self.idaapi = _make_idaapi(auto_is_ok=auto_is_ok)
+        sys.modules["idaapi"] = self.idaapi
+        sys.modules["idc"] = types.ModuleType("idc")
+        _blank_modules(["ida_ida", "ida_segment", "ida_nalt", "ida_bytes",
+                        "ida_funcs", "ida_hexrays", "ida_lines", "idautils"])
+        self.mod = load_tool_module("analysis", common_overrides=_real_eh_overrides())
+
+    def test_auto_wait_action_drains_without_unbounded_auto_wait(self):
+        self.auto_ok_state["flip_after"] = 2  # drains after two slices
+        res = self.mod.analysis(action="auto_wait", timeout_ms=5000)
+        self.assertEqual(res.get("ok"), True)
+        self.assertIs(res["analysis_done"], True)
+        self.assertEqual(res["queue_depth"], 0)
+        self.assertIs(res["timed_out"], False)
+        self.assertEqual(self.auto_wait_calls, 0)
+        self.assertGreaterEqual(self.auto_make_step_calls, 2)
+
+    def test_auto_wait_timeout_reports_still_running(self):
+        self.auto_ok_state["flip_after"] = None  # never drains
+        res = self.mod.analysis(action="auto_wait", timeout_ms=0)
+        self.assertEqual(res.get("ok"), True)
+        self.assertIs(res["analysis_done"], False)
+        self.assertIs(res["timed_out"], True)
         self.assertEqual(self.auto_wait_calls, 0)
 
 

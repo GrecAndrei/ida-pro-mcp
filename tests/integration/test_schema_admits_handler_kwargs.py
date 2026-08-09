@@ -30,10 +30,7 @@ REQUIRED = {
     "search": ["mode", "intent", "semantic_min_score", "constraints",
                "target", "ea", "radius", "src", "dst"],
     "intelligence": ["include_resolved", "similar_top_k"],
-    "blackboard": ["members", "entry_points", "exit_points", "size_bytes",
-                   "hints", "gap_type", "binary_type", "gap_id", "filled_by",
-                   "state_var", "states", "periph_type", "drivers",
-                   "reachable_from", "input_type", "call_stack", "resolved"],
+    "blackboard": ["entry_id", "addr", "query", "limit"],
     "idb": ["audit_tail"],
     "misc": ["module", "modules"],
 }

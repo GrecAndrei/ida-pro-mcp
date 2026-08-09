@@ -1,15 +1,34 @@
 #!/usr/bin/env python3
-"""Blackboard store and host-side orchestration helpers."""
+"""Blackboard host surface: dict-driven action dispatch over the store.
 
+The host-side blackboard handler is the single authority for every
+blackboard action (the in-IDA ``blackboard.py`` tool only handles
+``related_by_behavior``). This module owns the dispatch table that routes
+each action to a ``_bb_action_*`` handler, the governance gate that runs
+once per dispatch (phase auto-transition, contract check, strict policy),
+and the bounded evidence-gravity snapshot fired only when a write creates a
+new entry.
+
+Analyst memory lives in the workspace findings table (written through the
+store); machinery — crawler state, trace tasks, evidence-gravity snapshots,
+and the per-session phase/policy core — lives in ``bb_machinery`` /
+``bb_tasks`` owned by :mod:`blackboard_orchestration`. The phase/policy
+machines are in :mod:`server_blackboard_phase`, trace tasks in
+:mod:`server_blackboard_trace`, and the IDB-publishing surface in
+:mod:`server_blackboard_idb`.
+
+Canonical keep=true response shapes (write/search/frontier/next_target/
+crawler_status/list/read/coverage/export) are composed from
+:mod:`blackboard_shapes` so the pinned contracts stay in one place.
+"""
+
+import contextlib
 import hashlib
 import json
 import os
 import re
 import sqlite3
 import threading
-import time
-from collections import Counter
-from datetime import UTC, datetime
 from typing import Any
 
 from ..config import _bounded_int, _coerce_bool
@@ -17,44 +36,35 @@ from ..errors import MCPError, is_error_result, make_error
 from ..intelligence.helpers import parse_str_list
 from ..stores.blackboard_store import STRATEGIES as BB_STRATEGIES, is_auto_name
 from ..stores.symbol_db import SymbolDB
+from .blackboard_orchestration import (
+    EVIDENCE_GRAVITY_MAX_ITEMS,
+    NS_GRAVITY,
+    BlackboardOrchestrator,
+)
+from .blackboard_shapes import (
+    STRATEGY_EMPTY_NOTES as _STRATEGY_EMPTY,
+    STRATEGY_NOTES as _STRATEGY_NOTES,
+    build_export_snapshot,
+    coverage_response,
+    crawler_status_response,
+    entry_brief as _entry_brief,
+    entry_collection_summary as _entry_collection_summary,
+    frontier_response,
+    list_response,
+    next_target_response,
+    read_response,
+    search_response,
+    snapshot_to_json,
+    snapshot_to_markdown,
+    write_response,
+)
 from .server_blackboard_idb import ServerBlackboardIdbMixin
 from .server_blackboard_phase import ServerBlackboardPhaseMixin
 from .server_blackboard_trace import ServerBlackboardTraceMixin
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-#: Version stamp of the JSON export format, so consumers can detect
-#: incompatible files instead of guessing.
-_EXPORT_FORMAT_VERSION = "ida-findings-v1"
-
-#: Fields that describe internal storage rather than the investigation, and
-#: are therefore not part of an export.
-_EXPORT_DROP_FIELDS = {
-    "fingerprint", "bridges", "schema", "register", "reg_type",
-    "norm", "call_idx", "decayed_at", "version", "entropy",
-    "quantized", "q_signs", "vector",
-}
-
-#: Render order for the Markdown export: kinds first, statuses within a kind.
-_EXPORT_KIND_ORDER = ("finding", "hypothesis", "question", "task", "decision", "examined")
-_EXPORT_STATUS_ORDER = ("open", "confirmed", "resolved", "rejected")
-
-#: What each target strategy selects for, stated plainly in the response so
-#: the model can judge whether the suggestion is worth taking.
-_STRATEGY_NOTES = {
-    "unresolved": "Open questions, hypotheses, and tasks, plus findings recorded but never verified.",
-    "stale": "Claims whose underlying code changed after they were written.",
-    "conflict": "Entries that contradict another entry and must be reconciled.",
-    "coverage": "Frequently-called functions with no finding and no examination.",
-    "frontier": "Unexamined callers and callees of confirmed findings.",
-}
-_STRATEGY_EMPTY = {
-    "unresolved": " Nothing is open. Try strategy='coverage'.",
-    "stale": " No claim has been invalidated by a code change.",
-    "conflict": " No contradictions recorded.",
-    "coverage": " Every function is already recorded or examined, or no session is open.",
-    "frontier": " Nothing is confirmed yet to expand from, or no session is open.",
-}
+#: Lane name → store category for the working-set lanes.
 _LANE_CATEGORY = {
     "lane_now": "wm_now",
     "lane_hypotheses": "hypothesis",
@@ -63,137 +73,91 @@ _LANE_CATEGORY = {
     "lane_dead_ends": "dead_end",
 }
 
+#: Actions exempt from the phase contract gate — read-only / introspection.
+_PHASE_GATE_EXEMPT_ACTIONS = frozenset({
+    "phase_status", "phase_set", "working_set", "list", "read", "search",
+    "state_health", "policy_set", "policy_status", "policy_check",
+})
 
-def _clip(text: Any, limit: int = 120) -> str:
-    value = str(text or "").replace("\n", " ").strip()
-    if len(value) <= limit:
-        return value
-    return value[: max(0, limit - 1)].rstrip() + "…"
+#: Actions whose response carries a phase snapshot.
+_PHASE_SNAPSHOT_ACTIONS = frozenset({
+    "write", "decision_card", "proposal_create", "proposal_list",
+    "proposal_accept", "proposal_reject", "trace_ingest", "trace_status",
+    "trace_run", "memory_compile", "phase_finalize", "working_set",
+    "state_health", "policy_status", "policy_check", "phase_status",
+    "phase_set",
+})
 
+#: Actions gated by the strict policy gate when enforced for the current phase.
+_STRICT_POLICY_ACTIONS = frozenset({"proposal_accept", "trace_run"})
 
-def _entry_brief(entry: dict[str, Any]) -> dict[str, Any]:
-    tags = entry.get("tags") or []
-    evidence = entry.get("evidence") or []
-    addr = str(entry.get("addr") or "").strip()
-    title = str(entry.get("title") or "").strip()
-    category = str(entry.get("category") or "general").strip()
-    confidence = float(entry.get("confidence") or 0.0)
-    raw_status = str(entry.get("status") or "").strip().lower()
-    if raw_status in {"open", "confirmed", "resolved", "rejected"}:
-        status = raw_status
-    elif entry.get("resolved"):
-        status = "resolved"
-    elif entry.get("contradicted"):
-        status = "rejected"
-    else:
-        status = "open"
-    tag_list = tags if isinstance(tags, list) else []
-    return {
-        "entry_id": entry.get("id") or entry.get("entry_id"),
-        "addr": addr or None,
-        "title": title,
-        "category": category,
-        "confidence": round(confidence, 3),
-        "source_type": str(entry.get("source_type") or "manual"),
-        "status": status,
-        "tags": tag_list[:8],
-        "evidence_count": len(evidence) if isinstance(evidence, list) else 0,
-        "summary": _clip(
-            f"{addr or 'no-addr'} | {category} | {title} | conf={confidence:.2f} | "
-            f"{status} | tags={', '.join(tag_list[:4]) if tag_list else 'none'}",
-            180,
-        ),
-        "content_preview": _clip(entry.get("content") or "", 180) if entry.get("content") else "",
-    }
+#: Actions that only need phase/policy state (no store open).
+_POLICY_ONLY_ACTIONS = frozenset({
+    "policy_set", "policy_status", "policy_check", "phase_status", "phase_set",
+})
 
-
-def _entry_collection_summary(entries: list[dict[str, Any]]) -> dict[str, Any]:
-    categories = Counter(str(e.get("category") or "general") for e in entries)
-    source_types = Counter(str(e.get("source_type") or "manual") for e in entries)
-    briefs = [_entry_brief(e) for e in entries[:10]]
-    return {
-        "count": len(entries),
-        "categories": dict(categories),
-        "source_types": dict(source_types),
-        "top_titles": [b["title"] for b in briefs[:5] if b.get("title")],
-        "briefs": briefs,
-    }
-
-
-def _target_collection_summary(targets: list[dict[str, Any]]) -> dict[str, Any]:
-    if not targets:
-        return {"count": 0, "briefs": []}
-    briefs = []
-    for target in targets[:10]:
-        addr = str(target.get("addr") or target.get("address") or "").strip()
-        title = str(target.get("title") or target.get("name") or "").strip()
-        parts = [addr or "no-addr", title or "unnamed"]
-        if target.get("confidence") is not None:
-            parts.append(f"conf={float(target.get('confidence') or 0.0):.2f}")
-        priority = target.get("priority_score")
-        if priority is None:
-            priority = target.get("priority")
-        if priority is not None:
-            parts.append(f"priority={float(priority or 0.0):.3f}")
-        if target.get("semantic_similarity") is not None:
-            parts.append(f"semantic={float(target.get('semantic_similarity') or 0.0):.3f}")
-        if target.get("xref_count") is not None:
-            parts.append(f"xrefs={int(target.get('xref_count') or 0)}")
-        if target.get("entropy") is not None:
-            parts.append(f"entropy={float(target.get('entropy') or 0.0):.2f}")
-        briefs.append({
-            "addr": addr or None,
-            "title": title,
-            "category": target.get("category"),
-            "summary": " | ".join(parts),
-        })
-    best = targets[0]
-    return {
-        "count": len(targets),
-        "best_addr": best.get("addr") or best.get("address"),
-        "best_title": best.get("title"),
-        "briefs": briefs,
-    }
-
-
-def _frontier_collection_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
-    if not results:
-        return {"count": 0, "briefs": []}
-    briefs = []
-    for row in results[:10]:
-        addr = str(row.get("addr") or row.get("address") or "").strip()
-        name = str(row.get("name") or row.get("title") or "").strip()
-        pieces = [addr or "no-addr", name or "unnamed"]
-        if row.get("score") is not None:
-            pieces.append(f"score={float(row.get('score') or 0.0):.3f}")
-        if row.get("proximity") is not None:
-            pieces.append(f"prox={float(row.get('proximity') or 0.0):.3f}")
-        if row.get("nearest_label_title"):
-            pieces.append(f"near={_clip(row.get('nearest_label_title'), 40)}")
-        briefs.append({
-            "addr": addr or None,
-            "name": name,
-            "summary": " | ".join(pieces),
-        })
-    return {"count": len(results), "briefs": briefs}
-
-
-def _proposal_collection_summary(proposals: list[dict[str, Any]]) -> dict[str, Any]:
-    if not proposals:
-        return {"count": 0, "briefs": []}
-    briefs = []
-    for p in proposals[:10]:
-        briefs.append({
-            "proposal_id": p.get("proposal_id"),
-            "addr": p.get("addr"),
-            "title": p.get("title"),
-            "summary": _clip(
-                f"{p.get('proposal_id')} | {p.get('addr') or 'no-addr'} | "
-                f"{p.get('title') or ''} | conf={float(p.get('confidence') or 0.0):.2f}",
-                180,
-            ),
-        })
-    return {"count": len(proposals), "briefs": briefs}
+#: Dispatch table: blackboard action → handler method name.
+_BLACKBOARD_ACTIONS: dict[str, str] = {
+    # governance / phase
+    "policy_set": "_bb_action_policy_set",
+    "policy_status": "_bb_action_policy_status",
+    "policy_check": "_bb_action_policy_check",
+    "phase_status": "_bb_action_phase_status",
+    "phase_set": "_bb_action_phase_set",
+    "phase_tick": "_bb_action_phase_tick",
+    # analyst memory
+    "write": "_bb_action_write",
+    "decision_card": "_bb_action_decision_card",
+    "memory_compile": "_bb_action_memory_compile",
+    "phase_finalize": "_bb_action_memory_compile",
+    # proposal lifecycle (over real entries)
+    "proposal_create": "_bb_action_proposal_create",
+    "proposal_list": "_bb_action_proposal_list",
+    "proposal_accept": "_bb_action_proposal_accept",
+    "proposal_reject": "_bb_action_proposal_reject",
+    # trace tasks
+    "trace_ingest": "_bb_action_trace_ingest",
+    "trace_status": "_bb_action_trace_status",
+    "trace_run": "_bb_action_trace_run",
+    # lanes / state
+    "working_set": "_bb_action_working_set",
+    "state_health": "_bb_action_state_health",
+    # file / export
+    "export": "_bb_action_export",
+    "notes_import": "_bb_action_notes_import",
+    # CRUD
+    "list": "_bb_action_list",
+    "search": "_bb_action_search",
+    "read": "_bb_action_read",
+    "update": "_bb_action_update",
+    "delete": "_bb_action_delete",
+    "clear": "_bb_action_clear",
+    "stats": "_bb_action_stats",
+    "coverage": "_bb_action_coverage",
+    "merge": "_bb_action_merge",
+    "prune": "_bb_action_prune",
+    "contradict": "_bb_action_contradict",
+    "resolve": "_bb_action_resolve",
+    "next_target": "_bb_action_next_target",
+    "frontier": "_bb_action_frontier",
+    "add_evidence": "_bb_action_add_evidence",
+    "calibrate": "_bb_action_calibrate",
+    "decay": "_bb_action_decay",
+    "campaign_summary": "_bb_action_campaign_summary",
+    "workspace_brief": "_bb_action_workspace_brief",
+    "mark_examined": "_bb_action_mark_examined",
+    "recall": "_bb_action_recall",
+    "publish_findings": "_bb_action_publish_findings",
+    "import_annotations": "_bb_action_import_annotations",
+    "conflicts": "_bb_action_conflicts",
+    "stale": "_bb_action_stale",
+    # crawler
+    "start_crawler": "_bb_action_start_crawler",
+    "stop_crawler": "_bb_action_stop_crawler",
+    "crawler_status": "_bb_action_crawler_status",
+    "accept": "_bb_action_accept",
+    "reject": "_bb_action_reject",
+}
 
 
 def _coerce_str_list(value: Any) -> list[str]:
@@ -207,6 +171,104 @@ def _coerce_str_list(value: Any) -> list[str]:
 class ServerBlackboardMixin(
     ServerBlackboardPhaseMixin, ServerBlackboardTraceMixin, ServerBlackboardIdbMixin
 ):
+    # Phase/policy methods are in ServerBlackboardPhaseMixin (server_blackboard_phase.py)
+    # Trace methods are in ServerBlackboardTraceMixin (server_blackboard_trace.py)
+    # IDB-publish methods are in ServerBlackboardIdbMixin (server_blackboard_idb.py)
+
+    def _orchestration(self) -> BlackboardOrchestrator:
+        """Return the lazily-created orchestration layer for this host."""
+        orch = getattr(self, "_bb_orchestrator", None)
+        if orch is None:
+            orch = BlackboardOrchestrator(self)
+            self._bb_orchestrator = orch
+        return orch
+
+    def _bb_dispatch_gate(self, action, args, store, phase_state, policy_state) -> dict | None:
+        """Run the governance gate once per dispatch.
+
+        Order is deliberate and mirrors the original monolithic dispatch: log
+        the action, run the phase auto-transition, check the phase contract,
+        then (for the strict-policy actions) the policy gate. Returns a
+        POLICY_DENIED envelope when a gate blocks the action; else None so
+        dispatch proceeds to the action handler.
+        """
+        self._phase_log_action(phase_state, action, addr=str(args.get("addr") or "").strip())
+        if store is not None:
+            self._phase_auto_transition(
+                phase_state, action, args if isinstance(args, dict) else {}, store
+            )
+            phase_block = self._phase_contract_check(
+                phase_state, action, args if isinstance(args, dict) else {}, store
+            )
+        else:
+            phase_block = None
+        if phase_block and action not in _PHASE_GATE_EXEMPT_ACTIONS:
+            return phase_block
+        if self._phase_find_loop(phase_state):
+            self._phase_transition(phase_state, "prove", "auto: loop detected, injecting escape-route")
+        current_phase = str((phase_state or {}).get("phase") or "scout")
+        if (
+            action in _STRICT_POLICY_ACTIONS
+            and self._bb_policy_enforced_for_phase(policy_state, current_phase)
+        ):
+            check = self._bb_policy_check(policy_state)
+            if not check.get("ok"):
+                return self._policy_denied(
+                    phase_state,
+                    policy_state,
+                    "Strict policy gate failed before execution",
+                )
+        return None
+
+    def _handle_blackboard(self, args: dict) -> dict:
+        """Host-side blackboard handler.
+
+        Wraps the dispatch so malformed numeric args (``int``/``float`` on
+        caller strings) surface as an INVALID_ARGS envelope instead of raising
+        a ValueError out of the dispatch layer, which would report an internal
+        error to the MCP client.
+        """
+        try:
+            return self._handle_blackboard_inner(args)
+        except (TypeError, ValueError) as exc:
+            return make_error(MCPError.INVALID_ARGS, str(exc))
+
+    def _handle_blackboard_inner(self, args: dict) -> dict:
+        """Dict-driven blackboard dispatch so it works without IDA runtime."""
+        policy_state = self._bb_policy_bump()
+        phase_state = self._phase_state()
+        action = str(args.get("action") or "list").strip().lower()
+        store = None
+        if action not in _POLICY_ONLY_ACTIONS:
+            store = self._get_blackboard_store()
+            if store is None:
+                detail = getattr(self, "_blackboard_store_error", "") or ""
+                if detail:
+                    return make_error(MCPError.DB_ERROR, f"BlackboardStore unavailable: {detail}")
+                return make_error(MCPError.IO_ERROR, "BlackboardStore unavailable")
+        gate = self._bb_dispatch_gate(action, args, store, phase_state, policy_state)
+        if gate is not None:
+            return gate
+        handler_name = _BLACKBOARD_ACTIONS.get(action)
+        handler = getattr(self, handler_name, None) if handler_name else None
+        if handler is None or not callable(handler):
+            return make_error(
+                MCPError.ACTION_NOT_FOUND,
+                f"Unsupported blackboard action: '{action}'",
+                hint="Valid actions include write, read, list, search, update, workspace_brief, next_target, frontier, stats, and legacy analysis actions.",
+            )
+        result = handler(args, store, phase_state, policy_state)
+        if not isinstance(result, dict):
+            return {"ok": True, "result": result}
+        if action in _PHASE_SNAPSHOT_ACTIONS and "phase" not in result:
+            result = dict(result)
+            result["phase"] = self._phase_snapshot(phase_state, store)
+        return result
+
+    # ------------------------------------------------------------------
+    # Workspace path / seeding
+    # ------------------------------------------------------------------
+
     def _session_blackboard_path(self, session_obj=None, sid: str | None = None) -> str:
         session = session_obj
         sid_text = str(sid or "").strip()
@@ -292,10 +354,10 @@ class ServerBlackboardMixin(
             try:
                 with sqlite3.connect(workspace_path) as conn:
                     has_table = conn.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table' AND name='blackboard'"
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='findings'"
                     ).fetchone()
                     if has_table:
-                        count = conn.execute("SELECT COUNT(*) FROM blackboard").fetchone()[0]
+                        count = conn.execute("SELECT COUNT(*) FROM findings").fetchone()[0]
                         if count > 0:
                             return
             except sqlite3.Error:
@@ -316,9 +378,7 @@ class ServerBlackboardMixin(
         if not candidates:
             return
         try:
-            ordered = sorted(
-                candidates, key=os.path.getmtime, reverse=True
-            )
+            ordered = sorted(candidates, key=os.path.getmtime, reverse=True)
             with sqlite3.connect(ordered[0]) as source, sqlite3.connect(workspace_path) as target:
                 source.backup(target)
             for older in ordered[1:]:
@@ -359,9 +419,19 @@ class ServerBlackboardMixin(
         except sqlite3.Error:
             pass
 
-    # Phase/policy methods are in ServerBlackboardPhaseMixin (server_blackboard_phase.py)
-    # Trace methods are in ServerBlackboardTraceMixin (server_blackboard_trace.py)
+    # ------------------------------------------------------------------
+    # Evidence gravity (bounded snapshot, fired on create)
+    # ------------------------------------------------------------------
+
     def _evidence_gravity(self, store, source_entry_id: str, addr: str, source_text: str = "") -> dict[str, Any]:
+        """Pull a bounded evidence snapshot around ``addr`` and persist it.
+
+        Fired only when a write created a new entry. The response-carried view
+        is ``{ok, entry_id, items, note}`` with at most
+        ``EVIDENCE_GRAVITY_MAX_ITEMS`` items; the raw snapshot is stored in
+        ``bb_machinery`` under the gravity namespace so it survives without
+        polluting the analyst-facing findings table.
+        """
         addr = str(addr or "").strip()
         if not addr or not hasattr(self, "_execute_tool"):
             return {"ok": False, "reason": "no_addr_or_runtime"}
@@ -387,7 +457,6 @@ class ServerBlackboardMixin(
             except Exception as exc:
                 pulls.append({"tool": tool, "args": targs, "ok": False, "error": str(exc)})
         embedding_neighbors = []
-        # Embedding-aware gravity: pull semantic neighbors around the address/text seed.
         try:
             query = (source_text or "").strip() or addr
             sims = store.semantic_search(
@@ -410,87 +479,39 @@ class ServerBlackboardMixin(
                     )
         except Exception:
             embedding_neighbors = []
-        summary = {
+        items = []
+        for p in pulls:
+            items.append(
+                {
+                    "tool": p.get("tool"),
+                    "addr": addr,
+                    "ok": bool(p.get("ok")),
+                    "result": p.get("result")
+                    if p.get("ok")
+                    else {"error": str(p.get("error") or "probe failed")},
+                }
+            )
+        for n in embedding_neighbors:
+            items.append({"tool": "semantic", "addr": n.get("addr"), "ok": True, "result": n})
+        items = items[:EVIDENCE_GRAVITY_MAX_ITEMS]
+        snapshot = {
             "source_entry_id": source_entry_id,
             "addr": addr,
-            "pulls": pulls[:10],
-            "embedding_neighbors": embedding_neighbors,
-            "source_text_preview": _clip(source_text or "", 240),
+            "items": items,
+            "note": f"bounded evidence gravity snapshot (max {EVIDENCE_GRAVITY_MAX_ITEMS} items)",
         }
-        gravity_id = store.write(
-            title=f"evidence gravity {addr}",
-            content=json.dumps(summary, ensure_ascii=True),
-            category="evidence_gravity",
-            addr=addr,
-            tags=["evidence_gravity", "auto_enrich"],
-            confidence=0.66,
-            source="evidence_gravity",
-            source_type="gravity",
-        )
-        return {"ok": True, "entry_id": gravity_id, "pull_count": len(pulls), "embedding_neighbor_count": len(embedding_neighbors)}
-
-    def _quest_board(self, store, entry_id: str = "", limit: int = 20) -> dict[str, Any]:
-        seeds = []
-        if entry_id:
-            e = store.read(entry_id)
-            if e:
-                seeds = [e]
-        if not seeds:
-            seeds = store.list(include_resolved=False, include_contradicted=False, limit=max(20, limit))
-        quests = []
-        for e in seeds[: max(20, limit)]:
-            eid = str(e.get("id") or "")
-            addr = str(e.get("addr") or "")
-            cat = str(e.get("category") or "")
-            if addr:
-                quests.append({"quest_type": "trace_caller", "entry_id": eid, "addr": addr, "call": {"tool": "trace_ingest", "args": {"entry_id": eid}}})
-                quests.append({"quest_type": "verify_this", "entry_id": eid, "addr": addr, "call": {"tool": "search", "args": {"query": addr}}})
-                quests.append({
-                    "quest_type": "rename_candidate",
-                    "entry_id": eid,
-                    "addr": addr,
-                    "call": {
-                        "tool": "proposal_create",
-                        "args": {
-                            "proposal_type": "rename",
-                            "title": f"rename {addr}",
-                            "spec": {"renames": [{"addr": addr, "name": "sub_candidate"}]},
-                        },
-                    },
-                })
-            quests.append({"quest_type": "disprove_hypothesis", "entry_id": eid, "addr": addr, "call": {"tool": "contradict", "args": {"entry_id": eid, "reason": "counter-evidence required"}}})
-            if cat in {"hypothesis", "fact"}:
-                quests.append({"quest_type": "merge_duplicate", "entry_id": eid, "addr": addr, "call": {"tool": "merge", "args": {"addr": addr, "category": cat}}})
-            if len(quests) >= limit:
-                break
-        return {"ok": True, "count": len(quests[:limit]), "quests": quests[:limit]}
-
-    def _quest_complete(self, store, quest_id: str, quest_type: str, status: str, result_text: str, evidence: list[str], entry_id: str = "", addr: str = "") -> dict[str, Any]:
-        qid = str(quest_id or "").strip() or f"quest-{int(time.time() * 1000)}"
-        qtype = str(quest_type or "").strip() or "generic"
-        st = str(status or "completed").strip().lower()
-        if st not in {"completed", "failed", "skipped"}:
-            st = "completed"
-        payload = {
-            "quest_id": qid,
-            "quest_type": qtype,
-            "status": st,
-            "result": str(result_text or "").strip(),
-            "evidence": evidence[:10],
-            "entry_id": str(entry_id or "").strip(),
-            "addr": str(addr or "").strip(),
+        with contextlib.suppress(Exception):
+            self._orchestration().machinery_set(store, NS_GRAVITY, source_entry_id, snapshot)
+        return {
+            "ok": True,
+            "entry_id": source_entry_id,
+            "items": items,
+            "note": snapshot["note"],
         }
-        eid = store.write(
-            title=f"quest {qtype} {qid} {st}",
-            content=json.dumps(payload, ensure_ascii=True),
-            category="quest_log",
-            addr=str(addr or "").strip(),
-            tags=[f"quest:{qtype}", f"status:{st}", "quest_completion"],
-            confidence=0.75 if st == "completed" else 0.4,
-            source="quest_complete",
-            source_type="quest",
-        )
-        return {"ok": True, "entry_id": eid, "quest": payload}
+
+    # ------------------------------------------------------------------
+    # Memory compiler
+    # ------------------------------------------------------------------
 
     def _memory_compile(self, store, limit: int = 30, notes_path: str = "") -> dict[str, Any]:
         entries = store.list(include_resolved=True, include_contradicted=True, limit=max(200, limit * 4))
@@ -567,6 +588,7 @@ class ServerBlackboardMixin(
             },
         }
         notes_written = ""
+        path_err = None
         if notes_path:
             notes_path, path_err = self._bb_confine_path(notes_path)
         if notes_path and not path_err:
@@ -574,8 +596,6 @@ class ServerBlackboardMixin(
                 lines = [
                     "# Memory Compiler Snapshot",
                     "",
-                    # Compiler metadata, deliberately NOT bullet-prefixed so a
-                    # notes_import round-trip does not re-ingest it as findings.
                     f"phase_quality_score: {compiled['phase_quality']['score']}",
                     f"contradictions: {compiled['phase_quality']['contradictions']}",
                     f"quest_completion_rate: {compiled['quest_metrics']['completion_rate']}",
@@ -631,6 +651,110 @@ class ServerBlackboardMixin(
         )
         return {"ok": True, "entry_id": cid, "notes_path": notes_written or None, **compiled}
 
+    # ------------------------------------------------------------------
+    # Proposal / lifecycle helpers
+    # ------------------------------------------------------------------
+
+    def _write_proposal_entry(
+        self,
+        store,
+        *,
+        proposal_type: str,
+        title: str,
+        spec: dict[str, Any],
+        addr: str = "",
+        confidence: float = 0.7,
+        source: str = "proposal_create",
+        verification_spec: dict[str, Any] | None = None,
+        extra_tags: list[str] | None = None,
+    ) -> str:
+        """Write a real proposal entry with its lifecycle status in the payload."""
+        payload = {
+            "proposal_type": proposal_type,
+            "spec": spec,
+            "verification_spec": verification_spec or {},
+            "status": "proposed",
+        }
+        tags = [f"proposal_type:{proposal_type}", "status:proposed", "proposal_lifecycle"]
+        if extra_tags:
+            tags.extend(str(t) for t in extra_tags if str(t).strip())
+        return store.write(
+            title=title,
+            content=json.dumps(payload, ensure_ascii=True),
+            category="proposal",
+            addr=str(addr or "").strip(),
+            tags=tags,
+            confidence=float(confidence or 0.7),
+            source=source,
+            source_type="proposal",
+            status="proposed",
+        )
+
+    def _write_crawler_proposal(
+        self, store, *, addr: str, title: str, content: str, behavior_tags: list[str] | None = None
+    ) -> str:
+        """Write a crawler-generated rename proposal as a real store entry."""
+        name = self._proposal_name_candidate(title)
+        payload = {
+            "proposal_type": "rename",
+            "spec": {"renames": [{"addr": str(addr or "").strip(), "name": name}]},
+            "verification_spec": {"kind": "symbol_name_match"},
+            "status": "proposed",
+            "source_crawler": True,
+            "summary": str(content or "")[:220],
+        }
+        tags = ["proposal_type:rename", "status:proposed", "proposal_lifecycle", "crawler"]
+        if behavior_tags:
+            tags.extend(str(t) for t in behavior_tags[:8] if str(t).strip())
+        return store.write(
+            title=title,
+            content=json.dumps(payload, ensure_ascii=True),
+            category="proposal",
+            addr=str(addr or "").strip(),
+            tags=tags,
+            confidence=0.55,
+            source="crawler",
+            source_type="proposal",
+            status="proposed",
+        )
+
+    @staticmethod
+    def _proposal_name_candidate(title: str) -> str:
+        candidate = re.sub(r"[^A-Za-z0-9_]", "_", str(title or "").strip())[:48].strip("_")
+        if candidate and candidate[0].isdigit():
+            candidate = "_" + candidate
+        return candidate or "sub_candidate"
+
+    def _apply_lifecycle_status(self, store, entry_id: str, status: str, reason: str = "") -> dict[str, Any] | None:
+        """Transition a proposal/lifecycle entry and keep column + payload in sync.
+
+        Returns the updated entry, or None when the entry is missing.
+        """
+        entry = store.read(entry_id)
+        if entry is None:
+            return None
+        status = str(status or "").strip().lower()
+        tags = entry.get("tags") or []
+        if not isinstance(tags, list):
+            tags = []
+        new_tags = self._proposal_status_replace(tags, status)
+        payload = {}
+        try:
+            payload = json.loads(str(entry.get("content") or "{}"))
+        except Exception:
+            payload = {}
+        payload["status"] = status
+        if reason:
+            payload["last_reason"] = str(reason)[:200]
+        ok = store.update(
+            entry_id,
+            tags=new_tags,
+            content=json.dumps(payload, ensure_ascii=True),
+        )
+        if ok:
+            with contextlib.suppress(Exception):
+                store.update(entry_id, status=status)
+        return store.read(entry_id) if ok else entry
 
     def _verified_proposal_addrs(self, store, limit: int = 400) -> set:
         out = set()
@@ -750,6 +874,10 @@ class ServerBlackboardMixin(
             "recommended_action": fix,
         }
 
+    # ------------------------------------------------------------------
+    # Filesystem sandbox
+    # ------------------------------------------------------------------
+
     def _bb_path_root(self) -> str | None:
         """Root directory that blackboard file actions may read/write.
 
@@ -838,6 +966,10 @@ class ServerBlackboardMixin(
                 return True
         return False
 
+    # ------------------------------------------------------------------
+    # Findings export (canonical snapshot via blackboard_shapes)
+    # ------------------------------------------------------------------
+
     def _findings_export(
         self,
         store,
@@ -853,8 +985,7 @@ class ServerBlackboardMixin(
         include_contradicted: bool = True,
         limit: int = 0,
     ) -> dict[str, Any]:
-        """Export the investigation in the findings format (kind/status/
-        confidence/priority/tags/evidence), JSON or Markdown.
+        """Export the investigation in the findings format, JSON or Markdown.
 
         This is the full-fidelity snapshot of the workspace, carrying
         everything the ``ida_write_finding`` contract can express, so a
@@ -881,28 +1012,16 @@ class ServerBlackboardMixin(
             for row in page:
                 if cap and len(entries) >= cap:
                     break
-                clean = {k: v for k, v in row.items() if k not in _EXPORT_DROP_FIELDS}
-                clean["entry_id"] = str(clean.get("id") or "")
-                entries.append(clean)
+                entries.append(row)
             if len(page) < page_size or (cap and len(entries) >= cap):
                 break
             offset += page_size
         stats = store.stats() or {}
-        snapshot = {
-            "format": _EXPORT_FORMAT_VERSION,
-            "exported_at": datetime.now(UTC).isoformat(timespec="seconds"),
-            "stats": {
-                "total_entries": int(stats.get("total_entries") or 0),
-                "resolved": int(stats.get("resolved") or 0),
-                "contradicted": int(stats.get("contradicted") or 0),
-                "stale": int(stats.get("stale") or 0),
-            },
-            "entries": entries,
-        }
+        snapshot = build_export_snapshot(entries, stats=stats)
         if fmt == "markdown":
-            content = self._findings_to_markdown(snapshot)
+            content = snapshot_to_markdown(snapshot)
         else:
-            content = json.dumps(snapshot, indent=2, ensure_ascii=False)
+            content = snapshot_to_json(snapshot)
         if path.strip():
             out_path, path_err = self._bb_confine_path(path)
             if path_err:
@@ -924,83 +1043,6 @@ class ServerBlackboardMixin(
             "entries": len(entries),
             "stats": snapshot["stats"],
         }
-
-    @staticmethod
-    def _findings_to_markdown(snapshot: dict[str, Any]) -> str:
-        lines = ["# IDA Findings Export", ""]
-        lines.append(
-            f"Exported {snapshot.get('exported_at', '')} · format "
-            f"{snapshot.get('format', '')}"
-        )
-        stats = snapshot.get("stats") or {}
-        lines.append(
-            f"Entries: {stats.get('total_entries', 0)} · resolved "
-            f"{stats.get('resolved', 0)} · contradicted "
-            f"{stats.get('contradicted', 0)} · stale {stats.get('stale', 0)}"
-        )
-        lines.append("")
-        by_kind: dict[str, list[dict[str, Any]]] = {}
-        for entry in snapshot.get("entries") or []:
-            by_kind.setdefault(str(entry.get("kind") or "finding"), []).append(entry)
-        for kind in _EXPORT_KIND_ORDER:
-            group = by_kind.pop(kind, None)
-            if group is None:
-                continue
-            lines.append(f"## {kind} ({len(group)})")
-            lines.append("")
-            by_status: dict[str, list[dict[str, Any]]] = {}
-            for entry in group:
-                by_status.setdefault(str(entry.get("status") or "open"), []).append(entry)
-            for status in _EXPORT_STATUS_ORDER:
-                subgroup = by_status.pop(status, None)
-                if subgroup is None:
-                    continue
-                lines.append(f"### {status}")
-                for entry in subgroup:
-                    addr = str(entry.get("addr") or "").strip() or "no-addr"
-                    title = str(entry.get("title") or "").strip() or "(untitled)"
-                    lines.append(f"- **[{addr}] {title}**")
-                    meta = [f"conf={float(entry.get('confidence') or 0.0):.2f}"]
-                    priority = entry.get("priority")
-                    if priority is not None:
-                        meta.append(f"priority={float(priority):.2f}")
-                    tags = entry.get("tags") or []
-                    if isinstance(tags, list) and tags:
-                        meta.append("tags=" + ", ".join(str(t) for t in tags[:8]))
-                    source = str(entry.get("source_type") or "manual")
-                    meta.append(f"source={source}")
-                    if entry.get("stale"):
-                        meta.append("STALE: " + str(entry.get("stale_reason") or ""))
-                    conflicts = entry.get("conflicts_with") or []
-                    if isinstance(conflicts, list) and conflicts:
-                        meta.append("contradicts=" + ",".join(str(c) for c in conflicts))
-                    lines.append(f"  - {', '.join(meta)}")
-                    content = str(entry.get("content") or "").strip()
-                    if content:
-                        lines.append("")
-                        lines.append(f"  > {content}")
-                    evidence = entry.get("evidence") or []
-                    if isinstance(evidence, list) and evidence:
-                        lines.append("")
-                        for ev in evidence[:12]:
-                            ev_addr = str(ev.get("address") or "")
-                            loc = f" @ {ev_addr}" if ev_addr else ""
-                            lines.append(
-                                f"  - evidence: [{ev.get('type')}] {str(ev.get('value') or '')}{loc}"
-                            )
-                lines.append("")
-            for status, subgroup in by_status.items():
-                lines.append(f"### {status}")
-                for entry in subgroup:
-                    lines.append(f"- {str(entry.get('title') or '(untitled)')}")
-                lines.append("")
-        for kind, group in by_kind.items():
-            lines.append(f"## {kind} ({len(group)})")
-            lines.append("")
-            for entry in group:
-                lines.append(f"- {str(entry.get('title') or '(untitled)')}")
-            lines.append("")
-        return "\n".join(lines).strip() + "\n"
 
     def _notes_import(
         self,
@@ -1060,6 +1102,10 @@ class ServerBlackboardMixin(
             "trace_tasks_created": len(trace_tasks),
             "trace_task_ids": trace_tasks[:20],
         }
+
+    # ------------------------------------------------------------------
+    # Proposal spec validation + verification + execution
+    # ------------------------------------------------------------------
 
     def _validate_rename_spec(self, spec: dict[str, Any]) -> str | None:
         if not isinstance(spec, dict):
@@ -1215,6 +1261,10 @@ class ServerBlackboardMixin(
             }
         return {"ok": True, "applied": applied}
 
+    # ------------------------------------------------------------------
+    # Store access
+    # ------------------------------------------------------------------
+
     def _get_blackboard_store(self):
         """Return a BlackboardStore scoped to the current session workspace.
 
@@ -1260,6 +1310,10 @@ class ServerBlackboardMixin(
             return h.hexdigest()
         except Exception:
             return ""
+
+    # ------------------------------------------------------------------
+    # Cross-session hypothesis round-trip via the symbol DB
+    # ------------------------------------------------------------------
 
     def _export_session_hypotheses_to_symbol_db(self, sid: str, session_obj=None) -> int:
         try:
@@ -1357,819 +1411,771 @@ class ServerBlackboardMixin(
         except Exception:
             return 0
 
-    def _handle_blackboard(self, args: dict) -> dict:
-        """Host-side blackboard handler.
+    # ------------------------------------------------------------------
+    # Per-action handlers (governance / phase)
+    # ------------------------------------------------------------------
 
-        Wraps the dispatch so malformed numeric args (``int``/``float`` on
-        caller strings) surface as an INVALID_ARGS envelope instead of raising
-        a ValueError out of the dispatch layer, which would report an internal
-        error to the MCP client.
-        """
+    def _bb_action_policy_set(self, args, store, phase_state, policy_state) -> dict:
+        strict_mode = _coerce_bool(args.get("strict_mode"), policy_state.get("strict_mode", False))
+        max_age = _bounded_int(args.get("max_staleness_calls", policy_state.get("max_staleness_calls", 6)), 6, min_value=1, max_value=100)
+        require_ws = _coerce_bool(args.get("require_working_set"), policy_state.get("require_working_set", True))
+        require_dw = _coerce_bool(args.get("require_decision_or_write"), policy_state.get("require_decision_or_write", True))
+        enforce_phases = args.get("enforce_phases", policy_state.get("enforce_phases", ["commit", "finalize"]))
+        if isinstance(enforce_phases, str):
+            enforce_phases = parse_str_list(enforce_phases)
+        if not isinstance(enforce_phases, list) or not enforce_phases:
+            enforce_phases = ["commit", "finalize"]
+        policy_state["strict_mode"] = strict_mode
+        policy_state["max_staleness_calls"] = max_age
+        policy_state["require_working_set"] = require_ws
+        policy_state["require_decision_or_write"] = require_dw
+        policy_state["enforce_phases"] = [str(p).strip().lower() for p in enforce_phases]
+        self._policy_persist(policy_state)
+        check = self._bb_policy_check(policy_state)
+        check["ok"] = True
+        check["note"] = "Policy updated."
+        return check
+
+    def _bb_action_policy_status(self, args, store, phase_state, policy_state) -> dict:
+        return {
+            "ok": True,
+            "policy": self._bb_policy_snapshot(policy_state),
+            "phase": self._phase_snapshot(phase_state, store),
+        }
+
+    def _bb_action_policy_check(self, args, store, phase_state, policy_state) -> dict:
+        out = self._bb_policy_check(policy_state)
+        out["phase"] = self._phase_snapshot(phase_state, store)
+        return out
+
+    def _bb_action_phase_status(self, args, store, phase_state, policy_state) -> dict:
+        return {"ok": True, "phase": self._phase_snapshot(phase_state, store)}
+
+    def _bb_action_phase_set(self, args, store, phase_state, policy_state) -> dict:
+        phase = str(args.get("phase") or "").strip().lower()
+        if phase not in {"scout", "prove", "commit", "finalize"}:
+            return make_error(MCPError.INVALID_ARGS, "phase must be one of: scout, prove, commit, finalize")
+        auto = _coerce_bool(args.get("auto_transition"), phase_state.get("auto_transition", True))
+        phase_state["auto_transition"] = auto
+        self._phase_transition(phase_state, phase, "manual set")
+        return {"ok": True, "phase": self._phase_snapshot(phase_state, store)}
+
+    def _bb_action_phase_tick(self, args, store, phase_state, policy_state) -> dict:
+        limit = _bounded_int(args.get("limit", 3), 3, min_value=1, max_value=20)
+        return self._phase_tick(phase_state, store, limit=limit)
+
+    # ------------------------------------------------------------------
+    # Per-action handlers (analyst memory)
+    # ------------------------------------------------------------------
+
+    def _bb_action_write(self, args, store, phase_state, policy_state) -> dict:
+        title = str(args.get("name") or args.get("title") or "").strip()
+        if not title:
+            return make_error(MCPError.INVALID_ARGS, "name/title required for write")
+        raw_tags = args.get("tags")
+        if isinstance(raw_tags, list):
+            tags = [str(t).strip() for t in raw_tags if str(t).strip()]
+        elif isinstance(raw_tags, str):
+            tags = parse_str_list(raw_tags)
+        else:
+            tags = []
+        evidence = args.get("evidence")
+        if not isinstance(evidence, list):
+            evidence = []
         try:
-            return self._handle_blackboard_inner(args)
+            result = store.upsert_finding(
+                title=title,
+                content=str(args.get("notes") or args.get("content") or ""),
+                category=str(args.get("category") or "general"),
+                addr=str(args.get("addr") or ""),
+                tags=tags,
+                confidence=float(args.get("confidence", 0.5)),
+                evidence=evidence,
+                source=str(args.get("source") or "manual"),
+                kind=str(args.get("kind") or "finding"),
+                status=str(args.get("status") or "open"),
+                priority=float(args.get("priority", 0.5)),
+            )
         except (TypeError, ValueError) as exc:
             return make_error(MCPError.INVALID_ARGS, str(exc))
-
-    def _handle_blackboard_inner(self, args: dict) -> dict:
-        """Host-side blackboard dispatch so it works without IDA runtime."""
-        policy_state = self._bb_policy_bump()
-        phase_state = self._phase_state()
-        action = str(args.get("action") or "list").strip().lower()
-        policy_only_actions = {"policy_set", "policy_status", "policy_check", "phase_status", "phase_set"}
-        store = None
-        if action not in policy_only_actions:
-            store = self._get_blackboard_store()
-            if store is None:
-                detail = getattr(self, "_blackboard_store_error", "") or ""
-                if detail:
-                    return make_error(
-                        MCPError.DB_ERROR,
-                        f"BlackboardStore unavailable: {detail}",
-                    )
-                return make_error(MCPError.IO_ERROR, "BlackboardStore unavailable")
-        self._phase_log_action(phase_state, action, addr=str(args.get("addr") or "").strip())
-        if store is not None:
-            self._phase_auto_transition(phase_state, action, args if isinstance(args, dict) else {}, store)
-            phase_block = self._phase_contract_check(phase_state, action, args if isinstance(args, dict) else {}, store)
-        else:
-            phase_block = None
-        if phase_block and action not in {"phase_status", "phase_set", "working_set", "list", "read", "search", "state_health", "policy_set", "policy_status", "policy_check"}:
-            return phase_block
-        if self._phase_find_loop(phase_state):
-            self._phase_transition(phase_state, "prove", "auto: loop detected, injecting escape-route")
-        if action == "policy_set":
-            strict_mode = _coerce_bool(args.get("strict_mode"), policy_state.get("strict_mode", False))
-            max_age = _bounded_int(args.get("max_staleness_calls", policy_state.get("max_staleness_calls", 6)), 6, min_value=1, max_value=100)
-            require_ws = _coerce_bool(args.get("require_working_set"), policy_state.get("require_working_set", True))
-            require_dw = _coerce_bool(args.get("require_decision_or_write"), policy_state.get("require_decision_or_write", True))
-            enforce_phases = args.get("enforce_phases", policy_state.get("enforce_phases", ["commit", "finalize"]))
-            if isinstance(enforce_phases, str):
-                enforce_phases = parse_str_list(enforce_phases)
-            if not isinstance(enforce_phases, list) or not enforce_phases:
-                enforce_phases = ["commit", "finalize"]
-            policy_state["strict_mode"] = strict_mode
-            policy_state["max_staleness_calls"] = max_age
-            policy_state["require_working_set"] = require_ws
-            policy_state["require_decision_or_write"] = require_dw
-            policy_state["enforce_phases"] = [str(p).strip().lower() for p in enforce_phases]
-            check = self._bb_policy_check(policy_state)
-            check["ok"] = True
-            check["note"] = "Policy updated."
-            return check
-        if action == "policy_status":
-            return {"ok": True, "policy": self._bb_policy_snapshot(policy_state), "phase": self._phase_snapshot(phase_state, store)}
-        if action == "policy_check":
-            out = self._bb_policy_check(policy_state)
-            out["phase"] = self._phase_snapshot(phase_state, store)
-            return out
-        if action == "phase_status":
-            return {"ok": True, "phase": self._phase_snapshot(phase_state, store)}
-        if action == "phase_set":
-            phase = str(args.get("phase") or "").strip().lower()
-            if phase not in {"scout", "prove", "commit", "finalize"}:
-                return make_error(MCPError.INVALID_ARGS, "phase must be one of: scout, prove, commit, finalize")
-            auto = _coerce_bool(args.get("auto_transition"), phase_state.get("auto_transition", True))
-            phase_state["auto_transition"] = auto
-            self._phase_transition(phase_state, phase, "manual set")
-            return {"ok": True, "phase": self._phase_snapshot(phase_state, store)}
-        if action == "phase_tick":
-            limit = _bounded_int(args.get("limit", 3), 3, min_value=1, max_value=20)
-            return self._phase_tick(phase_state, store, limit=limit)
-        if action == "quest_board":
-            entry_id = str(args.get("entry_id") or "").strip()
-            limit = _bounded_int(args.get("limit", 20), 20, min_value=1, max_value=200)
-            return self._quest_board(store, entry_id=entry_id, limit=limit)
-        if action == "quest_complete":
-            quest_id = str(args.get("quest_id") or "").strip()
-            quest_type = str(args.get("quest_type") or "").strip()
-            status = str(args.get("status") or "completed")
-            result_text = str(args.get("result") or args.get("notes") or "")
-            evidence = _coerce_str_list(args.get("evidence"))
-            entry_id = str(args.get("entry_id") or "").strip()
-            addr = str(args.get("addr") or "").strip()
-            return self._quest_complete(
-                store,
-                quest_id=quest_id,
-                quest_type=quest_type,
-                status=status,
-                result_text=result_text,
-                evidence=evidence,
-                entry_id=entry_id,
-                addr=addr,
-            )
-        if action in {"memory_compile", "phase_finalize"}:
-            result = self._memory_compile(
-                store,
-                limit=_bounded_int(args.get("limit", 30), 30, min_value=5, max_value=200),
-                notes_path=str(args.get("notes_path") or args.get("path") or "").strip(),
-            )
-            result["phase"] = self._phase_snapshot(phase_state, store)
-            return result
-        strict_guard_actions = {"proposal_accept", "trace_run"}
-        current_phase = str((phase_state or {}).get("phase") or "scout")
-        if self._bb_policy_enforced_for_phase(policy_state, current_phase) and action in strict_guard_actions:
-            check = self._bb_policy_check(policy_state)
-            if not check.get("ok"):
-                return make_error(
-                    MCPError.INVALID_ARGS,
-                    "Strict policy gate failed before execution",
-                    hint=json.dumps(
-                        {
-                            "reasons": check.get("reasons", []),
-                            "recommendation": check.get("recommendation"),
-                        },
-                        ensure_ascii=True,
-                    ),
-                )
-        if action == "write":
-            title = str(args.get("name") or args.get("title") or "").strip()
-            if not title:
-                return make_error(MCPError.INVALID_ARGS, "name/title required for write")
-            raw_tags = args.get("tags")
-            if isinstance(raw_tags, list):
-                tags = [str(t).strip() for t in raw_tags if str(t).strip()]
-            elif isinstance(raw_tags, str):
-                tags = parse_str_list(raw_tags)
-            else:
-                tags = []
-
-            evidence = args.get("evidence")
-            if not isinstance(evidence, list):
-                evidence = []
-            try:
-                result = store.upsert_finding(
-                    title=title,
-                    content=str(args.get("notes") or args.get("content") or ""),
-                    category=str(args.get("category") or "general"),
-                    addr=str(args.get("addr") or ""),
-                    tags=tags,
-                    confidence=float(args.get("confidence", 0.5)),
-                    evidence=evidence,
-                    source=str(args.get("source") or "manual"),
-                    kind=str(args.get("kind") or "finding"),
-                    status=str(args.get("status") or "open"),
-                    priority=float(args.get("priority", 0.5)),
-                )
-            except (TypeError, ValueError) as exc:
-                return make_error(MCPError.INVALID_ARGS, str(exc))
-            eid = result["entry_id"]
-            self._bb_policy_mark(policy_state, "write")
-            gravity = None
-            if result.get("created"):
-                gravity = self._evidence_gravity(
-                    store,
-                    source_entry_id=eid,
-                    addr=str(args.get("addr") or ""),
-                    source_text=str(args.get("notes") or args.get("content") or ""),
-                )
-            return {"ok": True, **result, "action": "write", "gravity": gravity, "phase": self._phase_snapshot(phase_state, store)}
-        if action == "decision_card":
-            claim = str(args.get("claim") or args.get("title") or "").strip()
-            if not claim:
-                return make_error(MCPError.INVALID_ARGS, "claim/title required for decision_card")
-            lane = str(args.get("lane") or "lane_hypotheses").strip()
-            category = _LANE_CATEGORY.get(lane, "hypothesis")
-            evidence_for = _coerce_str_list(args.get("evidence_for"))
-            evidence_against = _coerce_str_list(args.get("evidence_against"))
-            next_step = str(args.get("next_step") or args.get("next_verification_step") or "").strip()
-            expires_hours = int(args.get("expires_hours") or 0)
-            card = {
-                "claim": claim,
-                "evidence_for": evidence_for,
-                "evidence_against": evidence_against,
-                "next_verification_step": next_step,
-                "expires_after_hours": expires_hours,
-                "created_by": "decision_card",
-            }
-            tag_list = [lane, "decision_card"]
-            addr = str(args.get("addr") or "").strip()
-            conf = float(args.get("confidence", 0.65))
-            content = json.dumps(card, ensure_ascii=True)
-            eid = store.write(
-                title=claim,
-                content=content,
-                category=category,
-                addr=addr,
-                tags=tag_list,
-                confidence=conf,
-                source="decision_card",
-                source_type="decision_card",
-            )
-            self._bb_policy_mark(policy_state, "decision")
-            auto_trace = _coerce_bool(args.get("auto_trace"), True)
-            trace_depth = _bounded_int(args.get("trace_depth", 2), 2, min_value=1, max_value=6)
-            trace_limit = _bounded_int(args.get("trace_limit", 8), 8, min_value=1, max_value=50)
-            trace_task_id = self._maybe_auto_trace_from_text(
+        eid = result["entry_id"]
+        self._bb_policy_mark(policy_state, "write")
+        gravity = None
+        if result.get("created"):
+            gravity = self._evidence_gravity(
                 store,
                 source_entry_id=eid,
-                source_text=f"{claim}\n{card.get('next_verification_step') or ''}\n{addr}",
-                auto_trace=auto_trace,
-                depth=trace_depth,
-                limit=trace_limit,
+                addr=str(args.get("addr") or ""),
+                source_text=str(args.get("notes") or args.get("content") or ""),
             )
-            gravity = self._evidence_gravity(store, source_entry_id=eid, addr=addr, source_text=claim)
-            return {
-                "ok": True,
-                "entry_id": eid,
-                "lane": lane,
-                "card": card,
-                "trace_task_id": trace_task_id,
-                "gravity": gravity,
-                "phase": self._phase_snapshot(phase_state, store),
-                "note": "Decision card stored. Use working_set to verify it appears in the active lane.",
-            }
-        if action == "proposal_create":
-            proposal_type = str(args.get("proposal_type") or args.get("type") or "").strip().lower()
-            if proposal_type not in {"rename", "patch", "type"}:
-                return make_error(MCPError.INVALID_ARGS, "proposal_type must be one of: rename, patch, type")
-            title = str(args.get("title") or f"{proposal_type} proposal").strip()
-            spec_raw = args.get("spec")
-            if isinstance(spec_raw, str):
-                try:
-                    spec_raw = json.loads(spec_raw)
-                except Exception:
-                    return make_error(MCPError.INVALID_ARGS, "spec must be a JSON object")
-            if not isinstance(spec_raw, dict):
-                return make_error(MCPError.INVALID_ARGS, "spec must be an object")
-            err = self._validate_proposal_spec(proposal_type, spec_raw)
-            if err:
-                return make_error(MCPError.INVALID_ARGS, err)
-            content = json.dumps(
-                {
-                    "proposal_type": proposal_type,
-                    "spec": spec_raw,
-                    "verification_spec": args.get("verification_spec") or {},
-                    "status": "proposed",
-                },
-                ensure_ascii=True,
-            )
-            confidence = float(args.get("confidence", 0.7))
-            tags = [f"proposal_type:{proposal_type}", "status:proposed", "proposal_lifecycle"]
-            eid = store.write(
-                title=title,
-                content=content,
-                category="proposal",
-                addr=str(args.get("addr") or "").strip(),
-                tags=tags,
-                confidence=confidence,
-                source="proposal_create",
-                source_type="proposal",
-            )
-            return {"ok": True, "proposal_id": eid, "status": "proposed", "proposal_type": proposal_type, "phase": self._phase_snapshot(phase_state, store)}
-        if action == "proposal_list":
-            status = str(args.get("status") or "").strip().lower()
-            limit = _bounded_int(args.get("limit", 100), 100, min_value=1, max_value=500)
-            entries = self._proposal_entries(store, status=status, limit=limit)
-            parsed = []
-            for e in entries:
-                payload = {}
-                try:
-                    payload = json.loads(str(e.get("content") or "{}"))
-                except Exception:
-                    payload = {}
-                parsed.append(
-                    {
-                        "proposal_id": e.get("id"),
-                        "title": e.get("title"),
-                        "confidence": e.get("confidence"),
-                        "status": self._proposal_status(e),
-                        "proposal_type": payload.get("proposal_type") or "unknown",
-                        "spec": payload.get("spec") or {},
-                    }
-                )
-            return {"ok": True, "count": len(parsed), "proposals": parsed, "phase": self._phase_snapshot(phase_state, store)}
-        if action == "proposal_accept":
-            proposal_id = str(args.get("proposal_id") or args.get("entry_id") or "").strip()
-            if not proposal_id:
-                return make_error(MCPError.INVALID_ARGS, "proposal_id required")
-            entry = store.read(proposal_id)
-            if not entry or str(entry.get("category") or "") != "proposal":
-                return make_error(MCPError.NOT_FOUND, f"Proposal '{proposal_id}' not found")
+        return write_response(
+            result,
+            action="write",
+            gravity=gravity,
+            phase=self._phase_snapshot(phase_state, store),
+        )
+
+    def _bb_action_decision_card(self, args, store, phase_state, policy_state) -> dict:
+        claim = str(args.get("claim") or args.get("title") or "").strip()
+        if not claim:
+            return make_error(MCPError.INVALID_ARGS, "claim/title required for decision_card")
+        lane = str(args.get("lane") or "lane_hypotheses").strip()
+        category = _LANE_CATEGORY.get(lane, "hypothesis")
+        evidence_for = _coerce_str_list(args.get("evidence_for"))
+        evidence_against = _coerce_str_list(args.get("evidence_against"))
+        next_step = str(args.get("next_step") or args.get("next_verification_step") or "").strip()
+        expires_hours = int(args.get("expires_hours") or 0)
+        card = {
+            "claim": claim,
+            "evidence_for": evidence_for,
+            "evidence_against": evidence_against,
+            "next_verification_step": next_step,
+            "expires_after_hours": expires_hours,
+            "created_by": "decision_card",
+        }
+        tag_list = [lane, "decision_card"]
+        addr = str(args.get("addr") or "").strip()
+        conf = float(args.get("confidence", 0.65))
+        content = json.dumps(card, ensure_ascii=True)
+        eid = store.write(
+            title=claim,
+            content=content,
+            category=category,
+            addr=addr,
+            tags=tag_list,
+            confidence=conf,
+            source="decision_card",
+            source_type="decision_card",
+        )
+        self._bb_policy_mark(policy_state, "decision")
+        auto_trace = _coerce_bool(args.get("auto_trace"), True)
+        trace_depth = _bounded_int(args.get("trace_depth", 2), 2, min_value=1, max_value=6)
+        trace_limit = _bounded_int(args.get("trace_limit", 8), 8, min_value=1, max_value=50)
+        trace_task_id = self._maybe_auto_trace_from_text(
+            store,
+            source_entry_id=eid,
+            source_text=f"{claim}\n{card.get('next_verification_step') or ''}\n{addr}",
+            auto_trace=auto_trace,
+            depth=trace_depth,
+            limit=trace_limit,
+        )
+        gravity = self._evidence_gravity(store, source_entry_id=eid, addr=addr, source_text=claim)
+        return {
+            "ok": True,
+            "entry_id": eid,
+            "lane": lane,
+            "card": card,
+            "trace_task_id": trace_task_id,
+            "gravity": gravity,
+            "phase": self._phase_snapshot(phase_state, store),
+            "note": "Decision card stored. Use working_set to verify it appears in the active lane.",
+        }
+
+    def _bb_action_memory_compile(self, args, store, phase_state, policy_state) -> dict:
+        result = self._memory_compile(
+            store,
+            limit=_bounded_int(args.get("limit", 30), 30, min_value=5, max_value=200),
+            notes_path=str(args.get("notes_path") or args.get("path") or "").strip(),
+        )
+        result["phase"] = self._phase_snapshot(phase_state, store)
+        return result
+
+    # ------------------------------------------------------------------
+    # Per-action handlers (proposal lifecycle over real entries)
+    # ------------------------------------------------------------------
+
+    def _bb_action_proposal_create(self, args, store, phase_state, policy_state) -> dict:
+        proposal_type = str(args.get("proposal_type") or args.get("type") or "").strip().lower()
+        if proposal_type not in {"rename", "patch", "type"}:
+            return make_error(MCPError.INVALID_ARGS, "proposal_type must be one of: rename, patch, type")
+        title = str(args.get("title") or f"{proposal_type} proposal").strip()
+        spec_raw = args.get("spec")
+        if isinstance(spec_raw, str):
+            try:
+                spec_raw = json.loads(spec_raw)
+            except Exception:
+                return make_error(MCPError.INVALID_ARGS, "spec must be a JSON object")
+        if not isinstance(spec_raw, dict):
+            return make_error(MCPError.INVALID_ARGS, "spec must be an object")
+        err = self._validate_proposal_spec(proposal_type, spec_raw)
+        if err:
+            return make_error(MCPError.INVALID_ARGS, err)
+        confidence = float(args.get("confidence", 0.7))
+        eid = self._write_proposal_entry(
+            store,
+            proposal_type=proposal_type,
+            title=title,
+            spec=spec_raw,
+            addr=str(args.get("addr") or "").strip(),
+            confidence=confidence,
+            source="proposal_create",
+            verification_spec=args.get("verification_spec"),
+        )
+        return {
+            "ok": True,
+            "proposal_id": eid,
+            "status": "proposed",
+            "proposal_type": proposal_type,
+            "phase": self._phase_snapshot(phase_state, store),
+        }
+
+    def _bb_action_proposal_list(self, args, store, phase_state, policy_state) -> dict:
+        status = str(args.get("status") or "").strip().lower()
+        limit = _bounded_int(args.get("limit", 100), 100, min_value=1, max_value=500)
+        entries = self._proposal_entries(store, status=status, limit=limit)
+        parsed = []
+        for e in entries:
             payload = {}
             try:
-                payload = json.loads(str(entry.get("content") or "{}"))
+                payload = json.loads(str(e.get("content") or "{}"))
             except Exception:
-                return make_error(MCPError.INVALID_ARGS, "Proposal content is not valid JSON")
-            proposal_type = str(payload.get("proposal_type") or "").strip().lower()
-            spec = payload.get("spec") or {}
-            err = self._validate_proposal_spec(proposal_type, spec)
-            if err:
-                return make_error(MCPError.INVALID_ARGS, f"Proposal spec invalid: {err}")
-            dry_run = _coerce_bool(args.get("dry_run"), False)
-            tags = entry.get("tags") or []
-            if not isinstance(tags, list):
-                tags = []
-            if dry_run:
-                verify = self._proposal_verify(proposal_type, spec)
-                return {
-                    "ok": True,
-                    "proposal_id": proposal_id,
-                    "status": "accepted",
-                    "dry_run": True,
-                    "verification": verify,
-                    "note": "Preview only; the proposal was not modified.",
+                payload = {}
+            parsed.append(
+                {
+                    "proposal_id": e.get("id"),
+                    "title": e.get("title"),
+                    "confidence": e.get("confidence"),
+                    "status": self._proposal_status(e),
+                    "proposal_type": payload.get("proposal_type") or "unknown",
+                    "spec": payload.get("spec") or {},
                 }
+            )
+        return {
+            "ok": True,
+            "count": len(parsed),
+            "proposals": parsed,
+            "phase": self._phase_snapshot(phase_state, store),
+        }
+
+    def _bb_action_proposal_accept(self, args, store, phase_state, policy_state) -> dict:
+        proposal_id = str(args.get("proposal_id") or args.get("entry_id") or "").strip()
+        if not proposal_id:
+            return make_error(MCPError.INVALID_ARGS, "proposal_id required")
+        entry = store.read(proposal_id)
+        if not entry or str(entry.get("category") or "") != "proposal":
+            return make_error(MCPError.NOT_FOUND, f"Proposal '{proposal_id}' not found")
+        payload = {}
+        try:
+            payload = json.loads(str(entry.get("content") or "{}"))
+        except Exception:
+            return make_error(MCPError.INVALID_ARGS, "Proposal content is not valid JSON")
+        proposal_type = str(payload.get("proposal_type") or "").strip().lower()
+        spec = payload.get("spec") or {}
+        err = self._validate_proposal_spec(proposal_type, spec)
+        if err:
+            return make_error(MCPError.INVALID_ARGS, f"Proposal spec invalid: {err}")
+        dry_run = _coerce_bool(args.get("dry_run"), False)
+        tags = entry.get("tags") or []
+        if not isinstance(tags, list):
+            tags = []
+        if dry_run:
             verify = self._proposal_verify(proposal_type, spec)
-            if verify.get("ok"):
-                exec_res = self._proposal_execute(proposal_type, spec)
-            else:
-                exec_res = {"ok": False, "applied": 0, "failed": [], "note": "skipped: pre-execute verification failed"}
-            status = "verified" if (exec_res.get("ok") and verify.get("ok")) else "failed"
-            new_tags = self._proposal_status_replace(tags, status)
-            meta = payload
-            meta["status"] = status
-            meta["last_apply"] = exec_res
-            meta["last_verify"] = verify
-            store.update(proposal_id, tags=new_tags, content=json.dumps(meta, ensure_ascii=True))
-            store.write(
-                title=f"proposal_feedback {proposal_id} {status}",
-                content=json.dumps(
-                    {
-                        "proposal_id": proposal_id,
-                        "proposal_type": proposal_type,
-                        "status": status,
-                        "execution_ok": bool(exec_res.get("ok")),
-                        "verification_ok": bool(verify.get("ok")),
-                        "verification": verify,
-                    },
-                    ensure_ascii=True,
-                ),
-                category="proposal_feedback",
-                addr=str(entry.get("addr") or ""),
-                tags=[f"proposal_id:{proposal_id}", f"status:{status}", "proposal_feedback"],
-                confidence=1.0 if status == "verified" else 0.3,
-                source="proposal_accept",
-                source_type="proposal_feedback",
-            )
             return {
-                "ok": bool(exec_res.get("ok") and verify.get("ok")),
+                "ok": True,
                 "proposal_id": proposal_id,
-                "status": status,
-                "execution": exec_res,
+                "status": "accepted",
+                "dry_run": True,
                 "verification": verify,
-                "phase": self._phase_snapshot(phase_state, store),
+                "note": "Preview only; the proposal was not modified.",
             }
-        if action == "proposal_reject":
-            proposal_id = str(args.get("proposal_id") or args.get("entry_id") or "").strip()
-            if not proposal_id:
-                return make_error(MCPError.INVALID_ARGS, "proposal_id required")
-            entry = store.read(proposal_id)
-            if not entry or str(entry.get("category") or "") != "proposal":
-                return make_error(MCPError.NOT_FOUND, f"Proposal '{proposal_id}' not found")
-            reason = str(args.get("reason") or "rejected_by_llm").strip()
-            tags = entry.get("tags") or []
-            if not isinstance(tags, list):
-                tags = []
-            new_tags = self._proposal_status_replace(tags, "rejected")
-            meta = {}
-            try:
-                meta = json.loads(str(entry.get("content") or "{}"))
-            except Exception:
-                meta = {}
-            meta["status"] = "rejected"
-            ok = store.update(proposal_id, tags=new_tags, content=json.dumps(meta, ensure_ascii=True))
-            if not ok:
-                return make_error(MCPError.IO_ERROR, f"Failed to reject proposal '{proposal_id}'")
-            store.write(
-                title=f"Rejected proposal {proposal_id}",
-                content=reason,
-                category="dead_end",
-                addr=str(entry.get("addr") or ""),
-                tags=["proposal_rejected"],
-                confidence=1.0,
-                source="proposal_reject",
-                source_type="proposal",
-            )
-            return {"ok": True, "proposal_id": proposal_id, "status": "rejected", "reason": reason, "phase": self._phase_snapshot(phase_state, store)}
-        if action == "trace_ingest":
-            source_entry_id = str(args.get("entry_id") or args.get("source_entry_id") or "").strip()
-            source_text = str(args.get("text") or "").strip()
-            if source_entry_id and not source_text:
-                src = store.read(source_entry_id)
-                if not src:
-                    return make_error(MCPError.NOT_FOUND, f"Entry '{source_entry_id}' not found")
-                source_text = f"{src.get('title') or ''}\n{src.get('content') or ''}"
-            if not source_text:
-                return make_error(MCPError.INVALID_ARGS, "trace_ingest requires text or entry_id")
-            depth = _bounded_int(args.get("depth", 2), 2, min_value=1, max_value=6)
-            limit = _bounded_int(args.get("limit", 8), 8, min_value=1, max_value=50)
-            task_id = self._create_trace_task(store, source_entry_id, source_text, depth=depth, limit=limit)
-            return {"ok": True, "trace_task_id": task_id, "status": "pending", "phase": self._phase_snapshot(phase_state, store)}
-        if action == "trace_status":
-            status = str(args.get("status") or "").strip().lower()
-            limit = _bounded_int(args.get("limit", 100), 100, min_value=1, max_value=500)
-            tasks = store.list(
-                category="trace_task",
-                include_resolved=True,
-                include_contradicted=True,
-                limit=limit,
-            )
-            summaries = []
-            for t in tasks:
-                payload = {}
-                try:
-                    payload = json.loads(str(t.get("content") or "{}"))
-                except Exception:
-                    payload = {}
-                task_status = str(payload.get("status") or "").strip().lower()
-                if status and task_status != status:
-                    continue
-                summaries.append(
-                    {
-                        "trace_task_id": t.get("id"),
-                        "title": t.get("title"),
-                        "status": task_status or "unknown",
-                        "addrs": (payload.get("entities") or {}).get("addrs", [])[:10],
-                        "symbols": (payload.get("entities") or {}).get("symbols", [])[:10],
-                        "result": payload.get("result") or {},
-                    }
-                )
-            return {"ok": True, "count": len(summaries), "tasks": summaries, "phase": self._phase_snapshot(phase_state, store)}
-        if action == "trace_run":
-            limit = _bounded_int(args.get("limit", 3), 3, min_value=1, max_value=20)
-            pending = []
-            for e in store.list(
-                category="trace_task",
-                include_resolved=True,
-                include_contradicted=True,
-                limit=200,
-            ):
-                payload = {}
-                try:
-                    payload = json.loads(str(e.get("content") or "{}"))
-                except Exception:
-                    payload = {}
-                if str(payload.get("status") or "").strip().lower() == "pending":
-                    pending.append(e)
-            ran = []
-            for entry in pending[:limit]:
-                payload = {}
-                try:
-                    payload = json.loads(str(entry.get("content") or "{}"))
-                except Exception:
-                    payload = {}
-                self._set_task_status(store, entry, "running", payload)
-                result = self._run_trace_task(store, entry, payload)
-                payload["status"] = "done" if result.get("ok") else "failed"
-                payload["result"] = result
-                self._set_task_status(store, entry, payload["status"], payload)
-                ran.append({"trace_task_id": entry.get("id"), **result})
-            return {"ok": True, "ran": len(ran), "results": ran, "phase": self._phase_snapshot(phase_state, store)}
-        if action == "working_set":
-            limit = _bounded_int(args.get("limit", 10), 10, min_value=1, max_value=50)
-            lanes = {}
-            for lane in ("lane_now", "lane_hypotheses", "lane_facts", "lane_queue", "lane_dead_ends"):
-                lane_entries = self._lane_fetch(store, lane, limit)
-                lanes[lane] = {
-                    "count": len(lane_entries),
-                    "items": [_entry_brief(e) for e in lane_entries[:limit]],
-                }
-            self._bb_policy_mark(policy_state, "working_set")
-            escape = store.next_target(limit=3) if self._phase_find_loop(phase_state) else []
-            return {
-                "ok": True,
-                "lanes": lanes,
-                "state_health": self._state_health(store),
-                "policy_check": self._bb_policy_check(policy_state),
-                "phase": self._phase_snapshot(phase_state, store),
-                "escape_route_targets": escape,
-                "note": "Read lane_now and lane_queue first, then verify/resolve hypothesis cards.",
-            }
-        if action == "state_health":
-            return {"ok": True, **self._state_health(store), "phase": self._phase_snapshot(phase_state, store)}
-        if action == "export":
-            fmt = str(args.get("format") or "json").strip().lower()
-            if fmt not in {"json", "markdown"}:
-                return make_error(MCPError.INVALID_ARGS, "format must be 'json' or 'markdown'")
-            export_limit = _bounded_int(args.get("limit", 0), 0, min_value=0, max_value=50000)
-            return self._findings_export(
-                store,
-                fmt=fmt,
-                path=str(args.get("path") or "").strip(),
-                kind=str(args.get("kind") or "").strip(),
-                status=str(args.get("status") or "").strip(),
-                category=str(args.get("category") or "").strip(),
-                tag=str(args.get("tag") or "").strip(),
-                addr=str(args.get("addr") or "").strip(),
-                min_confidence=float(args.get("min_confidence", 0.0)),
-                include_resolved=_coerce_bool(args.get("include_resolved"), True),
-                include_contradicted=_coerce_bool(args.get("include_contradicted"), True),
-                limit=export_limit,
-            )
-        if action == "notes_import":
-            notes_path = str(args.get("notes_path") or args.get("path") or "re_notes.md").strip()
-            lane = str(args.get("lane") or "lane_hypotheses").strip()
-            confidence = float(args.get("confidence", 0.65))
-            auto_trace = _coerce_bool(args.get("auto_trace"), False)
-            trace_depth = _bounded_int(args.get("trace_depth", 2), 2, min_value=1, max_value=6)
-            trace_limit = _bounded_int(args.get("trace_limit", 8), 8, min_value=1, max_value=50)
-            return self._notes_import(
-                store,
-                notes_path,
-                lane=lane,
-                confidence=confidence,
-                auto_trace=auto_trace,
-                trace_depth=trace_depth,
-                trace_limit=trace_limit,
-            )
-        if action == "list":
-            entries = store.list(
-                category=str(args.get("category") or "").strip() or None,
-                addr=str(args.get("addr") or "").strip() or None,
-                tag=str(args.get("tag") or "").strip() or None,
-                min_confidence=float(args.get("min_confidence", 0.0)),
-                limit=_bounded_int(args.get("limit", 100), 100, min_value=1, max_value=1000),
-                offset=_bounded_int(args.get("offset", 0), 0, min_value=0),
-                include_resolved=_coerce_bool(args.get("include_resolved"), True),
-                include_contradicted=_coerce_bool(args.get("include_contradicted"), False),
-                kind=str(args.get("kind") or "").strip() or None,
-                status=str(args.get("status") or "").strip() or None,
-            )
-            return {"ok": True, "entries": entries, "count": len(entries), "summary": _entry_collection_summary(entries)}
-        if action == "search":
-            query = str(args.get("query") or args.get("pattern") or "").strip()
-            if not query:
-                return make_error(MCPError.INVALID_ARGS, "query/pattern required for blackboard search")
-            entries = store.semantic_search(
-                query=query,
-                top_k=_bounded_int(args.get("limit", 20), 20, min_value=1, max_value=500),
-                threshold=float(args.get("threshold", 0.4)),
-                category=str(args.get("category") or "").strip() or None,
-                include_resolved=_coerce_bool(args.get("include_resolved"), True),
-                include_contradicted=_coerce_bool(args.get("include_contradicted"), False),
-            )
-            return {"ok": True, "query": query, "entries": entries, "count": len(entries), "summary": _entry_collection_summary(entries)}
-        if action == "read":
-            entry = store.read(str(args.get("entry_id") or ""))
-            if entry is None:
-                return make_error(MCPError.NOT_FOUND, "Entry not found")
-            return {"ok": True, "entry": entry, "summary": _entry_brief(entry)}
-        if action == "update":
-            entry_id = str(args.get("entry_id") or "").strip()
-            if not entry_id:
-                return make_error(MCPError.INVALID_ARGS, "entry_id required")
-            updates = {
-                k: v
-                for k, v in (args or {}).items()
-                if k
-                not in {
-                    "action",
-                    "entry_id",
-                }
-            }
-            if not updates:
-                return make_error(MCPError.INVALID_ARGS, "No update fields provided")
-            status = str(updates.pop("status", "") or "").strip().lower()
-            reason = str(updates.pop("reason", "") or "").strip()
-            if status:
-                try:
-                    transition_fields = {
-                        field: updates.pop(field)
-                        for field in ("content", "confidence", "priority", "tags")
-                        if field in updates
-                    }
-                    entry = store.transition(entry_id, status=status, reason=reason, **transition_fields)
-                except ValueError as exc:
-                    return make_error(MCPError.INVALID_ARGS, str(exc))
-                if entry is None:
-                    return make_error(MCPError.NOT_FOUND, f"Entry '{entry_id}' not found")
-                if updates:
-                    # Remaining fields (category, addr, kind, ...) are not part
-                    # of the transition contract; apply them via update.
-                    store.update(entry_id, embed=False, **updates)
-                    entry = store.read(entry_id)
-                return {"ok": True, "action": "update", "entry": entry}
-            ok = store.update(entry_id, embed=False, **updates)
-            return {"ok": ok, "action": "update", "entry": store.read(entry_id)} if ok else make_error(MCPError.NOT_FOUND, f"Entry '{entry_id}' not found or no valid fields")
-        if action == "delete":
-            ok = store.delete(str(args.get("entry_id") or ""))
-            return {
-                "ok": ok,
-                "action": "delete",
-                "scope": "entire_binary_workspace",
-                "note": "The workspace DB is shared by every session of this binary; "
-                "deleting an entry removes it for all sessions, not just this one.",
-            }
-        if action == "clear":
-            count = store.clear(category=str(args.get("category") or "").strip() or None)
-            return {
-                "ok": True,
-                "deleted": count,
-                "scope": "entire_binary_workspace",
-                "note": "Cleared the binary-wide workspace shared by every session of "
-                "this binary, not just the current session.",
-            }
-        if action == "stats":
-            return {"ok": True, **store.stats()}
-        if action == "coverage":
-            st = store.stats()
-            analyzed = int((st.get("coverage") or {}).get("examined", 0))
-            total = int(st.get("total_entries", 0))
-            unvisited = max(0, total - analyzed)
-            coverage_pct = round(analyzed / max(1, total) * 100.0, 1) if total else 0.0
-            return {
-                "ok": True,
-                "coverage_pct": coverage_pct,
-                "total_entries": total,
-                "analyzed": analyzed,
-                "unvisited": unvisited,
-                "note": "Workspace coverage based on recorded findings and examinations.",
-            }
-        if action == "merge":
-            result = store.auto_merge(
-                addr=str(args.get("addr") or "").strip(),
-                category=str(args.get("category") or "").strip(),
-                similarity_threshold=float(args.get("similarity_threshold", 0.85)),
-            )
-            return {"ok": True, **result}
-        if action == "prune":
-            result = store.prune(
-                max_entries=_bounded_int(args.get("max_entries", 1000), 1000, min_value=1, max_value=100000),
-                min_q_value=float(args.get("min_q_value", 0.0)),
-                older_than_days=int(args.get("older_than_days", 0)),
-            )
-            return {
-                "ok": True,
-                **result,
-                "scope": "entire_binary_workspace",
-                "note": "Pruned the binary-wide workspace shared by every session of "
-                "this binary, not just the current session.",
-            }
-        if action == "contradict":
-            eid = str(args.get("entry_id") or "").strip()
-            reason = str(args.get("reason") or "").strip()
-            if not eid or not reason:
-                return make_error(MCPError.INVALID_ARGS, "entry_id and reason required")
-            ok = store.contradict(eid, reason)
-            return {"ok": ok} if ok else make_error(MCPError.NOT_FOUND, f"Entry '{eid}' not found")
-        if action == "resolve":
-            eid = str(args.get("entry_id") or "").strip()
-            if not eid:
-                return make_error(MCPError.INVALID_ARGS, "entry_id required")
-            ok = store.mark_resolved(eid)
-            return {"ok": ok} if ok else make_error(MCPError.NOT_FOUND, f"Entry '{eid}' not found")
-        if action == "next_target":
-            rpc_fn = None
-            idb_ref = str(getattr(self.current_session, "idb_path", "") or "") if self.current_session else ""
-            if idb_ref:
-                def rpc_fn(tool, payload):
-                    return self.call_tool(tool, idb_ref, **payload)
-            limit = _bounded_int(args.get("limit", 5), 5, min_value=1, max_value=100)
-            query = args.get("query")
-            strategy = str(args.get("strategy") or "").strip().lower()
-            if strategy:
-                try:
-                    result = store.targets(strategy, limit=limit, rpc_fn=rpc_fn, query=query)
-                except ValueError as exc:
-                    return make_error(MCPError.INVALID_ARGS, str(exc))
-                targets = result["targets"]
-                note = _STRATEGY_NOTES.get(strategy, "")
-                if not targets:
-                    note += _STRATEGY_EMPTY.get(strategy, " Nothing matched this strategy.")
-            else:
-                targets = store.next_target(limit=limit, rpc_fn=rpc_fn, query=query)
-                strategy = "unresolved"
-                note = _STRATEGY_NOTES["unresolved"]
-                if not targets:
-                    note += (
-                        " The workspace has no open threads yet. Try"
-                        " strategy='coverage' for functions nobody has read."
-                    )
-            payload = {
-                "ok": True,
-                "strategy": strategy,
-                "targets": targets,
-                "count": len(targets),
-                "summary": _target_collection_summary(targets),
-                "note": note.strip(),
-                "strategies": list(BB_STRATEGIES),
-            }
-            if query:
-                payload["query_ranking"] = "keyword overlap; candidates are reordered, never dropped"
-            return payload
-        if action == "frontier":
-            limit = _bounded_int(args.get("limit", 20), 20, min_value=1, max_value=200)
-            rpc_fn = self._idb_rpc()
-            try:
-                targets_res = store.targets("frontier", limit=limit, query=args.get("query"), rpc_fn=rpc_fn)
-            except ValueError as exc:
-                return make_error(MCPError.INVALID_ARGS, str(exc))
-            results = targets_res.get("targets", [])
-            return {
-                "ok": True,
-                "frontier": results,
-                "count": len(results),
-                "summary": _frontier_collection_summary(results),
-            }
-        if action == "propagate_labels":
-            return {
-                "ok": True,
-                "propagated": 0,
-                "entries": [],
-                "count": 0,
-                "summary": {"count": 0, "briefs": []},
-                "note": "Label propagation engine disabled.",
-            }
-        if action == "add_evidence":
-            entry_id = str(args.get("entry_id") or "").strip()
-            evidence_type = str(args.get("evidence_type") or args.get("type") or "").strip()
-            value = str(args.get("value") or "").strip()
-            if not entry_id or not evidence_type or not value:
-                return make_error(MCPError.INVALID_ARGS, "entry_id, evidence_type/type, and value required")
-            ok = store.add_evidence(entry_id, evidence_type=evidence_type, value=value, weight=float(args.get("weight", 1.0)))
-            return {"ok": ok, "entry_id": entry_id} if ok else make_error(MCPError.NOT_FOUND, f"Entry '{entry_id}' not found")
-        if action == "calibrate":
-            entry_id = str(args.get("entry_id") or "").strip()
-            if not entry_id:
-                return make_error(MCPError.INVALID_ARGS, "entry_id required")
-            new_conf = store.calibrate_confidence(entry_id)
-            if new_conf is None:
-                return make_error(MCPError.NOT_FOUND, f"Entry '{entry_id}' not found")
-            return {"ok": True, "entry_id": entry_id, "confidence": new_conf}
-        if action == "decay":
-            half_life = float(args.get("half_life_days", 14.0) or 14.0)
-            min_conf = float(args.get("min_confidence", 0.1) or 0.1)
-            updated = store.decay_stale_confidence(half_life_days=half_life, min_confidence=min_conf)
-            return {"ok": True, "decayed": updated, "half_life_days": half_life, "min_confidence": min_conf}
-        if action == "campaign_summary":
-            return {"ok": True, "summary": store.campaign_summary()}
-        if action == "workspace_brief":
-            return {
-                "ok": True,
-                "brief": store.workspace_brief(
-                    limit=_bounded_int(args.get("limit", 8), 8, min_value=1, max_value=25)
-                ),
-            }
-        if action == "mark_examined":
-            try:
-                result = store.record_examination(
-                    addr=str(args.get("addr") or ""),
-                    verdict=str(args.get("verdict") or "boring"),
-                    note=str(args.get("note") or args.get("content") or ""),
-                    name=str(args.get("name") or ""),
-                )
-            except ValueError as exc:
-                return make_error(MCPError.INVALID_ARGS, str(exc))
-            self._bb_policy_mark(policy_state, "write")
-            return {"ok": True, "action": "mark_examined", **result}
-        if action == "recall":
-            addrs = _coerce_str_list(args.get("addrs") or args.get("addr"))
-            return {
-                "ok": True,
-                **store.recall(
-                    addrs,
-                    limit=_bounded_int(args.get("limit", 6), 6, min_value=1, max_value=25),
-                ),
-            }
-        if action == "publish_findings":
-            return self._publish_findings(store, args)
-        if action == "import_annotations":
-            return self._import_annotations(store, args)
-        if action == "conflicts":
-            entries = store.conflicts(
-                limit=_bounded_int(args.get("limit", 20), 20, min_value=1, max_value=200)
-            )
-            return {"ok": True, "entries": entries, "count": len(entries),
-                    "summary": _entry_collection_summary(entries)}
-        if action == "stale":
-            entries = store.stale_entries(
-                limit=_bounded_int(args.get("limit", 20), 20, min_value=1, max_value=200)
-            )
-            return {"ok": True, "entries": entries, "count": len(entries),
-                    "note": "Recorded before the code at these addresses changed."}
-        if action in ("start_crawler", "stop_crawler", "crawler_status", "accept", "reject"):
-            # Delegate to the tool module which owns the crawler singleton
-            mod = type(self)._blackboard_module
-            if mod is None:
-                return make_error(MCPError.IO_ERROR, "BlackboardStore unavailable")
-            crawler = mod._BackgroundCrawler.instance()
-            if action == "start_crawler":
-                crawler.start(notify_fn=self._send_notification)
-                return {"ok": True, "running": crawler.is_running(),
-                        "note": "Crawler uses frontier targets and runs agent(action='quick') every 0.5s."}
-            elif action == "stop_crawler":
-                crawler.stop()
-                return {"ok": True, "running": False}
-            elif action == "crawler_status":
-                proposals = crawler.pending_proposals()
-                return {"ok": True, "running": crawler.is_running(),
-                        "pending_proposals": len(proposals), "proposals_pending": len(proposals),
-                        "addresses_visited": crawler.visited_count(), "proposals": proposals[:10],
-                        "summary": _proposal_collection_summary(proposals)}
-            elif action == "accept":
-                pid = str(args.get("proposal_id") or "").strip()
-                if not pid:
-                    return make_error(MCPError.INVALID_ARGS, "proposal_id required")
-                eid = crawler.accept(pid)
-                return {"ok": bool(eid), "entry_id": eid} if eid else make_error(MCPError.NOT_FOUND, f"Proposal '{pid}' not found")
-            elif action == "reject":
-                pid = str(args.get("proposal_id") or "").strip()
-                if not pid:
-                    return make_error(MCPError.INVALID_ARGS, "proposal_id required")
-                ok = crawler.reject(pid)
-                return {"ok": ok} if ok else make_error(MCPError.NOT_FOUND, f"Proposal '{pid}' not found")
-        return make_error(
-            MCPError.ACTION_NOT_FOUND,
-            f"Unsupported blackboard action: '{action}'",
-            hint="Valid actions include write, read, list, search, update, workspace_brief, next_target, frontier, stats, and legacy analysis actions.",
+        verify = self._proposal_verify(proposal_type, spec)
+        if verify.get("ok"):
+            exec_res = self._proposal_execute(proposal_type, spec)
+        else:
+            exec_res = {"ok": False, "applied": 0, "failed": [], "note": "skipped: pre-execute verification failed"}
+        status = "verified" if (exec_res.get("ok") and verify.get("ok")) else "failed"
+        new_tags = self._proposal_status_replace(tags, status)
+        meta = payload
+        meta["status"] = status
+        meta["last_apply"] = exec_res
+        meta["last_verify"] = verify
+        store.update(proposal_id, tags=new_tags, content=json.dumps(meta, ensure_ascii=True))
+        with contextlib.suppress(Exception):
+            store.update(proposal_id, status=status)
+        store.write(
+            title=f"proposal_feedback {proposal_id} {status}",
+            content=json.dumps(
+                {
+                    "proposal_id": proposal_id,
+                    "proposal_type": proposal_type,
+                    "status": status,
+                    "execution_ok": bool(exec_res.get("ok")),
+                    "verification_ok": bool(verify.get("ok")),
+                    "verification": verify,
+                },
+                ensure_ascii=True,
+            ),
+            category="proposal_feedback",
+            addr=str(entry.get("addr") or ""),
+            tags=[f"proposal_id:{proposal_id}", f"status:{status}", "proposal_feedback"],
+            confidence=1.0 if status == "verified" else 0.3,
+            source="proposal_accept",
+            source_type="proposal_feedback",
         )
+        return {
+            "ok": bool(exec_res.get("ok") and verify.get("ok")),
+            "proposal_id": proposal_id,
+            "status": status,
+            "execution": exec_res,
+            "verification": verify,
+            "phase": self._phase_snapshot(phase_state, store),
+        }
+
+    def _bb_action_proposal_reject(self, args, store, phase_state, policy_state) -> dict:
+        proposal_id = str(args.get("proposal_id") or args.get("entry_id") or "").strip()
+        if not proposal_id:
+            return make_error(MCPError.INVALID_ARGS, "proposal_id required")
+        entry = store.read(proposal_id)
+        if not entry or str(entry.get("category") or "") != "proposal":
+            return make_error(MCPError.NOT_FOUND, f"Proposal '{proposal_id}' not found")
+        reason = str(args.get("reason") or "rejected_by_llm").strip()
+        tags = entry.get("tags") or []
+        if not isinstance(tags, list):
+            tags = []
+        new_tags = self._proposal_status_replace(tags, "rejected")
+        meta = {}
+        try:
+            meta = json.loads(str(entry.get("content") or "{}"))
+        except Exception:
+            meta = {}
+        meta["status"] = "rejected"
+        ok = store.update(proposal_id, tags=new_tags, content=json.dumps(meta, ensure_ascii=True))
+        if not ok:
+            return make_error(MCPError.IO_ERROR, f"Failed to reject proposal '{proposal_id}'")
+        with contextlib.suppress(Exception):
+            store.update(proposal_id, status="rejected")
+        store.write(
+            title=f"Rejected proposal {proposal_id}",
+            content=reason,
+            category="dead_end",
+            addr=str(entry.get("addr") or ""),
+            tags=["proposal_rejected"],
+            confidence=1.0,
+            source="proposal_reject",
+            source_type="proposal",
+        )
+        return {
+            "ok": True,
+            "proposal_id": proposal_id,
+            "status": "rejected",
+            "reason": reason,
+            "phase": self._phase_snapshot(phase_state, store),
+        }
+
+    # ------------------------------------------------------------------
+    # Per-action handlers (trace tasks)
+    # ------------------------------------------------------------------
+
+    def _bb_action_trace_ingest(self, args, store, phase_state, policy_state) -> dict:
+        source_entry_id = str(args.get("entry_id") or args.get("source_entry_id") or "").strip()
+        source_text = str(args.get("text") or "").strip()
+        if source_entry_id and not source_text:
+            src = store.read(source_entry_id)
+            if not src:
+                return make_error(MCPError.NOT_FOUND, f"Entry '{source_entry_id}' not found")
+            source_text = f"{src.get('title') or ''}\n{src.get('content') or ''}"
+        if not source_text:
+            return make_error(MCPError.INVALID_ARGS, "trace_ingest requires text or entry_id")
+        depth = _bounded_int(args.get("depth", 2), 2, min_value=1, max_value=6)
+        limit = _bounded_int(args.get("limit", 8), 8, min_value=1, max_value=50)
+        task_id = self._create_trace_task(store, source_entry_id, source_text, depth=depth, limit=limit)
+        return {
+            "ok": True,
+            "trace_task_id": task_id,
+            "status": "pending",
+            "phase": self._phase_snapshot(phase_state, store),
+        }
+
+    def _bb_action_trace_status(self, args, store, phase_state, policy_state) -> dict:
+        status = str(args.get("status") or "").strip().lower()
+        limit = _bounded_int(args.get("limit", 100), 100, min_value=1, max_value=500)
+        summaries = self._orchestration().trace_status_rows(store, status, limit)
+        return {
+            "ok": True,
+            "count": len(summaries),
+            "tasks": summaries,
+            "phase": self._phase_snapshot(phase_state, store),
+        }
+
+    def _bb_action_trace_run(self, args, store, phase_state, policy_state) -> dict:
+        limit = _bounded_int(args.get("limit", 3), 3, min_value=1, max_value=20)
+        result = self._orchestration().run_pending_trace_tasks(store, limit)
+        result["phase"] = self._phase_snapshot(phase_state, store)
+        return result
+
+    # ------------------------------------------------------------------
+    # Per-action handlers (lanes / state)
+    # ------------------------------------------------------------------
+
+    def _bb_action_working_set(self, args, store, phase_state, policy_state) -> dict:
+        limit = _bounded_int(args.get("limit", 10), 10, min_value=1, max_value=50)
+        lanes = {}
+        for lane in ("lane_now", "lane_hypotheses", "lane_facts", "lane_queue", "lane_dead_ends"):
+            lane_entries = self._lane_fetch(store, lane, limit)
+            lanes[lane] = {
+                "count": len(lane_entries),
+                "items": [_entry_brief(e) for e in lane_entries[:limit]],
+            }
+        self._bb_policy_mark(policy_state, "working_set")
+        escape = store.next_target(limit=3) if self._phase_find_loop(phase_state) else []
+        return {
+            "ok": True,
+            "lanes": lanes,
+            "state_health": self._state_health(store),
+            "policy_check": self._bb_policy_check(policy_state),
+            "phase": self._phase_snapshot(phase_state, store),
+            "escape_route_targets": escape,
+            "note": "Read lane_now and lane_queue first, then verify/resolve hypothesis cards.",
+        }
+
+    def _bb_action_state_health(self, args, store, phase_state, policy_state) -> dict:
+        return {
+            "ok": True,
+            **self._state_health(store),
+            "phase": self._phase_snapshot(phase_state, store),
+        }
+
+    # ------------------------------------------------------------------
+    # Per-action handlers (file / export)
+    # ------------------------------------------------------------------
+
+    def _bb_action_export(self, args, store, phase_state, policy_state) -> dict:
+        fmt = str(args.get("format") or "json").strip().lower()
+        if fmt not in {"json", "markdown"}:
+            return make_error(MCPError.INVALID_ARGS, "format must be 'json' or 'markdown'")
+        export_limit = _bounded_int(args.get("limit", 0), 0, min_value=0, max_value=50000)
+        return self._findings_export(
+            store,
+            fmt=fmt,
+            path=str(args.get("path") or "").strip(),
+            kind=str(args.get("kind") or "").strip(),
+            status=str(args.get("status") or "").strip(),
+            category=str(args.get("category") or "").strip(),
+            tag=str(args.get("tag") or "").strip(),
+            addr=str(args.get("addr") or "").strip(),
+            min_confidence=float(args.get("min_confidence", 0.0)),
+            include_resolved=_coerce_bool(args.get("include_resolved"), True),
+            include_contradicted=_coerce_bool(args.get("include_contradicted"), True),
+            limit=export_limit,
+        )
+
+    def _bb_action_notes_import(self, args, store, phase_state, policy_state) -> dict:
+        notes_path = str(args.get("notes_path") or args.get("path") or "re_notes.md").strip()
+        lane = str(args.get("lane") or "lane_hypotheses").strip()
+        confidence = float(args.get("confidence", 0.65))
+        auto_trace = _coerce_bool(args.get("auto_trace"), False)
+        trace_depth = _bounded_int(args.get("trace_depth", 2), 2, min_value=1, max_value=6)
+        trace_limit = _bounded_int(args.get("trace_limit", 8), 8, min_value=1, max_value=50)
+        return self._notes_import(
+            store,
+            notes_path,
+            lane=lane,
+            confidence=confidence,
+            auto_trace=auto_trace,
+            trace_depth=trace_depth,
+            trace_limit=trace_limit,
+        )
+
+    # ------------------------------------------------------------------
+    # Per-action handlers (CRUD)
+    # ------------------------------------------------------------------
+
+    def _bb_action_list(self, args, store, phase_state, policy_state) -> dict:
+        entries = store.list(
+            category=str(args.get("category") or "").strip() or None,
+            addr=str(args.get("addr") or "").strip() or None,
+            tag=str(args.get("tag") or "").strip() or None,
+            min_confidence=float(args.get("min_confidence", 0.0)),
+            limit=_bounded_int(args.get("limit", 100), 100, min_value=1, max_value=1000),
+            offset=_bounded_int(args.get("offset", 0), 0, min_value=0),
+            include_resolved=_coerce_bool(args.get("include_resolved"), True),
+            include_contradicted=_coerce_bool(args.get("include_contradicted"), False),
+            kind=str(args.get("kind") or "").strip() or None,
+            status=str(args.get("status") or "").strip() or None,
+        )
+        return list_response(entries)
+
+    def _bb_action_search(self, args, store, phase_state, policy_state) -> dict:
+        query = str(args.get("query") or args.get("pattern") or "").strip()
+        if not query:
+            return make_error(MCPError.INVALID_ARGS, "query/pattern required for blackboard search")
+        entries = store.semantic_search(
+            query=query,
+            top_k=_bounded_int(args.get("limit", 20), 20, min_value=1, max_value=500),
+            threshold=float(args.get("threshold", 0.4)),
+            category=str(args.get("category") or "").strip() or None,
+            include_resolved=_coerce_bool(args.get("include_resolved"), True),
+            include_contradicted=_coerce_bool(args.get("include_contradicted"), False),
+        )
+        return search_response(query, entries)
+
+    def _bb_action_read(self, args, store, phase_state, policy_state) -> dict:
+        entry = store.read(str(args.get("entry_id") or ""))
+        if entry is None:
+            return make_error(MCPError.NOT_FOUND, "Entry not found")
+        return read_response(entry)
+
+    def _bb_action_update(self, args, store, phase_state, policy_state) -> dict:
+        entry_id = str(args.get("entry_id") or "").strip()
+        if not entry_id:
+            return make_error(MCPError.INVALID_ARGS, "entry_id required")
+        updates = {
+            k: v
+            for k, v in (args or {}).items()
+            if k not in {"action", "entry_id"}
+        }
+        if not updates:
+            return make_error(MCPError.INVALID_ARGS, "No update fields provided")
+        status = str(updates.pop("status", "") or "").strip().lower()
+        reason = str(updates.pop("reason", "") or "").strip()
+        if status:
+            try:
+                transition_fields = {
+                    field: updates.pop(field)
+                    for field in ("content", "confidence", "priority", "tags")
+                    if field in updates
+                }
+                entry = store.transition(entry_id, status=status, reason=reason, **transition_fields)
+            except ValueError as exc:
+                return make_error(MCPError.INVALID_ARGS, str(exc))
+            if entry is None:
+                return make_error(MCPError.NOT_FOUND, f"Entry '{entry_id}' not found")
+            if updates:
+                # Remaining fields (category, addr, kind, ...) are not part
+                # of the transition contract; apply them via update.
+                store.update(entry_id, embed=False, **updates)
+                entry = store.read(entry_id)
+            return {"ok": True, "action": "update", "entry": entry}
+        ok = store.update(entry_id, embed=False, **updates)
+        return {"ok": ok, "action": "update", "entry": store.read(entry_id)} if ok else make_error(MCPError.NOT_FOUND, f"Entry '{entry_id}' not found or no valid fields")
+
+    def _bb_action_delete(self, args, store, phase_state, policy_state) -> dict:
+        ok = store.delete(str(args.get("entry_id") or ""))
+        return {
+            "ok": ok,
+            "action": "delete",
+            "scope": "entire_binary_workspace",
+            "note": "The workspace DB is shared by every session of this binary; "
+            "deleting an entry removes it for all sessions, not just this one.",
+        }
+
+    def _bb_action_clear(self, args, store, phase_state, policy_state) -> dict:
+        count = store.clear(category=str(args.get("category") or "").strip() or None)
+        return {
+            "ok": True,
+            "deleted": count,
+            "scope": "entire_binary_workspace",
+            "note": "Cleared the binary-wide workspace shared by every session of "
+            "this binary, not just the current session.",
+        }
+
+    def _bb_action_stats(self, args, store, phase_state, policy_state) -> dict:
+        return {"ok": True, **store.stats()}
+
+    def _bb_action_coverage(self, args, store, phase_state, policy_state) -> dict:
+        cov = store.coverage()
+        analyzed = int(cov.get("examined") or 0)
+        total = int((store.stats() or {}).get("total_entries") or 0)
+        return coverage_response(analyzed, total)
+
+    def _bb_action_merge(self, args, store, phase_state, policy_state) -> dict:
+        result = store.auto_merge(
+            addr=str(args.get("addr") or "").strip(),
+            category=str(args.get("category") or "").strip(),
+            similarity_threshold=float(args.get("similarity_threshold", 0.85)),
+        )
+        return {"ok": True, **result}
+
+    def _bb_action_prune(self, args, store, phase_state, policy_state) -> dict:
+        result = store.prune(
+            max_entries=_bounded_int(args.get("max_entries", 1000), 1000, min_value=1, max_value=100000),
+            min_q_value=float(args.get("min_q_value", 0.0)),
+            older_than_days=int(args.get("older_than_days", 0)),
+        )
+        return {
+            "ok": True,
+            **result,
+            "scope": "entire_binary_workspace",
+            "note": "Pruned the binary-wide workspace shared by every session of "
+            "this binary, not just the current session.",
+        }
+
+    def _bb_action_contradict(self, args, store, phase_state, policy_state) -> dict:
+        eid = str(args.get("entry_id") or "").strip()
+        reason = str(args.get("reason") or "").strip()
+        if not eid or not reason:
+            return make_error(MCPError.INVALID_ARGS, "entry_id and reason required")
+        ok = store.contradict(eid, reason)
+        return {"ok": ok} if ok else make_error(MCPError.NOT_FOUND, f"Entry '{eid}' not found")
+
+    def _bb_action_resolve(self, args, store, phase_state, policy_state) -> dict:
+        eid = str(args.get("entry_id") or "").strip()
+        if not eid:
+            return make_error(MCPError.INVALID_ARGS, "entry_id required")
+        ok = store.mark_resolved(eid)
+        return {"ok": ok} if ok else make_error(MCPError.NOT_FOUND, f"Entry '{eid}' not found")
+
+    def _bb_action_next_target(self, args, store, phase_state, policy_state) -> dict:
+        rpc_fn = None
+        idb_ref = str(getattr(self.current_session, "idb_path", "") or "") if self.current_session else ""
+        if idb_ref:
+            def rpc_fn(tool, payload):
+                return self.call_tool(tool, idb_ref, **payload)
+        limit = _bounded_int(args.get("limit", 5), 5, min_value=1, max_value=100)
+        query = args.get("query")
+        strategy = str(args.get("strategy") or "").strip().lower()
+        if strategy:
+            try:
+                result = store.targets(strategy, limit=limit, rpc_fn=rpc_fn, query=query)
+            except ValueError as exc:
+                return make_error(MCPError.INVALID_ARGS, str(exc))
+            targets = result["targets"]
+            note = _STRATEGY_NOTES.get(strategy, "")
+            if not targets:
+                note += _STRATEGY_EMPTY.get(strategy, " Nothing matched this strategy.")
+        else:
+            targets = store.next_target(limit=limit, rpc_fn=rpc_fn, query=query)
+            strategy = "unresolved"
+            note = _STRATEGY_NOTES["unresolved"]
+            if not targets:
+                note += (
+                    " The workspace has no open threads yet. Try"
+                    " strategy='coverage' for functions nobody has read."
+                )
+        return next_target_response(
+            strategy,
+            targets,
+            strategies=BB_STRATEGIES,
+            note=note.strip(),
+            query=query,
+        )
+
+    def _bb_action_frontier(self, args, store, phase_state, policy_state) -> dict:
+        limit = _bounded_int(args.get("limit", 20), 20, min_value=1, max_value=200)
+        rpc_fn = self._idb_rpc()
+        try:
+            targets_res = store.targets("frontier", limit=limit, query=args.get("query"), rpc_fn=rpc_fn)
+        except ValueError as exc:
+            return make_error(MCPError.INVALID_ARGS, str(exc))
+        results = targets_res.get("targets", [])
+        return frontier_response(results)
+
+    def _bb_action_add_evidence(self, args, store, phase_state, policy_state) -> dict:
+        entry_id = str(args.get("entry_id") or "").strip()
+        evidence_type = str(args.get("evidence_type") or args.get("type") or "").strip()
+        value = str(args.get("value") or "").strip()
+        if not entry_id or not evidence_type or not value:
+            return make_error(MCPError.INVALID_ARGS, "entry_id, evidence_type/type, and value required")
+        ok = store.add_evidence(entry_id, evidence_type=evidence_type, value=value, weight=float(args.get("weight", 1.0)))
+        return {"ok": ok, "entry_id": entry_id} if ok else make_error(MCPError.NOT_FOUND, f"Entry '{entry_id}' not found")
+
+    def _bb_action_calibrate(self, args, store, phase_state, policy_state) -> dict:
+        entry_id = str(args.get("entry_id") or "").strip()
+        if not entry_id:
+            return make_error(MCPError.INVALID_ARGS, "entry_id required")
+        new_conf = store.calibrate_confidence(entry_id)
+        if new_conf is None:
+            return make_error(MCPError.NOT_FOUND, f"Entry '{entry_id}' not found")
+        return {"ok": True, "entry_id": entry_id, "confidence": new_conf}
+
+    def _bb_action_decay(self, args, store, phase_state, policy_state) -> dict:
+        half_life = float(args.get("half_life_days", 14.0) or 14.0)
+        min_conf = float(args.get("min_confidence", 0.1) or 0.1)
+        updated = store.decay_stale_confidence(half_life_days=half_life, min_confidence=min_conf)
+        return {"ok": True, "decayed": updated, "half_life_days": half_life, "min_confidence": min_conf}
+
+    def _bb_action_campaign_summary(self, args, store, phase_state, policy_state) -> dict:
+        return {"ok": True, "summary": store.campaign_summary()}
+
+    def _bb_action_workspace_brief(self, args, store, phase_state, policy_state) -> dict:
+        return {
+            "ok": True,
+            "brief": store.workspace_brief(
+                limit=_bounded_int(args.get("limit", 8), 8, min_value=1, max_value=25)
+            ),
+        }
+
+    def _bb_action_mark_examined(self, args, store, phase_state, policy_state) -> dict:
+        try:
+            result = store.record_examination(
+                addr=str(args.get("addr") or ""),
+                verdict=str(args.get("verdict") or "boring"),
+                note=str(args.get("note") or args.get("content") or ""),
+                name=str(args.get("name") or ""),
+            )
+        except ValueError as exc:
+            return make_error(MCPError.INVALID_ARGS, str(exc))
+        self._bb_policy_mark(policy_state, "write")
+        return {"ok": True, "action": "mark_examined", **result}
+
+    def _bb_action_recall(self, args, store, phase_state, policy_state) -> dict:
+        addrs = _coerce_str_list(args.get("addrs") or args.get("addr"))
+        return {
+            "ok": True,
+            **store.recall(
+                addrs,
+                limit=_bounded_int(args.get("limit", 6), 6, min_value=1, max_value=25),
+            ),
+        }
+
+    def _bb_action_publish_findings(self, args, store, phase_state, policy_state) -> dict:
+        return self._publish_findings(store, args)
+
+    def _bb_action_import_annotations(self, args, store, phase_state, policy_state) -> dict:
+        return self._import_annotations(store, args)
+
+    def _bb_action_conflicts(self, args, store, phase_state, policy_state) -> dict:
+        entries = store.conflicts(
+            limit=_bounded_int(args.get("limit", 20), 20, min_value=1, max_value=200)
+        )
+        return {
+            "ok": True,
+            "entries": entries,
+            "count": len(entries),
+            "summary": _entry_collection_summary(entries),
+        }
+
+    def _bb_action_stale(self, args, store, phase_state, policy_state) -> dict:
+        entries = store.stale_entries(
+            limit=_bounded_int(args.get("limit", 20), 20, min_value=1, max_value=200)
+        )
+        return {
+            "ok": True,
+            "entries": entries,
+            "count": len(entries),
+            "note": "Recorded before the code at these addresses changed.",
+        }
+
+    # ------------------------------------------------------------------
+    # Per-action handlers (crawler)
+    # ------------------------------------------------------------------
+
+    def _bb_action_start_crawler(self, args, store, phase_state, policy_state) -> dict:
+        orch = self._orchestration()
+        running = orch.start_crawler(store, probe=None, notify_fn=getattr(self, "_send_notification", None))
+        return {
+            "ok": True,
+            "running": running,
+            "note": "Crawler walks frontier targets and writes real proposed entries into the shared workspace.",
+        }
+
+    def _bb_action_stop_crawler(self, args, store, phase_state, policy_state) -> dict:
+        self._orchestration().stop_crawler()
+        return {"ok": True, "running": False}
+
+    def _bb_action_crawler_status(self, args, store, phase_state, policy_state) -> dict:
+        orch = self._orchestration()
+        proposals = orch.pending_proposal_rows(store, limit=50)
+        return crawler_status_response(
+            running=orch.crawler_is_running(),
+            pending_proposals=len(proposals),
+            addresses_visited=orch.crawler_visited_count(),
+            proposals=proposals[:10],
+        )
+
+    def _bb_action_accept(self, args, store, phase_state, policy_state) -> dict:
+        return self._bb_action_proposal_accept(args, store, phase_state, policy_state)
+
+    def _bb_action_reject(self, args, store, phase_state, policy_state) -> dict:
+        return self._bb_action_proposal_reject(args, store, phase_state, policy_state)
+

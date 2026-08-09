@@ -47,15 +47,26 @@ _ORIG_RATE = os.environ.get("IDA_MCP_DISABLE_RATE_LIMIT")
 
 
 # ---------------------------------------------------------------------------
-# sys.modules pollution cleanup
+# sys.modules / sys.path pollution cleanup
 # ---------------------------------------------------------------------------
 # Many tests mutate `sys.modules` (e.g. to inject stub IDA modules, or
 # because they reload an ida_pro_mcp.* submodule). Without cleanup, the
 # mutation leaks into the next test, causing partial-import "unknown
 # location" errors. We snapshot sys.modules once and restore it between
 # tests.
+#
+# Some IDA-side modules also mutate `sys.path` at import time: server_script
+# inserts its src/ida_pro_mcp/ida_mcp dirs so the flat plugin layout works,
+# and code_helpers/ctree do the same for `_common`. When a test loads one of
+# those modules (e.g. test_swarm_q07's bridge tests), those entries leak into
+# later tests, making flat `import cache` or a top-level `import ida_mcp`
+# succeed when they should not — the q07->t19 (flat _tool_cache resolution)
+# and q07->q01 (real ida_mcp/__init__ import) ordering failures. sys.path is
+# snapshotted and restored per-test exactly like sys.modules so test order
+# does not matter.
 _PRESERVED_SYS_MODULES: dict[str, object] | None = None
 _ORIGINAL_TOOL_ACTIONS: dict[str, list[str]] | None = None
+_PRESERVED_SYS_PATH: list[str] | None = None
 
 
 def _freeze_sys_modules() -> dict[str, object]:
@@ -69,6 +80,80 @@ def _restore_sys_modules(snapshot: dict[str, object]) -> None:
     for name, mod in snapshot.items():
         if sys.modules.get(name) is not mod:
             sys.modules[name] = mod
+
+
+def _restore_sys_path(snapshot: list[str]) -> None:
+    """Restore the exact sys.path list (entries, order, duplicates).
+
+    Mutates the list in place (``del sys.path[:]``) so any module holding a
+    reference to ``sys.path`` keeps seeing the same object.
+    """
+    del sys.path[:]
+    sys.path.extend(snapshot)
+
+
+# Shared IDA SDK stub module objects that tests mutate IN PLACE (e.g.
+# ``ida_funcs.get_func_name = ...``, ``idaapi.get_inf_structure = ...``,
+# ``ida_ida.inf_get_max_ea = ...``). Restoring sys.modules *identity* between
+# tests is not enough: the module objects persist, so attribute mutations
+# survive. We snapshot each stub's ``__dict__`` per test and restore it.
+_SHARED_STUB_MODULES = (
+    "ida_ida", "idaapi", "idc", "idautils", "ida_funcs", "ida_bytes",
+    "ida_segment", "ida_name", "ida_typeinf", "ida_nalt", "ida_hexrays",
+    "ida_frame", "ida_struct", "ida_lines", "ida_ua", "ida_kernwin",
+    "ida_loader", "ida_dbg",
+)
+
+
+def _snapshot_shared_stub_attrs() -> dict[str, dict[str, object]]:
+    snap: dict[str, dict[str, object]] = {}
+    for name in _SHARED_STUB_MODULES:
+        mod = sys.modules.get(name)
+        if mod is not None:
+            snap[name] = dict(mod.__dict__)
+    return snap
+
+
+def _monkeypatch_owned_stub_attrs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[int, set[str]]:
+    """Map ``id(module_object) -> {attr names}`` for every attribute the
+    monkeypatch fixture will undo in its own teardown.
+
+    pytest tears down ``_isolate_sys_modules`` BEFORE ``monkeypatch``'s undo
+    runs (monkeypatch is set up first, hence undone last). If our stub-attr
+    restore clears an attribute monkeypatch still expects to ``delattr``
+    (``raising=False`` patches on attributes that did not exist), monkeypatch
+    raises ``AttributeError``. So we must leave every monkeypatch-tracked
+    attribute in place and let monkeypatch's undo handle it.
+    """
+    owned: dict[int, set[str]] = {}
+    for obj, name, _value in monkeypatch._setattr:  # type: ignore[attr-defined]
+        owned.setdefault(id(obj), set()).add(name)
+    return owned
+
+
+def _restore_shared_stub_attrs(
+    snap: dict[str, dict[str, object]],
+    monkeypatch_owned: dict[int, set[str]] | None = None,
+) -> None:
+    monkeypatch_owned = monkeypatch_owned or {}
+    for name, attrs in snap.items():
+        mod = sys.modules.get(name)
+        if mod is None:
+            continue
+        owned = monkeypatch_owned.get(id(mod), set())
+        # Remove attributes the test added in place — EXCEPT ones the
+        # monkeypatch fixture will undo itself (its teardown runs after ours).
+        for attr in list(mod.__dict__):
+            if attr not in attrs and attr not in owned:
+                del mod.__dict__[attr]
+        # Restore snapshot values, skipping monkeypatch-tracked attributes
+        # (monkeypatch's setattr/delattr will put them back).
+        for attr, value in attrs.items():
+            if attr in owned:
+                continue
+            mod.__dict__[attr] = value
 
 
 def _reset_tool_state() -> None:
@@ -106,16 +191,56 @@ def _reset_tool_state() -> None:
             del sys.modules[name]
 
 
+def _reinstall_clean_common() -> None:
+    """Replace ``sys.modules["_common"]`` with a clean stub.
+
+    A test module (t13) replaces ``_common`` at COLLECTION time with a
+    restricted stub (reduced ``MCPError`` set + real ``make_error`` envelope
+    without the ``ok`` key) via ``load_tool_module(common_overrides=...)``.
+    Because collection precedes any test, the fixture's sys.modules snapshot
+    retains that polluted ``_common``, and a fresh re-import during a test
+    (e.g. bb03's ``_fresh_blackboard()``) binds the wrong names. Reinstall a
+    clean ``_common`` each test so the snapshot captures the full error set.
+    """
+    if "ida_pro_mcp.ida_mcp.tools._common" not in sys.modules:
+        return
+    try:
+        from _isolated_repo_loader import install_common_stub
+
+        install_common_stub()
+    except Exception:
+        pass
+
+
 @pytest.fixture(autouse=True)
-def _isolate_sys_modules():
-    global _PRESERVED_SYS_MODULES
+def _isolate_sys_modules(monkeypatch: pytest.MonkeyPatch):
+    global _PRESERVED_SYS_MODULES, _PRESERVED_SYS_PATH
     if _PRESERVED_SYS_MODULES is None:
         _PRESERVED_SYS_MODULES = _freeze_sys_modules()
+    if _PRESERVED_SYS_PATH is None:
+        _PRESERVED_SYS_PATH = list(sys.path)
+    _reinstall_clean_common()
+    # Snapshot the shared IDA stub modules BEFORE the test body runs. For
+    # unittest classes setUpClass is class-scoped and set up before this
+    # function-scoped fixture, so the snapshot already carries class-level
+    # state (e.g. q03's CV_PARENTS/CV_FAST on ida_hexrays) and restoring to
+    # it preserves that state across the class's tests.
+    stub_attrs = _snapshot_shared_stub_attrs()
     snapshot = _freeze_sys_modules()
+    path_snapshot = list(sys.path)
     try:
         yield
     finally:
         _restore_sys_modules(snapshot)
+        # Restore stub-attr mutations, but leave every attribute the
+        # monkeypatch fixture will undo in its own teardown (which runs after
+        # ours) in place — clearing them here would break monkeypatch's
+        # delattr of raising=False patches (e.g. bb03's idaapi.get_path).
+        _restore_shared_stub_attrs(
+            stub_attrs,
+            _monkeypatch_owned_stub_attrs(monkeypatch),
+        )
+        _restore_sys_path(path_snapshot)
         _reset_tool_state()
 
 

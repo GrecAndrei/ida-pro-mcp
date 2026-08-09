@@ -9,6 +9,7 @@ include_items, and dead-code removal.
 from __future__ import annotations
 
 import re
+import struct
 import sys
 import types
 from pathlib import Path
@@ -144,7 +145,7 @@ def _assert_terminates(fn, *args):
 def test_search_insns_terminates_on_badaddr():
     code = _module("search.code")
     code.idaapi.BADADDR = -1
-    code.iter_segments = lambda a, b, require_exec=True: [(0x1000, 0x1010)]
+    code.resolve_scan_segments = lambda a, b, require_exec=True: ([(0x1000, 0x1010)], "", "")
     code.idc.next_head = lambda ea, end: -1  # always BADADDR
     code.ida_bytes.is_code = lambda fl: False
     code.ida_bytes.get_flags = lambda ea: 0
@@ -165,7 +166,7 @@ def test_search_comment_terminates_on_badaddr():
 def test_search_constants_terminates_on_badaddr():
     adv = _module("search.advanced")
     adv.idaapi.BADADDR = -1
-    adv.iter_segments = lambda a, b, require_exec=True: [(0x1000, 0x1010)]
+    adv.resolve_scan_segments = lambda a, b, require_exec=True: ([(0x1000, 0x1010)], "", "")
     adv.idc.next_head = lambda ea, end: -1
     adv.ida_ua.insn_t = type("I", (), {})
     adv.ida_ua.decode_insn = lambda insn, ea: 0
@@ -190,13 +191,67 @@ def test_prim_funcs_by_mnem_terminates_on_badaddr():
 def test_search_immediate_terminates_on_badaddr():
     basic = _module("search.basic")
     basic.idaapi.BADADDR = -1
-    basic.iter_segments = lambda a, b, require_exec=True: [(0x1000, 0x1010)]
+    basic.resolve_scan_segments = lambda a, b, require_exec=True: ([(0x1000, 0x1010)], "", "")
     basic.idc.next_head = lambda ea, end: -1
     basic.ida_ua.insn_t = type("I", (), {})
     basic.ida_ua.decode_insn = lambda insn, ea: 0
     basic.build_response = lambda *a, **k: {"ok": True}
     basic.resolve_target = lambda p, **k: (0x1234, None, {})
     _assert_terminates(basic.search_immediate, "0x1234", None, None, False, 0, 10)
+
+
+# ---------------------------------------------------------------------------
+# search_data_value — raw pointer-word scan (WO-S6)
+# ---------------------------------------------------------------------------
+
+def _config_data_value_ida(basic, blob, base=0x1000, end=None):
+    if end is None:
+        end = base + len(blob)
+
+    def _segments(a=None, b=None, require_exec=False):
+        start = base if a is None else a
+        stop = end if b is None else b
+        s, e = max(base, start), min(end, stop)
+        return [(s, e)] if s < e else []
+
+    sys.modules["ida_bytes"].get_bytes = (
+        lambda ea, n: bytes(blob[max(0, ea - base): max(0, ea - base) + n])
+    )
+    sys.modules["ida_bytes"].get_flags = lambda ea: 0x0
+    sys.modules["idc"].is_code = lambda f: False
+    sys.modules["idc"].is_data = lambda f: False
+    basic.iter_segments = _segments
+
+
+def test_search_data_value_no_shifted_false_positives():
+    # Regression: a byte-stepped scan of the big-endian encoding of 0x400000
+    # contains a subsequence that LE-decodes back to 0x400000 at a neighbouring
+    # offset (0x1013).  The pointer-word scan must step at word alignment and
+    # only report the genuine 0x1010 big-endian word.
+    basic = _module("search.basic")
+    blob = bytearray(0x20)
+    struct.pack_into(">Q", blob, 0x10, 0x400000)  # big-endian pointer at 0x1010
+    _config_data_value_ida(basic, blob)
+
+    resp = basic.search_data_value("0x400000", word_size="u64", endian="both", timeout_ms=0)
+    assert resp["ok"] is True
+    assert resp["count"] == 1
+    assert resp["items"][0]["address"] == "0x1010"
+    assert resp["items"][0]["endian"] == "be"
+
+
+def test_search_data_value_empty_segment_terminates():
+    basic = _module("search.basic")
+    # Unmapped/BSS segment: get_bytes returns None → the chunk is empty and the
+    # scan must terminate instead of looping.
+    sys.modules["ida_bytes"].get_bytes = lambda ea, n: None
+    sys.modules["ida_bytes"].get_flags = lambda ea: 0x0
+    sys.modules["idc"].is_code = lambda f: False
+    sys.modules["idc"].is_data = lambda f: False
+    basic.iter_segments = lambda a=None, b=None, require_exec=False: [(0x1000, 0x2000)]
+    _assert_terminates(
+        basic.search_data_value, "0x400000", None, None, "both", "u64", 0, 10, 0
+    )
 
 
 def test_search_type_terminates_on_badaddr():
@@ -229,8 +284,8 @@ def test_search_find_heap_survives_duplicate_keys():
     unified.get_cached_imports = list
     unified.idautils.Segments = list
     # ... and an instruction hit at the SAME ea with the SAME score
-    unified.iter_segments = lambda a, b, require_exec=True: [(0x401000, 0x401100)]
-    unified.iter_code = lambda a, b: [0x401000]
+    unified.resolve_scan_segments = lambda a, b, require_exec=True: ([(0x401000, 0x401100)], "", "")
+    unified.iter_code = lambda a, b, force=False: [0x401000]
     unified.idc.print_insn_mnem = lambda ea: "mov"
     unified.idc.print_operand = lambda ea, i: ("foo" if i == 0 else None)
     unified.safe_generate_disasm_line = lambda ea: "mov foo"

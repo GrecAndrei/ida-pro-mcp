@@ -8,10 +8,13 @@ tool calls (e.g. decompile) to the session that owns a given symbol.
 
 from __future__ import annotations
 
+import json
+import os
 import threading
 import uuid
 from typing import Any
 
+from ..config import log_rpc
 from ..errors import MCPError, make_error
 
 
@@ -32,8 +35,31 @@ class SessionGroup:
             "name": self.name,
             "session_ids": list(self.session_ids),
             "link_count": len(self.links),
+            "links": self.links,
             "metadata": self.metadata,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SessionGroup":
+        """Rebuild a group from a persisted ``to_dict`` snapshot.
+
+        Used to rehydrate ``groups.json`` at host startup so ``group_id``
+        references survive a restart (D3-F9). Unknown keys are dropped and
+        malformed link rows are skipped defensively.
+        """
+        group = cls(str(data.get("group_id") or ""), str(data.get("name") or ""))
+        raw_sids = data.get("session_ids") or []
+        if isinstance(raw_sids, list):
+            group.session_ids = [str(s) for s in raw_sids if s]
+        links = data.get("links")
+        if isinstance(links, dict):
+            for name, link in links.items():
+                if isinstance(link, dict):
+                    group.links[str(name)] = dict(link)
+        meta = data.get("metadata")
+        if isinstance(meta, dict):
+            group.metadata = dict(meta)
+        return group
 
 
 class ServerMultiSessionMixin:
@@ -53,11 +79,75 @@ class ServerMultiSessionMixin:
         cross_* handlers mutate or iterate the dict (and group.links) without
         any other synchronization, which can raise ``RuntimeError: dictionary
         changed size during iteration`` under concurrent access.
+
+        Groups are persisted to ``cache_dir/groups.json`` on every mutation and
+        rehydrated here (first init only) so ``group_id`` references survive a
+        host restart (D3-F9).
         """
-        if not hasattr(self, "_session_groups"):
+        first_init = not hasattr(self, "_session_groups")
+        if first_init:
             self._session_groups = {}
         if not hasattr(self, "_session_groups_lock"):
             self._session_groups_lock = threading.RLock()
+        if first_init:
+            self._load_groups_from_disk()
+
+    # ------------------------------------------------------------------
+    # Group persistence (survive host restarts)
+    # ------------------------------------------------------------------
+
+    def _groups_path(self) -> str | None:
+        cache_dir = getattr(self, "cache_dir", None)
+        if not cache_dir:
+            return None
+        return os.path.join(str(cache_dir), "groups.json")
+
+    def _load_groups_from_disk(self) -> None:
+        path = self._groups_path()
+        if not path or not os.path.exists(path):
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            log_rpc(f"Failed to load session groups from {path}: {e}")
+            return
+        raw = data if isinstance(data, list) else data.get("groups", [])
+        if not isinstance(raw, list):
+            return
+        loaded = 0
+        with self._session_groups_lock:
+            for entry in raw:
+                if not isinstance(entry, dict):
+                    continue
+                try:
+                    group = SessionGroup.from_dict(entry)
+                except Exception:
+                    continue
+                if not group.group_id:
+                    continue
+                self._session_groups[group.group_id] = group
+                loaded += 1
+        if loaded:
+            log_rpc(f"Rehydrated {loaded} session group(s) from {path}")
+
+    def _persist_groups(self) -> None:
+        path = self._groups_path()
+        if not path:
+            return
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            # Pid-scoped tmp so concurrent hosts sharing one cache never write
+            # into each other's temp file; os.replace is atomic.
+            tmp = f"{path}.{os.getpid()}.tmp"
+            with self._session_groups_lock:
+                payload = [g.to_dict() for g in self._session_groups.values()]
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+                f.flush()
+            os.replace(tmp, path)
+        except Exception as e:
+            log_rpc(f"Failed to persist session groups to {path}: {e}")
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -78,7 +168,12 @@ class ServerMultiSessionMixin:
             return None, make_error(
                 MCPError.NOT_FOUND,
                 f"Session group '{group_id}' not found",
-                hint="Use multi_session(action='group_list') to see available groups.",
+                hint=(
+                    "Use multi_session(action='group_list') to see available "
+                    "groups. Note: groups are persisted in the host cache and "
+                    "survive restarts; if this group predates persistence or "
+                    "the cache was cleared it may have been lost on restart."
+                ),
             )
         return group, None
 
@@ -111,6 +206,7 @@ class ServerMultiSessionMixin:
                         link["importer_sids"] = [
                             s for s in link["importer_sids"] if s != sid
                         ]
+        self._persist_groups()
 
     def _dispatch_to_session(self, session_id: str, tool: str, tool_args: dict) -> dict:
         """Dispatch a tool call to a specific session's IDA runtime.
@@ -194,6 +290,7 @@ class ServerMultiSessionMixin:
                 group.metadata = args["metadata"]
 
             self._session_groups[group_id] = group
+        self._persist_groups()
         return {"ok": True, "group": group.to_dict()}
 
     def _ms_group_list(self, args: dict) -> dict:
@@ -283,6 +380,9 @@ class ServerMultiSessionMixin:
                             link["importer_sids"].append(sid)
                             links_built += 1
 
+        # Persist the freshly-built link table so cross-session resolution
+        # survives a restart without a rebuild.
+        self._persist_groups()
         return {
             "ok": True,
             "group_id": group.group_id,
@@ -302,6 +402,7 @@ class ServerMultiSessionMixin:
             removed = self._session_groups.pop(group_id, None)
         if removed is None:
             return make_error(MCPError.NOT_FOUND, f"Group '{group_id}' not found")
+        self._persist_groups()
         return {"ok": True, "removed": removed.to_dict()}
 
     def _ms_cross_resolve(self, args: dict) -> dict:

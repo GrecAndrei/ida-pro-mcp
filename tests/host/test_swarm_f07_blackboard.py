@@ -234,12 +234,18 @@ def test_trace_run_marks_failed_when_no_evidence(tmp_path):
 
     server._handle_blackboard({"action": "trace_ingest", "text": "inspect 0x401000"})
     res = server._handle_blackboard({"action": "trace_run", "limit": 10})
-    assert res["ran"] == 1
-    assert res["results"][0]["ok"] is False
-    assert res["results"][0]["evidence_count"] == 0
+    assert res["ok"] is True
+    assert res["enqueued"] == 1
+    assert res["status"] == "running"
+    # trace_run is non-blocking; drain waits for the background worker.
+    server._orchestration().drain(timeout=10)
 
     status = server._handle_blackboard({"action": "trace_status"})
-    assert status["tasks"][0]["status"] == "failed"
+    task = status["tasks"][0]
+    assert task["status"] == "failed"
+    # The task's stored result records the failed evidence-gathering run.
+    assert task["result"].get("ok") is False
+    assert task["result"].get("evidence_count") == 0
     # A failed trace must not satisfy the prove-phase evidence gate.
     assert server._phase_has_prove_receipts(server._get_blackboard_store()) is False
 

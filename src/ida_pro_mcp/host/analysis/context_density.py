@@ -14,7 +14,11 @@ import re
 from collections import Counter
 from typing import Any
 
-# Useful tokens: addresses, symbol names, register names (x86, ARM, MIPS, RISC-V), type keywords
+# Useful tokens: addresses, symbol names, register names (x86, ARM, MIPS,
+# RISC-V), type keywords.  RISC-V adds the ABI register aliases: a0-a7
+# (argument/return), t0-t6 (temporaries), s0-s11 (saved, s0 == fp), plus
+# ra/gp/tp (x1/x3/x4) and the zero register.  The raw x0-x31 / sp / fp forms
+# are already covered by the generic alternatives above.
 _USEFUL_TOKEN_RE = re.compile(
     r'0x[0-9a-fA-F]+|'
     r'(?:sub_|loc_|off_|unk_|byte_|word_|dword_|qword_)[0-9a-fA-F]+|'
@@ -22,7 +26,8 @@ _USEFUL_TOKEN_RE = re.compile(
     r'eax|ebx|ecx|edx|esi|edi|ebp|esp|eip|'
     r'rax|rbx|rcx|rdx|rsi|rdi|rbp|rsp|rip|'
     r'r[0-9]{1,2}|w[0-9]{1,2}|x[0-9]{1,2}|sp|lr|pc|fp|'
-    r'\$[a-z0-9]+)\b',
+    r'\$[a-z0-9]+)\b|'
+    r'\b(?:a[0-7]|t[0-6]|s1[01]|s[0-9]|ra|gp|tp|zero)\b',
     re.IGNORECASE,
 )
 

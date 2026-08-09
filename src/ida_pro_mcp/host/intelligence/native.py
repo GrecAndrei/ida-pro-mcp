@@ -35,6 +35,7 @@ import hashlib
 import math
 import os
 import threading
+import time
 from typing import Any
 
 from .core import (
@@ -692,7 +693,12 @@ class NativeReranker:
         return [float(out[i]) for i in range(n)]
 
     def rerank(
-        self, query: str, documents: list[str], *, top_k: int | None = None
+        self,
+        query: str,
+        documents: list[str],
+        *,
+        top_k: int | None = None,
+        deadline: float | None = None,
     ) -> list[dict[str, Any]] | None:
         """Score ``(query, document)`` pairs.
 
@@ -700,13 +706,16 @@ class NativeReranker:
         the position in ``documents``), or ``None`` when unavailable/failed.
         Mirrors ``rerank.Reranker.rerank`` semantics: ``None`` means "keep the
         recall order", never a partial reorder.  A single native call scores
-        the whole pool (no HTTP chunk round trips).
+        the whole pool (no HTTP chunk round trips); ``deadline`` (a
+        ``time.monotonic()`` timestamp) is honored once before the call.
         """
         if not documents:
             return []
         if not self._use_native:
             return None
         if not self._ready and not self.ensure_ready():
+            return None
+        if deadline is not None and time.monotonic() >= deadline:
             return None
         docs = [str(d)[: max(256, int(NATIVE_DOC_CHARS))] for d in documents]
         scores = self._score(str(query), docs)

@@ -12,10 +12,31 @@ import time
 import ida_entry
 import ida_ida
 
+# ida_idp is the processor register/CSR introspection surface (registers
+# action). Imported defensively: outside a live IDA runtime the stub module
+# cannot resolve its compiled ``_ida_idp`` extension, so the tool must keep
+# loading (the registers action then reports register info unavailable).
+try:
+    import ida_idp
+except Exception:
+    ida_idp = None  # type: ignore[assignment]
+
 try:
     from ida_pro_mcp.services import infer_binary_arch_profile
 except Exception:
     infer_binary_arch_profile = None  # type: ignore
+
+# IDA event hooks (auto-analysis-finished + function-created) + the bounded
+# event ring they fill. Merely importing the events module installs the hooks
+# once at tool-module init (its own module-scope install_hooks()); read_events
+# is the read side of the ring.
+try:
+    from ida_pro_mcp.ida_mcp.support.events import EVENT_RING_MAX, read_events
+except Exception:
+    try:
+        from support.events import EVENT_RING_MAX, read_events  # type: ignore[import-not-found]
+    except Exception:
+        from .support.events import EVENT_RING_MAX, read_events  # type: ignore[import-not-found]
 
 try:
     from ida_pro_mcp.ida_mcp.support.arch_utils import detect_riscv_gp
@@ -47,8 +68,8 @@ def _safe_inf_get(attr_name, fallback=None):
 
 @tool
 def idb(
-    action: Annotated[Literal["meta", "summary", "segments", "entrypoints", "bookmarks", "overview", "architecture_profile", "state"],
-                      "Action: meta|summary|segments|entrypoints|bookmarks|overview|architecture_profile|state"] = "summary",
+    action: Annotated[Literal["meta", "summary", "segments", "entrypoints", "bookmarks", "overview", "architecture_profile", "state", "events", "registers"],
+                      "Action: meta|summary|segments|entrypoints|bookmarks|overview|architecture_profile|state|events|registers"] = "summary",
     offset: Annotated[int, "Pagination offset"] = 0,
     count: Annotated[int, "Max results (0=all)"] = 100,
     **kwargs
@@ -81,6 +102,15 @@ def idb(
 
     bookmarks - IDA native bookmarks
         Returns: {bookmarks: [{index, addr, desc}]}
+
+    events - Most recent analysis events from the hook event ring
+        (auto_analysis_finished / function_created). Params: limit (default 50,
+        capped at 500). Returns: {events: [{type, address, name, timestamp}],
+        count, total, limit}.
+
+    registers - Processor register classes + CSRs (read-only introspection)
+        Params: reg_class (optional filter; e.g. gpr, segment, csr, other).
+        Returns: {processor, reg_class, registers: [names], classes, count}.
     """
     try:
         if action == "meta":
@@ -151,6 +181,10 @@ def idb(
         if action == "state":
             tail = int(kwargs.get("audit_tail", 5) or 0)
             return idb_state(audit_tail=tail)
+        if action == "events":
+            return idb_events(limit=kwargs.get("limit", 50))
+        if action == "registers":
+            return idb_registers(reg_class=kwargs.get("reg_class"))
         return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
         return handle_error(e, "idb")
@@ -218,6 +252,9 @@ def idb_meta():
         "crc32": hex(crc32) if crc32 else None,
         "is_dll": ida_ida.inf_is_dll() if hasattr(ida_ida, "inf_is_dll") else None,
         "is_be": ida_ida.inf_is_be() if hasattr(ida_ida, "inf_is_be") else None,
+        # Carry the host-side raw-blob inference so idb_architecture_profile (and
+        # the overview action) can reuse it instead of re-running the file scan.
+        "inferred_arch_profile": inferred,
     }
     return out
 
@@ -439,7 +476,14 @@ def idb_architecture_profile(meta=None, summary=None):
 
     binary_path = str(meta.get("binary_path") or "")
     inferred = {}
-    if callable(infer_binary_arch_profile) and binary_path and os.path.exists(binary_path):
+    # Reuse the inference already computed by idb_meta (stored in meta) instead
+    # of re-scanning the file: idb_meta and the overview action already ran it.
+    # Fall back to a fresh scan only when the carried profile is absent or was
+    # never populated (e.g. meta built by a caller that did not use idb_meta).
+    carried = meta.get("inferred_arch_profile")
+    if isinstance(carried, dict) and carried.get("file_kind"):
+        inferred = carried
+    elif callable(infer_binary_arch_profile) and binary_path and os.path.exists(binary_path):
         try:
             inferred = infer_binary_arch_profile(binary_path) or {}
         except Exception:
@@ -470,12 +514,15 @@ def idb_architecture_profile(meta=None, summary=None):
     recs = []
     if raw_mode:
         recs.append("workflow(action='triage_fast')")
-        recs.append("firmware_view(action='triage_snapshot')")
         recs.append("analysis(action='set_architecture', processor='<candidate>', bitness=<16|32|64>, endian='<little|big>')")
 
-    # RISC-V: detect GP (x3) value for GP-relative xref resolution
+    # RISC-V: detect GP (x3) value for GP-relative xref resolution.  Keyed off
+    # the IDB's processor name rather than is_riscv_family(), which needs the
+    # IDA inf-structure and can be unreliable on opaque blobs before IDA has
+    # settled on a processor module.  'riscv' is the canonical IDA module name
+    # (normalized by _PROC_ALIASES), so this also covers riscv32/riscv64 aliases.
     gp_info = None
-    if is_riscv_family() and callable(detect_riscv_gp):
+    if "riscv" in proc and callable(detect_riscv_gp):
         try:
             gp_info = detect_riscv_gp()
             if gp_info.get("found"):
@@ -493,6 +540,22 @@ def idb_architecture_profile(meta=None, summary=None):
         "raw_binary_mode": raw_mode,
         "recommendations": recs,
     }
+    # Honest raw-blob surfaces: the inference caveat, any dominant load base,
+    # and the empty-entry-points note (no headers / vector table on an opaque
+    # blob means architecture must be set explicitly before full analysis).
+    if raw_mode:
+        raw_warning = inferred.get("warning") if isinstance(inferred, dict) else None
+        if raw_warning:
+            result["raw_binary_warning"] = raw_warning
+        load_base = inferred.get("load_base") if isinstance(inferred, dict) else None
+        if load_base is not None:
+            result["inferred_load_base"] = load_base
+        entry_count = int((summary or {}).get("exports", 0) or 0)
+        if entry_count == 0:
+            result["entrypoints_note"] = (
+                "no entry points detected (raw blob / no vector table); "
+                "set architecture explicitly before analysis"
+            )
     if gp_info is not None:
         result["riscv_gp"] = gp_info
     return result
@@ -584,7 +647,7 @@ def idb_state(audit_tail: int = 5) -> dict:
         idb_age_seconds, input_file, input_size, open_seconds}, inventory{
         functions_qty, strings_qty, imports_qty, exports_qty}, ui{cursor_ea},
         debugger{active, process_state}, audit_tail[N], indicators{
-        looks_empty, looks_packed, needs_packer_check}
+        looks_empty, looks_packed, needs_packer_check, raw_blob, arch_unverified}
     """
     now = time.time()
 
@@ -656,6 +719,25 @@ def idb_state(audit_tail: int = 5) -> dict:
         import_qty = int(ida_nalt.get_import_module_qty())
     with contextlib.suppress(Exception):
         export_qty = int(ida_entry.get_entry_qty())
+
+    # Opaque-blob probe: read only the input's leading bytes (cheap, no tool
+    # calls) and decide whether it carries a recognizable container magic.
+    # A raw blob with no architecture confidence (few/no functions) is the
+    # "arch unverified" case the LLM must act on.
+    raw_blob = False
+    if input_path and os.path.isfile(input_path):
+        try:
+            with open(input_path, "rb") as _f:
+                _magic = _f.read(8)
+            _known_magic = _magic.startswith(
+                (b"\x7fELF", b"MZ", b"IDA2",
+                 b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf",
+                 b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe")
+            )
+            raw_blob = not _known_magic
+        except OSError:
+            raw_blob = False
+    arch_unverified = bool(raw_blob and func_qty <= 1)
 
     # UI cursor
     cursor_ea = ""
@@ -749,5 +831,185 @@ def idb_state(audit_tail: int = 5) -> dict:
             "looks_empty": looks_empty,
             "looks_packed": looks_packed,
             "needs_packer_check": needs_packer_check,
+            "raw_blob": raw_blob,
+            "arch_unverified": arch_unverified,
         },
+    }
+
+
+# ---------------------------------------------------------------------------
+# events: read the hook event ring
+# ---------------------------------------------------------------------------
+
+@idaread
+def idb_events(limit=50):
+    """Return the most recent analysis events from the hook event ring.
+
+    The ring is filled by the IDB_Hooks subclass in ``support/events.py``
+    (auto_analysis_finished + function_created), which also invalidates the
+    shared tool-result cache on every event so this read never goes stale.
+    """
+    try:
+        limit = max(0, min(int(limit), EVENT_RING_MAX))
+    except (TypeError, ValueError):
+        limit = 50
+    events, total = read_events(limit)
+    return {
+        "ok": True,
+        "events": events,
+        "count": len(events),
+        "total": total,
+        "limit": limit,
+    }
+
+
+# ---------------------------------------------------------------------------
+# registers: processor register classes + CSRs (read-only introspection)
+# ---------------------------------------------------------------------------
+
+# Well-known RISC-V control/status registers (standard base set). IDA's RISC-V
+# module names most registers x0-x31/ABI aliases in ph.reg_names but the CSR
+# set is processor-module-dependent; exposing the documented list helps an LLM
+# reason about ecall/mret/CSR handlers on opaque RISC-V firmware without
+# hallucinating register names.
+_RISCV_CSRS = [
+    # User / floating-point CSRs
+    "fflags", "frm", "fcsr",
+    # User counters / timers
+    "cycle", "time", "instret",
+    "cycleh", "timeh", "instreth",
+    "hpmcounter3", "hpmcounter4", "hpmcounter5", "hpmcounter6", "hpmcounter7",
+    "hpmcounter8", "hpmcounter9", "hpmcounter10", "hpmcounter11", "hpmcounter12",
+    "hpmcounter13", "hpmcounter14", "hpmcounter15", "hpmcounter16", "hpmcounter17",
+    "hpmcounter18", "hpmcounter19", "hpmcounter20", "hpmcounter21", "hpmcounter22",
+    "hpmcounter23", "hpmcounter24", "hpmcounter25", "hpmcounter26", "hpmcounter27",
+    "hpmcounter28", "hpmcounter29", "hpmcounter30", "hpmcounter31",
+    "hpmcounter3h", "hpmcounter4h", "hpmcounter5h", "hpmcounter6h", "hpmcounter7h",
+    "hpmcounter8h", "hpmcounter9h", "hpmcounter10h", "hpmcounter11h", "hpmcounter12h",
+    "hpmcounter13h", "hpmcounter14h", "hpmcounter15h", "hpmcounter16h", "hpmcounter17h",
+    "hpmcounter18h", "hpmcounter19h", "hpmcounter20h", "hpmcounter21h", "hpmcounter22h",
+    "hpmcounter23h", "hpmcounter24h", "hpmcounter25h", "hpmcounter26h", "hpmcounter27h",
+    "hpmcounter28h", "hpmcounter29h", "hpmcounter30h", "hpmcounter31h",
+    # Machine CSRs
+    "mvendorid", "marchid", "mimpid", "mhartid",
+    "mstatus", "misa", "medeleg", "mideleg", "mie", "mtvec",
+    "mcounteren", "mscratch", "mepc", "mcause", "mtval", "mip",
+    "mcountinhibit",
+    "mhpmevent3", "mhpmevent4", "mhpmevent5", "mhpmevent6", "mhpmevent7",
+    "mhpmevent8", "mhpmevent9", "mhpmevent10", "mhpmevent11", "mhpmevent12",
+    "mhpmevent13", "mhpmevent14", "mhpmevent15", "mhpmevent16", "mhpmevent17",
+    "mhpmevent18", "mhpmevent19", "mhpmevent20", "mhpmevent21", "mhpmevent22",
+    "mhpmevent23", "mhpmevent24", "mhpmevent25", "mhpmevent26", "mhpmevent27",
+    "mhpmevent28", "mhpmevent29", "mhpmevent30", "mhpmevent31",
+    "mcycle", "minstret", "mcycleh", "minstreth",
+    # Supervisor CSRs
+    "sstatus", "sedeleg", "sideleg", "sie", "stvec",
+    "scounteren", "sscratch", "sepc", "scause", "stval", "sip", "satp",
+    # Physical memory protection
+    "pmpcfg0", "pmpcfg1", "pmpcfg2", "pmpcfg3",
+    "pmpaddr0", "pmpaddr1", "pmpaddr2", "pmpaddr3",
+    "pmpaddr4", "pmpaddr5", "pmpaddr6", "pmpaddr7",
+    "pmpaddr8", "pmpaddr9", "pmpaddr10", "pmpaddr11",
+    "pmpaddr12", "pmpaddr13", "pmpaddr14", "pmpaddr15",
+]
+
+
+def _register_classes(proc):
+    """Group the processor's register set into classes.
+
+    Uses ``ida_idp.ph.reg_names`` plus the segment/ideal-register index ranges
+    (``reg_first_sreg``/``reg_last_sreg``, ``reg_first_ireg``/``reg_last_ireg``).
+    For RISC-V, a documented CSR name set is appended under the ``csr`` class
+    (deduplicated against what the module already names). Returns a list of
+    ``{reg_class, registers}`` dicts; empty when the register table is
+    unavailable.
+    """
+    if ida_idp is None:
+        return []
+    ph = getattr(ida_idp, "ph", None)
+    if ph is None:
+        return []
+    reg_names = [str(r) for r in (getattr(ph, "reg_names", None) or [])]
+    reg_names = [r for r in reg_names if r]
+    if not reg_names:
+        return []
+
+    def _range(attr_first, attr_last):
+        first = int(getattr(ph, attr_first, 0) or 0)
+        last = int(getattr(ph, attr_last, 0) or 0)
+        if last < first or first < 0 or last >= len(reg_names):
+            return None
+        return (first, last)
+
+    used: set[int] = set()
+    classes: list[dict] = []
+
+    ireg = _range("reg_first_ireg", "reg_last_ireg")
+    if ireg is not None:
+        first, last = ireg
+        used.update(range(first, last + 1))
+        classes.append({"reg_class": "gpr", "registers": reg_names[first:last + 1]})
+
+    sreg = _range("reg_first_sreg", "reg_last_sreg")
+    if sreg is not None:
+        first, last = sreg
+        used.update(range(first, last + 1))
+        classes.append({"reg_class": "segment", "registers": reg_names[first:last + 1]})
+
+    remaining = [reg_names[i] for i in range(len(reg_names)) if i not in used]
+    if remaining:
+        classes.append({"reg_class": "other", "registers": remaining})
+
+    if "riscv" in (proc or "").lower():
+        known = {n for c in classes for n in c["registers"]}
+        csrs = [n for n in _RISCV_CSRS if n not in known]
+        if csrs:
+            classes.append({"reg_class": "csr", "registers": csrs})
+
+    return classes
+
+
+@idaread
+def idb_registers(reg_class=None):
+    """Enumerate the processor register classes + CSRs (read-only).
+
+    ``reg_class=None`` returns a flat deduplicated union plus a per-class
+    breakdown; a ``reg_class`` filter returns just that class. Read-only —
+    never touches the IDB.
+    """
+    proc = _inf_procname()
+    classes = _register_classes(proc)
+    if not classes:
+        return make_error(
+            MCPError.IDA_ERROR,
+            "Processor register info unavailable (ida_idp.ph.reg_names missing)",
+        )
+    if reg_class is not None:
+        selected = next((c for c in classes if c["reg_class"] == reg_class), None)
+        if selected is None:
+            available = ", ".join(c["reg_class"] for c in classes)
+            return make_error(
+                MCPError.INVALID_ARGS,
+                f"Unknown register class: {reg_class}",
+                hint=f"Available classes: {available or 'none'}",
+            )
+        return {
+            "ok": True,
+            "processor": proc,
+            "reg_class": reg_class,
+            "registers": selected["registers"],
+            "count": len(selected["registers"]),
+        }
+    seen: list[str] = []
+    for c in classes:
+        for name in c["registers"]:
+            if name not in seen:
+                seen.append(name)
+    return {
+        "ok": True,
+        "processor": proc,
+        "reg_class": "all",
+        "registers": seen,
+        "classes": classes,
+        "count": len(seen),
     }

@@ -73,6 +73,43 @@ try:
 except (ImportError, ValueError):
     pass
 
+# Arch-aware call alias set for MATCH call: exact-mnemonic search over the
+# real cross-arch CALL_MNEMONICS (call/jal/jalr/c.jal/c.jalr + link branches).
+try:
+    from ida_pro_mcp.ida_mcp.support.arch_utils import CALL_MNEMONICS as _CALL_MNEMONICS
+    from ida_pro_mcp.ida_mcp.support.arch_utils import get_arch as _get_arch
+except ImportError:
+    try:
+        from arch_utils import CALL_MNEMONICS as _CALL_MNEMONICS  # type: ignore[import-not-found]
+        from arch_utils import get_arch as _get_arch  # type: ignore[import-not-found]
+    except ImportError:
+        _CALL_MNEMONICS = frozenset({
+            "call", "jal", "jalr", "c.jal", "c.jalr",
+            "bl", "blx", "blr", "bla", "bsr", "jsr",
+            "call0", "call4", "call8", "call12",
+            "callx0", "callx4", "callx8", "callx12",
+            "calla", "calli", "rcall", "icall", "eicall",
+        })
+
+        def _get_arch() -> str:
+            """Fallback arch probe when arch_utils is unavailable."""
+            return "unknown"
+
+# Per-arch subsets so MATCH call * on, say, x86 searches only "call" instead of
+# re-scanning every exec segment for each of ~25 aliases.
+_ARCH_CALL_ALIASES = {
+    "x86": {"call"},
+    "x64": {"call"},
+    "arm": {"bl", "blx", "call"},
+    "arm64": {"bl", "blr", "call"},
+    "riscv": {"jal", "jalr", "c.jal", "c.jalr"},
+    "riscv64": {"jal", "jalr", "c.jal", "c.jalr"},
+    "mips": {"jal", "jalr", "call"},
+    "mips64": {"jal", "jalr", "call"},
+    "ppc": {"bl", "bla", "call"},
+    "ppc64": {"bl", "bla", "call"},
+}
+
 if "tool" not in globals():
     def tool(f):
         return f  # type: ignore
@@ -200,12 +237,43 @@ class QueryParser:
 class QueryExecutor:
     """Execute parsed query plans by delegating to existing tools."""
 
+    def __init__(self, limit: int = 1000):
+        # ``limit`` is the candidate-window cap: the maximum number of items
+        # fetched from the underlying tools before WHERE filtering.  It is
+        # distinct from the DSL ``LIMIT N`` clause (a post-filter result cap).
+        try:
+            self._fetch_limit = max(1, int(limit))
+        except (TypeError, ValueError):
+            self._fetch_limit = 1000
+
     def execute(self, plan: Dict) -> Dict:
         target = plan["target"]
         method = getattr(self, f"_execute_{target}", None)
         if not method:
             return make_error(MCPError.INVALID_ARGS, f"Unknown target: {target}")
         return method(plan)
+
+    @staticmethod
+    def _window_capped(response: Dict, fetched: int, window: Optional[int] = None) -> bool:
+        """Whether the underlying tool's response reflects a capped window.
+
+        The search/data tools report a full/DB-wide ``total`` next to the
+        page ``count`` (``total > count`` means more candidates exist than
+        were fetched) or an explicit ``truncated`` flag.  When neither is
+        present and a ``window`` cap was actually applied, the fetch limit
+        itself is the conservative signal.  This drives the ``truncated`` /
+        ``total_matches`` response keys so ``total`` is never silently
+        under-reported.
+        """
+        if not isinstance(response, dict):
+            return False
+        if isinstance(response.get("total"), int) and isinstance(response.get("count"), int):
+            return response["total"] > response["count"]
+        if response.get("truncated"):
+            return True
+        if window is not None:
+            return fetched >= window
+        return False
 
     def _match_conditions(self, item: Dict, conditions: List[Dict]) -> bool:
         for cond in conditions:
@@ -249,7 +317,7 @@ class QueryExecutor:
                     return False
         return True
 
-    def _apply_postprocessing(self, results: List[Dict], plan: Dict) -> Dict:
+    def _apply_postprocessing(self, results: List[Dict], plan: Dict, capped: bool = False) -> Dict:
         limit = plan["limit"]
         sort_key = plan.get("sort_key")
         sort_order = plan.get("sort_order", "ASC")
@@ -271,24 +339,33 @@ class QueryExecutor:
             for r in results:
                 k = str(r.get(group_key, "null"))
                 groups.setdefault(k, []).append(r)
-            return {
+            response: Dict = {
                 "ok": True,
                 "total": total,
                 "returned": len(results),
                 "grouped": groups,
                 "plan": plan,
             }
+        else:
+            response = {
+                "ok": True,
+                "total": total,
+                "returned": len(results),
+                "results": results,
+                "plan": plan,
+            }
 
-        return {
-            "ok": True,
-            "total": total,
-            "returned": len(results),
-            "results": results,
-            "plan": plan,
-        }
+        if capped:
+            # The candidate window filled before the whole IDB was scanned, so
+            # ``total`` is a lower bound on the true match count.  Mirror the
+            # search suite's timed_out/truncated convention: surface it
+            # explicitly instead of silently under-reporting.
+            response["truncated"] = True
+            response["total_matches"] = total
+        return response
 
     def _execute_function(self, plan: Dict) -> Dict:
-        result = _call_tool("data", action="functions", count=1000)
+        result = _call_tool("data", action="functions", count=self._fetch_limit)
         if not isinstance(result, dict) or "functions" not in result:
             return make_error("QUERY_ERROR", "Failed to fetch functions")
         funcs = result["functions"]
@@ -315,23 +392,80 @@ class QueryExecutor:
         elif not isinstance(funcs, list):
             funcs = []
         matched = [f for f in funcs if self._match_conditions(f, plan["conditions"])]
-        return self._apply_postprocessing(matched, plan)
+        capped = self._window_capped(result, len(funcs), self._fetch_limit)
+        return self._apply_postprocessing(matched, plan, capped=capped)
+
+    @staticmethod
+    def _fold_insn_matches(matches) -> List[Dict]:
+        """Fold search_insns text lines into per-instruction dicts.
+
+        search_insns returns one compact line per match (``0x1000  [jalr]``);
+        the block handler does the same folding so conditions can match on
+        addr/text.  Dict items are passed through untouched.
+        """
+        if isinstance(matches, str):
+            lines = matches.splitlines()
+        elif isinstance(matches, list) and matches and isinstance(matches[0], str):
+            lines = matches
+        else:
+            return matches
+        items = []
+        for line in lines:
+            entry = {"text": line}
+            parts = line.split()
+            if parts:
+                entry["addr"] = parts[0]
+            items.append(entry)
+        return items
+
+    @staticmethod
+    def _call_alias_set() -> List[str]:
+        """Arch-aware mnemonics that encode calls (exact-mnemonic search)."""
+        arch = _get_arch()
+        subset = _ARCH_CALL_ALIASES.get(arch)
+        if subset:
+            return sorted(subset)
+        return sorted(_CALL_MNEMONICS)
 
     def _execute_call(self, plan: Dict) -> Dict:
-        # Call instructions: search for calls then match conditions
-        identifier = plan["identifier"]
-        if identifier != "*":
-            result = _call_tool("search", action="api", pattern=identifier, limit=200)
+        # Call instructions: exact-mnemonic search over the arch-aware call
+        # alias set, then match conditions.  The old path searched API imports
+        # for a non-'*' identifier and used a *semantic* mnemonic search for
+        # '*', neither of which finds RISC-V jal/jalr/c.jal/c.jalr reliably.
+        identifier = (plan["identifier"] or "").strip().strip('"\'')
+        aliases = self._call_alias_set()
+        if identifier and identifier != "*" and identifier in aliases:
+            patterns = [identifier]
         else:
-            result = _call_tool("search", action="instruction", pattern="call", limit=200)
-        if not isinstance(result, dict):
-            return make_error("QUERY_ERROR", "Failed to search calls")
-        calls = result.get("results", result.get("matches", []))
+            patterns = aliases
+        calls = []
+        seen = set()
+        capped = False
+        for pat in patterns:
+            result = _call_tool("search", action="insns", pattern=pat, limit=200)
+            if not isinstance(result, dict):
+                return make_error("QUERY_ERROR", "Failed to search calls")
+            if result.get("error"):
+                # Propagate the tool's error instead of folding it into a
+                # false {ok: True, total: 0} success.
+                return result
+            if result.get("truncated"):
+                capped = True
+            for m in self._fold_insn_matches(result.get("results", result.get("matches", []))):
+                key = str(m.get("addr") or m.get("text") or m)
+                if key in seen:
+                    continue
+                seen.add(key)
+                calls.append(m)
+            if len(calls) >= 200:
+                # Aggregate cap across aliases: more call sites exist.
+                capped = True
+                break
         matched = [c for c in calls if self._match_conditions(c, plan["conditions"])]
-        return self._apply_postprocessing(matched, plan)
+        return self._apply_postprocessing(matched, plan, capped=capped)
 
     def _execute_string(self, plan: Dict) -> Dict:
-        result = _call_tool("data", action="strings", count=1000)
+        result = _call_tool("data", action="strings", count=self._fetch_limit)
         if not isinstance(result, dict):
             return make_error("QUERY_ERROR", "Failed to fetch strings")
         strings = result.get("strings", [])
@@ -358,10 +492,11 @@ class QueryExecutor:
         elif not isinstance(strings, list):
             strings = []
         matched = [s for s in strings if self._match_conditions(s, plan["conditions"])]
-        return self._apply_postprocessing(matched, plan)
+        capped = self._window_capped(result, len(strings), self._fetch_limit)
+        return self._apply_postprocessing(matched, plan, capped=capped)
 
     def _execute_import(self, plan: Dict) -> Dict:
-        result = _call_tool("data", action="imports", count=1000)
+        result = _call_tool("data", action="imports", count=self._fetch_limit)
         if not isinstance(result, dict):
             return make_error("QUERY_ERROR", "Failed to fetch imports")
         imports = result.get("imports", [])
@@ -383,19 +518,27 @@ class QueryExecutor:
         elif not isinstance(imports, list):
             imports = []
         matched = [i for i in imports if self._match_conditions(i, plan["conditions"])]
-        return self._apply_postprocessing(matched, plan)
+        capped = self._window_capped(result, len(imports), self._fetch_limit)
+        return self._apply_postprocessing(matched, plan, capped=capped)
 
     def _execute_instruction(self, plan: Dict) -> Dict:
-        identifier = plan["identifier"]
-        if identifier != "*":
-            result = _call_tool("search", action="mnemonic", pattern=identifier, limit=200)
+        # Exact-mnemonic search (search_insns), not the semantic
+        # mnemonic/instruction search that matched loosely and returned noise.
+        identifier = (plan["identifier"] or "").strip().strip('"\'')
+        if identifier and identifier != "*":
+            pattern = identifier
         else:
-            result = _call_tool("search", action="instruction", pattern=".*", limit=200)
+            pattern = "*"  # search_insns treats '*' as a wildcard mnemonic
+        result = _call_tool("search", action="insns", pattern=pattern, limit=200)
         if not isinstance(result, dict):
             return make_error("QUERY_ERROR", "Failed to search instructions")
-        insns = result.get("results", result.get("matches", []))
+        if result.get("error"):
+            # Propagate the tool's error instead of a false {ok: True, total: 0}.
+            return result
+        insns = self._fold_insn_matches(result.get("results", result.get("matches", [])))
+        capped = self._window_capped(result, len(insns), 200)
         matched = [i for i in insns if self._match_conditions(i, plan["conditions"])]
-        return self._apply_postprocessing(matched, plan)
+        return self._apply_postprocessing(matched, plan, capped=capped)
 
     def _execute_xref(self, plan: Dict) -> Dict:
         addr = plan["identifier"]
@@ -404,7 +547,10 @@ class QueryExecutor:
             return make_error("QUERY_ERROR", "Failed to fetch xrefs")
         xrefs = result.get("xrefs", result.get("results", []))
         matched = [x for x in xrefs if self._match_conditions(x, plan["conditions"])]
-        return self._apply_postprocessing(matched, plan)
+        # No fetch window was applied here; only explicit total/count/truncated
+        # signals indicate a capped result.
+        capped = self._window_capped(result, len(xrefs))
+        return self._apply_postprocessing(matched, plan, capped=capped)
 
     def _execute_segment(self, plan: Dict) -> Dict:
         result = _call_tool("idb", action="segments")
@@ -412,7 +558,8 @@ class QueryExecutor:
             return make_error("QUERY_ERROR", "Failed to fetch segments")
         segments = result.get("segments", [])
         matched = [s for s in segments if self._match_conditions(s, plan["conditions"])]
-        return self._apply_postprocessing(matched, plan)
+        capped = self._window_capped(result, len(segments))
+        return self._apply_postprocessing(matched, plan, capped=capped)
 
     def _execute_block(self, plan: Dict) -> Dict:
         # Basic blocks: via the code blocks action. The identifier is the
@@ -450,10 +597,11 @@ class QueryExecutor:
         elif not isinstance(blocks, list):
             blocks = []
         matched = [b for b in blocks if self._match_conditions(b, plan["conditions"])]
-        return self._apply_postprocessing(matched, plan)
+        capped = self._window_capped(result, len(blocks), 200)
+        return self._apply_postprocessing(matched, plan, capped=capped)
 
 
-def run_query_lang(query: str) -> dict:
+def run_query_lang(query: str, limit: int = 1000) -> dict:
     """
     Execute a high-level query language string.
 
@@ -461,21 +609,38 @@ def run_query_lang(query: str) -> dict:
       MATCH <target> <identifier> WHERE <conditions>
         [LIMIT N] [SORT BY key (ASC|DESC)] [GROUP BY key]
 
+    Args:
+        query:  The query-language expression.
+        limit:  Candidate-window cap for the underlying tools (default 1000).
+                When the window fills before the whole IDB is scanned, the
+                response carries ``truncated: True`` plus ``total_matches``
+                so ``total`` is never silently under-reported.  The DSL
+                ``LIMIT N`` clause is a separate post-filter result cap.
+
     Returns:
         {ok: True, total, returned, results, plan} or error dict.
     """
     if not query or not query.strip():
         return make_error(MCPError.INVALID_ARGS, "query is required")
 
+    try:
+        fetch_limit = max(1, int(limit))
+    except (TypeError, ValueError):
+        fetch_limit = 1000
+
     parser = QueryParser()
     plan = parser.parse(query)
     if not plan:
+        # NB: error_handling.make_error() has no ``example`` kwarg; fold the
+        # example into the hint so a malformed query never crashes the RPC.
         return make_error(
             MCPError.INVALID_ARGS,
             "Failed to parse query",
-            hint="Expected: MATCH <target> <id> WHERE <conditions> [LIMIT N] [SORT BY key]",
-            example="MATCH function * WHERE size > 100 LIMIT 10",
+            hint=(
+                "Expected: MATCH <target> <id> WHERE <conditions> [LIMIT N] [SORT BY key] — "
+                "e.g. MATCH function * WHERE size > 100 LIMIT 10"
+            ),
         )
 
-    executor = QueryExecutor()
+    executor = QueryExecutor(limit=fetch_limit)
     return executor.execute(plan)

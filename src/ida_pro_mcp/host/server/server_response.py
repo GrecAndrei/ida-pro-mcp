@@ -849,8 +849,18 @@ class ServerResponseMixin(ServerResponseCompactMixin):
         # When a background-loaded session's analysis completes, the next
         # response for that session carries the transition warning exactly
         # once ('the agent is auto moved to the new one with a warning').
+        # The notice is keyed by session and popped onto the NEXT dict-shaped
+        # response for that session (the background-load notice carries the
+        # generic completion message, code 'analysis_complete' — it means
+        # 'confirmed complete at least once', not 'currently idle'; live
+        # idleness is reported separately as analysis_ready/analysis_active).
         # The notice is only consumed when the payload can carry it (a dict);
         # a list/scalar payload leaves it pending for the next response.
+        #
+        # Pending notices live only in host memory: a host restart drops any
+        # notice that has not been consumed yet. This is acceptable — the
+        # notice is a transition hint, not durable state, and a fresh host has
+        # no live runtime to report a transition for anyway.
         try:
             notices = getattr(self, "_pending_session_notices", None)
             current = target_session
@@ -1019,9 +1029,19 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             # ---- Session Resume: first 2 calls only ----
             # Also skipped in safe mode: resume summarizes prior analysis,
             # which is exactly what must not be auto-trusted mid-analysis.
-            # The gate is a real per-session counter (previously it read a
-            # `_call_seq` arg that was never set, so the resume fired on every
-            # enriched response).
+            # The gate is a real monotonic per-session counter (previously it
+            # read a `_call_seq` arg that was never set, so the resume fired
+            # on every enriched response). It fires for the first 2 enriched
+            # calls of a session, then stays ahead of the threshold for the
+            # life of the session.
+            #
+            # The counter is deliberately NOT popped here. Once a session has
+            # served its first two calls it must never fire again, and reset
+            # is the session OPEN/close path's job: the key is dropped when a
+            # session is created/reused or torn down (see
+            # ``_forget_analysis_state`` and the session-bootstrap reset), so
+            # a re-opened session starts from 0 while a long-lived one cannot
+            # re-fire a stale resume.
             if self.enable_response_enrichment and not _safe_mode_active:
                 try:
                     if hasattr(self, 'session_mgr') and target_session is not None:
@@ -1029,17 +1049,13 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                         sid = str(getattr(target_session, "session_id", "") or "")
                         if sid:
                             # Decide under the lock so two concurrent
-                            # first-calls cannot both inject the resume, and
-                            # free the counter once the first two calls have
-                            # been counted so churned sessions don't accumulate
-                            # entries forever.
+                            # first-calls cannot both inject the resume. The
+                            # count is monotonic and persists until the session
+                            # is re-opened or closed.
                             with self._session_resume_calls_lock:
                                 call_count = self._session_resume_calls.get(sid, 0) + 1
+                                self._session_resume_calls[sid] = call_count
                                 should_resume = call_count <= 2
-                                if call_count > 2:
-                                    self._session_resume_calls.pop(sid, None)
-                                else:
-                                    self._session_resume_calls[sid] = call_count
                             if should_resume:
                                 resume = build_session_resume(self.session_mgr, sid)
                                 if resume:

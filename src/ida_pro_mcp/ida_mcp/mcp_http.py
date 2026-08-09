@@ -34,6 +34,17 @@ def config_json_set(key: str, value):
     node.setblob(json_blob, 0, "C")
 
 
+# D8: cache of the last-seen enabled-tools config, keyed by config_key →
+# (len(registry.methods) at compute time, enabled_tools dict). Tools register
+# lazily, so ``len(registry.methods)`` is the natural signature: while no new
+# tool registers, the persisted config is read once and the conditional write
+# (which used to fire on EVERY request until a new tool was persisted — each
+# write being an @idawrite that invalidates the shared tool cache) is skipped.
+# Cleared on /config POST. Values are snapshots (dict copies) so callers can
+# safely mutate their local copy.
+_ENABLED_TOOLS_CACHE: dict[str, tuple[int, dict]] = {}
+
+
 def handle_enabled_tools(registry: McpRpcRegistry, config_key: str):
     """Filter the registry down to the tools enabled in the persisted config.
 
@@ -45,19 +56,26 @@ def handle_enabled_tools(registry: McpRpcRegistry, config_key: str):
     """
     original_tools = registry.methods.copy()
     _KNOWN_TOOLS.update(original_tools)
-    enabled_tools = config_json_get(
-        config_key, dict.fromkeys(original_tools, True)
-    )
+    registry_size = len(original_tools)
+
+    cached = _ENABLED_TOOLS_CACHE.get(config_key)
+    if cached is not None and cached[0] == registry_size:
+        enabled_tools = dict(cached[1])
+    else:
+        enabled_tools = config_json_get(
+            config_key, dict.fromkeys(original_tools, True)
+        )
+        removed_tools = [name for name in enabled_tools if name not in original_tools]
+        if removed_tools:
+            for name in removed_tools:
+                enabled_tools.pop(name)
+        _ENABLED_TOOLS_CACHE[config_key] = (registry_size, dict(enabled_tools))
+
     new_tools = [name for name in original_tools if name not in enabled_tools]
-
-    removed_tools = [name for name in enabled_tools if name not in original_tools]
-    if removed_tools:
-        for name in removed_tools:
-            enabled_tools.pop(name)
-
     if new_tools:
         enabled_tools.update(dict.fromkeys(new_tools, True))
         config_json_set(config_key, enabled_tools)
+        _ENABLED_TOOLS_CACHE[config_key] = (registry_size, dict(enabled_tools))
 
     registry.methods = {
         name: func for name, func in original_tools.items() if enabled_tools.get(name)
@@ -423,6 +441,9 @@ input[type="submit"]:hover {
             if enabled_tools.get(name)
         }
         config_json_set("enabled_tools", enabled_tools)
+        # The config just changed under the enabled-tools cache: drop it so the
+        # next request re-reads (and re-applies) the new tool set.
+        _ENABLED_TOOLS_CACHE.clear()
 
         # Redirect back to the config page
         self.send_response(302)

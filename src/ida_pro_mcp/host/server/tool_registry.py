@@ -27,6 +27,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "set_loader_options", "set_architecture", "reanalyze",
         "run", "analyze", "state", "set_gp",
         "save_idb", "make_code", "undefine", "get_af", "set_af", "force_offset",
+        "add_entry", "snapshot", "restore_snapshot", "auto_wait",
     ],
     "annotation": [
         "auto_comment", "auto_comment_function", "label_loops",
@@ -39,7 +40,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
     "batch": ["(pass calls array)"],
     "blackboard": [
         "policy_set", "policy_status", "policy_check", "phase_status",
-        "phase_set", "phase_tick", "quest_board", "quest_complete",
+        "phase_set", "phase_tick",
         "memory_compile", "phase_finalize", "trace_ingest", "trace_run",
         "trace_status", "proposal_create", "proposal_list",
         "proposal_accept", "proposal_reject", "decision_card",
@@ -47,7 +48,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "export",
         "write", "read", "list", "search", "update", "delete", "clear",
         "stats", "coverage", "prune", "merge", "contradict", "resolve",
-        "next_target", "frontier", "propagate_labels",
+        "next_target", "frontier",
         "start_crawler", "stop_crawler", "crawler_status",
         "accept", "reject", "add_evidence", "calibrate", "decay",
         "campaign_summary", "workspace_brief",
@@ -60,16 +61,19 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
 
     "ctree": ["get", "traverse", "find_calls", "find_vars", "find_strings", "find_conditions", "get_logic_flow", "dominance_map", "var_dependency_graph"],
     "data": ["functions", "annotations", "globals", "strings", "imports", "exports", "lookup", "bulk_query", "capability_matrix", "string_xrefs", "read_bytes"],
+    "firmware": [
+        "detect_vector_table", "detect_load_base", "detect_mmio",
+        "rtos_scan", "carve",
+    ],
 
 
-    "firmware_view": ["scan_region", "auto_retype", "pointer_sweep", "recommend", "table_candidates", "smart_carve", "rollback_last", "review_contradictions", "region_profile", "pointer_clusters", "carve_plan", "campaign", "segment_sweep", "multi_region_campaign", "detect_load_address", "detect_vector_table", "detect_mmio", "rtos_scan", "triage_snapshot", "bootstrap"],
     "funcs": ["create", "change", "delete", "set_flags", "info", "metrics", "find_similar", "suggest_names", "list"],
     "gadgets": ["rop", "jop", "cop", "syscall", "write_what_where", "stack_pivot", "shellcode_space", "mitigations", "seh_handlers", "pivot_chains", "classify_chain", "semantic_find"],
     "governance": ["check", "redact", "list_rules", "stats"],
     "graph": ["callgraph", "cfg", "dominators", "xref_graph"],
 
 
-    "idb": ["meta", "summary", "segments", "entrypoints", "bookmarks", "overview", "architecture_profile", "state"],
+    "idb": ["meta", "summary", "segments", "entrypoints", "bookmarks", "overview", "architecture_profile", "state", "events", "registers"],
     "imports_deep": ["thunks", "delay", "forwarded", "ordinal", "api_sets", "resolve"],
     "intelligence": [
         "intelligence_status", "embedder_status", "reranker_status", "anchor_status",
@@ -77,11 +81,17 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "index_function", "index_batch", "index_fast", "index_range", "similar_functions",
         "semantic_search", "blackboard_search", "export_index_summary", "function_families",
     ],
-    "knowledge": ["chip_identify", "symbol_lookup", "import_symbols", "export_session", "chip_families"],
+    "knowledge": ["symbol_lookup", "import_symbols", "export_session"],
 
     "memory": ["read", "write", "hexdump", "search", "compare", "pointers", "entropy", "strings", "struct_walk", "histogram"],
     "misc": ["python", "idc", "load_sig", "list_sigs", "cache_stats", "plugin_list", "plugin_run", "read_file", "write_file", "health", "reload"],
-    "modify": ["rename", "comment", "set_type", "patch_asm", "patch_bytes", "rename_local"],
+    "modify": [
+        "rename", "comment", "set_type", "patch_asm", "patch_bytes", "rename_local",
+        "create_data", "create_strlit", "undo_begin", "undo_end",
+    ],
+    "r2": [
+        "status", "bininfo", "load_hints", "disassemble_hypothesis", "vxrefs",
+    ],
 
 
 
@@ -96,9 +106,9 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "data_ref", "code_ref", "regex", "func_by_sig", "type", "export",
         "summary", "query_lang", "bool", "analyze",
         "neighborhood", "outlier", "fingerprint", "path", "reach", "noreach",
-        "symbol", "symbol_info", "demangle", "xrefs_to_string",
+        "symbol", "symbol_info", "demangle", "xrefs_to_string", "data_value",
     ],
-    "segments": ["list", "add", "delete", "set_attr", "set_perms", "move", "info", "analyze", "find_code", "find_data", "compare", "merge"],
+    "segments": ["list", "add", "delete", "set_attr", "set_perms", "move", "info", "analyze", "find_code", "find_data", "compare", "merge", "sreg_get", "sreg_set", "sreg_list"],
     "session": [
         "health", "create", "create_background", "get", "list", "switch", "close",
         "status", "rebuild", "update", "rename", "duplicate",
@@ -116,7 +126,7 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
 
     "multi_session": ["group_create", "group_list", "group_link", "group_remove", "cross_resolve", "cross_decompile", "cross_xrefs", "status"],
     "truncation": ["continue", "peek", "search", "summary"],
-    "types": ["list", "get", "set_prototype", "parse_decl", "declare", "apply", "search_structs", "infer", "read_struct", "import_header", "diff", "visualize", "propagate", "enum_values", "type_graph", "vtable"],
+    "types": ["list", "get", "set_prototype", "parse_decl", "declare", "apply", "search_structs", "infer", "read_struct", "import_header", "diff", "visualize", "propagate", "enum_values", "type_graph", "vtable", "struct_member_add", "struct_member_del", "struct_member_rename", "struct_member_set_type", "enum_member_add", "enum_member_rename", "enum_member_revalue", "til_delete", "til_export", "til_import"],
     "wiki": ["list_topics", "read", "search", "semantic_search", "index", "sections", "suggest"],
     "workflow": [
         "audit_plan", "execute_plan", "prioritize", "compose",

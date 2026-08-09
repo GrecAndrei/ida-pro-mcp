@@ -179,9 +179,14 @@ def test_background_reuse_across_client_restart(tmp_path, monkeypatch):
 
     server2 = IDAMCPServer()
     monkeypatch.setattr(server2, "_ensure_runtime_and_idb", lambda session: None)
+    # The persisted analysis_gate from server1's run is restored at startup:
+    # the half-analyzed background session comes back in safe mode, which does
+    # NOT change the session_id/idb_path reuse the client depends on.
+    assert server2._safe_mode_active(sid) is True
     reopened = _open(server2, "ida_open_background", {"binary_path": str(binary)})
     assert reopened["session_id"] == sid
     assert reopened["idb_path"] == idb
+    assert reopened["safe_mode"] is True
     server2.shutdown()
 
 

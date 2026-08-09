@@ -215,7 +215,7 @@ SEARCH_ACTIONS = {
     "find", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
     "type", "export", "summary", "query_lang", "nl", "behavior",
     "bool", "neighborhood", "outlier", "fingerprint", "path", "reach", "noreach",
-    "symbol", "symbol_info", "demangle", "xrefs_to_string",
+    "symbol", "symbol_info", "demangle", "xrefs_to_string", "data_value",
 }
 
 SEARCH_ALIASES = {
@@ -255,6 +255,9 @@ SEARCH_ALIASES = {
     "shortest_path": "path", "callgraph_path": "path", "chain": "path",
     "reachable": "reach", "forward": "reach", "fanout": "reach",
     "unreachable": "noreach", "dead_code": "noreach", "orphan_reach": "noreach",
+    # data_value aliases (raw pointer-word scan, /v-style)
+    "pointer": "data_value", "pointers": "data_value",
+    "dataword": "data_value", "data_word": "data_value",
 }
 
 SEARCH_INTENT_PATTERNS = [
@@ -356,11 +359,54 @@ def iter_segments(range_start=None, range_end=None, require_exec: bool = True):
                 yield (seg.start_ea, seg.end_ea)
 
 
-def iter_code(seg_start, seg_end):
-    """Yield executable addresses within segment bounds."""
+def resolve_scan_segments(range_start=None, range_end=None, *, require_exec: bool = True):
+    """Resolve searchable segment ranges, relaxing exec gating for raw blobs.
+
+    Returns ``(segments, note, error)`` where ``segments`` is a list of
+    ``(start, end)`` tuples, ``note`` is "" normally or an explanatory string
+    when exec gating was relaxed, and ``error`` is a crisp message the caller
+    should return as-is instead of silently reporting zero matches.
+
+    A raw headerless firmware blob often loads with no EXEC segment at all
+    (IDA flags the whole image as data).  Searches that gate on
+    ``require_exec=True`` then silently return zero results even though the
+    bytes are code.  When the *whole database* has no executable segment we
+    treat that as a raw-blob load and relax the gate (the caller decides
+    whether to force-code while scanning); when the range simply misses the
+    code of an otherwise normal binary, we return a crisp error instead.
+    """
+    if not require_exec:
+        return list(iter_segments(range_start, range_end, require_exec=False)), "", ""
+    segs = list(iter_segments(range_start, range_end, require_exec=True))
+    if segs:
+        return segs, "", ""
+    # No EXEC segment inside the requested range.  Distinguish a raw blob that
+    # loaded without EXEC (whole DB has none) from a range that just misses the
+    # code (e.g. start/end pinned inside .data).
+    if not list(iter_segments(None, None, require_exec=True)):
+        relaxed = list(iter_segments(range_start, range_end, require_exec=False))
+        note = (
+            "Raw blob loaded without EXEC — scanning non-exec bytes as code. "
+            "Check segment perms or pass start/end to narrow."
+        )
+        return relaxed, note, ""
+    return [], "", (
+        "No executable segment in range; raw blob loaded without EXEC — "
+        "check segment perms or pass start/end."
+    )
+
+
+def iter_code(seg_start, seg_end, *, force: bool = False):
+    """Yield addresses within segment bounds that hold code.
+
+    With ``force=True`` every head address is yielded regardless of the
+    current data/code flags.  This is used when exec gating was relaxed for a
+    raw blob whose bytes are really instructions but were loaded without EXEC
+    permissions; the caller's disassembler force-decodes each yielded address.
+    """
     ea = seg_start
     while ea < seg_end:
-        if ida_bytes.is_code(ida_bytes.get_flags(ea)):
+        if force or ida_bytes.is_code(ida_bytes.get_flags(ea)):
             yield ea
         ea = idc.next_head(ea, seg_end)
         if ea == idaapi.BADADDR:
@@ -512,6 +558,97 @@ def demangle_safe(name: str) -> str:
         return name
 
 
+# (name -> demangled) memoization, invalidated when the IDB fingerprint changes.
+_DEMANGLE_CACHE: dict[str, str] = {}
+
+
+def demangle_cached(name: str) -> str:
+    """demangle_safe() memoized on the DB fingerprint.
+
+    resolve_target() walks every ``_Z``/``?`` symbol on its slow path; a large
+    C++ firmware with thousands of mangled names pays one ``idc.demangle_name``
+    RPC per name per call.  Demangling is deterministic per name and only the
+    DB contents change it, so memoizing keyed on the DB fingerprint collapses
+    repeated calls to a dict hit while still invalidating on rename/retype.
+    """
+    if _db_changed():
+        _DEMANGLE_CACHE.clear()
+    cached = _DEMANGLE_CACHE.get(name)
+    if cached is not None:
+        return cached
+    dem = demangle_safe(name)
+    if len(_DEMANGLE_CACHE) >= 20000:
+        _DEMANGLE_CACHE.clear()
+    _DEMANGLE_CACHE[name] = dem
+    return dem
+
+
+# ----------------------------------------------------------------------------
+# RISC-V lui+addi/addiw adjacent-pair constant reconstruction
+# ----------------------------------------------------------------------------
+
+def _sign_extend_12(val: int) -> int:
+    val &= 0xFFF
+    return val - 0x1000 if val & 0x800 else val
+
+
+def riscv_lui_addi_pair(lui_insn, addi_insn):
+    """Reconstruct a RISC-V 32-bit constant from an adjacent lui+addi/addiw pair.
+
+    Returns ``(resolved, addi_ea)`` when ``lui_insn`` is ``lui rd, imm20``
+    immediately followed by ``addi/addiw rd, rd, imm12`` on the same register;
+    otherwise returns ``None``.
+
+    The resolved constant is ``(imm20 << 12) + sign_extend(imm12)``, which is
+    exactly how the assembler's ``li`` pseudo-instruction materializes a 32-bit
+    immediate in two instructions (the compiler offsets ``%hi()`` by 0x800 so
+    the sign-extended low half lands on the true value).  Detection is
+    mnemonic-based: only RISC-V has this ``lui``+``addi`` pair, so it can never
+    fire on x86/ARM code even without a processor-name check.
+    """
+    import ida_ua
+    try:
+        lui_mnem = str(lui_insn.get_canon_mnem() or "").lower() if callable(
+            getattr(lui_insn, "get_canon_mnem", None)
+        ) else ""
+        addi_mnem = str(addi_insn.get_canon_mnem() or "").lower() if callable(
+            getattr(addi_insn, "get_canon_mnem", None)
+        ) else ""
+    except Exception:
+        return None
+    if lui_mnem != "lui" or addi_mnem not in ("addi", "addiw"):
+        return None
+
+    o_reg = getattr(ida_ua, "o_reg", 1)
+    o_imm = getattr(ida_ua, "o_imm", 5)
+    lui_ops = getattr(lui_insn, "ops", ()) or ()
+    addi_ops = getattr(addi_insn, "ops", ()) or ()
+    if len(lui_ops) < 2 or len(addi_ops) < 3:
+        return None
+    lui_rd, lui_imm = lui_ops[0], lui_ops[1]
+    addi_rd, addi_rs, addi_imm = addi_ops[0], addi_ops[1], addi_ops[2]
+    if getattr(lui_rd, "type", None) != o_reg or getattr(lui_imm, "type", None) != o_imm:
+        return None
+    if (
+        getattr(addi_rd, "type", None) != o_reg
+        or getattr(addi_rs, "type", None) != o_reg
+        or getattr(addi_imm, "type", None) != o_imm
+    ):
+        return None
+    # addi rd, rd, imm — source and destination must agree with lui's rd.
+    if getattr(addi_rd, "reg", None) != getattr(addi_rs, "reg", None):
+        return None
+    if getattr(lui_rd, "reg", None) != getattr(addi_rs, "reg", None):
+        return None
+    try:
+        hi = int(getattr(lui_imm, "value", 0) or 0)
+        lo = int(getattr(addi_imm, "value", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    resolved = (hi << 12) + _sign_extend_12(lo)
+    return resolved, getattr(addi_insn, "ea", idaapi.BADADDR)
+
+
 # ============================================================================
 # Semantic Target Resolution
 # ============================================================================
@@ -569,11 +706,23 @@ def resolve_target(
         return ea, None, {"match": "unique_substring", "resolved_name": nm}
 
     # Fast path: demangled name exact / unique substring
+    # A mangled C++ name always embeds the identifiers it demangles to, so a
+    # plain-identifier target shares a token with the raw name of any candidate
+    # that can match its demangled form.  Skip the expensive demangle RPC for
+    # names that share no target token unless the target is itself C++-shaped.
+    _target_terms = [
+        t for t in re.split(r"[^A-Za-z0-9_]+", target_l) if len(t) >= 3
+    ]
+    _cpp_shaped = any(c in target for c in ("::", "(", "<", ">"))
     demangle_hits = []
     for sym_ea, sym_name in idautils.Names():
         if not sym_name or not (sym_name.startswith(("_Z", "?"))):
             continue
-        dem = demangle_safe(sym_name)
+        if _target_terms and not _cpp_shaped and not any(
+            t in sym_name.lower() for t in _target_terms
+        ):
+            continue
+        dem = demangle_cached(sym_name)
         if not dem or dem == sym_name:
             continue
         if dem.lower() == target_l or target_l in dem.lower():
@@ -622,9 +771,20 @@ def resolve_target(
     for sym_ea, sym_name in idautils.Names():
         if not sym_name:
             continue
-        dem = demangle_safe(sym_name)
-        if not matcher(sym_name) and not (dem and matcher(dem)):
-            continue
+        if matcher(sym_name):
+            # Raw name already matches — no demangle needed for the candidate
+            # check; demangle only for a nicer display name.
+            dem = demangle_cached(sym_name) if sym_name.startswith(("_Z", "?")) else ""
+        else:
+            # Cheap pre-filter before the demangle RPC (see above): skip names
+            # that cannot be a demangled match for a plain-identifier target.
+            if _target_terms and not _cpp_shaped and not any(
+                t in sym_name.lower() for t in _target_terms
+            ):
+                continue
+            dem = demangle_cached(sym_name) if sym_name.startswith(("_Z", "?")) else ""
+            if not dem or dem == sym_name or not matcher(dem):
+                continue
         is_func = bool(idaapi.get_func(sym_ea))
         if require_function and not is_func:
             continue

@@ -105,7 +105,7 @@ class TestToolModulesExist:
         # Host-side tools with no IDA module
         host_only = {
             "session", "truncation", "bookmarks", "background", "workflow",
-            "multi_session",
+            "multi_session", "r2",
         }
         # Module map: tool name -> module file name (read directly from source)
         module_map = {}
@@ -145,7 +145,7 @@ class TestIdaSideLiteralContract:
     # Host-side tools that dispatch without an IDA-side tool module.
     HOST_ONLY_TOOLS = {
         "session", "truncation", "bookmarks", "background", "workflow",
-        "multi_session", "governance", "search",
+        "multi_session", "governance", "search", "r2",
     }
 
     @staticmethod

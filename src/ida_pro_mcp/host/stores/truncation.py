@@ -53,9 +53,20 @@ def _store_truncation(
 ) -> str:
     _prune_expired()
     token = secrets.token_urlsafe(16)
+    # Store only the full originals of the fields that were actually truncated
+    # (plus their metadata), not the whole response dict: continuation/search
+    # re-slice exactly these values, and the pruned envelope (with the slices)
+    # is what was already returned to the caller. Holding the full response
+    # here kept every non-truncated key — including already-sliced payloads and
+    # big metadata blobs — alive for the token's 10-minute TTL.
+    values: dict[str, Any] = {}
+    for path in fields:
+        value = _get_nested(response, path)
+        if value is not None:
+            values[path] = value
     with _STORE_LOCK:
         _TRUNCATION_STORE[token] = {
-            "response": response,
+            "values": values,
             "fields": fields,
             "session_id": session_id or "",
             "owner_id": owner_id or "",
@@ -160,10 +171,16 @@ def _resolve_field(
             details={"fields": sorted(fields.keys()), "required_argument": "field"},
         ), None
 
+    # Resolve the value from the stored truncated-field originals first; the
+    # dotted fallback covers entries minted before the slice-only store.
+    values = entry.get("values", {})
     response = entry.get("response", {})
-    # Dotted-path resolution: the continuation field may name a nested list
-    # element (e.g. "results.3.code") rather than a bare top-level key.
-    value = _get_nested(response, field)
+    if field in values:
+        value = values[field]
+    else:
+        # Dotted-path resolution: the continuation field may name a nested list
+        # element (e.g. "results.3.code") rather than a bare top-level key.
+        value = _get_nested(response, field)
     if value is None:
         return None, make_error(
             MCPError.TRUNCATION_FIELD_MISSING,
@@ -353,6 +370,7 @@ def search_truncated(
         return make_error(MCPError.INVALID_ARGS, "pattern required")
 
     fields = entry.get("fields", {})
+    values = entry.get("values", {})
     response = entry.get("response", {})
 
     # Determine which fields to search
@@ -394,7 +412,10 @@ def search_truncated(
 
     matches = []
     for fname in search_fields:
-        value = _get_nested(response, fname)
+        if fname in values:
+            value = values[fname]
+        else:
+            value = _get_nested(response, fname)
         if value is None:
             continue
         if isinstance(value, list):
@@ -505,6 +526,47 @@ def summary_truncated(
 # ─── Nested truncation helper ────────────────────────────────────────────────
 
 
+def _estimate_size(obj: Any, cap: int, _depth: int = 0) -> int:
+    """Cheap O(n) serialized-size estimate that stops once *cap* is exceeded.
+
+    Replaces the old ``len(json.dumps(response))`` probe, which allocated the
+    full multi-MB JSON string for every response before deciding it was small.
+    Walks the structure summing ``len()`` of strings and list/dict sizes, and
+    bails out early once the caller's budget is exceeded (the common case for
+    a large response that is about to be truncated anyway).
+    """
+    if _depth > _MAX_TRUNCATION_DEPTH:
+        return 0
+    if isinstance(obj, str):
+        return len(obj) + 2  # approximates the two JSON quotes
+    if isinstance(obj, dict):
+        total = 2
+        first = True
+        for k, v in obj.items():
+            if not first:
+                total += 2  # `", "` separator
+            first = False
+            total += len(str(k)) + 4  # quotes + `": `
+            total += _estimate_size(v, cap, _depth + 1)
+            if total >= cap:
+                return total
+        return total
+    if isinstance(obj, (list, tuple)):
+        total = 2
+        first = True
+        for v in obj:
+            if not first:
+                total += 2  # `", "` separator
+            first = False
+            total += _estimate_size(v, cap, _depth + 1)
+            if total >= cap:
+                return total
+        return total
+    if obj is None:
+        return 4
+    return len(str(obj))
+
+
 def _truncate_recursive(
     obj: Any,
     max_tokens: int,
@@ -593,8 +655,7 @@ def truncate_response(
     """
     max_tokens = max(max_tokens, _MIN_MAX_TOKENS)
 
-    resp_str = json.dumps(response)
-    if len(resp_str) < max_tokens and trunc_offset is None and trunc_limit is None:
+    if _estimate_size(response, max_tokens) < max_tokens and trunc_offset is None and trunc_limit is None:
         return response
 
     pruned = copy.deepcopy(response)

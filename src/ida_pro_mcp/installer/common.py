@@ -47,6 +47,15 @@ class InstallerOptions:
     ida_version: str = ""  # explicit version override (e.g. "9.3" or "9.3.260421")
     no_ida_prompt: bool = False  # don't prompt; pick highest-version automatically
     disable_policy: bool = False  # set IDA_MCP_POLICY_MODE=off in the spawned server
+    # r2/Rizin engine (paper §8.2 item 11) — Phase 1 locates an existing
+    # rz/r2 on PATH and records it as IDA_MCP_R2_BIN in the generated client
+    # config; it does NOT download a pinned release (documented follow-up,
+    # mirroring the llama.cpp pin discipline).
+    with_r2: bool = False  # --with-r2: resolve + record rz/r2 into the client config
+    # Signature-pack staging (paper §10.2 item 5e) — copies *.sig / *.sig.gz
+    # from a source dir into <IDADIR>/sig, closing "nothing installs a RISC-V
+    # .sig pack".
+    sigs_dir: str = ""  # --sigs <dir>: stage a FLIRT sig pack into IDA's sig dir
 
 
 @dataclass
@@ -94,3 +103,45 @@ class InstallReport:
             "metadata": self.metadata,
         }
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def find_ida_sig_dir(ida_dir: Path) -> Path:
+    """Return IDA's signature directory for an install.
+
+    The host MCP ``ida_list_sigs`` op globs ``<IDADIR>/sig/**/*.sig``
+    recursively (``ida_mcp/tools/misc.py``), so ``<ida_dir>/sig`` is the
+    canonical staging target for a FLIRT sig pack.  The directory may not
+    exist yet — staging creates it.
+    """
+    return Path(ida_dir) / "sig"
+
+
+@dataclass
+class SigsManifest:
+    """Record of what the installer staged (or would stage) into IDA's sig dir.
+
+    ``staged`` holds absolute destination paths of every signature file that
+    was (dry_run) or would be (real) copied; ``skipped`` holds destinations
+    that already existed and were deliberately not overwritten so a sig pack
+    can never clobber IDA's bundled signatures.
+    """
+
+    source: str
+    sig_dir: str
+    staged: list[str] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)
+    dry_run: bool = False
+
+    @property
+    def count(self) -> int:
+        return len(self.staged)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "source": self.source,
+            "sig_dir": self.sig_dir,
+            "staged": list(self.staged),
+            "skipped": list(self.skipped),
+            "dry_run": self.dry_run,
+            "count": self.count,
+        }

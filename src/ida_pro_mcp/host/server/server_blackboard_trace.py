@@ -3,8 +3,13 @@
 Extracted from server_blackboard.py to keep the main handler focused.
 This mixin provides:
   - Entity extraction from text (addresses, symbols, addr→name pairs)
-  - Trace task creation and execution
+  - Trace task creation and enqueueing
   - Auto-proposal generation from trace results
+  - The synchronous per-task executor the background worker pool runs
+
+``trace_run`` itself no longer blocks the request thread: it enqueues pending
+tasks onto the bounded worker pool (blackboard_orchestration.py) and returns a
+task id immediately. ``trace_status`` reads the resulting task rows.
 """
 from __future__ import annotations
 
@@ -22,7 +27,7 @@ _ADDR_NAME_RE = re.compile(
 
 
 class ServerBlackboardTraceMixin:
-    """Trace task creation, execution, and auto-proposal generation."""
+    """Trace task creation, enqueueing, execution, and auto-proposal generation."""
 
     def _extract_trace_entities(self, text: str) -> dict[str, Any]:
         addrs = sorted({m.group(0) for m in _ADDR_RE.finditer(text or "")})
@@ -88,13 +93,16 @@ class ServerBlackboardTraceMixin:
         entities = self._extract_trace_entities(source_text or "")
         if not entities.get("addrs") and not entities.get("addr_name_pairs"):
             return None
-        return self._create_trace_task(
-            store,
-            source_entry_id=source_entry_id,
-            source_text=source_text,
-            depth=depth,
-            limit=limit,
-        )
+        try:
+            return self._orchestration().enqueue_trace_task(
+                store,
+                source_entry_id=source_entry_id,
+                source_text=source_text,
+                depth=depth,
+                limit=limit,
+            )
+        except Exception:
+            return None
 
     def _set_task_status(self, store, entry: dict[str, Any], status: str, payload: dict[str, Any]) -> None:
         tags = entry.get("tags") or []

@@ -1,10 +1,6 @@
 """Regression tests for swarm/t12_misc_tools findings.
 
 Covers:
-- knowledge.chip_identify: input binary path comes from
-  ida_nalt/idaapi.get_input_file_path(), not a string-strip of the IDB path
-  (foo.i64 -> 'foo' was wrong for PE/ELF, and a raw .idb was fed to arch
-  inference on 32-bit targets).
 - symbols.load_dwarf: returns an IDA_ERROR envelope when the dwarf plugin
   fails to load/run, matching load_pdb (previously ok:true-on-failure).
 - imports_deep.delay / forwarded / api_sets: honor the query filter.
@@ -26,70 +22,6 @@ if str(TESTS) not in sys.path:
     sys.path.insert(0, str(TESTS))
 
 from _isolated_repo_loader import load_tool_module  # noqa: E402
-
-# ---------------------------------------------------------------------------
-# knowledge.chip_identify — input path source
-# ---------------------------------------------------------------------------
-
-class _FakeSymbolDB:
-    """Stand-in for SymbolDB; only construction happens on chip_identify."""
-
-    def __init__(self, db_path=None):
-        self.db_path = db_path or ":memory:"
-
-    def stats_by_chip(self):
-        return []
-
-    def query_symbols(self, query, limit=50):
-        return []
-
-    def upsert_symbol(self, row):
-        return 1
-
-    def lookup_by_fingerprint(self, fp, limit=5):
-        return []
-
-
-def test_chip_identify_uses_real_input_file_path(monkeypatch):
-    mod = load_tool_module("knowledge")
-    mod.SymbolDB = _FakeSymbolDB
-    seen = {}
-    mod.infer_binary_arch_profile = lambda p: dict(seen, path=p)
-
-    monkeypatch.setattr(sys.modules["idc"], "get_idb_path", lambda: "/idbs/foo.i64", raising=False)
-    monkeypatch.setattr(sys.modules["ida_nalt"], "get_input_file_path", lambda: "/binaries/foo.exe", raising=False)
-
-    res = mod.knowledge(action="chip_identify")
-    assert res["ok"] is True
-    # The profile must be inferred from the real binary, not 'foo' (the old
-    # '.i64'-strip result) and not the IDB path.
-    assert res["profile"]["path"] == "/binaries/foo.exe"
-
-
-def test_chip_identify_falls_back_to_idaapi_input_path(monkeypatch):
-    mod = load_tool_module("knowledge")
-    mod.SymbolDB = _FakeSymbolDB
-    mod.infer_binary_arch_profile = lambda p: {"path": p}
-
-    monkeypatch.delattr(sys.modules["ida_nalt"], "get_input_file_path", raising=False)
-    monkeypatch.setattr(sys.modules["idaapi"], "get_input_file_path", lambda: "/bin/bar.elf", raising=False)
-
-    res = mod.knowledge(action="chip_identify")
-    assert res["ok"] is True
-    assert res["profile"]["path"] == "/bin/bar.elf"
-
-
-def test_chip_identify_error_envelope_without_input_path(monkeypatch):
-    mod = load_tool_module("knowledge")
-    mod.SymbolDB = _FakeSymbolDB
-
-    monkeypatch.delattr(sys.modules["ida_nalt"], "get_input_file_path", raising=False)
-    monkeypatch.delattr(sys.modules["idaapi"], "get_input_file_path", raising=False)
-
-    res = mod.knowledge(action="chip_identify")
-    assert res.get("ok") is False
-    assert res.get("code") == "IDA_ERROR"
-
 
 # ---------------------------------------------------------------------------
 # symbols.load_dwarf — error envelope on plugin failure

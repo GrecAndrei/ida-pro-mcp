@@ -41,16 +41,30 @@ available.
 - Record confirmed work with `ida_write_finding`, and record dead ends with
   `ida_mark_examined(verdict="boring")`. A function you read and dismissed is
   worth one line: without it, the next session reads it again.
-- Responses carry `_recall` (what is already known about this address) and
-  `_already_examined` (returned addresses you previously dismissed). Read them
-  before re-deriving anything. A `_stale` field means the code changed after a
-  claim about it was recorded — re-check that claim rather than trusting it.
+- Responses carry an injected recall channel:
+  - `_recall` — what is already known about this address (prior findings,
+    verdicts, and their `[mcp:]`-anchored claims). Read it before re-deriving
+    anything.
+  - `_already_examined` — addresses in the response you previously dismissed;
+    do not re-read them as if they were new.
+  - `_stale` — a claim whose underlying code changed after it was recorded.
+    Re-check that claim rather than trusting it; a stale verdict means the
+    code moved, not that the analysis was wrong.
+  - `_recall_error` — when recall itself could not be loaded (e.g. no
+    workspace). Proceed, but note that prior-session memory is unavailable.
 - `ida_next_target(strategy=...)` picks the next investigation point:
   `unresolved` for open threads, `coverage` for functions nobody has read,
   `frontier` to expand from confirmed findings, `stale` and `conflict` for
-  claims that need repair. Every candidate states why it was chosen.
+  claims that need repair. Every candidate states why it was chosen. On
+  opaque/raw binaries with no function inventory, `coverage` returns an
+  explicit note (`coverage_pct=0`) instead of silently reporting an empty
+  coverage.
 - If `ida_write_finding` returns a `conflict`, two claims about the same thing
   disagree. Resolve it with `ida_update_finding` before building on either.
+- Accept or reject background proposals explicitly. The crawler and trace
+  machinery create real `proposed` entries and notify with the real entry id;
+  respond with `ida_update_finding(entry_id=..., status="confirmed")` (accept)
+  or `status="rejected"` with a reason, rather than leaving them in limbo.
 - `ida_import_annotations` early in a session adopts names and comments the
   last analyst left in the IDB, so you inherit their work instead of redoing
   it. `ida_publish_findings(risk_ack=true)` writes confirmed findings back as

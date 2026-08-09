@@ -59,7 +59,13 @@ class _McpSseConnection:
             if isinstance(data, str):
                 data_str = f"data: {data}\n\n"
             else:
-                data_str = f"data: {json.dumps(data)}\n\n"
+                try:
+                    data_str = f"data: {json.dumps(data)}\n\n"
+                except (TypeError, ValueError, OverflowError):
+                    # A non-serializable event payload must not crash the
+                    # connection (or, for a notification stream, take the whole
+                    # server down); emit a crisp error event instead.
+                    data_str = f"data: {json.dumps({'error': True, 'code': 'INTERNAL', 'message': 'event serialization failed'})}\n\n"
             message = f"event: {event_type}\n{data_str}".encode("utf-8")
             self.wfile.write(message)
             self.wfile.flush()  # Ensure data is sent immediately
@@ -262,7 +268,19 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             self.send_cors_headers()
             self.end_headers()
         else:
-            send_response(200, json.dumps(response).encode("utf-8"))
+            try:
+                payload = json.dumps(response).encode("utf-8")
+            except (TypeError, ValueError, OverflowError):
+                # A non-serializable tool result must not crash the handler
+                # thread; return an isError-style JSON-RPC error so the client
+                # sees a crisp failure instead of a dropped connection.
+                err_payload = {
+                    "jsonrpc": "2.0",
+                    "id": response.get("id") if isinstance(response, dict) else None,
+                    "error": {"code": -32603, "message": "Internal error: response serialization failed"},
+                }
+                payload = json.dumps(err_payload).encode("utf-8")
+            send_response(200, payload)
 
 class McpServer:
     def __init__(self, name: str, version = "1.0.0"):
@@ -392,7 +410,20 @@ class McpServer:
 
                 response = self.registry.dispatch(request)
                 if response is not None:
-                    stdout.write(json.dumps(response).encode("utf-8") + b"\n")
+                    try:
+                        payload = json.dumps(response).encode("utf-8")
+                    except (TypeError, ValueError, OverflowError):
+                        # A non-serializable response in stdio mode must not
+                        # kill the server loop; emit a crisp JSON-RPC error.
+                        err_id = response.get("id") if isinstance(response, dict) else None
+                        payload = json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": err_id,
+                                "error": {"code": -32603, "message": "Internal error: response serialization failed"},
+                            }
+                        ).encode("utf-8")
+                    stdout.write(payload + b"\n")
                     stdout.flush()
             except (BrokenPipeError, KeyboardInterrupt):  # Client disconnected
                 break
@@ -515,10 +546,39 @@ class McpServer:
             result = dict(result)
             result["_elapsed_ms"] = elapsed_ms
 
-        content = result if isinstance(result, str) else json.dumps(result, indent=2)
+        if isinstance(result, str):
+            content = result
+            structured = {"result": result}
+        else:
+            try:
+                content = json.dumps(result, indent=2)
+                structured = result if isinstance(result, dict) else {"result": result}
+            except (TypeError, ValueError, OverflowError):
+                # A tool that returns a non-serializable object (set, bytes,
+                # lambdas, an object with a broken __dict__) must surface as an
+                # isError tool result, never crash the whole MCP server.
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "[code INTERNAL] Tool returned a non-serializable result; see the error envelope for details.",
+                        }
+                    ],
+                    "structuredContent": {
+                        "error": {
+                            "error": True,
+                            "code": "INTERNAL",
+                            "category": "internal",
+                            "message": "Tool result could not be JSON-serialized.",
+                            "recoverable": False,
+                            "hint": "The tool returned an object that cannot be encoded as JSON.",
+                        }
+                    },
+                    "isError": True,
+                }
         return {
             "content": [{"type": "text", "text": content}],
-            "structuredContent": result if isinstance(result, dict) else {"result": result},
+            "structuredContent": structured,
             "isError": False,
         }
 
@@ -593,11 +653,21 @@ class McpServer:
                     error = resource_response["error"]
                     raise JsonRpcException(error["code"], error["message"], error.get("data"))
 
+                try:
+                    text = json.dumps(resource_response.get("result"), indent=2)
+                except (TypeError, ValueError, OverflowError):
+                    # A resource returning a non-serializable payload must be a
+                    # crisp JSON-RPC error, not an uncaught exception that
+                    # takes down the whole server.
+                    raise JsonRpcException(
+                        -32603, "Resource result could not be JSON-serialized", {"uri": uri}
+                    )
+
                 return {
                     "contents": [{
                         "uri": uri,
                         "mimeType": "application/json",
-                        "text": json.dumps(resource_response.get("result"), indent=2),
+                        "text": text,
                     }]
                 }
 
@@ -640,7 +710,12 @@ class McpServer:
 
         # Convert non-string results to JSON
         if not isinstance(result, str):
-            result = json.dumps(result, indent=2)
+            try:
+                result = json.dumps(result, indent=2)
+            except (TypeError, ValueError, OverflowError):
+                raise JsonRpcException(
+                    -32603, "Prompt result could not be JSON-serialized", {"name": name}
+                )
         return {
             "messages": [
                 {

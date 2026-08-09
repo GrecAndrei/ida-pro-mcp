@@ -603,6 +603,7 @@ _TOOL_CATEGORY_ANALYSIS = {
     "funcs",
     "segments",
     "calc",
+    "firmware",
 }
 _TOOL_CATEGORY_PROJECT = {"misc"}
 _TOOL_CATEGORY_ADVANCED = {
@@ -612,6 +613,7 @@ _TOOL_CATEGORY_ADVANCED = {
     "imports_deep",
     "symbols",
     "hooks",
+    "r2",
 }
 _TOOL_CATEGORY_SECURITY = {
     "deobfuscate",

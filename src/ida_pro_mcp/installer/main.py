@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .clients import configure_clients, rollback_from_backups
-from .common import InstallerOptions, InstallReport
+from .common import InstallerOptions, InstallReport, find_ida_sig_dir
 from .discovery import (
     IdaInstall,
     detect_ida_installs,
@@ -30,7 +30,9 @@ from .runtime import (
     get_install_root,
     install_optional_packages,
     kill_ida_processes,
+    resolve_r2_binary,
     setup_runtime_environment,
+    stage_sigs,
 )
 
 
@@ -732,8 +734,23 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
     parser.add_argument("--skills-mode", choices=["agent", "none"], default="agent", help="Codex skill installation mode")
     parser.add_argument("--install-skills", action="store_true", default=True, help="install auto-generated skills for Claude Code / OpenCode (default: on)")
     parser.add_argument("--no-install-skills", action="store_true", help="skip Claude Code / OpenCode skill installation")
+    parser.add_argument(
+        "--with-r2",
+        action="store_true",
+        help="locate rz (Rizin) / r2 (radare2) on PATH, record the resolved binary as "
+        "IDA_MCP_R2_BIN in the generated MCP client config, and print its version. "
+        "Does NOT download a pinned engine release in this phase.",
+    )
+    parser.add_argument(
+        "--sigs",
+        default="",
+        metavar="DIR",
+        help="stage a FLIRT signature pack (*.sig / *.sig.gz) into <IDADIR>/sig so "
+        "ida_list_sigs can surface it (e.g. a RISC-V .sig pack). DIR may be a single "
+        ".sig/.sig.gz file or a directory (walked recursively, subpaths preserved).",
+    )
 
-    parser.add_argument("--only", action="append", choices=["runtime", "clients", "skills", "shell"], default=[], help="run only selected install phases")
+    parser.add_argument("--only", action="append", choices=["runtime", "clients", "skills", "shell", "r2", "sigs"], default=[], help="run only selected install phases")
     parser.add_argument("--install-root", default="", help="override install root directory")
     parser.add_argument(
         "--ida-dir",
@@ -790,6 +807,8 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
 
         only=set(args.only),
         disable_policy=args.disable_policy,
+        with_r2=args.with_r2,
+        sigs_dir=args.sigs,
     )
     if opts.setup_embedder:
         opts.embed_auto = True
@@ -828,11 +847,18 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
 
     try:
         # Resolve IDA only when a later phase actually needs it or the user
-        # explicitly asked for an IDA override. Client configuration benefits
-        # from a concrete install, but runtime/skills/shell-only installs
-        # should not fail just because IDA is absent on this machine.
+        # explicitly asked for an IDA override. Client configuration and
+        # signature staging both need a concrete install, but runtime/skills/
+        # shell-only installs should not fail just because IDA is absent on
+        # this machine.
         chosen_install = None
-        if _phase_enabled(opts, "clients") or opts.ida_dir or opts.ida_version:
+        if (
+            _phase_enabled(opts, "clients")
+            or _phase_enabled(opts, "sigs")
+            or opts.sigs_dir
+            or opts.ida_dir
+            or opts.ida_version
+        ):
             try:
                 chosen_install = _resolve_ida_install(opts, ui)
             except RuntimeError as exc:
@@ -929,6 +955,66 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
         elif _phase_enabled(opts, "runtime"):
             report.add_step("corpus", "skipped", "dry-run")
 
+        # ── r2/Rizin engine (paper §8.2 item 11) ────────────────────────
+        # Resolve an existing rz/r2 on PATH and record it as IDA_MCP_R2_BIN
+        # in the generated client config so the default-off host engine can
+        # find it.  Phase 1 never downloads a pinned engine release.
+        r2_bin = ""
+        r2_ver = ""
+        if opts.with_r2:
+            r2_bin, r2_ver = resolve_r2_binary()
+            if r2_bin:
+                ui.ok(f"Rizin/radare2 engine binary: {r2_bin} ({r2_ver or 'version unknown'})")
+                ui.info("The resolved binary is recorded as IDA_MCP_R2_BIN in the generated MCP client config.")
+            else:
+                msg = (
+                    "rz/r2 not found on PATH. Install Rizin (or radare2) to enable the r2 "
+                    "engine: Debian/Ubuntu `sudo apt install rizin`, macOS `brew install "
+                    "rizin`, or https://rizin.re. The engine stays disabled (default-off) "
+                    "until a binary is available; Phase 1 does not download a pinned release."
+                )
+                ui.warn(msg)
+                report.add_warning(msg)
+            report.add_step(
+                "r2",
+                "ok" if r2_bin else "warn",
+                f"{r2_bin} {r2_ver or ''}".strip() if r2_bin else "rz/r2 not found on PATH",
+            )
+        elif _phase_enabled(opts, "r2"):
+            report.add_step("r2", "skipped", "not requested (pass --with-r2)")
+
+        # ── Signature-pack staging (paper §10.2 item 5e) ────────────────
+        # Copy *.sig / *.sig.gz from --sigs <dir> into <IDADIR>/sig so
+        # ida_list_sigs surfaces them — closes "nothing installs a RISC-V
+        # .sig pack".  A staged RISC-V pack then shows up under ida_list_sigs
+        # and can be applied per-IDB via ida_apply_sig.
+        if opts.sigs_dir:
+            sig_source = Path(opts.sigs_dir).expanduser()
+            if chosen_install is None:
+                ui.warn("--sigs requires an IDA install; skipping signature staging")
+                report.add_step("sigs", "failed", "no IDA install to derive <IDADIR>/sig from")
+            else:
+                sig_dir = find_ida_sig_dir(chosen_install.path)
+                manifest = stage_sigs(sig_source, sig_dir, opts.dry_run, report)
+                report.metadata["sigs_manifest"] = manifest.to_dict()
+                if manifest.count:
+                    action = "would stage" if opts.dry_run else "staged"
+                    ui.ok(f"{action} {manifest.count} signature file(s) into {sig_dir}")
+                    ui.info(
+                        "ida_list_sigs (the host MCP signature op) surfaces them by basename "
+                        "from <IDADIR>/sig; apply one per IDB with ida_apply_sig."
+                    )
+                    report.add_step(
+                        "sigs",
+                        "dry-run" if opts.dry_run else "ok",
+                        f"{manifest.count} file(s) -> {sig_dir}",
+                    )
+                else:
+                    ui.warn(f"No *.sig / *.sig.gz files found under {sig_source}")
+                    report.add_step("sigs", "warn", f"no signature files found in {sig_source}")
+        elif _phase_enabled(opts, "sigs"):
+            report.add_step("sigs", "skipped", "not requested (pass --sigs <dir>)")
+
         if _phase_enabled(opts, "clients"):
             ui.info("Configuring MCP clients")
             if opts.embed_backend == "gemini":
@@ -975,6 +1061,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                     ida_install=getattr(opts, "_ida_install", None),
                     disable_policy=opts.disable_policy,
                     rerank_disabled=opts.rerank_disabled,
+                    r2_bin=r2_bin,
                 )
                 configured = configure_clients(
                     source_root=source_root,
@@ -1077,6 +1164,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                     ida_install=getattr(opts, "_ida_install", None),
                     disable_policy=opts.disable_policy,
                     rerank_disabled=opts.rerank_disabled,
+                    r2_bin=r2_bin,
                 )
                 configured = configure_clients(
                     source_root=source_root,

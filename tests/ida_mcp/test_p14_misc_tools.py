@@ -313,11 +313,10 @@ def test_knowledge_fallback_import_targets_exist():
 
     # These are the fallback module paths used by knowledge.py (and modify.py)
     # when ida_pro_mcp.services is unavailable. They must resolve to real
-    # modules — the old flat host.arch_profile / host.chip_db / host.symbol_db
-    # paths were deleted in the stores/analysis refactor.
+    # modules — the old flat host.arch_profile / host.symbol_db paths were
+    # deleted in the stores/analysis refactor.
     for name in (
         "ida_pro_mcp.host.analysis.arch_profile",
-        "ida_pro_mcp.host.stores.chip_db",
         "ida_pro_mcp.host.stores.symbol_db",
     ):
         importlib.import_module(name)

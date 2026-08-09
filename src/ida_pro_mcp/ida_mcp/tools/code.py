@@ -5,6 +5,12 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+# ida_ua is intentionally not exported by _common.__all__ — import it directly.
+try:
+    import ida_ua  # type: ignore[import-not-found]
+except Exception:
+    ida_ua = None  # type: ignore[assignment]
+
 try:
     from ida_pro_mcp.ida_mcp.support.arch_utils import detect_riscv_gp as _detect_riscv_gp
 except Exception:
@@ -23,9 +29,11 @@ try:
         _build_function_structure_summary,
         _collect_compact_callees,
         _collect_compact_callers,
+        _collect_function_string_entries,
         _collect_function_strings,
         _compute_cfg_semantics,
         _decompile_with_diagnostics,
+        _detect_firmware_signals,
         _disasm_range,
         _disasm_range_structured,
         _disasm_window,
@@ -43,9 +51,11 @@ except ImportError:
         _build_function_structure_summary,
         _collect_compact_callees,
         _collect_compact_callers,
+        _collect_function_string_entries,
         _collect_function_strings,
         _compute_cfg_semantics,
         _decompile_with_diagnostics,
+        _detect_firmware_signals,
         _disasm_range,
         _disasm_range_structured,
         _disasm_window,
@@ -89,6 +99,29 @@ def _decompile_error_entry(addr, dec_err):
     }
 
 
+def _invalidate_tool_read_cache() -> None:
+    """Drop the ``@idaread`` result cache after a RISC-V GP application.
+
+    Applying the GP value and queueing reanalysis changes what later reads
+    resolve (GP-relative xrefs, strings), so cached results from before the
+    application must not be served for their TTL. Imported lazily because sync
+    is not part of the tool module graph in every install layout.
+    """
+    try:
+        from ida_pro_mcp.ida_mcp.sync import _tool_cache as _tc
+    except Exception:
+        try:
+            from ida_mcp.sync import _tool_cache as _tc  # type: ignore[import-not-found]
+        except Exception:
+            return
+    try:
+        cache = _tc()
+        if cache is not None:
+            cache.invalidate_all()
+    except Exception:
+        pass
+
+
 @tool
 @idaread
 def code(
@@ -115,6 +148,8 @@ def code(
     field_name: Annotated[Optional[str], "Struct field name (for xrefs_to_field)"] = None,
     target: Annotated[Optional[str], "Target address (for find_paths)"] = None,
     details: Annotated[bool, "Include verbose enrichment fields in decompile output: var_rename_hints, annotated_code, complexity, callers/callees/strings lists, dataflow graph. Default False — omit to keep response compact."] = False,
+    offset: Annotated[Optional[int], "decompile_all: number of matched functions to skip before returning the page (pagination)."] = None,
+    mode: Annotated[Optional[Literal["full", "listing"]], "decompile_all: 'full' decompiles each function (default); 'listing' returns a fast disasm-only table (addr/name/size/prototype) without Hex-Rays."] = None,
     **kwargs
 ) -> list[dict] | dict:
     """
@@ -236,9 +271,17 @@ def code(
         Example: code(action="xrefs_to_field", addrs="main", field_name="pkt_hdr.len")
 
     decompile_all - Decompile many functions (optionally filtered by a name pattern)
-        Params: max_items/limit (bound the number of functions returned)
-        Returns: {results: [{addr, name, code, prototype}], count, total_functions}
+        Params: max_items/limit (bound the number of functions returned),
+                query (name substring filter), offset (pagination — skip N matched),
+                mode ('full' decompiles each function; 'listing' returns a fast
+                disasm-only table with no Hex-Rays, ideal for cheap triage of
+                large opaque firmware)
+        Returns: {results: [{addr, name, code, prototype}], count, total_functions,
+                  total_matched, offset, returned, truncated, mode}
+        total_functions = number actually returned this call; total_matched = full
+        match count across the binary (honest, so callers can page).
         Example: code(action="decompile_all", limit=50)
+        Example: code(action="decompile_all", query="_irq", mode="listing", max_items=200)
 
     detect - Custom per-session vulnerability/pattern detector (LLM-defined rules)
         rule_type: api_chain | string_ref | type_match | xor_threshold | caller_of | callee_of
@@ -252,8 +295,19 @@ def code(
         Example: code(action="detect", rule_type="api_chain", apis=["recv","memcpy"], strict_order=true)
     """
     try:
-        # decompile_all doesn't need addrs — it uses a name filter
+        # decompile_all doesn't need addrs — it uses a name filter.
+        # Named params offset/mode are forwarded by the host schema when present;
+        # also tolerate them arriving via kwargs (direct/RPC calls).
         if action == "decompile_all":
+            if offset is None:
+                offset = kwargs.get("offset")
+            if mode is None:
+                mode = kwargs.get("mode")
+            try:
+                offset = max(int(offset or 0), 0)
+            except (TypeError, ValueError):
+                offset = 0
+            listing = (mode or "").lower() == "listing"
             query = kwargs.get("query")
             # Bound the decompile set with max_items/limit (the host schema
             # strips `query`, so without this the action would decompile every
@@ -266,20 +320,47 @@ def code(
                     budget = 1000
             budget = max(budget, 1)
             matcher = compile_smart_pattern(query, case_sensitive=False) if query else None
+            # Two-pass collection: count every match (total_matched) but only
+            # retain the requested page (budget after `offset`). Honest pagination
+            # metadata so callers can page through large firmware cheaply.
+            total_matched = 0
             all_funcs = []
             for func_ea in idautils.Functions():
                 name = ida_funcs.get_func_name(func_ea) or ""
                 if matcher and not matcher(name):
                     continue
+                total_matched += 1
+                # Count every match; only retain the requested page. No early
+                # break: total_matched must reflect ALL matching functions, not
+                # just those before the budget cut (the len(all_funcs) guard
+                # keeps the collection bounded).
+                if total_matched <= offset or len(all_funcs) >= budget:
+                    continue
                 all_funcs.append(func_ea)
-                if len(all_funcs) >= budget:
-                    break
             if not all_funcs:
                 return {"ok": True, "results": [], "count": 0,
-                        "note": f"No functions matching '{query}'."}
+                        "query": query or "", "total_functions": 0,
+                        "total_matched": total_matched, "offset": offset,
+                        "returned": 0, "truncated": False, "mode": mode or "full"}
             all_results = []
             for func_ea in all_funcs:
                 try:
+                    if listing:
+                        # Fast disasm-only listing mode: no Hex-Rays decompile.
+                        # Gives a cheap triage table over a whole opaque blob.
+                        size = 0
+                        fobj = idaapi.get_func(func_ea)
+                        if fobj is not None:
+                            size = int(getattr(fobj, "end_ea", func_ea)) - int(func_ea)
+                        all_results.append({
+                            "ok": True,
+                            "addr": hex_ea(func_ea),
+                            "name": ida_funcs.get_func_name(func_ea) or "",
+                            "size": max(size, 0),
+                            "prototype": get_prototype(idaapi.get_func(func_ea)),
+                            "mode": "listing",
+                        })
+                        continue
                     cfunc, dec_err = _decompile_with_diagnostics(func_ea)
                     if cfunc:
                         all_results.append({
@@ -302,8 +383,18 @@ def code(
                     })
                     entry["name"] = ida_funcs.get_func_name(func_ea) or ""
                     all_results.append(entry)
-            return {"ok": True, "results": all_results, "count": len(all_results),
-                    "query": query or "", "total_functions": len(all_funcs)}
+            return {
+                "ok": True,
+                "results": all_results,
+                "count": len(all_results),
+                "query": query or "",
+                "total_functions": len(all_funcs),
+                "total_matched": total_matched,
+                "offset": offset,
+                "returned": len(all_results),
+                "truncated": bool(total_matched > len(all_funcs) + offset),
+                "mode": mode or "full",
+            }
 
         # detect is address-less — it scans the whole binary, so it runs
         # before the per-address loop (which would otherwise reject it with
@@ -801,7 +892,10 @@ def code(
                                    "start": hex_ea(func.start_ea), "end": hex_ea(func.end_ea)})
 
             elif action == "xrefs_to_field":
-                # Find code that accesses a specific struct field by offset
+                # Find code that accesses a specific struct field by offset.
+                # Operand-based (ida_ua displacement match) so it works on
+                # RISC-V/MIPS/AArch64 where the old substring scan of the
+                # disasm text missed alternate renderings.
                 if not field_name:
                     results.append(make_error(MCPError.INVALID_ARGS, "field_name required"))
                     continue
@@ -810,6 +904,10 @@ def code(
                 actual_field = field_name
                 if "." in field_name:
                     struct_name, actual_field = field_name.rsplit(".", 1)
+
+                # Bound the scan so a large opaque firmware image can't stall.
+                MAX_FIELD_SCAN_FUNCS = 5000
+                MAX_FIELD_SCAN_INSNS = 200000
 
                 try:
                     til = ida_typeinf.get_idati()
@@ -827,7 +925,7 @@ def code(
                                 if tinfo.get_udt_details(udt):
                                     for member in udt:
                                         if member.name == actual_field:
-                                            field_offset = member.offset
+                                            field_offset = member.offset // 8
                                             field_type_str = str(member.type)
                                             found_struct = struct_name
                                             break
@@ -842,7 +940,7 @@ def code(
                                 if tinfo.get_udt_details(udt):
                                     for member in udt:
                                         if member.name == actual_field:
-                                            field_offset = member.offset  # bytes in IDA 9
+                                            field_offset = member.offset // 8
                                             field_type_str = str(member.type)
                                             found_struct = type_name
                                             break
@@ -854,41 +952,65 @@ def code(
                                         "note": f"Field '{actual_field}' not found in any struct"})
                         continue
 
-                    # Step 2: Find code that accesses this offset
-                    # Strategy: scan decompiled functions for offset access patterns
-                    # and scan disassembly for load/store at [reg+offset]
-                    code_refs = []
-                    offset_hex = hex(field_offset)
-                    offset_dec = str(field_offset)
+                    # Step 2: Find code that accesses this offset — match the
+                    # decoded operand displacement (o_displ/o_phrase) exactly.
+                    def _insn_field_matches(item_ea: int, f_off: int) -> bool:
+                        if ida_ua is None:
+                            return False
+                        try:
+                            insn = ida_ua.insn_t()
+                            if ida_ua.decode_insn(insn, item_ea) <= 0:
+                                return False
+                            o_displ = getattr(ida_ua, "o_displ", 4)
+                            o_phrase = getattr(ida_ua, "o_phrase", 5)
+                            for i, op in enumerate(insn.ops):
+                                if op.type in (o_displ, o_phrase):
+                                    v = ida_ua.get_operand_value(insn, i)
+                                    if v == f_off:
+                                        return True
+                        except Exception:
+                            return False
+                        return False
 
-                    # Scan all functions for references to this offset
+                    code_refs = []
+                    funcs_scanned = 0
+                    insns_scanned = 0
+                    truncated_scan = False
                     for func_ea in idautils.Functions():
-                        func = idaapi.get_func(func_ea)
-                        if not func:
-                            continue
-                        # Quick disasm scan for [reg+offset] patterns
+                        if funcs_scanned >= MAX_FIELD_SCAN_FUNCS or insns_scanned >= MAX_FIELD_SCAN_INSNS:
+                            truncated_scan = True
+                            break
+                        funcs_scanned += 1
                         found_in_func = False
                         for item_ea in idautils.FuncItems(func_ea):
-                            disasm = idc.generate_disasm_line(item_ea, 0) or ""
-                            disasm_clean = ida_lines.tag_remove(disasm)
-                            # Match [reg+offset] or [reg-offset] patterns
-                            if (f"+{offset_hex}" in disasm_clean.lower() or
-                                f"+{offset_dec}]" in disasm_clean or
-                                f"+0x{field_offset:x}]" in disasm_clean.lower()):
-                                fn_name = ida_funcs.get_func_name(func_ea)
-                                code_refs.append({
-                                    "ea": hex_ea(item_ea),
-                                    "func": hex_ea(func_ea),
-                                    "func_name": fn_name,
-                                    "disasm": disasm_clean[:80],
-                                })
-                                found_in_func = True
-                                if len(code_refs) >= max_items:
-                                    break
+                            insns_scanned += 1
+                            if insns_scanned >= MAX_FIELD_SCAN_INSNS:
+                                truncated_scan = True
+                                break
+                            if not _insn_field_matches(item_ea, field_offset):
+                                continue
+                            disasm = ida_lines.tag_remove(idc.generate_disasm_line(item_ea, 0) or "")
+                            code_refs.append({
+                                "ea": hex_ea(item_ea),
+                                "func": hex_ea(func_ea),
+                                "func_name": ida_funcs.get_func_name(func_ea) or "",
+                                "disasm": disasm[:80],
+                            })
+                            found_in_func = True
+                            if len(code_refs) >= max_items:
+                                break
                         if found_in_func and len(code_refs) >= max_items:
                             break
+                        if truncated_scan:
+                            break
 
-                    results.append({
+                    if not code_refs:
+                        note = (f"No struct field xrefs found: no instruction in "
+                                f"{funcs_scanned} scanned functions accesses "
+                                f"{found_struct}.{actual_field} at offset {hex(field_offset)}")
+                    else:
+                        note = f"Found {len(code_refs)} code references to {found_struct}.{actual_field} (offset {hex(field_offset)})"
+                    result_entry = {
                         "ok": True,
                         "field": field_name,
                         "struct": found_struct,
@@ -897,8 +1019,15 @@ def code(
                         "field_type": field_type_str,
                         "xrefs": code_refs,
                         "count": len(code_refs),
-                        "note": f"Found {len(code_refs)} code references to {found_struct}.{actual_field} (offset {hex(field_offset)})",
-                    })
+                        "note": note,
+                    }
+                    if truncated_scan:
+                        result_entry["truncated"] = True
+                        result_entry["scan_budget"] = {
+                            "funcs": MAX_FIELD_SCAN_FUNCS,
+                            "insns": MAX_FIELD_SCAN_INSNS,
+                        }
+                    results.append(result_entry)
                 except Exception as e:
                     results.append(make_error(MCPError.IDA_ERROR, f"Error searching for field: {str(e)}", details={"addr": addr}))
                 continue
@@ -959,16 +1088,38 @@ def code(
                     results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
                     continue
 
-                str_lines = []
-                for item in idautils.FuncItems(func.start_ea):
-                    for xref in idautils.XrefsFrom(item, 0):
-                        if not xref.iscode:
-                            s = idc.get_strlit_contents(xref.to)
-                            if s:
-                                if isinstance(s, bytes):
-                                    s = s.decode("utf-8", errors="replace")
-                                str_lines.append(f"{hex_ea(xref.to)}  {s}")
-                results.append({"ok": True, "addr": addr, "strings": "\n".join(str_lines), "count": len(str_lines)})
+                entries = _collect_function_string_entries(func.start_ea, result_limit=max_items)
+                str_lines = [f"{e['addr']}  {e['value']}" for e in entries]
+                entry: dict = {
+                    "ok": True,
+                    "addr": addr,
+                    "strings": "\n".join(str_lines),
+                    "count": len(str_lines),
+                }
+                if not entries:
+                    # Symbol-poor raw firmware: no strlit xrefs AND no resolvable
+                    # constant load. On RISC-V a common cause is GP-relative
+                    # string/table references (the GP register was never set),
+                    # so probe GP once and say so.
+                    entry["note"] = ("No string references found (no strlit xrefs or "
+                                     "resolvable constant loads in function)")
+                    if is_riscv_family() and callable(_detect_riscv_gp):
+                        try:
+                            gp_info = _detect_riscv_gp()
+                            if isinstance(gp_info, dict):
+                                if gp_info.get("found"):
+                                    entry["riscv_gp"] = gp_info
+                                    if gp_info.get("applied"):
+                                        # GP applied + reanalysis queued makes
+                                        # cached reads stale — drop the read cache.
+                                        _invalidate_tool_read_cache()
+                                else:
+                                    entry["note"] += (" — RISC-V GP (x3) unresolved: "
+                                                      "GP-relative xrefs may be missed "
+                                                      "until the GP value is known.")
+                        except Exception:
+                            pass
+                results.append(entry)
 
             elif action == "diff_functions":
                 # Compare two functions' decompilation
@@ -1218,6 +1369,10 @@ def code(
                 n_blocks = sum(1 for _ in idaapi.FlowChart(func))
                 n_lines = len(pseudo.splitlines())
 
+                # Symbol-free firmware signals (MMIO stores, traps, CSR access,
+                # table constants) — the bare-metal analog of libc API calls.
+                firmware_signals = _detect_firmware_signals(func.start_ea, pseudo)
+
                 # Build plain-English summary
                 purpose_parts = []
                 if any(a in found_apis for a in ["recv","recvfrom","socket","connect","bind","listen","accept"]):
@@ -1239,7 +1394,14 @@ def code(
                 if any(a in found_apis for a in ["gets","scanf","sscanf","vsprintf"]):
                     purpose_parts.append("reads user/external input (potentially unsafe)")
                 if not purpose_parts:
-                    purpose_parts.append("performs internal computation")
+                    # No libc API matched — check for symbol-free firmware
+                    # signals before falling back to the generic line. On
+                    # opaque device blobs "no APIs" usually means bare-metal
+                    # firmware, not "does nothing".
+                    if firmware_signals:
+                        purpose_parts.append("performs bare-metal/RTOS firmware operations (no libc APIs detected — bare-metal firmware?)")
+                    else:
+                        purpose_parts.append("performs internal computation")
 
                 # Danger signals
                 _DANGEROUS = {"gets","strcpy","sprintf","system","exec","execve","popen","memcpy","strncpy"}
@@ -1274,6 +1436,10 @@ def code(
                     "callers": n_callers,
                     "callees": sorted(callees_set)[:12],
                 })
+                if firmware_signals:
+                    results[-1]["firmware_signals"] = firmware_signals
+                if not found_apis:
+                    results[-1]["api_note"] = "no libc APIs detected — bare-metal firmware?"
 
             elif action == "trace_argument_origin":
                 func = idaapi.get_func(ea)

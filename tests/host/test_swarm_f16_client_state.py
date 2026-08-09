@@ -204,21 +204,22 @@ def test_semantic_find_refuses_foreign_locked_session(tmp_path, monkeypatch):
     assert "matches" not in res
 
 
-def test_semantic_find_adopts_unlocked_recorded_session(tmp_path, monkeypatch):
-    """The guard must not over-block: a session with no live runtime remains
-    adoptable (the recorded-session reuse path), and the adopter may then read
-    its cached index."""
+def test_semantic_find_adopts_unlocked_recorded_session_after_owner_disconnects(tmp_path, monkeypatch):
+    """The guard must not over-block: a session whose recorded owner DISCONNECTED
+    (socket closed, no live runtime) remains adoptable — the recorded-session
+    reuse path that lets a restarted client keep its cached index."""
     server = _make_server(tmp_path, monkeypatch)
     token_a = server._begin_client_connection()
     session = _owned_session(server)
     sid = session.session_id
     server.call_tool = lambda tool, idb_path, **kwargs: GADGET_PAYLOAD
 
-    # A builds the cached index.
+    # A builds the cached index, then its socket closes.
     owned = server._handle_gadgets_semantic_find(
         {"query": "rdi", "idb": sid, "source_actions": ["rop"]}
     )
     assert owned.get("ok") is True
+    server._end_client_connection(token_a)
 
     result: dict = {}
 
@@ -232,7 +233,6 @@ def test_semantic_find_adopts_unlocked_recorded_session(tmp_path, monkeypatch):
     thread.start()
     thread.join(timeout=10)
     assert not thread.is_alive()
-    server._end_client_connection(token_a)
 
     res = result["res"]
     assert res.get("ok") is True
@@ -243,33 +243,29 @@ def test_semantic_find_adopts_unlocked_recorded_session(tmp_path, monkeypatch):
 # server_client_state: _end_client_connection ownership re-check
 # ---------------------------------------------------------------------------
 
-def test_end_connection_does_not_kill_sibling_adopted_runtime(tmp_path, monkeypatch):
-    """Finding 2 (medium): A's ownership record went stale, B adopted the
-    session and started a live runtime; when A disconnects it must NOT tear
-    down B's runtime."""
+def test_end_connection_does_not_kill_sibling_owned_live_runtime(tmp_path, monkeypatch):
+    """Finding 2 (medium): A's ownership record went stale — a sibling now owns
+    the session and runs a live runtime — so when A disconnects it must NOT tear
+    down the sibling's runtime."""
     server = _make_server(tmp_path, monkeypatch)
     token_a = server._begin_client_connection()
     session = _owned_session(server)
     sid = session.session_id
-    # A's runtime died (no live runtime registered).
+
+    # Record a sibling as the session's current owner and give it a live
+    # runtime (A's own runtime is gone). This is the state the sticky-ownership
+    # rule (D3-F10) guarantees is reachable: after A's connection closed, B
+    # adopted and started idat.
+    sibling_token = server._begin_client_connection()
+    server._record_session_current_owner(sid)
+    server.session_runtimes[sid] = _live_runtime(sid)
+    server._end_client_connection(sibling_token)
 
     cleaned: list[str] = []
     server._cleanup_runtime = lambda s: cleaned.append(str(s))
 
-    def sibling() -> None:
-        server._begin_client_connection()
-        # B adopts the session (guard passes: nothing is running it) and
-        # starts its own live runtime.
-        assert server._ensure_client_owns_session(session) is None
-        server.session_runtimes[sid] = _live_runtime(sid)
-
-    thread = threading.Thread(target=sibling)
-    thread.start()
-    thread.join(timeout=10)
-    assert not thread.is_alive()
-
     server._end_client_connection(token_a)
-    assert sid not in cleaned, "sibling's adopted live runtime must survive A's disconnect"
+    assert sid not in cleaned, "sibling's owned live runtime must survive A's disconnect"
 
 
 def test_end_connection_cleans_own_live_runtime(tmp_path, monkeypatch):
@@ -301,6 +297,61 @@ def test_end_connection_cleans_owned_session_with_no_sibling(tmp_path, monkeypat
 
     server._end_client_connection(token)
     assert sid in cleaned
+
+
+# ---------------------------------------------------------------------------
+# server_client_state: sticky ownership (D3-F10) adoption consent
+# ---------------------------------------------------------------------------
+
+
+def test_adoption_refused_while_recorded_owner_still_connected(tmp_path, monkeypatch):
+    """D3-F10: a sibling cannot adopt a session whose recorded owner connection
+    is still connected, even though no runtime is running (the owner's runtime
+    died). Ownership stays sticky across a runtime death."""
+    server = _make_server(tmp_path, monkeypatch)
+    token_a = server._begin_client_connection()
+    session = _owned_session(server)
+    sid = session.session_id
+    # A's runtime died: no live runtime, no lease — but A is still connected.
+    assert not server._session_ownership_report(sid)["locked"]
+
+    result: dict = {}
+
+    def sibling() -> None:
+        server._begin_client_connection()
+        result["res"] = server._ensure_client_owns_session(session)
+
+    thread = threading.Thread(target=sibling)
+    thread.start()
+    thread.join(timeout=10)
+    assert not thread.is_alive()
+    server._end_client_connection(token_a)
+
+    res = result["res"]
+    assert res is not None
+    assert res.get("code") == MCPError.FILE_LOCKED
+    assert res["details"]["holder"] == "this-host-owner"
+    assert res["details"]["owner_alive"] is True
+    assert res["details"]["owner_pid"] == os.getpid()
+
+
+def test_adoption_allowed_after_recorded_owner_disconnects(tmp_path, monkeypatch):
+    """The sticky rule releases when the owning connection's socket closes: a
+    restarted client still re-adopts a disconnected owner's session (keep=true)."""
+    server = _make_server(tmp_path, monkeypatch)
+    token_a = server._begin_client_connection()
+    session = _owned_session(server)
+    sid = session.session_id
+    server._end_client_connection(token_a)  # A's socket closes
+
+    token_b = server._begin_client_connection()
+    try:
+        assert server._ensure_client_owns_session(session) is None
+        assert server._client_owns_session(sid)
+        # Adoption recorded the new owner connection.
+        assert server._session_current_owner[sid] == server._client_request_state().connection_id
+    finally:
+        server._end_client_connection(token_b)
 
 
 def test_end_connection_drops_logged_in_agents_under_realm_lock(tmp_path, monkeypatch):

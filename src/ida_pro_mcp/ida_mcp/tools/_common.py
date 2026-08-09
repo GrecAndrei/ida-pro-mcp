@@ -42,6 +42,7 @@ try:
         check_debugger,
         handle_error,
         make_error,
+        parse_address_canonical,
         require_arg,
         require_one_of,
         validate_action,
@@ -81,6 +82,7 @@ except (ImportError, ValueError):
         check_debugger,
         handle_error,
         make_error,
+        parse_address_canonical,
         require_arg,
         require_one_of,
         validate_action,
@@ -435,6 +437,7 @@ __all__ = [
     "MCPError", "make_error", "handle_error", "ERROR_HINTS",
     "validate_addr", "validate_range", "check_debugger", "validate_path_safe",
     "require_arg", "require_one_of", "validate_action", "validate_count",
+    "parse_address_canonical",
     # Centralized API categories
     "API_CATEGORIES", "DANGEROUS_APIS",
     "TAG_CATEGORIES", "API_TO_TAG", "MAGIC_CONSTANTS",

@@ -553,7 +553,7 @@ class ThreatCorpus:
                     if key and key not in idx:
                         idx[key] = e
             self._indexes[source_name] = idx
-            if source_name in ("yara_rules", "yara_rules_extra"):
+            if source_name in ("yara_rules", "yara_rules_extra", "findcrypt"):
                 for r in entries:
                     if r.get("name"):
                         self._indexes[source_name][r["name"]] = r
@@ -654,7 +654,7 @@ class ThreatCorpus:
     def all_yara_strings(self, min_len: int = 4, max_count: int = 200_000) -> list[str]:
         out: list[str] = []
         seen: set[str] = set()
-        for source in ("yara_rules", "yara_rules_extra"):
+        for source in ("yara_rules", "yara_rules_extra", "findcrypt"):
             for rule in self.entries.get(source, []):
                 for s in rule.get("strings") or []:
                     if not s or len(s) < min_len:
@@ -955,20 +955,30 @@ def _build_from_sources(download_result: dict[str, Any]) -> ThreatCorpus | None:
         fp = source.fingerprint(data_dir)
 
         if source.is_multi_type:
+            # Always record the source's own bucket key and fingerprint, even
+            # when parse produced nothing: an attempted-but-empty download must
+            # survive a save/load round-trip and stay distinguishable from a
+            # source that was never attempted.
+            entries.setdefault(source.name, [])
+            fingerprints[source.name] = fp
+
+            # Multi-type entries are stored under their bucket keys
+            # (attack_patterns/malware/...). Read the bucket without mutating
+            # the parse output and persist a clean copy, so the transient
+            # _attack_type marker never reaches the saved corpus.
             buckets: dict[str, list[dict[str, Any]]] = {}
             for e in parsed:
-                bucket = e.pop("_attack_type", source.name)
-                buckets.setdefault(bucket, []).append(e)
+                bucket = e.get("_attack_type", source.name)
+                clean = {k: v for k, v in e.items() if k != "_attack_type"}
+                buckets.setdefault(bucket, []).append(clean)
             for bucket, bucket_entries in buckets.items():
                 if bucket in entries:
                     entries[bucket].extend(bucket_entries)
                 else:
                     entries[bucket] = bucket_entries
-                # A multi-type source spreads its entries across bucket keys
-                # (attack_patterns/malware/...), and save_corpus keys the
-                # manifest off entry names. Record the source fingerprint
-                # under every bucket it populates or it is silently dropped
-                # on save/load.
+                # save_corpus keys the manifest off entry names, so the source
+                # fingerprint must be recorded under every bucket it populates
+                # or it is silently dropped on save/load.
                 fingerprints[bucket] = fp
         else:
             entries.setdefault(source.name, []).extend(parsed)

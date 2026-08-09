@@ -22,7 +22,6 @@ from ..config import (
     MAX_TAG_LEN,
     MAX_TAGS_PER_SESSION,
     SAFE_MODE_POLL_SECONDS,
-    SAFE_MODE_WATCH_SECONDS,
     _bounded_int,
     _coerce_bool,
     _normalize_session_id,
@@ -48,16 +47,26 @@ _SESSION_DIFF_INFLIGHT: set[tuple[str, str]] = set()
 _SESSION_DIFF_LOCK = threading.Lock()
 
 # Guards the safe-mode bookkeeping collections (_pending_analysis,
-# _analysis_complete_sessions, _analysis_pending_no_idb, _analysis_watchers,
-# _background_loads/_background_load_errors, _reloading_sessions). Module-level
-# so a check-then-act lazy init of those collections is serialized across the
-# request and watcher threads that mutate them; a per-instance attribute would
-# need the lock object itself created under a lock (a chicken-and-egg race).
+# _analysis_complete_sessions, _analysis_complete_in_flight, _analysis_watchers,
+# _background_load_errors, _reloading_sessions). Module-level so a check-then-act
+# lazy init of those collections is serialized across the request and watcher
+# threads that mutate them; a per-instance attribute would need the lock object
+# itself created under a lock (a chicken-and-egg race).
 _ANALYSIS_STATE_LOCK = threading.RLock()
 
 # Keys that count as an architecture/loader preload request when opening a
 # binary; shared by the reuse-decision logic in create/create_background.
 _OPEN_PRELOAD_KEYS = ("processor", "bitness", "endian", "loader", "flags", "loader_options", "value")
+
+# Confidence floor for auto-applying an architecture inference to the spawn
+# options of an opaque blob (h02 q02). Cortex-M vector-table heuristics reach
+# 0.92 and RISC-V lopsided bitness calls reach ~1.0; ambiguous near-ties and
+# sub-0.9 guesses are deliberately NOT auto-applied.
+_AUTO_APPLY_CONFIDENCE = 0.9
+
+# A resumed session whose persisted analysis-progress marker is older than this
+# (or in the future) is reported as stale on open/resume (h02 h08).
+_CHECKPOINT_STALENESS_SECONDS = 300
 
 # ---------------------------------------------------------------------------
 # Declarative session-action dispatch.
@@ -216,7 +225,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 return getattr(self, spec)(args)
             return self._run_session_spec(spec, args)
         if action and action.startswith("bootstrap_"):
-            result = self._handle_session_bootstrap(action, args, lambda: self._resolve_session_id(args))
+            result = self._handle_session_bootstrap(action, args)
             if result is not None:
                 return result
         return make_error(
@@ -504,6 +513,13 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                             "reason": "raw binary ambiguous; apply explicit architecture before deep analysis",
                         }
                     ]
+            # h02 q02: surface the auto-applied inference warning (when the
+            # spawn options were modified by the inference) alongside the
+            # recommendations.
+            warn = self._arch_inference_warning(arch_meta)
+            if warn:
+                prev = out.get("warning")
+                out["warning"] = f"{prev} {warn}".strip() if prev else warn
         with contextlib.suppress(Exception):
             self._import_cross_session_hypotheses(self.current_session)
 
@@ -589,6 +605,13 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             out["note"] = note
         if extra:
             out.update(extra)
+        # h02 h08: a resumed session whose persisted analysis-checkpoint marker
+        # is stale reports it so the agent knows the on-disk IDB may not reflect
+        # the most recent in-memory state. Fresh sessions get no warning.
+        stale = self._checkpoint_staleness_warning(session)
+        if stale:
+            prev = out.get("warning")
+            out["warning"] = f"{prev} {stale}".strip() if prev else stale
         return out
 
     def _open_analysis_state(self, session) -> dict:
@@ -775,8 +798,15 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                     ),
                 )
             arch_meta = dict(arch_meta or {})
-            arch_meta["inferred_profile"] = infer_binary_arch_profile(binary_path)
+            inferred = infer_binary_arch_profile(binary_path)
+            arch_meta["inferred_profile"] = inferred
             arch_meta["inference_applied"] = True
+            # h02 q02: auto-apply a high-confidence inference (Cortex-M >= 0.9,
+            # riscv ~1.0 non-ambiguous) into the spawn options before opening an
+            # opaque blob. The warning is surfaced in the open response.
+            warning = self._auto_apply_inferred_profile(analysis_options, inferred)
+            if warning:
+                arch_meta["inference_warning"] = warning
 
         if not binary_path:
             return (
@@ -839,14 +869,18 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             return False
 
     # ------------------------------------------------------------------
-    # Safe mode: while IDA auto-analysis is still completing, full-binary
-    # analysis / indexing / script execution is gated. Safe mode is a
-    # host-side, in-memory property of the session; it is marked pending on
-    # every open/rebuild that leaves analysis incomplete and is lifted only
-    # when a live runtime confirms analysis_complete. Re-opening the same
-    # binary (reuse or force_new), killing the runtime mid-build, or
-    # rebuilding the IDB cannot escape the gate — every path re-enters
-    # pending state.
+    # Safe mode (the analysis gate): while IDA auto-analysis is still
+    # completing, full-binary analysis / indexing / script execution is
+    # gated. Safe mode is a host-side property of the session; it is marked
+    # pending on every open/rebuild that leaves analysis incomplete and is
+    # lifted only when a live runtime confirms analysis_complete twice in a
+    # row. The gate is ALSO persisted into the session record
+    # (``metadata['analysis_gate']``) so the lifecycle survives a host
+    # restart, but the in-memory sets remain the query source of truth.
+    # Re-opening the same binary (reuse or force_new), killing the runtime
+    # mid-build, or rebuilding the IDB cannot escape the gate — every path
+    # re-enters pending state. There is no reload-on-completion: the
+    # runtime that confirmed completion is left in place.
     # ------------------------------------------------------------------
 
     def _analysis_state_lock(self) -> threading.RLock:
@@ -873,8 +907,45 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         complete = getattr(self, "_analysis_complete_sessions", None)
         return isinstance(complete, set) and sid in complete
 
+    def _session_is_closing(self, sid: str) -> bool:
+        """True while a close/teardown is in flight for *sid*.
+
+        The runtime layer maintains a close-in-progress flag
+        (``_session_teardown`` — set by ``_begin_session_teardown``/the
+        ``_teardown_session`` context manager and cleared unconditionally when
+        the delete completes). The analysis gate reads it to refuse a completion
+        transition for a session being torn down (D1-F11/D3-F4).
+        """
+        flags = getattr(self, "_session_teardown", None)
+        return isinstance(flags, set) and sid in flags
+
+    def _persist_analysis_gate(self, session, state: str) -> None:
+        """Best-effort persist of the analysis gate into session metadata.
+
+        Writes ``metadata['analysis_gate']`` ('pending'/'complete') through the
+        canonical ``_update_session_indexing_metadata``/``_save_metadata`` path
+        so the gate survives a host restart. The in-memory sets remain the
+        query source of truth; this is a durable mirror.
+        """
+        try:
+            updater = getattr(self, "_update_session_indexing_metadata", None)
+            if callable(updater):
+                updater(session.session_id, analysis_gate=state)
+            meta = getattr(session, "metadata", None)
+            if isinstance(meta, dict):
+                meta["analysis_gate"] = state
+        except Exception:
+            pass
+
     def _mark_analysis_pending(self, session) -> None:
-        """Enter safe mode for *session* and start watching for completion."""
+        """Enter safe mode for *session* and start watching for completion.
+
+        The analysis gate is persisted into the session record
+        (``metadata['analysis_gate'] == 'pending'``) so the lifecycle survives a
+        host restart and the open envelope is consistent across the blocking
+        and background paths. The in-memory sets remain the query source of
+        truth for ``_safe_mode_active``/``_analysis_is_complete``.
+        """
         sid = session.session_id
         with self._analysis_state_lock():
             pending = getattr(self, "_pending_analysis", None)
@@ -885,16 +956,25 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             complete = getattr(self, "_analysis_complete_sessions", None)
             if isinstance(complete, set):
                 complete.discard(sid)
-            if not getattr(session, "idb_on_disk", lambda: False)():
-                no_idb = getattr(self, "_analysis_pending_no_idb", None)
-                if not isinstance(no_idb, set):
-                    self._analysis_pending_no_idb = set()
-                    no_idb = self._analysis_pending_no_idb
-                no_idb.add(sid)
+            # A re-entry to pending invalidates any prior spawn-failure record:
+            # the fresh spawn will write its own error if it fails (D1-F12).
+            bg_errors = getattr(self, "_background_load_errors", None)
+            if isinstance(bg_errors, dict):
+                bg_errors.pop(sid, None)
+            self._persist_analysis_gate(session, "pending")
+        # h04 handoff: entering pending IS the session open/reopen path
+        # (create, reuse, switch, rebuild). Reset the enriched-response resume
+        # counter so a re-opened session starts from 0 and a churned session
+        # does not accumulate a stale counter entry.
+        self._reset_resume_counter(sid)
         self._spawn_analysis_watcher(sid)
 
     def _mark_analysis_complete(self, session) -> None:
-        """Lift safe mode for *session* and remember it as confirmed."""
+        """Lift safe mode for *session* and remember it as confirmed.
+
+        Persists ``metadata['analysis_gate'] == 'complete'`` and stays
+        idempotent (re-running it is a no-op for the sets).
+        """
         sid = session.session_id
         with self._analysis_state_lock():
             pending = getattr(self, "_pending_analysis", None)
@@ -905,6 +985,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 self._analysis_complete_sessions = set()
                 complete = self._analysis_complete_sessions
             complete.add(sid)
+            self._persist_analysis_gate(session, "complete")
 
     def _forget_analysis_state(self, sid: str) -> None:
         """Drop safe-mode tracking when a session is closed or killed."""
@@ -912,7 +993,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             for attr in (
                 "_pending_analysis",
                 "_analysis_complete_sessions",
-                "_analysis_pending_no_idb",
+                "_analysis_complete_in_flight",
                 "_reloading_sessions",
             ):
                 coll = getattr(self, attr, None)
@@ -920,9 +1001,6 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                     coll.discard(sid)
                 elif isinstance(coll, dict):
                     coll.pop(sid, None)
-            bg_loads = getattr(self, "_background_loads", None)
-            if isinstance(bg_loads, dict):
-                bg_loads.pop(sid, None)
             notices = getattr(self, "_pending_session_notices", None)
             if isinstance(notices, dict):
                 notices.pop(sid, None)
@@ -932,9 +1010,43 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             bg_errors = getattr(self, "_background_load_errors", None)
             if isinstance(bg_errors, dict):
                 bg_errors.pop(sid, None)
+            # h04 handoff: tear-down also drops the resume counter so a closed
+            # session never leaks its enriched-response counter entry and a
+            # later re-open starts from 0.
+            self._reset_resume_counter(sid)
+        # h02 h09: stop the analysis-completion watcher thread promptly so no
+        # ida-an-<sid> leaks across teardown/delete. The lock was released
+        # above (the watcher's exit path reacquires it).
+        self._stop_analysis_watcher(sid, join_timeout=0.2)
+
+    def _reset_resume_counter(self, sid: str) -> None:
+        """Drop the enriched-response resume counter for *sid*.
+
+        The counter and its lock are owned by the concrete server (server.py),
+        not this mixin, so both are reached via getattr; bare-mixin unit hosts
+        that do not compose the response mixin are a no-op. Dropping the key
+        means a session re-opened through pending starts from 0 (its first 2
+        enriched calls fire the resume again) while a long-lived session keeps
+        the monotonic count that prevents re-firing (server_response.py).
+        """
+        lock = getattr(self, "_session_resume_calls_lock", None)
+        calls = getattr(self, "_session_resume_calls", None)
+        if not isinstance(calls, dict):
+            return
+        if not (
+            lock is not None and hasattr(lock, "acquire") and hasattr(lock, "release")
+        ):
+            return
+        with lock:
+            calls.pop(sid, None)
 
     def _spawn_analysis_watcher(self, sid: str) -> None:
-        """Start the single analysis-completion watcher for *sid*."""
+        """Start the single analysis-completion watcher for *sid*.
+
+        The watcher thread is tracked with an explicit stop event so teardown
+        (close/delete/shutdown) can stop it promptly instead of waiting for its
+        next poll to notice the session left ``_pending_analysis`` (h02 h09).
+        """
         with self._analysis_state_lock():
             watchers = getattr(self, "_analysis_watchers", None)
             if not isinstance(watchers, set):
@@ -943,149 +1055,285 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             if sid in watchers:
                 return
             watchers.add(sid)
-        threading.Thread(
-            target=self._watch_analysis_completion,
-            args=(sid,),
-            daemon=True,
-            name=f"ida-an-{sid}",
-        ).start()
+            stop_events = getattr(self, "_analysis_watcher_stop_events", None)
+            if not isinstance(stop_events, dict):
+                self._analysis_watcher_stop_events = {}
+                stop_events = self._analysis_watcher_stop_events
+            threads = getattr(self, "_analysis_watcher_threads", None)
+            if not isinstance(threads, dict):
+                self._analysis_watcher_threads = {}
+                threads = self._analysis_watcher_threads
+            stop_events[sid] = threading.Event()
+            thread = threading.Thread(
+                target=self._watch_analysis_completion,
+                args=(sid,),
+                daemon=True,
+                name=f"ida-an-{sid}",
+            )
+            threads[sid] = thread
+        thread.start()
+
+    def _stop_analysis_watcher(self, sid: str, join_timeout: float = 1.0) -> None:
+        """Stop the analysis-completion watcher for *sid* promptly.
+
+        Sets the stop event (waking the watcher's poll wait immediately) and
+        joins with a bounded timeout so no ``ida-an-<sid>`` thread leaks across
+        teardown/delete (h02 h09). The lock is released before joining: the
+        watcher's exit path (and its re-arm check) reacquires
+        ``_analysis_state_lock``.
+        """
+        with self._analysis_state_lock():
+            stop_events = getattr(self, "_analysis_watcher_stop_events", None)
+            threads = getattr(self, "_analysis_watcher_threads", None)
+            stop_event = (
+                stop_events.pop(sid, None)
+                if isinstance(stop_events, dict)
+                else None
+            )
+            thread = (
+                threads.pop(sid, None)
+                if isinstance(threads, dict)
+                else None
+            )
+        if stop_event is not None:
+            stop_event.set()
+        if thread and thread.is_alive() and thread is not threading.current_thread():
+            with contextlib.suppress(Exception):
+                thread.join(timeout=max(0.0, float(join_timeout or 0.0)))
 
     def _watch_analysis_completion(self, sid: str) -> None:
-        """Poll analysis(action='state') until complete, then lift safe mode.
+        """Poll a live runtime until auto-analysis completes, then lift safe mode.
 
-        Background-loaded sessions are reloaded against the completed IDB so
-        the agent's session is backed by a fresh, fully-analyzed database
-        (the 'auto move to the new one' step). A runtime that dies before
-        analysis completes does NOT lift safe mode — the half-analyzed IDB
-        must not be trusted — instead the interruption is surfaced via
-        ida_session_status.background_error.
+        This is the analysis gate's single poller and the fix-point of the
+        session-open lifecycle (open → background load → safe mode → analysis
+        complete → automatic resume):
+
+        - A runtime that never registered is NOT an interruption: the spawn is
+          still in flight (or has not failed visibly), so keep polling — this is
+          what makes the watcher spawn-race-proof.
+        - A runtime that WAS seen alive and then dies while the gate is still
+          pending is an interrupted build: safe mode stays ON (never lift based
+          on idb_on_disk()) and the failure is surfaced via background_error.
+        - ``analysis_confirm_polls`` consecutive analysis_complete=True polls
+          are required before the gate lifts (defeats the brief AU_NONE
+          pre-queue window).
+        - No deadline: the watcher polls until the gate clears or the session is
+          gone. A permanently incomplete analysis is surfaced through status,
+          not silently dropped.
         """
+        poll_sec = max(
+            0.05, float(getattr(self, "safe_mode_poll_seconds", SAFE_MODE_POLL_SECONDS))
+        )
+        # h05 handoff: the confirm-count knob lives on the concrete server;
+        # a bare-mixin watcher host falls back to the design's N=2.
+        confirm_polls = max(
+            1, int(getattr(self, "analysis_confirm_polls", 2) or 2)
+        )
+        saw_runtime = False
+        complete_consecutive = 0
+        dead_consecutive = 0
+        stop_events = getattr(self, "_analysis_watcher_stop_events", None)
+        stop_event = stop_events.get(sid) if isinstance(stop_events, dict) else None
         try:
-            poll_sec = max(1.0, float(getattr(self, "safe_mode_poll_seconds", SAFE_MODE_POLL_SECONDS)))
-            deadline = time.time() + max(
-                60.0, float(getattr(self, "safe_mode_watch_seconds", SAFE_MODE_WATCH_SECONDS))
-            )
-            while time.time() < deadline:
+            while True:
+                if stop_event is not None and stop_event.is_set():
+                    return  # explicit teardown stop (h02 h09)
                 if not self._safe_mode_active(sid):
                     return  # lifted by another path (e.g. a status confirm)
-                session = self.session_mgr.get_session(sid) if hasattr(self, "session_mgr") else None
+                session = (
+                    self.session_mgr.get_session(sid)
+                    if hasattr(self, "session_mgr")
+                    else None
+                )
                 if session is None:
-                    return
+                    return  # session deleted/closed
                 runtime = self.session_runtimes.get(sid)
-                if not (runtime and self._runtime_alive(runtime)):
-                    # Runtime gone. If this process was building the IDB
-                    # from scratch (background load or fresh pending open),
-                    # the analysis was interrupted: keep safe mode ON and
-                    # surface the failure. Otherwise the IDB pre-existed a
-                    # completed run, so the session is usable.
-                    bg_loads = getattr(self, "_background_loads", {}) or {}
-                    build_interrupted = bool(
-                        bg_loads.get(sid, False)
-                        or sid in getattr(self, "_analysis_pending_no_idb", set())
-                    )
-                    if build_interrupted:
-                        errors = getattr(self, "_background_load_errors", None)
-                        if not isinstance(errors, dict):
-                            self._background_load_errors = {}
-                            errors = self._background_load_errors
-                        errors.setdefault(
-                            sid,
-                            make_error(
-                                MCPError.IDA_CRASHED,
-                                "IDA runtime exited before auto-analysis completed; "
-                                "safe mode stays on",
-                                details={"session_id": sid},
-                            ),
-                        )
-                        return
-                    if getattr(session, "idb_on_disk", lambda: False)():
-                        self._on_analysis_complete(session, reload=False)
-                    return
-                port = runtime.get("port")
-                if isinstance(port, int) and port > 0:
-                    try:
-                        state_res = self._send_rpc_raw(
-                            {"tool": "analysis", "args": {"action": "state"}},
-                            port,
-                            recv_timeout=10,
-                        )
-                        if (
-                            isinstance(state_res, dict)
-                            and "error" not in state_res
-                            and state_res.get("analysis_complete") is True
-                        ):
-                            bg_loads = getattr(self, "_background_loads", {}) or {}
-                            self._on_analysis_complete(
-                                session,
-                                reload=bool(bg_loads.get(sid, False)),
+                alive = bool(runtime and self._runtime_alive(runtime))
+                if alive:
+                    saw_runtime = True
+                    dead_consecutive = 0
+                    port = runtime.get("port")
+                    if isinstance(port, int) and port > 0:
+                        try:
+                            state_res = self._send_rpc_raw(
+                                {"tool": "analysis", "args": {"action": "state"}},
+                                port,
+                                recv_timeout=10,
                             )
+                            if (
+                                isinstance(state_res, dict)
+                                and "error" not in state_res
+                                and state_res.get("analysis_complete") is True
+                            ):
+                                complete_consecutive += 1
+                                if complete_consecutive >= confirm_polls:
+                                    # D4-F10: the completion transition re-checks
+                                    # pending/existence/closing under the lock
+                                    # immediately before mutating bookkeeping.
+                                    self._on_analysis_complete(session, reload=False)
+                                    return
+                            else:
+                                complete_consecutive = 0
+                        except Exception:
+                            complete_consecutive = 0
+                else:
+                    complete_consecutive = 0
+                    if saw_runtime:
+                        dead_consecutive += 1
+                        if dead_consecutive >= 2:
+                            self._record_background_error(sid)
                             return
-                    except Exception:
-                        pass
-                time.sleep(poll_sec)
+                    # A runtime that was never registered is not an interruption:
+                    # the spawn may still be in flight — keep polling.
+                if stop_event is not None:
+                    stop_event.wait(poll_sec)  # interruptible by _stop_analysis_watcher
+                else:
+                    time.sleep(poll_sec)
         finally:
-            watchers = getattr(self, "_analysis_watchers", None)
-            if isinstance(watchers, set):
-                watchers.discard(sid)
+            with self._analysis_state_lock():
+                watchers = getattr(self, "_analysis_watchers", None)
+                if isinstance(watchers, set):
+                    watchers.discard(sid)
+                # D1-F3: a session still pending when the watcher exits must not
+                # be left watcher-less (TOCTOU: _mark_analysis_pending saw this
+                # watcher in the set and skipped its own spawn, then we discard).
+                # Re-arm unless the spawn/teardown failure is already recorded
+                # (re-arming there would spin forever).
+                if self._safe_mode_active(sid):
+                    session = (
+                        self.session_mgr.get_session(sid)
+                        if hasattr(self, "session_mgr")
+                        else None
+                    )
+                    if session is not None:
+                        bg_errors = getattr(self, "_background_load_errors", None)
+                        if not (isinstance(bg_errors, dict) and sid in bg_errors):
+                            self._spawn_analysis_watcher(sid)
+
+    def _record_background_error(self, sid: str) -> None:
+        """Record the interrupted-build error for a runtime that died mid-analysis.
+
+        The gate stays pending (safe mode stays on) so the half-analyzed IDB is
+        never trusted; the error is surfaced through ida_session_status's
+        background_error until a re-open/rebuild re-enters pending state.
+        """
+        with self._analysis_state_lock():
+            errors = getattr(self, "_background_load_errors", None)
+            if not isinstance(errors, dict):
+                self._background_load_errors = {}
+                errors = self._background_load_errors
+            errors.setdefault(
+                sid,
+                make_error(
+                    MCPError.IDA_CRASHED,
+                    "IDA runtime exited before auto-analysis completed; "
+                    "safe mode stays on",
+                    details={"session_id": sid},
+                ),
+            )
 
     def _on_analysis_complete(self, session, reload: bool) -> None:
-        """Lift safe mode and, for background loads, reload against the IDB."""
+        """Lift safe mode for *session* and post the one-shot completion notice.
+
+        ``reload`` is accepted for backward compatibility (older callers and
+        tests pass it) but is a legacy no-op: the reload-on-completion machinery
+        is gone. The runtime that confirmed completion is left in place; safe
+        mode is lifted purely by re-confirming the live state.
+
+        The transition is idempotent: a transition-in-progress guard
+        (``_analysis_complete_in_flight``) plus re-verification that the gate is
+        still pending, the session still exists and is not closing — all under
+        ``_analysis_state_lock`` — make it impossible for the status poll and
+        the watcher to double-fire, or to re-enter bookkeeping for a deleted
+        session (D1-F11/D3-F4).
+        """
         sid = session.session_id
-        if reload:
-            reloading = getattr(self, "_reloading_sessions", None)
-            if not isinstance(reloading, set):
-                self._reloading_sessions = set()
-                reloading = self._reloading_sessions
-            reloading.add(sid)
-            try:
-                with self._runtime_lock:
-                    with contextlib.suppress(Exception):
-                        self._cleanup_runtime(sid)
-                    start_res = self._start_server(session)
-                    if isinstance(start_res, dict) and "error" in start_res:
-                        log_rpc(
-                            f"Safe-mode reload of {sid} failed: "
-                            f"{start_res.get('message') or start_res.get('code')}"
-                        )
-                    else:
-                        self._wait_for_idb(session, timeout=120)
-            finally:
-                reloading.discard(sid)
-            # The background load is done — clear the flag so a later status
-            # poll (which may confirm completion before/after the watcher)
-            # does not trigger a second reload, and so _maybe_resolve_analysis_state
-            # uses the same reload decision the watcher made.
-            bg_loads = getattr(self, "_background_loads", None)
-            if isinstance(bg_loads, dict):
-                bg_loads[sid] = False
-        self._mark_analysis_complete(session)
-        notices = getattr(self, "_pending_session_notices", None)
-        if not isinstance(notices, dict):
-            self._pending_session_notices = {}
-            notices = self._pending_session_notices
-        notices[sid] = {
-            "code": "analysis_complete",
-            "message": (
-                "IDA auto-analysis completed; the session was reloaded against "
-                "the fully analyzed IDB."
-                if reload
-                else "IDA auto-analysis completed."
-            ),
-            "suggestion": (
-                "Safe mode is lifted: decompilation, semantic search, and "
-                "indexing are now available."
-            ),
-        }
+        with self._analysis_state_lock():
+            if not self._safe_mode_active(sid):
+                return
+            if self._analysis_is_complete(sid):
+                return
+            if self._session_is_closing(sid):
+                return
+            inflight = getattr(self, "_analysis_complete_in_flight", None)
+            if not isinstance(inflight, set):
+                self._analysis_complete_in_flight = set()
+                inflight = self._analysis_complete_in_flight
+            if sid in inflight:
+                return
+            # Refetch under the lock so the transition never mutates bookkeeping
+            # for a session that was deleted since the caller sampled it.
+            current = (
+                self.session_mgr.get_session(sid)
+                if hasattr(self, "session_mgr")
+                else session
+            )
+            if current is None:
+                return
+            inflight.add(sid)
+        try:
+            self._finish_analysis_complete(current)
+        finally:
+            with self._analysis_state_lock():
+                inflight = getattr(self, "_analysis_complete_in_flight", None)
+                if isinstance(inflight, set):
+                    inflight.discard(sid)
+
+    def _finish_analysis_complete(self, session) -> None:
+        """Perform the gate-lifting bookkeeping for *session* (under the lock)."""
+        sid = session.session_id
+        with self._analysis_state_lock():
+            # The session may have been closed/deleted since the transition
+            # guard passed; never re-add bookkeeping for a gone session.
+            if self._session_is_closing(sid):
+                return
+            current = (
+                self.session_mgr.get_session(sid)
+                if hasattr(self, "session_mgr")
+                else session
+            )
+            if current is None:
+                return
+            self._mark_analysis_complete(current)
+            bg_errors = getattr(self, "_background_load_errors", None)
+            if isinstance(bg_errors, dict):
+                bg_errors.pop(sid, None)
+            notices = getattr(self, "_pending_session_notices", None)
+            if not isinstance(notices, dict):
+                self._pending_session_notices = {}
+                notices = self._pending_session_notices
+            notices[sid] = {
+                "code": "analysis_complete",
+                "message": "IDA auto-analysis completed.",
+                "suggestion": (
+                    "Safe mode is lifted: decompilation, semantic search, and "
+                    "indexing are now available."
+                ),
+            }
+        # h02 h08: an analysis-stage transition (completion) checkpoints the DB
+        # immediately, outside the lock, so the on-disk IDB reflects the settled
+        # analysis and the progress marker is fresh for a later resume. The
+        # periodic timer keeps it current afterwards.
+        run_checkpoint = getattr(self, "_run_analysis_checkpoint", None)
+        if callable(run_checkpoint):
+            with contextlib.suppress(Exception):
+                run_checkpoint(sid)
 
     def _maybe_resolve_analysis_state(self, session) -> None:
         """Opportunistically confirm analysis completion from a live runtime.
 
-        Called from status/state so an agent polling for progress never gets
-        stuck in safe mode because the watcher missed the transition. Only a
-        live runtime's explicit analysis_complete=True lifts the gate.
+        Called from status so an agent polling for progress never gets stuck in
+        safe mode because the watcher missed the transition. Confirmation-only:
+        it never spawns or kills a runtime, and it defers to an in-progress
+        rebuild/recovery reload. The same transition guard that protects the
+        watcher makes this path idempotent.
         """
         sid = session.session_id
         if not self._safe_mode_active(sid):
+            return
+        # A rebuild/recovery reload owns the gate while it is in flight.
+        reloading = getattr(self, "_reloading_sessions", None)
+        if isinstance(reloading, set) and sid in reloading:
             return
         runtime = self.session_runtimes.get(sid)
         if not (runtime and self._runtime_alive(runtime)):
@@ -1104,18 +1352,32 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 and "error" not in state_res
                 and state_res.get("analysis_complete") is True
             ):
-                # Match the watcher's decision: background-load sessions are
-                # reloaded against the completed IDB, everything else just has
-                # safe mode lifted. Hardcoding reload=False here would lift the
-                # gate on the pre-reload runtime while the watcher kills and
-                # restarts it underneath the agent.
-                bg_loads = getattr(self, "_background_loads", {}) or {}
-                self._on_analysis_complete(
-                    session,
-                    reload=bool(bg_loads.get(sid, False)),
-                )
+                self._on_analysis_complete(session, reload=False)
         except Exception:
             pass
+
+    def _record_background_load_error(self, sid: str, err: dict) -> None:
+        """Record a background spawn failure, skipping closing/deleted sessions.
+
+        The spawn thread is the single authoritative writer of spawn-failure
+        errors (D1-F12). A session that was closed or deleted while the spawn
+        was in flight must not accumulate an orphan error entry.
+        """
+        with self._analysis_state_lock():
+            if self._session_is_closing(sid):
+                return
+            current = (
+                self.session_mgr.get_session(sid)
+                if hasattr(self, "session_mgr")
+                else None
+            )
+            if current is None:
+                return
+            errors = getattr(self, "_background_load_errors", None)
+            if not isinstance(errors, dict):
+                self._background_load_errors = {}
+                errors = self._background_load_errors
+            errors[sid] = err
 
     def _spawn_runtime_background(self, session: Any) -> None:
         """Start idat for *session* without blocking the current request.
@@ -1123,7 +1385,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         The IDA runtime registers itself in session_runtimes when ready; a
         later ida_session_status / ida_session_state call reports progress.
         Failures are recorded in _background_load_errors and surfaced by
-        status.
+        status. The spawn thread is the single authoritative writer of
+        spawn-failure errors; it skips sessions that were closed/deleted while
+        the spawn was in flight (D1-F12).
         """
         if not isinstance(getattr(self, "_background_load_errors", None), dict):
             self._background_load_errors = {}
@@ -1132,12 +1396,15 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             try:
                 err = self._ensure_runtime_and_idb(session)
                 if isinstance(err, dict) and err.get("error"):
-                    self._background_load_errors[session.session_id] = err
+                    self._record_background_load_error(session.session_id, err)
             except Exception as exc:  # pragma: no cover - exercised at runtime
-                self._background_load_errors[session.session_id] = make_error(
-                    MCPError.IDA_CRASHED,
-                    f"Background IDA start failed: {exc}",
-                    details={"session_id": session.session_id},
+                self._record_background_load_error(
+                    session.session_id,
+                    make_error(
+                        MCPError.IDA_CRASHED,
+                        f"Background IDA start failed: {exc}",
+                        details={"session_id": session.session_id},
+                    ),
                 )
 
         threading.Thread(
@@ -1185,11 +1452,6 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                     f"Session '{existing.session_id}' disappeared during reuse",
                 )
             self.current_session = updated
-            bg_loads = getattr(self, "_background_loads", None)
-            if not isinstance(bg_loads, dict):
-                self._background_loads = {}
-                bg_loads = self._background_loads
-            bg_loads[updated.session_id] = not updated.idb_on_disk()
             self._mark_analysis_pending(updated)
             note = (
                 "Binary is large; opened in background automatically. "
@@ -1209,6 +1471,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             if auto:
                 out["auto_backgrounded"] = True
             self._spawn_runtime_background(updated)
+            self._attach_open_envelope(updated, out, arch_meta)
             return out
 
         if not analysis_options:
@@ -1229,11 +1492,6 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             notes=notes,
             packed_idb=is_packed_idb,
         )
-        bg_loads = getattr(self, "_background_loads", None)
-        if not isinstance(bg_loads, dict):
-            self._background_loads = {}
-            bg_loads = self._background_loads
-        bg_loads[self.current_session.session_id] = True
         self._mark_analysis_pending(self.current_session)
         note = (
             "Binary is large; opened in background automatically. "
@@ -1252,7 +1510,188 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         if auto:
             out["auto_backgrounded"] = True
         self._spawn_runtime_background(self.current_session)
+        self._attach_open_envelope(self.current_session, out, arch_meta)
         return out
+
+    def _attach_open_envelope(self, session, out: dict, arch_meta=None) -> None:
+        """Attach the same optional readiness fields the blocking open attaches.
+
+        Called after the (possibly asynchronous) runtime spawn so the background
+        open envelope is stable across paths: idb_exists/is_running refresh,
+        architecture_recommendations, a spawn_error already recorded by the
+        spawn thread, and an honest safe_mode/analysis_complete pair.
+        """
+        out["idb_exists"] = bool(
+            session.idb_path and os.path.isfile(session.idb_path)
+        )
+        out["is_running"] = self._session_is_running(session.session_id)
+        recs = self._arch_recommendations(arch_meta)
+        if recs:
+            out["architecture_recommendations"] = recs
+        # h02 q02: surface the auto-applied inference warning in the background
+        # envelope exactly as the blocking open does.
+        warn = self._arch_inference_warning(arch_meta)
+        if warn:
+            prev = out.get("warning")
+            out["warning"] = f"{prev} {warn}".strip() if prev else warn
+        bg_errors = getattr(self, "_background_load_errors", None)
+        if isinstance(bg_errors, dict) and session.session_id in bg_errors:
+            out["spawn_error"] = bg_errors[session.session_id]
+        analysis_state = self._open_analysis_state(session)
+        if analysis_state.get("analysis_complete") is True:
+            self._mark_analysis_complete(session)
+            out["analysis_functions"] = analysis_state.get("analysis_functions")
+        out["analysis_complete"] = self._analysis_is_complete(session.session_id)
+        out["safe_mode"] = self._safe_mode_active(session.session_id)
+
+    @staticmethod
+    def _arch_recommendations(arch_meta):
+        """Architecture preload recommendations mirroring the blocking open."""
+        if not arch_meta:
+            return None
+        inferred = arch_meta.get("inferred_profile") if isinstance(arch_meta, dict) else None
+        if not isinstance(inferred, dict):
+            return None
+        candidates = (
+            inferred.get("candidates")
+            if isinstance(inferred.get("candidates"), list)
+            else []
+        )
+        recs = []
+        if candidates:
+            recs = [
+                {
+                    "tool": "analysis",
+                    "arguments": {
+                        "action": "set_architecture",
+                        "processor": c.get("processor"),
+                        "bitness": c.get("bitness"),
+                        "endian": c.get("endian"),
+                    },
+                    "confidence": c.get("confidence"),
+                    "reason": c.get("reason"),
+                }
+                for c in candidates[:3]
+                if isinstance(c, dict) and c.get("processor")
+            ]
+        elif not candidates:
+            recs = [
+                {
+                    "tool": "analysis",
+                    "arguments": {
+                        "action": "set_architecture",
+                        "processor": "arm",
+                        "bitness": 32,
+                        "endian": "little",
+                    },
+                    "confidence": 0.2,
+                    "reason": "raw binary ambiguous; apply explicit architecture before deep analysis",
+                }
+            ]
+        return recs or None
+
+    @staticmethod
+    def _arch_inference_warning(arch_meta):
+        """The auto-apply warning produced by _prepare_open_args, if any."""
+        if not isinstance(arch_meta, dict):
+            return None
+        return arch_meta.get("inference_warning")
+
+    def _auto_apply_inferred_profile(self, analysis_options: dict, inferred) -> str | None:
+        """Apply a high-confidence architecture inference to the spawn options
+        of an opaque blob (h02 q02).
+
+        Policy: auto-apply only when the inference is NOT ambiguous and its
+        confidence is >= 0.9 AND it carries a definite processor + bitness
+        (Cortex-M vector-table heuristic -> 0.92; RISC-V lopsided bitness call
+        -> ~1.0). Ambiguous near-ties (rv32c vs rv64 at 1.0/1.0), native
+        containers that let the loader drive the arch (ELF/Mach-O), and
+        sub-0.9 guesses are never forced. Returns a warning string when options
+        were applied, else None.
+        """
+        if not isinstance(inferred, dict):
+            return None
+        if inferred.get("ambiguous"):
+            return None
+        try:
+            conf = float(inferred.get("confidence") or 0.0)
+        except Exception:
+            conf = 0.0
+        if conf < _AUTO_APPLY_CONFIDENCE:
+            return None
+        processor = inferred.get("processor")
+        bitness = inferred.get("bitness")
+        # Raw blobs rank a candidate list; the top-level processor/bitness stay
+        # None while the top candidate carries the definite call (e.g. rv64c ->
+        # riscv/64 at conf ~1.0). Lift it when the inference is unambiguous and
+        # high-confidence so a lopsided bitness call is actually applied.
+        if not processor or not bitness:
+            candidates = inferred.get("candidates") or []
+            top = candidates[0] if candidates else None
+            if isinstance(top, dict):
+                processor = processor or top.get("processor")
+                bitness = bitness or top.get("bitness")
+                with contextlib.suppress(Exception):
+                    conf = max(conf, float(top.get("confidence") or 0.0))
+        if not processor or not bitness:
+            return None
+        applied: dict = {}
+        if not analysis_options.get("processor"):
+            applied["processor"] = processor
+        if not analysis_options.get("bitness"):
+            applied["bitness"] = bitness
+        if not analysis_options.get("endian") and inferred.get("endian"):
+            applied["endian"] = inferred["endian"]
+        load_base = inferred.get("load_base")
+        if (
+            load_base is not None
+            and not (
+                analysis_options.get("baseaddr") or analysis_options.get("load_base")
+            )
+        ):
+            # _build_ida_command reads baseaddr for the -b paragraph flag.
+            applied["baseaddr"] = load_base
+        if not applied:
+            return None
+        analysis_options.update(applied)
+        load_note = f" 0x{int(load_base):X}" if load_base is not None else ""
+        return (
+            f"Applied high-confidence architecture inference for opaque blob: "
+            f"{processor} {bitness}-bit (confidence={conf:.2f}, load base "
+            f"{load_note}). If this is wrong, re-open with explicit "
+            "architecture options."
+        )
+
+    @staticmethod
+    def _checkpoint_staleness_warning(session):
+        """Warn on resume when the persisted analysis-progress marker shows the
+        on-disk IDB has not been checkpointed recently (h02 h08).
+
+        Fresh sessions (no marker) and recently-checkpointed sessions get None.
+        """
+        meta = getattr(session, "metadata", None)
+        if not isinstance(meta, dict):
+            return None
+        checkpointed = meta.get("analysis_checkpointed_at")
+        if not checkpointed:
+            return None
+        try:
+            import datetime as _dt
+            ts = str(checkpointed)
+            if ts.endswith("Z"):
+                ts = ts[:-1] + "+00:00"
+            parsed = _dt.datetime.fromisoformat(ts)
+            tz = parsed.tzinfo
+            now = _dt.datetime.now(tz) if tz is not None else _dt.datetime.now()
+            age_sec = (now - parsed).total_seconds()
+        except Exception:
+            return None
+        if age_sec < 0 or age_sec > _CHECKPOINT_STALENESS_SECONDS:
+            return (
+                "Resumed session IDB may be stale: last analysis checkpoint was "
+                f"{checkpointed}. Re-run analysis or wait for a fresh checkpoint."
+            )
+        return None
 
     def _session_action_discover(self, args: dict) -> dict:
         self.session_mgr._load_orphaned_idbs()
@@ -1527,10 +1966,19 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         sid = session.session_id
         runtime = self.session_runtimes.get(sid)
         if runtime and self._runtime_alive(runtime):
-            # Runtime is alive — just make sure the IDB is on disk
+            # Runtime is alive — just make sure the IDB is on disk. A wait that
+            # fails (runtime died or the IDB never landed) is a real spawn
+            # failure: returning None here would report success with no IDB and
+            # safe mode on (D2-F11).
             idb_path = getattr(session, "idb_path", None)
             if idb_path and not os.path.isfile(idb_path):
-                self._wait_for_idb(session, timeout=timeout)
+                if not self._wait_for_idb(session, timeout=timeout):
+                    return make_error(
+                        MCPError.IDA_CRASHED,
+                        "IDA runtime is alive but the IDB was not written within "
+                        "the timeout",
+                        details={"session_id": sid},
+                    )
             return None
         # Runtime is dead or missing — spawn a replacement
         try:
@@ -1547,7 +1995,13 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             return result
         runtime = self.session_runtimes.get(sid)
         if runtime and self._runtime_alive(runtime):
-            self._wait_for_idb(session, timeout=timeout)
+            if not self._wait_for_idb(session, timeout=timeout):
+                return make_error(
+                    MCPError.IDA_CRASHED,
+                    "IDA runtime started but the IDB was not written within "
+                    "the timeout",
+                    details={"session_id": sid},
+                )
         return None
 
     def _wait_for_idb(self, session: Any, timeout: float = 120.0) -> bool:
@@ -1646,17 +2100,27 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         if owned_err:
             return owned_err
         self._export_session_hypotheses_to_symbol_db(sid)
-        self._forget_analysis_state(sid)
-        self._cleanup_runtime(sid)
-        closed = self.session_mgr.delete_session(sid)
-        if (
-            closed
-            and self.current_session
-            and self.current_session.session_id == sid
-        ):
-            self.current_session = None
-        if closed:
-            self._drop_sid_from_groups(sid)
+        # Atomic close: hold the close-in-progress flag BEFORE teardown so a
+        # concurrent analysis-completion watcher/status poll cannot re-enter
+        # bookkeeping for a session that is about to be deleted (D1-F11/D3-F4),
+        # and a racing _start_server refuses to resurrect the runtime. The flag
+        # is cleared unconditionally once the delete completes (even on error),
+        # so a later re-open of the same path is never blocked.
+        with self._teardown_session(sid):
+            self._forget_analysis_state(sid)
+            self._cleanup_runtime(sid)
+            closed = self.session_mgr.delete_session(sid)
+            if (
+                closed
+                and self.current_session
+                and self.current_session.session_id == sid
+            ):
+                self.current_session = None
+            if closed:
+                self._drop_sid_from_groups(sid)
+            # Final sweep: drop any bookkeeping the close path itself may have
+            # re-added (e.g. a notice posted mid-teardown).
+            self._forget_analysis_state(sid)
         return {"ok": closed, "session_id": sid}
 
     def _session_target(self, args: dict) -> tuple[Any, dict | None]:
@@ -1707,6 +2171,10 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 hint="Create or switch to a session first, or pass session_id/idb to target one.",
             )
         try:
+            # h05 handoff: first-touch arming for a restored-pending session.
+            self._arm_analysis_watcher_if_needed(
+                getattr(self.current_session, "session_id", None) or ""
+            )
             state_value = self._build_state_payload()
             # Always wrap in a uniform envelope so callers can reliably
             # check `ok` and find the state under a known key.
@@ -1957,10 +2425,6 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         actions = []
         bb_state = state.get("blackboard", {})
         cov = state.get("coverage", {})
-        binary = state.get("binary", {})
-
-        if binary.get("is_firmware"):
-            actions.append("firmware_view(action='triage_snapshot')")
 
         next_targets = bb_state.get("next_targets", [])
         if next_targets:
@@ -2085,6 +2549,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             result["analysis_complete"] = self._analysis_is_complete(
                 fresh_session.session_id
             )
+            # h05 handoff: a restored-pending session's first touch arms its
+            # completion watcher (restore-at-startup deliberately never spawns).
+            self._arm_analysis_watcher_if_needed(fresh_session.session_id)
             # A polling agent must never be stuck in safe mode because the
             # watcher missed the transition: confirm from a live runtime.
             self._maybe_resolve_analysis_state(fresh_session)
@@ -2292,54 +2759,66 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         if not analysis_options:
             analysis_options = None
 
-        self._cleanup_runtime(sid)
-        if os.path.exists(session.idb_path):
-            try:
-                os.remove(session.idb_path)
-            except Exception as e:
+        # h01 unresolved #2: while the rebuild tears down and respawns the
+        # runtime, flag the session as reloading so the server_dispatch
+        # IDA_BUSY gate blocks racing tool calls and status confirmations are
+        # suppressed (the fresh spawn re-enters pending on its own). The marker
+        # is cleared in `finally` on every exit path, including failures.
+        reloading = getattr(self, "_reloading_sessions", None)
+        if not isinstance(reloading, set):
+            self._reloading_sessions = set()
+            reloading = self._reloading_sessions
+        reloading.add(sid)
+        try:
+            self._cleanup_runtime(sid)
+            if os.path.exists(session.idb_path):
+                try:
+                    os.remove(session.idb_path)
+                except Exception as e:
+                    return make_error(
+                        MCPError.FILE_LOCKED, f"Failed to remove IDB: {e}"
+                    )
+
+            # Update the REAL session via manager, not the deepcopy
+            self.session_mgr.update_session(
+                sid, analysis_options=analysis_options or {}, analysis_applied=False
+            )
+            # Refetch so we have the canonical object for _start_server
+            session = self.session_mgr.get_session(sid)
+            if session is None:
                 return make_error(
-                    MCPError.FILE_LOCKED, f"Failed to remove IDB: {e}"
+                    MCPError.SESSION_NOT_FOUND,
+                    f"Session '{sid}' disappeared during rebuild",
                 )
 
-        # Update the REAL session via manager, not the deepcopy
-        self.session_mgr.update_session(
-            sid, analysis_options=analysis_options or {}, analysis_applied=False
-        )
-        # Refetch so we have the canonical object for _start_server
-        session = self.session_mgr.get_session(sid)
-        if session is None:
-            return make_error(
-                MCPError.SESSION_NOT_FOUND,
-                f"Session '{sid}' disappeared during rebuild",
-            )
-
-        start_res = self._start_server(session)
-        if "error" in start_res:
-            # The IDB was already deleted and the runtime torn down. Re-enter
-            # pending so safe mode gates the session until a later spawn
-            # restores the database; otherwise a subsequent operation sees a
-            # session with no IDB on disk and no gate at all.
+            start_res = self._start_server(session)
+            if "error" in start_res:
+                # The IDB was already deleted and the runtime torn down.
+                # Re-enter pending so safe mode gates the session until a later
+                # spawn restores the database; otherwise a subsequent operation
+                # sees a session with no IDB on disk and no gate at all.
+                self._mark_analysis_pending(session)
+                response = dict(start_res)
+                response["session_id"] = session.session_id
+                response["safe_mode"] = True
+                response["analysis_complete"] = False
+                return response
+            self.current_session = session
+            # A rebuild deletes the IDB and re-runs auto-analysis: the session
+            # re-enters safe mode and the watcher lifts it when the rebuild
+            # completes. Rebuild is another route into pending, so it can never
+            # be used to escape the gate.
             self._mark_analysis_pending(session)
-            response = dict(start_res)
-            response["session_id"] = session.session_id
-            response["safe_mode"] = True
-            response["analysis_complete"] = False
-            return response
-        self.current_session = session
-        # A rebuild deletes the IDB and re-runs auto-analysis: the session
-        # re-enters safe mode and the watcher lifts it when the rebuild
-        # completes. Rebuild is another route into pending, so it can never
-        # be used to escape the gate.
-        self._mark_analysis_pending(session)
-        return {
-            "ok": True,
-            "session_id": session.session_id,
-            "idb_path": session.idb_path,
-            "safe_mode": True,
-            "analysis_complete": False,
-            "current_options": start_res.get("current_options"),
-            "bootstrap_report": start_res.get("bootstrap_report"),
-        }
+            return {
+                "ok": True,
+                "session_id": session.session_id,
+                "idb_path": session.idb_path,
+                "safe_mode": True,
+                "analysis_complete": False,
+                "current_options": start_res.get("current_options"),
+            }
+        finally:
+            reloading.discard(sid)
 
     def _session_action_update(self, args: dict) -> dict:
         sid, sid_err = self._resolve_session_id(args)

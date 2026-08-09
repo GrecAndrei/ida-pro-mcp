@@ -57,3 +57,39 @@ jobs:
         # exercised locally against live sessions; CI must not attempt to
         # spawn idat (each class would wait out its startup timeout).
         run: python -m pytest -q --ignore=tests/integration
+
+  # Optional: Architecture A Phase 1 — exercise the host-side r2 engine
+  # against a real Rizin install. Hermetic tests in the base matrix already
+  # cover the engine with a fake-r2 shim; this job proves the real
+  # subprocess contract (`rz -q -c`, `rz-bin -Ij/-ej`). The job is resilient:
+  # if apt cannot provide rizin, the real-engine tests skip instead of failing.
+  r2-real-engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . --group dev
+
+      - name: Install Rizin (best-effort)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rizin || echo "rizin unavailable; real-engine tests will skip"
+
+      - name: Run r2 engine tests against real rz
+        env:
+          IDA_MCP_DISABLE_RATE_LIMIT: "1"
+          IDA_MCP_POLICY_MODE: "permissive"
+        run: |
+          python -m pytest -q --ignore=tests/integration \
+            tests/host/test_swarm_p09_r2_engine.py

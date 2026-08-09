@@ -31,12 +31,17 @@ from ..agent_operations import (  # noqa: E402
 from ..analysis.context_density import ContextDensityOptimizer  # noqa: E402
 from ..analysis.patterns import GlobalFactsDatabase  # noqa: E402
 from ..config import (  # noqa: E402
+    ANALYSIS_CONFIRM_POLLS,
     CACHE_DIR,
+    CHECKPOINT_SAVE_SECONDS,
     CONTEXT_DENSITY_COMPACT_THRESHOLD,
     CONTEXT_DENSITY_DEFAULT_BUDGET,
     CONTEXT_DENSITY_MAX_CODE_PREVIEW,
     CONTEXT_DENSITY_MAX_HEX_PREVIEW,
     CONTEXT_DENSITY_MAX_XREF_ITEMS,
+    LARGE_IDB_SHUTDOWN_GRACE_SECONDS,
+    SAFE_MODE_POLL_SECONDS,
+    SAFE_MODE_WATCH_SECONDS,
     _bounded_int,
     _coerce_bool,
     _env_bool,
@@ -60,6 +65,7 @@ from .server_client_state import (  # noqa: E402
 )
 from .server_dispatch import ServerDispatchMixin  # noqa: E402
 from .server_multi_session import ServerMultiSessionMixin  # noqa: E402
+from .server_r2 import ServerR2Mixin  # noqa: E402
 from .server_response import ServerResponseMixin  # noqa: E402
 from .server_runtime import ServerRuntimeMixin  # noqa: E402
 from .server_semantic import ServerSemanticMixin  # noqa: E402
@@ -82,6 +88,7 @@ class IDAMCPServer(
     ServerMultiSessionMixin,
     ServerRuntimeMixin,
     ServerSessionMixin,
+    ServerR2Mixin,
     ServerDispatchMixin,
     BackgroundMixin,
     ServerClientStateMixin,
@@ -308,7 +315,6 @@ class IDAMCPServer(
         self._analysis_watchdog_lock = threading.RLock()
         self._analysis_watchdog_threads: dict[str, threading.Thread] = {}
         self._analysis_watchdog_stop_events: dict[str, threading.Event] = {}
-        self._analysis_watchdog_state: dict[str, dict[str, Any]] = {}
         self._analysis_watchdog_interval = _bounded_int(
             os.environ.get("IDA_MCP_WATCHDOG_INTERVAL", 5),
             5,
@@ -321,6 +327,15 @@ class IDAMCPServer(
             min_value=15,
             max_value=3600,
         )
+        # Lifecycle knobs, exposed as instance attributes so per-session paths
+        # (server_session / server_runtime) read them via getattr with the
+        # module constant as fallback. All parsed tolerantly in config.py so a
+        # malformed env value degrades to the default instead of crashing.
+        self.safe_mode_poll_seconds = SAFE_MODE_POLL_SECONDS
+        self.safe_mode_watch_seconds = SAFE_MODE_WATCH_SECONDS
+        self.analysis_confirm_polls = ANALYSIS_CONFIRM_POLLS
+        self.checkpoint_save_seconds = CHECKPOINT_SAVE_SECONDS
+        self.large_idb_shutdown_grace_seconds = LARGE_IDB_SHUTDOWN_GRACE_SECONDS
         self._pointer_note_interval_seconds = _bounded_int(
             os.environ.get("IDA_MCP_POINTER_NOTE_INTERVAL", 900),
             900,
@@ -398,6 +413,12 @@ class IDAMCPServer(
                 )
         except Exception as e:
             log_rpc(f"Auto session prune failed: {e}")
+        # Restore the per-session analysis gate AFTER auto-prune so sessions
+        # deleted for budget/age are never gated. A session whose metadata
+        # records 'complete' resumes ungated; every other session resumes
+        # gated in safe mode so a half-analyzed IDB is never exposed to
+        # full-binary analysis after a host restart (D3-F1).
+        self._restore_analysis_gates_from_metadata()
         self.bookmark_mgr = BookmarkManager(self.session_mgr.session_dir)
         self.audit = AuditLogger(base_dir=os.path.join(self.cache_dir, "audit"))
         # AuditLogger.close() is idempotent, so registering it atexit covers
@@ -467,6 +488,124 @@ class IDAMCPServer(
         self._start_runtime_lease_heartbeat()
         self._adopt_or_cleanup_stale_runtime_leases()
         self._load_session_macros()
+
+    # ------------------------------------------------------------------
+    # Analysis-gate persistence & restart restore
+    #
+    # The safe-mode state sets (_pending_analysis / _analysis_complete_sessions)
+    # are in-memory and lazily initialized, so a host restart starts with an
+    # empty gate. The gate is persisted per-session in metadata['analysis_gate']
+    # on every pending/complete transition by the server_session mixin
+    # (_mark_analysis_pending/_mark_analysis_complete/_persist_analysis_gate —
+    # this module does not shadow those). This module owns the pieces the
+    # mixin does not: restoring the gate in __init__ so a half-analyzed IDB
+    # stays gated after a restart (D3-F1) while a completed IDB resumes
+    # ungated, writing the final gate at shutdown, arming the completion
+    # watcher on a restored session's first touch (restore never spawns), and
+    # stopping completion watchers/background spawns during teardown.
+    # ------------------------------------------------------------------
+
+    def _restore_analysis_gates_from_metadata(self) -> None:
+        """Rehydrate the per-session analysis gate from persisted metadata.
+
+        'complete' resumes ungated; 'pending' or an absent record resumes
+        gated (fail-safe: an unverified IDB is never exposed to full-binary
+        analysis). Watchers are deliberately NOT spawned here — a restarted
+        host may have hundreds of loaded sessions whose runtimes are dead, so
+        each would only spin a polling thread until its re-arm window. The
+        watcher is armed on the session's first touch via
+        _arm_analysis_watcher_if_needed.
+        """
+        sessions = getattr(self.session_mgr, "sessions", None)
+        if not isinstance(sessions, dict):
+            return
+        with self._analysis_state_lock():
+            for sid, session in sessions.items():
+                meta = getattr(session, "metadata", None)
+                gate = meta.get("analysis_gate") if isinstance(meta, dict) else None
+                if gate == "complete":
+                    complete = getattr(self, "_analysis_complete_sessions", None)
+                    if not isinstance(complete, set):
+                        self._analysis_complete_sessions = set()
+                        complete = self._analysis_complete_sessions
+                    complete.add(sid)
+                else:
+                    pending = getattr(self, "_pending_analysis", None)
+                    if not isinstance(pending, set):
+                        self._pending_analysis = set()
+                        pending = self._pending_analysis
+                    pending.add(sid)
+
+    def _persist_analysis_gates_on_shutdown(self) -> None:
+        """Write the final gate for every tracked session before teardown.
+
+        Must run BEFORE _stop_analysis_completion_watchers so the in-memory
+        pending/complete sets still reflect the final state. Delegates the
+        per-session write to the server_session mixin's _persist_analysis_gate
+        (the canonical metadata['analysis_gate'] writer).
+        """
+        sessions = getattr(self.session_mgr, "sessions", None)
+        if not isinstance(sessions, dict):
+            return
+        for sid, session in sessions.items():
+            if self._analysis_is_complete(sid):
+                self._persist_analysis_gate(session, "complete")
+            elif self._safe_mode_active(sid):
+                self._persist_analysis_gate(session, "pending")
+
+    def _arm_analysis_watcher_if_needed(self, sid: str) -> None:
+        """Arm the analysis-completion watcher for a pending session.
+
+        Restore-at-startup never spawns watchers. The first touch that can
+        make progress on a still-pending session — a status/state poll or a
+        re-open — calls this to spawn the single completion watcher.
+        """
+        with self._analysis_state_lock():
+            pending = getattr(self, "_pending_analysis", None)
+            if not (isinstance(pending, set) and sid in pending):
+                return
+            watchers = getattr(self, "_analysis_watchers", None)
+            if isinstance(watchers, set) and sid in watchers:
+                return
+        self._spawn_analysis_watcher(sid)
+
+    def _stop_analysis_completion_watchers(self) -> None:
+        """Stop analysis-completion watchers and background runtime spawns.
+
+        The completion watchers (ida-an-<sid>) self-terminate on their next
+        poll once their session leaves _pending_analysis, so clearing the
+        pending markers is the deterministic stop signal. Background runtime
+        spawns (ida-bg-<sid>) observe _shutdown_requested and bail before
+        launching. This runs BEFORE the h02 runtime teardown so a background
+        thread cannot re-spawn an IDA process after _cleanup_all_runtimes has
+        finished killing them. The collections are cleared defensively
+        (getattr + isinstance): safe-mode bookkeeping lives in server_session
+        and evolves independently, so a missing/renamed collection is a no-op.
+        """
+        with self._analysis_state_lock():
+            pending = getattr(self, "_pending_analysis", None)
+            if isinstance(pending, set):
+                pending.clear()
+            watchers = getattr(self, "_analysis_watchers", None)
+            if isinstance(watchers, set):
+                watchers.clear()
+            in_flight = getattr(self, "_analysis_complete_in_flight", None)
+            if isinstance(in_flight, set):
+                in_flight.clear()
+            bg_errors = getattr(self, "_background_load_errors", None)
+            if isinstance(bg_errors, dict):
+                bg_errors.clear()
+
+    def shutdown(self) -> None:
+        """Deterministic shutdown: persist gates, stop watchers, then teardown."""
+        if self._shutdown:
+            return
+        self._shutdown_requested = True
+        with contextlib.suppress(Exception):
+            self._persist_analysis_gates_on_shutdown()
+        with contextlib.suppress(Exception):
+            self._stop_analysis_completion_watchers()
+        super().shutdown()
 
 
 
@@ -916,9 +1055,13 @@ class IDAMCPServer(
 
     @staticmethod
     def _cleanup_daemon() -> None:
-        _remove_pidfile()
-        with contextlib.suppress(OSError):
-            os.unlink(DAEMON_SOCKET)
+        # Unlink the socket only if the recorded pid is still our own: a live
+        # daemon that replaced us (or a fresh one that reclaimed a stale
+        # socket) must never have its socket yanked out from under it.
+        if _read_daemon_pidfile() == os.getpid():
+            _remove_pidfile()
+            with contextlib.suppress(OSError):
+                os.unlink(DAEMON_SOCKET)
 
     def _send_notification(self, notification: dict) -> None:
         """Send an unsolicited MCP notification to the client (no id field = notification)."""
@@ -956,6 +1099,44 @@ def _remove_pidfile() -> None:
         os.unlink(DAEMON_PIDFILE)
 
 
+def _read_daemon_pidfile() -> int | None:
+    """Return the pid recorded in DAEMON_PIDFILE, or None if absent/garbage.
+
+    Never raises: a malformed or unreadable pidfile simply reads as "no
+    recorded pid" (treated as stale at daemon start).
+    """
+    try:
+        with open(DAEMON_PIDFILE, encoding="utf-8") as f:
+            raw = f.read().strip()
+        if not raw:
+            return None
+        pid = int(raw)
+        return pid if pid > 0 else None
+    except (OSError, ValueError):
+        return None
+
+
+def _pid_is_live(pid: int | None) -> bool:
+    """Best-effort liveness probe for *pid* via ``os.kill(pid, 0)``.
+
+    Signal 0 performs the permissions/Existence check without sending a
+    signal. A pid that does not exist (ProcessLookupError) is dead; a pid we
+    may not signal but that exists (PermissionError) is alive; a bogus pid
+    (OSError/EINVAL, e.g. above pid_max) is treated as dead.
+    """
+    if not pid or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
 def main():
     """Console-script entry point: ``python -m ida_pro_mcp.host.server``."""
     global _real_stdout
@@ -963,6 +1144,23 @@ def main():
         _real_stdout = sys.stdout
 
     daemon_mode = "--daemon" in sys.argv
+    if daemon_mode:
+        # A second daemon must never reclaim a live daemon's socket. The
+        # pidfile is authoritative: probe the recorded pid BEFORE touching
+        # the socket. A live pid refuses to start (fail fast, before the
+        # heavy IDAMCPServer construction); a stale pidfile (dead pid) is
+        # reclaimed together with the stale socket it guarded.
+        existing_pid = _read_daemon_pidfile()
+        if _pid_is_live(existing_pid):
+            sys.stderr.write(
+                f"ida-pro-mcp daemon already running (pid {existing_pid}); "
+                f"refusing to start a second instance\n"
+            )
+            sys.exit(1)
+        _remove_pidfile()
+        with contextlib.suppress(OSError):
+            if os.path.exists(DAEMON_SOCKET):
+                os.unlink(DAEMON_SOCKET)
     try:
         # Auto-enable the in-process native retrieval backend when
         # libmcp_llama.so is present and no backend is pinned.  The HTTP
@@ -978,8 +1176,6 @@ def main():
             sys.stderr.write(f"native backend bootstrap skipped: {_native_exc}\n")
         server = IDAMCPServer()
         if daemon_mode:
-            if os.path.exists(DAEMON_SOCKET):
-                os.unlink(DAEMON_SOCKET)
             server.run_daemon()
         else:
             server.run()

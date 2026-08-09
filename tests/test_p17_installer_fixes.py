@@ -4,11 +4,17 @@ Each test pins one behavior that the agent-blitz audit found broken and that
 this package's fixer pass intentionally changed.  Files under test:
 
 * installer/clients.py  — VS Code / Copilot CLI "servers" top-level key
-* installer/runtime.py  — IDA_PRO_MCP_HOME, rerank opt-out, disable-policy env
+* installer/runtime.py  — IDA_PRO_MCP_HOME, rerank opt-out, disable-policy env, IDA_MCP_R2_BIN
 * installer/discovery.py — in-process binary version scan (no ``strings``)
-* installer/main.py     — --disable-policy flag, wizard defaults, rerank decline
+* installer/main.py     — --disable-policy flag, wizard defaults, rerank decline, --with-r2/--sigs
 * cli.py                — intelligence whitelist, background dispatch, timeouts
 * server_script.py      — sys.modules restore, non-string tool, auth, error codes
+
+WO-INST additions (paper §8.2 item 11 / §10.2 item 5e): ``--with-r2`` records
+an rz/r2 binary as ``IDA_MCP_R2_BIN``; ``--sigs <dir>`` stages a FLIRT sig pack
+into ``<IDADIR>/sig``.  Full coverage lives in
+``tests/host/test_swarm_p10_installer.py``; the two tests here pin the CLI
+contract so a regression cannot silently drop the flags.
 """
 
 from __future__ import annotations
@@ -251,6 +257,27 @@ def test_parse_args_no_embed_auto_flag():
 
     assert parse_args(["--no-embed-auto"]).embed_auto is False
     assert parse_args([]).embed_auto is True
+
+
+def test_parse_args_with_r2_and_sigs_flags():
+    """WO-INST: --with-r2 and --sigs <dir> must parse onto InstallerOptions."""
+    from ida_pro_mcp.installer.main import parse_args
+
+    opts = parse_args(["--with-r2", "--sigs", "/tmp/riscv64-sigpack"])
+    assert opts.with_r2 is True
+    assert opts.sigs_dir == "/tmp/riscv64-sigpack"
+    assert parse_args([]).with_r2 is False
+    assert parse_args([]).sigs_dir == ""
+
+
+def test_build_stdio_config_records_r2_bin(tmp_path):
+    """WO-INST: --with-r2 records the resolved engine as IDA_MCP_R2_BIN."""
+    from ida_pro_mcp.installer.runtime import build_stdio_config
+
+    cfg = build_stdio_config(tmp_path / "python", tmp_path, r2_bin="/usr/bin/rz")
+    assert cfg["env"].get("IDA_MCP_R2_BIN") == "/usr/bin/rz"
+    cfg2 = build_stdio_config(tmp_path / "python", tmp_path)
+    assert "IDA_MCP_R2_BIN" not in cfg2["env"]
 
 
 def test_wizard_embed_prompt_default_honors_no_embed_auto(tmp_path, monkeypatch):

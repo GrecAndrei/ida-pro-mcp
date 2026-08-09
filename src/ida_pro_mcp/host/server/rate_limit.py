@@ -140,3 +140,60 @@ class RateLimiter:
             for tool, bucket in self._tool_buckets.items():
                 out[tool] = {"tokens": round(bucket.tokens, 2)}
         return out
+
+
+# ─── Cheap host-only exemption ───────────────────────────────────────────────
+#
+# Tools/actions whose dispatcher work is entirely host-side (no IDA RPC, no
+# worker spawn, no heavy process management). Rate limiting them protects
+# nothing and only adds latency to the bookkeeping calls an agent legitimately
+# makes in tight loops (status polls, truncation continue, bookmark list,
+# blackboard reads). Write/exec/analysis tools stay on the buckets.
+
+# Fully host-only cheap tools: every action is a small in-memory/SQLite op.
+RATE_LIMIT_EXEMPT_TOOLS = frozenset({"bookmarks", "truncation"})
+
+# Session actions that are cheap host-side bookkeeping. Heavy session
+# management (create/close/kill/snapshot/archive/rebuild/duplicate, SSO
+# activate/login/logout) stays rate-limited so a spamming agent cannot exhaust
+# the host's process/lease resources.
+RATE_LIMIT_EXEMPT_SESSION_ACTIONS = frozenset({
+    "health", "get", "list", "status", "state", "logs", "get_phase",
+    "dashboard", "update", "rename", "tag", "untag", "add_note",
+    "clear_notes", "search_notes", "switch", "list_skills",
+    "suggest_triage", "suggest_strategy",
+})
+
+# Background status polls (cheap). ``submit`` stays rate-limited: it queues a
+# worker that performs IDA work.
+RATE_LIMIT_EXEMPT_BACKGROUND_ACTIONS = frozenset({
+    "status", "list", "result", "wait", "cancel",
+})
+
+# Blackboard reads over the investigation workspace. ``next_target``/``frontier``
+# are deliberately excluded: they may call back into IDA (rpc_fn) to suggest
+# work. All write/control actions (add/update/delete/publish/trace/…) stay
+# rate-limited.
+RATE_LIMIT_EXEMPT_BLACKBOARD_ACTIONS = frozenset({
+    "read", "list", "search", "stats", "coverage", "recall", "conflicts",
+    "stale", "workspace_brief", "campaign_summary", "state_health",
+    "proposal_list", "crawler_status", "trace_status", "phase_status",
+    "policy_status", "policy_check", "working_set",
+})
+
+
+def is_rate_limit_exempt(tool: str, action: str | None = None) -> bool:
+    """True when the (tool, action) is cheap host-side bookkeeping with no IDA
+    RPC, so it should skip the token buckets entirely (no consumption, no
+    denial)."""
+    tool = str(tool or "")
+    action = str(action or "").strip().lower()
+    if tool in RATE_LIMIT_EXEMPT_TOOLS:
+        return True
+    if tool == "session":
+        return action in RATE_LIMIT_EXEMPT_SESSION_ACTIONS
+    if tool == "background":
+        return action in RATE_LIMIT_EXEMPT_BACKGROUND_ACTIONS
+    if tool == "blackboard":
+        return action in RATE_LIMIT_EXEMPT_BLACKBOARD_ACTIONS
+    return False

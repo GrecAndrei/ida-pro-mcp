@@ -41,19 +41,37 @@ class AttackSource(SourceParser):
         ]
 
     def parse(self, data_dir: str) -> list[dict[str, Any]]:
-        """Parse all STIX bundles. Each entry gets an `_attack_type` field for splitting."""
+        """Parse all STIX bundles into a flat entry list.
+
+        Entries are tagged with a transient ``_attack_type`` marker recording
+        which corpus bucket (attack_patterns/malware/...) each belongs to. The
+        marker is consumed only by ``threat_corpus._build_from_sources``,
+        which strips it before persisting — direct callers must strip it too
+        before saving parse output into a corpus.
+        """
         from ..threat_corpus import parse_attack_stix
 
         merged: dict[str, list] = {k: [] for k in _STIX_KEYS}
+        # Technique ids repeat across the enterprise/ics/mobile bundles; keep
+        # the first copy so _rebuild_indexes does not resolve duplicates
+        # arbitrarily.
+        seen_ids: dict[str, set[str]] = {k: set() for k in _STIX_KEYS}
         jsons = glob.glob(os.path.join(data_dir, "*.json"))
         for jf in jsons:
             parsed = parse_attack_stix(jf)
             for key in _STIX_KEYS:
-                merged[key].extend(parsed.get(key) or [])
+                for entry in parsed.get(key) or []:
+                    eid = entry.get("id")
+                    if eid:
+                        if eid in seen_ids[key]:
+                            continue
+                        seen_ids[key].add(eid)
+                    merged[key].append(entry)
 
         out: list[dict[str, Any]] = []
         for key, entries in merged.items():
+            bucket = _KEY_TO_ENTRY_FIELD[key]
             for e in entries:
-                e["_attack_type"] = _KEY_TO_ENTRY_FIELD[key]
-                out.append(e)
+                # Tag a shallow copy rather than mutating the merged entries.
+                out.append({**e, "_attack_type": bucket})
         return out

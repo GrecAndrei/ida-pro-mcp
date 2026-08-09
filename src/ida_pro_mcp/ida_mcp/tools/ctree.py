@@ -163,6 +163,21 @@ def _ctree_build_var_dependency_graph(cfunc, max_edges=1200):
     }
 
 
+def _ctree_visitor_flags() -> int:
+    """Return ctree_visitor_t flags that keep nesting tracking intact.
+
+    CV_FAST skips parent-pointer setup and never fires leave_insn/leave_expr,
+    which silently breaks the depth/nesting bookkeeping that the dominance-map,
+    logic-graph, and traverse visitors rely on (depth never decrements and
+    control_stack never pops). CV_PARENTS restores both; fall back to the full
+    traversal (0) on SDKs without the constant.
+    """
+    try:
+        return int(getattr(ida_hexrays, "CV_PARENTS", 0) or 0)
+    except Exception:
+        return 0
+
+
 def _ctree_build_dominance_map(cfunc, max_nodes=600):
     """
     Build an approximate condition-dominance map using ctree depth/order.
@@ -172,13 +187,16 @@ def _ctree_build_dominance_map(cfunc, max_nodes=600):
 
     class CondVisitor(ida_hexrays.ctree_visitor_t):
         def __init__(self):
-            ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+            # CV_PARENTS (not CV_FAST): leave_insn must fire so depth decrements.
+            ida_hexrays.ctree_visitor_t.__init__(self, _ctree_visitor_flags())
             self.count = 0
             # IDA 9.x dropped ctree_visitor_t.level; track nesting depth manually.
             self.depth = 0
+            self.truncated = False
 
         def visit_insn(self, i):
             if self.count >= max_nodes:
+                self.truncated = True
                 return 1
             if i.op in [ida_hexrays.cit_if, ida_hexrays.cit_while, ida_hexrays.cit_for, ida_hexrays.cit_do, ida_hexrays.cit_switch]:
                 self.count += 1
@@ -211,9 +229,11 @@ def _ctree_build_dominance_map(cfunc, max_nodes=600):
                 self.depth -= 1
             return 0
 
+    truncated = False
     try:
         v = CondVisitor()
         v.apply_to(cfunc.body, None)
+        truncated = bool(getattr(v, "truncated", False))
     except Exception:
         pass
 
@@ -234,6 +254,7 @@ def _ctree_build_dominance_map(cfunc, max_nodes=600):
         "dominance_edges": edges,
         "condition_count": len(conditions),
         "edge_count": len(edges),
+        "truncated": truncated,
     }
 
 
@@ -268,17 +289,21 @@ def _ctree_build_logic_graph(cfunc, max_nodes=1200):
 
     class LogicGraphVisitor(ida_hexrays.ctree_visitor_t):
         def __init__(self):
-            ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+            # CV_PARENTS (not CV_FAST): leave_insn/leave_expr must fire so the
+            # control_stack pops and depth decrements.
+            ida_hexrays.ctree_visitor_t.__init__(self, _ctree_visitor_flags())
             self.count = 0
             self.control_stack = []
             # IDA 9.x dropped ctree_visitor_t.level; track nesting depth manually.
             self.depth = 0
+            self.truncated = False
 
         def _control_parent(self):
             return self.control_stack[-1] if self.control_stack else None
 
         def visit_insn(self, i):
             if self.count >= max_nodes:
+                self.truncated = True
                 return 1
             op = i.op
             depth = int(self.depth)
@@ -331,6 +356,7 @@ def _ctree_build_logic_graph(cfunc, max_nodes=1200):
 
         def visit_expr(self, e):
             if self.count >= max_nodes:
+                self.truncated = True
                 return 1
             if e.op == ida_hexrays.cot_call:
                 depth = int(self.depth)
@@ -348,9 +374,11 @@ def _ctree_build_logic_graph(cfunc, max_nodes=1200):
                 self.depth -= 1
             return 0
 
+    truncated = False
     try:
         v = LogicGraphVisitor()
         v.apply_to(cfunc.body, None)
+        truncated = bool(getattr(v, "truncated", False))
     except Exception:
         pass
 
@@ -359,6 +387,7 @@ def _ctree_build_logic_graph(cfunc, max_nodes=1200):
         "edges": edges,
         "node_count": len(nodes),
         "edge_count": len(edges),
+        "truncated": truncated,
     }
 
 
@@ -441,6 +470,15 @@ def ctree(
             else:
                 edges = graph.get("edges", [])
 
+            truncated = bool(graph.get("truncated", False))
+            returned_nodes = len(nodes)
+            returned_edges = len(edges)
+            # Display caps: the payload text is bounded at 1200 lines each.
+            if len(nodes) > 1200 or len(edges) > 1200:
+                truncated = True
+                returned_nodes = min(len(nodes), 1200)
+                returned_edges = min(len(edges), 1200)
+
             lines = [
                 f"{n.get('ea') or 'None'}  {n.get('kind')}  depth={n.get('depth')}  {n.get('text', '')}"
                 for n in nodes[:1200]
@@ -449,14 +487,19 @@ def ctree(
                 f"{e.get('from')} -> {e.get('to')}  {e.get('relation')}"
                 for e in edges[:1200]
             ]
-            return {
+            result = {
                 "ok": True,
                 "function": func_name,
                 "logic_flow": "\n".join(lines),
                 "edges": "\n".join(edge_lines),
                 "logic_graph": {"nodes": nodes, "edges": edges, "node_count": len(nodes), "edge_count": len(edges)},
-                "count": len(nodes),
+                "count": returned_nodes,
+                "total": len(nodes),
             }
+            if truncated:
+                result["truncated"] = True
+                result["returned"] = returned_nodes
+            return result
 
         if action == "get":
             node_lines = []
@@ -464,20 +507,29 @@ def ctree(
                 def __init__(self):
                     ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
                     self.count = 0
+                    self.truncated = False
                 def visit_expr(self, e):
-                    if self.count > 200: return 1
+                    if self.count > 200:
+                        self.truncated = True
+                        return 1
                     self.count += 1
                     node_lines.append(f"{hex(e.ea)}  {ida_hexrays.get_ctype_name(e.op)}  {ida_lines.tag_remove(e.print1(None))}")
                     return 0
                 def visit_insn(self, i):
-                    if self.count > 200: return 1
+                    if self.count > 200:
+                        self.truncated = True
+                        return 1
                     self.count += 1
                     node_lines.append(f"{hex(i.ea)}  {ida_hexrays.get_ctype_name(i.op)}")
                     return 0
 
             visitor = NodeVisitor()
             visitor.apply_to(cfunc.body, None)
-            return {"ok": True, "function": func_name, "nodes": "\n".join(node_lines), "total": len(node_lines)}
+            result = {"ok": True, "function": func_name, "nodes": "\n".join(node_lines), "total": len(node_lines)}
+            if visitor.truncated:
+                result["truncated"] = True
+                result["returned"] = len(node_lines)
+            return result
 
         elif action == "find_calls":
             call_lines = []
@@ -591,10 +643,11 @@ def ctree(
             class TraverseVisitor(ida_hexrays.ctree_visitor_t):
                 # IDA 9.x dropped the ctree_visitor_t.level depth attribute; track
                 # nesting depth ourselves. visit_* fires on entry (pre-order),
-                # leave_* on exit (post-order) -- but leave may not fire under
-                # CV_FAST, so prune once depth exceeds the cap regardless.
+                # leave_* on exit (post-order). CV_FAST never fires leave_*, so
+                # depth would grow unbounded and every nested item would render
+                # at a runaway indent — use CV_PARENTS so leave_* decrements.
                 def __init__(self, max_depth):
-                    ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+                    ida_hexrays.ctree_visitor_t.__init__(self, _ctree_visitor_flags())
                     self.max_depth = max_depth
                     self.depth = 0
                 def _emit(self, item, text):
@@ -634,17 +687,28 @@ def ctree(
 
         elif action == "dominance_map":
             dom = _ctree_build_dominance_map(cfunc, max_nodes=max(100, min(2000, int(depth) * 120)))
+            edges = dom.get("dominance_edges", [])
+            truncated = bool(dom.get("truncated", False))
+            returned_edges = len(edges)
+            if len(edges) > 500:
+                truncated = True
+                returned_edges = 500
             edge_lines = [
                 f"{e['from']} -> {e['to']}  {e['relation']}"
-                for e in dom.get("dominance_edges", [])[:500]
+                for e in edges[:500]
             ]
-            return {
+            result = {
                 "ok": True,
                 "function": func_name,
                 "dominance_map": dom,
                 "edges": "\n".join(edge_lines),
-                "count": dom.get("edge_count", 0),
+                "count": returned_edges,
+                "total": len(edges),
             }
+            if truncated:
+                result["truncated"] = True
+                result["returned"] = returned_edges
+            return result
 
         elif action == "var_dependency_graph":
             dep = _ctree_build_var_dependency_graph(cfunc, max_edges=max(200, min(2400, int(depth) * 180)))

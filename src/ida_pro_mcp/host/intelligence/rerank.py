@@ -997,14 +997,22 @@ class Reranker:
                 self._schedule_idle_shutdown()
 
     def rerank(
-        self, query: str, documents: list[str], *, top_k: int | None = None
+        self,
+        query: str,
+        documents: list[str],
+        *,
+        top_k: int | None = None,
+        deadline: float | None = None,
     ) -> list[dict[str, Any]] | None:
         """Score ``(query, document)`` pairs.
 
         Returns ``[{index, score}, ...]`` sorted by score descending (index is
         the position in ``documents``), or ``None`` when the reranker is
-        unavailable or the request failed.  Callers treat ``None`` as "keep
-        the recall order" — reranking is a quality boost, never a hard gate.
+        unavailable, the request failed, or the ``deadline`` (a
+        ``time.monotonic()`` timestamp) expired mid-pool.  Callers treat
+        ``None`` as "keep the recall order" — reranking is a quality boost,
+        never a hard gate.  An expired deadline is checked before each chunk so
+        a CPU-bound pool still yields back to the caller's search budget.
         """
         # Auto-recover: a recycled server (RSS ceiling after many pools, idle
         # shutdown, a mid-request timeout) leaves _ready=False.  Restart once
@@ -1028,6 +1036,8 @@ class Reranker:
         chunk = max(1, RERANK_CHUNK_SIZE)
         merged: list[dict[str, Any]] = []
         for start in range(0, len(documents), chunk):
+            if deadline is not None and time.monotonic() >= deadline:
+                return None
             part = documents[start:start + chunk]
             scored = self._request_rerank(
                 query,

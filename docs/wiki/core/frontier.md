@@ -19,3 +19,9 @@ the workspace knows what has already been read.
 
 When nothing matches, the response explains why (e.g. "nothing is open" for
 `unresolved`) and suggests the strategy that would still yield work.
+
+For opaque/raw binaries without a function inventory, `coverage` and the
+`coverage`/`frontier` strategies return an explicit `note` (and
+`coverage_pct=0`) instead of silently reporting an empty coverage — there is
+no inventory to count, and the response says so rather than implying the
+binary has been fully read.

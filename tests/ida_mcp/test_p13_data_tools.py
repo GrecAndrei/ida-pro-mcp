@@ -389,6 +389,130 @@ class TestRiscvGpRecommendation(unittest.TestCase):
         self.assertNotIn(".format(", rec)
 
 
+class TestIdbArchProfileReusesInferenceAndRawSurfaces(unittest.TestCase):
+    """q02: idb_architecture_profile reuses the idb_meta inference (no double
+    file scan), surfaces raw-blob warning / load_base / empty-entry notes, and
+    keys the RISC-V GP probe off the processor name."""
+
+    def setUp(self):
+        idaapi = _make_idaapi(get_idb_path=lambda: "test.idb")
+        idc = _make_idc()
+        ida_ida = types.ModuleType("ida_ida")
+        ida_ida.inf_get_min_ea = lambda: 0
+        ida_ida.inf_get_max_ea = lambda: 0x2000
+        ida_ida.inf_get_cc_id = lambda: 0
+        ida_ida.inf_get_baseaddr = lambda: 0
+        ida_ida.inf_is_dll = lambda: False
+        ida_ida.inf_is_be = lambda: False
+        ida_nalt = types.ModuleType("ida_nalt")
+        ida_nalt.get_input_file_path = lambda: "input.bin"
+        ida_entry = types.ModuleType("ida_entry")
+        _blank_modules(["ida_typeinf", "ida_segment", "ida_name", "ida_lines",
+                        "ida_bytes", "ida_funcs", "ida_hexrays", "ida_frame",
+                        "ida_struct", "ida_ua", "ida_kernwin", "ida_loader",
+                        "ida_dbg", "idautils"])
+        sys.modules["idaapi"] = idaapi
+        sys.modules["idc"] = idc
+        sys.modules["ida_ida"] = ida_ida
+        sys.modules["ida_nalt"] = ida_nalt
+        sys.modules["ida_entry"] = ida_entry
+        overrides = {"idaapi": idaapi, "idc": idc,
+                     "_inf_filetype_id": lambda: 17,
+                     "_filetype_name": lambda ft: "raw",
+                     "_inf_procname": lambda: "riscv",
+                     "_inf_bitness": lambda: 64}
+        self.mod = load_tool_module("idb", common_overrides=overrides)
+        self.mod._inf_filetype_id = lambda: 17
+        self.mod._filetype_name = lambda ft: "raw"
+        self.mod._inf_procname = lambda: "riscv"
+        self.mod._inf_bitness = lambda: 64
+        self.mod.detect_riscv_gp = lambda: {"found": False}
+        self.calls = {"n": 0}
+
+        def _fake_infer(binary_path):
+            self.calls["n"] += 1
+            return {
+                "file_kind": "raw",
+                "processor": "riscv",
+                "bitness": 64,
+                "endian": "little",
+                "load_base": 0x80000000,
+                "confidence": 0.5,
+                "warning": "raw blob; arch unverified — set architecture explicitly",
+                "candidates": [],
+            }
+
+        self.mod.infer_binary_arch_profile = _fake_infer
+
+    def test_architecture_profile_reuses_meta_inference_and_surfaces_raw(self):
+        meta = self.mod.idb_meta()
+        # idb_meta ran the inference exactly once and carried it in meta.
+        self.assertEqual(self.calls["n"], 1)
+        self.assertEqual(meta["inferred_arch_profile"]["file_kind"], "raw")
+        result = self.mod.idb_architecture_profile(meta=meta, summary={"imports": 0, "exports": 0})
+        # The profile action reuses the carried inference — no second scan.
+        self.assertEqual(self.calls["n"], 1)
+        self.assertTrue(result["raw_binary_mode"])
+        self.assertEqual(result["inferred_load_base"], 0x80000000)
+        self.assertIn("raw blob; arch unverified", result["raw_binary_warning"])
+        self.assertIn("entrypoints_note", result)
+        # GP probe fired from the processor name (proc="riscv") even though
+        # the inference carried no gp data.
+        self.assertIn("riscv_gp", result)
+        self.assertFalse(result["riscv_gp"]["found"])
+
+
+class TestIdbGpProbeKeyedOffProcessorName(unittest.TestCase):
+    """q02: the RISC-V GP recommendation must fire off the processor name
+    (including riscv64/riscv32 aliases) without depending on is_riscv_family(),
+    which needs the IDA inf-structure and is unreliable on opaque blobs."""
+
+    def setUp(self):
+        idaapi = _make_idaapi()
+        idc = _make_idc()
+        ida_ida = types.ModuleType("ida_ida")
+        ida_entry = types.ModuleType("ida_entry")
+        ida_nalt = types.ModuleType("ida_nalt")
+        _blank_modules(["ida_typeinf", "ida_segment", "ida_name", "ida_lines",
+                        "ida_bytes", "ida_funcs", "ida_hexrays", "ida_frame",
+                        "ida_struct", "ida_ua", "ida_kernwin", "ida_loader",
+                        "ida_dbg", "idautils"])
+        sys.modules["idaapi"] = idaapi
+        sys.modules["idc"] = idc
+        sys.modules["ida_ida"] = ida_ida
+        sys.modules["ida_entry"] = ida_entry
+        sys.modules["ida_nalt"] = ida_nalt
+        # NOTE: no is_riscv_family override — it is absent from the isolated
+        # _common stub, proving the probe no longer depends on it.
+        self.mod = load_tool_module("idb", common_overrides={"idaapi": idaapi, "idc": idc})
+        self.mod.detect_riscv_gp = lambda: {"found": True, "gp": 0x2A1000}
+
+    def _meta(self, processor):
+        return {
+            "binary_path": "",
+            "file_type_id": 17,
+            "file_type_info": {"effective": "raw", "loader": "raw"},
+            "file_type_effective": "raw",
+            "processor": processor,
+            "bitness": 64,
+            "is_be": False,
+        }
+
+    def test_gp_probe_fires_for_riscv_alias_without_is_riscv_family(self):
+        for processor in ("riscv", "riscv64"):
+            result = self.mod.idb_architecture_profile(meta=self._meta(processor),
+                                                       summary={"imports": 0})
+            gp_recs = [r for r in result["recommendations"] if "set_reg_value" in r]
+            self.assertTrue(gp_recs, (processor, result["recommendations"]))
+            self.assertIn('idc.set_reg_value("gp", 0x2a1000, idc.BADADDR)', gp_recs[0])
+
+    def test_no_gp_probe_for_non_riscv_processor(self):
+        result = self.mod.idb_architecture_profile(meta=self._meta("arm"),
+                                                   summary={"imports": 0})
+        gp_recs = [r for r in result["recommendations"] if "set_reg_value" in r]
+        self.assertFalse(gp_recs)
+
+
 class TestIdbMetaZeroEa(unittest.TestCase):
     def setUp(self):
         idaapi = _make_idaapi(get_idb_path=lambda: "test.idb")

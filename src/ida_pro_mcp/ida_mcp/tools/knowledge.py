@@ -9,10 +9,8 @@ except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
 try:
-    from ida_pro_mcp.services import SymbolDB, get_chip_family_catalog, infer_binary_arch_profile
+    from ida_pro_mcp.services import SymbolDB
 except ImportError:
-    from host.analysis.arch_profile import infer_binary_arch_profile  # type: ignore[import-not-found]
-    from host.stores.chip_db import get_chip_family_catalog  # type: ignore[import-not-found]
     from host.stores.symbol_db import SymbolDB  # type: ignore[import-not-found]
 
 
@@ -62,8 +60,8 @@ def _fingerprint_function(func_ea: int) -> Dict[str, Any]:
 @tool
 @idawrite
 def knowledge(
-    action: Annotated[Literal["chip_identify", "symbol_lookup", "import_symbols", "export_session", "chip_families"],
-                      "Action: chip_identify|symbol_lookup|import_symbols|export_session|chip_families"],
+    action: Annotated[Literal["symbol_lookup", "import_symbols", "export_session"],
+                      "Action: symbol_lookup|import_symbols|export_session"],
     query: Annotated[Optional[str], "Fuzzy query for symbol_lookup"] = None,
     min_confidence: Annotated[float, "Minimum confidence threshold for import/export"] = 0.8,
     limit: Annotated[int, "Max rows"] = 50,
@@ -72,28 +70,6 @@ def knowledge(
 ) -> dict:
     try:
         sdb = SymbolDB(db_path)
-
-        if action == "chip_identify":
-            # Use the real input binary path, not a string-strip of the IDB
-            # path (foo.i64 -> 'foo' for PE/ELF, or a raw .idb on 32-bit).
-            if hasattr(ida_nalt, "get_input_file_path"):
-                input_path = ida_nalt.get_input_file_path() or ""
-            elif hasattr(idaapi, "get_input_file_path"):
-                input_path = idaapi.get_input_file_path() or ""
-            else:
-                input_path = ""
-            if not input_path:
-                return make_error(MCPError.IDA_ERROR, "Could not resolve input binary path")
-            profile = infer_binary_arch_profile(input_path)
-            return {"ok": True, "profile": profile}
-
-        if action == "chip_families":
-            families = get_chip_family_catalog()
-            stats = sdb.stats_by_chip()
-            stat_map = {str(s.get("chip_family") or "").lower(): int(s.get("symbol_count") or 0) for s in stats}
-            for f in families:
-                f["match_stats"] = {"symbol_count": stat_map.get(str(f.get("chip_family", "")).lower(), 0)}
-            return {"ok": True, "families": families, "count": len(families)}
 
         if action == "symbol_lookup":
             if not query:

@@ -58,7 +58,7 @@ class _Host(ServerRuntimeMixin):
         self._session_startup_locks = {}
         self._session_last_activity = {}
         self._session_inflight_calls = {}
-        self._session_closing = {}
+        self._session_teardown = set()
         self._activity_log = []
         self._activity_log_max = 4000
         self.cache_dir = str(tmp_path / "cache")
@@ -69,9 +69,6 @@ class _Host(ServerRuntimeMixin):
             get_session_artifact_dir=lambda sid, create=True: str(tmp_path / f"artifacts-{sid}"),
             get_session_log_dir=lambda sid, create=True: str(tmp_path / f"logs-{sid}"),
         )
-
-    def _stop_idle_index_worker(self, sid, join_timeout=0.5):
-        pass
 
     def _stop_analysis_watchdog(self, sid, join_timeout=0.5):
         pass
@@ -164,6 +161,9 @@ def test_cleanup_sends_shutdown_before_popping_runtime(tmp_path, monkeypatch):
         "auth_token": "tok",
     }
     host.session_runtimes[SID] = runtime
+    # _start_server lazily creates the per-session startup lock; seed it the
+    # same way so the retention assertion below is meaningful.
+    host._session_startup_locks[SID] = threading.Lock()
     # Hold the lane busy so the shutdown RPC would queue forever if queue_timeout
     # were dead — it must fail fast instead.
     runtime["rpc_lock"].acquire()
@@ -183,20 +183,23 @@ def test_cleanup_sends_shutdown_before_popping_runtime(tmp_path, monkeypatch):
         runtime["rpc_lock"].release()
 
     # Shutdown was attempted while the runtime was still registered, with the
-    # documented fail-fast queue bound — and then the runtime was removed.
+    # documented fail-fast queue bound — and then the runtime was removed. The
+    # per-session startup lock is deliberately retained (h02: _start_server
+    # holds it by reference; popping it would let two threads race on different
+    # locks for the same sid and spawn duplicate IDA processes).
     assert observed.get("still_registered") is True
     assert observed.get("queue_timeout") == 0
     assert SID not in host.session_runtimes
-    assert SID not in host._session_startup_locks
+    assert SID in host._session_startup_locks
 
 
 def test_start_server_refuses_other_thread_auto_restart(tmp_path, monkeypatch):
-    """F04 finding 3: _start_server must not auto-restart a session that is being
-    closed by another thread (the close tombstone), or it would orphan a fresh
-    IDA process once close's delete_session runs."""
+    """F04 finding 3: _start_server must not auto-restart a session whose close
+    is in flight (the close-in-progress flag), or it would orphan a fresh IDA
+    process once close's delete_session runs."""
     host = _Host(tmp_path)
     session = host._make_session(tmp_path)
-    host._session_closing[SID] = -999  # some other thread
+    host._begin_session_teardown(SID)  # a close/delete is running
     launched = []
     monkeypatch.setattr(
         host, "_start_server_inner", lambda s: launched.append(1) or {"ok": True}
@@ -211,11 +214,16 @@ def test_start_server_refuses_other_thread_auto_restart(tmp_path, monkeypatch):
 
 
 def test_start_server_allows_same_thread_relaunch(tmp_path, monkeypatch):
-    """F04 finding 3: a deliberate restart on the same thread (safe-mode reload,
-    retry after a failed apply) must still be allowed through the tombstone."""
+    """F04 finding 3: a deliberate restart (safe-mode reload, retry after a
+    failed apply, re-open of a just-closed path) is allowed once the close has
+    COMPLETED — the close-in-progress flag is cleared unconditionally when the
+    teardown+delete finishes, so it never blocks a later relaunch."""
     host = _Host(tmp_path)
     session = host._make_session(tmp_path)
-    host._session_closing[SID] = threading.get_ident()
+    # Simulate a close that ran to completion: flag set, then cleared.
+    host._begin_session_teardown(SID)
+    assert host._session_teardown_active(SID)
+    host._end_session_teardown(SID)
     launched = []
     monkeypatch.setattr(
         host, "_start_server_inner", lambda s: launched.append(1) or {"ok": True}
@@ -230,12 +238,12 @@ def test_start_server_allows_same_thread_relaunch(tmp_path, monkeypatch):
 
 
 def test_registration_recheck_aborts_launch_that_races_close(tmp_path, monkeypatch):
-    """F04 finding 3: even if _start_server passed its pre-launch tombstone check,
-    a close that starts while IDA is booting must abort at registration instead of
-    orphaning the runtime."""
+    """F04 finding 3: even if _start_server passed its pre-launch close check,
+    a close that starts while IDA is booting must abort at registration instead
+    of orphaning the runtime."""
     host = _Host(tmp_path)
     session = host._make_session(tmp_path)
-    host._session_closing[SID] = -999  # close began from another thread mid-launch
+    host._begin_session_teardown(SID)  # close began while IDA was booting
     server_process = _FakeProc(alive=True)
     monkeypatch.setattr(host, "_is_executable_file", lambda p: True)
     monkeypatch.setattr(host, "_build_ida_command", lambda *a, **k: ["fake"])

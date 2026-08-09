@@ -248,34 +248,66 @@ def calc(
             return resp
 
         def resolve_ea(val, label="value"):
-            """Resolve a value/address from int, hex string, symbol name, or NL query."""
+            """Resolve a value/address from int, hex string, symbol name, or NL query.
+
+            All string parsing is delegated to the shared canonical parser
+            (tools/_common.parse_address_canonical) so a bare in-image token
+            like ``80000000`` and its ``0x80000000`` spelling resolve to the
+            same EA everywhere: hex-by-default for in-image bare tokens,
+            symbol-first, and ADDRESS_INVALID for ambiguous/unmapped tokens
+            (never a silent decimal reinterpretation).
+            """
             if val is None:
                 raise ValueError(f"{label} required")
             if isinstance(val, int):
                 return val
             if isinstance(val, str):
-                m = _INT_SUFFIX_RE.match(val)
-                if m:
+                s = val.strip()
+                # Value-context literals the address parser intentionally
+                # rejects: suffix-scaled magnitudes ('1k', '2m') and signed
+                # numbers (chain offsets, bitops operands). Neither is a bare
+                # address token, so each keeps its numeric semantics.
+                m = _INT_SUFFIX_RE.match(s)
+                if m and m.group(2):
                     base_txt = m.group(1).replace("_", "")
-                    suffix = (m.group(2) or "").lower()
-                    n = int(base_txt, 0)
                     scale = {
-                        "": 1,
                         "k": 1024,
                         "m": 1024 ** 2,
                         "g": 1024 ** 3,
                         "t": 1024 ** 4,
-                    }[suffix]
-                    return n * scale
+                    }[m.group(2).lower()]
+                    return int(base_txt, 0) * scale
+                if s[:1] in "+-":
+                    try:
+                        return int(s, 0)
+                    except ValueError:
+                        raise ValueError(f"Invalid {label}: {val}") from None
+                # Symbol-first: an exact symbol wins over any literal reading,
+                # so sub_401000 is the symbol's EA, never the number 401000.
                 try:
-                    return int(val, 0)
-                except ValueError:
-                    ea = idc.get_name_ea_simple(val)
-                    if ea != idaapi.BADADDR:
-                        return ea
-                    sem_ea = _semantic_symbol_match(val)
-                    if sem_ea != idaapi.BADADDR:
-                        return sem_ea
+                    sym_ea = idc.get_name_ea_simple(s)
+                    if sym_ea != idaapi.BADADDR:
+                        return sym_ea
+                except Exception:
+                    pass
+                # Everything else — 0x-prefixed hex, bare in-image hex, or an
+                # ambiguous/unmapped/garbage token — goes through the single
+                # canonical address parser.
+                ea, err = parse_address_canonical(s)
+                if ea is not None:
+                    return ea
+                if err is not None and isinstance(err, dict):
+                    msg = err.get("message") or f"Invalid {label}: {val}"
+                    hint = err.get("hint")
+                    if isinstance(hint, str) and hint:
+                        msg = f"{msg} {hint}"
+                    # Non-numeric garbage may still be a fuzzy symbol match.
+                    if not s.isdigit() and not s.lower().startswith("0x"):
+                        sem_ea = _semantic_symbol_match(val)
+                        if sem_ea != idaapi.BADADDR:
+                            return sem_ea
+                    raise ValueError(msg)
+                raise ValueError(f"Invalid {label}: {val}")
             raise ValueError(f"Invalid {label}: {val}")
 
         def resolve_int(val):
@@ -349,6 +381,22 @@ def calc(
             if val_type == "string":
                 s = idc.get_strlit_contents(ea, -1, 0)
                 if not s:
+                    # No string literal is defined at this address (raw blobs,
+                    # unanalyzed data, hand-built tables). Fall back to a bounded
+                    # printable-run scan so deref still yields text on opaque
+                    # regions — mirrors memory.py's read type="string" fallback.
+                    raw = ida_bytes.get_bytes(ea, 65536)
+                    if raw:
+                        chars = []
+                        for b in raw:
+                            if b == 0:
+                                break
+                            if 32 <= b <= 126:
+                                chars.append(chr(b))
+                            else:
+                                break
+                        if chars:
+                            return "".join(chars)
                     return None
                 if isinstance(s, bytes):
                     if len(s) > 65536:
@@ -606,13 +654,26 @@ def calc(
 
             # Get file offset
             file_off = _get_fro(ea)
+            if file_off == idaapi.BADADDR:
+                # Headerless raw blobs carry no segment-to-file mapping, so
+                # get_fileregion_offset returns BADADDR for every VA. Surface
+                # that as a crisp error instead of a confusing "not in file"
+                # value that looks like a real offset.
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    f"No file offset for VA {hex(ea)}: this image has no file mapping "
+                    "(headerless raw blob loaded without segment-to-file mapping)",
+                    hint="The VA is mapped in the database but not backed by a file "
+                         "region, so there is no file offset to resolve. Use the "
+                         "address itself (0x-prefixed) or a segment name instead.",
+                )
             seg = idaapi.getseg(ea)
             seg_name = ida_segment.get_segm_name(seg) if seg else "none"
 
             return _finalize({
                 "ok": True,
                 "va": hex(ea),
-                "file_offset": hex(file_off) if file_off != -1 else "not in file",
+                "file_offset": hex(file_off),
                 "segment": seg_name,
                 "segment_start": hex(seg.start_ea) if seg else None,
                 "segment_end": hex(seg.end_ea) if seg else None,
