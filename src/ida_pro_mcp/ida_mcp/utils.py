@@ -11,6 +11,13 @@ The vendored ``ida_mcp/zeromcp`` package is from the same author and keeps
 its own LICENSE file alongside the sources.
 """
 
+# Defer annotation evaluation: utils.py is imported transitively by every IDA
+# tool module, and its signatures reference ida_* types (ida_funcs.func_t,
+# ida_typeinf.tinfo_t) that only exist inside a live IDA runtime. Python <=3.13
+# evaluates function annotations eagerly at import, so any test that stubs a
+# bare-bones ida_funcs/ida_typeinf (empty ModuleType) breaks on `import utils`.
+from __future__ import annotations
+
 import json
 import struct
 from collections.abc import Callable
