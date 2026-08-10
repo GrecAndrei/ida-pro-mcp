@@ -306,6 +306,116 @@ def test_search_find_heap_survives_duplicate_keys():
     assert resp["ok"] is True
 
 
+def test_search_find_kind_restricts_to_strings():
+    """kind='strings' is a dedicated string-literal search — no name hits."""
+    unified = _module("search.unified")
+    unified.idaapi.BADADDR = -1
+    unified.SCORE_SUBSTRING = 60.0
+    unified.compile_smart_pattern = lambda p, case_sensitive=False: (
+        lambda v: p.lower() in str(v).lower()
+    )
+    unified.looks_like_address = lambda p: False
+    unified.looks_like_identifier = lambda p: False
+    # A name hit (0x401000) and a string hit (0x402000) both match "foo".
+    unified.idautils.Names = lambda: [(0x401000, "foo")]
+    unified.get_cached_strings = lambda: [{"ea": 0x402000, "string": "foo bar"}]
+    unified.get_cached_imports = list
+    unified.idautils.Segments = list
+    unified.idautils.XrefsTo = lambda *a, **k: []
+    unified.ida_funcs.get_func_name = lambda ea: "foo"
+    unified.idaapi.get_func = lambda ea: _Func(ea, ea + 1)
+    unified.xref_count_limited = lambda ea, **k: 0
+    unified.semantic_score_cheap = lambda *a, **k: 60.0
+    unified.semantic_scores = lambda *a, **k: [60.0, 60.0]
+    unified._rescore_find_ranked = lambda ranked, p: None
+    captured = {}
+
+    def fake_build_response(lines, offset, limit, total, is_truncated, **kw):
+        captured["lines"] = lines
+        return {"ok": True, "results": lines, "total": total}
+
+    unified.build_response = fake_build_response
+    unified.make_item = lambda *a, **k: {"addr": "0x1000"}
+
+    resp = unified.search_find("foo", True, None, None, False, False, False, 0, 10, 0, kind="strings")
+    assert resp["kind"] == "strings"
+    assert captured["lines"], "expected only string hits"
+    assert all("0x402000" in ln for ln in captured["lines"]), captured["lines"]
+    assert not any("0x401000" in ln for ln in captured["lines"]), captured["lines"]
+
+
+def test_search_find_kind_names_excludes_strings():
+    unified = _module("search.unified")
+    unified.idaapi.BADADDR = -1
+    unified.SCORE_SUBSTRING = 60.0
+    unified.compile_smart_pattern = lambda p, case_sensitive=False: (
+        lambda v: p.lower() in str(v).lower()
+    )
+    unified.looks_like_address = lambda p: False
+    unified.looks_like_identifier = lambda p: False
+    unified.idautils.Names = lambda: [(0x401000, "foo")]
+    unified.get_cached_strings = lambda: [{"ea": 0x402000, "string": "foo bar"}]
+    unified.get_cached_imports = list
+    unified.idautils.Segments = list
+    unified.idautils.XrefsTo = lambda *a, **k: []
+    unified.ida_funcs.get_func_name = lambda ea: "foo"
+    unified.idaapi.get_func = lambda ea: _Func(ea, ea + 1)
+    unified.xref_count_limited = lambda ea, **k: 0
+    unified.semantic_score_cheap = lambda *a, **k: 60.0
+    unified.semantic_scores = lambda *a, **k: [60.0, 60.0]
+    unified._rescore_find_ranked = lambda ranked, p: None
+    captured = {}
+
+    def fake_build_response(lines, offset, limit, total, is_truncated, **kw):
+        captured["lines"] = lines
+        return {"ok": True, "results": lines, "total": total}
+
+    unified.build_response = fake_build_response
+    unified.make_item = lambda *a, **k: {"addr": "0x1000"}
+
+    resp = unified.search_find("foo", True, None, None, False, False, False, 0, 10, 0, kind="names")
+    assert resp["kind"] == "names"
+    assert captured["lines"]
+    assert all("0x401000" in ln for ln in captured["lines"]), captured["lines"]
+    assert not any("0x402000" in ln for ln in captured["lines"]), captured["lines"]
+
+
+def test_search_find_unknown_kind_degrades_to_all():
+    unified = _module("search.unified")
+    unified.idaapi.BADADDR = -1
+    unified.SCORE_SUBSTRING = 60.0
+    unified.compile_smart_pattern = lambda p, case_sensitive=False: (
+        lambda v: p.lower() in str(v).lower()
+    )
+    unified.looks_like_address = lambda p: False
+    unified.looks_like_identifier = lambda p: False
+    unified.idautils.Names = lambda: [(0x401000, "foo")]
+    unified.get_cached_strings = lambda: [{"ea": 0x402000, "string": "foo bar"}]
+    unified.get_cached_imports = list
+    unified.idautils.Segments = list
+    unified.idautils.XrefsTo = lambda *a, **k: []
+    unified.ida_funcs.get_func_name = lambda ea: "foo"
+    unified.idaapi.get_func = lambda ea: _Func(ea, ea + 1)
+    unified.xref_count_limited = lambda ea, **k: 0
+    unified.semantic_score_cheap = lambda *a, **k: 60.0
+    unified.semantic_scores = lambda *a, **k: [60.0, 60.0]
+    unified._rescore_find_ranked = lambda ranked, p: None
+    captured = {}
+
+    def fake_build_response(lines, offset, limit, total, is_truncated, **kw):
+        captured["lines"] = lines
+        return {"ok": True, "results": lines, "total": total}
+
+    unified.build_response = fake_build_response
+    unified.make_item = lambda *a, **k: {"addr": "0x1000"}
+
+    resp = unified.search_find("foo", True, None, None, False, False, False, 0, 10, 0, kind="bogus")
+    # Unrecognized kinds degrade to all categories with a note, not an error.
+    assert resp["kind_note"] and "bogus" in resp["kind_note"]
+    assert any("0x401000" in ln for ln in captured["lines"]), captured["lines"]
+    assert any("0x402000" in ln for ln in captured["lines"]), captured["lines"]
+
+
 # ---------------------------------------------------------------------------
 # query_lang — tools package resolution + error envelope
 # ---------------------------------------------------------------------------

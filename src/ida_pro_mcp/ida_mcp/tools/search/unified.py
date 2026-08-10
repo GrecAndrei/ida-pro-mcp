@@ -43,13 +43,51 @@ from .core import (
     xref_count_limited,
 )
 
+# kind= filter for find: alias → canonical category.  Each canonical category
+# gates one scan section of search_find (names / strings / imports / comments /
+# instructions / refs), so ``search(action='find', pattern=..., kind='strings')``
+# is a dedicated string-literal search and ``kind='names'`` a symbol-only search.
+_FIND_KIND_ALIASES = {
+    "names": "names", "name": "names", "symbols": "names", "symbol": "names",
+    "strings": "strings", "string": "strings", "str": "strings",
+    "literal": "strings", "literals": "strings",
+    "imports": "imports", "import": "imports", "api": "imports", "apis": "imports",
+    "comments": "comments", "comment": "comments",
+    "instructions": "instructions", "instruction": "instructions",
+    "insn": "instructions", "insns": "instructions",
+    "mnemonic": "instructions", "mnemonics": "instructions",
+    "refs": "refs", "ref": "refs", "xref": "refs", "xrefs": "refs",
+    "code_ref": "refs", "data_ref": "refs", "code_refs": "refs", "data_refs": "refs",
+}
 
-def search_find(pattern, case_sensitive, range_start, range_end, include_context, include_items, include_breakdown, offset, limit, timeout_ms=0):
+
+def normalize_find_kind(kind):
+    """Map a user-supplied kind to (wanted, note).
+
+    ``wanted`` is None (all categories) or a frozenset of the canonical
+    categories to restrict to.  Unrecognized kinds degrade to all categories
+    with a note instead of erroring — the tool is meant to be hard to misuse.
+    """
+    if kind is None:
+        return None, None
+    s = str(kind).strip().lower()
+    if s in ("", "all", "auto", "*"):
+        return None, None
+    got = _FIND_KIND_ALIASES.get(s)
+    if got is None:
+        return None, f"Unrecognized kind {kind!r}; searched all categories."
+    return frozenset({got}), None
+
+
+def search_find(pattern, case_sensitive, range_start, range_end, include_context, include_items, include_breakdown, offset, limit, timeout_ms=0, kind=None):
     """Smart unified search: names (incl. demangled), strings, imports, comments, xrefs, instructions.
 
+    ``kind`` restricts the search to one category (e.g. ``kind='strings'`` for
+    a dedicated string-literal search, ``kind='names'`` for symbol-only).
     Identifier-like queries skip the expensive instruction scan when enough
     high-quality symbol/string/import hits already fill the page.
     """
+    wanted, kind_note = normalize_find_kind(kind)
     matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
     ranked_heap = []
     heap_cap = max(_FIND_INSTRUCTION_CAP, limit * _FIND_INSTRUCTION_LIMIT_MULTIPLIER)
@@ -84,7 +122,7 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
             heapq.heapreplace(ranked_heap, (key, heap_seq, record))
 
     # 1. Xrefs for address patterns
-    if looks_like_address(pattern):
+    if (not wanted or "refs" in wanted) and looks_like_address(pattern):
         ea, addr_err = validate_addr(pattern)
         if addr_err:
             try:
@@ -104,91 +142,98 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
     seen_eas = set()
 
     # 2. Names (+ demangled)
-    for ea, name in idautils.Names():
-        if ea in seen_eas or not name:
-            continue
-        dem = demangle_safe(name)
-        hit = matcher(name) or (dem and dem != name and matcher(dem))
-        if not hit:
-            continue
-        kind = "func" if idaapi.get_func(ea) else "data"
-        xref_count = xref_count_limited(ea)
-        display = dem if dem and dem != name else name
-        score = max(
-            semantic_score_cheap(pattern, name, substring_bonus=SCORE_SUBSTRING),
-            semantic_score_cheap(pattern, dem, substring_bonus=SCORE_SUBSTRING) if dem else 0.0,
-        )
-        if dem and dem != name:
-            line = f"{hex(ea)}  {kind}  {name}  ({clip_text(dem, 80)})  xrefs={xref_count}"
-        else:
-            line = f"{hex(ea)}  {kind}  {name}  xrefs={xref_count}"
-        add_find("names", ea, line, score, display, sem_text=display)
-        seen_eas.add(ea)
+    if not wanted or "names" in wanted:
+        for ea, name in idautils.Names():
+            if ea in seen_eas or not name:
+                continue
+            dem = demangle_safe(name)
+            hit = matcher(name) or (dem and dem != name and matcher(dem))
+            if not hit:
+                continue
+            kind = "func" if idaapi.get_func(ea) else "data"
+            xref_count = xref_count_limited(ea)
+            display = dem if dem and dem != name else name
+            score = max(
+                semantic_score_cheap(pattern, name, substring_bonus=SCORE_SUBSTRING),
+                semantic_score_cheap(pattern, dem, substring_bonus=SCORE_SUBSTRING) if dem else 0.0,
+            )
+            if dem and dem != name:
+                line = f"{hex(ea)}  {kind}  {name}  ({clip_text(dem, 80)})  xrefs={xref_count}"
+            else:
+                line = f"{hex(ea)}  {kind}  {name}  xrefs={xref_count}"
+            add_find("names", ea, line, score, display, sem_text=display)
+            seen_eas.add(ea)
 
     # 3. Strings (cached)
-    for srec in get_cached_strings():
-        ea = srec["ea"]
-        if ea in seen_eas:
-            continue
-        s = srec["string"]
-        if matcher(s):
-            xref_count = xref_count_limited(ea)
-            score = semantic_score_cheap(pattern, s, substring_bonus=SCORE_SUBSTRING)
-            add_find("strings", ea, f"{hex(ea)}  xrefs={xref_count}  {clip_text(s, 180)}", score, clip_text(s, 80), sem_text=s)
-            seen_eas.add(ea)
+    if not wanted or "strings" in wanted:
+        for srec in get_cached_strings():
+            ea = srec["ea"]
+            if ea in seen_eas:
+                continue
+            s = srec["string"]
+            if matcher(s):
+                xref_count = xref_count_limited(ea)
+                score = semantic_score_cheap(pattern, s, substring_bonus=SCORE_SUBSTRING)
+                add_find("strings", ea, f"{hex(ea)}  xrefs={xref_count}  {clip_text(s, 180)}", score, clip_text(s, 80), sem_text=s)
+                seen_eas.add(ea)
 
     # 4. Imports (cached)
-    for irec in get_cached_imports():
-        ea = irec["ea"]
-        if ea in seen_eas:
-            continue
-        name = irec["name"]
-        mod_name = irec["module"]
-        if name and matcher(name):
-            xref_count = xref_count_limited(ea)
-            score = semantic_score_cheap(pattern, name, substring_bonus=SCORE_SUBSTRING)
-            add_find("imports", ea, f"{hex(ea)}  {mod_name}!{name}  xrefs={xref_count}", score, name, sem_text=name, bonus=15.0)
-            seen_eas.add(ea)
+    if not wanted or "imports" in wanted:
+        for irec in get_cached_imports():
+            ea = irec["ea"]
+            if ea in seen_eas:
+                continue
+            name = irec["name"]
+            mod_name = irec["module"]
+            if name and matcher(name):
+                xref_count = xref_count_limited(ea)
+                score = semantic_score_cheap(pattern, name, substring_bonus=SCORE_SUBSTRING)
+                add_find("imports", ea, f"{hex(ea)}  {mod_name}!{name}  xrefs={xref_count}", score, name, sem_text=name, bonus=15.0)
+                seen_eas.add(ea)
 
     # 5. Comments (high signal for agents; bounded)
     comment_hits = 0
     comment_cap = max(200, limit * 4)
-    for seg_ea in idautils.Segments():
-        if comment_hits >= comment_cap or timed_out:
-            break
-        seg_end = idc.get_segm_end(seg_ea)
-        for head in idautils.Heads(seg_ea, seg_end):
-            if comment_hits >= comment_cap:
+    if not wanted or "comments" in wanted:
+        for seg_ea in idautils.Segments():
+            if comment_hits >= comment_cap or timed_out:
                 break
-            try:
-                timer.check()
-            except TimeoutError:
-                timed_out = True
-                break
-            c0 = idc.get_cmt(head, 0) or ""
-            c1 = idc.get_cmt(head, 1) or ""
-            blob = f"{c0} {c1}".strip()
-            if not blob or not matcher(blob):
-                continue
-            score = semantic_score_cheap(pattern, blob, substring_bonus=SCORE_SUBSTRING)
-            fn = idaapi.get_func(head)
-            fn_name = ida_funcs.get_func_name(fn.start_ea) if fn else ""
-            line = f"{hex(head)}  comment  {fn_name}  {clip_text(blob, 160)}"
-            add_find("comments", head, line, score, fn_name, sem_text=blob)
-            comment_hits += 1
+            seg_end = idc.get_segm_end(seg_ea)
+            for head in idautils.Heads(seg_ea, seg_end):
+                if comment_hits >= comment_cap:
+                    break
+                try:
+                    timer.check()
+                except TimeoutError:
+                    timed_out = True
+                    break
+                c0 = idc.get_cmt(head, 0) or ""
+                c1 = idc.get_cmt(head, 1) or ""
+                blob = f"{c0} {c1}".strip()
+                if not blob or not matcher(blob):
+                    continue
+                score = semantic_score_cheap(pattern, blob, substring_bonus=SCORE_SUBSTRING)
+                fn = idaapi.get_func(head)
+                fn_name = ida_funcs.get_func_name(fn.start_ea) if fn else ""
+                line = f"{hex(head)}  comment  {fn_name}  {clip_text(blob, 160)}"
+                add_find("comments", head, line, score, fn_name, sem_text=blob)
+                comment_hits += 1
 
     # 6. Instructions (bounded) — skip for identifier-like queries with enough symbol hits
-    skip_insns = looks_like_identifier(pattern) and name_hits >= max(limit, 8)
+    insns_wanted = wanted is None or "instructions" in wanted
+    skip_insns = (not insns_wanted) or (
+        looks_like_identifier(pattern) and name_hits >= max(limit, 8)
+    )
     instruction_hits = 0
     pattern_lower = pattern.lower() if not case_sensitive else pattern
     find_segs, find_seg_note, find_seg_error = (
         resolve_scan_segments(range_start, range_end, require_exec=True)
-        if not skip_insns
+        if (insns_wanted and not skip_insns)
         else ([], "", "")
     )
-    if not skip_insns and find_seg_error:
+    if insns_wanted and not skip_insns and find_seg_error:
         return make_error(MCPError.NOT_FOUND, find_seg_error)
-    if not skip_insns:
+    if insns_wanted and not skip_insns:
         for seg_start, seg_end in find_segs:
             if instruction_hits >= _FIND_INSTRUCTION_CAP or timed_out:
                 break
@@ -261,7 +306,11 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
     if timed_out:
         result["timed_out"] = True
         result["hint"] = "Search timed out. Narrow with range or increase timeout_ms."
-    if skip_insns:
+    if wanted:
+        result["kind"] = next(iter(wanted))
+    if kind_note:
+        result["kind_note"] = kind_note
+    if skip_insns and insns_wanted:
         result["insn_scan"] = "skipped"
         result["note"] = (
             "Instruction scan skipped (identifier-like query with enough symbol hits). "

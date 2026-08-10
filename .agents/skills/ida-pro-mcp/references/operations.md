@@ -657,7 +657,7 @@ Example:
 
 ## `ida_find`
 
-Find names, strings, imports, comments, and references matching text.
+Find names, strings, imports, comments, and references matching text. Pass kind='strings' for a dedicated string-literal search, kind='names' for symbol-only, or kind='imports'|'comments'|'instructions'|'refs' to restrict to that one category.
 
 Input schema:
 ```json
@@ -667,6 +667,19 @@ Input schema:
     "query": {
       "type": "string",
       "description": "Text, symbol, API, or IOC to find."
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "all",
+        "names",
+        "strings",
+        "imports",
+        "comments",
+        "instructions",
+        "refs"
+      ],
+      "description": "Restrict to one category; 'strings' = string search. Default 'all'."
     },
     "limit": {
       "type": "integer",
@@ -690,6 +703,7 @@ Example:
   "name": "ida_find",
   "arguments": {
     "query": "recv",
+    "kind": "strings",
     "limit": 20
   }
 }
@@ -4504,7 +4518,7 @@ Example:
 
 ## `ida_search_query_lang`
 
-Run a structured query-language search over names, strings, and imports.
+Run a structured query-language search over names, strings, and imports. Lenient grammar: MATCH/WHERE are optional, aliases and operator synonyms are accepted, bare identifiers become name/text filters, and free text falls back to unified find. Examples: 'functions with size > 100', 'strings containing cmd.exe', 'calls to malloc', 'function main', 'size > 100'.
 
 Input schema:
 ```json
@@ -4513,7 +4527,7 @@ Input schema:
   "properties": {
     "query": {
       "type": "string",
-      "description": "Query-language expression."
+      "description": "Query-language expression (or free text)."
     },
     "limit": {
       "type": "integer",
@@ -4536,7 +4550,7 @@ Example:
 {
   "name": "ida_search_query_lang",
   "arguments": {
-    "query": "name~crc AND type=import"
+    "query": "functions with size > 100 LIMIT 10"
   }
 }
 ```

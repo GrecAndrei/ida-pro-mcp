@@ -86,12 +86,74 @@ def test_query_lang_parses_contains_and_regex_conditions():
     assert conds == {"text": "contains", "value": "~"}
 
 
-def test_query_lang_rejects_malformed_query():
+def test_query_lang_accepts_missing_where():
+    # The parser is deliberately lenient: "MATCH function *" with no WHERE is a
+    # valid wildcard function query, not a parse error.
     ql = load_support_module("query_lang")
-    res = ql.run_query_lang("MATCH function *")  # missing WHERE
-    assert res.get("error") is True
-    assert res.get("code") == ql.MCPError.INVALID_ARGS
-    assert "WHERE" in res.get("hint", "")
+    plan = ql.QueryParser().parse("MATCH function *")
+    assert plan is not None
+    assert plan["target"] == "function"
+    assert plan["identifier"] == "*"
+    assert plan["conditions"] == []
+
+
+def test_query_lang_missing_where_executes_wildcard():
+    ql = load_support_module("query_lang")
+    ql._call_tool = lambda name, **kw: _functions_backend(_FNS, kw.get("count", 1000))
+    resp = ql.run_query_lang("MATCH function *")
+    assert resp["ok"] is True
+    assert resp["total"] == 10
+
+
+def test_query_lang_lenient_shapes():
+    """A load of phrasings parse to the same plan — very hard to use wrong."""
+    ql = load_support_module("query_lang")
+    cases = {
+        "function size > 100": ("function", "*", [("size", ">", 100)]),
+        "functions with size > 100": ("function", "*", [("size", ">", 100)]),
+        "find functions where size > 100": ("function", "*", [("size", ">", 100)]),
+        "size > 100": ("function", "*", [("size", ">", 100)]),  # target defaulted
+        "name = main": ("function", "*", [("name", "==", "main")]),  # '=' alias
+        'strings containing "cmd.exe"': ("string", "*", [("text", "contains", "cmd.exe")]),
+        'value matches "http"': ("function", "*", [("value", "~", "http")]),
+        'text like "key" AND size < 20': ("function", "*", [("text", "contains", "key"), ("size", "<", 20)]),
+        "MATCH function * WHERE size > 100 LIMIT 10": ("function", "*", [("size", ">", 100)]),
+    }
+    for q, (target, ident, conds) in cases.items():
+        plan = ql.QueryParser().parse(q)
+        assert plan is not None, q
+        assert plan["target"] == target, q
+        assert plan["identifier"] == ident, q
+        got = [(c["key"], c["op"], c["value"]) for c in plan["conditions"]]
+        assert got == conds, (q, got)
+
+
+def test_query_lang_bare_identifier_becomes_filter():
+    ql = load_support_module("query_lang")
+    plan = ql.QueryParser().parse("function main")
+    assert plan["target"] == "function"
+    assert plan["identifier"] == "*"
+    assert plan["conditions"] == [{"key": "name", "op": "contains", "value": "main"}]
+    plan = ql.QueryParser().parse('calls to "malloc"')
+    assert plan["target"] == "call"
+    assert plan["identifier"] == "*"
+    assert plan["conditions"] == [{"key": "text", "op": "contains", "value": "malloc"}]
+    plan = ql.QueryParser().parse("imports from kernel32")
+    assert plan["target"] == "import"
+    assert plan["identifier"] == "*"
+    assert plan["conditions"] == [{"key": "name", "op": "contains", "value": "kernel32"}]
+
+
+def test_query_lang_free_text_falls_back_to_find():
+    ql = load_support_module("query_lang")
+    calls = []
+    ql._call_tool = lambda name, **kw: calls.append((name, kw)) or {
+        "ok": True, "results": "0x1000  main", "total": 1, "count": 1,
+    }
+    resp = ql.run_query_lang("what does main do")
+    assert resp["ok"] is True
+    assert calls, calls
+    assert calls[0][0] == "search" and calls[0][1]["action"] == "find", calls
 
 
 # ---------------------------------------------------------------------------

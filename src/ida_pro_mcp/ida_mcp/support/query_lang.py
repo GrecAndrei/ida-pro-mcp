@@ -5,8 +5,25 @@ Instead of forcing the LLM to pass 15 JSON arguments to search tools,
 expose a custom query language that the server translates into low-level
 IDA API calls.
 
-Syntax:
-  MATCH <target> WHERE <conditions> [LIMIT N] [SORT BY key]
+The parser is deliberately lenient — "very hard to use wrong". Every
+reasonable phrasing resolves to a plan; nothing errors out except an empty
+query.  The canonical form is::
+
+  MATCH <target> <id> WHERE <conditions> [LIMIT N] [SORT BY key (ASC|DESC)] [GROUP BY key]
+
+but any of these are accepted interchangeably:
+
+  function size > 100                (no MATCH / WHERE — conditions inline)
+  functions with size > 100          (plural + "with")
+  find functions where size > 100    ("find" prefix)
+  MATCH function main                (identifier, no conditions)
+  function main                      (identifier becomes name-contains condition)
+  calls to "malloc"                  (identifier after a connective)
+  strings containing "cmd.exe"       ("containing" as contains)
+  name = main                        (single '=' alias for '==')
+  value matches "http"               ("matches" alias for '~')
+  size > 100                         (no target → defaults to functions)
+  what does main do                  (free text → unified find fallback)
 
 Targets:
   function <name|*>     - Match functions
@@ -29,10 +46,12 @@ Conditions:
   arg1 == "cmd.exe"        (for call instructions)
   complexity > 10
 
-Operators:
-  ==, !=, <, >, <=, >=
-  contains                (substring match for strings/lists)
-  ~                       (regex match)
+Operators (all aliased to a canonical op):
+  ==  =   eq   equals
+  !=  <>  ne   neq
+  <  lt  >  gt  <=  le  >=  ge
+  contains  containing  like  includes  has
+  ~  matches  match  regex
 
 Aggregates:
   LIMIT N
@@ -150,86 +169,272 @@ def _call_tool(name: str, **kwargs) -> Any:
         return make_error("TOOL_ERROR", f"{name} failed: {e}")
 
 
-class QueryParser:
-    """Parse high-level query strings into executable plans."""
+# Lenient vocabulary — a single canonical op per alias group.
+_OP_ALIASES = {
+    "==": "==", "=": "==", "eq": "==", "equals": "==",
+    "!=": "!=", "<>": "!=", "ne": "!=", "neq": "!=",
+    "<": "<", "lt": "<", ">": ">", "gt": ">",
+    "<=": "<=", "le": "<=", ">=": ">=", "ge": ">=",
+    "contains": "contains", "containing": "contains", "like": "contains",
+    "includes": "contains", "has": "contains",
+    "~": "~", "matches": "~", "match": "~", "regex": "~",
+}
 
-    QUERY_RE = re.compile(
-        r"MATCH\s+(\w+)\s+(\S+)\s+WHERE\s+(.+?)(?:\s+LIMIT\s+(\d+))?(?:\s+SORT\s+BY\s+(\w+)(?:\s+(ASC|DESC))?)?(?:\s+GROUP\s+BY\s+(\w+))?\s*$",
-        re.IGNORECASE | re.DOTALL,
-    )
+_TARGET_ALIASES: Dict[str, tuple] = {
+    "function": ("function", "functions", "func", "funcs", "fn", "fns"),
+    "string": ("string", "strings", "str", "strs", "literal", "literals", "lit"),
+    "call": ("call", "calls"),
+    "import": ("import", "imports", "api", "apis"),
+    "xref": ("xref", "xrefs", "crossref", "crossrefs", "cross_reference", "cross_references"),
+    "instruction": ("instruction", "instructions", "insn", "insns", "mnemonic", "mnemonics", "opcode", "opcodes"),
+    "block": ("block", "blocks", "basicblock", "basic_blocks", "bb", "bbs"),
+    "segment": ("segment", "segments", "seg", "segs", "section", "sections"),
+}
+
+# Targets whose executor ignores the identifier — a bare non-'*' identifier is
+# coerced into a name/text/substring condition so e.g. "function main" or
+# "imports from kernel32" actually filters instead of returning everything.
+_IDENTIFIER_COERCION = {
+    "function": "name",
+    "string": "text",
+    "import": "name",
+    "segment": "name",
+    "call": "text",
+}
+
+_CONNECTIVE_WORDS = frozenset({
+    "to", "from", "named", "called", "in", "into", "of", "with", "where",
+    "whose", "that", "having", "containing", "for", "by", "on", "at",
+})
+
+_NOISE_WORDS = frozenset({
+    "match", "find", "search", "list", "show", "get", "me", "all", "the",
+    "every", "any", "some", "please", "give",
+})
+
+_WHERE_MARKER_RE = re.compile(r"^(?:where|with|such that|that|having|whose)\b\s*", re.IGNORECASE)
+
+_CONTAINS_WORDS = ("contains", "containing", "like", "includes", "has")
+_REGEX_WORDS = ("matches", "match", "regex")
+_COMPARISON_RE = re.compile(
+    r"(\w+)\s*(==|!=|<=|>=|<|>|=|eq|equals|ne|neq|lt|le|gt|ge)\s*(.+)",
+    re.IGNORECASE,
+)
+
+
+class QueryParser:
+    """Parse high-level query strings into executable plans (lenient).
+
+    Accepts the canonical ``MATCH <target> <id> WHERE <conds> [LIMIT N]``
+    form as well as relaxed/natural phrasing (no MATCH, no WHERE, plural
+    aliases, single ``=``, connective words, free-text find fallback) so a
+    caller is very hard to get wrong.
+    """
 
     def parse(self, query: str) -> Optional[Dict]:
-        m = self.QUERY_RE.match(query.strip())
-        if not m:
+        if not query or not query.strip():
             return None
-        target, identifier, conditions, limit, sort_key, sort_order, group_key = m.groups()
-        return {
-            "target": target.lower(),
-            "identifier": identifier,
-            "conditions": self._parse_conditions(conditions),
-            "limit": int(limit) if limit else 100,
-            "sort_key": sort_key,
-            "sort_order": (sort_order or "ASC").upper(),
-            "group_key": group_key,
-        }
+        q = query.strip()
+        plan: Dict[str, Any] = {}
+        q, plan["limit"] = self._pull_limit(q)
+        q, plan["sort_key"], plan["sort_order"] = self._pull_sort(q)
+        q, plan["group_key"] = self._pull_group(q)
 
-    def _parse_conditions(self, conditions: str) -> List[Dict]:
-        """Parse AND-separated conditions, respecting quoted strings."""
-        result = []
-        tokens = []
-        current = ""
-        in_quote = False
-        quote_char = None
+        head = self._strip_noise(q)
+        parsed = self._parse_head_and_conditions(head)
+        if parsed:
+            target, identifier, conditions = parsed
+            plan.update({"target": target, "identifier": identifier, "conditions": conditions})
+            self._coerce_identifier(plan)
+            return plan
+
+        # Free-text fallback → unified find.  Whatever the caller wrote, it
+        # becomes a find pattern instead of a hard parse error.
+        plan.update({"target": "find", "identifier": q.strip().strip('"\''), "conditions": []})
+        return plan
+
+    # -- tail clauses -------------------------------------------------------
+    def _pull_limit(self, q: str):
+        m = re.search(r"\blimit\s+(\d+)\b", q, re.IGNORECASE)
+        if not m:
+            return q, 100
+        return (q[:m.start()] + " " + q[m.end():]).strip(), int(m.group(1))
+
+    def _pull_sort(self, q: str):
+        m = re.search(r"\bsort\s+by\s+(\w+)(?:\s+(asc|desc))?\b", q, re.IGNORECASE)
+        if not m:
+            return q, None, "ASC"
+        rest = (q[:m.start()] + " " + q[m.end():]).strip()
+        return rest, m.group(1).lower(), (m.group(2) or "ASC").upper()
+
+    def _pull_group(self, q: str):
+        m = re.search(r"\bgroup\s+by\s+(\w+)", q, re.IGNORECASE)
+        if not m:
+            return q, None
+        return (q[:m.start()] + " " + q[m.end():]).strip(), m.group(1).lower()
+
+    # -- head (target + identifier + conditions) ---------------------------
+    def _strip_noise(self, q: str) -> str:
+        words = q.split()
         i = 0
-        while i < len(conditions):
-            c = conditions[i]
-            if c in ('"', "'") and not in_quote:
-                in_quote = True
-                quote_char = c
-                current += c
-            elif c == quote_char and in_quote:
-                in_quote = False
-                quote_char = None
-                current += c
-            elif not in_quote and conditions[i:i+5].upper() == " AND ":
-                tokens.append(current.strip())
-                current = ""
-                i += 5
-                continue
-            else:
-                current += c
+        while i < len(words) and words[i].lower().rstrip(",;") in _NOISE_WORDS:
             i += 1
-        if current.strip():
-            tokens.append(current.strip())
+        return " ".join(words[i:])
 
-        for token in tokens:
+    def _parse_head_and_conditions(self, q: str) -> Optional[tuple]:
+        if not q.strip():
+            return None
+        target, rest = self._extract_target(q)
+        if target is None:
+            # No target word → pure conditions default to functions.
+            conditions = self._parse_conditions(q)
+            if conditions:
+                return ("function", "*", conditions)
+            return None
+        identifier, conditions = self._extract_identifier_and_conditions(rest)
+        return (target, identifier, conditions)
+
+    def _extract_target(self, q: str):
+        words = q.split()
+        if not words:
+            return None, q
+        first = words[0].strip(",;").lower()
+        for canonical, aliases in _TARGET_ALIASES.items():
+            if first in aliases:
+                rest = q[len(words[0]):].strip().lstrip(",;").strip()
+                return canonical, rest
+        return None, q
+
+    def _extract_identifier_and_conditions(self, rest: str):
+        if not rest or not rest.strip():
+            return "*", []
+        rest = rest.strip()
+        connective_alt = "|".join(sorted(_CONNECTIVE_WORDS, key=len, reverse=True))
+        m = re.match(fr"^(?:{connective_alt})\b", rest, re.IGNORECASE)
+        if m:
+            rest = rest[m.end():].strip()
+        m = re.match(r"""^(['"])(.*?)\1""", rest, re.DOTALL)
+        if m:
+            identifier = m.group(2)
+            rest = rest[m.end():].strip()
+        else:
+            tokens = rest.split()
+            if tokens and tokens[0] == "*":
+                identifier = "*"
+                rest = rest[len(tokens[0]):].strip()
+            elif tokens and not self._starts_condition(rest):
+                identifier = tokens[0]
+                rest = rest[len(tokens[0]):].strip()
+            else:
+                identifier = "*"
+        rest = _WHERE_MARKER_RE.sub("", rest).strip()
+        conditions = self._parse_conditions(rest)
+        return identifier, conditions
+
+    @staticmethod
+    def _starts_condition(s: str) -> bool:
+        word_ops = "|".join(_CONTAINS_WORDS + _REGEX_WORDS)
+        # Trailing whitespace-or-end instead of \b: after a symbol operator
+        # ("size > 100") the next char is a space, and \b would fail on the
+        # non-word→non-word transition.
+        return bool(
+            re.match(
+                rf"\w+\s*(?:==|!=|<=|>=|<|>|=|eq|equals|ne|neq|lt|le|gt|ge|{word_ops})(?:\s|$)",
+                s,
+                re.IGNORECASE,
+            )
+        )
+
+    def _coerce_identifier(self, plan: Dict) -> None:
+        """Turn a bare identifier on an identifier-ignoring target into a filter."""
+        identifier = plan.get("identifier") or "*"
+        if identifier == "*" or plan.get("conditions"):
+            return
+        key = _IDENTIFIER_COERCION.get(plan.get("target"))
+        if key:
+            plan["conditions"] = [{"key": key, "op": "contains", "value": identifier}]
+            # The identifier is now expressed as a condition; reset it so
+            # downstream executors do not re-apply it (e.g. call-mnemonic set).
+            plan["identifier"] = "*"
+
+    # -- conditions ---------------------------------------------------------
+    def _parse_conditions(self, conditions: str) -> List[Dict]:
+        """Parse conditions separated by AND/comma/semicolon/&& (quote-aware)."""
+        result = []
+        for token in self._split_conditions(conditions or ""):
             cond = self._parse_single_condition(token)
             if cond:
                 result.append(cond)
         return result
 
-    def _parse_single_condition(self, cond: str) -> Optional[Dict]:
+    @staticmethod
+    def _split_conditions(s: str) -> List[str]:
+        result = []
+        current = ""
+        in_quote = False
+        quote_char = None
+        i = 0
+        n = len(s)
+        while i < n:
+            c = s[i]
+            if c in ('"', "'") and not in_quote:
+                in_quote = True
+                quote_char = c
+                current += c
+                i += 1
+                continue
+            if in_quote:
+                current += c
+                if c == quote_char:
+                    in_quote = False
+                i += 1
+                continue
+            if s[i:i + 2] == "&&" or c in (",", ";"):
+                if current.strip():
+                    result.append(current.strip())
+                current = ""
+                i += 2 if s[i:i + 2] == "&&" else 1
+                continue
+            if (
+                s[i:i + 3].upper() == "AND"
+                and (i == 0 or s[i - 1].isspace())
+                and (i + 3 >= n or s[i + 3].isspace())
+            ):
+                if current.strip():
+                    result.append(current.strip())
+                current = ""
+                i += 3
+                continue
+            current += c
+            i += 1
+        if current.strip():
+            result.append(current.strip())
+        return result
+
+    @staticmethod
+    def _parse_single_condition(cond: str) -> Optional[Dict]:
         cond = cond.strip()
-        # contains
-        m = re.match(r"(\w+)\s+contains\s+(.+)", cond, re.IGNORECASE)
+        contains_alt = "|".join(_CONTAINS_WORDS)
+        regex_alt = "|".join(_REGEX_WORDS)
+        m = re.match(rf"(\w+)\s+(?:{contains_alt})\s+(.+)", cond, re.IGNORECASE)
         if m:
             key, val = m.group(1), m.group(2).strip().strip('"\'')
             return {"key": key, "op": "contains", "value": val}
-        # regex ~
-        m = re.match(r"(\w+)\s*~\s*(.+)", cond)
+        m = re.match(rf"(\w+)\s*(?:~|{regex_alt})\s*(.+)", cond, re.IGNORECASE)
         if m:
             key, val = m.group(1), m.group(2).strip().strip('"\'')
             return {"key": key, "op": "~", "value": val}
-        # comparison operators
-        m = re.match(r"(\w+)\s*(==|!=|<=|>=|<|>)\s*(.+)", cond)
+        m = _COMPARISON_RE.match(cond)
         if m:
-            key, op, val = m.group(1), m.group(2), m.group(3).strip().strip('"\'')
-            # Try numeric
+            key, raw_op, raw_val = m.group(1), m.group(2).lower(), m.group(3).strip().strip('"\'')
+            op = _OP_ALIASES.get(raw_op, raw_op)
+            # Keep the string value when it is not numeric (e.g. name == "main").
+            val = raw_val
             try:
-                val = int(val)
+                val = int(raw_val)
             except ValueError:
                 with contextlib.suppress(ValueError):
-                    val = float(val)
+                    val = float(raw_val)
             return {"key": key, "op": op, "value": val}
         return None
 
@@ -561,6 +766,18 @@ class QueryExecutor:
         capped = self._window_capped(result, len(segments))
         return self._apply_postprocessing(matched, plan, capped=capped)
 
+    def _execute_find(self, plan: Dict) -> Dict:
+        """Free-text fallback: delegate unparseable input to unified find."""
+        pattern = (plan.get("identifier") or "").strip()
+        try:
+            limit = max(1, int(plan.get("limit") or 100))
+        except (TypeError, ValueError):
+            limit = 100
+        result = _call_tool("search", action="find", pattern=pattern, limit=limit)
+        if not isinstance(result, dict):
+            return make_error("QUERY_ERROR", "Failed to run unified find search")
+        return result
+
     def _execute_block(self, plan: Dict) -> Dict:
         # Basic blocks: via the code blocks action. The identifier is the
         # function address/name whose CFG to inspect; the tool enumerates the
@@ -605,12 +822,15 @@ def run_query_lang(query: str, limit: int = 1000) -> dict:
     """
     Execute a high-level query language string.
 
-    Syntax:
-      MATCH <target> <identifier> WHERE <conditions>
-        [LIMIT N] [SORT BY key (ASC|DESC)] [GROUP BY key]
+    The parser is lenient — almost any phrasing resolves to a plan.  The
+    canonical form is ``MATCH <target> <identifier> WHERE <conditions>
+    [LIMIT N] [SORT BY key (ASC|DESC)] [GROUP BY key]``, but ``MATCH`` /
+    ``WHERE`` are optional, target aliases and operator synonyms are accepted,
+    bare identifiers become name/text filters, and free text falls back to the
+    unified ``find`` search.
 
     Args:
-        query:  The query-language expression.
+        query:  The query-language expression (or free text).
         limit:  Candidate-window cap for the underlying tools (default 1000).
                 When the window fills before the whole IDB is scanned, the
                 response carries ``truncated: True`` plus ``total_matches``
@@ -631,14 +851,14 @@ def run_query_lang(query: str, limit: int = 1000) -> dict:
     parser = QueryParser()
     plan = parser.parse(query)
     if not plan:
-        # NB: error_handling.make_error() has no ``example`` kwarg; fold the
-        # example into the hint so a malformed query never crashes the RPC.
+        # Only reachable for input that stripped to nothing (whitespace-only
+        # or pure punctuation); otherwise the parser degrades to a find plan.
         return make_error(
             MCPError.INVALID_ARGS,
-            "Failed to parse query",
+            "query could not be interpreted",
             hint=(
-                "Expected: MATCH <target> <id> WHERE <conditions> [LIMIT N] [SORT BY key] — "
-                "e.g. MATCH function * WHERE size > 100 LIMIT 10"
+                "Try: MATCH function * WHERE size > 100 LIMIT 10 — or just natural text "
+                "like 'functions that parse config' (falls back to unified find)."
             ),
         )
 

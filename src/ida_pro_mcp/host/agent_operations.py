@@ -477,13 +477,27 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     ),
     AgentOperation(
         name="ida_find",
-        description="Find names, strings, imports, comments, and references matching text.",
+        description=(
+            "Find names, strings, imports, comments, and references matching text. "
+            "Pass kind='strings' for a dedicated string-literal search, kind='names' for "
+            "symbol-only, or kind='imports'|'comments'|'instructions'|'refs' to restrict "
+            "to that one category."
+        ),
         category="discovery",
         input_schema=_schema(
-            {"query": {"type": "string", "description": "Text, symbol, API, or IOC to find."}, "limit": LIMIT, "idb": IDB},
+            {
+                "query": {"type": "string", "description": "Text, symbol, API, or IOC to find."},
+                "kind": {
+                    "type": "string",
+                    "enum": ["all", "names", "strings", "imports", "comments", "instructions", "refs"],
+                    "description": "Restrict to one category; 'strings' = string search. Default 'all'.",
+                },
+                "limit": LIMIT,
+                "idb": IDB,
+            },
             ["query"],
         ),
-        example={"query": "recv", "limit": 20},
+        example={"query": "recv", "kind": "strings", "limit": 20},
         backend_tool="search",
         backend_action="find",
         argument_map={"query": "pattern"},
@@ -2031,17 +2045,23 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     ),
     AgentOperation(
         name="ida_search_query_lang",
-        description="Run a structured query-language search over names, strings, and imports.",
+        description=(
+            "Run a structured query-language search over names, strings, and imports. "
+            "Lenient grammar: MATCH/WHERE are optional, aliases and operator synonyms are "
+            "accepted, bare identifiers become name/text filters, and free text falls back "
+            "to unified find. Examples: 'functions with size > 100', 'strings containing "
+            "cmd.exe', 'calls to malloc', 'function main', 'size > 100'."
+        ),
         category="discovery",
         input_schema=_schema(
             {
-                "query": {"type": "string", "description": "Query-language expression."},
+                "query": {"type": "string", "description": "Query-language expression (or free text)."},
                 "limit": LIMIT,
                 "idb": IDB,
             },
             ["query"],
         ),
-        example={"query": "name~crc AND type=import"},
+        example={"query": "functions with size > 100 LIMIT 10"},
         backend_tool="search",
         backend_action="query_lang",
     ),

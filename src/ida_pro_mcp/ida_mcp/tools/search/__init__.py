@@ -167,6 +167,7 @@ def search(
     include_semantic_alternatives: Annotated[bool, "Include alternatives"] = False,
     constraints: Annotated[Optional[dict], "Schema constraints for structured search"] = None,
     timeout_ms: Annotated[Optional[int], "Timeout in milliseconds for long searches (None = bounded default, 0 = no limit)"] = None,
+    kind: Annotated[Optional[str], "Restrict action='find' to one category: strings|names|imports|comments|instructions|refs (default: all)"] = None,
     **kwargs
 ) -> dict:
     """
@@ -174,7 +175,10 @@ def search(
     All results use compact text format (one match per line) to minimize LLM context.
 
     QUICK ACTIONS:
-    - find: Smart unified search (auto-detects names, strings, imports, instructions, xrefs)
+    - find: Smart unified search (auto-detects names, strings, imports, instructions, xrefs).
+            Pass kind='strings' for a dedicated string-literal search, kind='names'
+            for symbols only, or kind='imports'|'comments'|'instructions'|'refs' to
+            restrict to that one category.
     - nl: Natural language search via FunctionEmbeddingIndex (bge-code-v1 embeddings)
             Supports mode="quick" (hybrid search only) or mode="expand" (with behavior expansion)
     - behavior: Find functions matching a behavior tag (crypto_symmetric, network_http, etc.)
@@ -338,7 +342,7 @@ def search(
         elif action == "func_by_sig":
             response = search_func_by_sig(actual_pattern, offset, limit, timeout_ms)
         elif action == "find":
-            response = search_find(actual_pattern, case_sensitive, range_start, range_end, include_context, include_items, include_breakdown, offset, limit, timeout_ms)
+            response = search_find(actual_pattern, case_sensitive, range_start, range_end, include_context, include_items, include_breakdown, offset, limit, timeout_ms, kind)
         elif action == "callers":
             response = search_callers(actual_pattern, include_context, offset, limit, semantic_min_score, include_semantic_alternatives, include_items)
         elif action == "callees":
