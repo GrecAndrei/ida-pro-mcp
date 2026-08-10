@@ -1,9 +1,11 @@
 # tests/conftest.py
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 import pytest
@@ -267,6 +269,41 @@ def _isolate_real_cache_dir(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     """
     monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "ida-mcp-cache"))
     monkeypatch.setenv("IDA_MCP_DATA_DIR", str(tmp_path / "ida-mcp-cache"))
+
+
+_HEARTBEAT_THREAD_NAME = "ida-mcp-runtime-lease-heartbeat"
+
+
+@pytest.fixture(autouse=True)
+def _shutdown_leaked_servers() -> None:
+    """Shut down ``IDAMCPServer`` instances created during a test.
+
+    Server tests instantiate ``IDAMCPServer()`` inline and often never call
+    ``shutdown()``. Each instance starts a ``_lease_heartbeat_loop`` daemon
+    thread that pins the instance — and its full module graph — alive for the
+    rest of the process. Across the suite that accumulates ~10GB of RSS and
+    the process is OOM-killed during the summary phase (exit 137); CI runners
+    with ~7GB of RAM hit the same wall and the test job times out.
+
+    We snapshot the heartbeat threads alive *before* the test and only shut
+    down owners created during it, so a module-scoped server shared by a
+    fixture is never torn down mid-module.
+    """
+    before = {
+        id(t)
+        for t in threading.enumerate()
+        if t.name == _HEARTBEAT_THREAD_NAME and t.is_alive()
+    }
+    yield
+    for t in list(threading.enumerate()):
+        if t.name != _HEARTBEAT_THREAD_NAME or not t.is_alive():
+            continue
+        if id(t) in before:
+            continue
+        owner = getattr(getattr(t, "_target", None), "__self__", None)
+        if owner is not None and hasattr(owner, "shutdown"):
+            with contextlib.suppress(Exception):
+                owner.shutdown()
 
 
 @pytest.fixture
