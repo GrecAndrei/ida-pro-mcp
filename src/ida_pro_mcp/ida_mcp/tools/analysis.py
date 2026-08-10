@@ -1513,21 +1513,48 @@ def _auto_reanalyze_text_segments(
     started = time.time()
     if scheduled > 0 and wait_seconds > 0:
         try:
-            # Pump the analyzer within the caller's budget instead of calling
-            # auto_wait(), which drains the entire queue with no timeout — a
-            # whole-image reanalyze of a large binary could block for minutes
-            # and blow the host RPC recv deadline. Step each planned range
-            # incrementally until auto_is_ok() or the budget is spent.
-            while time.time() - started < wait_seconds:
-                if hasattr(idaapi, "auto_is_ok") and bool(idaapi.auto_is_ok()):
-                    break
-                if hasattr(_ida_auto, "auto_make_step"):
+            # Drain the planned text ranges with auto_wait_range(s, e) — the
+            # SDK primitive that analyzes exactly the requested span and returns
+            # once it is done. It is far more efficient than stepping one
+            # address at a time: the previous spin-pump (auto_make_step in a
+            # 0.1s loop until auto_is_ok()) took ~46s to drain a ~1KB .text on
+            # IDA 9.3, because auto_is_ok() only flips after the whole queue
+            # drains while each auto_make_step call advances a single address.
+            # auto_wait() is avoided deliberately (it drains the ENTIRE queue
+            # with no timeout — a whole-image reanalyze of a large binary could
+            # block for minutes and blow the host RPC recv deadline), but
+            # auto_wait_range is scoped to the span we just planned. Bounding:
+            # per-range calls are skipped once the caller's budget is spent, and
+            # each call is wrapped so a stuck analyzer degrades to the legacy
+            # auto_make_step pump rather than hanging startup.
+            have_wait_range = hasattr(_ida_auto, "auto_wait_range")
+            have_step = hasattr(_ida_auto, "auto_make_step")
+            wait_range_ok = have_wait_range
+            if have_wait_range:
+                for s, e, _n in ranges:
+                    if time.time() - started >= wait_seconds:
+                        break
+                    try:
+                        _ida_auto.auto_wait_range(s, e)
+                    except Exception:
+                        # Range drain failed; fall through to the step pump so
+                        # the caller's reanalysis still makes best-effort
+                        # progress instead of silently doing nothing.
+                        wait_range_ok = False
+                        break
+            # Belt-and-braces: if auto_wait_range is unavailable or errored,
+            # fall back to the legacy incremental pump until auto_is_ok() or
+            # the budget is spent.
+            if not wait_range_ok and have_step:
+                while time.time() - started < wait_seconds:
+                    if hasattr(idaapi, "auto_is_ok") and bool(idaapi.auto_is_ok()):
+                        break
                     try:
                         for s, e, _n in ranges:
                             _ida_auto.auto_make_step(s, e)
                     except Exception:
                         pass
-                time.sleep(0.1)
+                    time.sleep(0.1)
         except Exception:
             pass
         waited = time.time() - started

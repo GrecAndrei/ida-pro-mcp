@@ -339,6 +339,52 @@ def test_sync_reentrancy_guard_reports_call_name():
     assert sync._in_flight == set()
 
 
+def test_sync_is_batch_missing_attribute_falls_back_to_cvar():
+    """IDA 9.x removed ``idaapi.is_batch()``; ``_sync_wrapper`` must still work.
+
+    Regression for a real runtime failure: on IDA 9.3 the sync deadlock guard
+    called ``idaapi.is_batch()`` and died with "module 'idaapi' has no
+    attribute 'is_batch'".  The test stubs the exact 9.x condition — the
+    attribute absent from ``idaapi`` — and asserts the cvar.batch fallback
+    keeps the wrapper functional from a worker thread.
+    """
+    sync, _ = _load_sync_with_cache()
+    # 9.x runtime: is_batch() no longer exists on idaapi.
+    del sync.idaapi.is_batch
+    # 9.x runtime: batch state is exposed via ida_kernwin.cvar.batch.
+    kernwin = sync.ida_kernwin
+    if not hasattr(kernwin, "cvar"):
+        kernwin.cvar = types.SimpleNamespace(batch=False)
+    else:
+        kernwin.cvar.batch = False
+
+    assert sync._is_batch() is False
+
+    result = {}
+
+    def worker():
+        try:
+            result["value"] = sync._sync_wrapper(lambda: {"ok": True}, sync.IDASafety.SAFE_READ)
+        except Exception as e:  # pragma: no cover - surfaced via result
+            result["error"] = e
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join(timeout=10)
+    assert not t.is_alive(), "_sync_wrapper must not hang without is_batch()"
+    assert "error" not in result, f"missing is_batch() broke sync: {result.get('error')!r}"
+    assert result.get("value") == {"ok": True}
+
+
+def test_sync_is_batch_prefers_idaapi_callable():
+    """When ``idaapi.is_batch()`` exists (IDA 7.x), it takes precedence."""
+    sync, _ = _load_sync_with_cache()
+    sync.idaapi.is_batch = lambda: True
+    assert sync._is_batch() is True
+    sync.idaapi.is_batch = lambda: False
+    assert sync._is_batch() is False
+
+
 def test_idaread_and_idawrite_share_same_tool_cache():
     sync, cache = _load_sync_with_cache()
     assert sync._tool_cache() is cache.TOOL_CACHE

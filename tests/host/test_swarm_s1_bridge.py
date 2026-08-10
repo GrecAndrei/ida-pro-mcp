@@ -150,12 +150,28 @@ def _rpc_roundtrip(port, payload):
 
 @contextlib.contextmanager
 def _running_bridge(mod, tmp_path, monkeypatch):
-    """Run the real RPC accept loop on a thread against an ephemeral port."""
+    """Run the real RPC accept loop on a thread against an ephemeral port.
+
+    Mirrors the production topology exactly: the accept loop lives on the
+    'listener' thread, while a separate 'main' thread drains ``_TOOL_QUEUE``
+    (the real main thread does that in ``__main__`` after startup analysis).
+    Tool bodies therefore execute on the drainer thread — the same handoff the
+    runtime uses to keep IDA 9.x main-thread-only APIs on the main thread.
+    """
     port_file = tmp_path / "bridge.port"
     monkeypatch.setenv("IDA_MCP_PORT", "0")
     monkeypatch.setenv("IDA_MCP_PORT_FILE", str(port_file))
     thread = threading.Thread(target=mod.run_server, name="s1-test-listener", daemon=True)
     thread.start()
+    stop_drainer = threading.Event()
+
+    def _drain_loop():
+        while not stop_drainer.is_set():
+            mod._drain_tool_queue()
+            stop_drainer.wait(timeout=0.02)
+
+    drainer = threading.Thread(target=_drain_loop, name="s1-test-main", daemon=True)
+    drainer.start()
     deadline = time.monotonic() + 10.0
     while not port_file.exists() and time.monotonic() < deadline:
         time.sleep(0.02)
@@ -165,7 +181,9 @@ def _running_bridge(mod, tmp_path, monkeypatch):
     try:
         yield port, thread
     finally:
+        stop_drainer.set()
         mod._SHUTDOWN_EVENT.set()
+        drainer.join(timeout=5)
         thread.join(timeout=5)
         assert not thread.is_alive(), "listener thread did not stop after _SHUTDOWN_EVENT"
 
@@ -220,6 +238,63 @@ def test_tool_calls_gated_while_analyzing_then_served(bridge):
     )
     assert res["ok"] is True
     assert calls == ["state"]
+
+
+# ===========================================================================
+# Main-thread dispatch handoff
+# ===========================================================================
+
+def test_rpc_routing_pings_inline_and_tools_queued(bridge):
+    """Pings — and anything before the startup gate — are answered inline on
+    the listener thread. Once the gate lifts, every non-ping request (tool
+    calls AND shutdown, whose save_database is main-thread-only) is queued to
+    _TOOL_QUEUE for the main thread's drain loop."""
+    # Pre-startup: every request is answered inline, nothing queued.
+    bridge._STARTUP_DONE.clear()
+    try:
+        assert bridge._rpc_handled_inline({"type": "ping"}) is True
+        assert bridge._rpc_handled_inline({"tool": "analysis", "args": {}}) is True
+        assert bridge._rpc_handled_inline({"type": "shutdown"}) is True
+    finally:
+        bridge._STARTUP_DONE.set()
+    assert bridge._TOOL_QUEUE.empty()
+
+    # Post-startup: ping stays inline; tool calls and shutdown are queued.
+    assert bridge._rpc_handled_inline({"type": "ping"}) is True
+    assert bridge._rpc_handled_inline({"tool": "analysis", "args": {}}) is False
+    assert bridge._rpc_handled_inline({"type": "shutdown"}) is False
+
+
+def test_dispatch_executes_on_drainer_thread(bridge):
+    """_dispatch_on_main_thread blocks until the drainer (the main thread in
+    production) runs process_single — the tool body must never run on the RPC
+    caller's thread — and the caller receives the tool's exact result."""
+    ran_on = []
+    bridge.TOOLS = {
+        "analysis": lambda action="status", **kwargs: ran_on.append(
+            threading.current_thread()
+        )
+        or {"ok": True, "action": action}
+    }
+    result_box = {}
+
+    def _caller():
+        result_box["res"] = bridge._dispatch_on_main_thread(
+            {"tool": "analysis", "args": {"action": "state"}, "session_token": "secret"}
+        )
+
+    t = threading.Thread(target=_caller, name="rpc-caller", daemon=True)
+    t.start()
+    deadline = time.monotonic() + 5.0
+    while bridge._TOOL_QUEUE.empty() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert not bridge._TOOL_QUEUE.empty(), "caller never enqueued the request"
+    bridge._drain_tool_queue()
+    t.join(timeout=5)
+    assert not t.is_alive(), "caller must be unblocked once the main thread drains"
+    assert result_box["res"] == {"ok": True, "action": "state"}
+    assert len(ran_on) == 1
+    assert ran_on[0] is threading.current_thread(), "tool body must run on the draining thread, not the caller"
 
 
 # ===========================================================================

@@ -125,6 +125,30 @@ def bypass_sync(reason: str = ""):
         _bypass_local.active = prev
 
 
+def _is_batch() -> bool:
+    """Return True when IDA runs in batch/headless mode, across IDA versions.
+
+    ``idaapi.is_batch()`` was removed in IDA 9.x; the canonical read there is
+    ``ida_kernwin.cvar.batch`` (as used by the official SDK example
+    ``decompile_entry_points.py``).  Older 7.x builds still expose
+    ``idaapi.is_batch()``.  Fall back conservatively to False — treating an
+    unknown state as interactive is safe (we may take the slower sync path).
+    """
+    fn = getattr(idaapi, "is_batch", None)
+    if callable(fn):
+        try:
+            return bool(fn())
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("idaapi.is_batch() failed (%s); falling back", exc)
+    batch = getattr(ida_kernwin, "cvar", None)
+    if batch is not None:
+        try:
+            return bool(getattr(batch, "batch", False))
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("ida_kernwin.cvar.batch read failed (%s)", exc)
+    return False
+
+
 def _sync_wrapper(ff, safety_mode: IDASafety):
     """Call a function ff with a specific IDA safety_mode."""
     # DEADLOCK PROTECTION: Nuclear Option
@@ -138,7 +162,7 @@ def _sync_wrapper(ff, safety_mode: IDASafety):
         return ff()
 
     # DEADLOCK PROTECTION 2: Batch mode usually implies main thread execution.
-    if idaapi.is_batch():
+    if _is_batch():
         return ff()
 
     if safety_mode not in [IDASafety.SAFE_READ, IDASafety.SAFE_WRITE]:

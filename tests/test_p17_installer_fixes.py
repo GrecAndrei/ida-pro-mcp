@@ -626,6 +626,7 @@ def test_process_single_arg_error_still_invalid_args(server_script_module, monke
 
 def test_snapshot_source_ignores_sockets_and_temp_dirs(tmp_path):
     import socket
+
     from ida_pro_mcp.installer.common import InstallReport
     from ida_pro_mcp.installer.runtime import _snapshot_source
 

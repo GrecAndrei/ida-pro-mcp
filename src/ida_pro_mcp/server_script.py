@@ -7,6 +7,7 @@ import hmac
 import inspect
 import json
 import os
+import queue
 import re
 import select
 import socket
@@ -103,6 +104,19 @@ _STARTUP_ANALYSIS_ERROR = None
 # on disk. The event starts CLEARED; standalone/test invocations that never
 # run run_server() are unaffected.
 _SHUTDOWN_EVENT = threading.Event()
+
+# Tool-dispatch handoff between the RPC listener thread and the MAIN thread.
+# IDA 9.x enforces main-thread-only access for most of its API surface
+# (hexrays decompilation, ida_auto, save_database, even idautils.Functions).
+# After startup analysis completes, the listener thread must NOT call tool
+# functions itself: it reads the request, pushes (request, result_queue) onto
+# _TOOL_QUEUE, and waits on the per-request queue. The main thread's idle loop
+# (below, after _run_startup_analysis) drains _TOOL_QUEUE and executes
+# process_single there, so tool bodies always run on the main thread. Pings and
+# pre-startup requests (ANALYSIS_INCOMPLETE / shutdown-gate) never enter the
+# queue — they are answered inline on the listener thread, which is what keeps
+# the host's liveness probe alive during a long startup auto-analysis.
+_TOOL_QUEUE = queue.Queue()  # entries: (request_dict, result_queue.Queue)
 
 # Bridge-originated errors (UNAUTHORIZED / INVALID_REQUEST / REQUEST_TOO_LARGE
 # / INTERNAL / ANALYSIS_INCOMPLETE) go through the same factory as tool errors
@@ -552,6 +566,54 @@ def process_single(r):
         return _build_error(tool_name, msg, code=code, details=details, hint=hint)
 
 
+# Tool calls must execute on the MAIN thread (see _TOOL_QUEUE docstring). This
+# is the listener-thread side of the handoff: queue the request and block until
+# the main thread has executed it and posted the result. A generous timeout is
+# a safety net for a dying main thread; in normal operation the main thread
+# always drains promptly and posts before this would ever fire.
+_TOOL_DISPATCH_TIMEOUT_S = 600
+
+def _rpc_handled_inline(r):
+    """True when *r* can be answered on the listener thread without the IDB.
+
+    Pings are pure liveness/port discovery (no IDB access). Anything arriving
+    before ``_STARTUP_DONE`` is gated by ``process_single`` itself (tool calls
+    -> ANALYSIS_INCOMPLETE, shutdown -> save skipped), so it never touches a
+    half-analyzed IDB either. Once startup is done, every non-ping request —
+    tool calls AND shutdown (its ``save_database`` is main-thread-only) — is
+    handed to the main thread.
+    """
+    return not isinstance(r, dict) or r.get("type") == "ping" or not _STARTUP_DONE.is_set()
+
+
+def _dispatch_on_main_thread(req):
+    """Run *req*'s processing on the main thread and return its result."""
+    result_q = queue.Queue(maxsize=1)
+    _TOOL_QUEUE.put((req, result_q))
+    try:
+        return result_q.get(timeout=_TOOL_DISPATCH_TIMEOUT_S)
+    except queue.Empty:
+        return _build_error(
+            "bridge",
+            "Tool dispatch timed out waiting for the main thread",
+            code="INTERNAL",
+            hint="The IDA main thread did not drain the dispatch queue in time.",
+        )
+
+def _drain_tool_queue():
+    """Main-thread idle-loop body: execute every queued request in order."""
+    while True:
+        try:
+            req, result_q = _TOOL_QUEUE.get_nowait()
+        except queue.Empty:
+            return
+        try:
+            result_q.put(process_single(req))
+        except Exception as e:
+            msg = _sanitize_exception_message(e) if _sanitize_exception_message is not None else str(e)
+            result_q.put(_build_error("bridge", "Tool dispatch failed: " + msg, code="INTERNAL"))
+
+
 def _recv_exact(conn, length):
     """Receive exactly *length* bytes or return None on an early close."""
     data = bytearray()
@@ -646,8 +708,21 @@ def run_server():
 
             req = json.loads(data.decode('utf-8'))
 
+            # Tool dispatch must happen on the MAIN thread (IDA 9.x
+            # main-thread-only APIs). Pings and pre-startup requests are
+            # answered inline so the host's liveness probe stays responsive;
+            # everything else post-startup is queued to the main thread, whose
+            # idle loop (after _run_startup_analysis) executes it and posts the
+            # result back. This restores the invariant that tool bodies run on
+            # the main thread even though the accept loop lives on the listener.
             try:
-                res = [process_single(r) for r in req] if isinstance(req, list) else process_single(req)
+                if isinstance(req, list):
+                    res = [
+                        process_single(r) if _rpc_handled_inline(r) else _dispatch_on_main_thread(r)
+                        for r in req
+                    ]
+                else:
+                    res = process_single(req) if _rpc_handled_inline(req) else _dispatch_on_main_thread(req)
                 resp_json = json.dumps(res, separators=(",", ":")).encode('utf-8')
             except Exception as e:
                 # A tool result that json.dumps cannot serialize (e.g. a set,
@@ -1055,10 +1130,10 @@ if __name__ == "__main__":
     # thread's request loop, so waiting for it there is what keeps analysis
     # pumping on unknown-size blobs. Tool calls that arrive before _STARTUP_DONE
     # is set are answered with ANALYSIS_INCOMPLETE (mirroring the host-side
-    # safe_mode gate); after startup the main thread idles in the join loop
-    # below while tool calls run off the listener thread through the
-    # @idaread/@idawrite sync wrappers (batch mode short-circuits those to
-    # direct execution). The host's startup ping timeout
+    # safe_mode gate). After startup the listener thread keeps reading requests
+    # but queues every non-ping call to the main thread (via _TOOL_QUEUE),
+    # because IDA 9.x refuses main-thread-only APIs from any other thread —
+    # see _TOOL_QUEUE's docstring. The host's startup ping timeout
     # (IDA_MCP_STARTUP_TIMEOUT, default 240s) accommodates the auto_wait.
     _STARTUP_DONE.clear()
     listener_thread = threading.Thread(target=run_server, name="rpc-listener", daemon=True)
@@ -1080,5 +1155,12 @@ if __name__ == "__main__":
     # sidecars the handler exists to merge. Joining the thread lets the
     # shutdown handler finish save_database and deliver the response; the
     # accept loop then exits on the event and the thread ends on its own.
+    #
+    # While we wait, the main thread drains _TOOL_QUEUE: the listener thread
+    # reads requests but never executes tool bodies (IDA 9.x main-thread-only
+    # APIs), so this loop is what actually runs each tool call — on the main
+    # thread — and posts the result back for the listener to send. The short
+    # join timeout bounds how long a queued tool call waits to start (~50ms).
     while listener_thread.is_alive():
-        listener_thread.join(timeout=0.5)
+        _drain_tool_queue()
+        listener_thread.join(timeout=0.05)
