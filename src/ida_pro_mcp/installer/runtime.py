@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -912,12 +913,27 @@ def _snapshot_source(
     if target.exists():
         shutil.rmtree(target)
     target.parent.mkdir(parents=True, exist_ok=True)
-    ignore = shutil.ignore_patterns(
-        ".git", "__pycache__", "*.pyc", ".venv", "venv", "dist", "build",
+    pattern_ignore = shutil.ignore_patterns(
+        ".git", "__pycache__", "*.pyc", ".venv", "venv", "env", "dist", "build",
         "node_modules", "*.egg-info", ".pytest_cache", ".ruff_cache",
-        ".mypy_cache", ".coverage", "htmlcov",
+        ".mypy_cache", ".coverage", "htmlcov", ".tmp*", "*.sock", "ida_mcp_cache",
     )
-    shutil.copytree(source_root, target, ignore=ignore)
+
+    def ignore(folder: str, names: list[str]) -> set[str]:
+        ignored = set(pattern_ignore(folder, names))
+        for name in names:
+            if name in ignored:
+                continue
+            path = os.path.join(folder, name)
+            try:
+                st = os.lstat(path)
+                if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode) or stat.S_ISLNK(st.st_mode)):
+                    ignored.add(name)
+            except OSError:
+                ignored.add(name)
+        return ignored
+
+    shutil.copytree(source_root, target, ignore=ignore, ignore_dangling_symlinks=True)
     report.add_modified(target)
     report.add_step("snapshot", "ok", str(target))
     siblings = sorted(

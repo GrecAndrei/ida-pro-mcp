@@ -602,7 +602,7 @@ def _replace_with_symlink_or_copy(src: Path, dst: Path) -> str:
         return "linked"
     except OSError:
         if src.is_dir():
-            shutil.copytree(src, dst)
+            shutil.copytree(src, dst, ignore_dangling_symlinks=True)
         else:
             shutil.copy2(src, dst)
         return "copied"

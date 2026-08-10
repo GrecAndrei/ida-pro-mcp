@@ -622,3 +622,45 @@ def test_process_single_arg_error_still_invalid_args(server_script_module, monke
     res = mod.process_single({"tool": "analysis", "args": {}, "session_token": "secret"})
     assert res["error"] is True
     assert res["code"] == "INVALID_ARGS"
+
+
+def test_snapshot_source_ignores_sockets_and_temp_dirs(tmp_path):
+    import socket
+    from ida_pro_mcp.installer.common import InstallReport
+    from ida_pro_mcp.installer.runtime import _snapshot_source
+
+    source_root = tmp_path / "src_root"
+    source_root.mkdir()
+    (source_root / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
+
+    tmp_audit = source_root / ".tmp-audit" / "sub"
+    tmp_audit.mkdir(parents=True)
+    sock_path = tmp_audit / "daemon.sock"
+
+    normal_dir = source_root / "normal_dir"
+    normal_dir.mkdir()
+    (normal_dir / "file.txt").write_text("hello", encoding="utf-8")
+    unnamed_sock = normal_dir / "ipc_endpoint"
+
+    try:
+        s1 = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s1.bind(str(sock_path))
+        s2 = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s2.bind(str(unnamed_sock))
+    except Exception:
+        pytest.skip("AF_UNIX sockets not supported on this platform")
+
+    install_root = tmp_path / "install_root"
+    report = InstallReport()
+
+    target = _snapshot_source(source_root, install_root, dry_run=False, report=report)
+
+    assert target.exists()
+    assert (target / "pyproject.toml").exists()
+    assert (target / "normal_dir" / "file.txt").exists()
+    assert not (target / ".tmp-audit").exists()
+    assert not (target / "normal_dir" / "ipc_endpoint").exists()
+
+    s1.close()
+    s2.close()
+
