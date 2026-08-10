@@ -65,8 +65,11 @@ _TOOL_ACTIONS: dict[str, list[str]] = {
         "detect_vector_table", "detect_load_base", "detect_mmio",
         "rtos_scan", "carve",
     ],
-
-
+    "emulate": [
+        "info", "backend", "start", "state", "step", "run_to",
+        "suspend", "continue", "stop", "get_reg", "set_reg",
+        "read_mem", "set_mem",
+    ],
     "funcs": ["create", "change", "delete", "set_flags", "info", "metrics", "find_similar", "suggest_names", "list"],
     "gadgets": ["rop", "jop", "cop", "syscall", "write_what_where", "stack_pivot", "shellcode_space", "mitigations", "seh_handlers", "pivot_chains", "classify_chain", "semantic_find"],
     "governance": ["check", "redact", "list_rules", "stats"],

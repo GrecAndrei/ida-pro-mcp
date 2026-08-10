@@ -137,9 +137,9 @@ class TestNewOperationRegistration(unittest.TestCase):
         cls.actions = tool_actions()
         cls.all_ops = {operation.name: operation for operation in list_agent_operations()}
 
-    def test_operation_count_grew_to_103(self):
+    def test_operation_count_grew_to_104(self):
         names = [operation.name for operation in list_agent_operations()]
-        self.assertEqual(len(names), 103, "registration wave must add 36 ops on top of 67")
+        self.assertEqual(len(names), 104, "registration wave must add 37 ops on top of 67")
         for name in NEW_OPERATION_NAMES:
             self.assertIn(name, names)
 
@@ -283,6 +283,14 @@ class TestPolicyTiers(unittest.TestCase):
             ("types", "enum_member_revalue"),
             ("types", "til_delete"),
             ("firmware", "carve"),
+            ("emulate", "start"),
+            ("emulate", "step"),
+            ("emulate", "run_to"),
+            ("emulate", "suspend"),
+            ("emulate", "continue"),
+            ("emulate", "stop"),
+            ("emulate", "set_reg"),
+            ("emulate", "set_mem"),
         ]:
             tier = classify_tool_action(tool, action)
             self.assertEqual(tier, RiskTier.WRITE_IDB, f"{tool}/{action} was {tier}")
@@ -305,6 +313,11 @@ class TestPolicyTiers(unittest.TestCase):
             ("r2", "load_hints"),
             ("r2", "disassemble_hypothesis"),
             ("r2", "vxrefs"),
+            ("emulate", "info"),
+            ("emulate", "backend"),
+            ("emulate", "state"),
+            ("emulate", "get_reg"),
+            ("emulate", "read_mem"),
         ]:
             tier = classify_tool_action(tool, action)
             self.assertEqual(tier, RiskTier.READ, f"{tool}/{action} was {tier}")
@@ -334,6 +347,7 @@ class TestCategoryAndAdvertisedSurface(unittest.TestCase):
         self.assertLessEqual(len(ADVERTISED_TOOLS), 17)
         self.assertNotIn("r2", ADVERTISED_TOOLS)
         self.assertNotIn("firmware", ADVERTISED_TOOLS)
+        self.assertNotIn("emulate", ADVERTISED_TOOLS)
 
 
 class TestErrorPayloadAdaptation(unittest.TestCase):

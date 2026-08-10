@@ -79,6 +79,7 @@ TOOLS = [
     "firmware",
     # --- New: struct recovery, emulation, binary diffing, multi-session ---
     "multi_session",
+    "emulate",
 ]
 
 # Tier A — default tools/list surface for agents. Everything else stays callable
@@ -184,7 +185,7 @@ _EXTRA_TOOL_ALIASES = {
     "comments_ai": "annotation",
     "annotations_ai": "annotation",
     "strings_xref": "graph",
-    # No emulate tool exists; emulation is deferred to the host ida_r2_* engine (Phase 3).
+    "emu": "emulate",
     "searches": "search",
     "segment": "segments",
     "session_tool": "session",
@@ -231,6 +232,7 @@ TOOL_DESCRIPTIONS = {
     "stack_analysis": "Analyze stack frames: buffer sizes, canaries, alignment, spills, variables, and uninitialized regions. Actions: frame, buffers, canary, alignment, spills, usage, variables, arrays, uninitialized, summary.",
     "symbols": "Loads and manages debug symbols (PDB/DWARF) for the current binary. Actions: load_pdb, load_dwarf, status, apply, export.",
     "multi_session": "Multi-binary session groups — link IDA sessions for cross-binary import/export resolution, cross-session decompilation, and cross-binary xref queries. Actions: group_create, group_list, group_link, group_remove, cross_resolve, cross_decompile, cross_xrefs, status.",
+    "emulate": "Drive IDA's native emulator/debugger (ida_dbg) end to end. The tool auto-selects a backend at runtime — built-in emulator candidates (Emulator/emulator) are tried first via load_debugger, then the native 'linux' backend, then bochs/gdb — and reports the active backend in every response (backend + backend_reason). info: emulator overview (backend, why chosen, process state, available registers, current IP). backend: explicitly select/reload a backend by name (force reloads). start: launch the emulated process (optional start_addr/args/input_file/dir). state: current process state + instruction pointer. step: single/multi step — mode into|over|ret, count. run_to: run to an address. suspend/continue: pause/resume. stop: terminate the process (unload=true also unloads the backend). get_reg/set_reg: read/write a register (names list for bulk reads). read_mem/set_mem: read/write debuggee memory (data as hex). Mutating actions run a governance pre-check (governed=true default); failures map to EMULATION_ERROR / EMULATION_TIMEOUT. Actions: info, backend, start, state, step, run_to, suspend, continue, stop, get_reg, set_reg, read_mem, set_mem.",
 
     "truncation": "Manage truncated tool responses. continue reads the next chunk and requires field when the token contains multiple truncated fields; use the exact name listed in the response's _continue.fields. peek shows metadata (fields, totals, offsets) without consuming data. search greps within full original content. summary gives a compact overview. Also usable as per-call params on any tool: no_truncate=true skips truncation, max_tokens=N overrides budget, trunc_offset/trunc_limit paginate directly. Actions: continue, peek, search, summary.",
     "types": "Manages IDA type system: structs, enums, prototypes, type propagation, and header imports. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header, diff, visualize, propagate, enum_values, type_graph, vtable, struct_member_add, struct_member_del, struct_member_rename, struct_member_set_type, enum_member_add, enum_member_rename, enum_member_revalue, til_delete, til_export, til_import. struct_member_*/enum_member_* edit struct members and enum enumerators; til_delete removes a named type; til_export writes matched types to a C header (cross-session carry); til_import parses a header into the local Type Library.",
@@ -605,6 +607,26 @@ TOOL_ARG_SCHEMAS = {
         "end": {"type": "string", "description": "Exclusive end address of the carve/triage window (hex)"},
         "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") for region-relative checks"},
         "limit": {"type": "integer", "description": "Max results to return (detect_* / rtos_scan)"},
+    },
+    "emulate": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["emulate"]},
+        "name": {"type": "string", "description": "Register name (get_reg/set_reg) or backend name (backend action)."},
+        "names": {"type": "array", "items": {"type": "string"}, "description": "Registers to read in one get_reg call."},
+        "value": {"type": "string", "description": "Register value for set_reg (hex string like '0x10' or decimal string)."},
+        "address": {"type": "string", "description": "Function name or hexadecimal address for run_to/read_mem/set_mem."},
+        "size": {"type": "integer", "description": "Byte count for read_mem (default 16, max 4096)."},
+        "data": {"type": "string", "description": "Hex bytes to write for set_mem (e.g. '9090')."},
+        "start_addr": {"type": "string", "description": "Optional start address for start."},
+        "args": {"type": "string", "description": "Process argv string for start."},
+        "input_file": {"type": "string", "description": "Input file path for start."},
+        "dir": {"type": "string", "description": "Working directory for start."},
+        "count": {"type": "integer", "description": "Step count for step (default 1)."},
+        "mode": {"type": "string", "enum": ["into", "over", "ret"], "description": "Step mode (default 'into')."},
+        "force": {"type": "boolean", "description": "Reload the backend even if one is loaded (backend action)."},
+        "unload": {"type": "boolean", "description": "Unload the backend after stop."},
+        "governed": {"type": "boolean", "description": "Run the governance pre-check on mutating actions (default true)."},
+        "timeout_ms": {"type": "integer", "description": "Per-action timeout in milliseconds (default 30000)."},
+        "idb": {"type": "string", "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."},
     },
     "workflow": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["workflow"]},

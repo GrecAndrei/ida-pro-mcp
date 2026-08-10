@@ -4984,3 +4984,129 @@ Example:
   }
 }
 ```
+
+## `ida_emulate`
+
+Drive IDA's built-in emulator/debugger (ida_dbg) end to end. Auto-selects a backend at runtime (built-in emulator candidates first, then the native backend) and reports the active backend in every response. Actions: info (overview: backend, why chosen, process state, registers), backend, start, state, step (mode into|over|ret, count), run_to, suspend, continue, stop, get_reg, set_reg, read_mem, set_mem. Mutating actions require risk_ack=true.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "info",
+        "backend",
+        "start",
+        "state",
+        "step",
+        "run_to",
+        "suspend",
+        "continue",
+        "stop",
+        "get_reg",
+        "set_reg",
+        "read_mem",
+        "set_mem"
+      ],
+      "description": "Emulation action to run."
+    },
+    "name": {
+      "type": "string",
+      "description": "Register name (get_reg/set_reg) or backend name (backend)."
+    },
+    "names": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Registers to read in one get_reg call."
+    },
+    "value": {
+      "type": "string",
+      "description": "Register value for set_reg (hex string like '0x10' or decimal string)."
+    },
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address for run_to/read_mem/set_mem."
+    },
+    "size": {
+      "type": "integer",
+      "description": "Byte count for read_mem (default 16)."
+    },
+    "data": {
+      "type": "string",
+      "description": "Hex bytes to write for set_mem (e.g. '9090')."
+    },
+    "start_addr": {
+      "type": "string",
+      "description": "Optional start address for start."
+    },
+    "args": {
+      "type": "string",
+      "description": "Process argv string for start."
+    },
+    "input_file": {
+      "type": "string",
+      "description": "Input file path for start."
+    },
+    "dir": {
+      "type": "string",
+      "description": "Working directory for start."
+    },
+    "count": {
+      "type": "integer",
+      "description": "Step count (default 1)."
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "into",
+        "over",
+        "ret"
+      ],
+      "description": "Step mode (default 'into')."
+    },
+    "force": {
+      "type": "boolean",
+      "description": "Reload the backend even if one is loaded (backend action)."
+    },
+    "unload": {
+      "type": "boolean",
+      "description": "Unload the backend after stop."
+    },
+    "governed": {
+      "type": "boolean",
+      "description": "Run the governance pre-check on mutating actions (default true)."
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "description": "Per-action timeout in milliseconds (default 30000)."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "action"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_emulate",
+  "arguments": {
+    "action": "info"
+  }
+}
+```

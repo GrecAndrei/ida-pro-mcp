@@ -1,15 +1,18 @@
 """p13 vestigial error-code/comment surface regression tests (paper 10.2 item 12).
 
 The DEBUGGER_*/EMULATION_*/BOOKMARK_* error codes were designed for a
-debugger/emulation/bookmark-mutation surface that is NOT exposed as public
+debugger/emulation/bookmark-mutation surface.  Since then the emulation surface
+became public (the ``emulate`` tool, ida_dbg-backed), so the EMULATION_* hints
+point at it; the debugger and bookmark surfaces are still NOT exposed as public
 operations.  This file pins the honest rebuild:
 
-- Every DEBUGGER_*/EMULATION_*/BOOKMARK_* hint states the real path: no public
-  op exists; drive the underlying capability through ``misc(action='python')``
-  (``ida_dbg`` helpers) if code execution is authorized, or the host
-  ``ida_r2_*`` triage namespace once enabled.  The EMULATION_* codes are kept
-  (the host r2 engine, Phase 3, reuses them) but must not pretend a public
-  emulation op exists today.
+- Every DEBUGGER_*/BOOKMARK_* hint states the real path: no public op exists;
+  drive the underlying capability through ``misc(action='python')`` (``ida_dbg``
+  helpers) if code execution is authorized, or the host ``ida_r2_*`` triage
+  namespace once enabled.
+- The EMULATION_* hints point at the now-public ``emulate`` tool
+  (``emulate(action='info')`` for the backend/state overview) and are not
+  marked vestigial.
 - None of the edited hints reference a claimed-but-absent tool/op (the
   ``ida_python`` op alias, a fake ``max_steps`` emulation parameter,
   ``search(action="emulate")``, ...) or the old misleading phrasing that
@@ -53,6 +56,12 @@ EMULATION_CODES = ["EMULATION_ERROR", "EMULATION_TIMEOUT"]
 BOOKMARK_CODES = ["BOOKMARK_NOT_FOUND", "BOOKMARK_DUPLICATE"]
 VESTIGIAL_CODES = DEBUGGER_CODES + EMULATION_CODES + BOOKMARK_CODES
 
+# Codes whose hints must not use the pre-rebuild "operation failed" phrasing
+# (it implied a public op that did not exist). EMULATION is excluded: the
+# ``emulate`` tool IS a public op now, so "Emulation/emulator operation failed"
+# is honest, not misleading.
+_NON_EMULATION_VESTIGIAL_CODES = DEBUGGER_CODES + BOOKMARK_CODES
+
 # Misleading phrasing from the pre-rebuild surface that must be gone.
 _MISLEADING_SUBSTRINGS = [
     "operation failed",        # implied a public breakpoint/step/process/thread op
@@ -93,13 +102,16 @@ class TestVestigialHintsHonest(unittest.TestCase):
             self.assertIn("misc(action=", hint, code)
             self.assertIn("ida_dbg", hint, code)
 
-    def test_emulation_hints_point_to_future_r2_engine(self):
-        # Kept for the host r2 Phase 3 engine, but today no public op exists.
+    def test_emulation_hints_point_to_public_emulate_tool(self):
+        # Emulation became a public op (the ``emulate`` tool); the EMULATION_*
+        # hints must not point at the vestigial misc(action='python') path or a
+        # claimed-but-absent ida_r2_* engine, and the error hint must name the
+        # public tool for recovery.
         for code in EMULATION_CODES:
             hint = self.hints[code]
-            self.assertIn("public", hint, code)
-            self.assertIn("ida_r2_", hint, code)
-            self.assertIn("misc(action=", hint, code)
+            self.assertNotIn("misc(action=", hint, code)
+            self.assertNotIn("ida_r2_", hint, code)
+        self.assertIn("emulate(action=", self.hints["EMULATION_ERROR"])
 
     def test_bookmark_hints_state_honest_path(self):
         for code in BOOKMARK_CODES:
@@ -110,7 +122,9 @@ class TestVestigialHintsHonest(unittest.TestCase):
         self.assertIn("idb(action=", self.hints["BOOKMARK_NOT_FOUND"])
 
     def test_misleading_wording_gone_from_edited_hints(self):
-        for code in VESTIGIAL_CODES:
+        # EMULATION is exempt (public op now); the truly-vestigial codes must
+        # keep the honest phrasing.
+        for code in _NON_EMULATION_VESTIGIAL_CODES:
             hint = self.hints[code].lower()
             for bad in _MISLEADING_SUBSTRINGS:
                 self.assertNotIn(bad, hint, (code, self.hints[code]))

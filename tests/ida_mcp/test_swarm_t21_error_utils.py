@@ -239,10 +239,12 @@ class TestErrorHandlingMakeError(unittest.TestCase):
 
 
 class TestVestigialHintSurface(unittest.TestCase):
-    """The DEBUGGER_*/EMULATION_*/BOOKMARK_* codes are vestigial: no public
-    debugger/emulation op exists, so their hints must state the honest path
+    """The DEBUGGER_*/BOOKMARK_* codes are vestigial: no public debugger or
+    bookmark-mutation op exists, so their hints must state the honest path
     (misc(action='python') / ida_dbg, or the host ida_r2_* namespace) and must
-    not claim an absent tool."""
+    not claim an absent tool. The EMULATION_* codes are kept and used by the
+    public ``emulate`` tool, so their hints point at ``emulate(action=...)``
+    rather than a vestigial path."""
 
     VESTIGIAL_CODES = [
         "DEBUGGER_NOT_RUNNING",
@@ -259,6 +261,8 @@ class TestVestigialHintSurface(unittest.TestCase):
         "BOOKMARK_DUPLICATE",
     ]
 
+    EMULATION_CODES = ["EMULATION_ERROR", "EMULATION_TIMEOUT"]
+
     @classmethod
     def setUpClass(cls):
         install_common_stub()
@@ -269,6 +273,13 @@ class TestVestigialHintSurface(unittest.TestCase):
         for code in self.VESTIGIAL_CODES:
             self.assertIn(code, self.hints, f"{code} removed from ERROR_HINTS")
             hint = self.hints[code]
+            if code in self.EMULATION_CODES:
+                # Emulation is a public op now: the hints must not route callers
+                # through the vestigial misc(action='python') path, and the
+                # error hint must name the public tool for recovery.
+                self.assertNotIn("misc(action=", hint, code)
+                self.assertNotIn("public op", hint, code)
+                continue
             # Honest path: no public op; script via misc(action='python').
             self.assertIn("public", hint, code)
             self.assertIn("misc(action=", hint, code)

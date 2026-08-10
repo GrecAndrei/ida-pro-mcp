@@ -278,8 +278,17 @@ ERROR_HINTS: Dict[str, str] = {
     MCPError.SIGNATURE_ERROR: "Signature operation failed. Check the signature file format.",
     MCPError.PDB_ERROR: "PDB loading failed. Check the PDB path and format.",
     MCPError.DWARF_ERROR: "DWARF loading failed. Check the debug info format.",
-    MCPError.EMULATION_ERROR: "No public emulation op exists yet; emulation lands with the host ida_r2_* engine (Phase 3). Run a guest via misc(action='python') if code execution is authorized.",
-    MCPError.EMULATION_TIMEOUT: "No public emulation op exists yet; emulation lands with the host ida_r2_* engine (Phase 3). Run a guest via misc(action='python') if code execution is authorized.",
+    MCPError.EMULATION_ERROR: (
+        "Emulation/emulator operation failed. Check the details for the ida_dbg "
+        "call that failed; the active backend may not support the requested "
+        "operation. Use emulate(action='info') to see the backend and why it "
+        "was chosen."
+    ),
+    MCPError.EMULATION_TIMEOUT: (
+        "The emulation operation timed out (no suspend/breakpoint event within "
+        "the timeout). Retry with a larger timeout_ms, step in smaller counts, "
+        "or verify the run_to address is reachable. The error is recoverable."
+    ),
     MCPError.ANALYSIS_INCOMPLETE: "Analysis is still running. Wait and retry.",
     MCPError.ARCH_UNSUPPORTED: "This architecture is not supported for this operation.",
     MCPError.CALLING_CONVENTION_ERROR: "Calling convention detection failed.",

@@ -186,6 +186,17 @@ WRITE_TOOL_ACTIONS: set[tuple[str, str]] = {
     # though FILESYSTEM_READ wins the classify order.
     ("types", "til_delete"),
     ("types", "til_import"),
+    # Emulate tool mutating actions drive the emulated process (start/step/
+    # run_to/suspend/continue/stop) or write debuggee state (set_reg/set_mem),
+    # so they require ack unless _risk_ack=true.
+    ("emulate", "start"),
+    ("emulate", "step"),
+    ("emulate", "run_to"),
+    ("emulate", "suspend"),
+    ("emulate", "continue"),
+    ("emulate", "stop"),
+    ("emulate", "set_reg"),
+    ("emulate", "set_mem"),
 }
 
 WRITE_ACTIONS = {
@@ -347,6 +358,14 @@ READ_ONLY_ACTIONS = {
     ("multi_session", "cross_decompile"),
     ("multi_session", "cross_xrefs"),
     ("multi_session", "status"),
+    # Emulate tool reads only query the emulator/backend without mutating
+    # process state. "backend" is the query/select action (the IDA-side
+    # governance gate still covers an actual backend load).
+    ("emulate", "info"),
+    ("emulate", "backend"),
+    ("emulate", "state"),
+    ("emulate", "get_reg"),
+    ("emulate", "read_mem"),
 }
 
 
