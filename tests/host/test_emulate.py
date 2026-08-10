@@ -329,6 +329,23 @@ class TestEmulateHost(unittest.TestCase):
             [("Emulator", False), ("emulator", False), ("linux", False)],
         )
 
+    def test_backend_attempts_log_ok_and_failures(self):
+        self.dbg._load_results = {"Emulator": False, "emulator": False, "linux": True}
+        result = self.mod.emulate(action="backend")
+        self.assertTrue(result["ok"])
+        attempts = result["backend_attempts"]
+        self.assertEqual(attempts["linux"], "ok")
+        self.assertIn("error", attempts["Emulator"])
+        self.assertIn("error", attempts["emulator"])
+
+    def test_backend_reason_names_builtin_emulator_candidates(self):
+        self.dbg._load_results = {"Emulator": False, "emulator": False, "linux": True}
+        result = self.mod.emulate(action="backend")
+        self.assertTrue(result["ok"])
+        self.assertIn("built-in emulator candidates", result["backend_reason"])
+        self.assertIn("'Emulator'", result["backend_reason"])
+        self.assertIn("selected native backend 'linux'", result["backend_reason"])
+
     def test_backend_first_success_wins(self):
         self.dbg._load_results = {"Emulator": True}
         result = self.mod.emulate(action="backend")
@@ -376,6 +393,28 @@ class TestEmulateHost(unittest.TestCase):
             result = self.mod.emulate(action="start")
         self.assertTrue(result.get("error"))
         self.assertEqual(result.get("code"), "GOVERNANCE_BLOCKED")
+
+    def _governance_op_types(self):
+        return [args[0] for (args, _kwargs) in self.gov._calls if args]
+
+    def test_step_governance_uses_execution_operation(self):
+        self._prime_process()
+        result = self.mod.emulate(action="step", mode="into", count=1)
+        self.assertTrue(result["ok"], result)
+        self.assertIn("execution", self._governance_op_types())
+
+    def test_set_reg_governance_uses_patch_operation(self):
+        self._prime_process()
+        result = self.mod.emulate(action="set_reg", name="rax", value="0x10")
+        self.assertTrue(result["ok"], result)
+        self.assertIn("patch", self._governance_op_types())
+
+    def test_set_mem_governance_uses_patch_operation(self):
+        self._prime_process()
+        self.dbg._state = self.dbg.DSTATE_SUSP
+        result = self.mod.emulate(action="set_mem", address="0x401000", data="9090")
+        self.assertTrue(result["ok"], result)
+        self.assertIn("patch", self._governance_op_types())
 
     # -- stepping ------------------------------------------------------------
     def test_step_modes(self):
@@ -504,6 +543,29 @@ class TestEmulateHost(unittest.TestCase):
         result = self.mod.emulate(action="bogus")
         self.assertTrue(result.get("error"))
         self.assertEqual(result.get("code"), "ACTION_NOT_FOUND")
+
+    def test_error_envelopes_carry_backend_identity(self):
+        self.dbg._load_results = {"linux": True}
+        result = self.mod.emulate(action="start", governed=False)
+        self.assertTrue(result["ok"], result)
+        # Force an error path (unknown action) and confirm the backend keys
+        # are present even though the handler returned an error envelope.
+        err = self.mod.emulate(action="bogus")
+        self.assertTrue(err.get("error"))
+        self.assertIn("backend", err)
+        self.assertIn("backend_reason", err)
+        self.assertIn("backend_attempts", err)
+        self.assertIn("backend_candidates", err)
+
+    def test_backend_force_tears_down_live_process(self):
+        self.dbg._load_results = {"linux": True}
+        result = self.mod.emulate(action="start", governed=False)
+        self.assertTrue(result["ok"], result)
+        self.dbg._calls.clear()
+        result = self.mod.emulate(action="backend", force=True)
+        self.assertTrue(result["ok"], result)
+        # exit_process was called before re-selecting the backend.
+        self.assertGreater(self._called("exit_process"), 0)
 
     def test_governed_false_skips_governance(self):
         self.dbg._load_results = {"linux": True}

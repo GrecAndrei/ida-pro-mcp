@@ -10,12 +10,16 @@ Backend selection
 The tool auto-selects a debugger backend by calling ``load_debugger`` for each
 name in ``_BACKEND_CANDIDATES`` in order (``Emulator``, ``emulator``, ``linux``,
 ``bochs``, ``gdb``) and keeps the first that succeeds, caching the selection and
-the reason in module globals for the rest of the session. ``emulate(action=
-"backend", name=...)`` tries an explicit name first and falls back to the
-candidate order. Backend identity (``backend``), the selection reason
-(``backend_reason``), and the candidate list (``backend_candidates``) are
-reported on every successful response so callers can reason about which engine
-served them.
+the reason in module globals for the rest of the session. Every candidate
+attempt is recorded in ``_BACKEND_ATTEMPTS`` as ``"ok"`` or
+``"error: <detail>"``, and ``backend_reason`` names the candidates that failed
+*before* the winner — so a build without the built-in emulator backend visibly
+falls back to the native debugger. ``emulate(action="backend", name=...)``
+tries an explicit name first and falls back to the candidate order. Backend
+identity (``backend``), the selection reason (``backend_reason``), the attempt
+log (``backend_attempts``), and the candidate list (``backend_candidates``) are
+reported on every response (including error envelopes) so callers can reason
+about which engine served them.
 
 Why ``@idawrite`` and not ``@idaread``
 --------------------------------------
@@ -61,6 +65,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 _BACKEND = None
 _BACKEND_REASON = ""
+_BACKEND_ATTEMPTS: dict[str, str] = {}
 _PROCESS_STARTED = False
 
 _BACKEND_CANDIDATES = ["Emulator", "emulator", "linux", "bochs", "gdb"]
@@ -338,12 +343,17 @@ def _read_all_registers():
 # ---------------------------------------------------------------------------
 # Governance gate
 # ---------------------------------------------------------------------------
-def _governance_check(action: str, governed: bool, addr=None, value="") -> dict | None:
-    """Return an error envelope when the governance engine blocks *action*."""
+def _governance_check(action: str, governed: bool, addr=None, value="", op_type: str = "execution") -> dict | None:
+    """Return an error envelope when the governance engine blocks *action*.
+
+    ``op_type`` mirrors the operation kind the governance engine models:
+    ``"execution"`` for run/step/control actions and ``"patch"`` for
+    register/memory writes.
+    """
     if not governed or action not in _MUTATING_ACTIONS:
         return None
     try:
-        result = evaluate_operation("execution", addr=addr, proposed_value=value)
+        result = evaluate_operation(op_type, addr=addr, proposed_value=value)
     except Exception:
         return None
     if isinstance(result, dict) and not result.get("approved", True):
@@ -360,47 +370,91 @@ def _governance_check(action: str, governed: bool, addr=None, value="") -> dict 
 # Backend selection
 # ---------------------------------------------------------------------------
 def _try_load(name: str) -> bool:
+    """Try ``load_debugger(name)`` and record the outcome in ``_BACKEND_ATTEMPTS``."""
     fn = getattr(ida_dbg, "load_debugger", None)
     if not callable(fn):
+        _BACKEND_ATTEMPTS[name] = "error: ida_dbg has no load_debugger()"
         return False
     try:
-        return bool(fn(name, False))
-    except Exception:
+        ok = bool(fn(name, False))
+    except Exception as e:
+        _BACKEND_ATTEMPTS[name] = f"error: {e}"
         return False
+    _BACKEND_ATTEMPTS[name] = "ok" if ok else "error: load_debugger() returned false"
+    return ok
+
+
+def _build_backend_reason(selected: str, failures: list[str]) -> str:
+    """Explain why *selected* won, naming the candidates that failed first."""
+    if not failures:
+        return f"selected backend {selected!r}"
+    failed = ", ".join(repr(f) for f in failures)
+    if all(f.lower() in ("emulator",) for f in failures):
+        return (
+            f"built-in emulator candidates {failed} not loadable in this IDA build; "
+            f"selected native backend {selected!r}"
+        )
+    return (
+        f"candidates {failed} not loadable in this IDA build; "
+        f"selected backend {selected!r}"
+    )
 
 
 def _select_backend(name=None, force=False):
-    """Load a backend, caching the result. Returns the backend name or None."""
-    global _BACKEND, _BACKEND_REASON
+    """Load a backend, caching the result. Returns the backend name or None.
+
+    Records every candidate attempt in ``_BACKEND_ATTEMPTS`` and sets
+    ``_BACKEND_REASON`` so callers can see which candidates were tried before
+    the winner (in particular, when a built-in emulator backend was skipped).
+    """
+    global _BACKEND_REASON
+    if _BACKEND and not force:
+        return _BACKEND
+    _BACKEND_ATTEMPTS.clear()
+    failures: list[str] = []
+
+    def try_cand(cand: str) -> bool:
+        global _BACKEND, _BACKEND_REASON
+        if _try_load(cand):
+            _BACKEND = cand
+            _BACKEND_REASON = _build_backend_reason(cand, failures)
+            return True
+        failures.append(cand)
+        return False
+
     if name:
-        if _try_load(name):
-            _BACKEND = name
-            _BACKEND_REASON = f"load_debugger('{name}') succeeded"
+        if try_cand(name):
             return name
         for cand in _BACKEND_CANDIDATES:
             if cand == name:
                 continue
-            if _try_load(cand):
-                _BACKEND = cand
-                _BACKEND_REASON = f"load_debugger('{cand}') succeeded"
+            if try_cand(cand):
                 return cand
+        _BACKEND_REASON = f"no backend loadable; tried {', '.join(repr(f) for f in failures)}"
         return None
-    if _BACKEND and not force:
-        return _BACKEND
     for cand in _BACKEND_CANDIDATES:
-        if _try_load(cand):
-            _BACKEND = cand
-            _BACKEND_REASON = f"load_debugger('{cand}') succeeded"
+        if try_cand(cand):
             return cand
+    _BACKEND_REASON = f"no backend loadable; tried {', '.join(repr(f) for f in failures)}"
     return None
 
 
 def _no_backend_error():
+    if _BACKEND_ATTEMPTS:
+        tried = ", ".join(f"{k}: {v}" for k, v in _BACKEND_ATTEMPTS.items())
+        hint = (
+            "None of the candidates accepted load_debugger(). Attempts: "
+            f"{tried}. Install a debugger plugin or check the IDA debugger setup."
+        )
+    else:
+        hint = (
+            "None of the candidates (Emulator, emulator, linux, bochs, gdb) accepted "
+            "load_debugger(). Install a debugger plugin or check the IDA debugger setup."
+        )
     return make_error(
         MCPError.EMULATION_ERROR,
         "No emulation backend could be loaded",
-        hint="None of the candidates (Emulator, emulator, linux, bochs, gdb) accepted "
-        "load_debugger(). Install a debugger plugin or check the IDA debugger setup.",
+        hint=hint,
     )
 
 
@@ -415,7 +469,9 @@ def _require_backend():
 def _best_effort_stop() -> None:
     """Tear down a live debuggee without surfacing errors (restart semantics)."""
     global _PROCESS_STARTED
-    for method in ("stop_process", "exit_process"):
+    # exit_process is the IDA 9.x-native teardown; stop_process is the legacy
+    # name some backends expose. Try the native one first.
+    for method in ("exit_process", "stop_process"):
         fn = getattr(ida_dbg, method, None)
         if not callable(fn):
             continue
@@ -476,6 +532,7 @@ def _action_info():
         "action": "info",
         "backend": _backend_str(),
         "backend_reason": _BACKEND_REASON,
+        "backend_attempts": dict(_BACKEND_ATTEMPTS),
         "backend_candidates": list(_BACKEND_CANDIDATES),
         "why_chosen": _BACKEND_REASON or "no backend loaded",
         "process_state": _state_name(),
@@ -494,8 +551,13 @@ def _action_backend(name=None, force=None):
             "action": "backend",
             "backend": _backend_str(),
             "backend_reason": _BACKEND_REASON,
+            "backend_attempts": dict(_BACKEND_ATTEMPTS),
             "backend_candidates": list(_BACKEND_CANDIDATES),
         }
+    if force and (_PROCESS_STARTED or _process_running()):
+        # Reloading a debugger backend over a live debuggee can corrupt the
+        # debugger kernel; tear the process down before re-selecting.
+        _best_effort_stop()
     sel = _select_backend(name=name, force=bool(force))
     if sel is None:
         return _no_backend_error()
@@ -504,6 +566,7 @@ def _action_backend(name=None, force=None):
         "action": "backend",
         "backend": _backend_str(),
         "backend_reason": _BACKEND_REASON,
+        "backend_attempts": dict(_BACKEND_ATTEMPTS),
         "backend_candidates": list(_BACKEND_CANDIDATES),
     }
 
@@ -755,7 +818,7 @@ def _action_set_reg(governed, name, value):
         return make_error(MCPError.INVALID_ARGS, "name is required for set_reg")
     if value is None:
         return make_error(MCPError.INVALID_ARGS, "value is required for set_reg")
-    g = _governance_check("set_reg", governed, value=str(value))
+    g = _governance_check("set_reg", governed, value=str(value), op_type="patch")
     if g:
         return g
     err = _require_backend()
@@ -873,7 +936,7 @@ def _action_set_mem(governed, address, data):
             f"data must be valid hex, got {data!r}",
             hint="Pass a hex string such as '9090' or '90 90'.",
         )
-    g = _governance_check("set_mem", governed, addr=_as_int_opt(address), value=str(data))
+    g = _governance_check("set_mem", governed, addr=_as_int_opt(address), value=str(data), op_type="patch")
     if g:
         return g
     err = _require_backend()
@@ -914,7 +977,9 @@ def _action_stop(governed, unload):
     if err:
         return err
     stopped = False
-    for method in ("stop_process", "exit_process"):
+    # exit_process is the IDA 9.x-native teardown; stop_process is the legacy
+    # name some backends expose. Try the native one first.
+    for method in ("exit_process", "stop_process"):
         fn = getattr(ida_dbg, method, None)
         if not callable(fn):
             continue
@@ -927,7 +992,7 @@ def _action_stop(governed, unload):
     if not stopped:
         return make_error(
             MCPError.EMULATION_ERROR,
-            "ida_dbg has neither stop_process() nor exit_process()",
+            "ida_dbg has neither exit_process() nor stop_process()",
             hint="The loaded backend does not implement process teardown.",
         )
     global _PROCESS_STARTED
@@ -936,6 +1001,7 @@ def _action_stop(governed, unload):
         global _BACKEND, _BACKEND_REASON
         _BACKEND = None
         _BACKEND_REASON = ""
+        _BACKEND_ATTEMPTS.clear()
     return {
         "ok": True,
         "action": "stop",
@@ -1010,6 +1076,22 @@ def _action_continue(governed):
 
 
 # ---------------------------------------------------------------------------
+def _augment_backend(result: dict) -> dict:
+    """Ensure every envelope — success or error — names the active backend.
+
+    Action handlers already attach ``backend``/``backend_reason``/
+    ``backend_attempts``/``backend_candidates`` on success; error envelopes
+    (governance denials, timeouts, invalid args) go through ``make_error`` /
+    ``handle_error`` and would otherwise omit them. ``setdefault`` fills those
+    keys from the module cache without clobbering handler-authored values.
+    """
+    result.setdefault("backend", _backend_str())
+    result.setdefault("backend_reason", _BACKEND_REASON or "no backend loaded")
+    result.setdefault("backend_attempts", dict(_BACKEND_ATTEMPTS))
+    result.setdefault("backend_candidates", list(_BACKEND_CANDIDATES))
+    return result
+
+
 # Public tool
 # ---------------------------------------------------------------------------
 @tool
@@ -1046,55 +1128,57 @@ def emulate(
     callers can tell which engine served them.
     """
     if ida_dbg is None:
-        return make_error(
+        return _augment_backend(make_error(
             MCPError.EMULATION_ERROR,
             "ida_dbg is not available in this build",
             hint="The IDA debugger module (ida_dbg) is required for emulation.",
-        )
+        ))
     try:
         action = str(action or "").strip()
     except Exception:
         action = ""
     if action not in _VALID_ACTIONS:
-        return make_error(
+        return _augment_backend(make_error(
             MCPError.ACTION_NOT_FOUND,
             f"Unknown emulate action: {action!r}",
             hint=f"Valid actions: {', '.join(_VALID_ACTIONS)}",
-        )
+        ))
     governed = True if governed is None else bool(governed)
     try:
         if action == "info":
-            return _action_info()
-        if action == "backend":
-            return _action_backend(name=name, force=force)
-        if action == "start":
-            return _action_start(
+            result = _action_info()
+        elif action == "backend":
+            result = _action_backend(name=name, force=force)
+        elif action == "start":
+            result = _action_start(
                 governed=governed,
                 start_addr=start_addr,
                 input_file=input_file,
                 args=args,
                 dir_=dir,
             )
-        if action == "state":
-            return _action_state()
-        if action == "step":
-            return _action_step(governed=governed, mode=mode, count=count, timeout_ms=timeout_ms)
-        if action == "run_to":
-            return _action_run_to(governed=governed, address=address, timeout_ms=timeout_ms)
-        if action == "suspend":
-            return _action_suspend(governed=governed)
-        if action == "continue":
-            return _action_continue(governed=governed)
-        if action == "stop":
-            return _action_stop(governed=governed, unload=unload)
-        if action == "get_reg":
-            return _action_get_reg(governed=governed, name=name, names=names)
-        if action == "set_reg":
-            return _action_set_reg(governed=governed, name=name, value=value)
-        if action == "read_mem":
-            return _action_read_mem(governed=governed, address=address, size=size)
-        if action == "set_mem":
-            return _action_set_mem(governed=governed, address=address, data=data)
-        return make_error(MCPError.ACTION_NOT_FOUND, f"Unknown emulate action: {action!r}")
+        elif action == "state":
+            result = _action_state()
+        elif action == "step":
+            result = _action_step(governed=governed, mode=mode, count=count, timeout_ms=timeout_ms)
+        elif action == "run_to":
+            result = _action_run_to(governed=governed, address=address, timeout_ms=timeout_ms)
+        elif action == "suspend":
+            result = _action_suspend(governed=governed)
+        elif action == "continue":
+            result = _action_continue(governed=governed)
+        elif action == "stop":
+            result = _action_stop(governed=governed, unload=unload)
+        elif action == "get_reg":
+            result = _action_get_reg(governed=governed, name=name, names=names)
+        elif action == "set_reg":
+            result = _action_set_reg(governed=governed, name=name, value=value)
+        elif action == "read_mem":
+            result = _action_read_mem(governed=governed, address=address, size=size)
+        elif action == "set_mem":
+            result = _action_set_mem(governed=governed, address=address, data=data)
+        else:
+            result = make_error(MCPError.ACTION_NOT_FOUND, f"Unknown emulate action: {action!r}")
     except Exception as e:
-        return handle_error(e, "emulate")
+        result = handle_error(e, "emulate")
+    return _augment_backend(result)

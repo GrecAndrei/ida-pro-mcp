@@ -23,6 +23,7 @@ __all__ = [
     "imports_deep",
     "stack_analysis",
     "calc",
+    "emulate",
     "intelligence",
     "wiki",
     "analysis",
