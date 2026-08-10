@@ -5,7 +5,7 @@ Generated from `host.agent_operations.AGENT_OPERATIONS`.
 
 ## `ida_open_binary`
 
-Open a binary in a new or existing IDA analysis session. Large binaries are opened in the background automatically (background and safe_mode in the response); poll ida_session_status until safe_mode clears.
+Open a binary in a new or existing IDA analysis session. The open is blocking and waits until IDA auto-analysis completes, so the returned session is fully analyzed and safe_mode is off. Only when the experimental IDA_MCP_BACKGROUND_OPEN=1 flag is set may large binaries instead auto-open in the background (background and safe_mode in the response); poll ida_session_status until safe_mode clears.
 
 Input schema:
 ```json
@@ -174,7 +174,7 @@ Example:
 
 ## `ida_open_background`
 
-Open a binary in a session without blocking on IDA analysis. The session starts in safe mode (safe_mode: true): full-binary analysis, indexing, and script execution are blocked until analysis completes — manual small-area operations stay available. Poll ida_session_status for progress and for safe_mode to clear.
+EXPERIMENTAL — DISABLED BY DEFAULT. Open a binary in a session without blocking on IDA analysis. Requires IDA_MCP_BACKGROUND_OPEN=1 in the host environment; otherwise this operation fails with FEATURE_DISABLED and opens are blocking. When enabled, the session starts in safe mode (safe_mode: true): full-binary analysis, indexing, and script execution are blocked until analysis completes — manual small-area operations stay available. Poll ida_session_status for progress and for safe_mode to clear.
 
 Input schema:
 ```json

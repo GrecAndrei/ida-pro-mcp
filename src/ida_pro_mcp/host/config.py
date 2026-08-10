@@ -64,6 +64,19 @@ def _env_float(
     return value
 
 
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    s = str(value).strip().lower()
+    return s in {"1", "true", "yes", "on", "y", "enabled"}
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    return _coerce_bool(os.environ.get(name), default)
+
+
 def _default_runtime_dir() -> str:
     if sys.platform == "win32":
         root = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
@@ -239,12 +252,34 @@ SEMANTIC_INDEX_MAX_QUERY_WORKERS = 8
 MAX_BATCH_CALLS = 50
 MAX_BATCH_PAYLOAD_BYTES = 512 * 1024
 
-# Binaries at or above this size are auto-opened in the background (session
-# action create_background / ida_open_background) instead of blocking the
-# caller on upfront analysis; the session then starts in safe mode. 50 MiB by
-# default; override with IDA_MCP_LARGE_BINARY_MB.
+# Binaries at or above this size would be auto-opened in the background
+# (session action create_background / ida_open_background) INSTEAD of blocking
+# the caller on upfront analysis — but only while the experimental
+# background_open_enabled() flag below is set. With background open off (the
+# default) this threshold is inert: every open is blocking. 50 MiB by default;
+# override with IDA_MCP_LARGE_BINARY_MB.
 LARGE_BINARY_THRESHOLD_BYTES = (
     _env_int("IDA_MCP_LARGE_BINARY_MB", 50, min_value=1) * 1024 * 1024
+)
+
+# EXPERIMENTAL — background open. session action create_background
+# (ida_open_background) and the large-binary auto-background route are DISABLED
+# by default: any open blocks and waits until IDA analysis completes, so the
+# caller gets a fully analyzed IDB. The background path returns before analysis
+# with safe_mode on and has been observed to crash IDA runtimes, so it is
+# strictly opt-in. Override with IDA_MCP_BACKGROUND_OPEN=1. Read lazily (not at
+# import time) so an operator can toggle it for a running host and tests can
+# monkeypatch.setenv per case.
+def background_open_enabled() -> bool:
+    return _env_bool("IDA_MCP_BACKGROUND_OPEN", False)
+
+# Default-open analysis wait: how long a blocking open may wait (after the IDB
+# is on disk) for a live runtime to confirm auto-analysis completed before the
+# open returns with safe_mode on and the async watcher takes over. 0 disables
+# the wait (open returns as soon as the IDB is on disk, as before). Override
+# with IDA_MCP_OPEN_ANALYSIS_TIMEOUT_SEC.
+BLOCKING_OPEN_ANALYSIS_TIMEOUT_SECONDS = _env_float(
+    "IDA_MCP_OPEN_ANALYSIS_TIMEOUT_SEC", 600, min_value=0.0
 )
 
 # Safe mode: while a session's IDA auto-analysis is still completing, the
@@ -409,19 +444,6 @@ def _bounded_int(
     if v > max_value:
         return max_value
     return v
-
-
-def _coerce_bool(value: Any, default: bool = False) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    s = str(value).strip().lower()
-    return s in {"1", "true", "yes", "on", "y", "enabled"}
-
-
-def _env_bool(name: str, default: bool = False) -> bool:
-    return _coerce_bool(os.environ.get(name), default)
 
 
 # ---------------------------------------------------------------------------

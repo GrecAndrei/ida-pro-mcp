@@ -48,6 +48,9 @@ class _FakeIdaProcess:
 def _make_server(tmp_path, monkeypatch) -> IDAMCPServer:
     monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
     monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
+    # Background-open tests here (create_background / _attach_open_envelope) are
+    # behind the experimental opt-in flag.
+    monkeypatch.setenv("IDA_MCP_BACKGROUND_OPEN", "1")
     monkeypatch.setattr(IDAMCPServer, "_detect_ida_dir", lambda self: "")
     monkeypatch.setattr(IDAMCPServer, "_find_idat", lambda self: "")
     server = IDAMCPServer()
@@ -340,6 +343,94 @@ def test_maybe_resolve_analysis_state_never_spawns_or_kills(tmp_path, monkeypatc
         assert spawned == [], spawned
         assert started == [], started
         assert killed == [], killed
+    finally:
+        server.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Blocking-open wait: the default open blocks until analysis completes
+# ---------------------------------------------------------------------------
+
+
+def test_wait_for_analysis_complete_waits_then_confirms(tmp_path, monkeypatch):
+    server = _make_server(tmp_path, monkeypatch)
+    session = server.session_mgr.create_session("/tmp/blockwait.bin")
+    sid = session.session_id
+    # Seed the gate directly (not via _mark_analysis_pending) so no watcher
+    # thread races the blocking wait for the shared rpc sequence.
+    server._pending_analysis = {sid}
+    server.session_runtimes[sid] = _fake_runtime()
+    sequence = [
+        {"analysis_complete": False},
+        {"analysis_complete": False},
+        {"analysis_complete": True, "functions": 42},
+    ]
+    state = {"i": 0}
+
+    def rpc(payload, port, recv_timeout=10):
+        i = state["i"]
+        state["i"] = min(i + 1, len(sequence) - 1)
+        return sequence[i]
+
+    server._send_rpc_raw = rpc
+    try:
+        res = server._wait_for_analysis_complete(session, timeout=5.0)
+        assert res.get("analysis_complete") is True
+        assert res.get("analysis_functions") == 42
+        # The blocking wait confirms and lifts safe mode itself.
+        assert server._analysis_is_complete(sid)
+        assert not server._safe_mode_active(sid)
+        assert state["i"] >= 2, "should have polled until the True landed"
+    finally:
+        server.shutdown()
+
+
+def test_wait_for_analysis_complete_no_runtime_returns_empty(tmp_path, monkeypatch):
+    server = _make_server(tmp_path, monkeypatch)
+    session = server.session_mgr.create_session("/tmp/nort.bin")
+    # No live runtime: nothing to confirm, return immediately so the blocking
+    # open does not stall and the async watcher keeps tracking the gate.
+    res = server._wait_for_analysis_complete(session, timeout=5.0)
+    assert res == {}
+    assert not server._analysis_is_complete(session.session_id)
+
+
+def test_wait_for_analysis_complete_timeout_returns_empty(tmp_path, monkeypatch):
+    server = _make_server(tmp_path, monkeypatch)
+    session = server.session_mgr.create_session("/tmp/timeout.bin")
+    sid = session.session_id
+    server._pending_analysis = {sid}
+    server.session_runtimes[sid] = _fake_runtime()
+    server._send_rpc_raw = lambda payload, port, recv_timeout=10: {
+        "analysis_complete": False
+    }
+    try:
+        res = server._wait_for_analysis_complete(session, timeout=0.2)
+        assert res == {}
+        # Never marked complete on a timeout; the gate stays pending.
+        assert not server._analysis_is_complete(sid)
+        assert server._safe_mode_active(sid)
+    finally:
+        server.shutdown()
+
+
+def test_blocking_open_wait_confirms_and_clears_safe_mode(tmp_path, monkeypatch):
+    """The blocking open calls _wait_for_analysis_complete and reflects it."""
+    server = _make_server(tmp_path, monkeypatch)
+
+    def _fake_wait(session, timeout=0.0):
+        server._mark_analysis_complete(session)
+        return {"analysis_complete": True, "analysis_functions": 7}
+
+    monkeypatch.setattr(server, "_wait_for_analysis_complete", _fake_wait)
+    binary = tmp_path / "block.bin"
+    binary.write_bytes(b"\x00" * 256)
+    try:
+        out = server._session_action_create({"binary_path": str(binary)})
+        assert out.get("ok") is True
+        assert out.get("analysis_complete") is True
+        assert out.get("analysis_functions") == 7
+        assert out.get("safe_mode") is False
     finally:
         server.shutdown()
 

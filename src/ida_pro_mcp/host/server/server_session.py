@@ -13,6 +13,7 @@ from typing import Any
 
 from ..analysis.arch_profile import infer_binary_arch_profile, normalize_arch_options
 from ..config import (
+    BLOCKING_OPEN_ANALYSIS_TIMEOUT_SECONDS,
     LARGE_BINARY_THRESHOLD_BYTES,
     MAX_BATCH_CALLS,
     MAX_LIST_LIMIT,
@@ -25,6 +26,7 @@ from ..config import (
     _bounded_int,
     _coerce_bool,
     _normalize_session_id,
+    background_open_enabled,
     log_rpc,
 )
 from ..errors import MCPError, is_error_result, make_error
@@ -376,14 +378,18 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 # branch runs.
                 has_preload_request = False
 
-        # Auto-background: a large binary whose analysis would actually run
-        # (no completed IDB to reuse) must not stall this request. Route to
-        # the background path — the agent is informed via background +
-        # safe_mode in the response and polls ida_session_status. Re-opening
-        # the same binary cannot escape safe mode this way: the background
-        # path marks the session pending again.
-        if self._is_large_binary(binary_path) and not (
-            existing and not force_new and existing.idb_on_disk()
+        # EXPERIMENTAL background-open route: a large binary whose analysis
+        # would actually run (no completed IDB to reuse) is only auto-routed to
+        # the non-blocking background path when IDA_MCP_BACKGROUND_OPEN=1. The
+        # background path has been observed to crash IDA runtimes, so it is
+        # disabled by default — every open below is blocking and blocks until
+        # analysis completes. Re-opening the same binary cannot escape safe
+        # mode through the background route either: it marks the session
+        # pending again.
+        if (
+            background_open_enabled()
+            and self._is_large_binary(binary_path)
+            and not (existing and not force_new and existing.idb_on_disk())
         ):
             bg_args = dict(args)
             bg_args["_auto_backgrounded"] = True
@@ -429,9 +435,12 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 updated.idb_path and os.path.isfile(updated.idb_path)
             )
             out["is_running"] = self._session_is_running(updated.session_id)
-            analysis_state = self._open_analysis_state(updated)
-            if analysis_state.get("analysis_complete") is True:
-                self._mark_analysis_complete(updated)
+            # Default opens are blocking: wait for a live runtime to confirm
+            # auto-analysis completed so the caller gets a fully analyzed IDB,
+            # not a safe-mode session. When no runtime can confirm, the async
+            # watcher keeps tracking the gate.
+            analysis_state = self._wait_for_analysis_complete(updated)
+            if analysis_state:
                 out["analysis_functions"] = analysis_state.get(
                     "analysis_functions"
                 )
@@ -538,11 +547,13 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         )
         out["is_running"] = self._session_is_running(self.current_session.session_id)
 
-        # Check analysis state via lightweight RPC (always, not blocking);
-        # confirm completion when the runtime says so.
-        analysis_state = self._open_analysis_state(self.current_session)
-        if analysis_state.get("analysis_complete") is True:
-            self._mark_analysis_complete(self.current_session)
+        # Default opens are blocking: wait (up to the analysis timeout) for a
+        # live runtime to confirm IDA auto-analysis completed, so the caller
+        # gets a fully analyzed IDB instead of a safe-mode session. When no
+        # runtime can confirm (dead/missing), the async watcher keeps tracking
+        # and safe_mode stays on.
+        analysis_state = self._wait_for_analysis_complete(self.current_session)
+        if analysis_state:
             out["analysis_functions"] = analysis_state.get("analysis_functions")
         out["analysis_complete"] = self._analysis_is_complete(
             self.current_session.session_id
@@ -646,6 +657,34 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 }
         except Exception:
             pass
+        return {}
+
+    def _wait_for_analysis_complete(self, session, timeout: float = 0.0) -> dict:
+        """Block until a live runtime confirms IDA auto-analysis completed.
+
+        Default opens are blocking: the caller gets a fully analyzed IDB, not a
+        safe-mode session. Polls the runtime's analysis state (the same RPC the
+        async watcher uses) until ``analysis_complete is True`` or *timeout*
+        elapses. Returns the analysis-state dict on completion; {} when there
+        is no live runtime to confirm (dead/missing — the async watcher owns
+        the gate and safe_mode stays on) or the deadline passes.
+        """
+        sid = session.session_id
+        deadline = time.time() + (
+            timeout if timeout > 0 else BLOCKING_OPEN_ANALYSIS_TIMEOUT_SECONDS
+        )
+        poll_sec = max(
+            0.05, float(getattr(self, "safe_mode_poll_seconds", SAFE_MODE_POLL_SECONDS))
+        )
+        while time.time() < deadline:
+            runtime = self.session_runtimes.get(sid)
+            if not (runtime and self._runtime_alive(runtime)):
+                return {}  # nothing live to confirm; the watcher owns the gate
+            state = self._open_analysis_state(session)
+            if state.get("analysis_complete") is True:
+                self._mark_analysis_complete(session)
+                return state
+            time.sleep(poll_sec)
         return {}
 
     def _prepare_open_args(self, args: dict) -> tuple:
@@ -1382,8 +1421,10 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
     def _spawn_runtime_background(self, session: Any) -> None:
         """Start idat for *session* without blocking the current request.
 
-        The IDA runtime registers itself in session_runtimes when ready; a
-        later ida_session_status / ida_session_state call reports progress.
+        EXPERIMENTAL — only reachable while IDA_MCP_BACKGROUND_OPEN=1 (the
+        default open is blocking and waits for analysis). The IDA runtime
+        registers itself in session_runtimes when ready; a later
+        ida_session_status / ida_session_state call reports progress.
         Failures are recorded in _background_load_errors and surfaced by
         status. The spawn thread is the single authoritative writer of
         spawn-failure errors; it skips sessions that were closed/deleted while
@@ -1414,11 +1455,26 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
     def _session_action_create_background(self, args: dict) -> dict:
         """Create/open a session without blocking on IDA analysis.
 
-        For large binaries the upfront (blocking) load in ida_open_binary can
-        stall the caller for the whole analysis. This action returns as soon
+        EXPERIMENTAL — disabled by default. Background open has been observed
+        to crash IDA runtimes, so it is only reachable while
+        IDA_MCP_BACKGROUND_OPEN=1; otherwise this action returns FEATURE_DISABLED
+        and every open stays blocking. When enabled, this action returns as soon
         as the session exists and the idat launch is dispatched; progress is
         reported through ida_session_status.
         """
+        if not background_open_enabled():
+            return make_error(
+                MCPError.FEATURE_DISABLED,
+                "Background open is an experimental feature and is disabled by default.",
+                details={
+                    "flag": "IDA_MCP_BACKGROUND_OPEN",
+                    "hint": (
+                        "Set IDA_MCP_BACKGROUND_OPEN=1 to enable it. Without it, "
+                        "every open is blocking and waits until IDA analysis completes."
+                    ),
+                },
+            )
+
         binary_path, analysis_options, arch_meta, force_new, ida_args, prep_error = (
             self._prepare_open_args(args)
         )

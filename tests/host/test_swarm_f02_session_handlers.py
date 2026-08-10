@@ -49,6 +49,9 @@ class _FakeIdaProcess:
 def _make_server(tmp_path, monkeypatch) -> IDAMCPServer:
     monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
     monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
+    # test_restart_restores_pending_gate_from_background_open uses the
+    # experimental background path; keep it reachable for the whole file.
+    monkeypatch.setenv("IDA_MCP_BACKGROUND_OPEN", "1")
     monkeypatch.setattr(IDAMCPServer, "_detect_ida_dir", lambda self: "")
     monkeypatch.setattr(IDAMCPServer, "_find_idat", lambda self: "")
     server = IDAMCPServer()

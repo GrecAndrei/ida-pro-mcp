@@ -182,6 +182,8 @@ def server(tmp_path, monkeypatch, fake_shim):
     """IDAMCPServer with the r2 tool pointing at the fake shim."""
     monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
     monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
+    # Some safe-mode fixtures here open via the experimental background path.
+    monkeypatch.setenv("IDA_MCP_BACKGROUND_OPEN", "1")
     monkeypatch.setattr(IDAMCPServer, "_detect_ida_dir", lambda self: "")
     monkeypatch.setattr(IDAMCPServer, "_find_idat", lambda self: "")
     monkeypatch.setattr(r2_engine_mod, "R2_BIN", fake_shim)
