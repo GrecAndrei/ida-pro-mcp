@@ -207,6 +207,47 @@ def _require_session(client: "MCPIntegrationClient", binary: str | None) -> None
             "Failed to create IDA session (real failure, not a prerequisite gap): "
             f"{result}"
         )
+    return parsed.get("session_id")
+
+
+def _wait_session_ready(
+    client, session_id: str | None, timeout: float = 240.0
+) -> dict | None:
+    """Poll the session's analysis gate until safe mode lifts and analysis
+    completes, bounded by *timeout*.
+
+    ``session(action='create')`` may return while the session is still in
+    safe mode (background analysis running) — large binaries are auto-
+    backgrounded, and reused sessions re-enter pending state. Racing the gate
+    makes the first tool call fail with a "blocked while analyzing" error, so
+    readiness is measured on the observable signal: the ``state`` payload's
+    ``safe_mode``/``analysis_complete`` flags (mirrors how the host documents
+    ``ida_session_state``).
+    """
+    last = None
+    deadline = time.time() + timeout
+    args = {"action": "state"}
+    if session_id:
+        args["session_id"] = session_id
+    while time.time() < deadline:
+        result = client.call_tool("session", **args)
+        data = _parse_result(result)
+        if data and data.get("ok") is not True:
+            # A session that stops answering is a real regression, not a
+            # prerequisite gap — fail loudly rather than spinning to timeout.
+            raise AssertionError(
+                "session(state) failed while waiting for analysis to settle: "
+                f"{result}"
+            )
+        state = data.get("state") if data else None
+        if state and state.get("safe_mode") is False and state.get("analysis_complete") is True:
+            return state
+        last = state
+        time.sleep(5)
+    raise AssertionError(
+        "IDA session never left safe mode / completed analysis "
+        f"within {timeout:.0f}s (last state: {last!r})"
+    )
 
 
 def _wait_vulnerable_hits(client, timeout: float = 240.0) -> dict | None:
@@ -377,7 +418,8 @@ class TestCustomDetectorIntegration(unittest.TestCase):
         # Create a session with a test binary. A create failure here is a real
         # server regression (or an RPC hang) — fail loudly instead of masking
         # the entire class behind unittest.SkipTest.
-        _require_session(cls.client, _build_fixture())
+        sid = _require_session(cls.client, _build_fixture())
+        _wait_session_ready(cls.client, sid)
 
     @classmethod
     def tearDownClass(cls):
