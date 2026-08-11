@@ -137,3 +137,30 @@ def get_segment_ea_by_name(name):
         return None if ea == badaddr else ea
     seg = _ida_segment().get_segm_by_name(name)
     return seg.start_ea if seg else None
+
+
+def get_first_segment_ea():
+    """Start EA of the first segment, or None when the IDB has none.
+
+    Normalizes the 9.4 ``get_first_segment_ea`` BADADDR-on-miss contract to
+    None; on <= 9.3 falls back to ``get_first_seg``'s ``segment_t``.
+    """
+    seg = _ida_segment()
+    if HAS_EA_SEGMENT:
+        ea = seg.get_first_segment_ea()
+        return None if ea == seg.ida_idaapi.BADADDR else ea
+    s = seg.get_first_seg()
+    return s.start_ea if s else None
+
+
+def get_next_segment_ea(ea):
+    """Start EA of the segment after the one containing ``ea``, or None.
+
+    Same BADADDR→None normalization as :func:`get_first_segment_ea`.
+    """
+    seg = _ida_segment()
+    if HAS_EA_SEGMENT:
+        nxt = seg.get_next_segment_ea(ea)
+        return None if nxt == seg.ida_idaapi.BADADDR else nxt
+    s = seg.get_next_seg(ea)
+    return s.start_ea if s else None

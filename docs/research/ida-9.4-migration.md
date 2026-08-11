@@ -176,9 +176,12 @@ collapse to direct calls and the module is deleted.
 - **`get_first_seg`/`get_next_seg` caveat.** The task premise stated these were
   not deprecated, but they DO appear in the authoritative list
   (`/tmp/ida94_deprecated.txt` lines 37/56) and the 9.4 stub keeps them with
-  EA replacements `get_first_segment_ea()`/`get_next_segment_ea(ea)`. They
-  were intentionally left unmigrated in this pass (out of the declared scope);
-  worth a small follow-up.
+  EA replacements `get_first_segment_ea()`/`get_next_segment_ea(ea)`.
+  **Follow-up landed (2026-08-11):** compat gained `get_first_segment_ea()` /
+  `get_next_segment_ea(ea)` wrappers (BADADDR→None normalized) and
+  `funcs.py::_try_map_raw_runtime_addr` was migrated. `search/core.py:352`
+  (`iter_segments`) was NOT migrated: its loop reads `.perm` off the same
+  descriptor, so it belongs to the deferred segment-attribute batch below.
 - **Compat wrappers resolve `ida_segment` via `sys.modules` at call time**
   (`_ida_segment()` helper), not the import-time global. The host test harness
   swaps `sys.modules["ida_segment"]` per test while `compat` can stay cached

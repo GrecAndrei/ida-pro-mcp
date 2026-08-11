@@ -12,6 +12,15 @@ try:
 except ImportError:
     from sync import _tool_cache, sync_wrapper  # type: ignore[import-not-found]
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from .. import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 # Arch-aware classification for metrics and create-failure hints.  Re-imported
 # directly (not via _common) so the isolated unit-test harness exercises the
 # real classifier sets even though the _common stub omits them.
@@ -206,14 +215,16 @@ def _try_map_raw_runtime_addr(ea: int) -> tuple[Optional[int], Optional[str]]:
         return None, None
 
     segs = []
-    seg = idaapi.get_first_seg()
-    while seg:
-        segs.append(seg)
-        seg = idaapi.get_next_seg(seg.start_ea)
+    seg_ea = _compat.get_first_segment_ea()
+    while seg_ea is not None:
+        segs.append(seg_ea)
+        seg_ea = _compat.get_next_segment_ea(seg_ea)
     if len(segs) != 1:
         return None, None
 
-    only = segs[0]
+    only = _compat.get_segment(segs[0])
+    if only is None:
+        return None, None
     start = int(only.start_ea)
     end = int(only.end_ea)
     size = end - start

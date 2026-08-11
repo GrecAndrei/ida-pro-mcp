@@ -47,6 +47,11 @@ def _fake_segment(*, ea_api: bool) -> types.ModuleType:
             types.SimpleNamespace(start_ea=0x401000, end_ea=0x402000)
             if name == "seg" else None
         )
+        segment.get_first_seg = lambda: types.SimpleNamespace(start_ea=0x401000)
+        segment.get_next_seg = lambda ea: (
+            types.SimpleNamespace(start_ea=0x402000)
+            if ea == 0x401000 else None
+        )
         return segment
     segment.ida_idaapi = types.ModuleType("ida_idaapi")
     segment.ida_idaapi.BADADDR = -1
@@ -65,6 +70,8 @@ def _fake_segment(*, ea_api: bool) -> types.ModuleType:
     segment.set_segment_name = lambda ea, name, flags=0: 1
     segment.move_segment = lambda ea, to, flags=0: 0
     segment.get_segment_ea_by_name = lambda name: 0x401000 if name == "seg" else -1
+    segment.get_first_segment_ea = lambda: 0x401000
+    segment.get_next_segment_ea = lambda ea: 0x402000 if ea == 0x401000 else -1
     return segment
 
 
@@ -175,3 +182,23 @@ def test_segment_wrappers_fallback_to_legacy_on_93_surface():
     # get_segment_ea_by_name unwraps the legacy get_segm_by_name pointer.
     assert compat.get_segment_ea_by_name("seg") == 0x401000
     assert compat.get_segment_ea_by_name("missing") is None
+
+
+def test_segment_iteration_wrappers_use_ea_api_on_94_surface():
+    _install_ida_stubs(ea_api=True)
+    compat = _load_compat()
+
+    assert compat.get_first_segment_ea() == 0x401000
+    assert compat.get_next_segment_ea(0x401000) == 0x402000
+    # BADADDR-on-miss normalizes to None.
+    assert compat.get_next_segment_ea(0x402000) is None
+
+
+def test_segment_iteration_wrappers_fallback_to_legacy_on_93_surface():
+    _install_ida_stubs(ea_api=False)
+    compat = _load_compat()
+
+    assert compat.get_first_segment_ea() == 0x401000
+    assert compat.get_next_segment_ea(0x401000) == 0x402000
+    # Legacy None-on-miss propagates.
+    assert compat.get_next_segment_ea(0x402000) is None
