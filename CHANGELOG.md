@@ -2,6 +2,35 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-08-11 — IDA 9.4 support: compat layer + migration inventory
+
+IDA 9.4 (build 9.4.260714) deprecates ~118 pointer-based IDAPython APIs in
+favor of EA-based variants that avoid returning IDA-allocated pointers. The
+old names still work (one DeprecationWarning per process each) but the
+replacements are 9.4-only, so compatibility is handled by runtime branching
+against the install the user selected in the installer — not a floor bump.
+
+- **`ida_mcp/compat.py`** (new): import-time feature detection per API
+  family (`HAS_EA_FUNCS` / `HAS_EA_DECOMPILE` / `HAS_EA_SEGMENT` /
+  `HAS_DECOMPILER`) plus wrappers that prefer the 9.4 EA-based entry point
+  and fall back to the legacy one on <= 9.3. Self-heals across point
+  releases; deleted when the supported floor rises to 9.4.
+- **`decompile_func` → `decompile_function` migration** (worked example):
+  `utils.refresh_decompiler_ctext` and both `code_helpers` decompile paths
+  (including the auto-analysis nudge + retry) go through
+  `compat.decompile_function`.
+- **`tests/ida_mcp/test_compat.py`**: fake 9.3/9.4 ida_* surfaces pin that
+  each side selects the right underlying call.
+- **`docs/research/ida-9.4-migration.md`**: full migration inventory (~300
+  deprecated-API call sites: 193 `get_func`, 46 `getseg`, 29
+  `get_segm_name`, ...), new-surface adoption candidates (`ida_indexer`,
+  `ida_dscu`, idalib `execute_sync()`), and the RISC-V validation plan
+  (9.4 fixes the eager `auipc` merge and several decoding bugs; raw-blob
+  arch/GP inference stays ours).
+- Installer discovery verified unchanged against 9.4:
+  `detect_ida_installs()` reports both side-by-side installs with correct
+  version/build strings.
+
 ## 2026-08-09 — settle wave: q05 tool verification, h02 runtime lifecycle, arch auto-apply
 
 Settle/integration pass over the completed feature waves: the q05 analysis-surface

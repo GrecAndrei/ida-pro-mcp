@@ -419,8 +419,10 @@ def get_type_by_name(type_name: str) -> ida_typeinf.tinfo_t:
 
 
 def refresh_decompiler_ctext(fn_addr: int):
+    from .compat import decompile_function
+
     error = ida_hexrays.hexrays_failure_t()
-    cfunc: ida_hexrays.cfunc_t = ida_hexrays.decompile_func(
+    cfunc: ida_hexrays.cfunc_t = decompile_function(
         fn_addr, error, ida_hexrays.DECOMP_WARNINGS
     )
     if cfunc:

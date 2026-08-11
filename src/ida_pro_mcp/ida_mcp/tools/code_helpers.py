@@ -8,6 +8,15 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from .. import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 # ida_ua is intentionally not exported by _common.__all__ — import it directly.
 try:
     import ida_ua  # type: ignore[import-not-found]
@@ -1932,10 +1941,10 @@ def _decompile_with_diagnostics(func_ea: int):
         )
 
     try:
-        if hasattr(ida_hexrays, "decompile_func") and hasattr(ida_hexrays, "hexrays_failure_t"):
+        if _compat.HAS_DECOMPILER:
             failure = ida_hexrays.hexrays_failure_t()
             flags = getattr(ida_hexrays, "DECOMP_WARNINGS", 0)
-            cfunc = ida_hexrays.decompile_func(func_ea, failure, flags)
+            cfunc = _compat.decompile_function(func_ea, failure, flags)
             if cfunc:
                 return cfunc, None
             # On newly created functions, Hex-Rays may fail because the CFG
@@ -1953,7 +1962,7 @@ def _decompile_with_diagnostics(func_ea: int):
                             _ida_auto.auto_mark_range(fn.start_ea, fn.end_ea, _ida_auto.AU_FINAL)
                         time.sleep(0.5)
                         failure2 = ida_hexrays.hexrays_failure_t()
-                        cfunc = ida_hexrays.decompile_func(func_ea, failure2, flags)
+                        cfunc = _compat.decompile_function(func_ea, failure2, flags)
                         if cfunc:
                             return cfunc, None
                         code2 = getattr(failure2, "code", None)
