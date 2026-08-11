@@ -20,11 +20,52 @@ from ida_pro_mcp.host.server.server_multi_session import (
     ServerMultiSessionMixin,
     SessionGroup,
 )
-from ida_pro_mcp.host.server.session import BookmarkManager, SessionManager
+from ida_pro_mcp.host.server.session import BookmarkManager, Session, SessionManager
 
 
 def _skills_path(mgr: SessionManager, sid: str) -> str:
     return os.path.join(mgr.session_dir, f"SID_{sid}", "skills.json")
+
+
+# ---------------------------------------------------------------------------
+# session.py: analysis_gate round-trips through metadata (h03)
+# ---------------------------------------------------------------------------
+
+
+def test_analysis_gate_round_trips_through_to_dict_from_dict():
+    session = Session(
+        "ABC12345",
+        "/tmp/SID_ABC12345_x.i64",
+        "/tmp/x.bin",
+        analysis_gate="pending",
+    )
+    restored = Session.from_dict(session.to_dict())
+    assert restored.analysis_gate == "pending"
+
+    complete = Session.from_dict({"session_id": "ABC12345", "analysis_gate": "complete"})
+    assert complete.analysis_gate == "complete"
+
+    # Unknown / malformed gate values normalize to None so downstream code
+    # never sees a gate state it does not understand.
+    junk = Session.from_dict({"session_id": "ABC12345", "analysis_gate": "warped"})
+    assert junk.analysis_gate is None
+    missing = Session.from_dict({"session_id": "ABC12345"})
+    assert missing.analysis_gate is None
+
+
+def test_analysis_gate_survives_manager_save_and_reload(tmp_path):
+    mgr1 = SessionManager(str(tmp_path))
+    session = mgr1.create_session("/tmp/x.bin")
+    sid = session.session_id
+    mgr1.update_session(sid, analysis_gate="complete")
+
+    mgr2 = SessionManager(str(tmp_path))
+    reloaded = mgr2.get_session(sid)
+    assert reloaded is not None
+    assert reloaded.analysis_gate == "complete"
+    # The gate is a first-class metadata.json field, not a side table.
+    with open(mgr1._get_metadata_path(sid), encoding="utf-8") as f:
+        assert json.load(f)["analysis_gate"] == "complete"
 
 
 # ---------------------------------------------------------------------------

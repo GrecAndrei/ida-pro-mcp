@@ -177,10 +177,13 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     AgentOperation(
         name="ida_open_binary",
         description=(
-            "Open a binary in a new or existing IDA analysis session. Large "
-            "binaries are opened in the background automatically (background "
-            "and safe_mode in the response); poll ida_session_status until "
-            "safe_mode clears."
+            "Open a binary in a new or existing IDA analysis session. The "
+            "open is blocking and waits until IDA auto-analysis completes, so "
+            "the returned session is fully analyzed and safe_mode is off. "
+            "Only when the experimental IDA_MCP_BACKGROUND_OPEN=1 flag is set "
+            "may large binaries instead auto-open in the background "
+            "(background and safe_mode in the response); poll "
+            "ida_session_status until safe_mode clears."
         ),
         category="session",
         input_schema=_schema(
@@ -248,12 +251,14 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     AgentOperation(
         name="ida_open_background",
         description=(
-            "Open a binary in a session without blocking on IDA analysis. "
-            "The session starts in safe mode (safe_mode: true): full-binary "
-            "analysis, indexing, and script execution are blocked until "
-            "analysis completes — manual small-area operations stay "
-            "available. Poll ida_session_status for progress and for "
-            "safe_mode to clear."
+            "EXPERIMENTAL — DISABLED BY DEFAULT. Open a binary in a session "
+            "without blocking on IDA analysis. Requires IDA_MCP_BACKGROUND_OPEN=1 "
+            "in the host environment; otherwise this operation fails with "
+            "FEATURE_DISABLED and opens are blocking. When enabled, the session "
+            "starts in safe mode (safe_mode: true): full-binary analysis, "
+            "indexing, and script execution are blocked until analysis completes "
+            "— manual small-area operations stay available. Poll "
+            "ida_session_status for progress and for safe_mode to clear."
         ),
         category="session",
         input_schema=_schema(
@@ -453,6 +458,10 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
                     },
                 },
                 "continue_on_error": {"type": "boolean", "description": "Continue later calls after an error."},
+                "bindings": {
+                    "type": "object",
+                    "description": "Output→input bindings map: step{i}_{key} refs to later call arguments (e.g. {\"step1_addr\": {\"step\": 2, \"key\": \"addr\"}}).",
+                },
             },
             ["calls"],
         ),
@@ -473,13 +482,27 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     ),
     AgentOperation(
         name="ida_find",
-        description="Find names, strings, imports, comments, and references matching text.",
+        description=(
+            "Find names, strings, imports, comments, and references matching text. "
+            "Pass kind='strings' for a dedicated string-literal search, kind='names' for "
+            "symbol-only, or kind='imports'|'comments'|'instructions'|'refs' to restrict "
+            "to that one category."
+        ),
         category="discovery",
         input_schema=_schema(
-            {"query": {"type": "string", "description": "Text, symbol, API, or IOC to find."}, "limit": LIMIT, "idb": IDB},
+            {
+                "query": {"type": "string", "description": "Text, symbol, API, or IOC to find."},
+                "kind": {
+                    "type": "string",
+                    "enum": ["all", "names", "strings", "imports", "comments", "instructions", "refs"],
+                    "description": "Restrict to one category; 'strings' = string search. Default 'all'.",
+                },
+                "limit": LIMIT,
+                "idb": IDB,
+            },
             ["query"],
         ),
-        example={"query": "recv", "limit": 20},
+        example={"query": "recv", "kind": "strings", "limit": 20},
         backend_tool="search",
         backend_action="find",
         argument_map={"query": "pattern"},
@@ -1602,6 +1625,692 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         example={"topic": "ida_decompile"},
         help_only=True,
     ),
+    # ------------------------------------------------------------------ #
+    # Segment registers (segmented-mode sreg mapping)                    #
+    # ------------------------------------------------------------------ #
+    AgentOperation(
+        name="ida_sreg_get",
+        description="Read the current segment-register mapping for a code address (segmented mode).",
+        category="discovery",
+        input_schema=_schema(
+            {
+                "start": ADDRESS,
+                "reg": {"type": "string", "description": "Segment register name (e.g. 'cs', 'ds', 'ss', 'es', 'fs', 'gs')."},
+                "idb": IDB,
+            },
+            ["start", "reg"],
+        ),
+        example={"start": "0x401000", "reg": "cs"},
+        backend_tool="segments",
+        backend_action="sreg_get",
+    ),
+    AgentOperation(
+        name="ida_sreg_set",
+        description="Set the segment-register mapping for a code address (segmented mode).",
+        category="edit",
+        input_schema=_schema(
+            {
+                "start": ADDRESS,
+                "reg": {"type": "string", "description": "Segment register name (e.g. 'cs', 'ds', 'ss', 'es', 'fs', 'gs')."},
+                # String for numeric selectors too: Vertex converts JSON Schema
+                # type unions into any_of, which cannot sit beside description.
+                "value": {"type": "string", "description": "Segment selector or value to map the register to (e.g. '0x30')."},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["start", "reg", "value", "risk_ack"],
+        ),
+        example={"start": "0x401000", "reg": "ds", "value": "0x30", "risk_ack": True},
+        backend_tool="segments",
+        backend_action="sreg_set",
+        argument_map={"risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_sreg_list",
+        description="List the segment-register mappings in effect for a code address (segmented mode).",
+        category="discovery",
+        input_schema=_schema(
+            {
+                "start": ADDRESS,
+                "idb": IDB,
+            },
+            ["start"],
+        ),
+        example={"start": "0x401000"},
+        backend_tool="segments",
+        backend_action="sreg_list",
+    ),
+    # ------------------------------------------------------------------ #
+    # Raw-blob authoring / reversibility primitives (modify)             #
+    # ------------------------------------------------------------------ #
+    AgentOperation(
+        name="ida_create_data",
+        description=(
+            "Define a data item (or a run of them) at an address so raw blobs become analyzable "
+            "without redeclaring types. type selects the item kind: byte|word|dword|qword|pointer|array."
+        ),
+        category="edit",
+        input_schema=_schema(
+            {
+                "address": ADDRESS,
+                "type": {
+                    "type": "string",
+                    "enum": ["byte", "word", "dword", "qword", "pointer", "array"],
+                    "description": "Data item kind to lay (default: byte). 'pointer' lays FF_DWORD items; 'array' lays count dword-sized elements.",
+                },
+                "count": {"type": "integer", "description": "Number of consecutive items to lay (default 1)."},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["address", "risk_ack"],
+        ),
+        example={"address": "0x1234", "type": "dword", "count": 16, "risk_ack": True},
+        backend_tool="modify",
+        backend_action="create_data",
+        argument_map={"address": "addr", "type": "item_type", "risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_create_strlit",
+        description="Define a string literal covering [address, address+size). strtype is 'c' (C string), 'c16' (UTF-16), or 'c32' (UTF-32).",
+        category="edit",
+        input_schema=_schema(
+            {
+                "address": ADDRESS,
+                "size": {"type": "integer", "description": "Byte length of the string literal."},
+                "strtype": {
+                    "type": "string",
+                    "enum": ["c", "c16", "c32"],
+                    "description": "String encoding (default 'c').",
+                },
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["address", "size", "risk_ack"],
+        ),
+        example={"address": "0x1234", "size": 16, "strtype": "c", "risk_ack": True},
+        backend_tool="modify",
+        backend_action="create_strlit",
+        argument_map={"address": "addr", "risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_undo_begin",
+        description="Open an undo transaction so a failing batch can be rolled back. Pair with ida_undo_end.",
+        category="edit",
+        input_schema=_schema({"idb": IDB, "risk_ack": RISK_ACK}, ["risk_ack"]),
+        example={"risk_ack": True},
+        backend_tool="modify",
+        backend_action="undo_begin",
+        argument_map={"risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_undo_end",
+        description="Commit the changes wrapped by an ida_undo_begin transaction.",
+        category="edit",
+        input_schema=_schema({"idb": IDB, "risk_ack": RISK_ACK}, ["risk_ack"]),
+        example={"risk_ack": True},
+        backend_tool="modify",
+        backend_action="undo_end",
+        argument_map={"risk_ack": "_risk_ack"},
+    ),
+    # ------------------------------------------------------------------ #
+    # Entry points / IDB snapshots / analysis wait                       #
+    # ------------------------------------------------------------------ #
+    AgentOperation(
+        name="ida_add_entry",
+        description="Mark an address as an entry point in the IDB (reclassifies it as code and adds an entry-point flag).",
+        category="edit",
+        input_schema=_schema(
+            {"address": ADDRESS, "risk_ack": RISK_ACK, "idb": IDB},
+            ["address", "risk_ack"],
+        ),
+        example={"address": "0x401000", "risk_ack": True},
+        backend_tool="analysis",
+        backend_action="add_entry",
+        argument_map={"address": "ea", "risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_idb_snapshot",
+        description="Save a named snapshot of the current IDB state so experiments can be rolled back with ida_idb_restore_snapshot.",
+        category="edit",
+        input_schema=_schema(
+            {
+                "name": {"type": "string", "description": "Optional snapshot name/label."},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["risk_ack"],
+        ),
+        example={"name": "before_cleanup", "risk_ack": True},
+        backend_tool="analysis",
+        backend_action="snapshot",
+        argument_map={"risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_idb_restore_snapshot",
+        description="Restore the IDB to a previously saved snapshot (pass ordinal or snapshot_id from ida_idb_snapshot).",
+        category="edit",
+        input_schema=_schema(
+            {
+                "ordinal": {"type": "integer", "description": "Snapshot ordinal to restore."},
+                "snapshot_id": {"type": "string", "description": "Snapshot id/name to restore."},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["risk_ack"],
+        ),
+        example={"ordinal": 0, "risk_ack": True},
+        backend_tool="analysis",
+        backend_action="restore_snapshot",
+        argument_map={"risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_auto_wait",
+        description="Block until IDA's automatic analysis queue is idle (waits for a quiet IDB before batch work).",
+        category="discovery",
+        input_schema=_schema(
+            {
+                "timeout_ms": {"type": "integer", "description": "Max wait in milliseconds (default bounded by the RPC timeout)."},
+                "idb": IDB,
+            }
+        ),
+        example={},
+        backend_tool="analysis",
+        backend_action="auto_wait",
+    ),
+    # ------------------------------------------------------------------ #
+    # Struct / enum member editing + TIL carry                           #
+    # ------------------------------------------------------------------ #
+    AgentOperation(
+        name="ida_struct_member_add",
+        description="Add a member to a struct type. offset is the byte offset (-1 appends at the end); provide type_str or size.",
+        category="edit",
+        input_schema=_schema(
+            {
+                "struct_name": {"type": "string", "description": "Struct type name."},
+                "member_name": {"type": "string", "description": "New member name."},
+                "offset": {"type": "integer", "description": "Member byte offset (-1 appends)."},
+                "type_str": {"type": "string", "description": "C type string for the member."},
+                "size": {"type": "integer", "description": "Member size in bytes when type_str is omitted."},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["struct_name", "member_name", "risk_ack"],
+        ),
+        example={"struct_name": "pkt_hdr", "member_name": "crc", "type_str": "uint32_t", "offset": -1, "risk_ack": True},
+        backend_tool="types",
+        backend_action="struct_member_add",
+        argument_map={"risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_struct_member_del",
+        description="Delete a member from a struct type by name.",
+        category="edit",
+        input_schema=_schema(
+            {
+                "struct_name": {"type": "string", "description": "Struct type name."},
+                "member_name": {"type": "string", "description": "Member name to delete."},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["struct_name", "member_name", "risk_ack"],
+        ),
+        example={"struct_name": "pkt_hdr", "member_name": "crc", "risk_ack": True},
+        backend_tool="types",
+        backend_action="struct_member_del",
+        argument_map={"risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_struct_member_rename",
+        description="Rename a member of a struct type.",
+        category="edit",
+        input_schema=_schema(
+            {
+                "struct_name": {"type": "string", "description": "Struct type name."},
+                "member_name": {"type": "string", "description": "Current member name."},
+                "new_name": {"type": "string", "description": "Replacement member name."},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["struct_name", "member_name", "new_name", "risk_ack"],
+        ),
+        example={"struct_name": "pkt_hdr", "member_name": "crc", "new_name": "checksum", "risk_ack": True},
+        backend_tool="types",
+        backend_action="struct_member_rename",
+        argument_map={"risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_struct_member_set_type",
+        description="Retype a member of a struct type from a C type string.",
+        category="edit",
+        input_schema=_schema(
+            {
+                "struct_name": {"type": "string", "description": "Struct type name."},
+                "member_name": {"type": "string", "description": "Member name to retype."},
+                "type_str": {"type": "string", "description": "C type string for the member."},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["struct_name", "member_name", "type_str", "risk_ack"],
+        ),
+        example={"struct_name": "pkt_hdr", "member_name": "crc", "type_str": "uint64_t", "risk_ack": True},
+        backend_tool="types",
+        backend_action="struct_member_set_type",
+        argument_map={"risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_enum_member_add",
+        description="Add an enumerator to an enum type (enum_name + member_name + numeric value).",
+        category="edit",
+        input_schema=_schema(
+            {
+                "enum_name": {"type": "string", "description": "Enum type name."},
+                "member_name": {"type": "string", "description": "New enumerator name."},
+                "value": {"type": "integer", "description": "Numeric value of the enumerator."},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["enum_name", "member_name", "value", "risk_ack"],
+        ),
+        example={"enum_name": "status_t", "member_name": "STATUS_BUSY", "value": 2, "risk_ack": True},
+        backend_tool="types",
+        backend_action="enum_member_add",
+        argument_map={"risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_enum_member_rename",
+        description="Rename an enumerator in an enum type.",
+        category="edit",
+        input_schema=_schema(
+            {
+                "enum_name": {"type": "string", "description": "Enum type name."},
+                "member_name": {"type": "string", "description": "Current enumerator name."},
+                "new_name": {"type": "string", "description": "Replacement enumerator name."},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["enum_name", "member_name", "new_name", "risk_ack"],
+        ),
+        example={"enum_name": "status_t", "member_name": "STATUS_BUSY", "new_name": "STATUS_WAIT", "risk_ack": True},
+        backend_tool="types",
+        backend_action="enum_member_rename",
+        argument_map={"risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_enum_member_revalue",
+        description="Revalue an enumerator in an enum type (new numeric value).",
+        category="edit",
+        input_schema=_schema(
+            {
+                "enum_name": {"type": "string", "description": "Enum type name."},
+                "member_name": {"type": "string", "description": "Enumerator name to revalue."},
+                "value": {"type": "integer", "description": "New numeric value."},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["enum_name", "member_name", "value", "risk_ack"],
+        ),
+        example={"enum_name": "status_t", "member_name": "STATUS_WAIT", "value": 5, "risk_ack": True},
+        backend_tool="types",
+        backend_action="enum_member_revalue",
+        argument_map={"risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_til_delete",
+        description="Delete a named type from the local Type Library (TIL).",
+        category="edit",
+        input_schema=_schema(
+            {"name": {"type": "string", "description": "Type name to delete."}, "risk_ack": RISK_ACK, "idb": IDB},
+            ["name", "risk_ack"],
+        ),
+        example={"name": "OBSOLETE_STRUCT", "risk_ack": True},
+        backend_tool="types",
+        backend_action="til_delete",
+        argument_map={"risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_til_export",
+        description="Export matching named types as a C header file (cross-session carry).",
+        category="edit",
+        input_schema=_schema(
+            {
+                "path": {"type": "string", "description": "Absolute output header path."},
+                "name": {"type": "string", "description": "Type-name filter (default '*')."},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["path", "risk_ack"],
+        ),
+        example={"path": "/tmp/session_types.h", "risk_ack": True},
+        backend_tool="types",
+        backend_action="til_export",
+        argument_map={"name": "til_filter", "risk_ack": "_risk_ack"},
+    ),
+    AgentOperation(
+        name="ida_til_import",
+        description="Import a C header file into the local Type Library.",
+        category="edit",
+        input_schema=_schema(
+            {"path": {"type": "string", "description": "Absolute header file path to import."}, "risk_ack": RISK_ACK, "idb": IDB},
+            ["path", "risk_ack"],
+        ),
+        example={"path": "/tmp/session_types.h", "risk_ack": True},
+        backend_tool="types",
+        backend_action="til_import",
+        argument_map={"risk_ack": "_risk_ack"},
+    ),
+    # ------------------------------------------------------------------ #
+    # IDB events / register state                                        #
+    # ------------------------------------------------------------------ #
+    AgentOperation(
+        name="ida_events",
+        description="Stream recent analysis/audit events from the IDB (useful to see what IDA has been doing).",
+        category="discovery",
+        input_schema=_schema(
+            {
+                "limit": {"type": "integer", "description": "Max events to return."},
+                "tail": {"type": "integer", "description": "Return only the N most recent events."},
+                "idb": IDB,
+            }
+        ),
+        example={"limit": 20},
+        backend_tool="idb",
+        backend_action="events",
+    ),
+    AgentOperation(
+        name="ida_registers",
+        description="Dump the register state captured at an address (debugger/emulator/analysis capture).",
+        category="discovery",
+        input_schema=_schema({"addr": ADDRESS, "idb": IDB}, ["addr"]),
+        example={"addr": "0x401000"},
+        backend_tool="idb",
+        backend_action="registers",
+    ),
+    # ------------------------------------------------------------------ #
+    # Raw-value / query-language search                                  #
+    # ------------------------------------------------------------------ #
+    AgentOperation(
+        name="ida_search_data_value",
+        description="Locate raw byte/word values or ASCII strings in memory (e.g. '0xDEADBEEF' or a magic string).",
+        category="discovery",
+        input_schema=_schema(
+            {
+                "value": {"type": "string", "description": "Raw value to locate (hex string or ASCII text)."},
+                "size": {"type": "integer", "description": "Byte width for the scan (1/2/4/8; default auto-detect)."},
+                "endian": {"type": "string", "enum": ["little", "big"], "description": "Byte order (default: binary endianness)."},
+                "start": {"type": "string", "description": "Inclusive start address of the scan window."},
+                "end": {"type": "string", "description": "Exclusive end address of the scan window."},
+                "limit": LIMIT,
+                "idb": IDB,
+            },
+            ["value"],
+        ),
+        example={"value": "0xDEADBEEF", "limit": 10},
+        backend_tool="search",
+        backend_action="data_value",
+    ),
+    AgentOperation(
+        name="ida_search_query_lang",
+        description=(
+            "Run a structured query-language search over names, strings, and imports. "
+            "Lenient grammar: MATCH/WHERE are optional, aliases and operator synonyms are "
+            "accepted, bare identifiers become name/text filters, and free text falls back "
+            "to unified find. Examples: 'functions with size > 100', 'strings containing "
+            "cmd.exe', 'calls to malloc', 'function main', 'size > 100'."
+        ),
+        category="discovery",
+        input_schema=_schema(
+            {
+                "query": {"type": "string", "description": "Query-language expression (or free text)."},
+                "limit": LIMIT,
+                "idb": IDB,
+            },
+            ["query"],
+        ),
+        example={"query": "functions with size > 100 LIMIT 10"},
+        backend_tool="search",
+        backend_action="query_lang",
+    ),
+    # ------------------------------------------------------------------ #
+    # Rizin/radare2 sidecar engine (default-off)                         #
+    # ------------------------------------------------------------------ #
+    AgentOperation(
+        name="ida_r2_status",
+        description="Check availability of the r2 sidecar engine for a binary.",
+        category="discovery",
+        input_schema=_schema(
+            {"binary_path": {"type": "string", "description": "Absolute path to the raw binary (default: current session binary)."}, "idb": IDB}
+        ),
+        example={},
+        backend_tool="r2",
+        backend_action="status",
+    ),
+    AgentOperation(
+        name="ida_r2_bininfo",
+        description="Get r2 file metadata (arch/bits/entry/imports) for a binary without an IDB.",
+        category="discovery",
+        input_schema=_schema(
+            {
+                "binary_path": {"type": "string", "description": "Absolute path to the raw binary (default: current session binary)."},
+                "addr": {"type": "string", "description": "Optional address/offset to resolve into the binary."},
+                "idb": IDB,
+            }
+        ),
+        example={},
+        backend_tool="r2",
+        backend_action="bininfo",
+    ),
+    AgentOperation(
+        name="ida_r2_load_hints",
+        description="Get r2-suggested load addresses for a raw binary (base/entry hypotheses).",
+        category="discovery",
+        input_schema=_schema(
+            {
+                "binary_path": {"type": "string", "description": "Absolute path to the raw binary (default: current session binary)."},
+                "addr": {"type": "string", "description": "Optional address/offset to frame the hints."},
+                "idb": IDB,
+            }
+        ),
+        example={},
+        backend_tool="r2",
+        backend_action="load_hints",
+    ),
+    AgentOperation(
+        name="ida_r2_disassemble_hypothesis",
+        description="Disassemble at an address/offset with r2, without an IDB — useful to test a load-base or instruction-boundary hypothesis.",
+        category="discovery",
+        input_schema=_schema(
+            {
+                "address": {"type": "string", "description": "Address or file offset to disassemble at."},
+                "binary_path": {"type": "string", "description": "Absolute path to the raw binary (default: current session binary)."},
+                "count": {"type": "integer", "description": "Max instructions to disassemble."},
+                "idb": IDB,
+            },
+            ["address"],
+        ),
+        example={"address": "0x1000", "count": 16},
+        backend_tool="r2",
+        backend_action="disassemble_hypothesis",
+        argument_map={"address": "addr"},
+    ),
+    AgentOperation(
+        name="ida_r2_vxrefs",
+        description="Find raw pointer-word references to a value with r2 (no IDB cross-references needed).",
+        category="discovery",
+        input_schema=_schema(
+            {
+                "value": {"type": "string", "description": "Target value to find pointer-word references to."},
+                "binary_path": {"type": "string", "description": "Absolute path to the raw binary (default: current session binary)."},
+                "limit": LIMIT,
+                "idb": IDB,
+            },
+            ["value"],
+        ),
+        example={"value": "0x20000000", "limit": 20},
+        backend_tool="r2",
+        backend_action="vxrefs",
+    ),
+    # ------------------------------------------------------------------ #
+    # Dangerous-API marking                                              #
+    # ------------------------------------------------------------------ #
+    AgentOperation(
+        name="ida_mark_dangerous",
+        description="Mark dangerous API calls with warning comments (optionally scoped to one function).",
+        category="edit",
+        input_schema=_schema(
+            {
+                "address": ADDRESS,
+                "prefix": {"type": "string", "description": "Prefix for generated comments (default '[MCP] ')."},
+                "limit": {"type": "integer", "description": "Max warnings to add."},
+                "dry_run": {"type": "boolean", "description": "Preview without writing."},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["address", "risk_ack"],
+        ),
+        example={"address": "0x401000", "risk_ack": True},
+        backend_tool="annotation",
+        backend_action="mark_dangerous",
+        argument_map={"address": "addr", "risk_ack": "_risk_ack"},
+    ),
+    # ------------------------------------------------------------------ #
+    # Raw-binary firmware shaping (headerless blobs)                     #
+    # ------------------------------------------------------------------ #
+    AgentOperation(
+        name="ida_fw_detect_vector_table",
+        description="Detect a Cortex-M reset/ISR vector table in a raw firmware blob (start/end bound the scan window).",
+        category="discovery",
+        input_schema=_schema(
+            {
+                "start": {"type": "string", "description": "Inclusive start address of the scan window."},
+                "end": {"type": "string", "description": "Exclusive end address of the scan window."},
+                "limit": LIMIT,
+                "idb": IDB,
+            }
+        ),
+        example={"start": "0x0", "end": "0x400"},
+        backend_tool="firmware",
+        backend_action="detect_vector_table",
+    ),
+    AgentOperation(
+        name="ida_fw_detect_load_base",
+        description="Infer the preferred load base for a raw firmware blob.",
+        category="discovery",
+        input_schema=_schema(
+            {
+                "start": {"type": "string", "description": "Inclusive start address of the candidate window."},
+                "end": {"type": "string", "description": "Exclusive end address of the candidate window."},
+                "idb": IDB,
+            }
+        ),
+        example={},
+        backend_tool="firmware",
+        backend_action="detect_load_base",
+    ),
+    AgentOperation(
+        name="ida_fw_detect_mmio",
+        description="Locate memory-mapped peripheral regions in a raw firmware blob.",
+        category="discovery",
+        input_schema=_schema(
+            {
+                "start": {"type": "string", "description": "Inclusive start address of the scan window."},
+                "end": {"type": "string", "description": "Exclusive end address of the scan window."},
+                "limit": LIMIT,
+                "idb": IDB,
+            }
+        ),
+        example={},
+        backend_tool="firmware",
+        backend_action="detect_mmio",
+    ),
+    AgentOperation(
+        name="ida_fw_rtos_scan",
+        description="Heuristically detect an RTOS kernel inside a raw firmware blob.",
+        category="discovery",
+        input_schema=_schema(
+            {
+                "start": {"type": "string", "description": "Inclusive start address of the scan window."},
+                "end": {"type": "string", "description": "Exclusive end address of the scan window."},
+                "limit": LIMIT,
+                "idb": IDB,
+            }
+        ),
+        example={},
+        backend_tool="firmware",
+        backend_action="rtos_scan",
+    ),
+    AgentOperation(
+        name="ida_fw_carve",
+        description="Extract a code/data region of a raw firmware blob into a bounded range.",
+        category="discovery",
+        input_schema=_schema(
+            {
+                "start": {"type": "string", "description": "Inclusive start address of the region to carve."},
+                "end": {"type": "string", "description": "Exclusive end address of the region to carve."},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["start", "end", "risk_ack"],
+        ),
+        example={"start": "0x800", "end": "0x2000", "risk_ack": True},
+        backend_tool="firmware",
+        backend_action="carve",
+        argument_map={"risk_ack": "_risk_ack"},
+    ),
+    # ------------------------------------------------------------------ #
+    # Emulation / debugger (ida_dbg)                                     #
+    # ------------------------------------------------------------------ #
+    AgentOperation(
+        name="ida_emulate",
+        description=(
+            "Drive IDA's built-in emulator/debugger (ida_dbg) end to end. Auto-selects "
+            "a backend at runtime (built-in emulator candidates first, then the native "
+            "backend) and reports the active backend in every response. Actions: info "
+            "(overview: backend, why chosen, process state, registers), backend, start, "
+            "state, step (mode into|over|ret, count), run_to, suspend, continue, stop, "
+            "get_reg, set_reg, read_mem, set_mem. Mutating actions require risk_ack=true."
+        ),
+        category="code",
+        input_schema=_schema(
+            {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "info", "backend", "start", "state", "step", "run_to",
+                        "suspend", "continue", "stop", "get_reg", "set_reg",
+                        "read_mem", "set_mem",
+                    ],
+                    "description": "Emulation action to run.",
+                },
+                "name": {"type": "string", "description": "Register name (get_reg/set_reg) or backend name (backend)."},
+                "names": {"type": "array", "items": {"type": "string"}, "description": "Registers to read in one get_reg call."},
+                # Use a string for numeric register values too (hex or decimal):
+                # Vertex converts JSON Schema type unions into any_of, which
+                # cannot be combined with this field's description in a function
+                # declaration. The backend parses int(str(value), 0).
+                "value": {"type": "string", "description": "Register value for set_reg (hex string like '0x10' or decimal string)."},
+                "address": {"type": "string", "description": "Function name or hexadecimal address for run_to/read_mem/set_mem."},
+                "size": {"type": "integer", "description": "Byte count for read_mem (default 16)."},
+                "data": {"type": "string", "description": "Hex bytes to write for set_mem (e.g. '9090')."},
+                "start_addr": {"type": "string", "description": "Optional start address for start."},
+                "args": {"type": "string", "description": "Process argv string for start."},
+                "input_file": {"type": "string", "description": "Input file path for start."},
+                "dir": {"type": "string", "description": "Working directory for start."},
+                "count": {"type": "integer", "description": "Step count (default 1)."},
+                "mode": {"type": "string", "enum": ["into", "over", "ret"], "description": "Step mode (default 'into')."},
+                "force": {"type": "boolean", "description": "Reload the backend even if one is loaded (backend action)."},
+                "unload": {"type": "boolean", "description": "Unload the backend after stop."},
+                "governed": {"type": "boolean", "description": "Run the governance pre-check on mutating actions (default true)."},
+                "timeout_ms": {"type": "integer", "description": "Per-action timeout in milliseconds (default 30000)."},
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
+            ["action"],
+        ),
+        example={"action": "info"},
+        backend_tool="emulate",
+        backend_action="info",
+        argument_map={"risk_ack": "_risk_ack"},
+    ),
 )
 
 _OPERATIONS_BY_NAME = {operation.name: operation for operation in AGENT_OPERATIONS}
@@ -1623,7 +2332,7 @@ _LEGACY_ACTION_CALL = re.compile(
 )
 _LEGACY_REFERENCE = re.compile(
     r"\b[A-Za-z_]\w*\(\s*action\s*=|\b(?:funcs|code|data|search|session|misc|"
-    r"intelligence|truncation|analysis|calc)\.[A-Za-z_]\w*|\baction\s*=\s*"
+    r"intelligence|truncation|analysis|calc|r2|firmware)\.[A-Za-z_]\w*|\baction\s*=\s*"
 )
 
 
@@ -1891,16 +2600,30 @@ available.
 - Record confirmed work with `ida_write_finding`, and record dead ends with
   `ida_mark_examined(verdict="boring")`. A function you read and dismissed is
   worth one line: without it, the next session reads it again.
-- Responses carry `_recall` (what is already known about this address) and
-  `_already_examined` (returned addresses you previously dismissed). Read them
-  before re-deriving anything. A `_stale` field means the code changed after a
-  claim about it was recorded — re-check that claim rather than trusting it.
+- Responses carry an injected recall channel:
+  - `_recall` — what is already known about this address (prior findings,
+    verdicts, and their `[mcp:]`-anchored claims). Read it before re-deriving
+    anything.
+  - `_already_examined` — addresses in the response you previously dismissed;
+    do not re-read them as if they were new.
+  - `_stale` — a claim whose underlying code changed after it was recorded.
+    Re-check that claim rather than trusting it; a stale verdict means the
+    code moved, not that the analysis was wrong.
+  - `_recall_error` — when recall itself could not be loaded (e.g. no
+    workspace). Proceed, but note that prior-session memory is unavailable.
 - `ida_next_target(strategy=...)` picks the next investigation point:
   `unresolved` for open threads, `coverage` for functions nobody has read,
   `frontier` to expand from confirmed findings, `stale` and `conflict` for
-  claims that need repair. Every candidate states why it was chosen.
+  claims that need repair. Every candidate states why it was chosen. On
+  opaque/raw binaries with no function inventory, `coverage` returns an
+  explicit note (`coverage_pct=0`) instead of silently reporting an empty
+  coverage.
 - If `ida_write_finding` returns a `conflict`, two claims about the same thing
   disagree. Resolve it with `ida_update_finding` before building on either.
+- Accept or reject background proposals explicitly. The crawler and trace
+  machinery create real `proposed` entries and notify with the real entry id;
+  respond with `ida_update_finding(entry_id=..., status="confirmed")` (accept)
+  or `status="rejected"` with a reason, rather than leaving them in limbo.
 - `ida_import_annotations` early in a session adopts names and comments the
   last analyst left in the IDB, so you inherit their work instead of redoing
   it. `ida_publish_findings(risk_ack=true)` writes confirmed findings back as

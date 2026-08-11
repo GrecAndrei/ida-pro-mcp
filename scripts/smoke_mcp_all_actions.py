@@ -338,19 +338,6 @@ ACTION_ARGS: dict[tuple[str, str], dict] = {
     ("trace_analysis", "trace_entropy"):     {},
     ("trace_analysis", "api_sequence"):      {},
     ("trace_analysis", "loop_analysis"):     {},
-    # firmware_view
-    ("firmware_view", "triage_snapshot"): {},
-    ("firmware_view", "scan_region"):      {"addr": "__ADDR__", "size": 64},
-    ("firmware_view", "pointer_sweep"):    {"addr": "__ADDR__", "size": 64},
-    ("firmware_view", "recommend"):        {},
-    ("firmware_view", "table_candidates"):  {},
-    ("firmware_view", "region_profile"):    {"addr": "__ADDR__"},
-    ("firmware_view", "pointer_clusters"):  {},
-    ("firmware_view", "detect_load_address"): {},
-    ("firmware_view", "detect_vector_table"): {},
-    ("firmware_view", "detect_mmio"):       {},
-    ("firmware_view", "rtos_scan"):          {},
-    ("firmware_view", "bootstrap"):         {},
     # binary_info
     ("binary_info", "headers"):    {},
     ("binary_info", "sections"):   {},
@@ -393,8 +380,6 @@ ACTION_ARGS: dict[tuple[str, str], dict] = {
     ("idb", "architecture_profile"): {},
     ("idb", "state"):        {},
     # knowledge
-    ("knowledge", "chip_families"): {},
-    ("knowledge", "chip_identify"):  {"query": "zzz"},
     ("knowledge", "symbol_lookup"):  {"query": "main"},
     ("knowledge", "export_session"): {},
     # llm_helpers
@@ -569,10 +554,10 @@ SKIP_ACTIONS: set[tuple[str, str]] = {
     ("blackboard", "clear"), ("blackboard", "prune"), ("blackboard", "delete"),
     ("blackboard", "update"), ("blackboard", "write"), ("blackboard", "merge"),
     ("blackboard", "contradict"), ("blackboard", "resolve"), ("blackboard", "add_evidence"),
-    ("blackboard", "calibrate"), ("blackboard", "next_target"), ("blackboard", "propagate_labels"),
+    ("blackboard", "calibrate"), ("blackboard", "decay"),
+    ("blackboard", "next_target"),
     ("blackboard", "start_crawler"), ("blackboard", "stop_crawler"), ("blackboard", "accept"),
-    ("blackboard", "reject"), ("blackboard", "semantic_rebuild"), ("blackboard", "semantic_index"),
-    ("blackboard", "deref"), ("blackboard", "chain"),
+    ("blackboard", "reject"),
     ("memory", "write"),                # writes bytes into the IDB
     ("debug", "start"), ("debug", "stop"), ("debug", "continue"),
     ("debug", "step_into"), ("debug", "step_over"), ("debug", "run_to"),
@@ -602,17 +587,6 @@ SKIP_ACTIONS: set[tuple[str, str]] = {
     ("history", "snapshot"),  # mutates IDB history; keep list/diff only
     ("governance", "redact"),
     ("hooks", "generate_frida"), ("hooks", "generate_detours"), ("hooks", "inline_hooks"),
-    ("firmware_view", "smart_carve"), ("firmware_view", "carve_plan"),
-    ("firmware_view", "campaign"), ("firmware_view", "segment_sweep"),
-    ("firmware_view", "multi_region_campaign"), ("firmware_view", "auto_retype"),
-    ("firmware_view", "rollback_last"), ("firmware_view", "review_contradictions"),
-    ("blackboard", "kg_add_system"), ("blackboard", "kg_add_struct"),
-    ("blackboard", "kg_add_gap"), ("blackboard", "fill_gap"),
-    ("blackboard", "kg_add_state_machine"), ("blackboard", "kg_add_peripheral"),
-    ("blackboard", "kg_add_attack_surface"),
-    ("blackboard", "add_system"), ("blackboard", "add_struct"),
-    ("blackboard", "add_gap"), ("blackboard", "add_state_machine"),
-    ("blackboard", "add_peripheral"), ("blackboard", "add_attack_surface"),
     ("blackboard", "policy_set"), ("blackboard", "phase_set"),
     ("blackboard", "phase_tick"), ("blackboard", "phase_status"),
     ("blackboard", "phase_finalize"), ("blackboard", "memory_compile"),
@@ -625,12 +599,6 @@ SKIP_ACTIONS: set[tuple[str, str]] = {
     ("blackboard", "campaign_summary"), ("blackboard", "mark_examined"),
     ("blackboard", "recall"), ("blackboard", "conflicts"), ("blackboard", "stale"),
     ("blackboard", "publish_findings"), ("blackboard", "import_annotations"),
-    ("blackboard", "export_symbols"), ("blackboard", "import_symbols"),
-    ("blackboard", "related_by_behavior"),
-    ("blackboard", "kg_summary"), ("blackboard", "kg_systems"),
-    ("blackboard", "kg_gaps"), ("blackboard", "kg_structs"),
-    ("blackboard", "kg_state_machines"), ("blackboard", "kg_attack_surface"),
-    ("blackboard", "kg_peripherals"),
 }
 
 

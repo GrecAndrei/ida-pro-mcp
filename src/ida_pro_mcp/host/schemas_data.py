@@ -47,7 +47,6 @@ TOOLS = [
     # Differential and comparison
     # Export and annotation
 
-    "firmware_view",
     # Documentation
     "wiki",
     # Intelligence subsystem (extracted from agent)
@@ -72,11 +71,15 @@ TOOLS = [
     "blackboard",
     # --- Governance ---
     "governance",
-    # --- Cross-session firmware KB ---
+    # --- Cross-session symbol KB ---
     "knowledge",
     # --- Relocation/fixup management (specialized; not advertised) ---
+    # --- Raw-binary sidecar engines (default-off) ---
+    "r2",
+    "firmware",
     # --- New: struct recovery, emulation, binary diffing, multi-session ---
     "multi_session",
+    "emulate",
 ]
 
 # Tier A — default tools/list surface for agents. Everything else stays callable
@@ -112,6 +115,7 @@ ADVERTISED_ACTIONS: dict[str, list[str]] = {
     "search": [
         "find", "nl", "string", "bytes", "api", "callers", "callees",
         "xrefs_to_string", "symbol", "symbol_info", "decompiled", "behavior", "analyze",
+        "data_value", "query_lang",
     ],
     "intelligence": [
         "index_fast", "index_batch", "semantic_search", "similar_functions",
@@ -119,7 +123,11 @@ ADVERTISED_ACTIONS: dict[str, list[str]] = {
     ],
     "blackboard": [
         "write", "read", "list", "search", "update", "delete",
-        "workspace_brief", "frontier", "next_target", "decision_card", "stats",
+        "stats", "coverage", "next_target", "frontier", "workspace_brief",
+        "decision_card", "mark_examined", "recall", "conflicts", "stale",
+        "export", "publish_findings", "import_annotations", "memory_compile",
+        "phase_status", "policy_status", "state_health",
+        "start_crawler", "crawler_status", "proposal_list", "trace_status",
     ],
     "code": [
         "decompile", "smart_decompile", "disasm", "blocks", "callees", "callers",
@@ -131,6 +139,13 @@ ADVERTISED_ACTIONS: dict[str, list[str]] = {
     "misc": [
         "python", "idc", "health", "cache_stats", "plugin_list", "read_file", "write_file",
         # reload is dev-only; still callable, not advertised in compact enum
+    ],
+    "r2": [
+        "status", "bininfo", "load_hints", "disassemble_hypothesis", "vxrefs",
+    ],
+    "firmware": [
+        "detect_vector_table", "detect_load_base", "detect_mmio",
+        "rtos_scan", "carve",
     ],
 }
 
@@ -147,10 +162,6 @@ _EXTRA_TOOL_ALIASES = {
     "code_tool": "code",
     "database": "idb",
     "decompiler": "code",
-    "firmware": "firmware_view",
-    "firmware_ops": "firmware_view",
-    "firmware_view_tool": "firmware_view",
-    "firmware_bootstrap": "firmware_view",
     "decomp": "code",
     "diag": "misc",
     "disasm": "code",
@@ -174,7 +185,7 @@ _EXTRA_TOOL_ALIASES = {
     "comments_ai": "annotation",
     "annotations_ai": "annotation",
     "strings_xref": "graph",
-    # "emulate" alias removed — now a real tool in TOOLS
+    "emu": "emulate",
     "searches": "search",
     "segment": "segments",
     "session_tool": "session",
@@ -188,43 +199,45 @@ _EXTRA_TOOL_ALIASES = {
 
 TOOL_DESCRIPTIONS = {
 
-    "analysis": "Controls IDA analysis engine and on-the-fly IDB management. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze, run, analyze, state, set_gp, save_idb, make_code, undefine, get_af, set_af, force_offset. save_idb persists the IDB to disk. make_code forces bytes at an address to be disassembled as an instruction (use when IDA marked code as data). undefine clears code/data annotations so a region can be reinterpreted. get_af/set_af read and toggle IDA AF_* analysis flags. force_offset tells IDA a value is a pointer and creates an xref. set_gp is RISC-V only — sets GP register for GP-relative xref resolution.",
+    "analysis": "Controls IDA analysis engine and on-the-fly IDB management. Actions: get_options, set_options, set_processor, set_loader_options, set_architecture, reanalyze, run, analyze, state, set_gp, save_idb, make_code, undefine, get_af, set_af, force_offset, add_entry, snapshot, restore_snapshot, auto_wait. save_idb persists the IDB to disk. make_code forces bytes at an address to be disassembled as an instruction (use when IDA marked code as data). undefine clears code/data annotations so a region can be reinterpreted. get_af/set_af read and toggle IDA AF_* analysis flags. force_offset tells IDA a value is a pointer and creates an xref. set_gp is RISC-V only — sets GP register for GP-relative xref resolution. add_entry marks an address as an entry point; snapshot/restore_snapshot save and restore a named IDB snapshot; auto_wait blocks until IDA analysis is idle.",
     "annotation": "Automatically generates and manages comments, labels, and documentation across functions. Actions: auto_comment, auto_comment_function, label_loops, label_branches, mark_dangerous, annotate_constants, tag_functions, document_args, mark_error_paths, propagate_names, cleanup, validate, get_context, set_structured, bulk_set, export_md, import_md, summary.",
     "background": "Background batch execution for long-running analysis tasks and IDAPython scripts. Submit scripts or tool calls to run in background threads without interrupting IDA. Actions: submit, status, cancel, result, list, wait.",
     "batch": "Executes multiple tool calls in a single request to reduce round trips. Pass a calls array of tool invocations.",
-    "blackboard": "Durable RE notebook (canonical knowledge store). Prefer write/read/list/search/update/delete, frontier, next_target, decision_card, stats. Other blackboard actions remain callable. wiki is documentation lookup; knowledge is cross-session chip/symbol KB — use blackboard for findings.",
+    "blackboard": "Durable RE notebook (canonical knowledge store). Prefer write/read/list/search/update/delete, frontier, next_target, decision_card, stats. Other blackboard actions remain callable. wiki is documentation lookup; knowledge is the cross-session symbol KB — use blackboard for findings.",
     "bookmarks": "Manages named address bookmarks for quick navigation and milestone tracking. Actions: add, list, delete, update, clear, find, export.",
     "calc": "Safe address arithmetic and pointer resolution—use instead of mental math. Includes bitwise helper operations. Actions: eval, offset, convert, resolve, deref, chain, align, bitops.",
     "code": "Decompilation, disassembly, and code analysis (≈ IDA View menu / F5/Tab). smart_decompile: best first call — pseudocode + behavior tags + callers/callees + crypto hints + suggested next actions. decompile: pseudocode only. disasm: assembly listing. detect: custom per-session detector — define rules at runtime (api_chain, string_ref, type_match, xor_threshold, caller_of, callee_of). register persistent detectors with register=true. Actions: smart_decompile, decompile, disasm, detect, decompile_chain, semantic_decompile, diff_functions, trace_argument_origin, explain, decompile_all, xrefs_to, xrefs_from, xrefs_to_field, callees, callers, blocks, callgraph, find_paths, strings_in_func, decomp_dataflow, export.",
 
     "ctree": "Query and traverse the Hex-Rays decompiler ctree AST for a function. Actions: get, traverse, find_calls, find_vars, find_strings, find_conditions, get_logic_flow, dominance_map, var_dependency_graph.",
     "data": "Retrieve core IDB data. functions: list all functions — always includes xref count (capped 999). globals: global variables. strings: string literals — always includes xref count. imports: imported modules and functions. exports: exported entry points. annotations: all named items and comments. read_bytes: raw bytes at an address. lookup: resolve name↔address. bulk_query: multiple queries in one call. capability_matrix: binary capability matrix from imports + function classifications. string_xrefs: ranked string-to-function xref map with module clustering.",
-    "firmware_view": "Firmware triage: region scanning, pointer sweeps, table carving, deterministic detection logic, multi-region campaigns, and bootstrap orchestration. Actions: scan_region, auto_retype, pointer_sweep, recommend, table_candidates, smart_carve, rollback_last, review_contradictions, region_profile, pointer_clusters, carve_plan, campaign, segment_sweep, multi_region_campaign, detect_load_address, detect_vector_table, detect_mmio, rtos_scan, triage_snapshot, bootstrap.",
+    "firmware": "Headerless/raw-blob firmware shaping: detect_vector_table finds Cortex-M reset/ISR vector tables, detect_load_base infers the preferred load address, detect_mmio locates memory-mapped peripheral regions, rtos_scan heuristically detects RTOS kernels, carve extracts a code/data region into a bounded range. Actions: detect_vector_table, detect_load_base, detect_mmio, rtos_scan, carve.",
     "funcs": "Function boundary management (≈ IDA P/Delete keys). create: define a function at addr (≡ pressing P in IDA). change: set the current function end (≡ IDA Set function end). delete: remove function definition. info: full function metadata — pass include_xrefs/include_prototype/include_stack for richer output. metrics: size/complexity/call counts. find_similar: structural similarity search. suggest_names: name candidates from heuristics. list: paginated function listing (like data(functions)) with structured output. Note: regex-based filters live in search, while renames and comments live on modify. Actions: create, change, delete, set_flags, info, metrics, find_similar, suggest_names, list.",
     "gadgets": "Find ROP/JOP/COP gadgets, stack pivots, and classify exploit chains. Actions: rop, jop, cop, syscall, write_what_where, stack_pivot, shellcode_space, mitigations, seh_handlers, pivot_chains, classify_chain, semantic_find.",
     "governance": "Pre-flight validation for edits: detect contradictions, PII, dangerous patches. Actions: check, redact, list_rules, stats.",
     "graph": "Generate call graphs, CFGs, dominator trees, and xref graphs for visualization. Actions: callgraph, cfg, dominators, xref_graph.",
-    "idb": "Query top-level IDB metadata: binary info, segments, entrypoints, bookmarks, and architecture profile guidance for raw binaries. Actions: meta, summary, segments, entrypoints, bookmarks, overview, architecture_profile, state.",
+    "idb": "Query top-level IDB metadata: binary info, segments, entrypoints, bookmarks, and architecture profile guidance for raw binaries. Actions: meta, summary, segments, entrypoints, bookmarks, overview, architecture_profile, state, events, registers. events streams recent analysis/audit events; registers dumps the register state at an address (for debugger/emulator captures).",
     "imports_deep": "Deep import analysis: thunks, delay-loads, forwarded, ordinal, and API set resolution. Actions: thunks, delay, forwarded, ordinal, api_sets, resolve.",
      "intelligence": "Local embeddings index + behavior classification backend for search.nl. Prefer index_fast (quick) or index_batch (decompile-quality), then search(action=nl). Actions (core): index_fast, index_batch, semantic_search, similar_functions, embedder_status, intelligence_status.",
-    "knowledge": "Cross-session chip/symbol knowledge base (not the analysis notebook). For findings and hypotheses use blackboard. Actions: chip_identify, symbol_lookup, import_symbols, export_session, chip_families.",
+    "knowledge": "Cross-session symbol knowledge base (not the analysis notebook). For findings and hypotheses use blackboard. Actions: symbol_lookup, import_symbols, export_session.",
 
     "memory": "Read, write, and inspect raw memory/bytes in the binary or debuggee. search: set literal=true to bypass integer detection for digit-only patterns. compare: returns hamming_distance for large inputs, edit_distance for small. Actions: read, write, hexdump, search, compare, pointers, entropy, strings, struct_walk, histogram.",
     "misc": "Utility grab-bag: run scripts (python/idc), load/list/apply signatures, inspect cache stats, read/write files on the host filesystem, and reload IDA-side tool modules without restarting. reload: pass module='funcs' or modules='funcs,search' (or 'all') to pick up source changes instantly — no opencode restart needed for IDA-side changes. Actions: python, idc, load_sig, list_sigs, cache_stats, plugin_list, plugin_run, read_file, write_file, health, reload.",
-    "modify": "Apply edits to the IDB: rename symbols, add comments (regular/repeatable/anterior/posterior), set types, patch bytes/assembly, and rename local variables in a decompiled function. All actions run a governance pre-check by default (governed=True); patch_asm/patch_bytes into executable segments are blocked unless explicitly acknowledged. Actions: rename, comment, set_type, patch_bytes, patch_asm, rename_local.",
+    "modify": "Apply edits to the IDB: rename symbols, add comments (regular/repeatable/anterior/posterior), set types, patch bytes/assembly, create data items/string literals, bracket edits in undo_begin/undo_end, and rename local variables in a decompiled function. All actions run a governance pre-check by default (governed=True); patch_asm/patch_bytes into executable segments are blocked unless explicitly acknowledged. Actions: rename, comment, set_type, patch_bytes, patch_asm, rename_local, create_data, create_strlit, undo_begin, undo_end.",
+    "r2": "Rizin/radare2 sidecar engine (default-off) for pre-IDA and complementary triage on raw binaries. status: engine availability. bininfo: file metadata (arch/bits/entry/imports). load_hints: suggested load addresses. disassemble_hypothesis: disassemble at an address without an IDB. vxrefs: find raw pointer-word references to a value. Actions: status, bininfo, load_hints, disassemble_hypothesis, vxrefs.",
 
 
-    "search": "Primary discovery tool. find: unified names (incl. demangled)+strings+imports+comments+xrefs (+insns unless identifier-like). Always returns items[].addr. nl: embedding search (index_fast first; mode=quick|expand). analyze: unified structural analysis (neighborhood/outlier/similar/vulnerable/semantic scopes, uses embedding index + cached call graph). symbol/symbol_info: resolve names/addresses. api/callers/callees/xrefs_to_string: refs. string/bytes for raw patterns. Results always include results text + items with addr/name/type/score. Actions (core): find, nl, string, bytes, api, callers, callees, xrefs_to_string, symbol, symbol_info, decompiled, behavior, analyze.",
-    "segments": "List, create, modify, and analyze binary segments and their permissions/attributes. Actions: list, add, delete, set_attr, set_perms, move, info, analyze, find_code, find_data, compare, merge.",
-     "session": "Full session lifecycle. Prefer: create/switch/close/list/status/state/logs/health. state: analysis snapshot (binary, coverage, blackboard summary) — call at turn start. logs: tail IDA stdout/stderr without RPC when IDA is busy. Actions (core): create, switch, close, list, status, state, logs, health, kill.",
+    "search": "Primary discovery tool. find: unified names (incl. demangled)+strings+imports+comments+xrefs (+insns unless identifier-like) — pass kind='strings' for a dedicated string-literal search, kind='names' for symbols only. Always returns items[].addr. nl: embedding search (index_fast first; mode=quick|expand). analyze: unified structural analysis (neighborhood/outlier/similar/vulnerable/semantic scopes, uses embedding index + cached call graph). symbol/symbol_info: resolve names/addresses. api/callers/callees/xrefs_to_string: refs. string/bytes for raw patterns. data_value: locate raw byte/word values or ASCII strings in memory. query_lang: structured query-language search over names/strings/imports (lenient grammar — free text falls back to unified find). Results always include results text + items with addr/name/type/score. Actions (core): find, nl, string, bytes, api, callers, callees, xrefs_to_string, symbol, symbol_info, decompiled, behavior, analyze, data_value, query_lang.",
+    "segments": "List, create, modify, and analyze binary segments and their permissions/attributes. Actions: list, add, delete, set_attr, set_perms, move, info, analyze, find_code, find_data, compare, merge, sreg_get, sreg_set, sreg_list. sreg_get/sreg_set/sreg_list read, write, and enumerate segment-register (segmented-mode) mappings for a code address.",
+     "session": "Full session lifecycle. Prefer: create/switch/close/list/status/state/logs/health. create is blocking and waits until IDA auto-analysis completes, so the returned session is fully analyzed (safe_mode off). create_background (ida_open_background) is EXPERIMENTAL and DISABLED by default — it fails with FEATURE_DISABLED unless IDA_MCP_BACKGROUND_OPEN=1. state: analysis snapshot (binary, coverage, blackboard summary) — call at turn start. logs: tail IDA stdout/stderr without RPC when IDA is busy. Actions (core): create, switch, close, list, status, state, logs, health, kill.",
     "stack_analysis": "Analyze stack frames: buffer sizes, canaries, alignment, spills, variables, and uninitialized regions. Actions: frame, buffers, canary, alignment, spills, usage, variables, arrays, uninitialized, summary.",
     "symbols": "Loads and manages debug symbols (PDB/DWARF) for the current binary. Actions: load_pdb, load_dwarf, status, apply, export.",
     "multi_session": "Multi-binary session groups — link IDA sessions for cross-binary import/export resolution, cross-session decompilation, and cross-binary xref queries. Actions: group_create, group_list, group_link, group_remove, cross_resolve, cross_decompile, cross_xrefs, status.",
+    "emulate": "Drive IDA's native emulator/debugger (ida_dbg) end to end. The tool auto-selects a backend at runtime — built-in emulator candidates (Emulator/emulator) are tried first via load_debugger, then the native 'linux' backend, then bochs/gdb — and reports the active backend in every response (backend + backend_reason). info: emulator overview (backend, why chosen, process state, available registers, current IP). backend: explicitly select/reload a backend by name (force reloads). start: launch the emulated process (optional start_addr/args/input_file/dir). state: current process state + instruction pointer. step: single/multi step — mode into|over|ret, count. run_to: run to an address. suspend/continue: pause/resume. stop: terminate the process (unload=true also unloads the backend). get_reg/set_reg: read/write a register (names list for bulk reads). read_mem/set_mem: read/write debuggee memory (data as hex). Mutating actions run a governance pre-check (governed=true default); failures map to EMULATION_ERROR / EMULATION_TIMEOUT. Actions: info, backend, start, state, step, run_to, suspend, continue, stop, get_reg, set_reg, read_mem, set_mem.",
 
     "truncation": "Manage truncated tool responses. continue reads the next chunk and requires field when the token contains multiple truncated fields; use the exact name listed in the response's _continue.fields. peek shows metadata (fields, totals, offsets) without consuming data. search greps within full original content. summary gives a compact overview. Also usable as per-call params on any tool: no_truncate=true skips truncation, max_tokens=N overrides budget, trunc_offset/trunc_limit paginate directly. Actions: continue, peek, search, summary.",
-    "types": "Manages IDA type system: structs, enums, prototypes, type propagation, and header imports. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header, diff, visualize, propagate, enum_values, type_graph, vtable.",
+    "types": "Manages IDA type system: structs, enums, prototypes, type propagation, and header imports. Actions: list, get, set_prototype, parse_decl, declare, apply, search_structs, infer, read_struct, import_header, diff, visualize, propagate, enum_values, type_graph, vtable, struct_member_add, struct_member_del, struct_member_rename, struct_member_set_type, enum_member_add, enum_member_rename, enum_member_revalue, til_delete, til_export, til_import. struct_member_*/enum_member_* edit struct members and enum enumerators; til_delete removes a named type; til_export writes matched types to a C header (cross-session carry); til_import parses a header into the local Type Library.",
     "wiki": "Built-in tool/workflow documentation lookup (not the analysis notebook). For findings use blackboard. Actions: list_topics, read, search, semantic_search, index, sections, suggest.",
-    "workflow": "Executes predefined multi-step analysis workflows for common RE tasks. audit_plan validates and scores a plan before execution. execute_plan runs a planned call list (or generated plan) through batch execution with execution metadata. prioritize reorders a dry-run plan by strategy (original/coverage/risk_first). compose merges multiple workflow plans into one deduplicated dry-run execution plan. estimate returns dry-run complexity/risk/category projections. explain returns a dry-run plan plus per-step rationale. plan previews another workflow action without executing it. catalog returns available workflows and required inputs. triage_fast auto-checks idb overview and, for firmware-like binaries, injects firmware_view(action='triage_snapshot') plus guided analysis. recon_sweep runs broader orientation + structured retrieval + protocol + security posture in one pass. Supports dry_run plan preview and include/exclude tool filtering for controlled orchestration. Actions: audit_plan, execute_plan, prioritize, compose, estimate, explain, plan, catalog, triage_fast, malware_deep, vuln_audit, recon_sweep, patch_review.",
+    "workflow": "Executes predefined multi-step analysis workflows for common RE tasks. audit_plan validates and scores a plan before execution. execute_plan runs a planned call list (or generated plan) through batch execution with execution metadata. prioritize reorders a dry-run plan by strategy (original/coverage/risk_first). compose merges multiple workflow plans into one deduplicated dry-run execution plan. estimate returns dry-run complexity/risk/category projections. explain returns a dry-run plan plus per-step rationale. plan previews another workflow action without executing it. catalog returns available workflows and required inputs. triage_fast auto-checks idb overview and runs guided analysis. recon_sweep runs broader orientation + structured retrieval + protocol + security posture in one pass. Supports dry_run plan preview and include/exclude tool filtering for controlled orchestration. Actions: audit_plan, execute_plan, prioritize, compose, estimate, explain, plan, catalog, triage_fast, malware_deep, vuln_audit, recon_sweep, patch_review.",
 
 }
 
@@ -435,6 +448,27 @@ TOOL_ARG_SCHEMAS = {
         "addr2": {"type": "string"},
         "governed": {"type": "boolean", "description": "If true, treat the region as governed (constrained) memory for scan/walk semantics"},
     },
+    "modify": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["modify"]},
+        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion. Not required for undo_begin/undo_end."},
+        "address": {"type": "string", "description": "Alias for addr"},
+        "value": {"type": "string", "description": "New name, comment text, type declaration, assembly instruction(s), or hex bytes"},
+        "name": {"type": "string", "description": "Alias for value (when action=rename)"},
+        "text": {"type": "string", "description": "Alias for value (when action=comment)"},
+        "type_str": {"type": "string", "description": "Alias for value (when action=set_type)"},
+        "asm": {"type": "string", "description": "Alias for value (when action=patch_asm)"},
+        "comment_type": {"type": "string", "enum": ["regular", "repeatable", "anterior", "posterior"], "description": "Comment type (when action=comment)"},
+        "governed": {"type": "boolean", "description": "Run deterministic governance pre-check (default true)"},
+        "comment": {"type": "string", "description": "Alias for value (when action=comment)"},
+        "hex_bytes": {"type": "string", "description": "Hex byte string for patch_bytes (e.g. '9090')"},
+        "nop": {"type": "boolean", "description": "If true, overwrite instruction(s) at addr with NOPs (patch_bytes)"},
+        "new_name": {"type": "string", "description": "New local variable name (rename_local)"},
+        "var_name": {"type": "string", "description": "Current local variable name (rename_local)"},
+        "item_type": {"type": "string", "description": "Data item kind for create_data: byte|word|dword|qword|pointer|array"},
+        "size": {"type": "integer", "description": "Byte length for create_strlit, or element count for create_data array/pointer"},
+        "count": {"type": "integer", "description": "Number of consecutive items for create_data (default 1), or NOP count for patch_bytes"},
+        "strtype": {"type": "string", "enum": ["c", "c16", "c32"], "description": "String type for create_strlit (c/c16/c32)"},
+    },
     "misc": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["misc"]},
         "expr": {
@@ -475,10 +509,27 @@ TOOL_ARG_SCHEMAS = {
         "poll_timeout": {"type": "number"},
         "gp": {"type": "string", "description": "RISC-V GP value as hex string for set_gp action (e.g. '0x2556f0')"},
         "addr": {"type": "string", "description": "Target address (hex) for make_code, undefine, force_offset"},
+        "ea": {"type": "string", "description": "Entry-point address (hex) for add_entry"},
         "size": {"type": "integer", "description": "Byte count for make_code/undefine/force_offset"},
         "af_flag": {"type": "string", "description": "AF_* flag name for get_af/set_af (e.g. 'AF_MARKCODE')"},
         "af_value": {"type": "boolean", "description": "Enable/disable flag for set_af"},
         "path": {"type": "string", "description": "IDB save path for save_idb (default: current IDB)"},
+        # snapshot / add_entry / auto_wait actions
+        "ordinal": {"type": "integer", "description": "Snapshot ordinal for restore_snapshot"},
+        "timeout_ms": {"type": "integer", "description": "Wait timeout in milliseconds for auto_wait (default: bounded by RPC timeout)"},
+        "snapshot_id": {"type": "string", "description": "Snapshot id/name for restore_snapshot"},
+    },
+    "annotation": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["annotation"]},
+        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
+        "limit": {"type": "integer", "description": "Result limit for list/import"},
+        "prefix": {"type": "string", "description": "Comment prefix filter for list"},
+        "dry_run": {"type": "boolean", "description": "Report what would be written without touching the IDB"},
+        "text": {"type": "string", "description": "Comment text"},
+        "items": {"type": "array", "items": {"type": "object"}, "description": "Annotation items for import"},
+        "path": {"type": "string", "description": "File path for import/export"},
+        "fmt": {"type": "string", "description": "Comment format: plain|markdown|structured (alias: format)"},
+        "value": {"type": "string", "description": "Proposed comment text to validate (for validate action)"},
     },
     "data": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["data"]},
@@ -522,6 +573,7 @@ TOOL_ARG_SCHEMAS = {
         "semantic_min_score": {"type": "number", "description": "Minimum semantic score threshold (default 0.0)"},
         "include_semantic_alternatives": {"type": "boolean", "description": "Include alternative semantic matches"},
         "constraints": {"type": "object", "description": "Schema constraints for structured search"},
+        "kind": {"type": "string", "enum": ["all", "names", "strings", "imports", "comments", "instructions", "refs"], "description": "Restrict action='find' to one category. kind='strings' is a dedicated string-literal search; kind='names' a symbol-only search. Default 'all'."},
         # Combinator / NL kwargs (must be admitted — host rejects unknown keys)
         "mode": {"type": "string", "description": "nl mode: quick|expand (default expand)"},
         "rerank": {"type": "boolean", "description": "Re-score recalled candidates with the cross-encoder reranker (auto in expand mode, off in quick; no-op when no rerank model is installed)."},
@@ -537,6 +589,45 @@ TOOL_ARG_SCHEMAS = {
         "dst": {"type": "string", "description": "path destination symbol/addr"},
         "max_depth": {"type": "integer", "description": "path/reach max BFS depth"},
         "depth": {"type": "integer", "description": "reach/noreach BFS depth"},
+        # data_value / query_lang actions
+        "value": {"type": "string", "description": "Raw value to locate for data_value (e.g. '0xDEADBEEF' or ASCII string)"},
+        "endian": {"type": "string", "enum": ["little", "big"], "description": "Byte order for data_value scan (default: binary endianness)"},
+        "size": {"type": "integer", "description": "Byte width for data_value scans (1/2/4/8; default: auto-detect)"},
+    },
+    "r2": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["r2"]},
+        "binary_path": {"type": "string", "description": "Absolute path to the raw binary for r2 sidecar operations (defaults to the current session binary)"},
+        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or file offset for disassemble_hypothesis / load_hints"},
+        "value": {"type": "string", "description": "Raw value whose pointer-word references to locate (for vxrefs)"},
+        "count": {"type": "integer", "description": "Max instructions to disassemble (disassemble_hypothesis)"},
+        "limit": {"type": "integer", "description": "Max results to return (vxrefs)"},
+    },
+    "firmware": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["firmware"]},
+        "start": {"type": "string", "description": "Inclusive start address of the carve/triage window (hex)"},
+        "end": {"type": "string", "description": "Exclusive end address of the carve/triage window (hex)"},
+        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") for region-relative checks"},
+        "limit": {"type": "integer", "description": "Max results to return (detect_* / rtos_scan)"},
+    },
+    "emulate": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["emulate"]},
+        "name": {"type": "string", "description": "Register name (get_reg/set_reg) or backend name (backend action)."},
+        "names": {"type": "array", "items": {"type": "string"}, "description": "Registers to read in one get_reg call."},
+        "value": {"type": "string", "description": "Register value for set_reg (hex string like '0x10' or decimal string)."},
+        "address": {"type": "string", "description": "Function name or hexadecimal address for run_to/read_mem/set_mem."},
+        "size": {"type": "integer", "description": "Byte count for read_mem (default 16, max 4096)."},
+        "data": {"type": "string", "description": "Hex bytes to write for set_mem (e.g. '9090')."},
+        "start_addr": {"type": "string", "description": "Optional start address for start."},
+        "args": {"type": "string", "description": "Process argv string for start."},
+        "input_file": {"type": "string", "description": "Input file path for start."},
+        "dir": {"type": "string", "description": "Working directory for start."},
+        "count": {"type": "integer", "description": "Step count for step (default 1)."},
+        "mode": {"type": "string", "enum": ["into", "over", "ret"], "description": "Step mode (default 'into')."},
+        "force": {"type": "boolean", "description": "Reload the backend even if one is loaded (backend action)."},
+        "unload": {"type": "boolean", "description": "Unload the backend after stop."},
+        "governed": {"type": "boolean", "description": "Run the governance pre-check on mutating actions (default true)."},
+        "timeout_ms": {"type": "integer", "description": "Per-action timeout in milliseconds (default 30000)."},
+        "idb": {"type": "string", "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."},
     },
     "workflow": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["workflow"]},
@@ -599,6 +690,30 @@ TOOL_ARG_SCHEMAS = {
             "description": "Optional deny-list of tool names to remove from the generated plan.",
         },
     },
+    "types": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["types"]},
+        "name": {"type": "string", "description": "Type name, or variable name for apply"},
+        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
+        "decl": {"type": "string", "description": "Type declaration string (or header content)"},
+        "query": {"type": "string", "description": "Search query for list/search_structs"},
+        "kind": {"type": "string", "description": "Apply kind: function, global, local"},
+        "offset": {"type": "integer", "description": "Pagination offset (or member byte offset for struct_member_add; -1 appends)"},
+        "count": {"type": "integer", "description": "Maximum items to return"},
+        "other_name": {"type": "string", "description": "Second type name (for diff)"},
+        "value": {"type": "integer", "description": "Enum value to look up (enum_values) or enum member value (enum_member_*)"},
+        "max_depth": {"type": "integer", "description": "Maximum recursion depth for type_graph"},
+        "struct_name": {"type": "string", "description": "Struct type name (struct_member_* actions)"},
+        "member_name": {"type": "string", "description": "Member/enumerator name (struct_member_*/enum_member_* actions)"},
+        "new_name": {"type": "string", "description": "Replacement name (struct_member_rename / enum_member_rename)"},
+        "type_str": {"type": "string", "description": "C type string (struct_member_add / struct_member_set_type)"},
+        "size": {"type": "integer", "description": "Member size in bytes (struct_member_add when type_str omitted)"},
+        "enum_name": {"type": "string", "description": "Enum type name (enum_member_* actions)"},
+        "enum_value": {"type": "integer", "description": "Enum member value (enum_member_add / enum_member_revalue)"},
+        "path": {"type": "string", "description": "TIL file path (til_export / til_import)"},
+        "til_filter": {"type": "string", "description": "Type-name filter for til_export (default '*')"},
+        "seed_addr": {"type": "string", "description": "Alias for addr (type inference seed)"},
+        "type_name": {"type": "string", "description": "Alias for name"},
+    },
     "segments": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["segments"]},
         "start": {"type": "string"},
@@ -624,6 +739,8 @@ TOOL_ARG_SCHEMAS = {
         "segment2": {"type": "string"},
         "segment_name": {"type": "string"},
         "segment_name2": {"type": "string"},
+        # sreg_get/sreg_set/sreg_list actions
+        "reg": {"type": "string", "description": "Segment register name for sreg_get/sreg_set/sreg_list (e.g. 'cs', 'ds', 'ss', 'es', 'fs', 'gs')"},
     },
 
     "intelligence": {
@@ -665,6 +782,10 @@ TOOL_ARG_SCHEMAS = {
         # `state` reads `audit_tail` (number of recent audit records to show).
         # Previously stripped, so state always returned the default 5.
         "audit_tail": {"type": "integer"},
+        # events / registers actions
+        "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
+        "limit": {"type": "integer", "description": "Max events to return for events action"},
+        "tail": {"type": "integer", "description": "Return only the N most recent events"},
     },
     "code": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["code"]},
@@ -705,6 +826,8 @@ TOOL_ARG_SCHEMAS = {
         "function": {"type": "string", "description": "detect caller_of/callee_of alias for target"},
         "arg_index": {"type": "integer", "description": "trace_argument_origin: 1-based index of the argument to trace (default 1)"},
         "max_callers_per_level": {"type": "integer", "description": "trace_argument_origin: cap on callers followed per recursion level"},
+        "offset": {"type": "integer", "description": "decompile_all: number of matched functions to skip before returning the page (pagination)."},
+        "mode": {"type": "string", "enum": ["full", "listing"], "description": "decompile_all: 'full' decompiles each function (default); 'listing' returns a fast disasm-only table (addr/name/size/prototype) without Hex-Rays."},
     },
     "ctree": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["ctree"]},
@@ -716,6 +839,7 @@ TOOL_ARG_SCHEMAS = {
         "action": {"type": "string", "enum": TOOL_ACTIONS["gadgets"]},
         "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},
         "query": {"type": "string"},
+        "raw": {"type": "boolean", "description": "Force a byte-level linear sweep: raw-decode from every offset in the exec region even when IDA has disassembled heads (auto-enabled when the region has no defined instruction heads)."},
         "auto_blackboard": {"type": "boolean", "description": "Store mitigation/exploit findings in the blackboard (opt-in; default keeps read actions pure)."},
         "limit": {"type": "integer"},
         "max_insns": {"type": "integer"},
@@ -780,6 +904,7 @@ TOOL_ARG_SCHEMAS = {
         "dry_run": {"type": "boolean"},
         "template": {"type": "string", "description": "Predefined template name"},
         "template_vars": {"type": "object", "description": "Variables for template expansion"},
+        "bindings": {"type": "object", "description": "Static {param: value} map for output→input chaining; later call arguments may reference it via $param. Step results chain via step{i}_{key} / step{i}.result{path} / <output_key> refs. Precedence: literal > bindings > step refs."},
     },
     "blackboard": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["blackboard"]},
@@ -792,8 +917,8 @@ TOOL_ARG_SCHEMAS = {
         "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags for categorization"},
         "confidence": {"type": "number", "description": "Confidence score 0-1"},
         "priority": {"type": "number", "description": "Investigation priority 0-1"},
-        "kind": {"type": "string", "description": "finding, hypothesis, question, task, or decision"},
-        "status": {"type": "string", "description": "open, confirmed, resolved, or rejected"},
+        "kind": {"type": "string", "description": "finding, hypothesis, question, task, decision, or examined"},
+        "status": {"type": "string", "description": "proposed, open, confirmed, resolved, or rejected"},
         "reason": {"type": "string", "description": "Lifecycle transition reason"},
         "evidence": {"type": "array", "items": {"type": "object"}, "description": "Structured supporting observations"},
         "tag": {"type": "string", "description": "Filter by single tag"},
@@ -803,32 +928,9 @@ TOOL_ARG_SCHEMAS = {
         "threshold": {"type": "number", "description": "Similarity threshold for semantic retrieval"},
         "include_resolved": {"type": "boolean", "description": "Include resolved entries in semantic retrieval"},
         "include_contradicted": {"type": "boolean", "description": "Include contradicted entries in semantic retrieval"},
-        "force": {"type": "boolean", "description": "Force semantic_rebuild to re-embed all matching entries"},
+        "force": {"type": "boolean", "description": "Force re-embedding of matching entries during semantic recall"},
         "offset": {"type": "integer", "description": "Pagination offset"},
         "db_path": {"type": "string", "description": "Override path to blackboard SQLite DB"},
-        # Knowledge-graph builder fields for add_system / add_struct / add_gap /
-        # fill_gap / add_state_machine / add_peripheral / add_attack_surface /
-        # kg_gaps. Previously stripped, so the KG-builder actions could only
-        # set title/content/confidence/tags — the structuring fields (members,
-        # gap_type, size_bytes, drivers, reachable_from, ...) were silently
-        # dropped, making these actions non-functional through MCP.
-        "members": {"type": "array", "items": {"type": "string"}},
-        "entry_points": {"type": "array", "items": {"type": "string"}},
-        "exit_points": {"type": "array", "items": {"type": "string"}},
-        "size_bytes": {"type": "integer"},
-        "hints": {"type": "array", "items": {"type": "string"}},
-        "gap_type": {"type": "string"},
-        "binary_type": {"type": "string"},
-        "gap_id": {"type": "string"},
-        "filled_by": {"type": "string"},
-        "state_var": {"type": "string"},
-        "states": {"type": "array", "items": {"type": "object"}},
-        "periph_type": {"type": "string"},
-        "drivers": {"type": "array", "items": {"type": "string"}},
-        "reachable_from": {"type": "array", "items": {"type": "string"}},
-        "input_type": {"type": "string"},
-        "call_stack": {"type": "array", "items": {"type": "string"}},
-        "resolved": {"type": "boolean"},
     },
     "governance": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["governance"]},

@@ -243,6 +243,28 @@ class ServerResponseCompactMixin:
     # response compaction even when ``drop_false`` is enabled, because the
     # absence of the key vs. a literal False is the difference between
     # "unknown / not yet computed" and "we checked, the answer is no".
+    #
+    # Lifecycle semantics (surfaced by session status):
+    #   * ``safe_mode``          — the session's gate is up: full-binary
+    #                              analysis / indexing / script execution is
+    #                              blocked until IDA auto-analysis finishes.
+    #   * ``analysis_complete``  — analysis has been CONFIRMED complete at
+    #                              least once for this session. It is a
+    #                              sticky flag, not a live sample: it stays
+    #                              True even if a runtime restarts or the
+    #                              session re-enters safe mode (e.g. an IDB
+    #                              rebuild). Live activity is reported by
+    #                              ``analysis_ready`` / ``analysis_active``.
+    #   * ``analysis_ready``     — live sample: IDA analysis is currently
+    #                              idle / not running. Distinguishes "runtime
+    #                              alive but still busy" (ready=False) from
+    #                              "runtime gone / unknown" (key absent).
+    #   * ``analysis_active``    — live sample: IDA auto-analysis is currently
+    #                              in progress on this runtime.
+    #   * ``background``         — the session was opened on the background
+    #                              load path (never blocks on upfront analysis).
+    #   * ``auto_backgrounded``  — a regular open was auto-routed to the
+    #                              background path because the binary is large.
     _STATE_BOOLEAN_KEYS = frozenset({
         "is_current",
         "is_running",
@@ -251,6 +273,8 @@ class ServerResponseCompactMixin:
         "binary_exists",
         "analysis_applied",
         "analysis_complete",
+        "analysis_ready",
+        "analysis_active",
         "safe_mode",
         "background",
         "auto_backgrounded",

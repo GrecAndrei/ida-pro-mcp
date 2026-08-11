@@ -279,6 +279,60 @@ def test_unknown_tool_is_iserror_true():
 
 
 # ---------------------------------------------------------------------------
+# mcp.py: a non-serializable tool result is a crisp isError envelope, never a crash
+# ---------------------------------------------------------------------------
+
+def test_tool_non_serializable_result_is_iserror_not_crash():
+    jr, mcp = _load_pkg()
+    server = mcp.McpServer("test")
+
+    def returns_set(**kwargs):
+        return {1, 2, 3}  # set() is not JSON-serializable
+
+    server.tool(returns_set)
+
+    out = server._mcp_tools_call("returns_set", {})
+    assert out["isError"] is True
+    assert out["structuredContent"]["error"]["code"] == "INTERNAL"
+    # The error text must be serializable to JSON so the transport never dies.
+    json.dumps(out)
+    assert "non-serializable" in out["content"][0]["text"]
+
+
+def test_tool_nested_non_serializable_dict_is_iserror_not_crash():
+    jr, mcp = _load_pkg()
+    server = mcp.McpServer("test")
+
+    def returns_nested(**kwargs):
+        return {"ok": True, "payload": {frozenset([1])}}  # frozenset nested value
+
+    server.tool(returns_nested)
+
+    out = server._mcp_tools_call("returns_nested", {})
+    assert out["isError"] is True
+    assert out["structuredContent"]["error"]["code"] == "INTERNAL"
+    json.dumps(out)
+
+
+def test_mcp_post_non_serializable_response_returns_32603():
+    jr, mcp = _load_pkg()
+    server = mcp.McpServer("test")
+    # Force the registry to hand back a non-serializable response (a dict with
+    # a set value keeps the JSON-RPC id so the error reply can match it).
+    server.registry.dispatch = lambda body: {"id": 9, "result": {1, 2, 3}}
+
+    fake = _FakeHandler(server, path="/mcp")
+    body = json.dumps({"jsonrpc": "2.0", "method": "ping", "id": 9}).encode()
+    mcp.McpHttpRequestHandler._handle_mcp_post(fake, body)
+
+    assert ("response", 200) in fake.sent
+    assert fake.wfile.writes
+    payload = json.loads(fake.wfile.writes[0])
+    assert payload["error"]["code"] == -32603
+    assert payload["id"] == 9
+
+
+# ---------------------------------------------------------------------------
 # mcp.py: SSE POST must validate the session BEFORE dispatching
 # ---------------------------------------------------------------------------
 

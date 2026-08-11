@@ -25,10 +25,29 @@ from .core import (  # noqa: E402
     get_cached_constant_db,
     get_cached_imports,
     get_cached_strings,
-    iter_segments,
     paginate_records,
+    resolve_scan_segments,
+    riscv_lui_addi_pair,
     safe_generate_disasm_line,
 )
+
+def _known_const_name(value: int, known: dict) -> str:
+    """Name an immediate constant: known DB hit, else pattern-based magic.
+
+    Shared by the single-immediate scan and the RISC-V lui+addi pair path so
+    both treat the same constant the same way.
+    """
+    const_name = known.get(value)
+    if const_name:
+        return const_name
+    if value > 0xFFFF:
+        hex_str = hex(value)[2:]
+        if len(hex_str) >= 6:
+            chunks = [hex_str[i:i + 2] for i in range(0, len(hex_str), 2)]
+            if len(set(chunks)) <= 3:
+                return f"PATTERN_{hex(value)}"
+    return ""
+
 
 _DECOMPILED_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
 # Bounds the full-binary constants scan: keeps found_rows allocation and the
@@ -48,7 +67,8 @@ def _iter_function_starts(range_start=None, range_end=None):
         return
 
     seen = set()
-    for seg_start, seg_end in iter_segments(range_start, range_end, require_exec=True):
+    segs, _note, _error = resolve_scan_segments(range_start, range_end, require_exec=True)
+    for seg_start, seg_end in segs:
         for func_ea in idautils.Functions(seg_start, seg_end):
             if func_ea in seen:
                 continue
@@ -328,7 +348,10 @@ def search_constants(pattern, range_start, range_end, include_context, offset, l
     timed_out = False
     capped = False
 
-    for seg_start, seg_end in iter_segments(range_start, range_end, require_exec=True):
+    segs, seg_note, seg_error = resolve_scan_segments(range_start, range_end, require_exec=True)
+    if seg_error:
+        return make_error(MCPError.NOT_FOUND, seg_error)
+    for seg_start, seg_end in segs:
         curr = seg_start
         while curr < seg_end:
             if len(found_rows) >= _CONSTANTS_HIT_CAP:
@@ -341,18 +364,11 @@ def search_constants(pattern, range_start, range_end, include_context, offset, l
                 break
             insn = ida_ua.insn_t()
             if ida_ua.decode_insn(insn, curr) > 0:
+                matched_here = False
                 for op in insn.ops:
                     if op.type != ida_ua.o_imm:
                         continue
-                    const_name = KNOWN_CONSTANTS.get(op.value)
-                    if not const_name:
-                        # Pattern-based magic detection for large values
-                        if op.value > 0xFFFF:
-                            hex_str = hex(op.value)[2:]
-                            if len(hex_str) >= 6:
-                                chunks = [hex_str[i:i+2] for i in range(0, len(hex_str), 2)]
-                                if len(set(chunks)) <= 3:
-                                    const_name = f"PATTERN_{hex(op.value)}"
+                    const_name = _known_const_name(op.value, KNOWN_CONSTANTS)
                     if const_name:
                         func = idaapi.get_func(curr)
                         fn_name = ida_funcs.get_func_name(func.start_ea) if func else "unknown"
@@ -367,7 +383,41 @@ def search_constants(pattern, range_start, range_end, include_context, offset, l
                             "value": hex(op.value), "name": const_name,
                             "function": fn_name, "line": line,
                         })
+                        matched_here = True
                         break
+                if not matched_here:
+                    # RISC-V lui+addi/addiw adjacent-pair: the *resolved*
+                    # 32-bit constant is the one worth matching (the lui half
+                    # and addi half are rarely known constants by themselves).
+                    next_ea = curr + getattr(insn, "size", 0)
+                    if next_ea > curr and next_ea < seg_end:
+                        try:
+                            next_insn = ida_ua.insn_t()
+                            if ida_ua.decode_insn(next_insn, next_ea) > 0:
+                                pair = riscv_lui_addi_pair(insn, next_insn)
+                                if pair:
+                                    resolved, addi_ea = pair
+                                    const_name = _known_const_name(resolved, KNOWN_CONSTANTS)
+                                    if const_name:
+                                        func = idaapi.get_func(curr)
+                                        fn_name = ida_funcs.get_func_name(func.start_ea) if func else "unknown"
+                                        if const_matcher and not const_matcher(f"{const_name} {hex(resolved)} {fn_name}"):
+                                            pass
+                                        else:
+                                            line = (
+                                                f"{hex(curr)}  {hex(resolved)}  {const_name}  "
+                                                f"in:{fn_name}  lui+addi@{hex(addi_ea)}"
+                                            )
+                                            if include_context:
+                                                disasm_line = safe_generate_disasm_line(curr)
+                                                line += f"  {clip_text(ida_lines.tag_remove(disasm_line) if disasm_line else '')}"
+                                            found_rows.append({
+                                                "address_ea": curr, "address": hex(curr),
+                                                "value": hex(resolved), "name": const_name,
+                                                "function": fn_name, "line": line,
+                                            })
+                        except Exception:
+                            pass
                 curr += insn.size
             else:
                 curr = idc.next_head(curr, seg_end)
@@ -385,6 +435,8 @@ def search_constants(pattern, range_start, range_end, include_context, offset, l
         result["items"] = [{"address": r["address"], "value": r["value"], "name": r["name"], "function": r["function"]} for r in page]
     if pattern:
         result["query"] = pattern
+    if seg_note:
+        result["note"] = seg_note
     if timed_out:
         result["timed_out"] = True
         result["hint"] = "Search timed out. Narrow with range or increase timeout_ms."

@@ -2,7 +2,8 @@
 Segment management tool for IDA Pro MCP.
 
 Actions: list, info, add, delete, set_attr, set_perms, move,
-         analyze, find_code, find_data, compare, merge
+         analyze, find_code, find_data, compare, merge,
+         sreg_get, sreg_set, sreg_list (segment-register seam)
 """
 
 import math
@@ -24,6 +25,20 @@ except ImportError:
         from ida_pro_mcp.ida_mcp.error_handling import parse_address_safe
     except ImportError:
         from error_handling import parse_address_safe  # type: ignore[import-not-found]
+
+# ida_segregs / ida_idp are only present in a live IDA process and are not
+# re-exported by _common. Guard the imports so the module still loads in the
+# host unit-test harness; the sreg actions degrade to a clear error when the
+# runtime lacks them. Tests inject fake modules via sys.modules before loading.
+try:
+    import ida_idp  # noqa: F401
+except ImportError:
+    ida_idp = None  # type: ignore[assignment]
+
+try:
+    import ida_segregs  # noqa: F401
+except ImportError:
+    ida_segregs = None  # type: ignore[assignment]
 
 
 # ============================================================================
@@ -178,19 +193,147 @@ def _seg_density_analysis(seg):
     }
 
 
+# ============================================================================
+# 11b. SEGMENT REGISTERS - ida_segregs seam (Thumb T, RISC-V GP, x86-16 CS/DS)
+# ============================================================================
+# Public sr_type labels map onto the sreg range tag stored by IDA:
+#   signed/unsigned  -> SR_user  (an explicit, user-specified value)
+#   default          -> SR_inherit (inherit the value of the previous range)
+#   auto             -> SR_auto   (let IDA determine the value)
+# Modern IDA stores no per-range signedness bit; "signed" and "unsigned" are
+# accepted for contract parity and both write an explicit user value.
+
+_SREG_TYPES = ("signed", "unsigned", "default", "auto")
+
+
+def _resolve_sreg(reg):
+    """Resolve a segment-register name (e.g. 'T', 'GP', 'CS') or number to its IDA index.
+
+    Returns an int register index, or None when the register cannot be resolved.
+    """
+    if reg is None or isinstance(reg, bool):
+        return None
+    if isinstance(reg, int):
+        return reg
+    if ida_idp is not None and hasattr(ida_idp, "str2reg"):
+        try:
+            sr = int(ida_idp.str2reg(str(reg)))
+            if sr >= 0:
+                return sr
+        except (ValueError, TypeError):
+            pass
+    try:
+        return int(str(reg), 0)
+    except (ValueError, TypeError):
+        return None
+
+
+def _sreg_name(sr):
+    """Return the display name for a segment-register index from the processor table."""
+    if ida_idp is not None:
+        ph = getattr(ida_idp, "ph", None)
+        if ph is not None:
+            try:
+                reg_names = getattr(ph, "reg_names", None) or []
+                idx = int(sr)
+                if 0 <= idx < len(reg_names) and reg_names[idx]:
+                    return str(reg_names[idx])
+            except (ValueError, TypeError, IndexError):
+                pass
+    return str(sr)
+
+
+def _sreg_reg_indices():
+    """Return the inclusive (first, last) segment-register index range, or None."""
+    if ida_idp is None:
+        return None
+    ph = getattr(ida_idp, "ph", None)
+    if ph is None:
+        return None
+    try:
+        first = int(getattr(ph, "reg_first_sreg", 0) or 0)
+        last = int(getattr(ph, "reg_last_sreg", 0) or 0)
+    except (ValueError, TypeError):
+        return None
+    if last < first or first < 0:
+        return None
+    return (first, last)
+
+
+def _sreg_tag_name(tag):
+    """Map an sreg range tag (SR_inherit/SR_user/SR_auto) to the public sr_type label."""
+    if ida_segregs is None:
+        return "signed"
+    if tag == getattr(ida_segregs, "SR_inherit", 0):
+        return "default"
+    if tag == getattr(ida_segregs, "SR_auto", 2):
+        return "auto"
+    return "signed"  # SR_user -> an explicit user-specified value
+
+
+def _sreg_tag_for_type(sr_type):
+    """Map the public sr_type label to the split_sreg_range tag to store."""
+    if ida_segregs is None:
+        return 0
+    if sr_type == "default":
+        return getattr(ida_segregs, "SR_inherit", 0)
+    if sr_type == "auto":
+        return getattr(ida_segregs, "SR_auto", 2)
+    return getattr(ida_segregs, "SR_user", 1)  # signed/unsigned -> explicit user value
+
+
+def _sreg_ranges_for_register(seg_start, seg_end, sr):
+    """Enumerate the sreg ranges of one register overlapping [seg_start, seg_end)."""
+    ranges = []
+    try:
+        qty = int(ida_segregs.get_sreg_ranges_qty(sr))
+    except Exception:
+        return ranges
+    for n in range(qty):
+        out = ida_segregs.sreg_range_t()
+        try:
+            ok = ida_segregs.getn_sreg_range(out, sr, n)
+        except Exception:
+            continue
+        if not ok:
+            continue
+        start = getattr(out, "start_ea", None)
+        end = getattr(out, "end_ea", None)
+        if start is None or end is None:
+            continue
+        if end <= seg_start or start >= seg_end:
+            continue
+        ranges.append(out)
+    return ranges
+
+
+def _sreg_range_record(sr, srange):
+    """Build the public {reg, value, sr_type, start, end} record for one sreg range."""
+    return {
+        "reg": _sreg_name(sr),
+        "value": getattr(srange, "val", None),
+        "sr_type": _sreg_tag_name(getattr(srange, "tag", None)),
+        "start": hex(getattr(srange, "start_ea", 0)),
+        "end": hex(getattr(srange, "end_ea", 0)),
+    }
+
+
 @tool
 @idawrite
 def segments(
     action: Annotated[Literal["list", "add", "delete", "set_attr", "set_perms", "move",
-                              "info", "analyze", "find_code", "find_data", "compare", "merge"],
-                      "Action: list|add|delete|set_attr|set_perms|move|info|analyze|find_code|find_data|compare|merge"],
-    start: Annotated[Optional[str], "Start address (src for move); or segment address for info/analyze/find_code/find_data"] = None,
+                              "info", "analyze", "find_code", "find_data", "compare", "merge",
+                              "sreg_get", "sreg_set", "sreg_list"],
+                      "Action: list|add|delete|set_attr|set_perms|move|info|analyze|find_code|find_data|compare|merge|sreg_get|sreg_set|sreg_list"],
+    start: Annotated[Optional[str], "Start address (src for move); or segment address for info/analyze/find_code/find_data/sreg_get/sreg_set/sreg_list"] = None,
     end: Annotated[Optional[str], "End address (dst for move); or second address for compare"] = None,
     name: Annotated[Optional[str], "Segment name"] = None,
     name2: Annotated[Optional[str], "Second segment name (for compare)"] = None,
     sclass: Annotated[str, "Segment class"] = "DATA",
     attr: Annotated[Optional[str], "Attribute name (for set_attr)"] = None,
-    value: Annotated[Optional[Union[str, int]], "Attribute value (for set_attr / set_perms)"] = None,
+    value: Annotated[Optional[Union[str, int]], "Attribute value (for set_attr / set_perms) or segment-register value (for sreg_set)"] = None,
+    reg: Annotated[Optional[Union[str, int]], "Segment register name (e.g. 'T', 'GP', 'CS', 'DS') or number — for sreg_get/sreg_set/sreg_list"] = None,
+    sr_type: Annotated[str, "Signedness for sreg_set: 'signed' (default), 'unsigned', 'default', or 'auto'"] = "signed",
     offset: Annotated[int, "Pagination offset (for list)"] = 0,
     count: Annotated[int, "Max results (0=all)"] = 100,
     **kwargs
@@ -252,6 +395,24 @@ def segments(
     merge — Merge analysis results across all segments into a summary table
         Params: (none)
         Returns: {segments: [...], totals: {total_size, avg_entropy, ...}}
+
+    ====== SEGMENT-REGISTER ACTIONS (ida_segregs seam) ======
+
+    sreg_get — Read one segment register at an address (Thumb T, RISC-V GP, x86-16 CS/DS)
+        Params: start (address), reg (register name or number)
+        Returns: {address, reg, value, sr_type, range: {start, end}}
+        value is BADSEL when the register is undefined at that address.
+
+    sreg_set — Write one segment register at an address (governed write, mirrors set_attr)
+        Params: start (address), reg (register name or number), value (int),
+                sr_type ('signed'|'unsigned'|'default'|'auto', default 'signed')
+        Returns: {address, reg, value, sr_type}
+        sr_type maps to the IDA range tag: signed/unsigned -> SR_user (explicit
+        value), default -> SR_inherit, auto -> SR_auto.
+
+    sreg_list — Enumerate segment-register ranges overlapping the segment containing `start`
+        Params: start (address), reg (optional filter — omit to list all segment registers)
+        Returns: {segment, reg, ranges: [{reg, value, sr_type, start, end}], count}
     """
     try:
         # Normalize common direct-call aliases even before the MCP server's
@@ -362,8 +523,30 @@ def segments(
 
             seg = idaapi.segment_t()
             seg.start_ea, seg.end_ea = s_ea, e_ea
+            # add_segm_ex leaves seg.perm at 0 unless the loader set it, which
+            # silently makes analysis treat a CODE segment as data (no EXEC on
+            # raw blobs).  Derive permissions from the segment class so a code
+            # segment added to an opaque .bin is actually analyzed as code.
+            perm = getattr(idaapi, "SEGPERM_READ", 1)
+            sclass_upper = str(sclass or "").upper()
+            if sclass_upper in ("CODE", "XTRN"):
+                perm |= getattr(idaapi, "SEGPERM_EXEC", 4)
+            elif sclass_upper == "BSS":
+                perm |= getattr(idaapi, "SEGPERM_WRITE", 2)
+            seg.perm = perm
             if idaapi.add_segm_ex(seg, name or "", sclass, 0):
-                return {"ok": True, "start": hex(s_ea), "end": hex(e_ea), "name": name, "class": sclass}
+                result = {"ok": True, "start": hex(s_ea), "end": hex(e_ea), "name": name, "class": sclass}
+                if sclass_upper in ("CODE", "XTRN"):
+                    result["perms"] = _perms_string(seg)
+                    result["note"] = (
+                        "Segment permissions set to READ|EXEC from sclass. "
+                        "If code is still misread as data, run segments(action='set_perms', ...)."
+                    )
+                elif not sclass_upper:
+                    result["note"] = (
+                        "Run segments(action='set_perms', ...) to set explicit permissions."
+                    )
+                return result
             return make_error(MCPError.IDA_ERROR,
                               f"Failed to add segment '{name or ''}' at {hex(s_ea)}-{hex(e_ea)}")
 
@@ -515,6 +698,144 @@ def segments(
             error_msg = move_errors.get(result, f"Unknown error code: {result}")
             return make_error(MCPError.IDA_ERROR,
                               f"Failed to move segment: {error_msg}")
+
+        # ------------------------------------------------------------------
+        # SREG_GET — read one segment register (Thumb T, RISC-V GP, x86-16 CS/DS)
+        # ------------------------------------------------------------------
+        elif action == "sreg_get":
+            if not start:
+                return make_error(MCPError.INVALID_ARGS,
+                                  "Parameter 'start' (address) is required for sreg_get")
+            if reg is None or reg == "":
+                return make_error(MCPError.INVALID_ARGS,
+                                  "Parameter 'reg' (segment register, e.g. 'T', 'GP', 'CS') is required for sreg_get")
+            if ida_segregs is None:
+                return make_error(MCPError.IDA_ERROR,
+                                  "ida_segregs is unavailable in this runtime")
+            s_ea, err = validate_addr(start)
+            if err:
+                return err
+            sr = _resolve_sreg(reg)
+            if sr is None:
+                return make_error(MCPError.INVALID_ARGS,
+                                  f"Unknown segment register '{reg}'. Use a name like 'T', 'GP', 'CS' or a register number.")
+            seg = idaapi.getseg(s_ea)
+            if not seg:
+                return make_error(MCPError.SEGMENT_NOT_FOUND,
+                                  f"No segment at address {start}")
+            value = ida_segregs.get_sreg(s_ea, sr)
+            srange = ida_segregs.sreg_range_t()
+            range_info = None
+            try:
+                if ida_segregs.get_sreg_range(srange, s_ea, sr):
+                    range_info = {
+                        "start": hex(srange.start_ea),
+                        "end": hex(srange.end_ea),
+                    }
+            except Exception:
+                range_info = None
+            result = {
+                "ok": True,
+                "address": hex(s_ea),
+                "reg": _sreg_name(sr),
+                "value": value,
+                "sr_type": _sreg_tag_name(getattr(srange, "tag", None)) if range_info else "default",
+            }
+            if range_info is not None:
+                result["range"] = range_info
+            return result
+
+        # ------------------------------------------------------------------
+        # SREG_SET — write one segment register (governed write; mirrors set_attr)
+        # ------------------------------------------------------------------
+        elif action == "sreg_set":
+            if not start:
+                return make_error(MCPError.INVALID_ARGS,
+                                  "Parameter 'start' (address) is required for sreg_set")
+            if reg is None or reg == "":
+                return make_error(MCPError.INVALID_ARGS,
+                                  "Parameter 'reg' (segment register, e.g. 'T', 'GP', 'CS') is required for sreg_set")
+            if value is None:
+                return make_error(MCPError.INVALID_ARGS,
+                                  "Parameter 'value' is required for sreg_set")
+            if sr_type not in _SREG_TYPES:
+                return make_error(MCPError.INVALID_ARGS,
+                                  f"sr_type must be one of: {', '.join(_SREG_TYPES)}")
+            if ida_segregs is None:
+                return make_error(MCPError.IDA_ERROR,
+                                  "ida_segregs is unavailable in this runtime")
+            s_ea, err = validate_addr(start)
+            if err:
+                return err
+            sr = _resolve_sreg(reg)
+            if sr is None:
+                return make_error(MCPError.INVALID_ARGS,
+                                  f"Unknown segment register '{reg}'. Use a name like 'T', 'GP', 'CS' or a register number.")
+            seg = idaapi.getseg(s_ea)
+            if not seg:
+                return make_error(MCPError.SEGMENT_NOT_FOUND,
+                                  f"No segment at address {start}")
+            try:
+                sval = int(value, 0) if isinstance(value, str) else int(value)
+            except (ValueError, TypeError):
+                return make_error(MCPError.INVALID_ARG_TYPE,
+                                  f"Cannot parse segment-register value '{value}' as an integer")
+            tag = _sreg_tag_for_type(sr_type)
+            try:
+                ok = ida_segregs.split_sreg_range(s_ea, sr, sval, tag)
+            except Exception as e:
+                return handle_error(e)
+            if not ok:
+                return make_error(MCPError.IDA_ERROR,
+                                  f"Failed to set segment register '{_sreg_name(sr)}' at {hex(s_ea)}")
+            return {
+                "ok": True,
+                "address": hex(s_ea),
+                "reg": _sreg_name(sr),
+                "value": sval,
+                "sr_type": sr_type,
+            }
+
+        # ------------------------------------------------------------------
+        # SREG_LIST — enumerate sreg ranges overlapping the address's segment
+        # ------------------------------------------------------------------
+        elif action == "sreg_list":
+            if not start:
+                return make_error(MCPError.INVALID_ARGS,
+                                  "Parameter 'start' (address) is required for sreg_list")
+            if ida_segregs is None:
+                return make_error(MCPError.IDA_ERROR,
+                                  "ida_segregs is unavailable in this runtime")
+            s_ea, err = validate_addr(start)
+            if err:
+                return err
+            seg = idaapi.getseg(s_ea)
+            if not seg:
+                return make_error(MCPError.SEGMENT_NOT_FOUND,
+                                  f"No segment at address {start}")
+            sr = _resolve_sreg(reg) if reg is not None and reg != "" else None
+            if reg is not None and reg != "" and sr is None:
+                return make_error(MCPError.INVALID_ARGS,
+                                  f"Unknown segment register '{reg}'. Use a name like 'T', 'GP', 'CS' or a register number.")
+            ranges = []
+            if sr is not None:
+                for srange in _sreg_ranges_for_register(seg.start_ea, seg.end_ea, sr):
+                    ranges.append(_sreg_range_record(sr, srange))
+            else:
+                sreg_indices = _sreg_reg_indices()
+                if sreg_indices is not None:
+                    first, last = sreg_indices
+                    for idx in range(first, last + 1):
+                        for srange in _sreg_ranges_for_register(seg.start_ea, seg.end_ea, idx):
+                            ranges.append(_sreg_range_record(idx, srange))
+            return {
+                "ok": True,
+                "address": hex(s_ea),
+                "segment": ida_segment.get_segm_name(seg),
+                "reg": _sreg_name(sr) if sr is not None else None,
+                "ranges": ranges,
+                "count": len(ranges),
+            }
 
         # ==================================================================
         # NEW ACTIONS
@@ -726,7 +1047,8 @@ def segments(
         else:
             return make_error(MCPError.INVALID_ARGS,
                               f"Unknown action: '{action}'. Valid actions: list, info, add, delete, "
-                              f"set_attr, set_perms, move, analyze, find_code, find_data, compare, merge")
+                              f"set_attr, set_perms, move, analyze, find_code, find_data, compare, merge, "
+                              f"sreg_get, sreg_set, sreg_list")
 
     except Exception as e:
         return handle_error(e)

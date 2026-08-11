@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -14,7 +15,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from .common import InstallReport
+from .common import InstallReport, SigsManifest
 
 _log = logging.getLogger(__name__)
 
@@ -534,6 +535,107 @@ def find_rerank_model(install_root: Path, profile: str = "qwen3-reranker-0.6b") 
     return ""
 
 
+def _r2_version(bin_path: str) -> str:
+    """Probe an rz/r2 binary for its version string.
+
+    ``rz --version`` (Rizin) and ``r2 -v`` (radare2) both print a one-line
+    banner; try them in that order and return the first non-empty first line.
+    Returns "" when the binary cannot be probed (missing, non-executable, or
+    it hangs — a 10 s cap keeps a wedged engine from stalling the installer).
+    """
+    for flag in ("--version", "-v"):
+        try:
+            result = subprocess.run(
+                [bin_path, flag], capture_output=True, text=True, timeout=10
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode == 0:
+            first = (result.stdout or result.stderr or "").strip().splitlines()
+            if first and first[0].strip():
+                return first[0].strip()
+    return ""
+
+
+def resolve_r2_binary() -> tuple[str, str]:
+    """Locate the rz (Rizin) or r2 (radare2) engine binary on PATH.
+
+    Paper §8.2 item 11 / Architecture A Phase 1: the installer only *records*
+    an engine the user already has.  Returns ``(bin_path, version)`` with
+    version "" when the binary exists but cannot be probed, and ``("", "")``
+    when neither rz nor r2 is on PATH — the caller then prints install
+    instructions instead of downloading a pinned release (a documented
+    follow-up that mirrors the llama.cpp pin discipline).
+    """
+    for name in ("rz", "r2"):
+        found = shutil.which(name)
+        if found:
+            return found, _r2_version(found)
+    return "", ""
+
+
+def stage_sigs(
+    source: Path,
+    sig_dir: Path,
+    dry_run: bool,
+    report: InstallReport,
+) -> SigsManifest:
+    """Copy ``*.sig`` / ``*.sig.gz`` from ``source`` into IDA's signature dir.
+
+    ``source`` may be a single ``.sig``/``.sig.gz`` file or a directory.
+    Directory sources are walked recursively and their relative subpaths are
+    preserved, so a multi-arch pack (e.g. a RISC-V sig pack with nested
+    layout) cannot collide on basename.  An existing file in ``sig_dir`` is
+    never overwritten — it is reported as skipped, so a pack can never clobber
+    IDA's bundled signatures.  ``ida_list_sigs`` (the host MCP signature op)
+    surfaces staged files by basename from ``<IDADIR>/sig``.
+
+    On real runs the staged destinations are added to ``report.modified_files``;
+    in dry-run the manifest records what *would* be written and nothing touches
+    the filesystem.
+    """
+    source = source.expanduser().resolve()
+    if not source.exists():
+        raise RuntimeError(f"--sigs source not found: {source}")
+    if source.is_file():
+        if source.suffix.lower() in (".sig", ".sig.gz"):
+            candidates = [source]
+        else:
+            candidates = []
+    else:
+        candidates = sorted(list(source.rglob("*.sig")) + list(source.rglob("*.sig.gz")))
+
+    staged: list[str] = []
+    skipped: list[str] = []
+    for cand in candidates:
+        try:
+            rel = cand.relative_to(source)
+        except ValueError:
+            # Single-file source: stage into the top of sig_dir by basename.
+            rel = Path(cand.name)
+        if not rel.parts:
+            # cand == source (a bare .sig file): relative_to yields Path('.'),
+            # which would copy the file onto sig_dir itself.
+            rel = Path(cand.name)
+        dest = sig_dir / rel
+        if dest.exists():
+            skipped.append(str(dest))
+            continue
+        staged.append(str(dest))
+        if not dry_run:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(cand, dest)
+            report.add_modified(dest)
+
+    return SigsManifest(
+        source=str(source),
+        sig_dir=str(sig_dir),
+        staged=staged,
+        skipped=skipped,
+        dry_run=dry_run,
+    )
+
+
 def _platform_asset_hints() -> tuple[list[str], list[str]]:
     machine = (os.uname().machine if hasattr(os, "uname") else "").lower()
     if sys.platform == "win32":
@@ -811,12 +913,27 @@ def _snapshot_source(
     if target.exists():
         shutil.rmtree(target)
     target.parent.mkdir(parents=True, exist_ok=True)
-    ignore = shutil.ignore_patterns(
-        ".git", "__pycache__", "*.pyc", ".venv", "venv", "dist", "build",
+    pattern_ignore = shutil.ignore_patterns(
+        ".git", "__pycache__", "*.pyc", ".venv", "venv", "env", "dist", "build",
         "node_modules", "*.egg-info", ".pytest_cache", ".ruff_cache",
-        ".mypy_cache", ".coverage", "htmlcov",
+        ".mypy_cache", ".coverage", "htmlcov", ".tmp*", "*.sock", "ida_mcp_cache",
     )
-    shutil.copytree(source_root, target, ignore=ignore)
+
+    def ignore(folder: str, names: list[str]) -> set[str]:
+        ignored = set(pattern_ignore(folder, names))
+        for name in names:
+            if name in ignored:
+                continue
+            path = os.path.join(folder, name)
+            try:
+                st = os.lstat(path)
+                if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode) or stat.S_ISLNK(st.st_mode)):
+                    ignored.add(name)
+            except OSError:
+                ignored.add(name)
+        return ignored
+
+    shutil.copytree(source_root, target, ignore=ignore, ignore_dangling_symlinks=True)
     report.add_modified(target)
     report.add_step("snapshot", "ok", str(target))
     siblings = sorted(
@@ -966,6 +1083,7 @@ def build_stdio_config(
     ida_install: object | None = None,
     disable_policy: bool = False,
     rerank_disabled: bool = False,
+    r2_bin: str = "",
 ) -> dict:
     """Build the stdio MCP server config for a specific IDA install.
 
@@ -1037,6 +1155,11 @@ def build_stdio_config(
             env["GOOGLE_CLOUD_PROJECT"] = gemini_vertex_project
         if gemini_vertex_location:
             env["VERTEX_AI_LOCATION"] = gemini_vertex_location
+    if r2_bin:
+        # The host r2/Rizin engine (default-off) reads IDA_MCP_R2_BIN to
+        # spawn rz/r2 as a subprocess.  --with-r2 records the resolved binary
+        # here so the generated client config enables the engine.
+        env["IDA_MCP_R2_BIN"] = r2_bin
 
     return {
         "command": str(python_exe),

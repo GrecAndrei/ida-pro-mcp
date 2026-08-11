@@ -1,17 +1,35 @@
-"""Investigation workspace: what the analyst concluded, asked, and ruled out.
+"""Investigation memory: what the analyst concluded, asked, and ruled out.
 
-The store keeps three kinds of record about a binary, in one SQLite table:
+This is the storage core of the unified analysis-memory subsystem. The old
+single-table ``blackboard`` store has been rebuilt into a small relational
+layout:
 
-``findings`` / ``hypotheses`` / ``questions`` / ``tasks`` / ``decisions``
-    Positive claims and the open threads around them.
-``examined`` entries
-    Negative results. "I read this function, it is a CRT wrapper, skip it."
-    These are cheap to write and prevent the single most expensive failure
-    mode in a long investigation: re-deriving the same nothing.
+``findings``
+    Analyst memory. Positive claims, open threads, proposals and negative
+    results ("examined" rows) live here as one typed model, with a single
+    ``status`` column whose lifecycle is ``proposed → open → confirmed →
+    resolved`` or ``→ rejected``. ``resolved`` / ``contradicted`` /
+    ``conflicts_with`` are *derived at read time* rather than stored, so a row
+    can never disagree with its own status flag.
+``links``
+    The disagreement table. Opposed assertions are never merged away; the two
+    rows survive and a ``conflict`` link records who disputes whom. The reason
+    text lives in the link's ``note`` and in the event log.
+``finding_events``
+    Audit log. Every lifecycle transition and structural edit is retained so a
+    brief can say how the investigation got here.
 ``code_anchors``
     A digest of the code each claim was made against. When the code at an
-    address changes, every claim anchored to the old text is marked stale
-    rather than continuing to look authoritative.
+    address changes, every non-stale entry anchored to the old text is marked
+    stale rather than continuing to look authoritative.
+``bb_tasks`` / ``bb_machinery``
+    Machinery that used to hide inside the memory table: durable task-runner
+    state (crawler progress, trace tasks) and key/value governance state
+    (wm_now snapshots, quest log, phase/policy state, evidence snapshots).
+``findings_embeddings``
+    A side table written out-of-band. No CRUD RPC ever blocks on it: the write
+    path only calls the ``embed_enqueue`` hook (a no-op by default) unless
+    ``embed=True`` is requested explicitly.
 
 Design notes that are easy to get wrong and are therefore load-bearing:
 
@@ -25,11 +43,15 @@ Design notes that are easy to get wrong and are therefore load-bearing:
 * Target selection is a set of named strategies that each return a reason
   string, not one opaque score. A ranking nobody can explain is a ranking
   nobody can debug.
+* The schema is versioned with ``PRAGMA user_version`` and migrated by an
+  idempotent runner, so a database written by the single-table era opens
+  cleanly and its rows are adopted into the new layout exactly once.
 """
 
 from __future__ import annotations
 
 import builtins
+import contextlib
 import hashlib
 import json
 import math
@@ -37,15 +59,19 @@ import os
 import re
 import sqlite3
 import tempfile
+import threading
 import time
 import uuid
-from contextlib import closing
-from typing import Any
+from contextlib import contextmanager
+from typing import Any, Callable
 
 from ..intelligence.helpers import batch_cosine_similarity, pack_floats, unpack_floats
 
 KINDS = frozenset({"finding", "hypothesis", "question", "task", "decision", "examined"})
-STATUSES = frozenset({"open", "confirmed", "resolved", "rejected"})
+#: 'proposed' is written by the crawler / trace / proposal machinery and must be
+#: explicitly accepted or rejected before it becomes part of the analyst's
+#: lifecycle (open/confirmed/resolved/rejected).
+STATUSES = frozenset({"proposed", "open", "confirmed", "resolved", "rejected"})
 VERDICTS = frozenset({"interesting", "boring", "unclear"})
 ANCHOR_KINDS = frozenset({"decompile", "disassemble"})
 STRATEGIES = ("unresolved", "stale", "conflict", "coverage", "frontier")
@@ -75,6 +101,12 @@ _MARKER_RE = re.compile(r"\[mcp:([0-9a-f-]{4,})\]")
 
 #: Names IDA generates when it has nothing to say about a function.
 AUTO_NAME_PREFIXES = ("sub_", "j_", "loc_", "nullsub_", "unknown_libname_")
+
+#: Current schema version. Migrations are keyed by the user_version they land on.
+SCHEMA_VERSION = 2
+#: SQLite busy timeout in milliseconds. Writes use BEGIN IMMEDIATE and wait here
+#: rather than failing with SQLITE_BUSY when several clients touch one workspace.
+_DB_BUSY_TIMEOUT_MS = 30_000
 
 
 def is_auto_name(name: str) -> bool:
@@ -194,21 +226,320 @@ def _clamp01(value: Any, default: float = 0.5) -> float:
         return default
 
 
+# ---------------------------------------------------------------------------
+# Schema migrations
+# ---------------------------------------------------------------------------
+
+class _Rollback(Exception):
+    """Internal signal: roll back the current write transaction."""
+
+
+def _migrate_0001_initial_schema(conn: sqlite3.Connection) -> None:
+    """Create the redesigned tables. Idempotent (IF NOT EXISTS)."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS findings (
+            id               TEXT PRIMARY KEY,
+            kind             TEXT NOT NULL DEFAULT 'finding',
+            status           TEXT NOT NULL DEFAULT 'open',
+            category         TEXT NOT NULL DEFAULT 'general',
+            title            TEXT NOT NULL,
+            content          TEXT,
+            addr             TEXT,
+            addr_end         TEXT,
+            tags             TEXT DEFAULT '[]',
+            confidence       REAL DEFAULT 0.5,
+            priority         REAL DEFAULT 0.5,
+            q_value          REAL DEFAULT 0.5,
+            source           TEXT DEFAULT 'manual',
+            source_type      TEXT DEFAULT 'manual',
+            evidence         TEXT DEFAULT '[]',
+            fingerprint      TEXT DEFAULT '',
+            ioc_type         TEXT,
+            ioc_value        TEXT,
+            depends_on       TEXT,
+            blocks_addr      TEXT,
+            register         TEXT,
+            reg_type         TEXT,
+            entropy          REAL DEFAULT 0.0,
+            xref_count       INTEGER DEFAULT 0,
+            calibrated       INTEGER DEFAULT 0,
+            verdict          TEXT DEFAULT '',
+            anchor_kind      TEXT DEFAULT '',
+            anchor_digest    TEXT DEFAULT '',
+            stale            INTEGER DEFAULT 0,
+            stale_reason     TEXT DEFAULT '',
+            rejected_reason  TEXT DEFAULT '',
+            version          INTEGER DEFAULT 1,
+            created_at       REAL NOT NULL,
+            updated_at       REAL NOT NULL,
+            decayed_at       REAL,
+            published_at     REAL,
+            published_symbol TEXT DEFAULT ''
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS links (
+            entry_a    TEXT NOT NULL,
+            entry_b    TEXT NOT NULL,
+            type       TEXT NOT NULL DEFAULT 'conflict',
+            reason     TEXT DEFAULT '',
+            note       TEXT DEFAULT '',
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (entry_a, entry_b, type)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS finding_events (
+            seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+            entry_id   TEXT NOT NULL,
+            event      TEXT NOT NULL,
+            details    TEXT DEFAULT '{}',
+            created_at REAL NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS code_anchors (
+            addr      TEXT NOT NULL,
+            kind      TEXT NOT NULL,
+            digest    TEXT NOT NULL,
+            seen_at   REAL NOT NULL,
+            PRIMARY KEY (addr, kind)
+        )
+    """)
+    # These two tables are owned by blackboard_orchestration.MachineryDB
+    # (_machinery_schema); this migration must pre-create them with EXACTLY
+    # that layout, otherwise the orchestration's CREATE TABLE IF NOT EXISTS
+    # becomes a no-op and its INSERTs fail on missing columns (task_type,
+    # namespace/key), degrading the machinery to in-memory state.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS bb_tasks (
+            task_id    TEXT PRIMARY KEY,
+            task_type  TEXT NOT NULL,
+            status     TEXT NOT NULL DEFAULT 'pending',
+            payload    TEXT NOT NULL DEFAULT '{}',
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS bb_machinery (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            namespace  TEXT NOT NULL DEFAULT '',
+            key        TEXT NOT NULL,
+            value      TEXT NOT NULL DEFAULT '{}',
+            updated_at REAL NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS findings_embeddings (
+            entry_id   TEXT PRIMARY KEY,
+            vector     BLOB NOT NULL,
+            model      TEXT DEFAULT '',
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        )
+    """)
+
+    for stmt in (
+        "CREATE INDEX IF NOT EXISTS idx_findings_category ON findings(category)",
+        "CREATE INDEX IF NOT EXISTS idx_findings_addr ON findings(addr)",
+        "CREATE INDEX IF NOT EXISTS idx_findings_tags ON findings(tags)",
+        "CREATE INDEX IF NOT EXISTS idx_findings_kind_status ON findings(kind, status)",
+        "CREATE INDEX IF NOT EXISTS idx_findings_fingerprint ON findings(fingerprint)",
+        "CREATE INDEX IF NOT EXISTS idx_findings_stale ON findings(stale)",
+        "CREATE INDEX IF NOT EXISTS idx_findings_ioc ON findings(ioc_type)",
+        "CREATE INDEX IF NOT EXISTS idx_findings_source_type ON findings(source_type)",
+        "CREATE INDEX IF NOT EXISTS idx_findings_xref ON findings(xref_count)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_fingerprint_unique "
+        "ON findings(fingerprint) WHERE fingerprint != ''",
+        "CREATE INDEX IF NOT EXISTS idx_links_a ON links(entry_a)",
+        "CREATE INDEX IF NOT EXISTS idx_links_b ON links(entry_b)",
+        "CREATE INDEX IF NOT EXISTS idx_finding_events_entry ON finding_events(entry_id, seq)",
+        "CREATE INDEX IF NOT EXISTS idx_bb_tasks_status ON bb_tasks(status)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_bb_machinery_ns_key "
+        "ON bb_machinery(namespace, key)",
+    ):
+        conn.execute(stmt)
+
+
+def _migrate_legacy_blackboard(conn: sqlite3.Connection) -> None:
+    """Adopt rows from the pre-redesign single ``blackboard`` table exactly once."""
+    rows = conn.execute("SELECT * FROM blackboard").fetchall()
+    if not rows:
+        return
+    now = time.time()
+    for row in rows:
+        d = dict(row)
+        entry_id = str(d.get("id") or "")
+        if not entry_id:
+            continue
+        status = str(d.get("status") or "open").strip().lower()
+        if status not in STATUSES:
+            status = "open"
+        if int(d.get("resolved") or 0) and status == "open":
+            status = "resolved"
+        if int(d.get("contradicted") or 0) and status == "open":
+            status = "rejected"
+        kind = str(d.get("kind") or "finding").strip().lower()
+        if kind not in KINDS:
+            kind = "finding"
+        tags = d.get("tags") or "[]"
+        if not isinstance(tags, str):
+            tags = json.dumps(tags or [])
+        evidence = d.get("evidence") or "[]"
+        if not isinstance(evidence, str):
+            evidence = json.dumps(evidence or [])
+        priority = float(d.get("priority") if d.get("priority") is not None else 0.5)
+        confidence = float(d.get("confidence") if d.get("confidence") is not None else 0.5)
+        q_value = float(d.get("q_value") if d.get("q_value") is not None else confidence)
+        source_type = str(d.get("source_type") or "").strip() or str(d.get("source") or "manual")
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO findings
+                (id, kind, status, category, title, content, addr, addr_end, tags,
+                 confidence, priority, q_value, source, source_type, evidence, fingerprint,
+                 ioc_type, ioc_value, depends_on, blocks_addr, register, reg_type,
+                 entropy, xref_count, calibrated, verdict, anchor_kind, anchor_digest,
+                 stale, stale_reason, rejected_reason, version, created_at, updated_at,
+                 decayed_at, published_at, published_symbol)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                entry_id, kind, status,
+                str(d.get("category") or "general"), str(d.get("title") or ""),
+                d.get("content"), d.get("addr"), d.get("addr_end"), tags,
+                confidence, priority, q_value,
+                str(d.get("source") or "manual"), source_type, evidence,
+                str(d.get("fingerprint") or ""),
+                d.get("ioc_type"), d.get("ioc_value"), d.get("depends_on"), d.get("blocks_addr"),
+                d.get("register"), d.get("reg_type"),
+                float(d.get("entropy") or 0.0), int(d.get("xref_count") or 0),
+                int(d.get("calibrated") or 0), str(d.get("verdict") or ""),
+                str(d.get("anchor_kind") or ""), str(d.get("anchor_digest") or ""),
+                int(d.get("stale") or 0), str(d.get("stale_reason") or ""),
+                str(d.get("contradiction_reason") or ""),
+                int(d.get("version") or 1),
+                float(d.get("created_at") or now), float(d.get("updated_at") or now),
+                d.get("decayed_at"), d.get("published_at"),
+                str(d.get("published_symbol") or ""),
+            ),
+        )
+        try:
+            conflicts = json.loads(d.get("conflicts_with") or "[]")
+        except (TypeError, ValueError):
+            conflicts = []
+        if isinstance(conflicts, list):
+            for other in conflicts:
+                other = str(other)
+                if other and other != entry_id:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO links(entry_a, entry_b, type, reason, note, created_at, updated_at) "
+                        "VALUES (?,?,?,?,?,?,?)",
+                        (entry_id, other, "conflict",
+                         "migrated from legacy conflicts_with", "migrated from legacy conflicts_with",
+                         now, now),
+                    )
+        vector = d.get("vector")
+        if vector:
+            with contextlib.suppress(sqlite3.Error):
+                conn.execute(
+                    "INSERT OR IGNORE INTO findings_embeddings(entry_id, vector, model, created_at, updated_at) "
+                    "VALUES (?,?,?,?,?)",
+                    (entry_id, sqlite3.Binary(vector), "", now, now),
+                )
+
+
+def _create_blackboard_compat_view(conn: sqlite3.Connection) -> None:
+    """Expose ``blackboard`` as a view over ``findings`` for legacy direct SQL.
+
+    The redesign splits the single table into findings + side tables, so the
+    old table name no longer exists as a table. A few legacy callers (and
+    host tests that age rows by ``UPDATE blackboard SET updated_at=?``) still
+    speak the old name directly; an INSTEAD OF UPDATE trigger lands those
+    writes on the findings row. This is a migration seam, not the storage
+    model: all new code reads and writes ``findings``.
+    """
+    cols = [str(r[1]) for r in conn.execute("PRAGMA table_info(findings)").fetchall()]
+    if not cols:
+        return
+    conn.execute("DROP VIEW IF EXISTS blackboard")
+    conn.execute("CREATE VIEW blackboard AS SELECT * FROM findings")
+    set_clause = ", ".join(f"{c}=NEW.{c}" for c in cols)
+    conn.execute("DROP TRIGGER IF EXISTS trg_blackboard_compat_update")
+    conn.execute(
+        "CREATE TRIGGER trg_blackboard_compat_update INSTEAD OF UPDATE ON blackboard "
+        f"BEGIN UPDATE findings SET {set_clause} WHERE id=NEW.id; END"
+    )
+
+
+def _migrate_0002_split_findings(conn: sqlite3.Connection) -> None:
+    """Migrate legacy single-table data into the new layout, then drop it."""
+    legacy = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='blackboard'"
+    ).fetchone()
+    if legacy:
+        _migrate_legacy_blackboard(conn)
+        conn.execute("DROP TABLE blackboard")
+    _create_blackboard_compat_view(conn)
+
+
+#: Ordered by the user_version each migration lands on.
+_MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
+    1: _migrate_0001_initial_schema,
+    2: _migrate_0002_split_findings,
+}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Bring the database to SCHEMA_VERSION. Each migration runs in its own
+    transaction and only advances ``PRAGMA user_version`` after it succeeds, so
+    a failed or interrupted migration re-runs idempotently from the same point.
+    """
+    current = int(conn.execute("PRAGMA user_version").fetchone()[0] or 0)
+    for version in sorted(_MIGRATIONS):
+        if version <= current:
+            continue
+        fn = _MIGRATIONS[version]
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            fn(conn)
+            conn.execute(f"PRAGMA user_version={version}")
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+
+
 class BlackboardStore:
-    """SQLite-backed investigation workspace for one session."""
+    """SQLite-backed investigation memory for one session.
+
+    Connections are cached per thread with a busy timeout, and every write
+    runs as exactly one ``BEGIN IMMEDIATE`` transaction so concurrent clients
+    of one workspace coalesce instead of clobbering each other.
+    """
 
     def __init__(self, db_path: str | None = None):
         primary_path = _resolve_db_path(db_path)
         self.db_path = primary_path
+        self._local = threading.local()
         # Set by next_target()/targets() so a caller can report whether a
         # semantic query actually reached the ranking.
         self.last_query_applied: bool | None = None
         self.last_query_error: str = ""
+        # Set by the coverage strategy so callers can be honest when the
+        # function inventory is empty or no live IDA session is available.
+        self.last_coverage_note: str = ""
+        # Out-of-band embedding enqueue hook. The write path calls this with
+        # (entry_id, text) after every insert/update; by default it is a no-op
+        # so no CRUD RPC ever blocks on embedding. The host may replace it
+        # with a function that enqueues into a background embedding worker.
+        # Passing embed=True to write()/update() bypasses the hook and embeds
+        # synchronously.
+        self.embed_enqueue: Callable[[str, str], None] = lambda entry_id, text: None
         try:
             parent = os.path.dirname(self.db_path) or "."
             os.makedirs(parent, exist_ok=True)
-            with closing(self._conn()):
-                pass
             self._init_db()
         except (sqlite3.OperationalError, OSError, PermissionError):
             try:
@@ -222,142 +553,62 @@ class BlackboardStore:
             fallback_dir = os.path.join(CACHE_DIR, "fallback_indexes")
             os.makedirs(fallback_dir, exist_ok=True)
             self.db_path = os.path.join(fallback_dir, f"{h}.blackboard.db")
+            self._local.conn = None
             self._init_db()
 
     # ------------------------------------------------------------------
     # Connection and schema
     # ------------------------------------------------------------------
 
-    def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+    def _new_conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=float(_DB_BUSY_TIMEOUT_MS) / 1000.0)
         conn.row_factory = sqlite3.Row
+        # Autocommit mode; every transaction is opened explicitly (see _tx) so
+        # the connection's transaction state is never ambiguous.
+        conn.isolation_level = None
+        conn.execute(f"PRAGMA busy_timeout={_DB_BUSY_TIMEOUT_MS}")
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        return conn
+
+    def _conn(self) -> sqlite3.Connection:
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = self._new_conn()
+            self._local.conn = conn
+            return conn
+        try:
+            # A probe that raises if a legacy caller closed the shared handle
+            # (e.g. `with closing(store._conn())`). Re-open in that case.
+            conn.execute("SELECT 1").fetchone()
+        except sqlite3.ProgrammingError:
+            conn = self._new_conn()
+            self._local.conn = conn
         return conn
 
     def close(self) -> None:
-        """No persistent handle is held; present so callers can be symmetric."""
-        return None
+        """Close this thread's cached connection, if any."""
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            try:
+                conn.close()
+            finally:
+                self._local.conn = None
 
     def _init_db(self) -> None:
-        with closing(self._conn()) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS blackboard (
-                    id           TEXT PRIMARY KEY,
-                    category     TEXT NOT NULL DEFAULT 'general',
-                    title        TEXT NOT NULL,
-                    content      TEXT,
-                    addr         TEXT,
-                    addr_end     TEXT,
-                    tags         TEXT,
-                    confidence   REAL DEFAULT 0.5,
-                    created_at   REAL NOT NULL,
-                    updated_at   REAL NOT NULL,
-                    q_value      REAL DEFAULT 0.5,
-                    source       TEXT DEFAULT 'manual',
-                    vector       BLOB,
-                    resolved     INTEGER DEFAULT 0,
-                    contradicted INTEGER DEFAULT 0,
-                    contradiction_reason TEXT,
-                    ioc_type     TEXT,
-                    ioc_value    TEXT,
-                    depends_on   TEXT,
-                    blocks_addr  TEXT,
-                    register     TEXT,
-                    reg_type     TEXT,
-                    evidence     TEXT DEFAULT '[]',
-                    source_type  TEXT DEFAULT 'manual',
-                    version      INTEGER DEFAULT 1,
-                    entropy      REAL DEFAULT 0.0,
-                    xref_count   INTEGER DEFAULT 0,
-                    calibrated   INTEGER DEFAULT 0
-                )
-            """)
-            existing = {r["name"] for r in conn.execute("PRAGMA table_info(blackboard)").fetchall()}
-            for col, dtype in [
-                ("addr_end", "TEXT"),
-                ("resolved", "INTEGER DEFAULT 0"),
-                ("contradicted", "INTEGER DEFAULT 0"),
-                ("contradiction_reason", "TEXT"),
-                ("ioc_type", "TEXT"),
-                ("ioc_value", "TEXT"),
-                ("depends_on", "TEXT"),
-                ("blocks_addr", "TEXT"),
-                ("register", "TEXT"),
-                ("reg_type", "TEXT"),
-                ("evidence", "TEXT DEFAULT '[]'"),
-                ("source_type", "TEXT DEFAULT 'manual'"),
-                ("version", "INTEGER DEFAULT 1"),
-                ("entropy", "REAL DEFAULT 0.0"),
-                ("xref_count", "INTEGER DEFAULT 0"),
-                ("calibrated", "INTEGER DEFAULT 0"),
-                ("kind", "TEXT DEFAULT 'finding'"),
-                ("status", "TEXT DEFAULT 'open'"),
-                ("priority", "REAL DEFAULT 0.5"),
-                ("fingerprint", "TEXT DEFAULT ''"),
-                # Legacy columns kept so old databases still open cleanly.
-                ("bridges", "TEXT DEFAULT '{}'"),
-                ("schema", "TEXT DEFAULT '{}'"),
-                ("quantized", "BLOB"),
-                ("q_signs", "BLOB"),
-                ("norm", "REAL DEFAULT 0.0"),
-                ("call_idx", "INTEGER DEFAULT 0"),
-                # Kept separate from updated_at so decaying an entry does not
-                # make it look freshly edited (and so it can decay twice).
-                ("decayed_at", "REAL"),
-                # Anchoring: which code this claim was made against.
-                ("anchor_kind", "TEXT DEFAULT ''"),
-                ("anchor_digest", "TEXT DEFAULT ''"),
-                ("stale", "INTEGER DEFAULT 0"),
-                ("stale_reason", "TEXT DEFAULT ''"),
-                # Disagreement: ids of entries this one contradicts.
-                ("conflicts_with", "TEXT DEFAULT '[]'"),
-                # Coverage verdict, for kind='examined'.
-                ("verdict", "TEXT DEFAULT ''"),
-                # IDB round-trip: when this claim was last written into the
-                # database, and under what symbol.
-                ("published_at", "REAL"),
-                ("published_symbol", "TEXT DEFAULT ''"),
-            ]:
-                if col not in existing:
-                    conn.execute(f"ALTER TABLE blackboard ADD COLUMN {col} {dtype}")
-            for stmt in (
-                "CREATE INDEX IF NOT EXISTS idx_bb_category ON blackboard(category)",
-                "CREATE INDEX IF NOT EXISTS idx_bb_addr ON blackboard(addr)",
-                "CREATE INDEX IF NOT EXISTS idx_bb_tags ON blackboard(tags)",
-                "CREATE INDEX IF NOT EXISTS idx_bb_resolved ON blackboard(resolved)",
-                "CREATE INDEX IF NOT EXISTS idx_bb_ioc ON blackboard(ioc_type)",
-                "CREATE INDEX IF NOT EXISTS idx_bb_source_type ON blackboard(source_type)",
-                "CREATE INDEX IF NOT EXISTS idx_bb_xref ON blackboard(xref_count)",
-                "CREATE INDEX IF NOT EXISTS idx_bb_kind_status ON blackboard(kind, status)",
-                "CREATE INDEX IF NOT EXISTS idx_bb_fingerprint ON blackboard(fingerprint)",
-                "CREATE INDEX IF NOT EXISTS idx_bb_stale ON blackboard(stale)",
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_bb_fingerprint_unique "
-                "ON blackboard(fingerprint) WHERE fingerprint != ''",
-            ):
-                conn.execute(stmt)
-            conn.execute("UPDATE blackboard SET status='resolved' WHERE resolved=1 AND status='open'")
-            conn.execute("UPDATE blackboard SET status='rejected' WHERE contradicted=1 AND status='open'")
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS finding_events (
-                    seq        INTEGER PRIMARY KEY AUTOINCREMENT,
-                    entry_id   TEXT NOT NULL,
-                    event      TEXT NOT NULL,
-                    details    TEXT DEFAULT '{}',
-                    created_at REAL NOT NULL
-                )
-            """)
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_finding_events_entry ON finding_events(entry_id, seq)"
-            )
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS code_anchors (
-                    addr      TEXT NOT NULL,
-                    kind      TEXT NOT NULL,
-                    digest    TEXT NOT NULL,
-                    seen_at   REAL NOT NULL,
-                    PRIMARY KEY (addr, kind)
-                )
-            """)
+        _migrate(self._conn())
+
+    @contextmanager
+    def _tx(self):
+        """One write transaction: BEGIN IMMEDIATE … COMMIT, rolling back on error."""
+        conn = self._conn()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield conn
+        except BaseException:
+            conn.rollback()
+            raise
+        else:
             conn.commit()
 
     # ------------------------------------------------------------------
@@ -379,17 +630,67 @@ class BlackboardStore:
         except Exception:
             return None
 
-    @staticmethod
-    def _row_to_dict(row) -> dict:
+    def _store_embedding(self, entry_id: str, blob: bytes) -> None:
+        """Upsert one entry's vector into the embeddings side table."""
+        with self._tx() as conn:
+            conn.execute(
+                "INSERT INTO findings_embeddings(entry_id, vector, model, created_at, updated_at) "
+                "VALUES (?,?,?,?,?) "
+                "ON CONFLICT(entry_id) DO UPDATE SET vector=excluded.vector, updated_at=excluded.updated_at",
+                (entry_id, sqlite3.Binary(blob), "", time.time(), time.time()),
+            )
+
+    def _row_to_dict(self, row) -> dict:
+        """Convert a findings row to an entry dict.
+
+        ``resolved`` / ``contradicted`` are derived from the single status
+        column so a row can never disagree with itself; ``conflicts_with`` is
+        derived from the links table and attached by :meth:`_hydrate`.
+        """
         if row is None:
             return {}
         d = dict(row)
         d["tags"] = json.loads(d.get("tags") or "[]")
         d["evidence"] = json.loads(d.get("evidence") or "[]")
-        d["conflicts_with"] = json.loads(d.get("conflicts_with") or "[]")
-        for k in ("vector", "quantized", "q_signs"):
-            d.pop(k, None)
+        status = str(d.get("status") or "open")
+        d["resolved"] = int(status == "resolved")
+        d["contradicted"] = int(status == "rejected")
+        d.setdefault("conflicts_with", [])
+        if not d.get("rejected_reason"):
+            d["rejected_reason"] = ""
+        d.pop("_vec", None)
+        d.pop("vector", None)
         return d
+
+    def _hydrate(self, rows, conn: sqlite3.Connection | None = None) -> builtins.list[dict]:
+        """Convert rows to entry dicts and attach read-time derived fields.
+
+        ``conflicts_with`` requires the links table, so it is computed once per
+        batch here rather than once per row.
+        """
+        entries = [self._row_to_dict(r) for r in rows]
+        if not entries:
+            return entries
+        ids = [str(e["id"]) for e in entries]
+        own = conn is None
+        if own:
+            conn = self._conn()
+        placeholders = ",".join("?" for _ in ids)
+        # link_conflict stores both directions, so the same neighbour arrives
+        # twice here; dedupe with a set before attaching.
+        link_rows = conn.execute(
+            f"SELECT entry_a, entry_b FROM links "
+            f"WHERE entry_a IN ({placeholders}) OR entry_b IN ({placeholders})",
+            (*ids, *ids),
+        ).fetchall()
+        conflict_map: dict[str, set[str]] = {}
+        for lr in link_rows:
+            a, b = str(lr["entry_a"]), str(lr["entry_b"])
+            conflict_map.setdefault(a, set()).add(b)
+            conflict_map.setdefault(b, set()).add(a)
+        for e in entries:
+            e["conflicts_with"] = sorted(conflict_map.get(str(e["id"]), set()))
+        return entries
 
     @staticmethod
     def _finding_key(title: str, category: str, addr: str) -> tuple[str, str, str]:
@@ -404,12 +705,12 @@ class BlackboardStore:
         return hashlib.sha256("\x1f".join(key).encode("utf-8")).hexdigest()[:24]
 
     def _record_event(self, entry_id: str, event: str, details: dict[str, Any] | None = None) -> None:
-        with closing(self._conn()) as conn:
-            conn.execute(
-                "INSERT INTO finding_events(entry_id, event, details, created_at) VALUES (?,?,?,?)",
-                (entry_id, event, json.dumps(details or {}, sort_keys=True, ensure_ascii=True), time.time()),
-            )
-            conn.commit()
+        conn = self._conn()
+        conn.execute(
+            "INSERT INTO finding_events(entry_id, event, details, created_at) VALUES (?,?,?,?)",
+            (entry_id, event, json.dumps(details or {}, sort_keys=True, ensure_ascii=True), time.time()),
+        )
+        conn.commit()
 
     # ------------------------------------------------------------------
     # Code anchors and staleness
@@ -427,8 +728,8 @@ class BlackboardStore:
             params.append(str(kind))
         # Prefer decompiled text over raw disassembly: it is the stronger signal.
         sql += " ORDER BY CASE kind WHEN 'decompile' THEN 0 ELSE 1 END, seen_at DESC LIMIT 1"
-        with closing(self._conn()) as conn:
-            row = conn.execute(sql, params).fetchone()
+        conn = self._conn()
+        row = conn.execute(sql, params).fetchone()
         return dict(row) if row else None
 
     def observe_code(self, addr: str, kind: str, text: str = "", digest: str = "") -> dict[str, Any]:
@@ -449,8 +750,7 @@ class BlackboardStore:
             return {"ok": False, "reason": "no code text to anchor"}
 
         now = time.time()
-        with closing(self._conn()) as conn:
-            conn.execute("BEGIN IMMEDIATE")
+        with self._tx() as conn:
             row = conn.execute(
                 "SELECT digest FROM code_anchors WHERE addr=? AND kind=?", (naddr, kind)
             ).fetchone()
@@ -464,18 +764,19 @@ class BlackboardStore:
             if previous and previous != new_digest:
                 reason = f"code at {naddr} changed since this was recorded"
                 rows = conn.execute(
-                    "SELECT id FROM blackboard WHERE addr=? AND anchor_kind=? AND anchor_digest=? AND stale=0",
+                    "SELECT id FROM findings WHERE addr=? AND anchor_kind=? AND anchor_digest=? AND stale=0",
                     (naddr, kind, previous),
                 ).fetchall()
                 marked = [r["id"] for r in rows]
                 if marked:
                     conn.execute(
-                        "UPDATE blackboard SET stale=1, stale_reason=? WHERE id IN ("
+                        "UPDATE findings SET stale=1, stale_reason=? WHERE id IN ("
                         + ",".join("?" for _ in marked)
                         + ")",
                         (reason, *marked),
                     )
-            conn.commit()
+            else:
+                reason = ""
 
         for eid in marked:
             self._record_event(eid, "stale", {"addr": naddr, "anchor_kind": kind})
@@ -489,13 +790,13 @@ class BlackboardStore:
         }
 
     def stale_entries(self, limit: int = 20) -> builtins.list[dict]:
-        with closing(self._conn()) as conn:
-            rows = conn.execute(
-                "SELECT * FROM blackboard WHERE stale=1 AND contradicted=0 "
-                "ORDER BY confidence DESC, updated_at DESC LIMIT ?",
-                (max(1, int(limit)),),
-            ).fetchall()
-        return [self._row_to_dict(r) for r in rows]
+        conn = self._conn()
+        rows = conn.execute(
+            "SELECT * FROM findings WHERE stale=1 AND status != 'rejected' "
+            "ORDER BY confidence DESC, updated_at DESC LIMIT ?",
+            (max(1, int(limit)),),
+        ).fetchall()
+        return self._hydrate(rows, conn)
 
     def clear_stale(self, entry_id: str) -> bool:
         """Re-anchor an entry to the current code and drop its stale flag."""
@@ -503,17 +804,17 @@ class BlackboardStore:
         if not entry:
             return False
         anchor = self.current_anchor(str(entry.get("addr") or ""))
-        with closing(self._conn()) as conn:
-            conn.execute(
-                "UPDATE blackboard SET stale=0, stale_reason='', anchor_kind=?, anchor_digest=? WHERE id=?",
+        with self._tx() as conn:
+            cur = conn.execute(
+                "UPDATE findings SET stale=0, stale_reason='', anchor_kind=?, anchor_digest=? WHERE id=?",
                 (
                     (anchor or {}).get("kind", entry.get("anchor_kind") or ""),
                     (anchor or {}).get("digest", entry.get("anchor_digest") or ""),
                     entry_id,
                 ),
             )
-            conn.commit()
-        return True
+            ok = cur.rowcount > 0
+        return ok
 
     # ------------------------------------------------------------------
     # Writing
@@ -555,7 +856,7 @@ class BlackboardStore:
         if kind not in KINDS:
             raise ValueError("kind must be one of: " + ", ".join(sorted(KINDS)))
         if status not in STATUSES:
-            raise ValueError("status must be open, confirmed, resolved, or rejected")
+            raise ValueError("status must be proposed, open, confirmed, resolved, or rejected")
         if verdict and verdict not in VERDICTS:
             raise ValueError("verdict must be interesting, boring, or unclear")
 
@@ -570,30 +871,35 @@ class BlackboardStore:
 
         entry_id = str(uuid.uuid4())[:8]
         now = time.time()
+        # Embedding runs before the write transaction so a slow embedder never
+        # holds the workspace write lock.
         vector_blob = self._embed_text(f"{title} {content}".strip()) if embed else None
         if not source_type:
             source_type = source
-        with closing(self._conn()) as conn:
-            conn.execute("""
-                INSERT INTO blackboard
-                    (id, category, title, content, addr, addr_end, tags, confidence,
-                     created_at, updated_at, q_value, source, vector,
+        with self._tx() as conn:
+            conn.execute(
+                """
+                INSERT INTO findings
+                    (id, kind, status, category, title, content, addr, addr_end, tags,
+                     confidence, priority, q_value, source, source_type, evidence, fingerprint,
                      ioc_type, ioc_value, depends_on, blocks_addr, register, reg_type,
-                     evidence, source_type, entropy, xref_count, version,
-                     kind, status, priority, fingerprint, resolved, contradicted,
-                     verdict, anchor_kind, anchor_digest, stale, stale_reason, conflicts_with)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,'','[]')
-            """, (
-                entry_id, category, title, content, naddr, addr_end,
-                json.dumps(tags or []), _clamp01(confidence),
-                now, now, _clamp01(confidence), source, vector_blob,
-                ioc_type, ioc_value, normalize_addr(depends_on), blocks_addr, register, reg_type,
-                json.dumps(evidence or []), source_type, entropy, xref_count, 1,
-                kind, status, _clamp01(priority), fingerprint,
-                int(status == "resolved"), int(status == "rejected"),
-                verdict, anchor_kind, anchor_digest,
-            ))
-            conn.commit()
+                     entropy, xref_count, calibrated, verdict, anchor_kind, anchor_digest,
+                     stale, stale_reason, rejected_reason, version, created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    entry_id, kind, status, category, title, content, naddr, addr_end,
+                    json.dumps(tags or []), _clamp01(confidence), _clamp01(priority),
+                    _clamp01(confidence), source, source_type, json.dumps(evidence or []),
+                    fingerprint,
+                    ioc_type, ioc_value, normalize_addr(depends_on), blocks_addr, register, reg_type,
+                    entropy, xref_count, 0, verdict, anchor_kind, anchor_digest,
+                    0, "", "", 1, now, now,
+                ),
+            )
+        if vector_blob:
+            self._store_embedding(entry_id, vector_blob)
+        self.embed_enqueue(entry_id, f"{title} {content}".strip())
         self._record_event(entry_id, "created", {"kind": kind, "status": status})
         return entry_id
 
@@ -626,14 +932,16 @@ class BlackboardStore:
         clean_tags = sorted({str(tag).strip() for tag in (tags or []) if str(tag).strip()})
         clean_evidence = [item for item in (evidence or []) if isinstance(item, dict)]
         status = str(status or "open").strip().lower()
+        if status not in STATUSES:
+            raise ValueError("status must be proposed, open, confirmed, resolved, or rejected")
 
-        with closing(self._conn()) as conn:
-            rows = conn.execute(
-                "SELECT * FROM blackboard WHERE fingerprint=? OR "
-                "(lower(category)=? AND lower(COALESCE(addr,''))=?) "
-                "ORDER BY updated_at DESC LIMIT 200",
-                (fingerprint, key[1], naddr),
-            ).fetchall()
+        conn = self._conn()
+        rows = conn.execute(
+            "SELECT * FROM findings WHERE fingerprint=? OR "
+            "(lower(category)=? AND lower(COALESCE(addr,''))=?) "
+            "ORDER BY updated_at DESC LIMIT 200",
+            (fingerprint, key[1], naddr),
+        ).fetchall()
         existing = next(
             (row for row in (self._row_to_dict(item) for item in rows)
              if row.get("fingerprint") == fingerprint or (
@@ -690,15 +998,14 @@ class BlackboardStore:
 
         # Serialize read/merge/write so simultaneous clients cannot lose each
         # other's evidence through a last-writer-wins update.
-        with closing(self._conn()) as conn:
-            conn.execute("BEGIN IMMEDIATE")
+        with self._tx() as conn:
             row = conn.execute(
-                "SELECT * FROM blackboard WHERE fingerprint=? ORDER BY updated_at DESC LIMIT 1",
+                "SELECT * FROM findings WHERE fingerprint=? ORDER BY updated_at DESC LIMIT 1",
                 (fingerprint,),
             ).fetchone()
             if row is None:
                 row = conn.execute(
-                    "SELECT * FROM blackboard WHERE id=?", (str(existing["id"]),)
+                    "SELECT * FROM findings WHERE id=?", (str(existing["id"]),)
                 ).fetchone()
             current = self._row_to_dict(row) if row else existing
             merged_tags = sorted(set(current.get("tags") or []) | set(clean_tags))
@@ -716,8 +1023,8 @@ class BlackboardStore:
                 merged_content = str(content).strip()
             now = time.time()
             conn.execute(
-                "UPDATE blackboard SET content=?, tags=?, evidence=?, confidence=?, priority=?, "
-                "kind=?, status=?, resolved=?, contradicted=?, fingerprint=?, updated_at=?, version=? "
+                "UPDATE findings SET content=?, tags=?, evidence=?, confidence=?, priority=?, "
+                "kind=?, status=?, fingerprint=?, updated_at=?, version=? "
                 "WHERE id=?",
                 (
                     merged_content,
@@ -729,15 +1036,12 @@ class BlackboardStore:
                     max(_clamp01(current.get("priority"), 0.0), _clamp01(priority)),
                     kind,
                     merged_status,
-                    int(merged_status == "resolved"),
-                    int(merged_status == "rejected"),
                     fingerprint,
                     now,
                     int(current.get("version") or 1) + 1,
                     str(current["id"]),
                 ),
             )
-            conn.commit()
         self._record_event(str(current["id"]), "observation_merged", {"source": source})
         refreshed = self.read(str(current["id"])) or current
         return {
@@ -788,38 +1092,38 @@ class BlackboardStore:
         """Record that two entries make incompatible claims. Symmetric."""
         if not entry_a or not entry_b or entry_a == entry_b:
             return False
-        with closing(self._conn()) as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            rows = {
-                r["id"]: r for r in conn.execute(
-                    "SELECT id, conflicts_with FROM blackboard WHERE id IN (?,?)", (entry_a, entry_b)
-                ).fetchall()
-            }
+        with self._tx() as conn:
+            rows = conn.execute(
+                "SELECT id FROM findings WHERE id IN (?,?)", (entry_a, entry_b)
+            ).fetchall()
             if len(rows) != 2:
-                conn.rollback()
                 return False
+            now = time.time()
             for this, other in ((entry_a, entry_b), (entry_b, entry_a)):
-                links = json.loads(rows[this]["conflicts_with"] or "[]")
-                if other not in links:
-                    links.append(other)
                 conn.execute(
-                    "UPDATE blackboard SET conflicts_with=?, updated_at=? WHERE id=?",
-                    (json.dumps(links), time.time(), this),
+                    "INSERT INTO links(entry_a, entry_b, type, reason, note, created_at, updated_at) "
+                    "VALUES (?,?,'conflict',?,?,?,?) "
+                    "ON CONFLICT(entry_a, entry_b, type) DO UPDATE SET note=excluded.note, updated_at=excluded.updated_at",
+                    (this, other, reason, reason, now, now),
                 )
-            conn.commit()
         for eid, other in ((entry_a, entry_b), (entry_b, entry_a)):
             self._record_event(eid, "conflict", {"with": other, "reason": reason})
         return True
 
     def conflicts(self, limit: int = 20) -> builtins.list[dict]:
-        """Return entries that contradict another entry, newest first."""
-        with closing(self._conn()) as conn:
-            rows = conn.execute(
-                "SELECT * FROM blackboard WHERE conflicts_with != '[]' AND conflicts_with IS NOT NULL "
-                "ORDER BY updated_at DESC LIMIT ?",
-                (max(1, int(limit)),),
-            ).fetchall()
-        return [self._row_to_dict(r) for r in rows]
+        """Return entries involved in a disagreement, newest first.
+
+        An entry counts as contested when it participates in a conflict link or
+        was transitioned to ``rejected`` outright (no link exists yet).
+        """
+        conn = self._conn()
+        rows = conn.execute(
+            "SELECT * FROM findings WHERE status='rejected' "
+            "OR id IN (SELECT entry_a FROM links UNION SELECT entry_b FROM links) "
+            "ORDER BY updated_at DESC LIMIT ?",
+            (max(1, int(limit)),),
+        ).fetchall()
+        return self._hydrate(rows, conn)
 
     # ------------------------------------------------------------------
     # Coverage: what was looked at and set aside
@@ -846,21 +1150,19 @@ class BlackboardStore:
             raise ValueError("verdict must be interesting, boring, or unclear")
         title = f"examined {name}".strip() if name else f"examined {naddr}"
 
-        with closing(self._conn()) as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                "SELECT id, verdict FROM blackboard WHERE kind='examined' AND addr=? LIMIT 1",
-                (naddr,),
-            ).fetchone()
-            existing_id = row["id"] if row else None
-            previous = row["verdict"] if row else ""
-            conn.commit()
+        conn = self._conn()
+        row = conn.execute(
+            "SELECT id, verdict FROM findings WHERE kind='examined' AND addr=? LIMIT 1",
+            (naddr,),
+        ).fetchone()
+        existing_id = row["id"] if row else None
+        previous = row["verdict"] if row else ""
 
         anchor = self.current_anchor(naddr) or {}
         if existing_id:
-            with closing(self._conn()) as conn:
-                conn.execute(
-                    "UPDATE blackboard SET verdict=?, content=?, title=?, updated_at=?, "
+            with self._tx() as c:
+                c.execute(
+                    "UPDATE findings SET verdict=?, content=?, title=?, updated_at=?, "
                     "version=version+1, stale=0, stale_reason='', anchor_kind=?, anchor_digest=? "
                     "WHERE id=?",
                     (
@@ -869,7 +1171,6 @@ class BlackboardStore:
                         existing_id,
                     ),
                 )
-                conn.commit()
             self._record_event(
                 existing_id, "examined", {"verdict": verdict, "previous": previous, "addr": naddr}
             )
@@ -896,10 +1197,10 @@ class BlackboardStore:
         naddr = normalize_addr(addr)
         if not naddr:
             return None
-        with closing(self._conn()) as conn:
-            row = conn.execute(
-                "SELECT * FROM blackboard WHERE kind='examined' AND addr=? LIMIT 1", (naddr,)
-            ).fetchone()
+        conn = self._conn()
+        row = conn.execute(
+            "SELECT * FROM findings WHERE kind='examined' AND addr=? LIMIT 1", (naddr,)
+        ).fetchone()
         if row is None:
             return None
         entry = self._row_to_dict(row)
@@ -914,10 +1215,10 @@ class BlackboardStore:
 
     def coverage(self) -> dict[str, Any]:
         """Counts of examined addresses by verdict."""
-        with closing(self._conn()) as conn:
-            rows = conn.execute(
-                "SELECT verdict, COUNT(*) AS n FROM blackboard WHERE kind='examined' GROUP BY verdict"
-            ).fetchall()
+        conn = self._conn()
+        rows = conn.execute(
+            "SELECT verdict, COUNT(*) AS n FROM findings WHERE kind='examined' GROUP BY verdict"
+        ).fetchall()
         by_verdict = {str(r["verdict"] or "unclear"): int(r["n"]) for r in rows}
         return {"examined": sum(by_verdict.values()), "by_verdict": by_verdict}
 
@@ -934,24 +1235,23 @@ class BlackboardStore:
         export repeatedly is cheap and idempotent.
         """
         sql = (
-            "SELECT * FROM blackboard WHERE status='confirmed' AND contradicted=0 "
-            "AND stale=0 AND kind != 'examined' AND addr != '' AND addr IS NOT NULL "
-            "AND (conflicts_with = '[]' OR conflicts_with IS NULL) "
+            "SELECT * FROM findings WHERE status='confirmed' AND stale=0 "
+            "AND kind != 'examined' AND addr != '' AND addr IS NOT NULL "
+            "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.entry_a=findings.id OR l.entry_b=findings.id) "
         )
         if not include_published:
             sql += "AND (published_at IS NULL OR published_at < updated_at) "
         sql += "ORDER BY confidence DESC, updated_at DESC LIMIT ?"
-        with closing(self._conn()) as conn:
-            rows = conn.execute(sql, (max(1, int(limit)),)).fetchall()
-        return [self._row_to_dict(r) for r in rows]
+        conn = self._conn()
+        rows = conn.execute(sql, (max(1, int(limit)),)).fetchall()
+        return self._hydrate(rows, conn)
 
     def mark_published(self, entry_id: str, symbol: str = "") -> bool:
-        with closing(self._conn()) as conn:
+        with self._tx() as conn:
             cur = conn.execute(
-                "UPDATE blackboard SET published_at=?, published_symbol=? WHERE id=?",
+                "UPDATE findings SET published_at=?, published_symbol=? WHERE id=?",
                 (time.time(), symbol, entry_id),
             )
-            conn.commit()
             ok = cur.rowcount > 0
         if ok:
             self._record_event(entry_id, "published", {"symbol": symbol} if symbol else {})
@@ -1045,17 +1345,17 @@ class BlackboardStore:
             return result
 
         placeholders = ",".join("?" for _ in ordered)
-        with closing(self._conn()) as conn:
-            rows = conn.execute(
-                f"SELECT * FROM blackboard WHERE addr IN ({placeholders}) "
-                "AND lower(COALESCE(source_type,'')) NOT IN ("
-                + ",".join("?" for _ in _INTERNAL_WORKSPACE_SOURCE_TYPES)
-                + ") ORDER BY confidence DESC, updated_at DESC LIMIT 200",
-                (*ordered, *sorted(_INTERNAL_WORKSPACE_SOURCE_TYPES)),
-            ).fetchall()
+        conn = self._conn()
+        rows = conn.execute(
+            f"SELECT * FROM findings WHERE addr IN ({placeholders}) "
+            "AND lower(COALESCE(source_type,'')) NOT IN ("
+            + ",".join("?" for _ in _INTERNAL_WORKSPACE_SOURCE_TYPES)
+            + ") ORDER BY confidence DESC, updated_at DESC LIMIT 200",
+            (*ordered, *sorted(_INTERNAL_WORKSPACE_SOURCE_TYPES)),
+        ).fetchall()
 
         rank = {addr: i for i, addr in enumerate(ordered)}
-        entries = [self._row_to_dict(r) for r in rows]
+        entries = self._hydrate(rows, conn)
         entries.sort(key=lambda e: (rank.get(str(e.get("addr") or ""), 99), -float(e.get("confidence") or 0.0)))
 
         for entry in entries:
@@ -1120,9 +1420,11 @@ class BlackboardStore:
     # ------------------------------------------------------------------
 
     def read(self, entry_id: str) -> dict | None:
-        with closing(self._conn()) as conn:
-            row = conn.execute("SELECT * FROM blackboard WHERE id = ?", (entry_id,)).fetchone()
-        return self._row_to_dict(row) if row else None
+        conn = self._conn()
+        row = conn.execute("SELECT * FROM findings WHERE id = ?", (entry_id,)).fetchone()
+        if row is None:
+            return None
+        return self._hydrate([row], conn)[0]
 
     def list(
         self,
@@ -1152,9 +1454,9 @@ class BlackboardStore:
             conditions.append("tags LIKE ?")
             params.append(f'%"{tag}"%')
         if not include_resolved:
-            conditions.append("resolved = 0")
+            conditions.append("status != 'resolved'")
         if not include_contradicted:
-            conditions.append("contradicted = 0")
+            conditions.append("status != 'rejected'")
         if ioc_type:
             conditions.append("ioc_type = ?")
             params.append(ioc_type)
@@ -1170,12 +1472,12 @@ class BlackboardStore:
         if stale_only:
             conditions.append("stale = 1")
         where = "WHERE " + " AND ".join(conditions)
-        with closing(self._conn()) as conn:
-            rows = conn.execute(
-                f"SELECT * FROM blackboard {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
-                (*params, limit, offset),
-            ).fetchall()
-        return [self._row_to_dict(r) for r in rows]
+        conn = self._conn()
+        rows = conn.execute(
+            f"SELECT * FROM findings {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+            (*params, int(limit), int(offset)),
+        ).fetchall()
+        return self._hydrate(rows, conn)
 
     def semantic_search(
         self,
@@ -1186,19 +1488,20 @@ class BlackboardStore:
         include_resolved: bool = True,
         include_contradicted: bool = False,
     ) -> builtins.list[dict]:
-        """Vector search over entries, falling back to keyword overlap.
+        """Vector search over the embeddings side table, falling back to keywords.
 
         The fallback is not a silent downgrade: entries returned lexically
         carry a ``similarity`` derived from term overlap and a ``match``
         field naming which path produced them.
         """
+
         def lexical_search() -> builtins.list[dict]:
             q = query.lower()
             terms = {term for term in q.split() if len(term) > 1}
-            with closing(self._conn()) as conn:
-                rows = conn.execute(
-                    "SELECT * FROM blackboard ORDER BY updated_at DESC LIMIT 200"
-                ).fetchall()
+            conn = self._conn()
+            rows = conn.execute(
+                "SELECT * FROM findings ORDER BY updated_at DESC LIMIT 200"
+            ).fetchall()
             results = []
             for row in rows:
                 d = self._row_to_dict(row)
@@ -1217,40 +1520,37 @@ class BlackboardStore:
             results.sort(key=lambda item: (item["similarity"], item.get("updated_at", 0)), reverse=True)
             return results[:top_k]
 
-        with closing(self._conn()) as conn:
-            has_vectors = bool(
-                conn.execute("SELECT 1 FROM blackboard WHERE vector IS NOT NULL LIMIT 1").fetchone()
-            )
-        if not has_vectors:
-            return lexical_search()
-
-        embedder = self._get_embedder()
-        if embedder is None:
-            return lexical_search()
         try:
+            embedder = self._get_embedder()
+            if embedder is None:
+                return lexical_search()
             q_vec = embedder.embed_vector(query)
             if q_vec is None:
                 raise RuntimeError("embedding unavailable")
         except Exception:
             return lexical_search()
 
-        conditions = ["vector IS NOT NULL"]
+        conditions = ["fe.vector IS NOT NULL"]
         params: builtins.list[Any] = []
         if category:
-            conditions.append("category = ?")
+            conditions.append("f.category = ?")
             params.append(category)
         if not include_resolved:
-            conditions.append("resolved = 0")
+            conditions.append("f.status != 'resolved'")
         if not include_contradicted:
-            conditions.append("contradicted = 0")
+            conditions.append("f.status != 'rejected'")
         where = "WHERE " + " AND ".join(conditions)
 
-        with closing(self._conn()) as conn:
-            rows = conn.execute(f"SELECT * FROM blackboard {where}", params).fetchall()
+        conn = self._conn()
+        rows = conn.execute(
+            f"SELECT f.*, fe.vector AS _vec FROM findings f "
+            f"JOIN findings_embeddings fe ON fe.entry_id = f.id {where}",
+            params,
+        ).fetchall()
 
         pairs: list[tuple[sqlite3.Row, list[float]]] = []
         for row in rows:
-            blob = row["vector"]
+            blob = row["_vec"]
             if not blob:
                 continue
             try:
@@ -1273,7 +1573,24 @@ class BlackboardStore:
         if not scored:
             return lexical_search()
         scored.sort(key=lambda x: x["similarity"], reverse=True)
-        return scored[:top_k]
+        scored = scored[:top_k]
+        # Attach the derived conflicts_with field for the returned entries.
+        ids = [str(s["id"]) for s in scored]
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            link_rows = conn.execute(
+                f"SELECT entry_a, entry_b FROM links "
+                f"WHERE entry_a IN ({placeholders}) OR entry_b IN ({placeholders})",
+                (*ids, *ids),
+            ).fetchall()
+            cmap: dict[str, set[str]] = {}
+            for lr in link_rows:
+                a, b = str(lr["entry_a"]), str(lr["entry_b"])
+                cmap.setdefault(a, set()).add(b)
+                cmap.setdefault(b, set()).add(a)
+            for s in scored:
+                s["conflicts_with"] = sorted(cmap.get(str(s["id"]), set()))
+        return scored
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -1282,22 +1599,34 @@ class BlackboardStore:
     def update(self, entry_id: str, embed: bool = False, **kwargs) -> bool:
         allowed = {
             "title", "content", "category", "addr", "addr_end", "tags",
-            "confidence", "q_value", "resolved", "ioc_type", "ioc_value",
+            "confidence", "q_value", "ioc_type", "ioc_value",
             "depends_on", "blocks_addr", "register", "reg_type",
             "evidence", "source_type", "entropy", "xref_count", "calibrated",
-            "kind", "status", "priority", "fingerprint", "contradicted",
-            "contradiction_reason", "verdict", "anchor_kind", "anchor_digest",
-            "stale", "stale_reason",
+            "kind", "status", "priority", "fingerprint", "rejected_reason",
+            "verdict", "anchor_kind", "anchor_digest", "stale", "stale_reason",
+            "source", "published_at", "published_symbol",
         }
+        # Legacy aliases: resolved/contradicted/contradiction_reason were
+        # stored columns in the single-table era and are derived now. Map them
+        # so older callers keep working while the redesign lands.
+        if "contradiction_reason" in kwargs:
+            kwargs["rejected_reason"] = kwargs.pop("contradiction_reason")
+        if "resolved" in kwargs:
+            resolved = bool(kwargs.pop("resolved"))
+            if resolved and "status" not in kwargs:
+                kwargs["status"] = "resolved"
+        if "contradicted" in kwargs:
+            contradicted = bool(kwargs.pop("contradicted"))
+            if contradicted and "status" not in kwargs:
+                kwargs["status"] = "rejected"
         updates = {k: v for k, v in kwargs.items() if k in allowed}
         if not updates:
             return False
-        with closing(self._conn()) as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT * FROM blackboard WHERE id=?", (entry_id,)).fetchone()
+
+        with self._tx() as conn:
+            row = conn.execute("SELECT * FROM findings WHERE id=?", (entry_id,)).fetchone()
             if row is None:
-                conn.rollback()
-                return False
+                raise _Rollback()
             current = self._row_to_dict(row)
             if "tags" in updates and isinstance(updates["tags"], builtins.list):
                 updates["tags"] = sorted(
@@ -1317,6 +1646,11 @@ class BlackboardStore:
                 updates["evidence"] = merged_evidence
             if "addr" in updates:
                 updates["addr"] = normalize_addr(updates["addr"])
+            if "status" in updates:
+                new_status = str(updates["status"] or "").strip().lower()
+                updates["status"] = new_status
+                if new_status != "rejected":
+                    updates["rejected_reason"] = ""
             # Any deliberate revision re-anchors the claim to the code as it
             # stands now, so a stale flag the analyst has acted on clears.
             if "stale" not in updates and current.get("stale"):
@@ -1332,18 +1666,20 @@ class BlackboardStore:
                 updates["tags"] = json.dumps(updates["tags"])
             if "evidence" in updates:
                 updates["evidence"] = json.dumps(updates["evidence"])
-            if embed and ("title" in updates or "content" in updates):
-                t = updates.get("title", current.get("title", ""))
-                c = updates.get("content", current.get("content", ""))
-                blob = self._embed_text(f"{t} {c}".strip())
-                if blob:
-                    updates["vector"] = blob
+            if "rejected_reason" in updates and not str(updates["rejected_reason"] or "").strip():
+                updates["rejected_reason"] = ""
             sets = ", ".join(f"{k} = ?" for k in updates)
             cur = conn.execute(
-                f"UPDATE blackboard SET {sets} WHERE id = ?", (*updates.values(), entry_id)
+                f"UPDATE findings SET {sets} WHERE id = ?", (*updates.values(), entry_id)
             )
-            conn.commit()
             ok = cur.rowcount > 0
+
+        if embed and ("title" in updates or "content" in updates):
+            text = f"{updates.get('title', current.get('title', ''))} {updates.get('content', current.get('content', ''))}".strip()
+            blob = self._embed_text(text)
+            if blob:
+                self._store_embedding(entry_id, blob)
+            self.embed_enqueue(entry_id, text)
         if ok:
             self._record_event(
                 entry_id, "updated",
@@ -1364,15 +1700,13 @@ class BlackboardStore:
         """Apply one explicit lifecycle transition and retain an audit event."""
         status = str(status or "open").strip().lower()
         if status not in STATUSES:
-            raise ValueError("status must be open, confirmed, resolved, or rejected")
+            raise ValueError("status must be proposed, open, confirmed, resolved, or rejected")
         existing = self.read(entry_id)
         if existing is None:
             return None
         updates: dict[str, Any] = {
             "status": status,
-            "resolved": int(status == "resolved"),
-            "contradicted": int(status == "rejected"),
-            "contradiction_reason": reason if status == "rejected" else "",
+            "rejected_reason": reason if status == "rejected" else "",
         }
         if content is not None:
             updates["content"] = content
@@ -1387,23 +1721,35 @@ class BlackboardStore:
         return self.read(entry_id)
 
     def contradict(self, entry_id: str, reason: str) -> bool:
-        with closing(self._conn()) as conn:
+        with self._tx() as conn:
             cur = conn.execute(
-                "UPDATE blackboard SET contradicted=1, status='rejected', "
-                "contradiction_reason=?, updated_at=? WHERE id=?",
+                "UPDATE findings SET status='rejected', rejected_reason=?, updated_at=?, version=version+1 "
+                "WHERE id=?",
                 (reason, time.time(), entry_id),
             )
-            conn.commit()
-            return cur.rowcount > 0
+            ok = cur.rowcount > 0
+            if ok:
+                # Store the reason in any conflict links this entry participates
+                # in, so the disagreement trail carries it.
+                conn.execute(
+                    "UPDATE links SET note=?, updated_at=? WHERE type='conflict' "
+                    "AND (entry_a=? OR entry_b=?)",
+                    (reason, time.time(), entry_id, entry_id),
+                )
+        if ok:
+            self._record_event(entry_id, "status:rejected", {"reason": reason} if reason else {})
+        return ok
 
     def mark_resolved(self, entry_id: str) -> bool:
-        with closing(self._conn()) as conn:
+        with self._tx() as conn:
             cur = conn.execute(
-                "UPDATE blackboard SET resolved=1, status='resolved', updated_at=? WHERE id=?",
+                "UPDATE findings SET status='resolved', updated_at=?, version=version+1 WHERE id=?",
                 (time.time(), entry_id),
             )
-            conn.commit()
-            return cur.rowcount > 0
+            ok = cur.rowcount > 0
+        if ok:
+            self._record_event(entry_id, "status:resolved", {})
+        return ok
 
     def add_evidence(self, entry_id: str, evidence_type: str, value: str, weight: float = 1.0) -> bool:
         """Append a structured observation supporting an entry."""
@@ -1454,10 +1800,10 @@ class BlackboardStore:
         now = time.time()
         decay_rate = math.log(2) / max(half_life_days, 1.0)
         updated = 0
-        with closing(self._conn()) as conn:
+        with self._tx() as conn:
             rows = conn.execute(
                 "SELECT id, confidence, updated_at, decayed_at, calibrated, evidence "
-                "FROM blackboard WHERE confidence > ?",
+                "FROM findings WHERE confidence > ?",
                 (min_confidence,),
             ).fetchall()
             for row in rows:
@@ -1474,11 +1820,10 @@ class BlackboardStore:
                 new_conf = round(max(min_confidence, conf * math.exp(-elapsed_days * rate)), 3)
                 if new_conf < conf - 0.01:
                     conn.execute(
-                        "UPDATE blackboard SET confidence=?, decayed_at=? WHERE id=?",
+                        "UPDATE findings SET confidence=?, decayed_at=? WHERE id=?",
                         (new_conf, now, row["id"]),
                     )
                     updated += 1
-            conn.commit()
         return updated
 
     # ------------------------------------------------------------------
@@ -1503,7 +1848,10 @@ class BlackboardStore:
             Entries that contradict another entry and need reconciling.
         ``coverage``
             Frequently-called functions with no finding and no examination.
-            Requires ``rpc_fn`` to read the function inventory.
+            Requires ``rpc_fn`` to read the function inventory. When the
+            inventory is empty or ``rpc_fn`` is None the result carries a
+            ``note`` saying so instead of silently pretending there is nothing
+            to look at.
         ``frontier``
             Unexamined neighbours of confirmed findings. Requires ``rpc_fn``.
 
@@ -1529,11 +1877,14 @@ class BlackboardStore:
         if query and str(query).strip():
             candidates = self._filter_by_query(candidates, str(query).strip())
 
-        return {
+        result = {
             "strategy": strategy,
             "targets": candidates[:limit],
             "count": len(candidates[:limit]),
         }
+        if strategy == "coverage" and self.last_coverage_note:
+            result["note"] = self.last_coverage_note
+        return result
 
     def _filter_by_query(
         self, candidates: builtins.list[dict], query: str
@@ -1553,27 +1904,27 @@ class BlackboardStore:
         return sorted(candidates, key=lambda i: i.get("query_overlap", 0.0), reverse=True)
 
     def _resolved_addrs(self) -> set:
-        with closing(self._conn()) as conn:
-            return {
-                r["addr"] for r in conn.execute(
-                    "SELECT addr FROM blackboard WHERE status IN ('resolved','confirmed') "
-                    "AND addr != '' AND addr IS NOT NULL"
-                ).fetchall()
-            }
+        conn = self._conn()
+        return {
+            r["addr"] for r in conn.execute(
+                "SELECT addr FROM findings WHERE status IN ('resolved','confirmed') "
+                "AND addr != '' AND addr IS NOT NULL"
+            ).fetchall()
+        }
 
     def _targets_unresolved(self, limit: int, rpc_fn=None) -> builtins.list[dict]:
         resolved = self._resolved_addrs()
         placeholders = ",".join("?" for _ in OPEN_THREAD_KINDS)
-        with closing(self._conn()) as conn:
-            rows = conn.execute(
-                f"SELECT * FROM blackboard WHERE kind IN ({placeholders}) AND status='open' "
-                "AND contradicted=0 ORDER BY priority DESC, confidence DESC, updated_at DESC LIMIT 200",
-                tuple(sorted(OPEN_THREAD_KINDS)),
-            ).fetchall()
-            unverified = conn.execute(
-                "SELECT * FROM blackboard WHERE kind='finding' AND status='open' AND contradicted=0 "
-                "AND confidence < 0.6 ORDER BY priority DESC, updated_at DESC LIMIT 100"
-            ).fetchall()
+        conn = self._conn()
+        rows = conn.execute(
+            f"SELECT * FROM findings WHERE kind IN ({placeholders}) AND status='open' "
+            "ORDER BY priority DESC, confidence DESC, updated_at DESC LIMIT 200",
+            tuple(sorted(OPEN_THREAD_KINDS)),
+        ).fetchall()
+        unverified = conn.execute(
+            "SELECT * FROM findings WHERE kind='finding' AND status='open' "
+            "AND confidence < 0.6 ORDER BY priority DESC, updated_at DESC LIMIT 100"
+        ).fetchall()
 
         out: builtins.list[dict] = []
         blocked: builtins.list[dict] = []
@@ -1623,16 +1974,31 @@ class BlackboardStore:
         binary has symbols and nothing is auto-named, this falls back to every
         unexamined function and says so in the reason, rather than returning
         nothing on a symbolised target.
+
+        Coverage is the one strategy that depends on a live IDA session. When
+        ``rpc_fn`` is None or the function inventory comes back empty, the
+        result is empty *and* a ``last_coverage_note`` explains why, so a
+        caller never mistakes "could not look" for "nothing to look at".
         """
+        self.last_coverage_note = ""
+        if rpc_fn is None:
+            self.last_coverage_note = (
+                "No live IDA session (rpc_fn is None), so the function inventory "
+                "could not be read; coverage targets are unavailable."
+            )
+            return []
         functions = self._function_inventory(rpc_fn)
         if not functions:
+            self.last_coverage_note = (
+                "The IDA function inventory is empty; there are no coverage candidates yet."
+            )
             return []
-        with closing(self._conn()) as conn:
-            known = {
-                r["addr"] for r in conn.execute(
-                    "SELECT DISTINCT addr FROM blackboard WHERE addr != '' AND addr IS NOT NULL"
-                ).fetchall()
-            }
+        conn = self._conn()
+        known = {
+            r["addr"] for r in conn.execute(
+                "SELECT DISTINCT addr FROM findings WHERE addr != '' AND addr IS NOT NULL"
+            ).fetchall()
+        }
 
         def is_auto_named(name: str) -> bool:
             return not name or name.startswith(("sub_", "j_", "loc_", "nullsub_", "unknown_libname_"))
@@ -1670,16 +2036,16 @@ class BlackboardStore:
         """Unexamined neighbours of what is already confirmed."""
         if rpc_fn is None:
             return []
-        with closing(self._conn()) as conn:
-            anchors = conn.execute(
-                "SELECT id, addr, title FROM blackboard WHERE status='confirmed' "
-                "AND addr != '' AND addr IS NOT NULL ORDER BY confidence DESC LIMIT 12"
+        conn = self._conn()
+        anchors = conn.execute(
+            "SELECT id, addr, title FROM findings WHERE status='confirmed' "
+            "AND addr != '' AND addr IS NOT NULL ORDER BY confidence DESC LIMIT 12"
+        ).fetchall()
+        known = {
+            r["addr"] for r in conn.execute(
+                "SELECT DISTINCT addr FROM findings WHERE addr != '' AND addr IS NOT NULL"
             ).fetchall()
-            known = {
-                r["addr"] for r in conn.execute(
-                    "SELECT DISTINCT addr FROM blackboard WHERE addr != '' AND addr IS NOT NULL"
-                ).fetchall()
-            }
+        }
         out: builtins.list[dict] = []
         seen: set[str] = set()
         for anchor in anchors:
@@ -1821,26 +2187,30 @@ class BlackboardStore:
         limit = max(1, min(50, int(limit or 8)))
         cat_placeholders = ",".join("?" for _ in _INTERNAL_WORKSPACE_CATEGORIES)
         src_placeholders = ",".join("?" for _ in _INTERNAL_WORKSPACE_SOURCE_TYPES)
-        with closing(self._conn()) as conn:
-            rows = conn.execute(
-                "SELECT * FROM blackboard WHERE contradicted=0 AND kind != 'examined' "
-                f"AND lower(category) NOT IN ({cat_placeholders}) "
-                f"AND lower(COALESCE(source_type, '')) NOT IN ({src_placeholders}) "
-                "ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'confirmed' THEN 1 ELSE 2 END, "
-                "priority DESC, confidence DESC, updated_at DESC LIMIT 500",
-                (*sorted(_INTERNAL_WORKSPACE_CATEGORIES), *sorted(_INTERNAL_WORKSPACE_SOURCE_TYPES)),
-            ).fetchall()
-            conflict_rows = conn.execute(
-                "SELECT * FROM blackboard WHERE contradicted=1 OR status='rejected' "
-                "OR (conflicts_with != '[]' AND conflicts_with IS NOT NULL) "
-                "ORDER BY updated_at DESC LIMIT ?", (limit,)
-            ).fetchall()
-            recent_events = conn.execute(
-                "SELECT entry_id, event, details, created_at FROM finding_events "
-                "ORDER BY seq DESC LIMIT ?", (limit,)
-            ).fetchall()
-        entries = [self._row_to_dict(row) for row in rows]
-        conflicts = [self._row_to_dict(row) for row in conflict_rows]
+        conn = self._conn()
+        # Proposals (status 'proposed') are deliberately excluded: they have
+        # their own accept/reject machinery and are not part of the analyst's
+        # established memory until accepted.
+        rows = conn.execute(
+            "SELECT * FROM findings WHERE status NOT IN ('rejected', 'proposed') "
+            "AND kind != 'examined' "
+            f"AND lower(category) NOT IN ({cat_placeholders}) "
+            f"AND lower(COALESCE(source_type, '')) NOT IN ({src_placeholders}) "
+            "ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'confirmed' THEN 1 ELSE 2 END, "
+            "priority DESC, confidence DESC, updated_at DESC LIMIT 500",
+            (*sorted(_INTERNAL_WORKSPACE_CATEGORIES), *sorted(_INTERNAL_WORKSPACE_SOURCE_TYPES)),
+        ).fetchall()
+        conflict_rows = conn.execute(
+            "SELECT * FROM findings WHERE status='rejected' "
+            "OR id IN (SELECT entry_a FROM links UNION SELECT entry_b FROM links) "
+            "ORDER BY updated_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        recent_events = conn.execute(
+            "SELECT entry_id, event, details, created_at FROM finding_events "
+            "ORDER BY seq DESC LIMIT ?", (limit,)
+        ).fetchall()
+        entries = self._hydrate(rows, conn)
+        conflicts = self._hydrate(conflict_rows, conn)
         stale = self.stale_entries(limit=limit)
         cover = self.coverage()
 
@@ -2005,15 +2375,15 @@ class BlackboardStore:
         """Legacy summary shape, derived from the same data as the brief."""
         brief = self.workspace_brief(limit=5)
         stats = self.stats()
-        with closing(self._conn()) as conn:
-            iocs = conn.execute(
-                "SELECT ioc_type, ioc_value, addr, confidence FROM blackboard "
-                "WHERE category='ioc' AND resolved=0 ORDER BY confidence DESC LIMIT 10"
-            ).fetchall()
-            vulns = conn.execute(
-                "SELECT title, addr, confidence FROM blackboard "
-                "WHERE category='vuln' AND resolved=0 ORDER BY confidence DESC LIMIT 5"
-            ).fetchall()
+        conn = self._conn()
+        iocs = conn.execute(
+            "SELECT ioc_type, ioc_value, addr, confidence FROM findings "
+            "WHERE category='ioc' AND status != 'resolved' ORDER BY confidence DESC LIMIT 10"
+        ).fetchall()
+        vulns = conn.execute(
+            "SELECT title, addr, confidence FROM findings "
+            "WHERE category='vuln' AND status != 'resolved' ORDER BY confidence DESC LIMIT 5"
+        ).fetchall()
         return {
             "total_entries": stats["total_entries"],
             "active_entries": stats["total_entries"] - stats["resolved"] - stats["contradicted"],
@@ -2032,120 +2402,70 @@ class BlackboardStore:
     # Maintenance
     # ------------------------------------------------------------------
 
-    def semantic_index(self, category: str | None = None) -> dict[str, Any]:
-        conditions = []
-        params: builtins.list[Any] = []
-        if category:
-            conditions.append("category = ?")
-            params.append(category)
-        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-        with closing(self._conn()) as conn:
-            total = conn.execute(f"SELECT COUNT(*) AS n FROM blackboard {where}", params).fetchone()["n"]
-            embedded = conn.execute(
-                f"SELECT COUNT(*) AS n FROM blackboard {where}{' AND' if where else 'WHERE'} vector IS NOT NULL",
-                params,
-            ).fetchone()["n"]
-        return {
-            "ok": True,
-            "total": total,
-            "embedded": embedded,
-            "missing": max(0, total - embedded),
-            "category": category or "",
-        }
-
-    def semantic_rebuild(self, category: str | None = None, force: bool = False, limit: int = 5000) -> dict[str, Any]:
-        conditions = [] if force else ["vector IS NULL"]
-        params: builtins.list[Any] = []
-        if category:
-            conditions.append("category = ?")
-            params.append(category)
-        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-        with closing(self._conn()) as conn:
-            rows = conn.execute(
-                f"SELECT id, title, content FROM blackboard {where} LIMIT ?", (*params, int(limit))
-            ).fetchall()
-        rebuilt = 0
-        skipped = 0
-        for row in rows:
-            blob = self._embed_text(f"{row['title'] or ''} {row['content'] or ''}".strip())
-            if not blob:
-                skipped += 1
-                continue
-            with closing(self._conn()) as conn:
-                conn.execute(
-                    "UPDATE blackboard SET vector=? WHERE id=?", (blob, row["id"])
-                )
-                conn.commit()
-            rebuilt += 1
-        result = {
-            "ok": True,
-            "rebuilt": rebuilt,
-            "category": category or "",
-            "forced": bool(force),
-        }
-        if skipped:
-            result["skipped"] = skipped
-            result["note"] = "Embedding backend unavailable for the skipped entries."
-        return result
-
     def delete(self, entry_id: str) -> bool:
-        with closing(self._conn()) as conn:
-            cur = conn.execute("DELETE FROM blackboard WHERE id = ?", (entry_id,))
-            conn.commit()
-            return cur.rowcount > 0
+        """Delete an entry and cascade its links, events, and embeddings."""
+        with self._tx() as conn:
+            cur = conn.execute("DELETE FROM findings WHERE id = ?", (entry_id,))
+            ok = cur.rowcount > 0
+            conn.execute("DELETE FROM links WHERE entry_a = ? OR entry_b = ?", (entry_id, entry_id))
+            conn.execute("DELETE FROM finding_events WHERE entry_id = ?", (entry_id,))
+            conn.execute("DELETE FROM findings_embeddings WHERE entry_id = ?", (entry_id,))
+        return ok
 
     def clear(self, category: str | None = None) -> int:
-        with closing(self._conn()) as conn:
+        with self._tx() as conn:
             if category:
-                cur = conn.execute("DELETE FROM blackboard WHERE category = ?", (category,))
+                cur = conn.execute("DELETE FROM findings WHERE category = ?", (category,))
             else:
-                cur = conn.execute("DELETE FROM blackboard")
-            conn.commit()
-            return cur.rowcount
+                cur = conn.execute("DELETE FROM findings")
+            count = cur.rowcount
+        return count
 
     def stats(self) -> dict:
-        with closing(self._conn()) as conn:
-            head = conn.execute(
-                "SELECT COUNT(*) AS total, COUNT(DISTINCT category) AS cats, "
-                "AVG(confidence) AS avg_conf FROM blackboard"
-            ).fetchone()
-            by_cat = {r["category"]: r["n"] for r in conn.execute(
-                "SELECT category, COUNT(*) AS n FROM blackboard GROUP BY category"
-            ).fetchall()}
-            scalars = conn.execute(
-                "SELECT "
-                "SUM(CASE WHEN vector IS NOT NULL THEN 1 ELSE 0 END) AS embedded, "
-                "SUM(resolved) AS resolved, "
-                "SUM(contradicted) AS contradicted, "
-                "SUM(stale) AS stale, "
-                "SUM(calibrated) AS calibrated "
-                "FROM blackboard"
-            ).fetchone()
-            iocs = {r["ioc_type"]: r["n"] for r in conn.execute(
-                "SELECT ioc_type, COUNT(*) AS n FROM blackboard "
-                "WHERE ioc_type != '' AND ioc_type IS NOT NULL GROUP BY ioc_type"
-            ).fetchall()}
-            source_types = {r["source_type"]: r["n"] for r in conn.execute(
-                "SELECT source_type, COUNT(*) AS n FROM blackboard "
-                "WHERE source_type IS NOT NULL GROUP BY source_type"
-            ).fetchall()}
-            ev_rows = conn.execute(
-                "SELECT evidence FROM blackboard WHERE evidence != '[]' AND evidence IS NOT NULL"
-            ).fetchall()
+        """SQL-aggregated workspace statistics."""
+        conn = self._conn()
+        head = conn.execute(
+            "SELECT "
+            "COUNT(*) AS total, "
+            "COUNT(DISTINCT category) AS cats, "
+            "AVG(confidence) AS avg_conf, "
+            "SUM(CASE WHEN status='resolved' THEN 1 ELSE 0 END) AS resolved, "
+            "SUM(CASE WHEN status='rejected' THEN 1 ELSE 0 END) AS contradicted, "
+            "SUM(CASE WHEN status IN ('open','proposed') THEN 1 ELSE 0 END) AS unresolved, "
+            "SUM(stale) AS stale, "
+            "SUM(calibrated) AS calibrated "
+            "FROM findings"
+        ).fetchone()
+        by_cat = {r["category"]: r["n"] for r in conn.execute(
+            "SELECT category, COUNT(*) AS n FROM findings GROUP BY category"
+        ).fetchall()}
+        iocs = {r["ioc_type"]: r["n"] for r in conn.execute(
+            "SELECT ioc_type, COUNT(*) AS n FROM findings "
+            "WHERE ioc_type != '' AND ioc_type IS NOT NULL GROUP BY ioc_type"
+        ).fetchall()}
+        source_types = {r["source_type"]: r["n"] for r in conn.execute(
+            "SELECT source_type, COUNT(*) AS n FROM findings "
+            "WHERE source_type IS NOT NULL GROUP BY source_type"
+        ).fetchall()}
+        embedded = conn.execute("SELECT COUNT(*) AS n FROM findings_embeddings").fetchone()["n"]
+        ev_rows = conn.execute(
+            "SELECT evidence FROM findings WHERE evidence != '[]' AND evidence IS NOT NULL"
+        ).fetchall()
         total_evidence = sum(len(json.loads(r["evidence"] or "[]")) for r in ev_rows)
         return {
             "total_entries": head["total"] or 0,
             "categories": head["cats"] or 0,
             "avg_confidence": round(head["avg_conf"] or 0, 3),
             "by_category": by_cat,
-            "embedded_entries": scalars["embedded"] or 0,
-            "resolved": scalars["resolved"] or 0,
-            "contradicted": scalars["contradicted"] or 0,
-            "stale": scalars["stale"] or 0,
+            "embedded_entries": embedded or 0,
+            "resolved": head["resolved"] or 0,
+            "contradicted": head["contradicted"] or 0,
+            "unresolved": head["unresolved"] or 0,
+            "stale": head["stale"] or 0,
             "iocs": iocs,
             "source_types": source_types,
             "total_evidence_records": total_evidence,
-            "calibrated_entries": scalars["calibrated"] or 0,
+            "calibrated_entries": head["calibrated"] or 0,
             "coverage": self.coverage(),
         }
 
@@ -2160,31 +2480,37 @@ class BlackboardStore:
         Conflicting and stale entries are never pruned automatically: they are
         low-confidence precisely because they need attention.
         """
-        with closing(self._conn()) as conn:
-            total = conn.execute("SELECT COUNT(*) AS n FROM blackboard").fetchone()["n"]
-            conditions = ["stale = 0", "(conflicts_with = '[]' OR conflicts_with IS NULL)"]
-            params: builtins.list[Any] = []
-            if min_q_value > 0:
-                conditions.append("confidence < ?")
-                params.append(min_q_value)
-            if older_than_days > 0:
-                conditions.append("updated_at < ?")
-                params.append(time.time() - older_than_days * 86400)
-            where = "WHERE " + " AND ".join(conditions)
-            to_delete = max(0, total - max_entries)
-            if to_delete > 0:
-                ids = [r["id"] for r in conn.execute(
-                    f"SELECT id FROM blackboard {where} ORDER BY confidence ASC, updated_at ASC LIMIT ?",
-                    (*params, to_delete),
-                ).fetchall()]
+        conn = self._conn()
+        total = conn.execute("SELECT COUNT(*) AS n FROM findings").fetchone()["n"]
+        conditions = [
+            "stale = 0",
+            "NOT EXISTS (SELECT 1 FROM links l WHERE l.entry_a=findings.id OR l.entry_b=findings.id)",
+        ]
+        params: builtins.list[Any] = []
+        if min_q_value > 0:
+            conditions.append("confidence < ?")
+            params.append(min_q_value)
+        if older_than_days > 0:
+            conditions.append("updated_at < ?")
+            params.append(time.time() - older_than_days * 86400)
+        where = "WHERE " + " AND ".join(conditions)
+        to_delete = max(0, total - max_entries)
+        if to_delete > 0:
+            ids = [r["id"] for r in conn.execute(
+                f"SELECT id FROM findings {where} ORDER BY confidence ASC, updated_at ASC LIMIT ?",
+                (*params, to_delete),
+            ).fetchall()]
+            with self._tx() as c:
                 for eid in ids:
-                    conn.execute("DELETE FROM blackboard WHERE id = ?", (eid,))
-                conn.commit()
-                return {"pruned": len(ids), "remaining": total - len(ids)}
-            if params:
-                cur = conn.execute(f"DELETE FROM blackboard {where}", params)
-                conn.commit()
-                return {"pruned": cur.rowcount, "remaining": total - cur.rowcount}
+                    c.execute("DELETE FROM findings WHERE id = ?", (eid,))
+                    c.execute("DELETE FROM links WHERE entry_a = ? OR entry_b = ?", (eid, eid))
+                    c.execute("DELETE FROM finding_events WHERE entry_id = ?", (eid,))
+                    c.execute("DELETE FROM findings_embeddings WHERE entry_id = ?", (eid,))
+            return {"pruned": len(ids), "remaining": total - len(ids)}
+        if params:
+            with self._tx() as c:
+                cur = c.execute(f"DELETE FROM findings {where}", params)
+            return {"pruned": cur.rowcount, "remaining": total - cur.rowcount}
         return {"pruned": 0, "remaining": total}
 
     def exists_similar(self, addr: str, category: str, title: str, threshold: float = 0.85) -> bool:
@@ -2194,11 +2520,11 @@ class BlackboardStore:
         gate from the quantiles of the very sample it was testing, so a set of
         uniformly dissimilar titles produced a low gate and reported a match.
         """
-        with closing(self._conn()) as conn:
-            rows = conn.execute(
-                "SELECT title FROM blackboard WHERE addr = ? AND category = ?",
-                (normalize_addr(addr), category),
-            ).fetchall()
+        conn = self._conn()
+        rows = conn.execute(
+            "SELECT title FROM findings WHERE addr = ? AND category = ?",
+            (normalize_addr(addr), category),
+        ).fetchall()
         if not rows:
             return False
         return any(_jaccard(title, r["title"]) >= threshold for r in rows)
@@ -2213,12 +2539,12 @@ class BlackboardStore:
         if category:
             conditions.append("category = ?")
             params.append(category)
-        with closing(self._conn()) as conn:
-            rows = conn.execute(
-                f"SELECT * FROM blackboard WHERE {' AND '.join(conditions)} ORDER BY updated_at DESC",
-                params,
-            ).fetchall()
-        entries = [self._row_to_dict(r) for r in rows]
+        conn = self._conn()
+        rows = conn.execute(
+            f"SELECT * FROM findings WHERE {' AND '.join(conditions)} ORDER BY updated_at DESC",
+            params,
+        ).fetchall()
+        entries = self._hydrate(rows, conn)
         deleted: set = set()
         for i, e in enumerate(entries):
             if e["id"] in deleted:

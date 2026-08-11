@@ -17,7 +17,7 @@ from .urlhaus import UrlhausSource
 from .yara_rules_extra import YaraRulesExtraSource
 from .yara_source import YaraSource
 
-__all__ = ["SOURCES", "SourceParser", "get_source", "source_names"]
+__all__ = ["SOURCES", "SourceParser"]
 
 # === ADD NEW SOURCES HERE (one line) ===
 SOURCES: list[SourceParser] = [
@@ -30,14 +30,3 @@ SOURCES: list[SourceParser] = [
     UrlhausSource(),
     FindCryptSource(),
 ]
-
-
-def get_source(name: str) -> SourceParser | None:
-    for s in SOURCES:
-        if s.name == name:
-            return s
-    return None
-
-
-def source_names() -> list[str]:
-    return [s.name for s in SOURCES]

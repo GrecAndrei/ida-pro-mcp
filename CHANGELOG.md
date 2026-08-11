@@ -2,6 +2,267 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-08-09 — settle wave: q05 tool verification, h02 runtime lifecycle, arch auto-apply
+
+Settle/integration pass over the completed feature waves: the q05 analysis-surface
+directives are verified and pinned, the session-lifecycle revamp's runtime layer
+gains a real shutdown bridge, opaque-blob architecture auto-apply lands, and the
+repo is landed ruff-clean.
+
+### q05: calc / graph / gadgets / imports / data / memory
+- **calc**: all address-context tokens route through the shared
+  `parse_address_canonical` (symbol-first, hex-by-default in-image bare tokens,
+  `ADDRESS_INVALID` for ambiguous/unmapped, crisp `no file mapping` on
+  headerless blobs). `calc deref` `type="string"` now falls back to a bounded
+  printable-run scan when no string literal is defined (raw blobs), mirroring
+  `memory read type="string"`.
+- **graph**: `cfg` and `dominators` report pre/post truncation counts
+  (`nodes_before_truncation` / `edges_before_truncation` / `truncated`) and
+  `dominators` now honors `max_items` (the dominator tree is still computed over
+  the full block list so idoms stay correct). `callgraph` reports
+  function-less-target placeholders + count; raw-blob fallbacks auto-note.
+- **gadgets**: new optional `raw=True` opt-in (byte-level linear sweep);
+  `rop`/`jop`/`cop`/`syscall` auto-fall back to the sweep on headless exec
+  regions and carry a `note`. RISC-V register-indirect branches are classified
+  through the shared `arch_utils` classifier — `jalr t0, 0(ra)` is now a JOP
+  jump (not a ROP return), compressed `c.jr`/`c.jalr` terminators appear in the
+  finders, and RISC-V write_what_where excludes `sp`/`fp` frame saves. The host
+  `TOOL_ARG_SCHEMAS["gadgets"]` now advertises `raw` so it reaches the handler.
+- **imports_deep / data / memory / misc / symbols**: verified and regression-
+  pinned (ELF PLT/GOT thunk resolver, `no import table` note, `string_xrefs`
+  zero-ref scoring, memory read/write split riding `@idaread`/`@idawrite`).
+
+### h02: runtime lifecycle bridge
+- **server_script**: the `__main__` join loop now waits for the listener thread
+  to exit instead of returning on the shutdown event — the handler's
+  best-effort `save_database` completes and the shutdown response is delivered
+  before the process exits (daemon threads are not joined at interpreter exit).
+  The RPC listener answers pings (`analyzing: true`) while startup analysis is
+  still gated; shutdown is auth-checked and reachable mid-analysis.
+- **runtime**: a fresh spawn retires a crashed runtime's log fds and stale
+  port/auth token first; auto-restart is refused only while a close/delete is
+  actually running; `_terminate_ida_processes_for_path` matches the IDB path as
+  an exact argv argument; spawn envelope reports `indexing_state="disabled"`;
+  periodic analysis checkpoints (`checkpoint_save_seconds`) persist a marker and
+  a resume warns when it is stale; watcher/checkpoint threads stop cleanly.
+- **arch auto-apply**: high-confidence non-ambiguous opaque-blob inferences
+  (Cortex-M conf 0.92, RISC-V rv64c with a definite bitness call) are applied
+  into the spawn options and surfaced in the open response; ambiguous
+  rv32c/rv64 near-ties and sub-0.9 guesses are never forced.
+- **leases**: the heartbeat keeps a lease while the idat launcher exited but an
+  ida-named analysis child is still alive; stale-lease cleanup tree-kills the
+  launcher's process group (taskkill `/T` on Windows) so orphaned children that
+  hold `.id0`/`.id1` open are freed; shutdown stops watchers/spawns first.
+
+### Blocker fixes
+- `code_helpers._function_may_reference_apis` is now a conservative superset:
+  an inconclusive cheap scan (register-indirect call with no resolvable operand)
+  returns True so the ctree API-chain detector runs instead of silently dropping
+  the function.
+- `tests/conftest.py` `_isolate_sys_modules` snapshots and restores `sys.path`
+  per test, fixing the `q07 → t19` import-cache and `q07 → q01` collisions
+  (server_script inserts src dirs at module scope); the q04 deadline test now
+  restores the real `time.time`/`time.monotonic` so the shared module is never
+  left frozen.
+- `batch_manager` parks its ThreadPoolExecutor when the queue goes idle, so
+  `batch-*` worker threads are reclaimed instead of lingering; `shutdown()` is
+  idempotent.
+
+### Ruff cleanup
+- Repo-wide sweep to zero findings (`ruff check .` passes): lambda inlining in
+  tests, `UP031` → f-strings, `SIM103`/`SIM114`/`SIM105`/`E731`/`PLR1714`/
+  `C416`/`PIE808`, unused imports. The cross-arch set duplicates in
+  `arch_utils` (beq/bne/blt/bge, li/lui, addi/add/mul) are intentional shared
+  encodings and are kept with targeted `# noqa: B033` comments.
+- Docs regenerated (`scripts/generate_tool_skills.py`); schema integrity check
+  passes (33 legacy tools, 103 agent operations).
+
+## 2026-08-09 — blackboard analysis-memory redesign
+
+The findings workspace and the legacy blackboard are merged into one SQLite
+store (per binary digest under `cache/blackboards/`), with analyst memory,
+machinery, embeddings, links, code anchors, and events in one schema and a
+single `{proposed, open, confirmed, resolved, rejected}` status column.
+`resolved`/`contradicted`/`conflicts_with` are now derived at read time.
+
+### Store & schema
+- One store: `findings` (memory), `bb_tasks`/`bb_machinery` (machinery owned by
+  the orchestrator), `findings_embeddings`, `links`, `code_anchors`,
+  `finding_events`. `rejected_reason` replaces `contradiction_reason`.
+- Idempotent migration runner (`PRAGMA user_version`) with a compat `blackboard`
+  VIEW over `findings` plus an INSTEAD OF UPDATE trigger, so legacy readers and
+  the seeding seam keep working. Fixed the legacy-migration INSERT whose VALUES
+  clause carried one too many `?` placeholders (silent fallback on old IDBs).
+- Host dispatch is dict-driven: `server_blackboard.py` routes each action to a
+  `_bb_action_*` handler through `_BLACKBOARD_ACTIONS`; the IDA-side
+  `tools/blackboard.py` is a thin bridge (store subclass + `related_by_behavior`
+  + `CrawlerProbe` adapter).
+
+### Tool/action surface (design contract changes)
+- `blackboard` tool drops the legacy KG actions and kwargs: `propagate_labels`,
+  `quest_board`, `quest_complete`, `semantic_index`, `semantic_rebuild`, the KG
+  family (`kg_add_system`, `add_struct`/`add_gap`/`add_state_machine`/
+  `add_peripheral`/`add_attack_surface`, `fill_gap`, `kg_*` queries,
+  `export_symbols`, `related_by_behavior`) and the 17 legacy kwargs (`members`,
+  `entry_points`, `exit_points`, `size_bytes`, `hints`, `gap_type`,
+  `binary_type`, `gap_id`, `filled_by`, `state_var`, `states`, `periph_type`,
+  `drivers`, `reachable_from`, `input_type`, `call_stack`, `resolved`).
+- `ADVERTISED_ACTIONS['blackboard']` curated to the 27 live actions: write,
+  read, list, search, update, delete, stats, coverage, next_target, frontier,
+  workspace_brief, decision_card, mark_examined, recall, conflicts, stale,
+  export, publish_findings, import_annotations, memory_compile, phase_status,
+  policy_status, state_health, start_crawler, crawler_status, proposal_list,
+  trace_status. Policy read-exemption for `quest_board` removed; the
+  `semantic_rebuild` long-running marker removed.
+- `trace_run` is now async (returns `{ok, enqueued, task_ids, status}`);
+  `trace_status` reads task rows; governance blocks return the
+  `POLICY_DENIED` envelope.
+- Agent-operation status enum gains `proposed` (blackboard accepts it; the 10
+  `ida_*` agent-op enums are unchanged).
+
+### Orchestration & crawler
+- `BlackboardOrchestrator` owns machinery DB access, a bounded `TaskPool` with
+  `drain()`, the evidence-gravity snapshot, and the frontier crawler that writes
+  real proposed entries; the host probe slot routes through the in-process tool
+  dispatch (`_execute_tool("code", smart_decompile)`), superseding the
+  standalone-interpreter `CrawlerProbe` fallback.
+
+### Docs & tooling
+- `.agents/skills/` SKILL.md/operations.md and `docs/TOOLS_REFERENCE.md`
+  regenerated from the curated action surface; investigation/frontier wiki pages
+  document the new status lifecycle, derived conflicts, and coverage honesty.
+- Smoke script, schema-admission tests, and the trace/coverage/policy test
+  suites updated to the async contract and the curated action list.
+- `scripts/check_schema_integrity.py` passes (33 legacy tools, 103 agent
+  operations).
+
+## 2026-08-09 — unified registration, r2 sidecar seam, firmware shaping, policy tiers
+
+Registration wave that makes every new tool/action produced by the feature
+orders first-class on the agent surface and inside the risk-policy engine.
+Agent operation count grows from 67 to 103.
+
+### Tool/action registration
+- **New `r2` tool** (Rizin/radare2 sidecar engine, default-off): `status`,
+  `bininfo`, `load_hints`, `disassemble_hypothesis`, `vxrefs` — pre-IDA triage
+  on raw binaries without an IDB.
+- **`firmware` tool resurrected** (headerless raw-blob shaping): `detect_vector_table`,
+  `detect_load_base`, `detect_mmio`, `rtos_scan`, `carve`.
+- **Action-list extensions**: `segments` gains `sreg_get`/`sreg_set`/`sreg_list`;
+  `modify` gains `create_data`/`create_strlit`/`undo_begin`/`undo_end`;
+  `analysis` gains `add_entry`/`snapshot`/`restore_snapshot`/`auto_wait`;
+  `idb` gains `events`/`registers`; `search` gains `data_value`/`query_lang`;
+  `types` gains the `struct_member_*`/`enum_member_*` editors plus `til_delete`,
+  `til_export`, `til_import`.
+- **36 new agent operations** exposed on the agent surface: sreg triage/set,
+  raw-blob authoring (`create_data`/`create_strlit`) and reversibility primitives
+  (`undo_begin`/`undo_end`), entry-point marking and IDB snapshots, struct/enum
+  member editing and TIL carry, event/register inspection, raw-value and
+  query-language search, the full r2 sidecar family, dangerous-API marking, and
+  firmware shaping. `ida_batch` gains an optional `bindings` map.
+- `schemas_data.TOOL_ARG_SCHEMAS` now admits the previously-open `modify`,
+  `types`, `annotation` tools and the new `r2`/`firmware` tools, so every param
+  reaches the handler instead of being silently stripped.
+
+### Policy tiers
+- `firmware` joins `WRITE_IDB_TOOLS`; `carve` stays WRITE_IDB while the
+  `detect_*`/`rtos_scan` probes classify READ.
+- New `NETWORK_OR_PROCESS_ACTIONS` set (forward-declared `r2 start`/`r2 attach`)
+  with a `NETWORK_OR_PROCESS` check in `classify_tool_action`.
+- All `modify`/`analysis`/`types`/`segments` write actions and `til_export`
+  (filesystem write) / `til_import` (filesystem read) are explicitly tiered.
+
+### Docs & prompts
+- `QUICKREF_TEXT` gains a **Raw Firmware Triage** section pointing at
+  `ida_r2_bininfo`/`ida_r2_load_hints`, `search data_value`, and the firmware
+  `detect_*` ops.
+- `README` operations table and count updated; `docs/TOOLS_REFERENCE.md` and
+  `.agents/skills/` regenerated from the 103-op registry.
+
+## 2026-08-09 — opaque-binary (RISC-V) analysis polish
+
+Focused pass on headerless raw `.bin` device firmware — the "MCP gets confused"
+case — plus search/speed/reliability seams that radare2-style triage depends on.
+Opaque RISC-V blobs now get first-class arch/bitness/load-base inference,
+operand-aware RISC-V instruction classification, GP/entry bootstrap at open, and
+crisp "arch unverified" warnings instead of confident-wrong metapc decoding.
+
+### RISC-V on opaque raw blobs
+- **`arch_profile` gains riscv32/riscv64 as first-class candidates**: opcode
+  density (auipc/lui/jal/jalr/c.jr/c.jalr/ecall-CSR) plus an RV32C/RV64C
+  instruction-validity scan, bitness inferred (RV64 ld/sd/lui-hi20 density vs
+  RV32), absolute-signal confidence (no inflated best-of-N), and a populated
+  `load_base` (Cortex-M reset vector & ~1, dominant lui/auipc base, SoC bases
+  0x80000000/0x10000000). `riscv64/rv64/riscv32/rv32/riscv` resolve to the
+  canonical IDA `riscv` module with implied bitness.
+- **Operand-aware RISC-V return classification**: `jalr rd,imm(rs1)` is a return
+  only when `rd==x0` AND `rs1==ra`; `c.jr` returns only when `rs1==ra`; `c.jalr`
+  is a call. ABI (zero/ra) and numeric (x0/x1) register names both accepted.
+  RISC-V mnemonic sets (beq/bne/blt/bge, slt*/sltu*, addi/add/sub/mul*, lui/li/
+  la/xori/andi/ori/xor) feed funcs metrics, query_lang MATCH routing, and branch
+  annotation. `detect_riscv_gp` handles the lui+addi gp prologue and falls back
+  to the raw image base with a crisp "GP not found" hint.
+- **Entry/exec bootstrap for headerless blobs**: open-time bootstrap seeds reset
+  `j`/`jal`/`auipc+jalr` and ISR pointer tables into entry points; reanalyze and
+  text-segment search fall back to the whole mapped range with a "no executable
+  segments; set perms with segments set_perms" warning instead of silent no-op.
+  `segments(add)` derives perm from sclass (CODE→READ|EXEC) so added segments
+  are actually analyzed as code.
+
+### Tool quality (symbol-poor firmware)
+- **`code`**: `decompile_all` pagination (`offset`/`mode='listing'`), operand-
+  based `xrefs_to_field` (decoded displacement, not `+0x10` substrings), and a
+  constant-load string fallback in `strings_in_func` with GP-unresolved note.
+  `explain` adds firmware signals (ecall/CSR/MMIO) and a "no libc APIs detected —
+  bare-metal firmware?" note.
+- **`types` propagate** applies types only at genuine data items and records call
+  sites without mutating. **`ctree`** nesting is CV_PARENTS-based (correct under
+  CV_FAST) with honest truncated/returned counts. **`stack_analysis`** store
+  detection is arch-aware (RISC-V compressed/float stores, ARM64 stp).
+
+### Search + semantic speed
+- **RISC-V constant recovery**: `search_immediate`/`search_constants` reconstruct
+  adjacent lui+addi/addiw pairs into full 32-bit constants (both insn addresses
+  reported).
+- **Whole-binary scans get a bounded default timeout** (8s) reporting
+  `timed_out` + partial results; `timeout_ms=0` remains the explicit no-limit.
+  Exec-gated scans fall back to non-exec bytes with a note on raw blobs.
+- **`search_text` is index-time persisted**: token columns written at index time,
+  ea-range + token filters pushed into SQL, IDF cached per index build — no more
+  full-table SELECT + per-row regex tokenization per query.
+- **Rerank pool sized to recall** (`min(RERANK_MAX_CANDIDATES, candidate_limit)`)
+  with a deadline check; expired → `rerank_meta['reason']='timeout'`. NL search
+  degrades to lexical ranking with a "degraded — embedding backend unavailable"
+  note instead of hard-erroring; cold-anchor behavior search reports
+  "classifier cold, run index first". Auto-named `sub_*` functions get an opcode
+  histogram + instruction-bigram lexical fingerprint so embeddings discriminate
+  name-less firmware.
+
+### Reliability / speed / contract
+- **One shared address parser** (`parse_address_canonical`): bare all-digit
+  tokens parse as HEX when they map inside the image, else `ADDRESS_INVALID` with
+  a "use 0x prefix" hint — this is a deliberate change from the old decimal
+  default (silent-wrong-EA on RISC-V bases like `80000000` is worse than a
+  documented parse policy). calc, segments, funcs, and any tool using
+  `parse_address_safe` inherit it.
+- **@idawrite no longer clears the whole read cache**: invalidation is narrowed
+  to the written-address family; the explicit `invalidate_all()` physical-clear
+  contract is preserved. Cache keys canonicalize numeric-string args and sort
+  address lists so LLM rephrasing hits the LRU.
+- **Error envelopes**: every wire error (bridge-originated too) carries
+  `category` + `recoverable`; exception-type dispatch yields
+  DECOMPILER/EMULATION/SEARCH/RPC_TIMEOUT instead of blanket UNKNOWN_ERROR;
+  bridge serialization failures become crisp INTERNAL envelopes instead of a
+  dropped connection (which the host read as "IDA crashed").
+- **Policy config parsed once per (mtime,size)** instead of 2-5 disk reads per
+  call; `ida_batch` sends one list-shaped RPC and fans responses out; pure-PP
+  page slices forward `offset`/`count` to natively-paging tools; post-processing
+  runs before truncation; cheap host-only tools exempt from rate-limit buckets;
+  batch persistence debounced.
+- **Semantic index** rebuild is single-flight with persisted float32 vectors
+  (rebuild no longer recomputes unchanged gadgets); audit records are
+  hash-failure-proof with coalesced flush.
+
 ## 2026-08-08 — swarm/agent-blitz integration: host-seam reconciliation
 
 Integration pass that resolved the 10 cross-package host-side seams surfaced by

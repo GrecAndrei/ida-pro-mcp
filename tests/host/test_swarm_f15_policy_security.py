@@ -36,6 +36,7 @@ assert str(SRC) in sys.path or sys.path.insert(0, str(SRC)) is None
 importlib.import_module("ida_pro_mcp.host")
 
 from ida_pro_mcp.host.policy import (  # noqa: E402
+    DESTRUCTIVE_TOOL_ACTIONS,
     PolicyDecision,
     PolicyMode,
     RiskTier,
@@ -267,7 +268,12 @@ def test_multi_session_group_mutations_are_write_tier():
 
 def test_bootstrap_skills_actions_are_write_tier():
     # session is READ_ONLY_TOOLS, so these used to classify READ even though
-    # they mutate the durable skills.json. They must require ack.
+    # they mutate the durable skills.json. They must require ack. The 10
+    # WRITE_IDB entries added by the gap-audit handoff
+    # (init/ingest_outcome/open_dispute/resolve_dispute/update_baseline/
+    # autopilot/set_autopilot_policy/rollback_last_reweight/record_readiness/
+    # finalize_report) persist via _save_skills, so they join the write tier;
+    # the 11th (prune_data) classifies DESTRUCTIVE and is asserted separately.
     for action in (
         "bootstrap_policy_reweight",
         "bootstrap_run_tournament",
@@ -275,14 +281,44 @@ def test_bootstrap_skills_actions_are_write_tier():
         "bootstrap_snapshot",
         "bootstrap_evaluate_alerts",
         "bootstrap_apply_mitigation",
+        "bootstrap_init",
+        "bootstrap_ingest_outcome",
+        "bootstrap_open_dispute",
+        "bootstrap_resolve_dispute",
+        "bootstrap_update_baseline",
+        "bootstrap_autopilot",
+        "bootstrap_set_autopilot_policy",
+        "bootstrap_rollback_last_reweight",
+        "bootstrap_record_readiness",
+        "bootstrap_finalize_report",
+        # bootstrap_prune_data is covered separately below: it classifies
+        # DESTRUCTIVE, not WRITE_IDB.
         "log_activity",
     ):
         assert classify_tool_action("session", action) == RiskTier.WRITE_IDB, action
         result = evaluate_policy("session", action, mode=PolicyMode.ENFORCE)
         assert result.requires_ack is True, f"session/{action} ack was {result.requires_ack}"
 
-    # The read-back action is deliberately left READ.
+    # The read-back actions are deliberately left READ.
     assert classify_tool_action("session", "bootstrap_policy_reweight_history") == RiskTier.READ
+    # readiness_regression_guard only returns a recommended-actions plan and
+    # never persists, so it stays out of the write tier.
+    assert classify_tool_action("session", "bootstrap_readiness_regression_guard") == RiskTier.READ
+
+
+def test_bootstrap_prune_data_is_destructive_tier():
+    # bootstrap_prune_data deletes persisted outcomes, disputes, and snapshots,
+    # so it must classify DESTRUCTIVE (not merely WRITE_IDB) and require ack
+    # when no risk_ack is supplied — otherwise it sails through on the same tier
+    # as a plain write despite deleting durable state.
+    assert classify_tool_action("session", "bootstrap_prune_data") == RiskTier.DESTRUCTIVE
+    assert ("session", "bootstrap_prune_data") in DESTRUCTIVE_TOOL_ACTIONS
+    result = evaluate_policy("session", "bootstrap_prune_data", mode=PolicyMode.ENFORCE)
+    assert result.requires_ack is True, "destructive bootstrap_prune_data must require ack without risk_ack"
+    # A supplied ack satisfies the requirement (decision ALLOW, no residual ack).
+    acked = evaluate_policy("session", "bootstrap_prune_data", mode=PolicyMode.ENFORCE, ack=True)
+    assert acked.requires_ack is False
+    assert acked.decision == PolicyDecision.ALLOW
 
 
 def test_blackboard_read_only_overrides_are_read_tier():
@@ -291,7 +327,6 @@ def test_blackboard_read_only_overrides_are_read_tier():
     for action in (
         "working_set",
         "state_health",
-        "quest_board",
         "conflicts",
         "stale",
         "recall",

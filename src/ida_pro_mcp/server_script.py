@@ -7,6 +7,7 @@ import hmac
 import inspect
 import json
 import os
+import queue
 import re
 import select
 import socket
@@ -14,6 +15,7 @@ import sys
 
 # HEARTBEAT
 import tempfile
+import threading
 import time
 from typing import Annotated, Literal, get_args, get_origin
 
@@ -78,6 +80,59 @@ try:
 except Exception:
     _MAX_RPC_REQUEST_BYTES = 1048576
 _MAX_RPC_REQUEST_BYTES = max(4096, min(_MAX_RPC_REQUEST_BYTES, 64 * 1024 * 1024))
+try:
+    _MAX_RPC_RESPONSE_BYTES = int(os.environ.get("IDA_MCP_MAX_RPC_RESPONSE_BYTES", str(256 * 1024 * 1024)))
+except Exception:
+    _MAX_RPC_RESPONSE_BYTES = 256 * 1024 * 1024
+_MAX_RPC_RESPONSE_BYTES = max(65536, min(_MAX_RPC_RESPONSE_BYTES, 512 * 1024 * 1024))
+
+# Startup-analysis state. The __main__ flow binds the RPC listener and answers
+# pings BEFORE auto-analysis of an opaque raw blob finishes, so the host's
+# liveness probe never mistakes a long startup analysis for a crashed IDA.
+# Tool calls that arrive while startup analysis is still running are answered
+# with ANALYSIS_INCOMPLETE (mirroring the host-side safe_mode gate) instead of
+# touching a half-analyzed IDB. The event starts SET so standalone/test
+# invocations that never run the __main__ startup path are never gated.
+_STARTUP_DONE = threading.Event()
+_STARTUP_DONE.set()
+_STARTUP_ANALYSIS_ERROR = None
+
+# Set when the bridge receives a real ``type=="shutdown"`` request from the
+# host's cleanup path. run_server()'s accept loop polls it so the process can
+# wind down cleanly (best-effort save_database merges the unpacked .id0/.id1
+# sidecars into the .i64) instead of being killed with those sidecars abandoned
+# on disk. The event starts CLEARED; standalone/test invocations that never
+# run run_server() are unaffected.
+_SHUTDOWN_EVENT = threading.Event()
+
+# Tool-dispatch handoff between the RPC listener thread and the MAIN thread.
+# IDA 9.x enforces main-thread-only access for most of its API surface
+# (hexrays decompilation, ida_auto, save_database, even idautils.Functions).
+# After startup analysis completes, the listener thread must NOT call tool
+# functions itself: it reads the request, pushes (request, result_queue) onto
+# _TOOL_QUEUE, and waits on the per-request queue. The main thread's idle loop
+# (below, after _run_startup_analysis) drains _TOOL_QUEUE and executes
+# process_single there, so tool bodies always run on the main thread. Pings and
+# pre-startup requests (ANALYSIS_INCOMPLETE / shutdown-gate) never enter the
+# queue — they are answered inline on the listener thread, which is what keeps
+# the host's liveness probe alive during a long startup auto-analysis.
+_TOOL_QUEUE = queue.Queue()  # entries: (request_dict, result_queue.Queue)
+
+# Bridge-originated errors (UNAUTHORIZED / INVALID_REQUEST / REQUEST_TOO_LARGE
+# / INTERNAL / ANALYSIS_INCOMPLETE) go through the same factory as tool errors
+# so they carry the same category/recoverable shape on the wire. Falls back to
+# a plain envelope when the shared factory is not importable (standalone mode).
+try:
+    from ida_pro_mcp.ida_mcp.error_handling import (
+        _sanitize_exception_message,
+        make_error as _shared_make_error,
+    )
+except Exception:  # pragma: no cover - standalone import fallback
+    try:
+        from error_handling import _sanitize_exception_message, make_error as _shared_make_error
+    except Exception:
+        _shared_make_error = None
+        _sanitize_exception_message = None
 
 
 def _trim_text(text, max_len=300):
@@ -253,15 +308,60 @@ def _suggest_choice(value, choices):
         matches = best_match(str(value), list(choices), n=1, cutoff=0.6)
     return matches[0] if matches else None
 
-def _build_error(tool_name, message, code="INVALID_ARGS", details=None, hint=None):
-    res = {"error": True, "code": code, "message": message}
-    if hint:
-        res["hint"] = hint
+def _build_error(tool_name, message, code="INVALID_ARGS", details=None, hint=None, recoverable=False):
+    """Build a bridge-originated error envelope.
+
+    Routes through the shared error factory (when importable) so bridge errors
+    carry the same ``category``/``recoverable`` shape as tool errors, letting
+    the host's client-side matching on ``error.category`` behave uniformly for
+    both. Falls back to a plain envelope in standalone mode.
+    """
+    if _shared_make_error is not None:
+        res = _shared_make_error(code, message, hint=hint, details=None, recoverable=recoverable)
+    else:
+        res = {"error": True, "code": code, "category": "runtime", "message": message, "recoverable": bool(recoverable)}
+        if hint:
+            res["hint"] = hint
     if details:
         compacted = _compact_error_details(details)
         if compacted:
             res["details"] = compacted
     return res
+
+def _handle_shutdown():
+    """Best-effort save + accept-loop stop for the host's cleanup path.
+
+    The host sends ``{"type": "shutdown"}`` (with the session token, injected
+    by ``_send_rpc_raw``) on session teardown and then kills the IDA process
+    tree shortly after. Previously the bridge had no ``shutdown`` branch, so
+    the request fell through to tool dispatch and was answered with an
+    INVALID_REQUEST error — the IDB was never saved and the unpacked
+    .id0/.id1 sidecars were abandoned when the host killed the process.
+
+    Now we set the shutdown event (run_server's accept loop exits on it) and
+    best-effort ``save_database`` so the sidecars are merged into the .i64.
+    The save is gated on ``_STARTUP_DONE``: while startup analysis is still
+    running the MAIN thread owns the IDB (auto_wait/reanalysis), so a
+    save_database from this (listener) thread would race it. After startup the
+    main thread idles, so saving here is the single IDA operation in flight.
+    """
+    _SHUTDOWN_EVENT.set()
+    saved = False
+    if _STARTUP_DONE.is_set():
+        try:
+            import ida_loader as _ida_loader
+            _idb_target = os.environ.get("IDA_MCP_IDB_PATH", "") or ""
+            saved = bool(_ida_loader.save_database(_idb_target, 0))
+        except Exception as e:
+            log_ev(f"Shutdown save_database failed: {e}")
+    else:
+        log_ev("Shutdown during startup analysis; skipping save_database")
+    return {
+        "ok": True,
+        "shutdown": True,
+        "saved": saved,
+        "analysis_complete": _STARTUP_DONE.is_set(),
+    }
 
 def process_single(r):
     if not isinstance(r, dict):
@@ -270,7 +370,12 @@ def process_single(r):
     if r.get("type") == "ping":
         # Ping is intentionally unauthenticated: it is a liveness / port
         # discovery probe (the host pings before routing a real request).
-        return {"pong": True, "port": _BOUND_PORT}
+        return {
+            "pong": True,
+            "port": _BOUND_PORT,
+            "analyzing": not _STARTUP_DONE.is_set(),
+            "startup_error": _STARTUP_ANALYSIS_ERROR,
+        }
 
     # Session-token auth is mandatory, never optional-on-empty: the host
     # injects a token for every managed session (server_runtime.py), and a
@@ -293,6 +398,13 @@ def process_single(r):
             hint="Use the host-managed authenticated session runtime.",
         )
 
+    # Control-plane shutdown: the host's cleanup path sends {"type":
+    # "shutdown"} to let IDA persist the IDB before it kills the process tree.
+    # It is authenticated like every non-ping message, and is handled BEFORE
+    # the startup gate so a session can be torn down even mid-startup-analysis.
+    if r.get("type") == "shutdown":
+        return _handle_shutdown()
+
     tool_name = r.get("tool")
     args = r.get("args", {})
     if not isinstance(tool_name, str) or not tool_name:
@@ -301,6 +413,30 @@ def process_single(r):
             "Invalid request: 'tool' must be a non-empty string",
             code="INVALID_REQUEST",
             details={"tool": type(tool_name).__name__},
+        )
+    if not isinstance(args, dict):
+        # tool_func(**args) would raise TypeError for a non-mapping 'args'; the
+        # failure is the caller's protocol mistake, not a tool bug — classify it
+        # as INVALID_ARGS up front instead of letting it surface as a generic
+        # internal error (or a crash).
+        return _build_error(
+            "bridge",
+            "Invalid request: 'args' must be a JSON object mapping argument names to values",
+            code="INVALID_ARGS",
+            details={"args_type": type(args).__name__},
+            hint="Pass the tool's arguments as a JSON object, e.g. {\"args\": {\"address\": \"0x401000\"}}.",
+        )
+    if not _STARTUP_DONE.is_set():
+        # The listener is bound before startup analysis finishes so the host's
+        # liveness probe succeeds; tool calls arriving during that window must
+        # not touch a half-analyzed IDB. Mirror the host-side safe_mode gate.
+        return _build_error(
+            "bridge",
+            "IDA is still running startup analysis on this binary; tool calls are paused until it completes",
+            code="ANALYSIS_INCOMPLETE",
+            hint="Retry in a few seconds, or poll the host session status until analysis completes.",
+            details={"analyzing": True},
+            recoverable=True,
         )
     log_ev(f"Calling tool: {tool_name}")
     try:
@@ -370,12 +506,24 @@ def process_single(r):
                         details.setdefault("missing_arg", missing_arg)
                         details.setdefault("required_args", siginfo.get("required", []))
                         res.setdefault("hint", "Provide the missing required argument.")
+        # Tool-originated error dicts carry tool-produced details that may hold
+        # large, sensitive, or non-serializable payloads (tracebacks, raw hex).
+        # Compact them before they reach the wire so a verbose failure inside a
+        # tool can never crash the bridge or leak a giant blob.
+        if isinstance(res, dict) and res.get("error"):
+            details = res.get("details")
+            if isinstance(details, dict) or details:
+                compacted = _compact_error_details(details)
+                if compacted:
+                    res["details"] = compacted
+                else:
+                    res.pop("details", None)
         return res
     except Exception as e:
         # Attach helpful hints for common arg mistakes
         tool_func = TOOLS.get(tool_name) if isinstance(tool_name, str) else None
         siginfo = _tool_signature_info(tool_func) if tool_func else {"params": [], "required": [], "actions": []}
-        msg = str(e)
+        msg = _sanitize_exception_message(e) if _sanitize_exception_message is not None else str(e)
         details = {"available_args": siginfo.get("params", [])}
         hint = None
         is_user_error = False
@@ -400,6 +548,14 @@ def process_single(r):
             details["missing_arg"] = missing_arg
             hint = "Provide the missing required argument."
 
+        # A TypeError from the tool (bad argument type, wrong call shape) is a
+        # caller-controllable failure: classify it INVALID_ARGS with a clear
+        # message, never the generic "Internal server error" hint that would
+        # make the agent re-check the right thing for the wrong reason.
+        if isinstance(e, TypeError) and not is_user_error:
+            is_user_error = True
+            hint = "The tool raised a TypeError — check the types of the arguments you passed."
+
         # Only argument-parsing failures are user errors.  Everything else — a
         # decompiler exception, an IDA SDK error, or a genuine tool bug — must
         # not be mislabeled INVALID_ARGS (which would send the agent back to
@@ -408,6 +564,54 @@ def process_single(r):
         if not is_user_error:
             hint = "Internal server error — not caused by your request arguments."
         return _build_error(tool_name, msg, code=code, details=details, hint=hint)
+
+
+# Tool calls must execute on the MAIN thread (see _TOOL_QUEUE docstring). This
+# is the listener-thread side of the handoff: queue the request and block until
+# the main thread has executed it and posted the result. A generous timeout is
+# a safety net for a dying main thread; in normal operation the main thread
+# always drains promptly and posts before this would ever fire.
+_TOOL_DISPATCH_TIMEOUT_S = 600
+
+def _rpc_handled_inline(r):
+    """True when *r* can be answered on the listener thread without the IDB.
+
+    Pings are pure liveness/port discovery (no IDB access). Anything arriving
+    before ``_STARTUP_DONE`` is gated by ``process_single`` itself (tool calls
+    -> ANALYSIS_INCOMPLETE, shutdown -> save skipped), so it never touches a
+    half-analyzed IDB either. Once startup is done, every non-ping request —
+    tool calls AND shutdown (its ``save_database`` is main-thread-only) — is
+    handed to the main thread.
+    """
+    return not isinstance(r, dict) or r.get("type") == "ping" or not _STARTUP_DONE.is_set()
+
+
+def _dispatch_on_main_thread(req):
+    """Run *req*'s processing on the main thread and return its result."""
+    result_q = queue.Queue(maxsize=1)
+    _TOOL_QUEUE.put((req, result_q))
+    try:
+        return result_q.get(timeout=_TOOL_DISPATCH_TIMEOUT_S)
+    except queue.Empty:
+        return _build_error(
+            "bridge",
+            "Tool dispatch timed out waiting for the main thread",
+            code="INTERNAL",
+            hint="The IDA main thread did not drain the dispatch queue in time.",
+        )
+
+def _drain_tool_queue():
+    """Main-thread idle-loop body: execute every queued request in order."""
+    while True:
+        try:
+            req, result_q = _TOOL_QUEUE.get_nowait()
+        except queue.Empty:
+            return
+        try:
+            result_q.put(process_single(req))
+        except Exception as e:
+            msg = _sanitize_exception_message(e) if _sanitize_exception_message is not None else str(e)
+            result_q.put(_build_error("bridge", "Tool dispatch failed: " + msg, code="INTERNAL"))
 
 
 def _recv_exact(conn, length):
@@ -460,7 +664,7 @@ def run_server():
             log_ev(f"Failed to publish RPC port: {e}")
     log_ev(f"Listening on {bound_port}")
 
-    while True:
+    while not _SHUTDOWN_EVENT.is_set():
         conn = None
         try:
             # Poll for new connection
@@ -504,9 +708,44 @@ def run_server():
 
             req = json.loads(data.decode('utf-8'))
 
-            res = [process_single(r) for r in req] if isinstance(req, list) else process_single(req)
-
-            resp_json = json.dumps(res, separators=(",", ":")).encode('utf-8')
+            # Tool dispatch must happen on the MAIN thread (IDA 9.x
+            # main-thread-only APIs). Pings and pre-startup requests are
+            # answered inline so the host's liveness probe stays responsive;
+            # everything else post-startup is queued to the main thread, whose
+            # idle loop (after _run_startup_analysis) executes it and posts the
+            # result back. This restores the invariant that tool bodies run on
+            # the main thread even though the accept loop lives on the listener.
+            try:
+                if isinstance(req, list):
+                    res = [
+                        process_single(r) if _rpc_handled_inline(r) else _dispatch_on_main_thread(r)
+                        for r in req
+                    ]
+                else:
+                    res = process_single(req) if _rpc_handled_inline(req) else _dispatch_on_main_thread(req)
+                resp_json = json.dumps(res, separators=(",", ":")).encode('utf-8')
+            except Exception as e:
+                # A tool result that json.dumps cannot serialize (e.g. a set,
+                # bytes, or a non-encodable object) must surface as a crisp
+                # error envelope, never a dropped connection — the host reads a
+                # mid-request socket close as "IDA may have crashed" and tears
+                # the whole session down.
+                ser = _build_error(
+                    "bridge",
+                    "Response serialization failed: " + (_sanitize_exception_message(e) if _sanitize_exception_message is not None else str(e)),
+                    code="INTERNAL",
+                    hint="The tool returned a non-serializable result; check the tool's output shape.",
+                )
+                resp_json = json.dumps(ser, separators=(",", ":")).encode('utf-8')
+            if len(resp_json) > _MAX_RPC_RESPONSE_BYTES:
+                too_big = _build_error(
+                    "bridge",
+                    f"Response too large: {len(resp_json)} bytes exceeds the {_MAX_RPC_RESPONSE_BYTES}-byte cap",
+                    code="RESULT_TOO_LARGE",
+                    hint="Narrow the query scope (limit / pagination / start-end) to shrink the response.",
+                    details={"max_bytes": _MAX_RPC_RESPONSE_BYTES},
+                )
+                resp_json = json.dumps(too_big, separators=(",", ":")).encode('utf-8')
             conn.sendall((len(resp_json)).to_bytes(4, 'big') + resp_json)
 
             log_ev("Request finished")
@@ -742,31 +981,95 @@ def _apply_pre_analysis_options():
         log_ev(f"Pre-analysis warnings: {', '.join(warnings_list)}")
 
 
-if __name__ == "__main__":
-    _apply_pre_analysis_options()
-    load_tools()
+def _bounded_auto_wait(timeout=None):
+    """Wait for IDA auto-analysis without blocking forever on unknown-size raw
+    blobs.
 
-    # Block on the main thread until initial auto-analysis completes, then
-    # run a targeted reanalysis for stripped ELF binaries (Android NDK
-    # arm64-v8a) that only produced PLT stubs on initial load. The MCP
-    # host's startup ping timeout (IDA_MCP_STARTUP_TIMEOUT, default 240s)
-    # accommodates this blocking wait. Every subsequent session reuse
-    # skips this entirely since the IDB is already built (the host sets
-    # IDA_MCP_USE_EXISTING_IDB=1 on reuse spawns).
-    _is_reuse_spawn = os.environ.get("IDA_MCP_USE_EXISTING_IDB") == "1"
+    ``ida_auto.auto_wait()`` returns only when the analysis queue is empty,
+    which on an opaque raw .bin (or a hostile/broken blob) can take unbounded
+    time. Instead, poll ``ida_auto.get_auto_state()`` and give up once the
+    deadline passes so the server can serve whatever analysis completed. The
+    host's own safe_mode gate (polled via the ping's ``analyzing`` flag) covers
+    the remainder.
+    """
+    if timeout is None:
+        try:
+            timeout = float(os.environ.get("IDA_MCP_STARTUP_ANALYSIS_TIMEOUT", "120.0"))
+        except ValueError:
+            timeout = 120.0
+    timeout = max(5.0, min(timeout, 600.0))
+    try:
+        import ida_auto as _ida_auto
+    except ImportError:
+        return
+    if not hasattr(_ida_auto, "auto_wait"):
+        return
+    if not hasattr(_ida_auto, "get_auto_state"):
+        # No way to introspect progress; do one blocking wait (legacy behavior).
+        try:
+            _ida_auto.auto_wait()
+        except Exception as e:
+            log_ev(f"auto_wait failed: {e}")
+        return
+    au_none = getattr(_ida_auto, "AU_NONE", -1)
+    deadline = time.monotonic() + timeout
+    last_beat = time.monotonic()
+    while True:
+        try:
+            state = int(_ida_auto.get_auto_state())
+        except Exception:
+            # Cannot introspect; fall back to a single blocking wait.
+            try:
+                _ida_auto.auto_wait()
+            except Exception as e:
+                log_ev(f"auto_wait fallback failed: {e}")
+            return
+        if state == au_none:
+            return
+        now = time.monotonic()
+        if now - last_beat >= 10.0:
+            log_ev(f"still analyzing (auto state {state})...")
+            last_beat = now
+        if now >= deadline:
+            log_ev(f"auto-analysis still running after {timeout:.0f}s; serving partial analysis")
+            return
+        time.sleep(0.5)
+
+
+def _run_startup_analysis():
+    """Perform bounded startup analysis on the MAIN thread.
+
+    The RPC listener is already bound when this runs (see __main__), so the
+    host's liveness probe succeeds and ping reports ``analyzing: true`` while
+    an opaque raw blob is still being analyzed. Tool calls that arrive during
+    this window are gated with ANALYSIS_INCOMPLETE by process_single.
+
+    auto_wait is deliberately on the main thread: IDA's auto-analysis is driven
+    by the main thread's request loop, so this is what keeps analysis pumping
+    for unknown-size raw blobs. The listener thread serves pings / gated tool
+    calls meanwhile.
+    """
+    global _STARTUP_ANALYSIS_ERROR
     try:
         import ida_auto as _ida_auto
 
-        log_ev("Waiting for initial auto-analysis...")
+        log_ev("Waiting for initial auto-analysis (bounded)...")
         if hasattr(_ida_auto, "auto_wait"):
-            _ida_auto.auto_wait()
-        log_ev("Initial auto-analysis complete.")
+            _bounded_auto_wait()
+        else:
+            log_ev("ida_auto.auto_wait unavailable; analysis continues in background.")
 
+        _is_reuse_spawn = os.environ.get("IDA_MCP_USE_EXISTING_IDB") == "1"
         if _is_reuse_spawn:
             # IDB is already built and was upgraded by the original session;
             # re-running reanalysis + a full save on every reuse is wasted I/O
             # and can add minutes to reuse startup on large binaries.
             log_ev("IDB reuse detected; skipping startup reanalysis and save.")
+        elif _SHUTDOWN_EVENT.is_set():
+            # The host requested shutdown while auto_wait was still running;
+            # the process is being torn down, so reanalysis + save would be
+            # wasted I/O racing the kill.
+            log_ev("Shutdown requested during startup; skipping reanalysis and save.")
         else:
             try:
                 from ida_pro_mcp.ida_mcp.tools.analysis import (
@@ -792,19 +1095,72 @@ if __name__ == "__main__":
             # the empty string path writes next to the source binary which
             # leaves the sessions-dir metadata idb_exists=false and breaks
             # reuse detection.
-            try:
-                import ida_loader as _ida_loader
-                _idb_target = os.environ.get("IDA_MCP_IDB_PATH", "")
-                if _idb_target:
-                    _ida_loader.save_database(_idb_target, 0)
-                    log_ev(f"IDB saved to {_idb_target} after reanalysis.")
-                else:
-                    _ida_loader.save_database("", 0)
-                    log_ev("IDB saved (default path) after reanalysis.")
-            except Exception as _e:
-                log_ev(f"save_database after reanalysis failed: {_e}")
+            if not _SHUTDOWN_EVENT.is_set():
+                try:
+                    import ida_loader as _ida_loader
+                    _idb_target = os.environ.get("IDA_MCP_IDB_PATH", "")
+                    if _idb_target:
+                        _ida_loader.save_database(_idb_target, 0)
+                        log_ev(f"IDB saved to {_idb_target} after reanalysis.")
+                    else:
+                        _ida_loader.save_database("", 0)
+                        log_ev("IDB saved (default path) after reanalysis.")
+                except Exception as _e:
+                    log_ev(f"save_database after reanalysis failed: {_e}")
+            else:
+                log_ev("Shutdown arrived during reanalysis; skipping post-reanalysis save.")
     except ImportError:
         log_ev("idaapi/ida_auto not importable; skipping reanalysis.")
+    except Exception as _e:
+        _STARTUP_ANALYSIS_ERROR = str(_e)
+        log_ev(f"Startup analysis failed: {_e}")
+    finally:
+        _STARTUP_DONE.set()
+        log_ev("Startup analysis finished.")
+
+
+if __name__ == "__main__":
+    _apply_pre_analysis_options()
+    load_tools()
+
+    # Start the RPC listener on a DEDICATED thread and answer pings BEFORE the
+    # blocking startup analysis, so the host's liveness probe never mistakes a
+    # long auto-analysis of an opaque raw blob for a crashed IDA. The MAIN
+    # thread then runs auto_wait: IDA's auto-analysis is driven by the main
+    # thread's request loop, so waiting for it there is what keeps analysis
+    # pumping on unknown-size blobs. Tool calls that arrive before _STARTUP_DONE
+    # is set are answered with ANALYSIS_INCOMPLETE (mirroring the host-side
+    # safe_mode gate). After startup the listener thread keeps reading requests
+    # but queues every non-ping call to the main thread (via _TOOL_QUEUE),
+    # because IDA 9.x refuses main-thread-only APIs from any other thread —
+    # see _TOOL_QUEUE's docstring. The host's startup ping timeout
+    # (IDA_MCP_STARTUP_TIMEOUT, default 240s) accommodates the auto_wait.
+    _STARTUP_DONE.clear()
+    listener_thread = threading.Thread(target=run_server, name="rpc-listener", daemon=True)
+    listener_thread.start()
 
     log_ev("Starting server...")
-    run_server()
+    _run_startup_analysis()
+
+    # Startup analysis is complete. Keep the process alive until the host
+    # sends a shutdown request (which stops the accept loop and best-effort
+    # saves the IDB) or kills the process tree. The listener is a daemon
+    # thread, so this main-thread join is what keeps the RPC server serving.
+    #
+    # The loop joins the LISTENER thread, not the shutdown event: the event is
+    # set at the very START of _handle_shutdown, before its save_database runs
+    # and before the shutdown response is sent. Returning from __main__ on the
+    # event alone would let the interpreter kill the daemon listener mid-save
+    # (daemon threads are not joined at exit) — abandoning the very .id0/.id1
+    # sidecars the handler exists to merge. Joining the thread lets the
+    # shutdown handler finish save_database and deliver the response; the
+    # accept loop then exits on the event and the thread ends on its own.
+    #
+    # While we wait, the main thread drains _TOOL_QUEUE: the listener thread
+    # reads requests but never executes tool bodies (IDA 9.x main-thread-only
+    # APIs), so this loop is what actually runs each tool call — on the main
+    # thread — and posts the result back for the listener to send. The short
+    # join timeout bounds how long a queued tool call waits to start (~50ms).
+    while listener_thread.is_alive():
+        _drain_tool_queue()
+        listener_thread.join(timeout=0.05)

@@ -9,6 +9,197 @@ except ImportError:
 # 19. GRAPH - Export call graphs and CFGs for visualization/analysis
 # ============================================================================
 
+# Safety cap for the raw-blob head scan (no defined function boundaries to
+# bound the iteration otherwise).
+_MAX_CODE_SCAN = 8192
+
+
+def _raw_blob_note() -> str:
+    """Note appended to graph responses built without any defined function."""
+    return ("No defined functions: graph built from mapped code heads; "
+            "function-less targets are kept as sub_<ea> placeholder nodes "
+            "(functions auto-defined for graph traversal).")
+
+
+class _RangeLike:
+    """Duck-typed ea_range_t stand-in for minimal IDA builds / test fakes."""
+
+    def __init__(self, start_ea, end_ea):
+        self.start_ea = start_ea
+        self.end_ea = end_ea
+
+
+def _build_range_chart(ida_gdl, ea):
+    """Build an ida_gdl FlowChart over a mapped code range (raw-blob fallback).
+
+    Used when no function is defined at *ea* (opaque raw blobs): IDA's
+    FlowChart accepts a range in place of a function_t, so the graph tools can
+    still produce cfg/dominator output without auto-defining functions.
+    """
+    seg = idaapi.getseg(ea)
+    end = seg.end_ea if seg else idaapi.BADADDR
+    rng_cls = getattr(idaapi, "ea_range_t", None)
+    if rng_cls is not None:
+        try:
+            return ida_gdl.FlowChart(rng_cls(ea, end))
+        except Exception:
+            pass
+    return ida_gdl.FlowChart(_RangeLike(ea, end))
+
+
+def _code_items(f_ea):
+    """Instruction EAs to scan for outgoing code xrefs.
+
+    Uses the defined function's items when one exists; otherwise falls back to
+    scanning mapped code heads from *f_ea* to the end of its segment so raw
+    blobs with no defined functions still yield a call graph. Bounded by
+    ``_MAX_CODE_SCAN`` to prevent hangs on pathological scans.
+    """
+    func = ida_funcs.get_func(f_ea)
+    if func:
+        return list(idautils.FuncItems(f_ea))
+    seg = idaapi.getseg(f_ea)
+    end = seg.end_ea if seg else idaapi.BADADDR
+    items = []
+    cur = f_ea
+    scanned = 0
+    while cur != idaapi.BADADDR and (end == idaapi.BADADDR or cur < end) and scanned < _MAX_CODE_SCAN:
+        try:
+            if ida_bytes.is_code(ida_bytes.get_flags(cur)):
+                items.append(cur)
+        except Exception:
+            pass
+        scanned += 1
+        cur = idc.next_head(cur, end)
+    return items
+
+
+def _compute_idoms_lt(entry, succ, pred, all_nodes):
+    """Immediate dominators via Lengauer–Tarjan (near-linear, O(E·α(V,E))).
+
+    Pure-Python fallback used when ``ida_gdl.calc_idom`` is unavailable; the
+    real IDA path delegates to ida_gdl, which is also near-linear. This
+    replaces the previous O(n^3) dataflow fixpoint.
+
+    Args:
+        entry: entry node.
+        succ: mapping node -> list of successors.
+        pred: mapping node -> list of predecessors.
+        all_nodes: iterable of nodes.
+
+    Returns:
+        dict mapping each node to its immediate dominator (None for entry).
+    """
+    nodes = list(all_nodes)
+    if not nodes:
+        return {}
+
+    # Step 1: DFS from the entry to number nodes and build spanning-tree parents.
+    num = {}
+    vertex = {}
+    parent = {}
+    num[entry] = 0
+    vertex[0] = entry
+    counter = 1
+    stack = [(entry, iter(succ.get(entry, [])))]
+    while stack:
+        v, it = stack[-1]
+        advanced = False
+        for w in it:
+            if w not in num:
+                num[w] = counter
+                vertex[counter] = w
+                counter += 1
+                parent[w] = num[v]
+                stack.append((w, iter(succ.get(w, []))))
+                advanced = True
+                break
+        if not advanced:
+            stack.pop()
+
+    n = counter
+    semi = list(range(n))
+    label = list(range(n))
+    ancestor = [-1] * n
+    bucket = [[] for _ in range(n)]
+    idom = [-1] * n
+
+    def compress(v):
+        a = ancestor[v]
+        if a == -1 or ancestor[a] == -1:
+            return
+        compress(a)
+        if semi[label[a]] < semi[label[v]]:
+            label[v] = label[a]
+        ancestor[v] = ancestor[a]
+
+    def eval_vertex(v):
+        a = ancestor[v]
+        if a == -1:
+            return v
+        compress(v)
+        return label[v]
+
+    # Step 2: process vertices in reverse DFS order.
+    for i in range(n - 1, 0, -1):
+        w = vertex[i]
+        for pnode in pred.get(w, []):
+            p = num.get(pnode)
+            if p is None:
+                continue
+            u = eval_vertex(p)
+            semi[i] = min(semi[i], semi[u])
+        bucket[semi[i]].append(i)
+        pw = parent[w]
+        ancestor[i] = pw
+        for v in bucket[pw]:
+            u = eval_vertex(v)
+            idom[v] = u if semi[u] < semi[v] else pw
+        bucket[pw] = []
+
+    # Step 3: propagate idoms down the tree.
+    for i in range(1, n):
+        if idom[i] != semi[i]:
+            idom[i] = idom[idom[i]]
+
+    result = {}
+    for nd in nodes:
+        i = num.get(nd)
+        if i is None or i == 0:
+            result[nd] = None
+        else:
+            dom_i = idom[i]
+            result[nd] = vertex[dom_i] if dom_i != -1 else None
+    return result
+
+
+def _immediate_dominators(ida_gdl, fc, blocks):
+    """Map each basic-block start EA to its immediate dominator's start EA.
+
+    Near-linear: prefers ``ida_gdl.calc_idom`` (IDA's Lengauer–Tarjan), falling
+    back to the pure-Python Lengauer–Tarjan implementation.
+    """
+    calc_idom = getattr(ida_gdl, "calc_idom", None)
+    if calc_idom is not None:
+        try:
+            idom_arr = calc_idom(fc)
+            out = {}
+            for i, b in enumerate(blocks):
+                didx = int(idom_arr[i]) if i < len(idom_arr) else -1
+                out[b.start_ea] = blocks[didx].start_ea if didx >= 0 else None
+            return out
+        except Exception:
+            pass
+    succ = {}
+    pred = {}
+    for b in blocks:
+        s = [x.start_ea for x in b.succs()]
+        succ.setdefault(b.start_ea, []).extend(s)
+        for t in s:
+            pred.setdefault(t, []).append(b.start_ea)
+    return _compute_idoms_lt(blocks[0].start_ea, succ, pred, [b.start_ea for b in blocks])
+
+
 @tool
 @idaread
 def graph(
@@ -48,7 +239,7 @@ def graph(
 
         if action == "callgraph":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
-            ea, err = validate_addr(addr, require_func=True)
+            ea, err = validate_addr(addr)
             if err: return err
 
             depth = max(0, int(depth))
@@ -57,58 +248,80 @@ def graph(
             edge_set = set()
             cycle_nodes = set()
             item_count = 0
+            function_less_targets = 0
+            auto_defined = ida_funcs.get_func(ea) is None
+
             def add_node(f_ea):
+                nonlocal item_count
                 if f_ea not in nodes:
                     nodes[f_ea] = idc.get_func_name(f_ea) or f"sub_{f_ea:x}"
+                    item_count += 1
 
             def traverse(f_ea, d, stack):
-                nonlocal item_count
+                nonlocal item_count, function_less_targets
                 if d > depth or f_ea in visited: return
                 if item_count >= max_items: return
                 visited.add(f_ea)
                 add_node(f_ea)
                 stack.add(f_ea)
-                for item in idautils.FuncItems(f_ea):
+                for item in _code_items(f_ea):
                     if item_count >= max_items: break
                     for xref in idautils.XrefsFrom(item):
                         if item_count >= max_items: break
                         if not xref.iscode or xref.type not in (idaapi.fl_CN, idaapi.fl_CF):
                             continue
-                        target = ida_funcs.get_func(xref.to)
-                        if target and target.start_ea != f_ea:
-                            add_node(target.start_ea)
-                            edge = (f_ea, target.start_ea)
-                            if edge not in edge_set:
-                                edge_set.add(edge)
-                                edges.append(edge)
-                                item_count += 1
-                            if target.start_ea in stack:
-                                cycle_nodes.add(target.start_ea)
-                            else:
-                                traverse(target.start_ea, d + 1, stack)
+                        target_func = ida_funcs.get_func(xref.to)
+                        if target_func:
+                            if target_func.start_ea == f_ea:
+                                continue
+                            target = target_func.start_ea
+                            recurse = True
+                        else:
+                            # Function-less target: keep the edge and a
+                            # placeholder node named sub_<ea>. Chase further
+                            # only on raw blobs where the whole image is code.
+                            target = xref.to
+                            function_less_targets += 1
+                            recurse = auto_defined
+                        add_node(target)
+                        if item_count >= max_items:
+                            break
+                        edge = (f_ea, target)
+                        if edge not in edge_set:
+                            edge_set.add(edge)
+                            edges.append(edge)
+                            item_count += 1
+                        if target in stack:
+                            cycle_nodes.add(target)
+                        elif recurse:
+                            traverse(target, d + 1, stack)
                 stack.discard(f_ea)
 
             traverse(ea, 0, set())
 
-            return _format_graph(nodes, edges, format, cycle_nodes=cycle_nodes, root_ea=ea)
+            resp = _format_graph(nodes, edges, format, cycle_nodes=cycle_nodes, root_ea=ea)
+            resp["function_less_targets"] = function_less_targets
+            if auto_defined:
+                resp["note"] = _raw_blob_note()
+            return resp
 
         elif action == "cfg":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
-            ea, err = validate_addr(addr, require_func=True)
+            ea, err = validate_addr(addr)
             if err: return err
 
             import ida_gdl
             func = ida_funcs.get_func(ea)
-            if not func:
-                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
+            auto_defined = func is None
+            fc = ida_gdl.FlowChart(func) if func else _build_range_chart(ida_gdl, ea)
             max_items = min(max(1, int(max_items)), 500)
-            fc = ida_gdl.FlowChart(func)
             id_by_start = {}
             nodes = []
             edges = []
             mm = ["flowchart TD"]
 
             blocks = list(fc)
+            nodes_before = len(blocks)
             for i, b in enumerate(blocks):
                 if len(nodes) >= max_items:
                     break
@@ -135,6 +348,11 @@ def graph(
                 })
                 mm.append(f'  {bid}["{hex(b.start_ea)}\\ninsn:{insn_count}"]')
 
+            # Total edges in the FlowChart (pre-truncation count). FlowChart
+            # successors are always blocks in the chart, so the full edge set
+            # is simply the sum of each block's successors.
+            edges_before = sum(len(list(b.succs())) for b in blocks)
+
             for b in blocks:
                 src = id_by_start.get(b.start_ea)
                 if not src:
@@ -153,93 +371,65 @@ def graph(
             result = {
                 "ok": True,
                 "action": "cfg",
-                "function": idc.get_func_name(ea),
-                "addr": hex(func.start_ea),
+                "function": idc.get_func_name(func.start_ea) if func else f"sub_{ea:x}",
+                "addr": hex(func.start_ea if func else ea),
                 "mermaid": "\n".join(mm),
                 "adjacency": {"nodes": nodes, "edges": edges},
                 "node_count": len(nodes),
                 "edge_count": len(edges),
+                "nodes_before_truncation": nodes_before,
+                "edges_before_truncation": edges_before,
+                "truncated": nodes_before > max_items or edges_before > max_items,
             }
+            if auto_defined:
+                result["note"] = _raw_blob_note()
             return result
 
         elif action == "dominators":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
-            ea, err = validate_addr(addr, require_func=True)
+            ea, err = validate_addr(addr)
             if err: return err
             import ida_gdl
             func = ida_funcs.get_func(ea)
-            if not func:
-                return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
-            blocks = list(ida_gdl.FlowChart(func))
+            auto_defined = func is None
+            fc = ida_gdl.FlowChart(func) if func else _build_range_chart(ida_gdl, ea)
+            blocks = list(fc)
             if not blocks:
-                return {"ok": True, "action": "dominators", "dominators": []}
+                resp = {"ok": True, "action": "dominators", "dominators": []}
+                if auto_defined:
+                    resp["note"] = _raw_blob_note()
+                return resp
 
-            preds = {b.start_ea: set() for b in blocks}
-            all_nodes = {b.start_ea for b in blocks}
-            start = blocks[0].start_ea
-            for b in blocks:
-                for s in b.succs():
-                    preds.setdefault(s.start_ea, set()).add(b.start_ea)
+            max_items = min(max(1, int(max_items)), 500)
+            nodes_before = len(blocks)
 
-            dom = {n: set(all_nodes) for n in all_nodes}
-            dom[start] = {start}
-            changed = True
-            while changed:
-                changed = False
-                for n in all_nodes:
-                    if n == start:
-                        continue
-                    pset = preds.get(n, set())
-                    if not pset:
-                        new_dom = {n}
-                    else:
-                        inter = None
-                        for p in pset:
-                            inter = set(dom[p]) if inter is None else inter.intersection(dom[p])
-                        new_dom = (inter if inter is not None else set()) | {n}
-                    if new_dom != dom[n]:
-                        dom[n] = new_dom
-                        changed = True
-
-            idom = {}
-            for n in all_nodes:
-                if n == start:
-                    idom[n] = None
-                    continue
-                cands = list(dom[n] - {n})
-                if not cands:
-                    idom[n] = None
-                    continue
-                # immediate dominator: dominator not dominated by any other candidate
-                imm = None
-                for c in cands:
-                    dominated_by_other = False
-                    for o in cands:
-                        if o == c:
-                            continue
-                        if c in dom.get(o, set()):
-                            dominated_by_other = True
-                            break
-                    if not dominated_by_other:
-                        imm = c
-                        break
-                idom[n] = imm
+            # Near-linear immediate dominators (ida_gdl's Lengauer–Tarjan, or
+            # the pure-Python fallback) — not the O(n^3) fixpoint. Computed
+            # over the full block list so the tree stays correct; only the
+            # emitted rows are bounded by max_items.
+            idoms = _immediate_dominators(ida_gdl, fc, blocks)
 
             rows = []
             for b in blocks:
-                n = b.start_ea
+                dom = idoms.get(b.start_ea)
                 rows.append({
-                    "block_addr": hex(n),
-                    "idom_addr": hex(idom[n]) if idom.get(n) is not None else None,
+                    "block_addr": hex(b.start_ea),
+                    "idom_addr": hex(dom) if dom is not None else None,
                 })
-            return {
+            rows = rows[:max_items]
+            resp = {
                 "ok": True,
                 "action": "dominators",
-                "function": idc.get_func_name(func.start_ea),
-                "entry": hex(start),
+                "function": idc.get_func_name(func.start_ea) if func else f"sub_{ea:x}",
+                "entry": hex(blocks[0].start_ea),
                 "dominators": rows,
                 "count": len(rows),
+                "nodes_before_truncation": nodes_before,
+                "truncated": nodes_before > max_items,
             }
+            if auto_defined:
+                resp["note"] = _raw_blob_note()
+            return resp
 
         elif action == "xref_graph":
             if not addr: return make_error(MCPError.INVALID_ARGS, "addr required")
@@ -254,6 +444,7 @@ def graph(
             item_count = 0
             name = idc.get_name(ea) or hex(ea)
             nodes[ea] = name
+            item_count += 1
 
             def traverse_xrefs(target_ea, d, stack):
                 nonlocal item_count
@@ -269,7 +460,9 @@ def graph(
                         src_func = ida_funcs.get_func(xref.frm)
                         src_ea = src_func.start_ea if src_func else xref.frm
                         src_name = idc.get_name(src_ea) or hex(src_ea)
-                        if src_ea not in nodes: nodes[src_ea] = src_name
+                        if src_ea not in nodes:
+                            nodes[src_ea] = src_name
+                            item_count += 1
                         edge = (src_ea, target_ea)
                         if edge not in edge_set:
                             edge_set.add(edge)
@@ -292,7 +485,9 @@ def graph(
                                 dst_ea = dst_func.start_ea if dst_func else xref.to
                                 if dst_ea == target_ea: continue
                                 dst_name = idc.get_name(dst_ea) or hex(dst_ea)
-                                if dst_ea not in nodes: nodes[dst_ea] = dst_name
+                                if dst_ea not in nodes:
+                                    nodes[dst_ea] = dst_name
+                                    item_count += 1
                                 edge = (target_ea, dst_ea)
                                 if edge not in edge_set:
                                     edge_set.add(edge)
@@ -314,8 +509,14 @@ def graph(
 
 
 def _format_graph(nodes, edges, format, cycle_nodes=None, root_ea=None):
-    """Format graph nodes/edges into the requested output format."""
+    """Format graph nodes/edges into the requested output format.
+
+    Reports pre/post truncation counts so callers can tell how many nodes and
+    edges were dropped by the 500-node safety cap.
+    """
     cycle_nodes = cycle_nodes or set()
+    nodes_before = len(nodes)
+    edges_before = len(edges)
     if len(nodes) > 500:
         # Keep the traversal anchored on relevance, not address order: the
         # requested root first, then the most-connected nodes. Address-sorted
@@ -332,6 +533,17 @@ def _format_graph(nodes, edges, format, cycle_nodes=None, root_ea=None):
         keep = set(sorted(nodes.keys(), key=_relevance_key)[:500])
         nodes = {ea: name for ea, name in nodes.items() if ea in keep}
         edges = [(src, dst) for src, dst in edges if src in keep and dst in keep]
+
+    base = {
+        "ok": True,
+        "format": format,
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "nodes_before_truncation": nodes_before,
+        "edges_before_truncation": edges_before,
+        "truncated": nodes_before > 500,
+    }
+
     if format == "mermaid":
         mm = ["graph TD"]
         def _esc_mermaid(label: str) -> str:
@@ -350,8 +562,8 @@ def _format_graph(nodes, edges, format, cycle_nodes=None, root_ea=None):
                 mm.append(f'  {_sid(nodes[ea], ea)}:::cycle')
         if cycle_nodes:
             mm.append("  classDef cycle fill:#ffd6d6,stroke:#d00,stroke-width:2px;")
-        return {"ok": True, "format": "mermaid", "graph": "\n".join(mm),
-                "node_count": len(nodes), "edge_count": len(edges)}
+        base["graph"] = "\n".join(mm)
+        return base
 
     elif format == "dot":
         dot = ["digraph G {", "  rankdir=TB;", '  node [shape=box, style=filled, fillcolor="#e8e8e8"];']
@@ -365,12 +577,12 @@ def _format_graph(nodes, edges, format, cycle_nodes=None, root_ea=None):
             v_name = nodes.get(dst, hex(dst))
             dot.append(f'  "{_esc_dot(u_name)}" -> "{_esc_dot(v_name)}";')
         dot.append("}")
-        return {"ok": True, "format": "dot", "graph": "\n".join(dot),
-                "node_count": len(nodes), "edge_count": len(edges)}
+        base["graph"] = "\n".join(dot)
+        return base
 
     else:  # json
         node_rows = [{"addr": hex(ea), "name": name, "cycle": ea in cycle_nodes} for ea, name in sorted(nodes.items())]
         edge_rows = [{"from": hex(src), "to": hex(dst)} for src, dst in edges]
-        return {"ok": True, "format": "json", "nodes": node_rows,
-                "edges": edge_rows,
-                "node_count": len(nodes), "edge_count": len(edges)}
+        base["nodes"] = node_rows
+        base["edges"] = edge_rows
+        return base

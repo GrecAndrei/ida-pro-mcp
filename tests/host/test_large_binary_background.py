@@ -1,11 +1,13 @@
 """Auto-background loading and safe mode for large binaries.
 
-Large binaries must never stall the caller on upfront analysis: ida_open_binary
-auto-routes them to the background path (background + auto_backgrounded +
-safe_mode in the response) and ida_open_background always returns immediately.
-Safe mode gates full-binary analysis/indexing/script execution until the
-session's IDA auto-analysis completes; manual small-area operations stay
-available.
+Background open is EXPERIMENTAL and disabled by default (IDA_MCP_BACKGROUND_OPEN
+unset): every open is blocking and waits until analysis completes, and
+ida_open_background fails with FEATURE_DISABLED. The tests below that exercise
+the background contract (large binaries auto-routed to the background path with
+background + auto_backgrounded + safe_mode, and ida_open_background returning
+immediately) opt in via IDA_MCP_BACKGROUND_OPEN=1. Safe mode gates full-binary
+analysis/indexing/script execution until the session's IDA auto-analysis
+completes; manual small-area operations stay available.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ import time
 import pytest
 
 from ida_pro_mcp.host.config import LARGE_BINARY_THRESHOLD_BYTES
+from ida_pro_mcp.host.errors import MCPError
 from ida_pro_mcp.host.server.server import IDAMCPServer
 
 
@@ -23,10 +26,25 @@ from ida_pro_mcp.host.server.server import IDAMCPServer
 def server(tmp_path, monkeypatch):
     monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
     monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
+    # Background open is experimental: opt in for the background-contract tests.
+    monkeypatch.setenv("IDA_MCP_BACKGROUND_OPEN", "1")
     monkeypatch.setattr(IDAMCPServer, "_detect_ida_dir", lambda self: "")
     monkeypatch.setattr(IDAMCPServer, "_find_idat", lambda self: "")
     srv = IDAMCPServer()
     # Never block on an actual idat spawn.
+    monkeypatch.setattr(srv, "_ensure_runtime_and_idb", lambda session: None)
+    yield srv
+    srv.shutdown()
+
+
+@pytest.fixture
+def blocking_server(tmp_path, monkeypatch):
+    """A server with background open left disabled (the default)."""
+    monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
+    monkeypatch.setattr(IDAMCPServer, "_detect_ida_dir", lambda self: "")
+    monkeypatch.setattr(IDAMCPServer, "_find_idat", lambda self: "")
+    srv = IDAMCPServer()
     monkeypatch.setattr(srv, "_ensure_runtime_and_idb", lambda session: None)
     yield srv
     srv.shutdown()
@@ -43,6 +61,34 @@ def _open(server, name, arguments, request_id=1):
     )
     assert response is not None
     return response["result"]["structuredContent"]
+
+
+# ---------------------------------------------------------------------------
+# Background open is experimental and disabled by default
+# ---------------------------------------------------------------------------
+
+
+def test_background_open_disabled_by_default_errors(tmp_path, blocking_server):
+    binary = tmp_path / "plain.bin"
+    binary.write_bytes(b"\x00" * 1024)
+
+    result = _open(blocking_server, "ida_open_background", {"binary_path": str(binary)})
+    assert result.get("ok") is not True
+    assert result.get("error") is True
+    assert result.get("code") == MCPError.FEATURE_DISABLED
+    assert "IDA_MCP_BACKGROUND_OPEN" in str(result.get("details") or {})
+    assert "blocking" in str(result.get("details") or {})
+
+
+def test_large_binary_open_blocks_when_background_disabled(tmp_path, blocking_server):
+    """With the flag off, a large binary is a blocking open — never backgrounded."""
+    large = tmp_path / "huge.bin"
+    large.write_bytes(b"\x00" * (LARGE_BINARY_THRESHOLD_BYTES + 1))
+
+    result = _open(blocking_server, "ida_open_binary", {"binary_path": str(large)})
+    assert result.get("ok") is True
+    assert result.get("background") is not True
+    assert "auto_backgrounded" not in result
 
 
 def test_large_binary_open_auto_backgrounds_and_enters_safe_mode(tmp_path, server):
@@ -165,6 +211,8 @@ def test_background_reuse_across_client_restart(tmp_path, monkeypatch):
     """A restarted client reloads the session through the background path."""
     monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
     monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
+    # Background open is experimental; this test drives it across restarts.
+    monkeypatch.setenv("IDA_MCP_BACKGROUND_OPEN", "1")
     monkeypatch.setattr(IDAMCPServer, "_detect_ida_dir", lambda self: "")
     monkeypatch.setattr(IDAMCPServer, "_find_idat", lambda self: "")
     binary = tmp_path / "same.bin"
@@ -179,9 +227,14 @@ def test_background_reuse_across_client_restart(tmp_path, monkeypatch):
 
     server2 = IDAMCPServer()
     monkeypatch.setattr(server2, "_ensure_runtime_and_idb", lambda session: None)
+    # The persisted analysis_gate from server1's run is restored at startup:
+    # the half-analyzed background session comes back in safe mode, which does
+    # NOT change the session_id/idb_path reuse the client depends on.
+    assert server2._safe_mode_active(sid) is True
     reopened = _open(server2, "ida_open_background", {"binary_path": str(binary)})
     assert reopened["session_id"] == sid
     assert reopened["idb_path"] == idb
+    assert reopened["safe_mode"] is True
     server2.shutdown()
 
 

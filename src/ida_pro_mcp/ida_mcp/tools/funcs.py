@@ -12,6 +12,33 @@ try:
 except ImportError:
     from sync import _tool_cache, sync_wrapper  # type: ignore[import-not-found]
 
+# Arch-aware classification for metrics and create-failure hints.  Re-imported
+# directly (not via _common) so the isolated unit-test harness exercises the
+# real classifier sets even though the _common stub omits them.
+try:
+    from ida_pro_mcp.ida_mcp.support.arch_utils import (
+        UNCONDITIONAL_JUMP_MNEMONICS,
+        CONDITIONAL_BRANCH_MNEMONICS,
+        is_call_mnemonic,
+        is_return_mnemonic,
+        is_riscv_family,
+    )
+except ImportError:
+    try:
+        from arch_utils import (  # type: ignore[import-not-found]
+            UNCONDITIONAL_JUMP_MNEMONICS,
+            CONDITIONAL_BRANCH_MNEMONICS,
+            is_call_mnemonic,
+            is_return_mnemonic,
+            is_riscv_family,
+        )
+    except ImportError:
+        UNCONDITIONAL_JUMP_MNEMONICS = frozenset()
+        CONDITIONAL_BRANCH_MNEMONICS = frozenset()
+        is_call_mnemonic = lambda m, *a, **k: False  # noqa: E731
+        is_return_mnemonic = lambda m, *a, **k: False  # noqa: E731
+        is_riscv_family = lambda *a, **k: False  # noqa: E731
+
 # ============================================================================
 # 10. FUNCS - Function management
 # ============================================================================
@@ -407,10 +434,35 @@ def _funcs_impl(
                     ida_bytes.del_items(ea, ida_bytes.DELIT_SIMPLE, end_ea - ea)
 
             if not _ensure_code_at(ea):
+                hint = (
+                    "Tried carve-and-convert retries (16/64/256 bytes). Bytes may be invalid "
+                    "for the current processor; verify the architecture and ensure the correct "
+                    "processor/bitness/endianness is set."
+                )
+                if is_riscv_family():
+                    hint += (
+                        " RISC-V: confirm processor/bitness/endian, 2-byte alignment for "
+                        "compressed c.* instructions, and the GP/load base for raw blobs "
+                        "(analysis action='set_gp'/'set_architecture')."
+                    )
+                else:
+                    hint += (
+                        " For ARM Cortex-M firmware, ensure Thumb mode (T=1) is set via "
+                        "seg_reg action."
+                    )
+                try:
+                    _ft = _inf_filetype_id()
+                except Exception:
+                    _ft = None
+                if _ft in (getattr(idaapi, "f_BIN", -1), getattr(idaapi, "f_BINARY", -1)):
+                    hint += (
+                        " Raw blob: run analysis(action='set_architecture'/'set_processor') "
+                        "if the bytes misdecode under the current processor."
+                    )
                 return make_error(
                     MCPError.ADDRESS_INVALID,
                     f"Address {hex(ea)} cannot be converted to code",
-                    "Tried carve-and-convert retries (16/64/256 bytes). Bytes may be invalid for current processor; verify architecture or use firmware_view(action='auto_retype'). For ARM Cortex-M firmware, ensure Thumb mode (T=1) is set via seg_reg action.",
+                    hint,
                 )
 
             fn = ida_funcs.add_func(ea, end_ea or idaapi.BADADDR)
@@ -611,14 +663,24 @@ def _funcs_impl(
                     while head < b.end_ea and head != idaapi.BADADDR:
                         insn_count += 1
                         mnem = (idc.print_insn_mnem(head) or "").lower()
-                        if mnem in ("call", "bl", "blx"):
-                            call_count += 1
-                        elif mnem in ("ret", "retn", "bx", "jr", "blr"):
+                        disasm = ""
+                        if hasattr(idc, "generate_disasm_line"):
+                            try:
+                                disasm = (idc.generate_disasm_line(head, 0) or "").lower()
+                            except Exception:
+                                disasm = ""
+                        # Arch-aware classification driven by the shared
+                        # arch_utils sets: operand-aware returns (e.g. RISC-V
+                        # jalr x0, 0(ra); c.jr ra), compressed c.* mnemonics,
+                        # and jal/jalr counted as calls.
+                        if is_return_mnemonic(mnem, disasm):
                             ret_count += 1
-                        elif mnem.startswith(("j", "b")):
+                        elif is_call_mnemonic(mnem):
+                            call_count += 1
+                        elif mnem in UNCONDITIONAL_JUMP_MNEMONICS:
                             jump_count += 1
-                            if mnem in ("jz", "je", "jnz", "jne", "ja", "jb", "jg", "jl", "jbe", "jge", "jle", "jc", "jnc"):
-                                cond_jump_count += 1
+                        elif mnem in CONDITIONAL_BRANCH_MNEMONICS:
+                            cond_jump_count += 1
                         head = idc.next_head(head, fn.end_ea)
                         insn_iter += 1
                         if insn_iter >= 500000:

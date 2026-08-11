@@ -5,11 +5,153 @@ No IDA dependencies — safe to import from both host and runtime.
 """
 import contextlib
 import fnmatch
+import math
 import os
 import re
 import time
+from collections import Counter
 from functools import lru_cache
 from typing import Any
+
+# ----------------------------------------------------------------------------
+# Shared byte-analysis helpers (entropy / "looks like code" / RISC-V decode
+# plausibility).  Pure bytes, no disassembly: used by arch_profile's raw-blob
+# inference (looks_like_code flag + RISC-V instruction-validity scan) and by
+# the triage path.
+# ----------------------------------------------------------------------------
+
+def byte_entropy(data: bytes) -> float:
+    """Byte-level Shannon entropy in bits (0..8); 0.0 for empty input."""
+    if not data:
+        return 0.0
+    counts = Counter(data)
+    total = len(data)
+    return -sum((count / total) * math.log2(count / total) for count in counts.values())
+
+
+def looks_like_code(
+    data: bytes,
+    *,
+    entropy_floor: float = 3.0,
+    entropy_ceiling: float = 7.9,
+    max_zero_ratio: float = 0.5,
+    max_printable_ratio: float = 0.85,
+) -> bool:
+    """Cheap 'is this plausible code rather than text/zeros/table' gate.
+
+    A raw blob that clears this gate is *plausibly* executable — which is all
+    a bootstrap inference should claim.  High-entropy (packed/encrypted) data,
+    printable text, and zero-filled tables are rejected so an opaque blob never
+    gets silently treated as code of an unverified architecture.
+    """
+    if not data:
+        return False
+    entropy = byte_entropy(data)
+    if not (entropy_floor <= entropy <= entropy_ceiling):
+        return False
+    n = len(data)
+    if data.count(b"\x00") / n > max_zero_ratio:
+        return False
+    printable = sum(1 for b in data if 0x20 <= b <= 0x7E)
+    return printable / n <= max_printable_ratio
+
+
+# Base integer + FP + custom RISC-V opcodes whose 7-bit opcode field [6:0] is
+# defined by the spec (RV32/RV64 share this set).  Opcodes that are reserved in
+# the base ISAs (0x1f, 0x3f, 0x5b, 0x5f, 0x6b, 0x77) are deliberately absent.
+_RV_BASE_OPCODES = frozenset({
+    0x03, 0x07, 0x0b, 0x0f, 0x13, 0x17, 0x1b,
+    0x23, 0x27, 0x2b, 0x2f, 0x33, 0x37, 0x3b,
+    0x43, 0x47, 0x4b, 0x4f, 0x53,
+    0x63, 0x67, 0x6f, 0x73, 0x7b, 0x7f,
+})
+
+
+def _c_half_plausible(h: int) -> bool:
+    """Light RISC-V C-extension plausibility check for a 16-bit halfword.
+
+    Only the reserved/illegal encodings are rejected; the C-extension ISA is
+    dense, so this is a weak filter on its own and is meant to be combined with
+    the 32-bit opcode check and the opcode-density signals.
+    """
+    if h in {0x0000, 0xFFFF}:
+        return False
+    op = h & 0x3
+    funct3 = (h >> 13) & 0x7
+    if funct3 == 0:
+        if op == 0 and (h & 0x1FFC) == 0:
+            # C.ADDI4SPN with a zero immediate is reserved.
+            return False
+        if op == 1 and (h & 0x0F80) == 0 and h != 0x0001:
+            # C.ADDI on x0 (except C.NOP 0x0001) is reserved.
+            return False
+        if op == 2 and (h & 0x0F80) == 0:
+            # C.SLLI on x0 is reserved.
+            return False
+    return True
+
+
+def riscv_instruction_validity(data: bytes, *, rv64: bool = False) -> dict:
+    """Scan a sample as little-endian RV32/RV64 instructions (base I + C ext).
+
+    Walks 16-bit halfwords: a halfword whose opcode[1:0] == 0b11 is the low
+    half of a 32-bit instruction (valid when its 7-bit opcode is a known base
+    opcode); otherwise it is a 16-bit C-extension instruction (valid unless a
+    reserved encoding).  Valid 32-bit instructions get full weight (both halves
+    decode), C halves get half weight — the C-extension encoding is dense, so
+    giving it full weight would let random bytes score as RISC-V.
+
+    Returns a dict with ``valid_ratio`` (0..1), per-class counts and a
+    ``looks_like_riscv`` boolean.  ``rv64`` is accepted for API symmetry; the
+    base opcode set is shared between RV32 and RV64 (bitness is inferred
+    separately from ld/sd vs lw/sw density in arch_profile).
+    """
+    sample = data[: min(len(data), 16384)]
+    if len(sample) < 4:
+        return {
+            "valid_ratio": 0.0,
+            "valid32": 0,
+            "valid16": 0,
+            "invalid": 0,
+            "scanned_bytes": 0,
+            "looks_like_riscv": False,
+        }
+    pos = 0
+    valid32 = 0
+    valid16 = 0
+    invalid = 0
+    while pos + 2 <= len(sample):
+        h0 = sample[pos] | (sample[pos + 1] << 8)
+        if (h0 & 0x3) == 0b11:
+            if pos + 4 <= len(sample):
+                if (h0 & 0x7F) in _RV_BASE_OPCODES:
+                    valid32 += 1
+                    pos += 4
+                else:
+                    invalid += 1
+                    pos += 2
+            else:
+                invalid += 1
+                pos += 2
+        else:
+            if _c_half_plausible(h0):
+                valid16 += 1
+            else:
+                invalid += 1
+            pos += 2
+    scanned = len(sample) - (len(sample) % 2)
+    halves = scanned // 2
+    numerator = valid32 * 2 + valid16 * 0.5
+    ratio = (numerator / halves) if halves else 0.0
+    return {
+        "valid_ratio": round(min(1.0, ratio), 3),
+        "valid32": valid32,
+        "valid16": valid16,
+        "invalid": invalid,
+        "scanned_bytes": scanned,
+        "looks_like_riscv": ratio >= 0.5,
+    }
+
 
 _SEMANTIC_CANONICALS = {
     "find": "search",

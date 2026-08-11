@@ -144,6 +144,377 @@ class ServerRuntimeLeasesMixin:
             except Exception:
                 return False
 
+    @staticmethod
+    def _parse_proc_stat(data: str) -> dict | None:
+            """Parse the numeric fields of a ``/proc/<pid>/stat`` line.
+
+            The ``comm`` field may contain spaces and parentheses, so the
+            kernel's ``pid (comm) state ppid pgrp session ...`` layout is
+            parsed after the final ')': state, ppid, pgrp, session follow the
+            command name.
+            """
+            end = data.rfind(")")
+            if end < 0:
+                return None
+            tail = data[end + 1 :].split()
+            if len(tail) < 4:
+                return None
+            try:
+                return {
+                    "state": tail[0],
+                    "ppid": int(tail[1]),
+                    "pgrp": int(tail[2]),
+                    "session": int(tail[3]),
+                }
+            except (TypeError, ValueError):
+                return None
+
+    def _proc_is_ida_named(self, pid: int) -> bool:
+            """Best-effort Linux identity: is ``pid`` an ida/idat binary?"""
+            if pid is None or pid <= 0:
+                return False
+            names = {n.lower() for n in self._ida_binary_names()}
+            try:
+                exe = os.path.realpath(f"/proc/{pid}/exe")
+                if os.path.basename(exe).lower() in names:
+                    return True
+            except Exception:
+                pass
+            try:
+                with open(f"/proc/{pid}/cmdline", "rb") as f:
+                    cmdline = f.read().decode("utf-8", errors="ignore")
+                parts = [p for p in cmdline.split("\x00") if p]
+                if parts and os.path.basename(parts[0]).lower() in names:
+                    return True
+            except Exception:
+                pass
+            return False
+
+    def _proc_group_has_ida_member(self, pgid: int) -> bool:
+            """Whether any member of process group ``pgid`` is an IDA binary."""
+            if pgid is None or pgid <= 0:
+                return False
+            try:
+                entries = os.listdir("/proc")
+            except Exception:
+                return False
+            for entry in entries:
+                if not entry.isdigit():
+                    continue
+                try:
+                    with open(f"/proc/{entry}/stat", "rb") as f:
+                        parsed = self._parse_proc_stat(
+                            f.read().decode("utf-8", errors="ignore")
+                        )
+                except Exception:
+                    continue
+                if not parsed or parsed["pgrp"] != pgid:
+                    continue
+                if self._proc_is_ida_named(int(entry)):
+                    return True
+            return False
+
+    def _proc_group_has_live_member(self, pgid: int) -> bool:
+            """Whether process group ``pgid`` still has a running (non-zombie)
+            member.
+
+            A zombie keeps the pgid visible to killpg, so the drain check in
+            ``_kill_stale_process_group`` must not treat a group whose members
+            have all exited but not yet been reaped as still-alive — otherwise
+            a killed tree whose direct child is waiting for its (dead) parent's
+            reaper would never drain and would be reported as a kill failure.
+            """
+            if pgid is None or pgid <= 0:
+                return False
+            try:
+                entries = os.listdir("/proc")
+            except Exception:
+                return True  # cannot enumerate: assume still live
+            for entry in entries:
+                if not entry.isdigit():
+                    continue
+                try:
+                    with open(f"/proc/{entry}/stat", "rb") as f:
+                        parsed = self._parse_proc_stat(
+                            f.read().decode("utf-8", errors="ignore")
+                        )
+                except Exception:
+                    continue
+                if not parsed or parsed["pgrp"] != pgid:
+                    continue
+                if parsed["state"] != "Z":
+                    return True
+            return False
+
+    def _runtime_tree_still_alive(self, pid: int) -> bool:
+            """True while an ida-named descendant of the launcher is alive.
+
+            The runtime's ``process`` is the idat launcher, which can exit in
+            milliseconds while its real IDA child keeps running (holding the
+            unpacked .id0/.id1). A launcher exit must not drop the session
+            lease early, so the heartbeat keeps the lease until the whole tree
+            is gone.
+
+            POSIX: the launcher is started with start_new_session, so it leads
+            its own process group and the child inherits that pgid even after
+            being reparented to init on the launcher's exit. We probe the group
+            AND require an ida-named member, so an unrelated process group that
+            happens to reuse the launcher's PID is never mistaken for our tree.
+            Windows: walk the ParentProcessId chain for an ida-named descendant.
+            """
+            if pid is None or pid <= 0:
+                return False
+            if sys.platform == "win32":
+                return self._win32_ida_descendant_alive(pid)
+            try:
+                os.killpg(pid, 0)
+            except ProcessLookupError:
+                return False  # the whole tree is gone
+            except Exception:
+                # Cannot probe (e.g. EPERM): keep the lease rather than drop it
+                # for a tree we cannot inspect; stale cleanup reclaims later.
+                return True
+            return self._proc_group_has_ida_member(pid)
+
+    def _win32_process_map(self) -> tuple[dict[int, list[int]], dict[int, str]]:
+            """Return ``(children_by_ppid, name_by_pid)`` for win32 processes.
+
+            Best-effort: an empty map is returned on any enumeration failure so
+            callers fall back to the conservative "keep the lease" behaviour.
+            """
+            children: dict[int, list[int]] = {}
+            names: dict[int, str] = {}
+            try:
+                out = subprocess.run(
+                    ["wmic", "process", "get", "ProcessId,ParentProcessId,Name",
+                     "/format:list"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+            except Exception:
+                return children, names
+            name = None
+            ppid = None
+            procid = None
+
+            def _flush() -> None:
+                nonlocal name, ppid, procid
+                if procid is not None:
+                    if ppid is not None:
+                        children.setdefault(ppid, []).append(procid)
+                    names[procid] = name or ""
+                name, ppid, procid = None, None, None
+
+            for line in (out.stdout or "").splitlines():
+                if not line.strip():
+                    _flush()
+                    continue
+                if "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip().lower()
+                value = value.strip()
+                if key == "name":
+                    name = value.lower()
+                elif key == "parentprocessid":
+                    try:
+                        ppid = int(value)
+                    except (TypeError, ValueError):
+                        ppid = None
+                elif key == "processid":
+                    try:
+                        procid = int(value)
+                    except (TypeError, ValueError):
+                        procid = None
+            _flush()
+            return children, names
+
+    def _win32_ida_descendant_alive(self, pid: int) -> bool:
+            """Whether an ida-named descendant of ``pid`` is live on Windows."""
+            if pid is None or pid <= 0:
+                return False
+            children, names = self._win32_process_map()
+            expected_names = {n.lower() for n in self._ida_binary_names()}
+            frontier = [pid]
+            seen = {pid}
+            while frontier:
+                nxt: list[int] = []
+                for parent in frontier:
+                    for child in children.get(parent, []):
+                        if child in seen:
+                            continue
+                        seen.add(child)
+                        if os.path.basename(names.get(child) or "").lower() in expected_names:
+                            return True
+                        nxt.append(child)
+                frontier = nxt
+            return False
+
+    def _collect_descendant_pids(self, pid: int, max_depth: int = 8) -> list[int]:
+            """pgrep -P style descendant enumeration via parent-PID links.
+
+            On Linux this scans ``/proc/*/stat``; other POSIX platforms fall
+            back to ``pgrep -P``; Windows uses the wmic parent map. Descendants
+            are bounded by ``max_depth`` so a pathologically deep tree cannot
+            stall the caller.
+            """
+            if pid is None or pid <= 0:
+                return []
+            if sys.platform == "win32":
+                children, _names = self._win32_process_map()
+                out: list[int] = []
+                frontier = [pid]
+                depth = 0
+                while frontier and depth < max_depth:
+                    depth += 1
+                    nxt: list[int] = []
+                    for parent in frontier:
+                        for child in children.get(parent, []):
+                            out.append(child)
+                            nxt.append(child)
+                    frontier = nxt
+                return out
+            if sys.platform != "linux":
+                # macOS/BSD fallback.
+                out = []
+                frontier = [pid]
+                depth = 0
+                while frontier and depth < max_depth:
+                    depth += 1
+                    nxt: list[int] = []
+                    for parent in frontier:
+                        try:
+                            res = subprocess.run(
+                                ["pgrep", "-P", str(parent)],
+                                capture_output=True,
+                                text=True,
+                                timeout=5,
+                            )
+                        except Exception:
+                            continue
+                        for tok in (res.stdout or "").split():
+                            try:
+                                child = int(tok)
+                            except ValueError:
+                                continue
+                            out.append(child)
+                            nxt.append(child)
+                    frontier = nxt
+                return out
+            children_by_ppid: dict[int, list[int]] = {}
+            try:
+                entries = os.listdir("/proc")
+            except Exception:
+                return []
+            for entry in entries:
+                if not entry.isdigit():
+                    continue
+                try:
+                    with open(f"/proc/{entry}/stat", "rb") as f:
+                        parsed = self._parse_proc_stat(
+                            f.read().decode("utf-8", errors="ignore")
+                        )
+                except Exception:
+                    continue
+                if parsed:
+                    children_by_ppid.setdefault(parsed["ppid"], []).append(int(entry))
+            out: list[int] = []
+            frontier = [pid]
+            depth = 0
+            while frontier and depth < max_depth:
+                depth += 1
+                nxt: list[int] = []
+                for parent in frontier:
+                    for child in children_by_ppid.get(parent, []):
+                        out.append(child)
+                        nxt.append(child)
+                frontier = nxt
+            return out
+
+    def _kill_stale_process_group(self, pgid: int) -> bool:
+            """SIGTERM a process group, wait for it to drain, then SIGKILL.
+
+            The group is only signalled after the recorded pid has been
+            identity-verified as an IDA launcher AND confirmed to lead its own
+            process group (start_new_session), so the group is exclusively this
+            IDA tree — never an unrelated group the launcher shared.
+
+            A member that exited but is still a zombie keeps the pgid visible
+            to killpg, so the drain check also treats a group whose members are
+            all zombies as drained (they are gone; whoever is responsible for
+            reaping them will collect them).
+            """
+            if pgid is None or pgid <= 0:
+                return False
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except ProcessLookupError:
+                return True
+            except Exception:
+                return False
+            deadline = time.time() + PROCESS_TERMINATION_TIMEOUT_SECONDS
+            while time.time() < deadline:
+                try:
+                    os.killpg(pgid, 0)
+                except ProcessLookupError:
+                    return True  # drained
+                except Exception:
+                    return True  # cannot probe; best-effort done
+                if not self._proc_group_has_live_member(pgid):
+                    return True  # only zombies remain; the tree is gone
+                time.sleep(0.1)
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                return True
+            except Exception:
+                return False
+            try:
+                os.killpg(pgid, 0)
+                return False
+            except ProcessLookupError:
+                return True
+            except Exception:
+                return False
+
+    def _kill_stale_process_tree(self, pid: int) -> bool:
+            """Terminate an identity-verified IDA launcher and its process tree.
+
+            Called only after ``_is_expected_ida_process`` confirmed the
+            recorded pid is an IDA binary. Killing just the recorded pid leaves
+            its ida child (the idat -> ida launcher pair) holding the unpacked
+            .id0/.id1 files open; terminating the whole tree frees them so the
+            next open can take the lock.
+
+            Windows: ``taskkill /T /F`` walks the tree natively.
+            POSIX: when the launcher leads its own process group it was started
+            with start_new_session, so the tree IS the group — signal the group
+            (this also reaches children reparented to init when the launcher
+            exited). Otherwise signal the recorded pid plus any descendants
+            still linked by parent PID, never touching an unrelated group.
+            """
+            if pid is None or pid <= 0:
+                return False
+            if sys.platform == "win32":
+                with contextlib.suppress(Exception):
+                    subprocess.run(
+                        ["taskkill", "/T", "/F", "/PID", str(pid)],
+                        capture_output=True,
+                        timeout=PROCESS_TERMINATION_TIMEOUT_SECONDS + 3,
+                    )
+                return self._kill_stale_pid(pid)
+            try:
+                pgid = os.getpgid(pid)
+            except Exception:
+                pgid = None
+            if pgid == pid:
+                return self._kill_stale_process_group(pid)
+            for child in self._collect_descendant_pids(pid):
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(child, signal.SIGKILL)
+            return self._kill_stale_pid(pid)
+
     def _is_expected_ida_process(self, pid: int, lease: dict) -> bool:
             if pid <= 0:
                 return False
@@ -407,15 +778,14 @@ class ServerRuntimeLeasesMixin:
                         # lease for a later pass rather than risk a wrong kill.
                         skip_count += 1
                     continue
-                # Signal only the recorded pid, never the whole process tree.
-                # The stale path has no Popen and only identity-verifies the
-                # recorded pid (it may not be a process-group leader), so
-                # killing the tree here could signal an unrelated group. The
-                # tracked teardown path (server_runtime.py) uses
-                # _kill_process_tree where the group is guaranteed; the price
-                # here is that an orphaned idat.exe -> ida.exe child can keep
-                # the unpacked .id0/.id1 files open and FILE_LOCK a later open.
-                killed = self._kill_stale_pid(pid)
+                # Terminate the recorded pid AND its process tree so an
+                # orphaned idat -> ida child cannot keep the unpacked
+                # .id0/.id1 files open and FILE_LOCK a later open. The recorded
+                # pid was identity-verified as an IDA binary above; the
+                # tree-kill only signals the recorded pid, processes that
+                # provably descend from it, or (when it leads its own process
+                # group) that group — never an unrelated group it shared.
+                killed = self._kill_stale_process_tree(pid)
                 if killed:
                     if self._remove_lease_if_unchanged(path, updated):
                         removed_count += 1
@@ -463,6 +833,14 @@ class ServerRuntimeLeasesMixin:
                             continue
                         if proc.poll() is None:
                             self._write_runtime_lease(sid, runtime)
+                        elif proc.pid and self._runtime_tree_still_alive(proc.pid):
+                            # The idat launcher exited but its ida child (the
+                            # real analysis process) is still alive holding the
+                            # unpacked .id0/.id1. Keep the lease fresh so a
+                            # launcher exit does not drop coverage early;
+                            # stale cleanup reclaims the tree after the TTL
+                            # once it is truly gone.
+                            self._write_runtime_lease(sid, runtime)
                         else:
                             # Guarded removal: a fresh runtime may have been
                             # registered for this sid (its lease rewritten)
@@ -479,6 +857,11 @@ class ServerRuntimeLeasesMixin:
     def _start_runtime_lease_heartbeat(self) -> None:
             if self._lease_thread and self._lease_thread.is_alive():
                 return
+            # Clear any stop signal left by a prior stop/shutdown so a fresh
+            # thread actually beats instead of exiting on the stale event. Each
+            # server instance owns its own event (server.py), so this never
+            # clears another instance's stop.
+            self._lease_thread_stop.clear()
             self._lease_thread = threading.Thread(
                 target=self._lease_heartbeat_loop,
                 name="ida-mcp-runtime-lease-heartbeat",
@@ -522,6 +905,17 @@ class ServerRuntimeLeasesMixin:
             self._shutdown = True
             self._shutdown_requested = True
             self._stop_runtime_lease_heartbeat()
+            # Stop analysis-completion watchers and background runtime spawns,
+            # and clear the pending/complete sets, via the existing helper
+            # (server.py's _stop_analysis_completion_watchers) when the
+            # composing server provides it. This runs before runtime teardown so
+            # a background thread cannot re-spawn an IDA process after
+            # _cleanup_all_runtimes has finished killing them. Bare-mixin hosts
+            # that do not compose the session mixin are a no-op.
+            stop_watchers = getattr(self, "_stop_analysis_completion_watchers", None)
+            if callable(stop_watchers):
+                with contextlib.suppress(Exception):
+                    stop_watchers()
             # Stop host-owned inference first. Runtime cleanup can wait on IDA
             # long enough for stdio clients to escalate to SIGTERM; leaving
             # this until the end allowed llama-server to be orphaned.

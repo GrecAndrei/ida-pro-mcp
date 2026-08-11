@@ -52,7 +52,6 @@ READ_ONLY_TOOLS = {
     "code",
     "ctree",
     "data",
-    "firmware_view",
     "graph",
     "idb",
     "imports_deep",
@@ -72,6 +71,7 @@ WRITE_IDB_TOOLS = {
     "annotation",
     "batch",
     "blackboard",
+    "firmware",
     "funcs",
     "governance",
     "modify",
@@ -104,6 +104,10 @@ DESTRUCTIVE_TOOL_ACTIONS: set[tuple[str, str]] = {
     ("session", "cleanup_stale"),
     ("session", "idle_purge"),
     ("session", "restore_snapshot"),
+    # bootstrap_prune_data deletes persisted outcomes, disputes, and
+    # snapshots from the session's durable skills state, so it belongs in the
+    # destructive tier (not merely WRITE_TOOL_ACTIONS).
+    ("session", "bootstrap_prune_data"),
 }
 
 # (tool, action) pairs that mutate the IDB (or equivalent durable state) but
@@ -116,11 +120,10 @@ WRITE_TOOL_ACTIONS: set[tuple[str, str]] = {
     ("analysis", "set_architecture"),
     ("analysis", "set_loader_options"),
     ("analysis", "set_processor"),
+    ("analysis", "add_entry"),
+    ("analysis", "snapshot"),
+    ("analysis", "restore_snapshot"),
     ("calc", "persist"),
-    ("firmware_view", "auto_retype"),
-    ("firmware_view", "bootstrap"),
-    ("firmware_view", "rollback_last"),
-    ("firmware_view", "smart_carve"),
     ("knowledge", "import_symbols"),
     ("misc", "load_sig"),
     ("multi_session", "group_create"),
@@ -132,13 +135,26 @@ WRITE_TOOL_ACTIONS: set[tuple[str, str]] = {
     # Session-skills bootstrap actions mutate the durable skills.json state for
     # the session, so they must require ack rather than sailing through as READ
     # (session is otherwise a READ_ONLY tool). bootstrap_policy_reweight_history
-    # is deliberately NOT here — it only reads back past reweight history.
+    # is deliberately NOT here — it only reads back past reweight history — and
+    # bootstrap_readiness_regression_guard only returns a recommended-actions
+    # plan without persisting, so it stays excluded too.
     ("session", "bootstrap_policy_reweight"),
     ("session", "bootstrap_run_tournament"),
     ("session", "bootstrap_simulate_batch"),
     ("session", "bootstrap_snapshot"),
     ("session", "bootstrap_evaluate_alerts"),
     ("session", "bootstrap_apply_mitigation"),
+    ("session", "bootstrap_init"),
+    ("session", "bootstrap_ingest_outcome"),
+    ("session", "bootstrap_open_dispute"),
+    ("session", "bootstrap_resolve_dispute"),
+    ("session", "bootstrap_update_baseline"),
+    ("session", "bootstrap_autopilot"),
+    ("session", "bootstrap_set_autopilot_policy"),
+    ("session", "bootstrap_rollback_last_reweight"),
+    ("session", "bootstrap_record_readiness"),
+    ("session", "bootstrap_finalize_report"),
+    ("session", "bootstrap_prune_data"),
     ("session", "log_activity"),
     ("session", "rate_skill"),
     ("session", "snapshot"),
@@ -146,10 +162,41 @@ WRITE_TOOL_ACTIONS: set[tuple[str, str]] = {
     ("session", "untag"),
     ("symbols", "load_dwarf"),
     ("symbols", "load_pdb"),
+    ("modify", "create_data"),
+    ("modify", "create_strlit"),
+    ("modify", "undo_begin"),
+    ("modify", "undo_end"),
+    ("segments", "sreg_set"),
     ("types", "declare"),
     ("types", "import_header"),
     ("types", "propagate"),
     ("types", "set_prototype"),
+    # Struct/enum member editing + TIL carry mutate the type library, which
+    # sits in READ_ONLY_TOOLS, so they must be explicit to avoid READ.
+    ("types", "struct_member_add"),
+    ("types", "struct_member_del"),
+    ("types", "struct_member_rename"),
+    ("types", "struct_member_set_type"),
+    ("types", "enum_member_add"),
+    ("types", "enum_member_rename"),
+    ("types", "enum_member_revalue"),
+    # til_delete mutates the type library; without this entry it would fall
+    # through to READ (types ∈ READ_ONLY_TOOLS) because "til_delete" is not a
+    # DESTRUCTIVE_ACTION. til_import is listed below for defense-in-depth even
+    # though FILESYSTEM_READ wins the classify order.
+    ("types", "til_delete"),
+    ("types", "til_import"),
+    # Emulate tool mutating actions drive the emulated process (start/step/
+    # run_to/suspend/continue/stop) or write debuggee state (set_reg/set_mem),
+    # so they require ack unless _risk_ack=true.
+    ("emulate", "start"),
+    ("emulate", "step"),
+    ("emulate", "run_to"),
+    ("emulate", "suspend"),
+    ("emulate", "continue"),
+    ("emulate", "stop"),
+    ("emulate", "set_reg"),
+    ("emulate", "set_mem"),
 }
 
 WRITE_ACTIONS = {
@@ -198,10 +245,21 @@ FILESYSTEM_WRITE_ACTIONS = {
     ("misc", "write_file"),
     ("symbols", "export"),
     ("knowledge", "export_session"),
+    ("types", "til_export"),
 }
 
 FILESYSTEM_READ_ACTIONS = {
     ("misc", "read_file"),
+    ("types", "til_import"),
+}
+
+# Actions that start or attach an external process (or open a network channel).
+# The r2 sidecar engine spawns a rizin subprocess; start/attach are the
+# process-lifecycle operations. Forward-declared for when the engine lands
+# them — they must never fall through to READ.
+NETWORK_OR_PROCESS_ACTIONS: set[tuple[str, str]] = {
+    ("r2", "start"),
+    ("r2", "attach"),
 }
 
 READ_ONLY_ACTIONS = {
@@ -242,7 +300,6 @@ READ_ONLY_ACTIONS = {
     # Additional blackboard reads that only query the store (no writes):
     ("blackboard", "working_set"),
     ("blackboard", "state_health"),
-    ("blackboard", "quest_board"),
     ("blackboard", "conflicts"),
     ("blackboard", "stale"),
     ("blackboard", "recall"),
@@ -250,6 +307,31 @@ READ_ONLY_ACTIONS = {
     ("blackboard", "campaign_summary"),
     ("blackboard", "phase_status"),
     ("search", "comment"),
+    # Raw-value and query-language search only read the IDB.
+    ("search", "data_value"),
+    ("search", "query_lang"),
+    # Segment-register queries read the sreg map without mutating it.
+    ("segments", "sreg_get"),
+    ("segments", "sreg_list"),
+    # auto_wait only blocks until the analysis queue is idle.
+    ("analysis", "auto_wait"),
+    # idb events/registers are pure metadata reads.
+    ("idb", "events"),
+    ("idb", "registers"),
+    # Firmware shaping detect_*/rtos_scan only probe a raw blob; carve (which
+    # bounds a region) stays WRITE_IDB via the firmware entry in WRITE_IDB_TOOLS.
+    ("firmware", "detect_vector_table"),
+    ("firmware", "detect_load_base"),
+    ("firmware", "detect_mmio"),
+    ("firmware", "rtos_scan"),
+    # r2 sidecar queries are read-only triage (they spawn a local rizin to read
+    # the file, but never mutate the IDB). r2 start/attach, when the engine
+    # lands them, are classified by NETWORK_OR_PROCESS_ACTIONS instead.
+    ("r2", "status"),
+    ("r2", "bininfo"),
+    ("r2", "load_hints"),
+    ("r2", "disassemble_hypothesis"),
+    ("r2", "vxrefs"),
     ("gadgets", "rop"),
     ("gadgets", "jop"),
     ("gadgets", "cop"),
@@ -276,6 +358,14 @@ READ_ONLY_ACTIONS = {
     ("multi_session", "cross_decompile"),
     ("multi_session", "cross_xrefs"),
     ("multi_session", "status"),
+    # Emulate tool reads only query the emulator/backend without mutating
+    # process state. "backend" is the query/select action (the IDA-side
+    # governance gate still covers an actual backend load).
+    ("emulate", "info"),
+    ("emulate", "backend"),
+    ("emulate", "state"),
+    ("emulate", "get_reg"),
+    ("emulate", "read_mem"),
 }
 
 
@@ -387,6 +477,8 @@ def classify_tool_action(tool: Any, action: Any) -> RiskTier:
         return RiskTier.FILESYSTEM_WRITE
     if pair in FILESYSTEM_READ_ACTIONS:
         return RiskTier.FILESYSTEM_READ
+    if pair in NETWORK_OR_PROCESS_ACTIONS:
+        return RiskTier.NETWORK_OR_PROCESS
     if action_name in DESTRUCTIVE_ACTIONS:
         return RiskTier.DESTRUCTIVE
     if pair in DESTRUCTIVE_TOOL_ACTIONS:

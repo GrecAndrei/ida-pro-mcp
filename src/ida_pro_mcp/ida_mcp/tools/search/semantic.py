@@ -66,8 +66,12 @@ RERANK_MAX_DOC_CHARS = 6000
 def get_backend():
     """Resolve the semantic search backend.
 
-    Returns (index, classifier, idb_path) or raises a descriptive error dict.
-    Either import path is supported so this works in both package and test modes.
+    Returns (index, classifier, idb_path, degraded) — ``degraded`` is "" when
+    the embedding backend started, or a note when it could not start but the
+    index is non-empty (lexical-only ranking is still meaningful).  Returns a
+    descriptive error dict when the index is empty too, or the environment
+    cannot resolve an IDB.  Either import path is supported so this works in
+    both package and test modes.
     """
     try:
         from ida_pro_mcp.services import get_assembler
@@ -107,15 +111,19 @@ def get_backend():
 
     # This is the explicit semantic-search path.  It is the right place to
     # activate the local model; routine tool/context paths intentionally do
-    # not cold-start llama.cpp.
+    # not cold-start llama.cpp.  When the model cannot start but the index has
+    # rows, degrade to lexical-only ranking instead of refusing the search: a
+    # user on an opaque firmware blob is better served by partial results with
+    # an honest note than by a crisp "backend unavailable" error.
     if not asm.ensure_embedding_server():
-        return _err(
-            "Semantic search backend is unavailable.",
-            hint="Configure an embedding model and llama-server, then retry.",
+        return idx, None, idb_path, (
+            "degraded — embedding backend unavailable; results ranked by "
+            "lexical overlap only. Configure an embedding model and "
+            "llama-server, then retry."
         )
 
     classifier = asm._behavior_classifier()
-    return idx, classifier, idb_path
+    return idx, classifier, idb_path, ""
 
 
 def _err(message: str, hint: str = "") -> dict:
@@ -123,6 +131,25 @@ def _err(message: str, hint: str = "") -> dict:
     if hint:
         payload["hint"] = hint
     return payload
+
+
+def _call_rerank(rr, query: str, docs: list[str], deadline: float):
+    """Invoke a reranker, passing the deadline when the backend accepts it.
+
+    The real Reranker.rerank/NativeReranker.rerank take an optional
+    ``deadline`` keyword; lightweight/scripted rerankers used in tests do not.
+    ``inspect.signature`` lets us detect support without catching a TypeError
+    that might otherwise mask a genuine runtime failure inside the reranker.
+    """
+    try:
+        import inspect
+        sig = inspect.signature(rr.rerank)
+    except Exception:
+        sig = None
+    if sig is not None and "deadline" in sig.parameters:
+        return rr.rerank(query, docs, deadline=deadline)
+    return rr.rerank(query, docs)
+
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +196,11 @@ def search_nl(
     backend = get_backend()
     if isinstance(backend, dict):
         return backend
-    idx, classifier, _idb_path = backend
+    if len(backend) == 4:
+        idx, classifier, _idb_path, degraded_note = backend
+    else:  # tolerate a legacy 3-tuple backend (older callers / test stubs)
+        idx, classifier, _idb_path = backend
+        degraded_note = ""
 
     if not timeout_ms or timeout_ms <= 0:
         timeout_ms = 10000
@@ -203,16 +234,23 @@ def search_nl(
         else None
     )
 
-    # Phase 1: primary search via hybrid semantic+lexical. The embedding index
-    # applies address_ranges before top-k truncation.  When reranking is on,
-    # recall a wider pool so the cross-encoder has real candidates to re-score
-    # (the bi-encoder often places the right function at rank 30-50).
+    # Phase 0: decide rerank before recall so the candidate pool can be aligned
+    # to it.  When the cross-encoder is going to re-score the top of the list,
+    # recalling a wide 64-pool we then truncate to the rerank budget wastes
+    # Stage-1 work; when it is not, inflating recall to RERANK_MAX_CANDIDATES
+    # is equally wasteful.
+    want_rerank = bool(rerank) if rerank is not None else (mode == "expand")
     try:
         from ida_pro_mcp.host.intelligence.rerank import RERANK_MAX_CANDIDATES
-        candidate_limit = max(24, limit * 5, RERANK_MAX_CANDIDATES)
     except Exception:
-        candidate_limit = max(24, limit * 5)
-    candidate_limit = min(candidate_limit, 256)
+        RERANK_MAX_CANDIDATES = 64
+    if want_rerank:
+        candidate_limit = min(max(limit, RERANK_POOL_MAX), 256)
+    else:
+        candidate_limit = min(max(24, limit * 5), 256)
+
+    # Phase 1: primary search via hybrid semantic+lexical. The embedding index
+    # applies address_ranges before top-k truncation.
     raw_results = idx.search(
         query,
         top_k=candidate_limit,
@@ -222,7 +260,7 @@ def search_nl(
 
     # Phase 2: behavior-driven query expansion (only in "expand" mode)
     expansion_queries: list[str] = []
-    if mode == "expand":
+    if mode == "expand" and classifier is not None:
         try:
             hits = classifier.classify(query[:600], threshold=classifier_threshold, top_k=4, block=False)
             if hits:
@@ -260,7 +298,30 @@ def search_nl(
                 if ea_key:
                     merged_by_ea[ea_key] = dict(r)
 
-            for extra_q in expansion_queries[:3]:
+            # Run each expansion search only over the top recalled EAs instead
+            # of the whole binary: each extra hybrid_search is otherwise a full
+            # embedding scan.  One (ea, ea+1) range per recalled entry limits
+            # the candidate set to exactly those functions, so expansion cost
+            # stays O(top-K) regardless of binary size.
+            try:
+                idx_size = int(getattr(idx, "size", 0) or 0)
+            except Exception:
+                idx_size = 0
+            recalled_eas = []
+            for r in raw_results[: max(limit * 2, 16)]:
+                try:
+                    recalled_eas.append(int(str(r.get("ea") or ""), 0))
+                except (TypeError, ValueError):
+                    continue
+            if recalled_eas:
+                expansion_ranges = [(ea, ea + 1) for ea in recalled_eas]
+            else:
+                expansion_ranges = address_ranges
+            # Very large binaries gate expansion to a single extra query so a
+            # behavior explosion cannot extend the search past the deadline.
+            cap_extra = 1 if idx_size > 8000 else 3
+
+            for extra_q in expansion_queries[:cap_extra]:
                 if (_time.time() - started_at) >= (timeout_ms / 1000.0):
                     break
                 try:
@@ -268,7 +329,7 @@ def search_nl(
                         extra_q,
                         top_k=max(3, limit),
                         threshold=0.0,
-                        address_ranges=address_ranges,
+                        address_ranges=expansion_ranges,
                     )
                 except Exception:
                     continue
@@ -319,7 +380,6 @@ def search_nl(
     # or returns non-discriminating scores (e.g. a headless conversion), the
     # recall order is preserved and the response says why.
     rerank_meta = {"profile": None, "applied": False, "pool": 0, "latency_ms": 0}
-    want_rerank = bool(rerank) if rerank is not None else (mode == "expand")
     if not want_rerank:
         if rerank is None:
             rerank_meta["reason"] = (
@@ -331,49 +391,56 @@ def search_nl(
     if want_rerank and raw_results:
         try:
             from ida_pro_mcp.host.intelligence.rerank import Reranker
-            from ida_pro_mcp.host.intelligence.rerank import RERANK_MAX_CANDIDATES
         except Exception:
             Reranker = None  # type: ignore[assignment]
-            RERANK_MAX_CANDIDATES = 64
         if Reranker is not None:
             try:
                 rr = Reranker()
             except Exception:
                 rr = None
             if rr is not None and getattr(rr, "_use_llama", False):
-                pool = raw_results[: min(RERANK_MAX_CANDIDATES, RERANK_POOL_MAX)]
-                eas = [str(r.get("ea") or "") for r in pool]
-                docs: list[str] = []
-                stored = idx._row_docs_for_eas(eas) if hasattr(idx, "_row_docs_for_eas") else {}
-                for ea, r in zip(eas, pool, strict=True):
-                    doc = stored.get(ea) or r.get("signature") or ""
-                    if not doc and ea:
-                        try:
-                            ea_int = int(ea, 0)
-                            cfunc = ida_hexrays.decompile(ea_int)
-                            doc = str(cfunc)[:RERANK_MAX_DOC_CHARS] if cfunc else ""
-                        except Exception:
-                            doc = ""
-                    docs.append((doc or str(r.get("name") or ea))[:RERANK_DOC_BUDGET_CHARS])
-                rerank_started = _time.time()
-                scored = rr.rerank(query, docs) if docs else None
-                rerank_meta["latency_ms"] = round((_time.time() - rerank_started) * 1000)
-                if scored:
-                    by_index = {int(item["index"]): float(item["score"]) for item in scored}
-                    discriminating = len(set(by_index.values())) >= 2
-                    indices_in_pool = bool(by_index) and max(by_index) < len(pool) and min(by_index) >= 0
-                    if discriminating and len(by_index) == len(pool) and indices_in_pool:
-                        for i, r in enumerate(pool):
-                            r["rerank_score"] = by_index.get(i)
-                            r["rank_reason"] = {
-                                **(r.get("rank_reason") or {}),
-                                "rerank": round(by_index.get(i, 0.0), 4),
-                            }
-                        pool.sort(key=lambda r: float(r.get("rerank_score") or 0.0), reverse=True)
-                        raw_results = pool
-                        rerank_meta["applied"] = True
-                    rerank_meta["profile"] = rr.status().get("profile_name")
-                rerank_meta["pool"] = len(pool)
+                # The rerank phase shares the caller's search deadline: check
+                # before starting and hand the deadline into the reranker so it
+                # can bail between CPU chunks.  An expired deadline keeps the
+                # recall order and explains itself instead of burning the budget.
+                budget_sec = (timeout_ms / 1000.0) - max(0.0, _time.time() - started_at)
+                rerank_deadline = _time.monotonic() + max(0.0, budget_sec)
+                if _time.monotonic() >= rerank_deadline:
+                    rerank_meta["reason"] = "timeout"
+                else:
+                    pool = raw_results[: min(RERANK_MAX_CANDIDATES, candidate_limit)]
+                    eas = [str(r.get("ea") or "") for r in pool]
+                    docs: list[str] = []
+                    stored = idx._row_docs_for_eas(eas) if hasattr(idx, "_row_docs_for_eas") else {}
+                    for ea, r in zip(eas, pool, strict=True):
+                        doc = stored.get(ea) or r.get("signature") or ""
+                        if not doc and ea:
+                            try:
+                                ea_int = int(ea, 0)
+                                cfunc = ida_hexrays.decompile(ea_int)
+                                doc = str(cfunc)[:RERANK_MAX_DOC_CHARS] if cfunc else ""
+                            except Exception:
+                                doc = ""
+                        docs.append((doc or str(r.get("name") or ea))[:RERANK_DOC_BUDGET_CHARS])
+                    rerank_started = _time.time()
+                    scored = _call_rerank(rr, query, docs, rerank_deadline) if docs else None
+                    rerank_meta["latency_ms"] = round((_time.time() - rerank_started) * 1000)
+                    if scored:
+                        by_index = {int(item["index"]): float(item["score"]) for item in scored}
+                        discriminating = len(set(by_index.values())) >= 2
+                        indices_in_pool = bool(by_index) and max(by_index) < len(pool) and min(by_index) >= 0
+                        if discriminating and len(by_index) == len(pool) and indices_in_pool:
+                            for i, r in enumerate(pool):
+                                r["rerank_score"] = by_index.get(i)
+                                r["rank_reason"] = {
+                                    **(r.get("rank_reason") or {}),
+                                    "rerank": round(by_index.get(i, 0.0), 4),
+                                }
+                            pool.sort(key=lambda r: float(r.get("rerank_score") or 0.0), reverse=True)
+                            raw_results = pool
+                            rerank_meta["applied"] = True
+                        rerank_meta["profile"] = rr.status().get("profile_name")
+                    rerank_meta["pool"] = len(pool)
         if rerank_meta["applied"]:
             for r in raw_results:
                 if "rerank_score" in r:
@@ -441,6 +508,8 @@ def search_nl(
         ),
         "rerank": rerank_meta,
     }
+    if degraded_note:
+        response["degraded"] = degraded_note
     if expansion_queries:
         response["expansion_queries"] = expansion_queries[:3]
     return response
@@ -505,59 +574,71 @@ def search_behavior(
                 pass
 
     # Stage 2: BehaviorClassifier on unnamed functions (if needed)
+    classifier_cold = False
     if len(rows) < limit // 2:
         try:
             backend = get_backend()
             if isinstance(backend, dict):
                 pass
             else:
-                idx, classifier, _idb_path = backend
-                checked = 0
-                for func_ea in idautils.Functions():
-                    if checked >= 200 or len(rows) >= limit:
-                        break
-                    try:
-                        timer.check()
-                    except TimeoutError:
-                        break
-                    fname = idc.get_func_name(func_ea) or ""
-                    if not (fname.startswith(("sub_", "j_"),)):
-                        continue
-                    try:
-                        cfunc = ida_hexrays.decompile(func_ea)
-                        if not cfunc:
+                if len(backend) == 4:
+                    idx, classifier, _idb_path, _degraded = backend
+                else:  # tolerate a legacy 3-tuple backend
+                    idx, classifier, _idb_path = backend
+                # A classifier whose anchor cache was never populated cannot
+                # produce meaningful zero-shot labels; every classify() call
+                # would be a wasted decompile.  Skip the up-to-200 decompile
+                # loop and say so instead of silently returning partials.
+                anchors = getattr(classifier, "_anchor_embs", None) or {}
+                if not anchors:
+                    classifier_cold = True
+                else:
+                    checked = 0
+                    for func_ea in idautils.Functions():
+                        if checked >= 200 or len(rows) >= limit:
+                            break
+                        try:
+                            timer.check()
+                        except TimeoutError:
+                            break
+                        fname = idc.get_func_name(func_ea) or ""
+                        if not (fname.startswith(("sub_", "j_"),)):
                             continue
-                        pseudo = str(cfunc)[:2000]
-                        hits = classifier.classify(pseudo, threshold=0.0, top_k=5, block=False)
-                        if hits:
-                            hs = sorted(
-                                float(h.get("confidence", h.get("score", 0.0)) or 0.0)
-                                for h in hits
-                            )
-                            q50 = hs[len(hs) // 2]
-                            q75 = hs[min(len(hs) - 1, int(round((len(hs) - 1) * 0.75)))]
-                            gate = q50 + max(0.0, q75 - q50)
-                            hits = [
-                                h for h in hits
-                                if float(h.get("confidence", h.get("score", 0.0)) or 0.0) >= gate
-                            ]
-                        if any(h.get("behavior", "").lower() == normalized_tag for h in hits):
-                            rows.append({
-                                "addr": hex(func_ea),
-                                "name": fname,
-                                "source": "classifier",
-                                "confidence": max(
-                                    (
-                                        float(h.get("confidence", h.get("score", 0)) or 0)
-                                        for h in hits
-                                        if h.get("behavior", "").lower() == normalized_tag
+                        try:
+                            cfunc = ida_hexrays.decompile(func_ea)
+                            if not cfunc:
+                                continue
+                            pseudo = str(cfunc)[:2000]
+                            hits = classifier.classify(pseudo, threshold=0.0, top_k=5, block=False)
+                            if hits:
+                                hs = sorted(
+                                    float(h.get("confidence", h.get("score", 0.0)) or 0.0)
+                                    for h in hits
+                                )
+                                q50 = hs[len(hs) // 2]
+                                q75 = hs[min(len(hs) - 1, int(round((len(hs) - 1) * 0.75)))]
+                                gate = q50 + max(0.0, q75 - q50)
+                                hits = [
+                                    h for h in hits
+                                    if float(h.get("confidence", h.get("score", 0.0)) or 0.0) >= gate
+                                ]
+                            if any(h.get("behavior", "").lower() == normalized_tag for h in hits):
+                                rows.append({
+                                    "addr": hex(func_ea),
+                                    "name": fname,
+                                    "source": "classifier",
+                                    "confidence": max(
+                                        (
+                                            float(h.get("confidence", h.get("score", 0)) or 0)
+                                            for h in hits
+                                            if h.get("behavior", "").lower() == normalized_tag
+                                        ),
+                                        default=0,
                                     ),
-                                    default=0,
-                                ),
-                            })
-                    except Exception:
-                        pass
-                    checked += 1
+                                })
+                        except Exception:
+                            pass
+                        checked += 1
         except Exception:
             pass
 
@@ -580,4 +661,11 @@ def search_behavior(
             f"+ BehaviorClassifier ({sum(1 for r in rows if r['source'] == 'classifier')})."
         ),
     }
+    if classifier_cold:
+        response["classifier_cold"] = True
+        response["timed_out"] = True
+        response["note"] += (
+            " Classifier cold — Stage 2 (BehaviorClassifier) skipped; "
+            "run intelligence(action='index') first."
+        )
     return response

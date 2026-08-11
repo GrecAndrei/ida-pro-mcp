@@ -263,7 +263,11 @@ CALL_MNEMONICS = {
     "jal", "jalr",
     # PowerPC
     "bla",
-    # RISC-V
+    # RISC-V (jal/jalr below via MIPS; compressed C-extension calls are RV32C
+    # "jal ra, offset" and RV*C "jalr x1, rs1" — always link to ra, so they are
+    # calls, never returns; is_return_mnemonic() classifies jalr/c.jr operand-aware)
+    "c.jal",
+    "c.jalr",
     # SPARC
     # SuperH
     "bsr", "jsr",
@@ -291,7 +295,11 @@ CONDITIONAL_BRANCH_MNEMONICS = {
     "beqz", "bnez", "bgezal", "bltzal",
     # PowerPC
     "bdnz", "bdz", "bc",
-    # RISC-V standard
+    # RISC-V standard. beq/bne/blt/bge are shared with ARM and beqz/bnez/bltz/
+    # bgez/bgtz are shared with MIPS; each is deliberately re-listed here so the
+    # RISC-V instruction set reads complete and self-documenting (membership is
+    # unaffected — these sets are only used for `m in ...` checks).
+    "beq", "bne", "blt", "bge",  # noqa: B033  # shared with ARM
     "bltu", "bgeu",
     # RISC-V compressed C extension
     "c.beqz", "c.bnez",
@@ -336,8 +344,11 @@ MOV_MNEMONICS = {
     "li", "lui", "move", "sb",
     # PowerPC
     "lis", "mr", "stb",
-    # RISC-V
-    "mv", # Xtensa
+    # RISC-V (li/lui shared with MIPS; re-listed for self-documentation, see
+    # the note under CONDITIONAL_BRANCH_MNEMONICS — membership is unaffected)
+    "li", "lui",  # noqa: B033  # shared with MIPS
+    "mv", "la",
+    # Xtensa
     "movi", "movi.n", "s8i",
     # AVR
     "ldi", "sts", "std",
@@ -355,7 +366,8 @@ COMPARISON_MNEMONICS = {
     "beqz", "bnez", "slti", "sltiu",
     # PowerPC
     "cmpwi", "cmplwi", "cmpdi", "cmpldi",
-    # RISC-V
+    # RISC-V (slti/sltiu above via MIPS — same encodings)
+    "slt", "sltu",
     # Xtensa
     "bgez", "bltz",
     # AVR
@@ -364,11 +376,11 @@ COMPARISON_MNEMONICS = {
 
 # XOR-like mnemonics (used for obfuscation detection)
 XOR_MNEMONICS = {
-    # x86
+    # x86 / RISC-V (xor)
     "xor",
     # ARM
     "eor",
-    # MIPS
+    # MIPS / RISC-V (xori)
     "xori",
 }
 
@@ -382,7 +394,10 @@ ARITHMETIC_MNEMONICS = {
     "addu", "addi", "addiu", "mult", "multu", "sll", "srl",
     # PowerPC
     "mulli", "mullw", "slwi", "srwi",
-    # RISC-V
+    # RISC-V (add shared with x86; addi shared with MIPS; mul shared with x86;
+    # re-listed for self-documentation — membership is unaffected)
+    "sub", "mulhu", "lui", "li", "xori", "andi", "ori",
+    "add", "addi", "mul",  # noqa: B033  # add/mul shared with x86, addi with MIPS
     "slli", "srli",
     # Xtensa
     # AVR
@@ -562,6 +577,69 @@ def get_callee_saved_registers(arch=None):
     return _map.get(arch, set())
 
 
+# RISC-V ABI register aliases -> canonical xN name. Only x0/zero and x1/ra are
+# load-bearing for return classification, but the map keeps parsing uniform.
+_RISCV_REG_ABI = {
+    "zero": "x0", "ra": "x1", "sp": "x2", "gp": "x3", "tp": "x4",
+    "fp": "x8", "s0": "x8", "s1": "x9",
+}
+
+
+def _riscv_reg_name(tok: str) -> str:
+    """Normalize a RISC-V register operand token to its canonical xN name.
+
+    Accepts ABI names (``zero``, ``ra``) and numeric names (``x0``, ``x1``, or
+    a bare ``0``/``1``) with an optional ``$`` prefix.
+    """
+    t = (tok or "").strip().lower().lstrip("$")
+    if t in _RISCV_REG_ABI:
+        return _RISCV_REG_ABI[t]
+    if t.isdigit():
+        return f"x{t}"
+    return t
+
+
+def _riscv_operand_parts(disasm_lower: str, mnem: str) -> list[str]:
+    """Return the comma-separated operand list of a RISC-V disasm line.
+
+    IDA renders the full line (mnemonic included) in both ``jalr rd, imm(rs1)``
+    and ``jalr rd, rs1, imm`` forms; the leading mnemonic token is stripped.
+    """
+    txt = (disasm_lower or "").strip()
+    if txt.split(" ", 1) and txt.split(" ", 1)[0] == mnem:
+        txt = txt.split(" ", 1)[1].strip()
+    return [p.strip() for p in txt.split(",") if p.strip()]
+
+
+def _classify_riscv_ret(mnem_lower: str, disasm_lower: str) -> bool:
+    """Operand-aware RISC-V return classification (shared with gadgets).
+
+    * ``jalr  rd, rs1, imm``  — return only when rd is x0/zero AND rs1 is ra/x1.
+      ``jalr ra, rs1`` links a return address (a call); ``jalr x0, rs1`` with
+      rs1 != ra is an indirect jump.
+    * ``c.jr  rs1``           — return only when rs1 is ra/x1 (rd is x0).
+    * ``c.jalr rs1``          — always links to ra: a CALL, never a return.
+    """
+    if mnem_lower == "jalr":
+        parts = _riscv_operand_parts(disasm_lower, "jalr")
+        if len(parts) < 2:
+            return False
+        rd = parts[0]
+        second = parts[1]
+        # offset(rs1) form, e.g. '0(ra)' (also '0(x1)').
+        if "(" in second:
+            rs1 = second[second.find("(") + 1:second.find(")")].strip()
+        else:
+            rs1 = second
+        return _riscv_reg_name(rd) == "x0" and _riscv_reg_name(rs1) == "x1"
+    if mnem_lower == "c.jr":
+        parts = _riscv_operand_parts(disasm_lower, "c.jr")
+        if not parts:
+            return False
+        return _riscv_reg_name(parts[0]) == "x1"
+    return False
+
+
 def is_return_mnemonic(mnem_lower, disasm_lower="", arch=None):
     """Check if a mnemonic represents a function return on the given architecture.
 
@@ -596,12 +674,12 @@ def is_return_mnemonic(mnem_lower, disasm_lower="", arch=None):
         return mnem_lower == "blr"
 
     if is_riscv_family(arch):
-        if mnem_lower in ("ret", "c.jr", "mret", "sret", "uret"):
+        # mret/sret/uret are architectural exception returns; 'ret' is the
+        # canonical pseudo-instruction for 'jalr x0, 0(ra)'.  Register-indirect
+        # branches (jalr, c.jr, c.jalr) are classified operand-aware below.
+        if mnem_lower in ("ret", "mret", "sret", "uret"):
             return True
-        # c.jalr ra  is a compressed return when the register is ra/x1
-        if mnem_lower == "c.jalr" and "ra" in disasm_lower:
-            return True
-        return bool(mnem_lower == "jalr" and "ra" in disasm_lower)
+        return _classify_riscv_ret(mnem_lower, disasm_lower)
 
     if is_sparc_family(arch):
         return mnem_lower in ("ret", "retl")
@@ -926,6 +1004,16 @@ def detect_riscv_gp():
         except Exception:
             pass
 
+    # Raw-blob fallback: an opaque .bin has no vector table / entry point, so
+    # the reset code usually sits at the image head (INF_MIN_EA).  Also scan
+    # the base for common RISC-V link conventions.
+    try:
+        base = idc.get_inf_attr(idc.INF_MIN_EA)
+        if base is not None and base != idc.BADADDR:
+            candidates.append(int(base))
+    except Exception:
+        pass
+
     seen = set()
     for start_ea in candidates:
         if start_ea in seen:
@@ -934,6 +1022,7 @@ def detect_riscv_gp():
         # Scan up to 32 instructions from each candidate
         ea = start_ea
         prev_auipc_val = None  # accumulated upper bits after auipc gp
+        prev_lui_val = None    # accumulated upper bits after lui gp
         for _ in range(32):
             try:
                 mnem = idc.print_insn_mnem(ea).lower()
@@ -948,13 +1037,22 @@ def detect_riscv_gp():
                     if imm & 0x80000:
                         imm -= 0x100000
                     prev_auipc_val = ea + (imm << 12)
-                elif mnem == "addi" and op0 in ("gp", "x3") and prev_auipc_val is not None:
+                    prev_lui_val = None
+                elif mnem == "lui" and op0 in ("gp", "x3"):
+                    # lui gp, imm20  =>  gp = sign_extend(imm20) << 12
+                    imm = idc.get_operand_value(ea, 1)
+                    if imm & 0x80000:
+                        imm -= 0x100000
+                    prev_lui_val = imm << 12
+                    prev_auipc_val = None
+                elif mnem == "addi" and op0 in ("gp", "x3") and (prev_auipc_val is not None or prev_lui_val is not None):
                     # addi gp, gp, imm  =>  gp = prev + sign_extend(imm, 12)
                     raw = idc.get_operand_value(ea, 2)
                     # sign-extend 12-bit immediate
                     if raw & 0x800:
                         raw -= 0x1000
-                    gp_val = (prev_auipc_val + raw) & 0xFFFFFFFFFFFFFFFF
+                    prev = prev_auipc_val if prev_auipc_val is not None else prev_lui_val
+                    gp_val = (prev + raw) & 0xFFFFFFFFFFFFFFFF
                     applied, apply_error, reanalysis_queued = _apply_riscv_gp(gp_val)
                     note = _riscv_gp_note(gp_val, start_ea, applied, apply_error, reanalysis_queued)
                     return {
@@ -968,19 +1066,31 @@ def detect_riscv_gp():
                     }
                 else:
                     prev_auipc_val = None
+                    prev_lui_val = None
                 ea = idc.next_head(ea, idc.BADADDR)
                 if ea == idc.BADADDR:
                     break
             except Exception:
                 break
 
+    # Opaque raw blob: no prologue found.  Surface a crisp hint instead of the
+    # generic "pattern not found near entry points" (there are none on a raw
+    # .bin), and propose the common GP conventions derived from the load base.
+    try:
+        base = idc.get_inf_attr(idc.INF_MIN_EA)
+        if base is None or base == idc.BADADDR:
+            base = 0
+    except Exception:
+        base = 0
+    candidates_gp = sorted({(int(base) + off) & 0xFFFFFFFFFFFFFFFF
+                            for off in (0x0, 0x10000000, 0x80000000)})
+    gp_hint = ", ".join(hex(g) for g in candidates_gp)
     return {
         "found": False,
         "note": (
-            "RISC-V GP (x3) initialization pattern not found near entry points. "
-            "GP-relative xrefs (lw/sw via gp) will be unresolved. "
-            "If you know the GP value, set it with: "
-            "analysis(action='set_gp', gp='0x<value>') "
-            "or manually: idc.set_processor_options('gp=0x<value>')"
+            "GP not found — load base/GP unknown for this raw blob; "
+            "GP-relative xrefs (lw/sw via gp) are unresolved. "
+            "Run analysis(action='set_gp', gp='0x<value>') with a known GP, "
+            f"or try a candidate base (e.g. gp ≈ {gp_hint})."
         ),
     }

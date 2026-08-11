@@ -12,8 +12,29 @@ except ImportError:
 import hashlib
 
 # ============================================================================
-# 7. MODIFY - Rename, comments, set type
+# 7. MODIFY - Rename, comments, set type, data authoring, undo
 # ============================================================================
+
+# item_type -> (ida_bytes flag name, numeric fallback, element size in bytes)
+# used by the create_data action. Pointers are laid as FF_DWORD items (the
+# work-order contract); 'array' lays count dword-sized elements so a single
+# call can define a vector/MMIO table region. The flag is resolved through
+# getattr so the same code runs against real IDA and fake modules in tests.
+_ITEM_TYPE_SPEC: dict[str, tuple[str, int, int]] = {
+    "byte": ("FF_BYTE", 0x00, 1),
+    "word": ("FF_WORD", 0x1000, 2),
+    "dword": ("FF_DWORD", 0x2000, 4),
+    "qword": ("FF_QWORD", 0x3000, 8),
+    "pointer": ("FF_DWORD", 0x2000, 4),
+    "array": ("FF_DWORD", 0x2000, 4),
+}
+
+# strtype -> (idc constant name, numeric fallback) for create_strlit.
+_STRTYPE_SPEC: dict[str, tuple[str, int]] = {
+    "c": ("STRTYPE_C", 0),
+    "c16": ("STRTYPE_C_16", 2),
+    "c32": ("STRTYPE_C_32", 3),
+}
 
 def _gather_governance_metadata(action: str, ea: int, value: str) -> dict:
     """Gather IDA-specific metadata for governance checks."""
@@ -118,9 +139,12 @@ def _persist_symbol_knowledge(func_ea: int, name: str) -> None:
 @tool
 @idawrite
 def modify(
-    action: Annotated[Literal["rename", "comment", "set_type", "patch_asm", "patch_bytes", "rename_local"],
-                      "Action: rename|comment|set_type|patch_asm|patch_bytes|rename_local"],
-    addr: Annotated[str, "Address"],
+    action: Annotated[
+        Literal["rename", "comment", "set_type", "patch_asm", "patch_bytes", "rename_local",
+                "create_data", "create_strlit", "undo_begin", "undo_end"],
+        "Action: rename|comment|set_type|patch_asm|patch_bytes|rename_local|"
+        "create_data|create_strlit|undo_begin|undo_end"],
+    addr: Annotated[Optional[str], "Address (not required for undo_begin/undo_end)"] = None,
     value: Annotated[Optional[str], "New name, comment text, type declaration, or assembly instruction(s)"] = None,
     # Aliases for compatibility
     name: Annotated[Optional[str], "Alias for value (when action=rename)"] = None,
@@ -133,7 +157,8 @@ def modify(
     **kwargs
 ) -> dict:
     """
-    Modify the database: renaming, commenting, types, and assembly patching.
+    Modify the database: renaming, commenting, types, assembly patching, and
+    the raw-blob authoring/reversibility primitives.
 
     Actions:
     - rename: Change the name of a function, label, or data item at `addr`.
@@ -143,6 +168,19 @@ def modify(
       Supports single instructions (e.g. "mov eax, 1") or multiple instructions
       separated by semicolons (e.g. "nop; nop; nop" or "push ebp; mov ebp, esp").
       Each instruction is assembled and patched sequentially at consecutive addresses.
+    - create_data: Define a data item (or a run of them) at `addr`, so raw
+      blobs become analyzable without redeclaring types. `item_type` selects
+      the item kind (byte|word|dword|qword|pointer|array) and `count` the
+      number of consecutive items laid (default 1). 'pointer' lays FF_DWORD
+      items; 'array' lays count dword-sized elements (vector/MMIO tables).
+      Extra kwargs: item_type, count.
+    - create_strlit: Define a string literal covering [addr, addr+size).
+      `strtype` is 'c' (C string), 'c16' (UTF-16), or 'c32' (UTF-32).
+      Extra kwargs: size (required, byte length), strtype.
+    - undo_begin / undo_end: Wrap a batch-patch or experiment in an undo
+      transaction; call undo_end to commit the wrapped changes. Recommended
+      around ida_batch runs so a failing batch can be rolled back. These two
+      actions take no address.
 
     Arguments:
     - value (or name/text/type_str/asm): The content to apply.
@@ -170,14 +208,23 @@ def modify(
                 value = kwargs["new_name"]
 
         if not value:
-            # patch_bytes via nop-only and rename_local carry their own args;
-            # their branches validate the specifics.
-            if not (action == "patch_bytes" and kwargs.get("nop")):
+            # patch_bytes via nop-only, rename_local, the data-authoring
+            # primitives, and the undo pair carry their own args; their
+            # branches validate the specifics.
+            value_optional = (
+                (action == "patch_bytes" and kwargs.get("nop"))
+                or action in ("create_data", "create_strlit", "undo_begin", "undo_end")
+            )
+            if not value_optional:
                 return make_error(MCPError.INVALID_ARGS, f"value parameter required (or use {action}-specific alias: name/text/type_str/asm)")
 
-        ea, error = validate_addr(addr)
-        if error:
-            return error
+        # undo_begin/undo_end bracket an edit batch and take no address.
+        if action in ("undo_begin", "undo_end"):
+            ea = None
+        else:
+            ea, error = validate_addr(addr)
+            if error:
+                return error
 
         # ----------------------------------------------------------------
         # Governance pre-check
@@ -190,6 +237,8 @@ def modify(
                 "set_type": "type_change",
                 "patch_asm": "patch",
                 "patch_bytes": "patch",
+                "create_data": "type_change",
+                "create_strlit": "type_change",
             }
             op_type = op_type_map.get(action)
             if op_type:
@@ -197,7 +246,9 @@ def modify(
                 gov_result = evaluate_operation(
                     operation_type=op_type,
                     addr=ea,
-                    proposed_value=value,
+                    # Data-authoring actions carry no `value`; the governance
+                    # engine's PII redaction must still receive a string.
+                    proposed_value=value or "",
                     context={"tool": "modify", "action": action, "comment_type": comment_type},
                     metadata=metadata,
                 )
@@ -420,6 +471,125 @@ def modify(
                 return make_error(MCPError.IDA_ERROR, f"Failed to rename '{var_name}' — variable may be optimized out")
             except Exception as e:
                 return handle_error(e, context="rename_local")
+
+        elif action == "create_data":
+            # Define data items over raw bytes so a blob becomes analyzable
+            # without redeclaring types. `count` consecutive items are laid
+            # (default 1); item_type picks the flag and element size.
+            item_type = str(kwargs.get("item_type") or "byte").lower()
+            try:
+                count = int(kwargs.get("count") or 1)
+            except (TypeError, ValueError):
+                return make_error(MCPError.INVALID_ARGS, "count must be an integer")
+            if count < 1:
+                return make_error(MCPError.INVALID_ARGS, "count must be at least 1")
+            spec = _ITEM_TYPE_SPEC.get(item_type)
+            if spec is None:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    f"Unknown item_type: {item_type}",
+                    hint="Use one of: byte, word, dword, qword, array, pointer.",
+                )
+            flag_name, flag_fallback, elem_size = spec
+            flag = getattr(ida_bytes, flag_name, flag_fallback)
+            laid = 0
+            cur = ea
+            for _ in range(count):
+                if ida_bytes.create_data(cur, flag, elem_size, 0):
+                    laid += 1
+                    cur += elem_size
+                else:
+                    break
+            if laid == 0:
+                return make_error(
+                    MCPError.IDA_ERROR,
+                    f"create_data failed at {addr}",
+                    hint="The address may already be defined, or the range may be unmapped.",
+                )
+            result = {
+                "ok": True,
+                "addr": addr,
+                "item_type": item_type,
+                "count": laid,
+                "size": laid * elem_size,
+                "end": hex(cur),
+            }
+            if laid < count:
+                result["partial"] = True
+            if gov_warnings:
+                result["governance_warnings"] = gov_warnings
+            return result
+
+        elif action == "create_strlit":
+            # Define a string literal over [addr, addr+size). Useful on raw
+            # blobs where IDA found no strlit marks during auto-analysis.
+            try:
+                size = int(kwargs.get("size"))
+            except (TypeError, ValueError):
+                return make_error(MCPError.INVALID_ARGS, "size (byte length) is required for create_strlit")
+            if size <= 0:
+                return make_error(MCPError.INVALID_ARGS, "size must be a positive integer")
+            strtype = str(kwargs.get("strtype") or "c").lower()
+            st_spec = _STRTYPE_SPEC.get(strtype)
+            if st_spec is None:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    f"Unknown strtype: {strtype}",
+                    hint="Use one of: c, c16, c32.",
+                )
+            st_name, st_fallback = st_spec
+            st = getattr(idc, st_name, st_fallback)
+            try:
+                length = ida_bytes.create_strlit(ea, ea + size, st)
+            except Exception as e:
+                return handle_error(e, context="create_strlit")
+            if not length:
+                return make_error(
+                    MCPError.IDA_ERROR,
+                    f"create_strlit failed at {addr}",
+                    hint="The range may already be defined, or the address may be unmapped.",
+                )
+            result = {
+                "ok": True,
+                "addr": addr,
+                "size": size,
+                "strtype": strtype,
+                "length": length,
+            }
+            if gov_warnings:
+                result["governance_warnings"] = gov_warnings
+            return result
+
+        elif action == "undo_begin":
+            # Open an undo transaction; wrapped edits can be reverted with
+            # undo() or committed via undo_end(). Recommended around ida_batch
+            # runs so a failed batch can be rolled back.
+            try:
+                started = ida_bytes.undo_begin()
+            except Exception as e:
+                return handle_error(e, context="undo_begin")
+            if started is False:
+                return make_error(MCPError.IDA_ERROR, "undo_begin failed", hint="Undo may be unavailable for this IDB.")
+            return {
+                "ok": True,
+                "action": "undo_begin",
+                "note": "Undo transaction started. Wrap a batch-patch or experiment between undo_begin and undo_end, then call undo_end to commit.",
+            }
+
+        elif action == "undo_end":
+            # Commit the transaction opened by undo_begin(). After this, the
+            # wrapped edits are permanent and no longer individually undoable.
+            try:
+                committed = ida_bytes.undo_end()
+            except Exception as e:
+                return handle_error(e, context="undo_end")
+            if committed is False:
+                return make_error(MCPError.IDA_ERROR, "undo_end failed", hint="There may be no open undo transaction.")
+            return {
+                "ok": True,
+                "action": "undo_end",
+                "note": "Undo transaction committed. Wrap a batch-patch or experiment between undo_begin and undo_end, then call undo_end to commit.",
+            }
 
         else:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")

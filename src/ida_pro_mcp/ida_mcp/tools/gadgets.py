@@ -4,6 +4,26 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 from collections import OrderedDict
+from functools import partial
+
+# RISC-V register-operand parsing is owned by support/arch_utils (the canonical
+# classifier for jalr/c.jr/c.jalr); import it directly so gadgets never keeps a
+# divergent jalr parser.  `is_return_mnemonic` (from _common) already routes the
+# return side of every RISC-V register-indirect branch through the same helper.
+try:
+    from ..support.arch_utils import (
+        _riscv_operand_parts,
+        _riscv_reg_name,
+    )
+except ImportError:
+    try:
+        from support.arch_utils import (  # type: ignore[import-not-found]
+            _riscv_operand_parts,
+            _riscv_reg_name,
+        )
+    except ImportError:
+        _riscv_operand_parts = None  # type: ignore[assignment]
+        _riscv_reg_name = None  # type: ignore[assignment]
 
 # ============================================================================
 # GADGETS - ROP/JOP/COP Gadget & Exploit Primitive Discovery
@@ -106,291 +126,429 @@ def _matches_query(insns, query):
     return any(matcher(mnem) or matcher(disasm) for _, mnem, disasm in insns)
 
 
-# ---- RISC-V jalr operand classification ----
+# ---- RISC-V register-indirect branch classification ----
 # RISC-V `jalr rd, imm(rs1)` is overloaded: rd=ra links a return address
 # (indirect call), rd=x0 with rs1=ra returns, rd=x0 with rs1!=ra jumps.
-# IDA renders both the call form (`jalr ra, 0(t0)`) and the return form
+# The compressed forms follow the same ABI: `c.jr rs1` is a return only when
+# rs1=ra (otherwise a JOP jump), and `c.jalr rs1` always links to ra (a call).
+# IDA renders the call form (`jalr ra, 0(t0)`) and the return form
 # (`jalr zero, 0(ra)`) with "ra" present, so a bare substring check inverts
-# the COP/ROP classification. Parse the operand shapes instead.
+# the COP/ROP classification.  Classification is routed through the shared
+# arch_utils classifier (is_return_mnemonic + _riscv_operand_parts) so the
+# compressed terminators appear in JOP/COP and ROP is not polluted with
+# calls/stack-saves.
 
-def _riscv_jalr_operands(disasm_lower):
-    """Extract (rd, rs1) register names from a RISC-V jalr disasm line.
+_RISCV_FP_REGISTERS = frozenset({"fp", "s0", "x8"})
 
-    Accepts both common renderings:
-      jalr ra, 0(t0)      # rd=ra, rs1=t0
-      jalr ra, t0, 0      # rd=ra, rs1=t0 (rs1 before imm)
-    Returns (rd, rs1), or (None, None) when the line is not parseable.
+
+def _riscv_branch_kind(mnem_lower, disasm_lower, arch=None):
+    """Three-way classify a RISC-V register-indirect branch.
+
+      jalr   rd == x0/zero AND rs1 == ra  -> "return"  (ROP terminator)
+             rd == ra/x1                   -> "call"    (COP terminator)
+             otherwise                     -> "jump"    (JOP terminator)
+      c.jr   rs1 == ra                     -> "return"  (ROP terminator)
+             otherwise                     -> "jump"    (JOP terminator)
+      c.jalr                               -> "call"    (COP terminator,
+                                                         always links ra)
+    Returns "other" for non-register-indirect mnemonics.  An unparseable jalr
+    defaults to "call" so a mis-parsed terminator is never silently dropped
+    from the COP results.
     """
-    if not disasm_lower:
-        return (None, None)
-    comma = disasm_lower.find(",")
-    if comma < 0:
-        return (None, None)
-    rd = disasm_lower[:comma].split()[-1].strip()
-    rest = disasm_lower[comma + 1:].strip()
-    open_p = rest.find("(")
-    if open_p >= 0:
-        close_p = rest.find(")", open_p)
-        if close_p > open_p:
-            rs1 = rest[open_p + 1:close_p].strip()
-            return (rd, rs1)
-    rs1 = rest.split(",")[0].strip()
-    return (rd, rs1)
+    if arch is None:
+        arch = _get_arch()
+    mnem = (mnem_lower or "").lower()
+    disasm = disasm_lower or ""
+    if mnem == "c.jalr":
+        return "call"
+    if mnem == "c.jr":
+        return "return" if is_return_mnemonic(mnem, disasm, arch) else "jump"
+    if mnem == "jalr":
+        if is_return_mnemonic(mnem, disasm, arch):
+            return "return"
+        if _riscv_operand_parts is None or _riscv_reg_name is None:
+            return "call"
+        parts = _riscv_operand_parts(disasm, mnem)
+        if not parts:
+            return "call"
+        if _riscv_reg_name(parts[0]) == "x1":
+            return "call"
+        return "jump"
+    return "other"
 
 
-def _classify_riscv_jalr(disasm_lower):
-    """Classify a RISC-V jalr as a call, return, or jump by operand shape.
+def _riscv_store_base(disasm_lower, mnem):
+    """Extract the xN-normalized base register of a RISC-V store's memory
+    operand (e.g. ``sw s0, 8(sp)`` -> ``x2``), or None when not parseable."""
+    if _riscv_operand_parts is None:
+        return None
+    parts = _riscv_operand_parts(disasm_lower or "", mnem or "")
+    for part in parts[1:]:
+        if "(" in part:
+            inner = part[part.find("(") + 1:part.find(")")]
+            if _riscv_reg_name is not None:
+                return _riscv_reg_name(inner)
+            return inner
+    return None
 
-      rd == ra/x1        -> "call"    (link saved, COP terminator)
-      rs1 == ra/x1       -> "return"  (control to saved link, ROP)
-      otherwise          -> "jump"    (JOP terminator)
-    An unparseable line defaults to "call" so a mis-parsed terminator is
-    never silently dropped from the COP results.
+
+# ============================================================================
+# Shared terminator classification + byte-level linear sweep
+# ============================================================================
+#
+# Every finder below can run two ways:
+#   * a head-based scan over IDA-defined instructions (the classic path), and
+#   * a byte-level linear sweep that raw-decodes from EVERY offset in the exec
+#     region via ida_ua, used for opaque blobs IDA never disassembled (or when
+#     the caller opts in with raw=True).
+# Both paths share the same per-action terminator predicates so the two modes
+# cannot drift apart.
+
+def _is_ret_terminator(ea, ml, disasm, arch):
+    """Return mnemonic (ROP gadget terminator) for the current arch."""
+    return is_return_mnemonic(ml, disasm, arch)
+
+
+def _is_jop_terminator(ea, ml, disasm, arch):
+    """Indirect-jump mnemonic (JOP gadget terminator) for the current arch."""
+    if _is_x86_family(arch):
+        if ml == "jmp":
+            op_type = idc.get_operand_type(ea, 0)
+            return op_type in (idc.o_reg, idc.o_mem, idc.o_phrase, idc.o_displ)
+        return False
+    if _is_arm_family(arch):
+        if ml in ("bx", "blx", "br"):
+            return "lr" not in disasm
+        return False
+    if is_mips_family(arch):
+        if ml == "jr":
+            return "ra" not in disasm and "$31" not in disasm
+        return False
+    if is_riscv_family(arch):
+        if ml in ("jalr", "c.jr", "c.jalr"):
+            return _riscv_branch_kind(ml, disasm, arch) == "jump"
+        return False
+    if is_ppc_family(arch):
+        return ml == "bctr"
+    return False
+
+
+def _is_cop_terminator(ea, ml, disasm, arch):
+    """Indirect-call mnemonic (COP gadget terminator) for the current arch."""
+    if _is_x86_family(arch):
+        if ml == "call":
+            op_type = idc.get_operand_type(ea, 0)
+            return op_type in (idc.o_reg, idc.o_mem, idc.o_phrase, idc.o_displ)
+        return False
+    if _is_arm_family(arch):
+        if ml in ("blx", "blr"):
+            return "lr" not in disasm
+        return False
+    if is_mips_family(arch):
+        return ml == "jalr"
+    if is_riscv_family(arch):
+        if ml in ("jalr", "c.jr", "c.jalr"):
+            return _riscv_branch_kind(ml, disasm, arch) == "call"
+        return False
+    if is_ppc_family(arch):
+        return ml == "bctrl"
+    return False
+
+
+def _is_syscall_terminator(ea, ml, disasm, arch):
+    """Syscall/trap mnemonic for the current arch."""
+    if _is_x86_family(arch):
+        if ml in ("syscall", "sysenter"):
+            return True
+        if ml == "int":
+            op_val = idc.get_operand_value(ea, 0)
+            return op_val in (0x80, 0x2e)
+        return False
+    if _is_arm_family(arch):
+        return ml in ("svc", "swi", "hvc", "smc")
+    if is_mips_family(arch):
+        return ml == "syscall"
+    if is_ppc_family(arch):
+        return ml == "sc"
+    if is_riscv_family(arch):
+        return ml == "ecall"
+    if is_sparc_family(arch):
+        return ml == "ta"
+    return False
+
+
+def _sweep_stop_set():
+    """Terminator + syscall mnemonics: instructions with no fall-through that
+    can legitimately end a gadget stream.  Built lazily so a bare module load
+    without the arch_utils mnemonics still imports cleanly."""
+    try:
+        return frozenset(TERMINATOR_MNEMONICS) | frozenset(SYSCALL_MNEMONICS)
+    except NameError:
+        return frozenset()
+
+
+def _prepare_exec_region(seg_start, seg_end):
+    """Best-effort, non-blocking: ask IDA to create code / plan reanalysis over
+    an exec region before a head-based scan, so a region IDA never
+    auto-disassembled has a chance to gain heads.  Never raises.  Returns True
+    when some analysis was scheduled."""
+    try:
+        import ida_auto as _ida_auto
+    except ImportError:
+        return False
+    try:
+        if hasattr(_ida_auto, "plan_range"):
+            _ida_auto.plan_range(seg_start, seg_end)
+            return True
+        if hasattr(_ida_auto, "auto_mark_range"):
+            _ida_auto.auto_mark_range(seg_start, seg_end,
+                                      getattr(_ida_auto, "AU_FINAL", 0x10))
+            return True
+        if hasattr(_ida_auto, "auto_make_code"):
+            _ida_auto.auto_make_code(seg_start)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _region_has_heads(seg_start, seg_end):
+    """True when [seg_start, seg_end) contains at least one defined instruction
+    head — i.e. IDA actually disassembled something there.
+
+    Probes from seg_start - 1 because idaapi.next_head returns the first head
+    with address >= the query; a head exactly at seg_start must count.
     """
-    rd, rs1 = _riscv_jalr_operands(disasm_lower)
-    if rd is None:
-        return "call"
-    if rd in ("ra", "x1"):
-        return "call"
-    if rs1 in ("ra", "x1"):
-        return "return"
-    return "jump"
+    try:
+        head = idc.next_head(seg_start - 1)
+        return head != idaapi.BADADDR and head < seg_end
+    except Exception:
+        return False
+
+
+def _exec_region_has_heads(addr):
+    """True when any exec segment targeted by addr has defined instruction heads."""
+    for seg_start, seg_end in _get_exec_segments(addr):
+        if _region_has_heads(seg_start, seg_end):
+            return True
+    return False
+
+
+def _raw_decode_insn(ea):
+    """Raw-decode a single instruction at ea via ida_ua (byte-level decode,
+    independent of whether IDA created a head there).
+
+    Returns (ea, mnem_lower, disasm, size) or None when the bytes at ea do not
+    form a valid instruction.
+    """
+    try:
+        import ida_ua as _ida_ua
+    except ImportError:
+        return None
+    try:
+        insn = _ida_ua.insn_t()
+        if _ida_ua.decode_insn(insn, ea) <= 0:
+            return None
+        mnem = insn.get_canon_mnem()
+        if not mnem:
+            return None
+        size = int(getattr(insn, "size", 0) or 0)
+        if size <= 0:
+            return None
+        disasm = _disasm_at(ea) or mnem
+        return (ea, mnem.lower(), disasm, size)
+    except Exception:
+        return None
+
+
+def _scan_region_terminators(seg_start, seg_end, limit, max_insns, query,
+                             arch, term_test, seen, min_insns=2):
+    """Head-based scan: walk defined instructions and collect gadgets whose
+    terminal instruction satisfies term_test(ea, mnem, disasm)."""
+    out = []
+    ea = seg_start
+    while ea < seg_end and len(out) < limit:
+        mnem = idc.print_insn_mnem(ea)
+        if not mnem:
+            ea = idc.next_head(ea)
+            if ea == idaapi.BADADDR:
+                break
+            continue
+        ml = mnem.lower()
+        disasm = _disasm_at(ea).lower()
+        if term_test(ea, ml, disasm):
+            insns = _decode_backward(ea, max_insns)
+            if insns and len(insns) >= min_insns and _matches_query(insns, query):
+                key = tuple(ins[2] for ins in insns)
+                if key not in seen:
+                    seen.add(key)
+                    out.append(_format_gadget(insns))
+        ea = idc.next_head(ea)
+        if ea == idaapi.BADADDR:
+            break
+    return out
+
+
+def _sweep_region_terminators(seg_start, seg_end, limit, max_insns, query,
+                              arch, term_test, seen, min_insns=2):
+    """Byte-level linear sweep: decode from every offset in [seg_start, seg_end)
+    via raw decode (ida_ua, not IDA heads) and collect streams whose terminal
+    instruction satisfies term_test(ea, mnem, disasm).  Handles opaque regions
+    IDA never disassembled."""
+    out = []
+    stop = _sweep_stop_set()
+    ea = seg_start
+    while ea < seg_end and len(out) < limit:
+        dec = _raw_decode_insn(ea)
+        if dec is None:
+            ea += 1
+            continue
+        _s_ea, mnem, disasm, size = dec
+        stream = [(ea, mnem, disasm)]
+        if mnem not in stop:
+            cur = ea + size
+            while len(stream) < max_insns and cur < seg_end:
+                dec2 = _raw_decode_insn(cur)
+                if dec2 is None:
+                    break
+                _e2, m2, d2, s2 = dec2
+                stream.append((cur, m2, d2))
+                cur += s2
+                if m2 in stop:
+                    break
+        if len(stream) >= min_insns and term_test(stream[-1][0], stream[-1][1], stream[-1][2].lower()):
+            if _matches_query(stream, query):
+                key = tuple(ins[2] for ins in stream)
+                if key not in seen:
+                    seen.add(key)
+                    out.append(_format_gadget(stream))
+        ea += 1
+    return out
+
+
+def _region_results(seg_start, seg_end, limit, max_insns, query, arch,
+                    term_test, seen, raw, min_insns=2):
+    """Run either the head-based scan or the raw linear sweep for one exec
+    region, preferring the sweep when raw is set or the region has no heads."""
+    _prepare_exec_region(seg_start, seg_end)
+    if raw or not _region_has_heads(seg_start, seg_end):
+        return _sweep_region_terminators(seg_start, seg_end, limit, max_insns,
+                                         query, arch, term_test, seen, min_insns)
+    return _scan_region_terminators(seg_start, seg_end, limit, max_insns,
+                                    query, arch, term_test, seen, min_insns)
 
 
 # ---- ROP gadgets ----
 
-def _find_rop_gadgets(addr, limit, max_insns, query):
-    """Find ROP gadgets (sequences ending in ret)."""
+def _find_rop_gadgets(addr, limit, max_insns, query, raw=False):
+    """Find ROP gadgets (sequences ending in ret / jalr-return / c.jr-return).
+
+    RISC-V register-indirect branches (jalr/c.jr/c.jalr) are classified through
+    the shared arch_utils classifier, so calls and jumps never leak into ROP.
+    """
     arch = _get_arch()
     gadgets_found = []
     seen = set()
+    term_test = partial(_is_ret_terminator, arch=arch)
 
     for seg_start, seg_end in _get_exec_segments(addr):
         if len(gadgets_found) >= limit:
             break
-        ea = seg_start
-        while ea < seg_end and len(gadgets_found) < limit:
-            mnem = idc.print_insn_mnem(ea)
-            if not mnem:
-                ea = idc.next_head(ea)
-                if ea == idaapi.BADADDR:
-                    break
-                continue
-            ml = mnem.lower()
-            disasm = _disasm_at(ea).lower()
-            is_ret = is_return_mnemonic(ml, disasm, arch)
-            # RISC-V jalr doubles as an indirect call (rd=ra) and a return
-            # (rs1=ra); is_return_mnemonic flags any jalr whose text mentions
-            # ra, so calls would otherwise leak into the ROP results.
-            if is_ret and is_riscv_family(arch) and ml == "jalr":
-                is_ret = _classify_riscv_jalr(disasm) == "return"
-
-            if is_ret:
-                insns = _decode_backward(ea, max_insns)
-                if insns and len(insns) >= 2 and _matches_query(insns, query):
-                    key = tuple(ins[2] for ins in insns)
-                    if key not in seen:
-                        seen.add(key)
-                        gadgets_found.append(_format_gadget(insns))
-
-            ea = idc.next_head(ea)
-            if ea == idaapi.BADADDR:
-                break
+        gadgets_found.extend(_region_results(
+            seg_start, seg_end, limit - len(gadgets_found), max_insns, query,
+            arch, term_test, seen, raw))
 
     return gadgets_found
 
 
 # ---- JOP gadgets ----
 
-def _find_jop_gadgets(addr, limit, max_insns, query):
-    """Find JOP gadgets (sequences ending in indirect jmp)."""
+def _find_jop_gadgets(addr, limit, max_insns, query, raw=False):
+    """Find JOP gadgets (sequences ending in indirect jmp / bx reg / jr reg /
+    bctr / jalr-jump / c.jr rs1!=ra).
+
+    Compressed RISC-V terminators (c.jr with rs1!=ra) are classified through the
+    shared arch_utils classifier and now appear in JOP; the c.jalr call form is
+    excluded (it belongs to COP).
+    """
     arch = _get_arch()
     gadgets_found = []
     seen = set()
+    term_test = partial(_is_jop_terminator, arch=arch)
 
     for seg_start, seg_end in _get_exec_segments(addr):
         if len(gadgets_found) >= limit:
             break
-        ea = seg_start
-        while ea < seg_end and len(gadgets_found) < limit:
-            mnem = idc.print_insn_mnem(ea)
-            if not mnem:
-                ea = idc.next_head(ea)
-                if ea == idaapi.BADADDR:
-                    break
-                continue
-            ml = mnem.lower()
-            is_jop = False
-            if _is_x86_family(arch):
-                if ml == "jmp":
-                    op_type = idc.get_operand_type(ea, 0)
-                    # Indirect: register or memory
-                    if op_type in (idc.o_reg, idc.o_mem, idc.o_phrase, idc.o_displ):
-                        is_jop = True
-            elif _is_arm_family(arch):
-                if ml in ("bx", "blx", "br"):
-                    disasm = _disasm_at(ea).lower()
-                    # Exclude bx lr (that's ROP)
-                    if "lr" not in disasm:
-                        is_jop = True
-            elif is_mips_family(arch):
-                if ml == "jr":
-                    disasm = _disasm_at(ea).lower()
-                    if "ra" not in disasm and "$31" not in disasm:
-                        is_jop = True
-            elif is_riscv_family(arch):
-                if ml == "jalr":
-                    # Only rd=x0, rs1!=ra is a pure indirect jump; the call
-                    # (rd=ra) and return (rs1=ra) forms belong to COP/ROP.
-                    if _classify_riscv_jalr(_disasm_at(ea).lower()) == "jump":
-                        is_jop = True
-            elif is_ppc_family(arch) and ml in ("bctr",):
-                is_jop = True
-
-            if is_jop:
-                insns = _decode_backward(ea, max_insns)
-                if insns and len(insns) >= 2 and _matches_query(insns, query):
-                    key = tuple(ins[2] for ins in insns)
-                    if key not in seen:
-                        seen.add(key)
-                        gadgets_found.append(_format_gadget(insns))
-
-            ea = idc.next_head(ea)
-            if ea == idaapi.BADADDR:
-                break
+        gadgets_found.extend(_region_results(
+            seg_start, seg_end, limit - len(gadgets_found), max_insns, query,
+            arch, term_test, seen, raw))
 
     return gadgets_found
 
 
 # ---- COP gadgets ----
 
-def _find_cop_gadgets(addr, limit, max_insns, query):
-    """Find COP gadgets (sequences ending in indirect call)."""
+def _find_cop_gadgets(addr, limit, max_insns, query, raw=False):
+    """Find COP gadgets (sequences ending in indirect call / blx reg / jalr-call /
+    c.jalr).
+
+    Compressed RISC-V terminators (c.jalr, and jalr with rd=ra) are classified
+    through the shared arch_utils classifier; plain jumps and returns never
+    appear in COP.
+    """
     arch = _get_arch()
     gadgets_found = []
     seen = set()
+    term_test = partial(_is_cop_terminator, arch=arch)
 
     for seg_start, seg_end in _get_exec_segments(addr):
         if len(gadgets_found) >= limit:
             break
-        ea = seg_start
-        while ea < seg_end and len(gadgets_found) < limit:
-            mnem = idc.print_insn_mnem(ea)
-            if not mnem:
-                ea = idc.next_head(ea)
-                if ea == idaapi.BADADDR:
-                    break
-                continue
-            ml = mnem.lower()
-            is_cop = False
-            if _is_x86_family(arch):
-                if ml == "call":
-                    op_type = idc.get_operand_type(ea, 0)
-                    if op_type in (idc.o_reg, idc.o_mem, idc.o_phrase, idc.o_displ):
-                        is_cop = True
-            elif _is_arm_family(arch):
-                if ml in ("blx", "blr"):
-                    disasm = _disasm_at(ea).lower()
-                    if "lr" not in disasm:
-                        is_cop = True
-            elif is_mips_family(arch):
-                if ml == "jalr":
-                    is_cop = True
-            elif is_riscv_family(arch):
-                if ml == "jalr":
-                    # An indirect call is the rd=ra form; the old "ra absent"
-                    # test inverted this — it reported plain jumps as COP and
-                    # dropped the actual calls.
-                    if _classify_riscv_jalr(_disasm_at(ea).lower()) == "call":
-                        is_cop = True
-            elif is_ppc_family(arch) and ml == "bctrl":
-                is_cop = True
-
-            if is_cop:
-                insns = _decode_backward(ea, max_insns)
-                if insns and len(insns) >= 2 and _matches_query(insns, query):
-                    key = tuple(ins[2] for ins in insns)
-                    if key not in seen:
-                        seen.add(key)
-                        gadgets_found.append(_format_gadget(insns))
-
-            ea = idc.next_head(ea)
-            if ea == idaapi.BADADDR:
-                break
+        gadgets_found.extend(_region_results(
+            seg_start, seg_end, limit - len(gadgets_found), max_insns, query,
+            arch, term_test, seen, raw))
 
     return gadgets_found
 
 
 # ---- Syscall gadgets ----
 
-def _find_syscall_gadgets(addr, limit, max_insns, query):
-    """Find syscall/sysenter/svc gadgets."""
+def _find_syscall_gadgets(addr, limit, max_insns, query, raw=False):
+    """Find syscall/sysenter/svc/ecall/sc gadgets."""
     arch = _get_arch()
     gadgets_found = []
     seen = set()
+    term_test = partial(_is_syscall_terminator, arch=arch)
 
     for seg_start, seg_end in _get_exec_segments(addr):
         if len(gadgets_found) >= limit:
             break
-        ea = seg_start
-        while ea < seg_end and len(gadgets_found) < limit:
-            mnem = idc.print_insn_mnem(ea)
-            if not mnem:
-                ea = idc.next_head(ea)
-                if ea == idaapi.BADADDR:
-                    break
-                continue
-            ml = mnem.lower()
-            is_syscall = False
-            if _is_x86_family(arch):
-                if ml in ("syscall", "sysenter", "int"):
-                    if ml == "int":
-                        op_val = idc.get_operand_value(ea, 0)
-                        if op_val in (0x80, 0x2e):
-                            is_syscall = True
-                    else:
-                        is_syscall = True
-            elif _is_arm_family(arch):
-                if ml in ("svc", "swi", "hvc", "smc"):
-                    is_syscall = True
-            elif is_mips_family(arch):
-                if ml == "syscall":
-                    is_syscall = True
-            elif is_ppc_family(arch):
-                if ml == "sc":
-                    is_syscall = True
-            elif is_riscv_family(arch):
-                if ml == "ecall":
-                    is_syscall = True
-            elif is_sparc_family(arch) and ml == "ta":
-                is_syscall = True
-
-            if is_syscall:
-                insns = _decode_backward(ea, max_insns)
-                if insns and _matches_query(insns, query):
-                    key = tuple(ins[2] for ins in insns)
-                    if key not in seen:
-                        seen.add(key)
-                        gadgets_found.append(_format_gadget(insns))
-
-            ea = idc.next_head(ea)
-            if ea == idaapi.BADADDR:
-                break
+        gadgets_found.extend(_region_results(
+            seg_start, seg_end, limit - len(gadgets_found), max_insns, query,
+            arch, term_test, seen, raw, min_insns=1))
 
     return gadgets_found
 
 
 # ---- Write-what-where primitives ----
 
-def _find_write_what_where(addr, limit, max_insns, query):
-    """Find write-what-where primitives (mov [reg], reg patterns)."""
+def _find_write_what_where(addr, limit, max_insns, query, raw=False):
+    """Find write-what-where primitives (mov [reg], reg patterns).
+
+    RISC-V stores are narrowed to those whose base register is not the stack or
+    frame pointer (a pointer loaded from memory or a register argument), matching
+    the x86 operand-shape check — ordinary ``sw s0, 8(sp); ret`` frame saves are
+    not write-what-where primitives.
+    """
     arch = _get_arch()
     gadgets_found = []
     seen = set()
+    sp_regs = get_stack_pointer_names(arch)
 
     for seg_start, seg_end in _get_exec_segments(addr):
         if len(gadgets_found) >= limit:
             break
+        _prepare_exec_region(seg_start, seg_end)
         ea = seg_start
         while ea < seg_end and len(gadgets_found) < limit:
             mnem = idc.print_insn_mnem(ea)
@@ -419,7 +577,12 @@ def _find_write_what_where(addr, limit, max_insns, query):
                 if ml in ("stw", "sth", "stb", "std", "stwx", "stdx"):
                     is_www = True
             elif is_riscv_family(arch) and ml in ("sw", "sh", "sb", "sd"):
-                is_www = True
+                # Narrow to stores through a non-sp/non-fp base register
+                # (pointer loaded from memory or a register argument).
+                disasm = _disasm_at(ea).lower()
+                base = _riscv_store_base(disasm, ml)
+                if base is not None and base not in sp_regs and base not in _RISCV_FP_REGISTERS:
+                    is_www = True
 
             if is_www:
                 # Look for a ret following this to make it a usable gadget
@@ -462,7 +625,7 @@ def _find_write_what_where(addr, limit, max_insns, query):
 
 # ---- Stack pivot gadgets ----
 
-def _find_stack_pivot(addr, limit, max_insns, query):
+def _find_stack_pivot(addr, limit, max_insns, query, raw=False):
     """Find stack pivot gadgets (xchg esp/rsp, mov esp/rsp, etc.)."""
     arch = _get_arch()
     gadgets_found = []
@@ -472,6 +635,7 @@ def _find_stack_pivot(addr, limit, max_insns, query):
     for seg_start, seg_end in _get_exec_segments(addr):
         if len(gadgets_found) >= limit:
             break
+        _prepare_exec_region(seg_start, seg_end)
         ea = seg_start
         while ea < seg_end and len(gadgets_found) < limit:
             mnem = idc.print_insn_mnem(ea)
@@ -909,15 +1073,16 @@ def gadgets(
     limit: Annotated[int, "Max gadgets to return"] = 50,
     max_insns: Annotated[int, "Max instructions per gadget"] = 5,
     query: Annotated[Optional[str], "Filter gadgets by mnemonic pattern (regex/glob/substring/semantic auto-detected)"] = None,
+    raw: Annotated[bool, "Force a byte-level linear sweep: raw-decode from every offset in the exec region even when IDA has disassembled heads (auto-enabled when the region has no defined instruction heads)"] = False,
     auto_blackboard: Annotated[bool, "Store mitigation/exploit findings in the blackboard (opt-in; default keeps read actions pure)"] = False,
 ) -> dict:
     """
     LLM-optimized ROP/JOP/COP gadget and exploit primitive discovery.
 
     Actions:
-    - rop: Find ROP gadgets (instruction sequences ending in ret/pop pc/bx lr/jr ra/blr/jalr)
-    - jop: Find JOP gadgets (sequences ending in indirect jmp/bx reg/jr reg/bctr/jalr)
-    - cop: Find COP gadgets (sequences ending in indirect call/blx reg/jalr/bctrl)
+    - rop: Find ROP gadgets (instruction sequences ending in ret/pop pc/bx lr/jr ra/blr/jalr-return/c.jr ra)
+    - jop: Find JOP gadgets (sequences ending in indirect jmp/bx reg/jr reg/bctr/jalr-jump/c.jr rs1!=ra)
+    - cop: Find COP gadgets (sequences ending in indirect call/blx reg/jalr-call/c.jalr/bctrl)
     - syscall: Find syscall/sysenter/svc/ecall/sc gadgets
     - write_what_where: Find write-what-where primitives (mov [reg], reg / str reg, [reg])
     - stack_pivot: Find stack pivot gadgets (xchg rsp, mov rsp / mov sp, reg)
@@ -925,6 +1090,12 @@ def gadgets(
     - mitigations: Detect exploit mitigations (ASLR, DEP/NX, CFI, CET, stack cookies)
     - seh_handlers: Find SEH handler chains (Windows x86)
     - pivot_chains: Suggest ROP chain building blocks for common operations
+
+    Opaque-region handling: when the exec region has no defined instruction heads
+    (a raw blob IDA never disassembled) — or when raw=True is set — rop/jop/cop/
+    syscall fall back to a byte-level linear sweep that raw-decodes from every
+    offset.  plan_range/auto_make_code is attempted over the segment first, and a
+    "region was never disassembled" note is returned when the sweep finds nothing.
 
     Architecture-aware: supports x86/x64, ARM/AArch64, MIPS, PowerPC, RISC-V, SPARC, and more.
     Each gadget: {addr, insns, gadget}
@@ -1020,12 +1191,18 @@ def gadgets(
         if not handler:
             return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
 
-        results = handler(addr, limit, max_insns, query)
+        # Opaque-region handling: when the exec region has no defined instruction
+        # heads (a raw blob IDA never disassembled), or when the caller opts in
+        # with raw=True, the terminator finders fall back to a byte-level linear
+        # sweep that raw-decodes from every offset.
+        region_had_heads = _exec_region_has_heads(addr)
+        used_raw = bool(raw) or not region_had_heads
+        results = handler(addr, limit, max_insns, query, raw=used_raw)
 
         # Augment with BehaviorClassifier scoring when available
         behavior_score = _score_gadgets_behavior(results, action)
 
-        return {
+        resp = {
             "ok": True,
             "action": action,
             "gadgets": results[:limit],
@@ -1034,6 +1211,21 @@ def gadgets(
             "arch": _get_arch(),
             **({"exploit_potential": behavior_score} if behavior_score else {}),
         }
+        # Surface the opaque-region reality instead of letting an empty result
+        # read as "no gadgets exist in this binary".
+        if not results and used_raw:
+            if region_had_heads:
+                resp["note"] = (
+                    "raw=True forced a byte-level linear sweep over the exec "
+                    "region; no qualifying gadget terminators were found."
+                )
+            else:
+                resp["note"] = (
+                    "Region was never disassembled — no defined instruction heads "
+                    "in the exec region; ran a byte-level linear sweep and found "
+                    "no qualifying gadget terminators."
+                )
+        return resp
 
     except Exception as e:
         return handle_error(e)

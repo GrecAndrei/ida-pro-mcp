@@ -132,6 +132,56 @@ class TestCompactPreservesNextOffset:
 
 
 # ---------------------------------------------------------------------------
+# _compact_value: live analysis signals survive drop_false
+# ---------------------------------------------------------------------------
+
+
+class TestCompactKeepsLiveAnalysisSignals:
+    def test_analysis_ready_and_active_survive_drop_false(self):
+        """The "runtime alive but still busy" signals must survive compact
+        drop_false (ready=False is the difference between 'busy' and 'unknown');
+        unrelated false keys still drop."""
+        stub = ServerResponseCompactMixin.__new__(ServerResponseCompactMixin)
+        payload = {
+            "ok": True,
+            "safe_mode": False,
+            "analysis_complete": False,
+            "analysis_ready": False,
+            "analysis_active": True,
+            "is_running": True,
+            "some_unrelated_flag": False,
+        }
+        out = stub._compact_value(payload, dict(_COMPACT_OPTS))
+        assert out["analysis_ready"] is False, out
+        assert out["analysis_active"] is True, out
+        assert out["safe_mode"] is False, out
+        assert out["analysis_complete"] is False, out
+        assert out["is_running"] is True, out
+        assert "some_unrelated_flag" not in out, out
+
+    def test_live_signals_survive_when_nested_under_session(self):
+        stub = ServerResponseCompactMixin.__new__(ServerResponseCompactMixin)
+        payload = {
+            "ok": True,
+            "session": {
+                "analysis_ready": False,
+                "analysis_active": False,
+                "safe_mode": True,
+                "background": True,
+                "auto_backgrounded": False,
+            },
+            "total_sessions": 1,
+        }
+        out = stub._compact_value(payload, dict(_COMPACT_OPTS))
+        session = out["session"]
+        assert session["analysis_ready"] is False, session
+        assert session["analysis_active"] is False, session
+        assert session["safe_mode"] is True, session
+        assert session["background"] is True, session
+        assert session["auto_backgrounded"] is False, session
+
+
+# ---------------------------------------------------------------------------
 # digest_decompiled: _ANTIVM, complexity counters, file_io
 # ---------------------------------------------------------------------------
 

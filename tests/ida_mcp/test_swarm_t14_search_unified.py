@@ -186,8 +186,10 @@ def _config_constants_ida(adv):
     sys.modules["ida_ua"].o_imm = 0x20
     adv.idaapi.get_func = lambda ea: _Func(ea, ea + 4)
     adv.ida_funcs.get_func_name = lambda ea: f"sub_{ea:x}"
-    adv.iter_segments = lambda range_start, range_end, require_exec=True: iter(
-        [(0x1000, 0x2000)]
+    adv.resolve_scan_segments = lambda range_start, range_end, require_exec=True: (
+        [(0x1000, 0x2000)],
+        "",
+        "",
     )
     adv.get_cached_constant_db = lambda: {0x1234: "MAGIC"}
 
@@ -376,3 +378,29 @@ def test_router_forwards_timeout_ms_to_decompiled_and_constants():
     r2 = router.search(action="constants", pattern="magic", timeout_ms=5000)
     assert r2["ok"] is True
     assert captured["constants_timeout_ms"] == 5000
+
+
+def test_router_forwards_data_value_endian_word_size_timeout():
+    router = _module("search", os=os)
+    captured = {}
+
+    def fake_data_value(value, **kw):
+        captured["value"] = value
+        captured.update(kw)
+        return {"ok": True}
+
+    router.search_data_value = fake_data_value
+
+    r = router.search(
+        action="data_value", value="0x400000",
+        endian="be", word_size="u64", timeout_ms=0, region="0x1000-0x1020",
+    )
+    assert r["ok"] is True
+    assert captured["value"] == "0x400000"
+    assert captured["endian"] == "be"
+    assert captured["word_size"] == "u64"
+    assert captured["timeout_ms"] == 0
+    assert captured["region"] == "0x1000-0x1020"
+    # data_value is pattern-optional (value may arrive via the value kwarg).
+    assert captured["range_start"] is None
+    assert captured["range_end"] is None

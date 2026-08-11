@@ -25,11 +25,22 @@ from typing import Any
 
 from ..config import _bounded_int
 from ..errors import MCPError, is_error_result, make_error
-from ..stores.blackboard_store import is_auto_name, symbol_from_title
+from ..stores.blackboard_store import entry_id_in, is_auto_name, normalize_addr, symbol_from_title
 
 #: Bound on one publish/import call. Both walk the IDB per item, so an
 #: unbounded run would stall the session behind hundreds of round trips.
 MAX_BATCH = 200
+
+#: The IDA-side batch tool refuses more than this many calls per request
+#: (ida_mcp/tools/batch.py), so a "batch" symbol lookup must be chunked below
+#: this bound or the optimization silently degenerates to one sequential RPC
+#: per address.
+IDA_BATCH_MAX_CALLS = 20
+
+#: Sentinel for "the current name could not be read". Distinct from "" (no
+#: name / auto-named): both would otherwise collapse to "" and _plan_rename
+#: would SN_FORCE-rename an analyst-applied symbol it never saw.
+_UNREADABLE = object()
 
 
 class ServerBlackboardIdbMixin:
@@ -47,18 +58,34 @@ class ServerBlackboardIdbMixin:
 
         return rpc
 
-    def _current_symbol(self, rpc, addr: str) -> str:
-        """Read the name currently applied at an address."""
+    def _current_symbol(self, rpc, addr: str) -> str | object:
+        """Read the name currently applied at an address.
+
+        Returns the name (possibly "") — or the :data:`_UNREADABLE` sentinel
+        when the lookup did not succeed: an RPC exception, an error envelope,
+        or a response with no ``name`` key. Callers must never rename based on
+        a failed read: treating it as "" would let a blind SN_FORCE rename
+        clobber a name an analyst applied by hand.
+        """
         try:
             result = rpc("data", {"action": "lookup", "query": addr})
         except Exception:
-            return ""
+            return _UNREADABLE
         if not isinstance(result, dict) or is_error_result(result):
-            return ""
+            return _UNREADABLE
+        if "name" not in result:
+            return _UNREADABLE
         return str(result.get("name") or "")
 
-    def _current_symbols_batch(self, rpc, addrs: list[str]) -> dict[str, str]:
-        """Read names currently applied across multiple addresses in a single batch."""
+    def _current_symbols_batch(self, rpc, addrs: list[str]) -> dict[str, str | object]:
+        """Read names currently applied across many addresses in few round trips.
+
+        Chunks into sub-batches of at most :data:`IDA_BATCH_MAX_CALLS` so the
+        batching actually applies: the IDA-side batch tool rejects larger
+        requests, which would silently fall back to one sequential RPC per
+        address. A failed per-address read maps to the :data:`_UNREADABLE`
+        sentinel, never to "".
+        """
         if not addrs:
             return {}
         unique_addrs = sorted(set(addrs))
@@ -66,27 +93,33 @@ class ServerBlackboardIdbMixin:
             addr = unique_addrs[0]
             return {addr: self._current_symbol(rpc, addr)}
 
-        batch_calls = [{"tool": "data", "action": "lookup", "query": addr} for addr in unique_addrs]
-        try:
-            res = rpc("batch", {"calls": batch_calls})
-            if isinstance(res, dict) and not is_error_result(res):
-                results = res.get("results") or res.get("calls") or []
-                if isinstance(results, list) and len(results) == len(unique_addrs):
-                    mapping = {}
-                    for addr, item in zip(unique_addrs, results, strict=False):
-                        if isinstance(item, dict) and not is_error_result(item):
+        mapping: dict[str, str | object] = {}
+        for chunk_start in range(0, len(unique_addrs), IDA_BATCH_MAX_CALLS):
+            chunk = unique_addrs[chunk_start:chunk_start + IDA_BATCH_MAX_CALLS]
+            if len(chunk) == 1:
+                mapping[chunk[0]] = self._current_symbol(rpc, chunk[0])
+                continue
+            batch_calls = [{"tool": "data", "action": "lookup", "query": addr} for addr in chunk]
+            try:
+                res = rpc("batch", {"calls": batch_calls})
+                if isinstance(res, dict) and not is_error_result(res):
+                    results = res.get("results") or res.get("calls") or []
+                    if isinstance(results, list) and len(results) == len(chunk):
+                        for addr, item in zip(chunk, results, strict=False):
+                            if not isinstance(item, dict) or is_error_result(item):
+                                mapping[addr] = _UNREADABLE
+                                continue
                             sub_res = item.get("result", item)
-                            if isinstance(sub_res, dict):
+                            if isinstance(sub_res, dict) and "name" in sub_res:
                                 mapping[addr] = str(sub_res.get("name") or "")
                             else:
-                                mapping[addr] = ""
-                        else:
-                            mapping[addr] = ""
-                    return mapping
-        except Exception:
-            pass
-
-        return {addr: self._current_symbol(rpc, addr) for addr in unique_addrs}
+                                mapping[addr] = _UNREADABLE
+                        continue
+            except Exception:
+                pass
+            for addr in chunk:
+                mapping[addr] = self._current_symbol(rpc, addr)
+        return mapping
 
     # ------------------------------------------------------------------
     # Export
@@ -120,12 +153,25 @@ class ServerBlackboardIdbMixin:
         else:
             current_symbols = {}
 
+        # One repeatable-comment slot holds one claim per address. Publishing
+        # several entries at the same address would overwrite each other's
+        # comment (last wins): the earlier [mcp:<id>] markers would vanish
+        # while those entries were still marked published — so they could
+        # never be re-adopted by import and never be republished. Publish the
+        # first (highest-confidence) entry per address; record the rest as
+        # skipped rather than silently losing them.
+        handled_addrs: set[str] = set()
         for entry in entries:
             addr = str(entry.get("addr") or "")
             record: dict[str, Any] = {"entry_id": entry.get("id"), "address": addr,
                                       "title": entry.get("title")}
             comment = store.comment_for(entry)
             record["comment"] = comment
+
+            if addr in handled_addrs:
+                skipped.append({**record, "error": "address already published this run"})
+                continue
+            handled_addrs.add(addr)
 
             symbol = ""
             if rename:
@@ -144,6 +190,8 @@ class ServerBlackboardIdbMixin:
                 rpc, "comment", addr, comment, comment_type="repeatable"
             )
             if comment_result is not None:
+                # The comment never landed: never mark the entry published, or
+                # it would silently never be re-attempted.
                 skipped.append({**record, "error": comment_result})
                 continue
             if symbol:
@@ -180,19 +228,26 @@ class ServerBlackboardIdbMixin:
         return payload
 
     def _plan_rename(
-        self, rpc, entry: dict, addr: str, current_symbol: str | None = None
+        self, rpc, entry: dict, addr: str, current_symbol: str | object | None = None
     ) -> tuple[str, str]:
         """Decide whether to rename, returning (symbol, reason_if_not).
 
         A name that is not auto-generated is left alone: it is either an
         analyst's own work or a library signature match, and overwriting
         either with a slug of a finding title destroys more than it adds.
+
+        When the current name could not be read, the rename is skipped too:
+        SN_FORCE-renaming from a failed lookup can destroy a name we never
+        saw. The caller records ``record['rename_skipped']='could not read
+        current symbol'`` from the returned reason.
         """
         symbol = symbol_from_title(str(entry.get("title") or ""))
         if not symbol:
             return "", "title yields no usable identifier"
         if current_symbol is None:
             current_symbol = self._current_symbol(rpc, addr)
+        if current_symbol is _UNREADABLE:
+            return "", "could not read current symbol"
         if current_symbol and not is_auto_name(current_symbol):
             if current_symbol == symbol:
                 return "", "already named"
@@ -207,10 +262,15 @@ class ServerBlackboardIdbMixin:
             })
         except Exception as exc:
             return f"{type(exc).__name__}: {exc}"[:200]
-        if isinstance(result, dict) and is_error_result(result):
-            # `error` is the boolean flag, not the text; reporting it would
-            # hand the caller the string "True" instead of what went wrong.
-            detail = result.get("message") or result.get("code") or result
+        if not isinstance(result, dict) or is_error_result(result) or result.get("ok") is not True:
+            # Anything that is not an ok dict — an error envelope, a malformed
+            # response, or a missing/None result — is a failure. Reporting it
+            # as success would fabricate a published record for a write that
+            # never happened.
+            if isinstance(result, dict):
+                detail = result.get("message") or result.get("code") or result
+            else:
+                detail = result
             return str(detail)[:200]
         return None
 
@@ -242,18 +302,34 @@ class ServerBlackboardIdbMixin:
         if not isinstance(rows, list):
             rows = []
         imported: list[dict] = []
+        skipped_no_addr = 0
         skipped_own = 0
+        skipped_no_content = 0
         for row in rows:
             if not isinstance(row, dict):
                 continue
+            addr = str(row.get("addr") or "")
+            name = str(row.get("name") or "")
             comment = str(row.get("repeatable_comment") or row.get("comment") or "")
-            outcome = store.adopt_annotation(
-                addr=str(row.get("addr") or ""),
-                name=str(row.get("name") or ""),
-                comment=comment,
-            )
-            if outcome is None:
+            # Mirror the store's own adoption gate so the three distinct
+            # skip reasons are reported separately instead of being lumped
+            # together as "skipped our own output".
+            naddr = normalize_addr(addr)
+            if not naddr:
+                skipped_no_addr += 1
+                continue
+            if entry_id_in(comment):
                 skipped_own += 1
+                continue
+            if is_auto_name(name) and not comment.strip():
+                skipped_no_content += 1
+                continue
+            outcome = store.adopt_annotation(addr=naddr, name=name, comment=comment)
+            if outcome is None:
+                # Defensive: the store's gate refused a row this loop did not
+                # reproduce. Never count it as our own marker; treat it as
+                # "no content worth adopting".
+                skipped_no_content += 1
                 continue
             imported.append({
                 "entry_id": outcome["entry_id"],
@@ -279,4 +355,8 @@ class ServerBlackboardIdbMixin:
         }
         if skipped_own:
             payload["skipped_own_annotations"] = skipped_own
+        if skipped_no_addr:
+            payload["skipped_no_addr"] = skipped_no_addr
+        if skipped_no_content:
+            payload["skipped_no_content"] = skipped_no_content
         return payload

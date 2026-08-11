@@ -76,6 +76,7 @@ def test_new_layout_session_reloads_across_manager_instances(tmp_path):
     session = mgr1.create_session("/samples/foo.bin")
     sid = session.session_id
     mgr1.add_note(sid, "relocations verified")
+    mgr1.update_session(sid, analysis_gate="pending")
     mgr1._save_notebook(sid, "# Analysis\n- done")
 
     mgr2 = SessionManager(str(tmp_path))
@@ -84,6 +85,9 @@ def test_new_layout_session_reloads_across_manager_instances(tmp_path):
     assert loaded.binary_path == "/samples/foo.bin"
     assert loaded.idb_path == session.idb_path
     assert "relocations verified" in loaded.notes
+    # The durable analysis gate survives a manager restart so h05 can resume
+    # a large binary in the same gate state it died in.
+    assert loaded.analysis_gate == "pending"
     assert mgr2._load_notebook(sid) == "# Analysis\n- done"
 
 
@@ -94,6 +98,7 @@ def test_legacy_flat_session_is_migrated_on_load(tmp_path):
     sid = "AAAA1111"
     legacy_idb = os.path.join(session_dir, f"SID_{sid}_foo.bin.i64")
     legacy_session = Session(sid, legacy_idb, "/samples/foo.bin", notes="old notes")
+    legacy_session.analysis_gate = "complete"
     _write(
         os.path.join(session_dir, f"SID_{sid}_metadata.json"),
         json.dumps(legacy_session.to_dict()),
@@ -109,6 +114,8 @@ def test_legacy_flat_session_is_migrated_on_load(tmp_path):
     loaded = mgr.get_session(sid)
     assert loaded is not None
     assert loaded.notes == "old notes"
+    # The gate field is carried through the legacy flat-layout migration.
+    assert loaded.analysis_gate == "complete"
 
     session_dir_path = os.path.join(session_dir, f"SID_{sid}")
     assert os.path.isfile(os.path.join(session_dir_path, "metadata.json"))

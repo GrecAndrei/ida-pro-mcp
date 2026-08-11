@@ -51,22 +51,32 @@ class _Seg:
 
 
 class _RiscvIDB:
-    """Minimal RISC-V instruction stream for the gadget finders."""
+    """Minimal RISC-V instruction stream for the gadget finders.
+
+    Entries are (ea, mnem, disasm) or (ea, mnem, disasm, size); size defaults
+    to 4 so the compressed (c.*) forms can be modelled accurately.
+    """
 
     START = 0x1000
     END = 0x1010
     BADADDR = -1
 
     def __init__(self, insns):
-        # insns: list of (ea, mnem, disasm)
-        self._insns = {ea: (mnem, disasm) for ea, mnem, disasm in insns}
+        # insns: list of (ea, mnem, disasm[, size])
+        self._insns = {}
+        self._sizes = {}
+        for entry in insns:
+            ea, mnem, disasm = entry[0], entry[1], entry[2]
+            size = entry[3] if len(entry) > 3 else 4
+            self._insns[ea] = (mnem, disasm)
+            self._sizes[ea] = size
         self._eas = sorted(self._insns)
 
     def install(self):
         idc_ = sys.modules["idc"]
         idc_.print_insn_mnem = lambda ea: self._insns.get(ea, ("", ""))[0]
         idc_.generate_disasm_line = lambda ea, flags: self._insns.get(ea, ("", ""))[1]
-        idc_.get_item_size = lambda ea: 4
+        idc_.get_item_size = lambda ea: self._sizes.get(ea, 4)
         idc_.next_head = self._next
         idc_.prev_head = self._prev
 
@@ -105,31 +115,41 @@ def _gadget_texts(gadgets):
 
 
 # ---------------------------------------------------------------------------
-# RISC-V jalr operand classification (pure helpers)
+# RISC-V register-indirect branch classification (routed through the shared
+# arch_utils classifier: _riscv_branch_kind + is_return_mnemonic)
 # ---------------------------------------------------------------------------
 
-def test_riscv_jalr_operands_parsed():
-    g = _load_gadgets()
-    assert g._riscv_jalr_operands("jalr ra, 0(t0)") == ("ra", "t0")
-    assert g._riscv_jalr_operands("jalr ra, t0, 0") == ("ra", "t0")
-    assert g._riscv_jalr_operands("jalr zero, 0(ra)") == ("zero", "ra")
-    assert g._riscv_jalr_operands("jalr x0, 0(t3)") == ("x0", "t3")
-    assert g._riscv_jalr_operands("") == (None, None)
-
-
-def test_riscv_jalr_classify_call_return_jump():
+def test_riscv_branch_kind_classifies_jalr_call_return_jump():
     g = _load_gadgets()
     # rd=ra -> indirect call (COP)
-    assert g._classify_riscv_jalr("jalr ra, 0(t0)") == "call"
-    assert g._classify_riscv_jalr("jalr ra, t0, 0") == "call"
-    assert g._classify_riscv_jalr("jalr ra, 0(ra)") == "call"
-    # rs1=ra -> return (ROP), regardless of rd
-    assert g._classify_riscv_jalr("jalr zero, 0(ra)") == "return"
-    assert g._classify_riscv_jalr("jalr x0, 0(ra)") == "return"
-    assert g._classify_riscv_jalr("jalr t0, 0(ra)") == "return"
+    assert g._riscv_branch_kind("jalr", "jalr ra, 0(t0)") == "call"
+    assert g._riscv_branch_kind("jalr", "jalr ra, t0, 0") == "call"
+    assert g._riscv_branch_kind("jalr", "jalr ra, 0(ra)") == "call"
+    # return requires rd==x0/zero AND rs1==ra (shared arch_utils rule)
+    assert g._riscv_branch_kind("jalr", "jalr zero, 0(ra)") == "return"
+    assert g._riscv_branch_kind("jalr", "jalr x0, 0(ra)") == "return"
+    assert g._riscv_branch_kind("jalr", "jalr x0, ra, 0") == "return"
+    # rd!=x0 (e.g. t0) with rs1==ra is NOT a pure return -> JOP jump
+    assert g._riscv_branch_kind("jalr", "jalr t0, 0(ra)") == "jump"
     # rd=x0, rs1!=ra -> jump (JOP)
-    assert g._classify_riscv_jalr("jalr zero, 0(t0)") == "jump"
-    assert g._classify_riscv_jalr("jalr x0, 0(t3)") == "jump"
+    assert g._riscv_branch_kind("jalr", "jalr zero, 0(t0)") == "jump"
+    assert g._riscv_branch_kind("jalr", "jalr x0, 0(t3)") == "jump"
+    # unparseable jalr defaults to "call" (never dropped from COP)
+    assert g._riscv_branch_kind("jalr", "") == "call"
+    # non-branch mnemonics are not classified
+    assert g._riscv_branch_kind("addi", "addi sp, sp, 16") == "other"
+
+
+def test_riscv_branch_kind_compressed_forms():
+    g = _load_gadgets()
+    # c.jr rs1==ra -> return (ROP); c.jr rs1!=ra -> JOP jump
+    assert g._riscv_branch_kind("c.jr", "c.jr ra") == "return"
+    assert g._riscv_branch_kind("c.jr", "c.jr x1") == "return"
+    assert g._riscv_branch_kind("c.jr", "c.jr t0") == "jump"
+    assert g._riscv_branch_kind("c.jr", "c.jr a5") == "jump"
+    # c.jalr always links to ra -> call (COP), never a return/jump
+    assert g._riscv_branch_kind("c.jalr", "c.jalr t0") == "call"
+    assert g._riscv_branch_kind("c.jalr", "c.jalr ra") == "call"
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +234,67 @@ def test_jop_finder_reports_jump_not_call():
         (0x1008, "jalr", "jalr ra, 0(t0)"),   # call, not a jump
     ]).install()
     assert g._find_jop_gadgets(None, 50, 5, None) == []
+
+
+# ---------------------------------------------------------------------------
+# Compressed terminators: c.jr / c.jalr route through the shared classifier
+# ---------------------------------------------------------------------------
+
+def test_jop_finder_reports_compressed_jump():
+    g = _load_gadgets()
+    _RiscvIDB([
+        (0x1000, "lw", "lw a0, 0(sp)", 4),
+        (0x1004, "c.jr", "c.jr t0", 2),   # compressed indirect jump (rs1!=ra)
+    ]).install()
+    res = g._find_jop_gadgets(None, 50, 5, None)
+    assert any("c.jr t0" in t for t in _gadget_texts(res)), res
+
+
+def test_jop_finder_skips_compressed_call():
+    g = _load_gadgets()
+    _RiscvIDB([
+        (0x1000, "lw", "lw a0, 0(sp)", 4),
+        (0x1004, "c.jalr", "c.jalr t0", 2),   # compressed call, not a jump
+    ]).install()
+    assert g._find_jop_gadgets(None, 50, 5, None) == []
+
+
+def test_cop_finder_reports_compressed_call():
+    g = _load_gadgets()
+    _RiscvIDB([
+        (0x1000, "lw", "lw a0, 0(sp)", 4),
+        (0x1004, "c.jalr", "c.jalr t0", 2),   # compressed indirect call
+    ]).install()
+    res = g._find_cop_gadgets(None, 50, 5, None)
+    assert any("c.jalr t0" in t for t in _gadget_texts(res)), res
+
+
+def test_cop_finder_skips_compressed_jump():
+    g = _load_gadgets()
+    _RiscvIDB([
+        (0x1000, "lw", "lw a0, 0(sp)", 4),
+        (0x1004, "c.jr", "c.jr t0", 2),   # compressed jump, not a call
+    ]).install()
+    assert g._find_cop_gadgets(None, 50, 5, None) == []
+
+
+def test_rop_finder_reports_compressed_return():
+    g = _load_gadgets()
+    _RiscvIDB([
+        (0x1000, "lw", "lw a0, 0(sp)", 4),
+        (0x1004, "c.jr", "c.jr ra", 2),   # compressed return
+    ]).install()
+    res = g._find_rop_gadgets(None, 50, 5, None)
+    assert any("c.jr ra" in t for t in _gadget_texts(res)), res
+
+
+def test_rop_finder_skips_compressed_call():
+    g = _load_gadgets()
+    _RiscvIDB([
+        (0x1000, "lw", "lw a0, 0(sp)", 4),
+        (0x1004, "c.jalr", "c.jalr t0", 2),   # compressed call, not a return
+    ]).install()
+    assert g._find_rop_gadgets(None, 50, 5, None) == []
 
 
 # ---------------------------------------------------------------------------

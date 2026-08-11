@@ -17,6 +17,9 @@ Covers the p02_session fixer pass:
   matches the watcher's reload decision; cleanup_stale orphan-prune skips
   locked sessions; _run_workflow_sequence uses the error envelope; _wait_for_idb
   returns an absolute legacy-component path.
+- server_workflow_batch: batch output→input chaining reports an unresolved
+  step reference as a full INVALID_ARGS error envelope (the batch-side sibling
+  of _run_workflow_sequence's error envelope), never a silent empty string.
 - server_multi_session: _session_groups access is lock-guarded and groups are
   reconciled when sessions are deleted.
 """
@@ -33,6 +36,7 @@ from ida_pro_mcp.host.errors import MCPError
 from ida_pro_mcp.host.server.server import IDAMCPServer
 from ida_pro_mcp.host.server.server_multi_session import ServerMultiSessionMixin, SessionGroup
 from ida_pro_mcp.host.server.server_session import ServerSessionMixin
+from ida_pro_mcp.host.server.server_workflow_batch import ServerWorkflowBatchMixin
 from ida_pro_mcp.host.server.session import BookmarkManager, Session, SessionManager
 
 
@@ -139,6 +143,23 @@ def test_delete_session_removes_runtime_lease(tmp_path):
 
     assert mgr.delete_session(sid) is True
     assert not os.path.exists(lease_path)
+
+
+def test_delete_session_removes_runtime_owner_file(tmp_path):
+    """D3-F7: delete_session must also drop the runtime_leases/SID_<sid>.owner.json
+    claim, which the stale-lease cleanup never touches — otherwise owner files
+    accumulate for every session whose runtime was ever started."""
+    mgr = SessionManager(str(tmp_path))
+    session = mgr.create_session("/tmp/x.bin")
+    sid = session.session_id
+    lease_dir = os.path.join(str(tmp_path), "runtime_leases")
+    os.makedirs(lease_dir, exist_ok=True)
+    owner_path = os.path.join(lease_dir, f"SID_{sid}.owner.json")
+    with open(owner_path, "w", encoding="utf-8") as f:
+        json.dump({"session_id": sid, "owner_pid": os.getpid(), "owner_id": "test"}, f)
+
+    assert mgr.delete_session(sid) is True
+    assert not os.path.exists(owner_path)
 
 
 def test_metadata_save_uses_pid_scoped_tmp(tmp_path):
@@ -397,46 +418,60 @@ def test_switch_reopen_reenters_safe_mode(tmp_path, monkeypatch):
     token = server._begin_client_connection()
     try:
         res = server._session_action_switch({"session_id": sid, "reopen": True})
+        # Assert before teardown: shutdown clears _pending_analysis (the
+        # watcher stop signal added by the lifecycle revamp), which would make
+        # a post-shutdown _safe_mode_active check read False.
+        assert res.get("ok") is True
+        assert res.get("safe_mode") is True
+        assert server._safe_mode_active(sid)
     finally:
         server._end_client_connection(token)
         server.shutdown()
-    assert res.get("ok") is True
-    assert res.get("safe_mode") is True
-    assert server._safe_mode_active(sid)
 
 
 # ---------------------------------------------------------------------------
-# server_session.py: _maybe_resolve_analysis_state reload decision
+# server_session.py: _maybe_resolve_analysis_state confirmation-only
 # ---------------------------------------------------------------------------
 
 
-def test_maybe_resolve_analysis_state_uses_background_load_flag(tmp_path, monkeypatch):
+def test_maybe_resolve_analysis_state_confirms_completion_and_single_fires(
+    tmp_path, monkeypatch
+):
     server = _make_server(tmp_path, monkeypatch)
     session = server.session_mgr.create_session("/tmp/x.bin")
     sid = session.session_id
     server._mark_analysis_pending(session)
     server.session_runtimes[sid] = {"port": 9999, "process": _FakeIdaProcess()}
     server._send_rpc_raw = lambda payload, port, recv_timeout=10: {"analysis_complete": True}
-    server._background_loads = {sid: True}
     seen = []
-    server._on_analysis_complete = lambda s, reload: seen.append(reload)
+    real = IDAMCPServer._on_analysis_complete.__get__(server, IDAMCPServer)
+    server._on_analysis_complete = lambda s, reload: seen.append(reload) or real(s, reload)
     try:
         server._maybe_resolve_analysis_state(session)
-        assert seen == [True], seen
+        server._maybe_resolve_analysis_state(session)
+        # Confirmation-only path always confirms with reload=False (the
+        # reload-on-completion machinery is gone) and cannot double-fire.
+        assert seen == [False], seen
+        assert not server._safe_mode_active(sid)
+        assert server._analysis_is_complete(sid)
     finally:
         server.shutdown()
 
 
-def test_on_analysis_complete_resets_background_load_flag(tmp_path, monkeypatch):
+def test_on_analysis_complete_clears_pending_and_persists_gate(tmp_path, monkeypatch):
     server = _make_server(tmp_path, monkeypatch)
     session = server.session_mgr.create_session("/tmp/x.bin")
     sid = session.session_id
-    server._background_loads = {sid: True}
-    server._start_server = lambda s: {"ok": True}
-    server._wait_for_idb = lambda s, timeout=120: True
+    server._mark_analysis_pending(session)
+    assert server._safe_mode_active(sid)
+    assert (session.metadata or {}).get("analysis_gate") == "pending"
     try:
+        # reload=True is accepted for backward compat but is a legacy no-op.
         server._on_analysis_complete(session, reload=True)
-        assert server._background_loads.get(sid) is False
+        assert not server._safe_mode_active(sid)
+        assert server._analysis_is_complete(sid)
+        fresh = server.session_mgr.get_session(sid)
+        assert (fresh.metadata or {}).get("analysis_gate") == "complete"
     finally:
         server.shutdown()
 
@@ -494,6 +529,57 @@ def test_workflow_sequence_uses_error_envelope_for_bad_steps():
             assert key in err, f"missing envelope key {key} in {err}"
     # Successful step is untouched.
     assert "error" not in result["steps"][0]["result"]
+
+
+# ---------------------------------------------------------------------------
+# server_workflow_batch.py: chaining error envelope
+# ---------------------------------------------------------------------------
+
+
+class _FakeBatchMixinHost(ServerWorkflowBatchMixin):
+    """Hermetic batch host: the batch mixin plus stubbed IO (no live IDA)."""
+
+    current_session = None
+    session_runtimes = {}
+
+    def _execute_tool(self, tool, args):
+        return {"ok": True, "tool": tool}
+
+    def _extract_response_options(self, args):
+        return dict(args), {}
+
+    def _cache_next_page(self, tool_name, args, payload):
+        return payload
+
+    def _record_activity(self, tool_name, args, result):
+        return None
+
+    def _try_batch_fast_path(self, calls, continue_on_error):
+        return None
+
+
+def test_batch_chaining_unresolved_ref_uses_error_envelope():
+    """An unresolved output→input step reference must surface as a full
+    INVALID_ARGS error envelope — the batch-side sibling of the workflow
+    sequence contract above — and the failing step must NOT reach _execute_tool
+    (no silent empty-string argument substitution)."""
+    host = _FakeBatchMixinHost()
+    result = host._handle_batch(
+        {
+            "calls": [
+                {"name": "idb", "arguments": {"action": "overview"}},
+                {"name": "code", "arguments": {"action": "disasm", "addr": "step0.result.missing.0.x"}},
+            ],
+            "continue_on_error": True,
+        }
+    )
+    assert result["summary"]["errors"] == 1
+    err = result["results"][1]["result"]
+    assert err.get("error") is True
+    for key in ("code", "category", "message"):
+        assert key in err, f"missing envelope key {key} in {err}"
+    assert err.get("code") == MCPError.INVALID_ARGS
+    assert "unresolved" in err.get("message", "")
 
 
 # ---------------------------------------------------------------------------

@@ -49,6 +49,9 @@ class _FakeIdaProcess:
 def _make_server(tmp_path, monkeypatch) -> IDAMCPServer:
     monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
     monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
+    # test_restart_restores_pending_gate_from_background_open uses the
+    # experimental background path; keep it reachable for the whole file.
+    monkeypatch.setenv("IDA_MCP_BACKGROUND_OPEN", "1")
     monkeypatch.setattr(IDAMCPServer, "_detect_ida_dir", lambda self: "")
     monkeypatch.setattr(IDAMCPServer, "_find_idat", lambda self: "")
     server = IDAMCPServer()
@@ -357,12 +360,12 @@ def test_forget_analysis_state_clears_background_load_errors(tmp_path, monkeypat
     sid = session.session_id
     server._pending_analysis = {sid}
     server._background_load_errors = {sid: {"error": True, "message": "boom"}}
-    server._background_loads = {sid: True}
+    server._analysis_complete_in_flight = {sid}
     try:
         server._forget_analysis_state(sid)
         assert not server._safe_mode_active(sid)
         assert sid not in server._background_load_errors
-        assert sid not in server._background_loads
+        assert sid not in server._analysis_complete_in_flight
     finally:
         server.shutdown()
 
@@ -549,3 +552,77 @@ def test_untag_rejects_whitespace_only_tag(tmp_path, monkeypatch):
     finally:
         server._end_client_connection(token_b)
         server.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Restart gate-restore: the REAL startup path rehydrates the analysis gate
+# ---------------------------------------------------------------------------
+# _make_server constructs IDAMCPServer() directly, so its __init__ runs the
+# startup gate restoration. A session left 'pending' by a previous host
+# instance must come back in safe mode; a 'complete' one comes back ungated.
+
+
+def test_restart_restores_pending_gate_into_safe_mode(tmp_path, monkeypatch):
+    binary = tmp_path / "restart.bin"
+    binary.write_bytes(b"\x00" * 64)
+
+    server1 = _make_server(tmp_path, monkeypatch)
+    token = server1._begin_client_connection()
+    try:
+        opened = _open(server1, str(binary))
+        sid = opened["session_id"]
+        assert server1._safe_mode_active(sid)
+    finally:
+        server1._end_client_connection(token)
+        server1.shutdown()
+
+    server2 = _make_server(tmp_path, monkeypatch)
+    try:
+        assert server2._safe_mode_active(sid) is True, (
+            "metadata analysis_gate='pending' must restore safe mode after restart"
+        )
+        assert server2._analysis_is_complete(sid) is False
+    finally:
+        server2.shutdown()
+
+
+def test_restart_restores_pending_gate_from_background_open(tmp_path, monkeypatch):
+    """The background-open path also persists a pending gate that survives a
+    host restart (the D3-F1 half-analyzed-IDB case)."""
+    binary = tmp_path / "restart-bg.bin"
+    binary.write_bytes(b"\x00" * 64)
+
+    server1 = _make_server(tmp_path, monkeypatch)
+    token = server1._begin_client_connection()
+    try:
+        opened = server1._session_action_create_background({"binary_path": str(binary)})
+        sid = opened["session_id"]
+        assert opened.get("safe_mode") is True
+    finally:
+        server1._end_client_connection(token)
+        server1.shutdown()
+
+    server2 = _make_server(tmp_path, monkeypatch)
+    try:
+        assert server2._safe_mode_active(sid) is True
+        assert server2._analysis_is_complete(sid) is False
+    finally:
+        server2.shutdown()
+
+
+def test_restart_restores_complete_gate_ungated(tmp_path, monkeypatch):
+    binary = tmp_path / "restart-done.bin"
+    binary.write_bytes(b"\x00" * 64)
+
+    server1 = _make_server(tmp_path, monkeypatch)
+    session = server1.session_mgr.create_session(str(binary))
+    sid = session.session_id
+    server1._mark_analysis_complete(session)
+    server1.shutdown()
+
+    server2 = _make_server(tmp_path, monkeypatch)
+    try:
+        assert server2._analysis_is_complete(sid) is True
+        assert server2._safe_mode_active(sid) is False
+    finally:
+        server2.shutdown()

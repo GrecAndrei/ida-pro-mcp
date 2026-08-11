@@ -264,6 +264,18 @@ def apply_post_processing(
     # Used by pagination continuation to decide whether more pages exist
     # without misreading the post-slice `_count` as the whole result.
     pre_slice_total = len(items)
+    # When the tool already sliced server-side (data/list_* with a forwarded
+    # offset/count), len(items) is the page length, not the whole result. The
+    # tool's own `total` field is the authoritative pre-slice count, so prefer
+    # it when present and numeric.
+    payload_total = payload.get("total")
+    if (
+        isinstance(payload_total, (int, float))
+        and not isinstance(payload_total, bool)
+        and payload_total >= 0
+        and used_field != "total"
+    ):
+        pre_slice_total = int(payload_total)
 
     # 2. Head/tail + offset
     items, offset = apply_head_tail(items, pp_params)

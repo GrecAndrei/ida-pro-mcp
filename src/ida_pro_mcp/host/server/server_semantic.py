@@ -7,6 +7,7 @@ semantic index logic easier to navigate.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import re
@@ -28,6 +29,36 @@ from ..config import (
 )
 from ..errors import MCPError, is_error_result, make_error
 from .session import Session
+
+# Query-time row-vector memoization: norm_text -> embedding vector. Repeated
+# semantic_find queries re-embed each row only once ever (not once per query);
+# vectors are best-effort persisted into the SQLite index (vector BLOB column)
+# so the cache also survives process restarts. Thread-safety comes from the
+# GIL for dict get/set; a benign duplicate compute on a cache miss is fine.
+_GADGET_VEC_CACHE: dict[str, list[float]] = {}
+
+
+def _pack_vector(vec: list[float]) -> bytes | None:
+    """Pack an embedding vector into a compact BLOB (or None when unusable)."""
+    if not vec:
+        return None
+    try:
+        return struct.pack(f"<{len(vec)}f", *[float(v) for v in vec])
+    except Exception:
+        return None
+
+
+def _unpack_vector(blob) -> list[float] | None:
+    """Unpack a stored vector BLOB back into a list of floats (or None)."""
+    if not blob:
+        return None
+    try:
+        count = len(blob) // 4
+        if count == 0 or count * 4 != len(blob):
+            return None
+        return list(struct.unpack(f"<{count}f", blob))
+    except Exception:
+        return None
 
 
 class ServerSemanticMixin:
@@ -79,11 +110,16 @@ class ServerSemanticMixin:
                 norm_text TEXT NOT NULL,
                 tokens TEXT NOT NULL,
                 digest BLOB NOT NULL,
+                vector BLOB,
                 PRIMARY KEY (source_action, addr, digest)
             );
             CREATE INDEX IF NOT EXISTS idx_gadgets_source_action ON gadgets(source_action);
             """
         )
+        # Indexes built before the vector BLOB column existed lack it; add it
+        # best-effort so row-vector memoization survives restarts on those DBs.
+        with contextlib.suppress(sqlite3.OperationalError):
+            conn.execute("ALTER TABLE gadgets ADD COLUMN vector BLOB")
 
     def _semantic_index_meta(self, conn: sqlite3.Connection) -> dict[str, str]:
         """Read semantic index metadata as a flat key/value map."""
@@ -129,7 +165,7 @@ class ServerSemanticMixin:
         """Rebuild and persist the semantic gadget index for a session."""
         db_path = self._semantic_index_db_path(session.session_id)
         fingerprint = self._semantic_index_fingerprint(session)
-        indexed_rows: list[tuple[str, str, int, str, str, str, bytes]] = []
+        indexed_rows: list[tuple[str, str, int, str, str, str, bytes, bytes | None]] = []
         errors: list[dict[str, Any]] = []
         for source_action in source_actions:
             result = self.call_tool(
@@ -145,6 +181,19 @@ class ServerSemanticMixin:
                         "action": source_action,
                         "code": result.get("code"),
                         "message": result.get("message") or result.get("error"),
+                    }
+                )
+                continue
+            if not isinstance(result, dict) or not isinstance(result.get("gadgets"), list):
+                # A tool response the extractor cannot use (non-dict, or missing
+                # the 'gadgets' list) must surface as a per-action error rather
+                # than silently indexing zero rows — which would make a broken
+                # source action look like "this gadget class does not exist".
+                errors.append(
+                    {
+                        "action": source_action,
+                        "code": MCPError.INTERNAL,
+                        "message": "gadgets tool returned no usable 'gadgets' list",
                     }
                 )
                 continue
@@ -171,6 +220,11 @@ class ServerSemanticMixin:
                         norm_text,
                         token_blob,
                         digest,
+                        # Best-effort: persist any embedding already computed for
+                        # this row in the module cache. New embeddings are never
+                        # computed here — that would make a rebuild synchronously
+                        # re-embed the whole gadget corpus.
+                        _pack_vector(_GADGET_VEC_CACHE.get(norm_text)),
                     )
                 )
 
@@ -195,8 +249,8 @@ class ServerSemanticMixin:
                     conn.executemany(
                         """
                         INSERT OR IGNORE INTO gadgets(
-                            source_action, addr, insns, gadget, norm_text, tokens, digest
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                            source_action, addr, insns, gadget, norm_text, tokens, digest, vector
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         indexed_rows,
                     )
@@ -299,9 +353,15 @@ class ServerSemanticMixin:
 
         rebuild_info = None
         if rebuild_index:
-            rebuild_info = self._semantic_index_rebuild(
-                session, source_actions, source_limit, max_insns
-            )
+            # Single-flight: hold the (reentrant) index lock across the whole
+            # rebuild so two concurrent semantic_find calls that both see a
+            # stale/missing index cannot each rebuild (double embedding + a
+            # DELETE/re-INSERT race). The rebuild itself re-acquires the lock
+            # for its DB write, which is fine for an RLock.
+            with self._semantic_index_lock:
+                rebuild_info = self._semantic_index_rebuild(
+                    session, source_actions, source_limit, max_insns
+                )
             if is_error_result(rebuild_info):
                 return rebuild_info
 
@@ -313,7 +373,7 @@ class ServerSemanticMixin:
                 placeholders = ",".join("?" for _ in source_actions)
                 rows = conn.execute(
                     f"""
-                    SELECT source_action, addr, insns, gadget, norm_text, tokens
+                    SELECT source_action, addr, insns, gadget, norm_text, tokens, vector
                     FROM gadgets
                     WHERE source_action IN ({placeholders})
                     """,
@@ -326,7 +386,7 @@ class ServerSemanticMixin:
         query_lower = query.lower()
         query_tokens = set(re.findall(r"[a-z0-9_]+", query_lower))
 
-        ranked: list[tuple[float, tuple[Any, Any, Any, Any, Any, Any]]] = []
+        ranked: list[tuple[float, tuple[Any, Any, Any, Any, Any, Any, Any]]] = []
         query_vec: list[float] | None = None
         embedder = None
         if EMBEDDING_FIRST_MODE:
@@ -334,6 +394,17 @@ class ServerSemanticMixin:
                 from ..intelligence.core import BgeCodeEmbedder
                 embedder = BgeCodeEmbedder()
                 query_vec = embedder.embed_vector(query)
+                # Warm the module cache from vectors persisted by a previous
+                # process, so the first query after a restart does not re-embed
+                # the whole gadget corpus.
+                if rows:
+                    for row in rows:
+                        norm_text = str(row[4] or "")
+                        if not norm_text or norm_text in _GADGET_VEC_CACHE:
+                            continue
+                        stored = _unpack_vector(row[6])
+                        if stored is not None:
+                            _GADGET_VEC_CACHE[norm_text] = stored
             except Exception:
                 # Embedding is best-effort: fall through to token matching.
                 embedder = None
@@ -343,9 +414,12 @@ class ServerSemanticMixin:
             sim = 0.0
             if embedder is not None and query_vec is not None and norm_text:
                 try:
-                    row_vec = embedder.embed_vector(norm_text)
+                    row_vec = _GADGET_VEC_CACHE.get(norm_text)
                     if row_vec is None:
-                        raise RuntimeError("embedding unavailable")
+                        row_vec = embedder.embed_vector(norm_text)
+                        if row_vec is None:
+                            raise RuntimeError("embedding unavailable")
+                        _GADGET_VEC_CACHE[norm_text] = row_vec
                     sim = float(embedder.cosine(query_vec, row_vec))
                 except Exception:
                     sim = 0.0
@@ -359,7 +433,7 @@ class ServerSemanticMixin:
                 ranked.append((sim, row))
 
         def _rank_sort_key(
-            item: tuple[float, tuple[Any, Any, Any, Any, Any, Any]]
+            item: tuple[float, tuple[Any, Any, Any, Any, Any, Any, Any]]
         ) -> tuple[float, str, str]:
             sim, row = item
             source_action = str(row[0] or "")
@@ -403,4 +477,8 @@ class ServerSemanticMixin:
                 "rows_indexed": rebuild_info.get("rows_indexed", 0),
                 "errors": rebuild_info.get("errors", []),
             }
+            out["note"] = (
+                "Semantic index was rebuilt for this query and can take a while; "
+                "subsequent queries reuse the cached index."
+            )
         return out

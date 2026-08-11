@@ -22,19 +22,35 @@ pip install -e .
 
 ## Running Tests
 
+The suite is pytest-based. Most tests run without live IDA (host fakes,
+`FakeIDB`-style stubs); only `tests/integration/` requires a real IDA
+installation. The runner writes scratch files under the pytest basetemp, and
+the repo's `/tmp` tmpfs can fill — always pass
+`--basetemp=/home/alex/.tmp/pytest` (repo convention).
+
 Targeted tests:
 
 ```bash
-python -m unittest tests.test_host_wiki_and_hardening
-python -m unittest tests.test_linux_support
-python -m unittest tests.test_session_features
+.venv/bin/pytest tests/test_docs_sync.py --basetemp=/home/alex/.tmp/pytest
+.venv/bin/pytest tests/host/test_swarm_p14_stale_docs.py --basetemp=/home/alex/.tmp/pytest
+```
+
+Per-directory layouts:
+
+```bash
+.venv/bin/pytest tests/ --basetemp=/home/alex/.tmp/pytest       # host + docs + contract tests
+.venv/bin/pytest tests/host --basetemp=/home/alex/.tmp/pytest    # host-server fakes (no live IDA)
+.venv/bin/pytest tests/ida_mcp --basetemp=/home/alex/.tmp/pytest # IDA-side tool logic (fakes)
 ```
 
 Full suite:
 
 ```bash
-python -m unittest discover tests
+.venv/bin/pytest --basetemp=/home/alex/.tmp/pytest
 ```
+
+Live-IDA integration lives in `tests/integration/`; run it explicitly and do
+not count it as part of the fast suite.
 
 ## Pull Request Guidelines
 

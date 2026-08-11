@@ -15,6 +15,7 @@ Creative features integrated directly into existing session tool:
 """
 import contextlib
 import copy
+import errno
 import glob
 import json
 import os
@@ -46,6 +47,30 @@ from ..errors import MCPError, is_error_result, make_error
 # before it can be joined into filesystem paths or fed to a glob pattern.
 _SAFE_SID_RE = re.compile(r"^[A-Za-z0-9]{8}$")
 
+# Durable analysis gate: tracks whether a session's IDA auto-analysis has
+# completed. h01 (the analysis-watchdog fixer) persists "pending"/"complete";
+# h05 (the restart-resume fixer) restores it on restart so a large binary that
+# died mid-analysis resumes in the right state instead of being treated as
+# fully analyzed. None means the gate was never recorded (legacy session).
+_VALID_ANALYSIS_GATES = frozenset({"pending", "complete"})
+
+
+def _normalize_analysis_gate(value) -> str | None:
+    """Coerce an ``analysis_gate`` value to None / "pending" / "complete".
+
+    Anything else (junk on disk, a caller typo, a future state name) is
+    normalized to None so downstream code never has to defend against unknown
+    gate values.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in _VALID_ANALYSIS_GATES:
+            return v
+    return None
+
+
 # ============================================================================
 # SESSION
 # ============================================================================
@@ -59,6 +84,7 @@ class Session:
         binary_path: str,
         analysis_options: dict | None = None,
         analysis_applied: bool = False,
+        analysis_gate: str | None = None,
         ida_args: list[str] | None = None,
         created_at: datetime | None = None,
         last_accessed: datetime | None = None,
@@ -76,6 +102,7 @@ class Session:
         self.binary_path = binary_path
         self.analysis_options = analysis_options or {}
         self.analysis_applied = bool(analysis_applied)
+        self.analysis_gate = _normalize_analysis_gate(analysis_gate)
         self.ida_args = ida_args or []
         self.created_at = created_at or datetime.now()
         self.last_accessed = last_accessed or datetime.now()
@@ -144,6 +171,7 @@ class Session:
             "binary_path": self.binary_path,
             "analysis_options": self.analysis_options,
             "analysis_applied": self.analysis_applied,
+            "analysis_gate": self.analysis_gate,
             "ida_args": self.ida_args,
             "binary_exists": bool(self.binary_path and os.path.exists(self.binary_path)),
             "idb_exists": self.idb_on_disk(),
@@ -177,6 +205,7 @@ class Session:
             data.get("binary_path", ""),
             data.get("analysis_options", {}) or {},
             data.get("analysis_applied", False),
+            data.get("analysis_gate"),
             data.get("ida_args", []) or [],
             created,
             accessed,
@@ -360,8 +389,28 @@ class SessionManager(SessionSkillsMixin):
                 # re-run of the same analysis step).
                 f.flush()
             os.replace(tmp, path)
+        except OSError as e:
+            if e.errno == errno.ENOSPC:
+                # Distinct, greppable warning: this is a disk-full condition,
+                # not a transient permissions race. The in-memory session state
+                # (analysis_applied / analysis_gate in particular) now diverges
+                # from what is on disk, so a restart would re-run analysis the
+                # caller believes already happened — surface that honestly.
+                log_rpc(
+                    f"[DISK-FULL] session metadata write failed for "
+                    f"{session.session_id} (ENOSPC errno={e.errno}): {e} — "
+                    f"in-memory analysis_applied={session.analysis_applied}, "
+                    f"analysis_gate={session.analysis_gate!r} not persisted"
+                )
+            else:
+                log_rpc(
+                    f"Failed to save session metadata for "
+                    f"{session.session_id}: {e}"
+                )
+            with contextlib.suppress(OSError):
+                os.remove(tmp)
         except Exception as e:
-            log_rpc(f"Failed to save session metadata: {e}")
+            log_rpc(f"Failed to save session metadata for {session.session_id}: {e}")
             with contextlib.suppress(OSError):
                 os.remove(tmp)
 
@@ -616,16 +665,21 @@ class SessionManager(SessionSkillsMixin):
                     deleted = True
                 except Exception as e:
                     log_rpc(f"Failed to delete {cache_path}: {e}")
-        # Runtime lease file lives in runtime_leases/ (not the cache root the
-        # globs above cover); drop it so no stale lease claims a deleted
-        # session and later confuses ownership forensics or lease adoption.
-        lease_path = os.path.join(self.cache_dir, "runtime_leases", f"SID_{sid}.lease.json")
-        if os.path.exists(lease_path):
-            try:
-                os.remove(lease_path)
-                deleted = True
-            except Exception as e:
-                log_rpc(f"Failed to delete {lease_path}: {e}")
+        # Runtime lease and owner files live in runtime_leases/ (not the cache
+        # root the globs above cover); drop both so no stale claim (lease OR
+        # owner.json) references a deleted session and later confuses ownership
+        # forensics, lease adoption, or the stale-lease cleanup pass — which
+        # removes .lease.json but never .owner.json, so a session delete was
+        # the only place an orphaned owner file could be reclaimed.
+        runtime_leases_dir = os.path.join(self.cache_dir, "runtime_leases")
+        for suffix in (".lease.json", ".owner.json"):
+            claim_path = os.path.join(runtime_leases_dir, f"SID_{sid}{suffix}")
+            if os.path.exists(claim_path):
+                try:
+                    os.remove(claim_path)
+                    deleted = True
+                except Exception as e:
+                    log_rpc(f"Failed to delete {claim_path}: {e}")
         return bool(session) or deleted
 
     def delete_session(self, sid: str) -> bool:
@@ -645,6 +699,11 @@ class SessionManager(SessionSkillsMixin):
                         value = self._sanitize_note(value)
                     elif key == "auto_name":
                         value = self._sanitize_name(value)
+                    elif key == "analysis_gate":
+                        # Keep the durable gate normalized (None/"pending"/"complete")
+                        # even when set through the generic setter, so a caller
+                        # typo cannot leak a junk gate value to metadata.json.
+                        value = _normalize_analysis_gate(value)
                     setattr(session, key, value)
             session.update_access()
             self._save_metadata(session)

@@ -66,10 +66,6 @@ from ida_pro_mcp.host.stores.blackboard_store import (
     BlackboardStore,
     _resolve_db_path,
 )
-from ida_pro_mcp.host.stores.chip_db import (
-    find_chip_profile,
-    get_chip_family_catalog,
-)
 from ida_pro_mcp.host.stores.knowledge_graph import KnowledgeGraph
 from ida_pro_mcp.host.stores.symbol_db import SymbolDB
 
@@ -98,8 +94,6 @@ __all__ = [
     "build_audit_record",
     "classify_tool_action",
     "evaluate_policy",
-    "find_chip_profile",
-    "get_chip_family_catalog",
     "KnowledgeGraph",
     "CACHE_DIR",
     "ContextDensityOptimizer",

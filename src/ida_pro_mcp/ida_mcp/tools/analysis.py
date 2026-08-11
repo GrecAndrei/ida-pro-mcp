@@ -22,8 +22,8 @@ import ida_entry
 @tool
 @idawrite
 def analysis(
-    action: Annotated[Literal["get_options", "set_options", "set_processor", "set_loader_options", "set_architecture", "reanalyze", "run", "analyze", "state", "set_gp", "save_idb", "make_code", "undefine", "get_af", "set_af", "force_offset"],
-                      "Action: get_options|set_options|set_processor|set_loader_options|set_architecture|reanalyze|analyze|state|set_gp|save_idb|make_code|undefine|get_af|set_af|force_offset"],
+    action: Annotated[Literal["get_options", "set_options", "set_processor", "set_loader_options", "set_architecture", "reanalyze", "run", "analyze", "state", "set_gp", "save_idb", "make_code", "undefine", "get_af", "set_af", "force_offset", "add_entry", "snapshot", "restore_snapshot", "auto_wait"],
+                      "Action: get_options|set_options|set_processor|set_loader_options|set_architecture|reanalyze|analyze|state|set_gp|save_idb|make_code|undefine|get_af|set_af|force_offset|add_entry|snapshot|restore_snapshot|auto_wait"],
     options: Annotated[Optional[dict], "Options dict for set_options"] = None,
     processor: Annotated[Optional[str], "Processor name for set_processor"] = None,
     flags: Annotated[Optional[int], "Processor flags (idaapi.SETPROC_*)"] = None,
@@ -39,6 +39,10 @@ def analysis(
     af_flag: Annotated[Optional[str], "Analysis flag name (AF_* constant name) for get_af/set_af, e.g. 'AF_MARKCODE'"] = None,
     af_value: Annotated[Optional[bool], "Flag value (true/false) for set_af"] = None,
     path: Annotated[Optional[str], "IDB save path for save_idb (default: current IDB path)"] = None,
+    ordinal: Annotated[Optional[int], "Entry ordinal for add_entry"] = None,
+    name: Annotated[Optional[str], "Entry name for add_entry (optional)"] = None,
+    snapshot_name: Annotated[Optional[str], "Snapshot name for snapshot/restore_snapshot"] = None,
+    timeout_ms: Annotated[Optional[int], "Bounded wait budget in milliseconds for auto_wait (default 15000)"] = None,
     **kwargs
 ) -> dict:
     """
@@ -72,6 +76,23 @@ def analysis(
         Params: af_flag (REQUIRED, e.g. "AF_TRACING"), af_value (REQUIRED, bool).
     - force_offset: Tell IDA a value at addr is a pointer/offset (creates xref).
         Params: addr (REQUIRED), size optional (4 or 8 bytes, default: address size).
+    - add_entry: Register a real entry point at addr under ordinal. Use for a
+        bootstrapped reset-vector/ISR candidate on an opaque raw blob (RISC-V
+        etc.) so IDA keeps analyzing and exposing it.
+        Params: addr (REQUIRED), ordinal (REQUIRED, integer), name (optional).
+    - snapshot: Save an ida_loader snapshot of the current database under
+        snapshot_name so an experiment (reanalysis, patching, types) can be
+        rolled back before publishing findings.
+        Params: snapshot_name (REQUIRED).
+    - restore_snapshot: Roll the live database back to a previously saved
+        ida_loader snapshot. Params: snapshot_name (REQUIRED).
+    - auto_wait: Bounded wait for auto-analysis to drain. Pumps the analyzer in
+        50ms slices up to timeout_ms (default 15000) instead of calling the
+        unbounded ida_auto.auto_wait(), which has no timeout and would blow the
+        host RPC recv deadline. Never raises on timeout — returns
+        still-running with timed_out=true. Use for deterministic patch→verify
+        loops before querying fresh results.
+        Params: timeout_ms (optional, default 15000; 0 = single pump, no wait).
     """
     try:
         inf = None
@@ -119,6 +140,15 @@ def analysis(
             ft_name = _filetype_name(filetype)
             ft_effective = ft_name
             ft_note = None
+            warnings = []
+            if ft_name == "raw" or filetype in (
+                getattr(idaapi, "f_BIN", -1), getattr(idaapi, "f_BINARY", -1),
+            ):
+                warnings.append(
+                    "raw blob; arch unverified — bytes (e.g. RISC-V) will misdecode under "
+                    "the current processor. Run analysis(action='set_architecture', ...) to "
+                    "set processor/bitness/endian before trusting disassembly."
+                )
             return {
                 "ok": True,
                 "procname": procname,
@@ -129,6 +159,7 @@ def analysis(
                     "effective": ft_effective,
                     "note": ft_note,
                 },
+                "warnings": warnings,
                 "is_64bit": is_64bit,
                 "is_be": is_be,
                 "app_bitness": app_bitness,
@@ -494,6 +525,15 @@ def analysis(
             elif "x86" in proc_lower:
                 arch_hints["ptr_size"] = 4
                 arch_hints["default_int_width"] = 4
+            elif "riscv" in proc_lower or proc_lower.startswith("rv"):
+                rv_bits = int(bitness) if bitness is not None else _get_app_bitness()
+                arch_hints["ptr_size"] = 8 if rv_bits == 64 else 4
+                arch_hints["default_int_width"] = 4
+                arch_hints["riscv_note"] = (
+                    "RISC-V: GP (x3) unresolved? run analysis(action='set_gp', gp=...) "
+                    "so GP-relative xrefs resolve; confirm 2-byte alignment for compressed "
+                    "c.* instructions and the load base for raw blobs."
+                )
             elif "ppc" in proc_lower or "power" in proc_lower:
                 arch_hints["disasm_note"] = "PowerPC: use annotate_branches=true. Conditional branches use CR fields."
                 arch_hints["ptr_size"] = 4
@@ -633,8 +673,12 @@ def analysis(
             return result
 
         if action == "state":
-            # Lightweight read-only check of analysis progress.
-            analysis_ok = True
+            # Lightweight read-only check of analysis progress. The default is
+            # deliberately conservative: safe mode may be lifted ONLY on a
+            # confirmed live "auto analysis idle" verdict, so a probe exception
+            # or an unavailable API must never report complete (the h02 probe
+            # contract — D1-F6).
+            analysis_ok = False
             try:
                 if hasattr(idaapi, "get_auto_state"):
                     analysis_ok = int(idaapi.get_auto_state()) == int(
@@ -643,7 +687,7 @@ def analysis(
                 elif hasattr(idaapi, "auto_is_ok"):
                     analysis_ok = bool(idaapi.auto_is_ok())
             except Exception:
-                analysis_ok = True
+                analysis_ok = False
             func_count = -1
             try:
                 func_count = idaapi.get_func_qty() if hasattr(idaapi, "get_func_qty") else -1
@@ -931,6 +975,167 @@ def analysis(
                 "note": "IDA will now treat the value at this address as an offset/pointer and create an xref.",
             }
 
+        if action == "add_entry":
+            # Register a real entry point (Edit → Segments → Add entry point)
+            # for a bootstrapped reset-vector / ISR candidate. Raw blobs (RISC-V
+            # etc.) have no format loader, so _bootstrap_raw_entry_points() finds
+            # candidates in the image head; this action promotes one to a real
+            # entry so IDA keeps analyzing and exposing it.
+            if addr is None or addr == "":
+                return make_error(MCPError.INVALID_ARGS, "addr required")
+            if ordinal is None:
+                return make_error(MCPError.INVALID_ARGS, "ordinal required")
+            ea, err = validate_addr(addr)
+            if err:
+                return err
+            try:
+                ord_int = int(ordinal)
+            except (TypeError, ValueError):
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    f"ordinal must be an integer, got {ordinal!r}",
+                    details={"ordinal": ordinal},
+                )
+            entry_name = name or ""
+            added = False
+            try:
+                # add_entry(ordinal, ea, name, is_manual) is the IDA 7.x+ form;
+                # a handful of builds only take the 3-arg form.
+                added = bool(ida_entry.add_entry(ord_int, ea, entry_name, True))
+            except TypeError:
+                try:
+                    added = bool(ida_entry.add_entry(ord_int, ea, entry_name))
+                except Exception as e:
+                    return make_error(MCPError.IDA_ERROR, f"add_entry failed: {e}")
+            except Exception as e:
+                return make_error(MCPError.IDA_ERROR, f"add_entry failed: {e}")
+            if not added:
+                return make_error(
+                    MCPError.IDA_ERROR,
+                    f"ida_entry.add_entry failed for ordinal {ord_int} at {hex(ea)}",
+                    details={"ordinal": ord_int, "addr": hex(ea), "name": entry_name},
+                )
+            return {
+                "ok": True,
+                "ordinal": ord_int,
+                "addr": hex(ea),
+                "name": entry_name or None,
+                "result": True,
+                "note": "Registered as a real entry point.",
+            }
+
+        if action == "snapshot":
+            # ida_loader.save_snapshot(name, dbflags) — snapshot the current
+            # database under a name so a reversible experiment (reanalysis,
+            # patching, type fixes) can be rolled back with restore_snapshot
+            # before publishing findings. Pass DBFL_SNAPSHOT when the build
+            # exposes it, else 0; fall back to the 1-arg form.
+            if not snapshot_name:
+                return make_error(MCPError.INVALID_ARGS, "snapshot_name required")
+            saved = False
+            try:
+                flags = getattr(ida_loader, "DBFL_SNAPSHOT", 0)
+                try:
+                    saved = bool(ida_loader.save_snapshot(snapshot_name, flags))
+                except TypeError:
+                    saved = bool(ida_loader.save_snapshot(snapshot_name))
+            except Exception as e:
+                return make_error(MCPError.IDA_ERROR, f"save_snapshot failed: {e}")
+            if not saved:
+                return make_error(
+                    MCPError.IDA_ERROR,
+                    f"save_snapshot failed for {snapshot_name!r}",
+                    details={"snapshot_name": snapshot_name},
+                )
+            return {"ok": True, "snapshot_name": snapshot_name, "result": True}
+
+        if action == "restore_snapshot":
+            # Roll the live DB back to a previously saved ida_loader snapshot.
+            # restore_snapshot replaces the current database with the snapshot,
+            # so any experiment done after snapshot() is discarded.
+            if not snapshot_name:
+                return make_error(MCPError.INVALID_ARGS, "snapshot_name required")
+            restored = False
+            try:
+                restored = bool(ida_loader.restore_snapshot(snapshot_name))
+            except Exception as e:
+                return make_error(MCPError.IDA_ERROR, f"restore_snapshot failed: {e}")
+            if not restored:
+                return make_error(
+                    MCPError.IDA_ERROR,
+                    f"restore_snapshot failed for {snapshot_name!r} — snapshot may not exist",
+                    details={"snapshot_name": snapshot_name},
+                )
+            return {"ok": True, "snapshot_name": snapshot_name, "result": True}
+
+        if action == "auto_wait":
+            # Bounded wait for auto-analysis to drain. The unbounded
+            # ida_auto.auto_wait() drains the whole queue with no timeout and
+            # would blow the host RPC recv deadline on a large binary (see the
+            # reanalyze / _auto_reanalyze_text_segments notes), so pump the
+            # analyzer one unit per 50ms slice via auto_make_step() and poll
+            # auto_is_ok() up to the bound. Never raises on timeout.
+            import ida_auto as _ida_auto
+            import time as _time
+            budget_ms = 15000
+            if timeout_ms is not None:
+                try:
+                    budget_ms = int(timeout_ms)
+                except (TypeError, ValueError):
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        f"timeout_ms must be a non-negative integer, got {timeout_ms!r}",
+                        details={"timeout_ms": timeout_ms},
+                    )
+            budget_ms = max(0, budget_ms)
+            deadline = _time.time() + (budget_ms / 1000.0)
+            timed_out = False
+            drained = 0
+
+            def _auto_done() -> bool:
+                if hasattr(_ida_auto, "auto_is_ok"):
+                    return bool(_ida_auto.auto_is_ok())
+                if hasattr(idaapi, "auto_is_ok"):
+                    return bool(idaapi.auto_is_ok())
+                return True
+
+            while not _auto_done():
+                # Pump one queued unit. Prefer the 2-arg (s, e) form (IDA 9)
+                # and fall back to the no-arg form for builds that take none.
+                try:
+                    _ida_auto.auto_make_step()
+                    drained += 1
+                except TypeError:
+                    try:
+                        _ida_auto.auto_make_step(idaapi.BADADDR, idaapi.BADADDR)
+                        drained += 1
+                    except Exception:
+                        break
+                except Exception:
+                    break
+                if budget_ms <= 0:
+                    timed_out = True
+                    break
+                if _time.time() >= deadline:
+                    timed_out = True
+                    break
+                _time.sleep(0.05)
+            analysis_done = _auto_done()
+            return {
+                "ok": True,
+                "analysis_done": analysis_done,
+                # IDA exposes no direct queue-size API; report the number of
+                # analyzer units drained as a lower-bound proxy for depth (0
+                # when the queue is already idle).
+                "queue_depth": 0 if analysis_done else drained,
+                "timed_out": timed_out,
+                "note": (
+                    "Auto-analysis still running; poll again or check session(action='status')."
+                    if (timed_out and not analysis_done)
+                    else "Auto-analysis idle."
+                ),
+            }
+
         return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
     except Exception as e:
         return handle_error(e)
@@ -939,8 +1144,17 @@ def analysis(
 def _bootstrap_raw_entry_points(start_ea: int, end_ea: int) -> dict:
     """
     Best-effort entry seeding for raw blobs when auto-analysis finds 0 functions.
-    Uses deterministic vector-table style pointer extraction near image start.
-    Sets Thumb mode and uses ida_ua.create_insn for IDA 9.x compatibility.
+
+    Arch-aware scan of the image head:
+      * RISC-V: reset ``j``/``jal`` (and ``auipc``+``jalr``) branches plus ISR
+        pointer tables read as LE u32, BE u32, or LE u16 (compressed c.j) — a
+        headerless .bin has no vector table, so both the direct branch at the
+        image head and pointer-like tables are candidates.
+      * ARM/Thumb: LE u32 vector-table pointers (existing path).
+      * Unknown: default LE u32 pointer-table scan.
+
+    Found targets are converted to code, wrapped in functions, and registered
+    via ida_entry.add_entry so IDA keeps analyzing/exposing them.
     """
     seeded = 0
     scan_size = min(max(0, end_ea - start_ea), 0x800)
@@ -951,18 +1165,83 @@ def _bootstrap_raw_entry_points(start_ea: int, end_ea: int) -> dict:
         return {"seeded_entries": 0}
     import struct
     candidates = []
-    for i in range(4, len(data) - 3, 4):
-        raw = struct.unpack_from("<I", data, i)[0]
-        target = raw & ~1
-        if raw == 0:
-            continue
-        if start_ea <= target < end_ea:
-            candidates.append(target)
-        else:
-            base = raw & 0xFFFF0000
-            off = target - base
-            if 0 <= off < (end_ea - start_ea):
-                candidates.append(start_ea + off)
+    arch = get_arch()
+    is_rv = is_riscv_family(arch)
+    is_arm = is_arm_family(arch)
+
+    def _scan_le32_table() -> None:
+        """LE u32 vector/ISR table scan (shared by ARM and unknown arches)."""
+        for i in range(4, len(data) - 3, 4):
+            raw = struct.unpack_from("<I", data, i)[0]
+            target = raw & ~1
+            if raw == 0:
+                continue
+            if start_ea <= target < end_ea:
+                candidates.append(target)
+            else:
+                base = raw & 0xFFFF0000
+                off = target - base
+                if 0 <= off < (end_ea - start_ea):
+                    candidates.append(start_ea + off)
+
+    if is_rv:
+        # Reset branch at the image head: `j`/`jal` target, or auipc+jalr long
+        # branch.  Raw RISC-V firmware commonly starts at the reset vector.
+        try:
+            first_mnem = (idc.print_insn_mnem(start_ea) or "").lower()
+        except Exception:
+            first_mnem = ""
+        if first_mnem in ("j", "jal"):
+            try:
+                tgt = int(idc.get_operand_value(start_ea, 0))
+                if tgt not in (idaapi.BADADDR, 0) and start_ea <= tgt < end_ea:
+                    candidates.append(tgt)
+            except Exception:
+                pass
+        elif first_mnem == "auipc":
+            # auipc ra, imm20 ; jalr ra, imm12(ra)  ->  target = PC + (imm20<<12) + imm12
+            try:
+                imm = int(idc.get_operand_value(start_ea, 1))
+                if imm & 0x80000:
+                    imm -= 0x100000
+                ra = start_ea + (imm << 12)
+                ea2 = idc.next_head(start_ea, end_ea)
+                if ea2 != idaapi.BADADDR and (idc.print_insn_mnem(ea2) or "").lower() == "jalr":
+                    imm12 = int(idc.get_operand_value(ea2, 2))
+                    if imm12 & 0x800:
+                        imm12 -= 0x1000
+                    tgt = (ra + imm12) & 0xFFFFFFFFFFFFFFFF
+                    if start_ea <= tgt < end_ea:
+                        candidates.append(tgt)
+            except Exception:
+                pass
+        # ISR pointer tables: LE/BE u32, then LE u16 (compressed c.j targets).
+        for i in range(4, len(data) - 3, 4):
+            for raw in (struct.unpack_from("<I", data, i)[0],
+                        struct.unpack_from(">I", data, i)[0]):
+                if raw == 0:
+                    continue
+                target = raw & ~1
+                if start_ea <= target < end_ea:
+                    candidates.append(target)
+                else:
+                    base = raw & 0xFFFF0000
+                    off = target - base
+                    if 0 <= off < (end_ea - start_ea):
+                        candidates.append(start_ea + off)
+        for i in range(0, len(data) - 1, 2):
+            raw16 = struct.unpack_from("<H", data, i)[0]
+            target16 = raw16 & ~1
+            if raw16 == 0 or target16 < 0x100:
+                continue
+            if start_ea <= target16 < end_ea:
+                candidates.append(target16)
+    elif is_arm:
+        # Thumb vector-table pointers (LE u32; bit 0 selects Thumb).
+        _scan_le32_table()
+    else:
+        _scan_le32_table()
+
     seen = set()
     for ea in candidates[:64]:
         if ea in seen:
@@ -985,6 +1264,12 @@ def _bootstrap_raw_entry_points(start_ea: int, end_ea: int) -> dict:
                 continue
             if ida_funcs.add_func(ea) or ida_funcs.add_func(ea, min(ea + 256, end_ea)):
                 seeded += 1
+            # Register as an entry point so IDA keeps analyzing/exposing it.
+            try:
+                ord_val = ida_entry.get_entry_qty() + 1
+                ida_entry.add_entry(ord_val, ea, "", 0)
+            except Exception:
+                pass
         except Exception:
             continue
     return {"seeded_entries": seeded}
@@ -996,6 +1281,71 @@ _SKIP_SEGMENT_NAMES = {
     ".plt_indirect", ".plt_resolve",
     ".got", ".got.plt", ".got.off", ".got.sec",
 }
+
+
+def _is_raw_bin_filetype() -> bool:
+    """True when the loaded file is a raw/headerless binary (f_BIN / f_BINARY).
+
+    Uses only the ``idaapi``/``idc`` module globals so the auto-reanalysis
+    helpers stay self-contained (they are also executed standalone by the host
+    test harness, where ``_common`` re-exports are absent).
+    """
+    try:
+        f_bin = getattr(idaapi, "f_BIN", 0)
+        f_binary = getattr(idaapi, "f_BINARY", f_bin)
+        ft = None
+        inf_getter = getattr(idaapi, "inf_get_filetype", None)
+        if callable(inf_getter):
+            ft = int(inf_getter())
+        else:
+            inf_attr = getattr(idc, "get_inf_attr", None)
+            if callable(inf_attr):
+                v = inf_attr(getattr(idc, "INF_FILETYPE", -1))
+                if v is not None:
+                    ft = int(v)
+            else:
+                inf = idaapi.get_inf_structure() if callable(getattr(idaapi, "get_inf_structure", None)) else None
+                if inf is not None:
+                    v = getattr(inf, "filetype", None)
+                    if v is not None:
+                        ft = int(v)
+        if ft is not None:
+            return ft in (f_bin, f_binary)
+    except Exception:
+        pass
+    return False
+
+
+def _raw_mapped_range():
+    """Return (min_ea, max_ea) of the whole mapped database, or None."""
+    try:
+        import ida_ida as _ida_ida
+        if hasattr(_ida_ida, "inf_get_min_ea") and hasattr(_ida_ida, "inf_get_max_ea"):
+            mn = int(_ida_ida.inf_get_min_ea())
+            mx = int(_ida_ida.inf_get_max_ea())
+            if mn < mx:
+                return (mn, mx)
+    except Exception:
+        pass
+    try:
+        inf = idaapi.get_inf_structure() if callable(getattr(idaapi, "get_inf_structure", None)) else None
+        if inf is not None:
+            mn = getattr(inf, "min_ea", None)
+            mx = getattr(inf, "max_ea", None)
+            if mn is not None and mx is not None and mn < mx:
+                return (int(mn), int(mx))
+    except Exception:
+        pass
+    try:
+        inf_attr = getattr(idc, "get_inf_attr", None)
+        if callable(inf_attr):
+            mn = inf_attr(getattr(idc, "INF_MIN_EA", -1))
+            mx = inf_attr(getattr(idc, "INF_MAX_EA", -1))
+            if mn is not None and mx is not None and mn < mx:
+                return (int(mn), int(mx))
+    except Exception:
+        pass
+    return None
 
 
 def _segment_code_score(seg) -> tuple[int, int, int]:
@@ -1079,6 +1429,18 @@ def _find_text_segments() -> list[tuple[int, int, str]]:
         seen.add(key)
         out.append((s, e, name))
     out.sort(key=lambda t: t[0])
+    # Raw blobs (f_BIN) frequently load with NO executable segment — the bin
+    # loader creates a single R/W segment with perms that analysis tools then
+    # treat as data-only.  Refusing to schedule anything leaves the agent with
+    # a silent no-op, so fall back to the whole mapped range (the <0x100-byte
+    # skip is kept).  The caller (_auto_reanalyze_text_segments) reports the
+    # "no executable segments" warning.
+    if not out and _is_raw_bin_filetype():
+        mrange = _raw_mapped_range()
+        if mrange is not None:
+            s, e = mrange
+            if e - s >= 0x100:
+                out = [(s, e, "<raw-mapped>")]
     return out
 
 
@@ -1099,6 +1461,26 @@ def _auto_reanalyze_text_segments(
     import ida_auto as _ida_auto
 
     ranges = _find_text_segments()
+    # Open-time entry seeding for opaque raw blobs (f_BIN): this helper runs on
+    # every fresh load via server_script.py after auto_wait(), so a headerless
+    # .bin gets reset/ISR targets seeded even before any agent calls
+    # analysis(action='reanalyze').  Guarded so the host test namespace (no
+    # _bootstrap_raw_entry_points in scope) short-circuits on the non-raw path.
+    if _is_raw_bin_filetype():
+        mrange = _raw_mapped_range()
+        if mrange is not None:
+            try:
+                boot = _bootstrap_raw_entry_points(*mrange)
+                if boot.get("seeded_entries") and not ranges:
+                    ranges = [(*mrange, "<raw-mapped>")]
+            except Exception:
+                pass
+    warning = None
+    if ranges and ranges[0][2] == "<raw-mapped>":
+        warning = (
+            "no executable segments; set perms with segments(action='set_perms', ...) "
+            "— fell back to the whole mapped range for analysis"
+        )
     before_funcs = 0
     before_defined = 0
     before_total = 0
@@ -1131,21 +1513,48 @@ def _auto_reanalyze_text_segments(
     started = time.time()
     if scheduled > 0 and wait_seconds > 0:
         try:
-            # Pump the analyzer within the caller's budget instead of calling
-            # auto_wait(), which drains the entire queue with no timeout — a
-            # whole-image reanalyze of a large binary could block for minutes
-            # and blow the host RPC recv deadline. Step each planned range
-            # incrementally until auto_is_ok() or the budget is spent.
-            while time.time() - started < wait_seconds:
-                if hasattr(idaapi, "auto_is_ok") and bool(idaapi.auto_is_ok()):
-                    break
-                if hasattr(_ida_auto, "auto_make_step"):
+            # Drain the planned text ranges with auto_wait_range(s, e) — the
+            # SDK primitive that analyzes exactly the requested span and returns
+            # once it is done. It is far more efficient than stepping one
+            # address at a time: the previous spin-pump (auto_make_step in a
+            # 0.1s loop until auto_is_ok()) took ~46s to drain a ~1KB .text on
+            # IDA 9.3, because auto_is_ok() only flips after the whole queue
+            # drains while each auto_make_step call advances a single address.
+            # auto_wait() is avoided deliberately (it drains the ENTIRE queue
+            # with no timeout — a whole-image reanalyze of a large binary could
+            # block for minutes and blow the host RPC recv deadline), but
+            # auto_wait_range is scoped to the span we just planned. Bounding:
+            # per-range calls are skipped once the caller's budget is spent, and
+            # each call is wrapped so a stuck analyzer degrades to the legacy
+            # auto_make_step pump rather than hanging startup.
+            have_wait_range = hasattr(_ida_auto, "auto_wait_range")
+            have_step = hasattr(_ida_auto, "auto_make_step")
+            wait_range_ok = have_wait_range
+            if have_wait_range:
+                for s, e, _n in ranges:
+                    if time.time() - started >= wait_seconds:
+                        break
+                    try:
+                        _ida_auto.auto_wait_range(s, e)
+                    except Exception:
+                        # Range drain failed; fall through to the step pump so
+                        # the caller's reanalysis still makes best-effort
+                        # progress instead of silently doing nothing.
+                        wait_range_ok = False
+                        break
+            # Belt-and-braces: if auto_wait_range is unavailable or errored,
+            # fall back to the legacy incremental pump until auto_is_ok() or
+            # the budget is spent.
+            if not wait_range_ok and have_step:
+                while time.time() - started < wait_seconds:
+                    if hasattr(idaapi, "auto_is_ok") and bool(idaapi.auto_is_ok()):
+                        break
                     try:
                         for s, e, _n in ranges:
                             _ida_auto.auto_make_step(s, e)
                     except Exception:
                         pass
-                time.sleep(0.1)
+                    time.sleep(0.1)
         except Exception:
             pass
         waited = time.time() - started
@@ -1175,7 +1584,7 @@ def _auto_reanalyze_text_segments(
         {"start": hex(s), "end": hex(e), "name": name}
         for s, e, name in ranges
     ]
-    return {
+    result = {
         "eligible_ranges": eligible,
         "scheduled": scheduled,
         "functions_before": before_funcs,
@@ -1192,6 +1601,9 @@ def _auto_reanalyze_text_segments(
             after_funcs > before_funcs or after_defined > before_defined
         ),
     }
+    if warning:
+        result["warning"] = warning
+    return result
 
 
 def _entry_point_addrs() -> list[int]:

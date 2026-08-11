@@ -30,11 +30,21 @@ scripts (`ida_python`) — and suppresses auto-enrichment. **Manual small-area
 work stays available**: disassembly, decompilation of single functions,
 reads, strings, xrefs, comments/renames, and findings.
 
-Safe mode lifts only when a live runtime confirms `analysis_complete: true`.
-For background-loaded sessions the runtime is then reloaded against the fully
-analyzed IDB, and the next response for the session carries a one-shot
-`analysis_complete` warning. A runtime that dies mid-build keeps the gate on
-and reports `background_error`.
+Safe mode lifts only when a live runtime confirms `analysis_complete: true`
+on `analysis_confirm_polls` consecutive polls (default 2) — a dead or missing
+runtime can never lift the gate. The completing runtime IS the serving runtime:
+there is no reload against the analyzed IDB, so the session resumes in place.
+The next response for the session carries a one-shot `analysis_complete`
+warning. A runtime that dies mid-build keeps the gate on and reports
+`background_error` until a re-open or rebuild re-enters pending.
+
+The gate survives a host restart: each session records
+`metadata['analysis_gate']` (`pending`/`complete`) on every transition and at
+shutdown. On restart a `complete` session resumes ungated while a `pending` or
+untracked session stays gated (fail-safe) and re-arms its completion watcher on
+the first status/state touch. Every fresh spawn (create, switch, rebuild, or a
+call_tool auto-restart of a dead runtime) re-enters pending, so no path can
+bypass the gate.
 
 ## Staying oriented
 

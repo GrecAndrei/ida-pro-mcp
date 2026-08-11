@@ -80,6 +80,42 @@ def test_resolve_startup_timeout_falls_back_on_bad_env(monkeypatch):
     assert server_runtime_mod._resolve_startup_timeout() == 30
 
 
+def test_lifecycle_knobs_fall_back_on_bad_env(monkeypatch):
+    """The h05 lifecycle knobs parse tolerantly: a malformed env value falls
+    back to the default instead of crashing the host at import (analogous to
+    test_resolve_startup_timeout_falls_back_on_bad_env)."""
+    import importlib
+
+    import ida_pro_mcp.host.config as config
+
+    cases = [
+        ("IDA_MCP_ANALYSIS_CONFIRM_POLLS", "ANALYSIS_CONFIRM_POLLS", 2),
+        ("IDA_MCP_CHECKPOINT_SAVE_SEC", "CHECKPOINT_SAVE_SECONDS", 5.0),
+        (
+            "IDA_MCP_LARGE_IDB_SHUTDOWN_GRACE_SEC",
+            "LARGE_IDB_SHUTDOWN_GRACE_SECONDS",
+            30.0,
+        ),
+    ]
+    for env, attr, default in cases:
+        monkeypatch.setenv(env, "garbage")
+        importlib.reload(config)
+        try:
+            assert getattr(config, attr) == default, f"{attr} must fall back on bad env"
+        finally:
+            monkeypatch.delenv(env, raising=False)
+            importlib.reload(config)
+
+    # A valid value parses (and clamps to the configured bounds).
+    monkeypatch.setenv("IDA_MCP_ANALYSIS_CONFIRM_POLLS", "5")
+    importlib.reload(config)
+    try:
+        assert config.ANALYSIS_CONFIRM_POLLS == 5
+    finally:
+        monkeypatch.delenv("IDA_MCP_ANALYSIS_CONFIRM_POLLS", raising=False)
+        importlib.reload(config)
+
+
 def test_terminate_ida_processes_does_not_killpg_shared_group(monkeypatch):
     """A stale process that shares another process group must be signalled by
     pid only — killpg would take out the MCP server's whole group."""

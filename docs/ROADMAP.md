@@ -18,9 +18,11 @@ surface or documentation source.
 ## Product surface tiers
 
 The default agent surface (`tool_surface == "agent"`) advertises every `ida_*`
-operation from the catalog in `tools/list` — currently all 67 operations,
-built from `list_agent_operations()`. There is no hidden default subset: what
-a fresh agent sees is the full catalog.
+operation from the catalog in `tools/list` — the full
+`list_agent_operations()` catalog (103 operations as of the paper-addressal
+wave; the count is pinned by `tests/test_docs_sync.py` /
+`tests/host/test_swarm_p14_stale_docs.py`). There is no hidden default subset:
+what a fresh agent sees is the full catalog.
 
 The tiering below applies only to the legacy `IDA_MCP_TOOL_SURFACE=legacy`
 backend:

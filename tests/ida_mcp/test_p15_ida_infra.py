@@ -10,7 +10,6 @@ Coverage:
   "injection" substring; bounded sinks (strncpy/strncat/snprintf) are not
   dual-classified as dangerous sinks + safe functions.
 - crypto_registry: CRC32 polynomial labels are not swapped.
-- firmware_heuristics: regions with no fingerprint evidence get no boost.
 - semantic_matching.normalize_action tie-breaking is order-independent.
 - mcp_http origin/host checks accept IPv6 loopback + missing Origin.
 """
@@ -82,6 +81,17 @@ def _install_ida_stubs():
 
 
 def _load_error_handling():
+    # Install a clean `idc` stub (get_name_ea_simple resolves nothing) so the
+    # canonical address parser's symbol-resolution step falls through to
+    # bare-hex rather than inheriting an in-place-mutated idc from an earlier
+    # test in the session (e.g. test_swarm_t14 sets idc.get_name_ea_simple on
+    # the shared module object, which the per-test sys.modules snapshot cannot
+    # undo).
+    _install_ida_stubs()
+    idc = types.ModuleType("idc")
+    idc.BADADDR = -1
+    idc.get_name_ea_simple = lambda name: -1
+    sys.modules["idc"] = idc
     return _load_standalone("error_handling", "p15_error_handling_ut")
 
 
@@ -118,6 +128,65 @@ def test_parse_address_safe_rejects_float():
     assert err["code"] == eh.MCPError.ADDRESS_INVALID
 
 
+def test_make_error_always_emits_recoverable():
+    eh = _load_error_handling()
+    for code in (eh.MCPError.INVALID_ARGS, eh.MCPError.UNKNOWN, eh.MCPError.ADDRESS_INVALID):
+        err = eh.make_error(code, "x")
+        assert "recoverable" in err
+        assert err["recoverable"] is False
+    ok = eh.make_error(eh.MCPError.RPC_TIMEOUT, "t", recoverable=True)
+    assert ok["recoverable"] is True
+
+
+def test_parse_address_canonical_bare_hex_maps_inside_image(monkeypatch):
+    """A bare all-digit token is read as hex when the value maps in the image."""
+    eh = _load_error_handling()
+    # Default image range is the full address space, so any hex value maps.
+    addr, err = eh.parse_address_canonical("401000")
+    assert err is None
+    assert addr == 0x401000
+    # parse_address_safe delegates to the same policy.
+    addr2, err2 = eh.parse_address_safe("401000")
+    assert err2 is None
+    assert addr2 == 0x401000
+
+
+def test_parse_address_canonical_bare_hex_unmapped_requires_0x_prefix(monkeypatch):
+    """An ambiguous bare digit string outside the image is refused with a
+    'use 0x prefix' hint instead of silently guessing decimal or hex."""
+    eh = _load_error_handling()
+    # Simulate an opaque RISC-V raw blob mapped only in a small window.
+    monkeypatch.setattr(eh, "_image_min_ea", lambda: 0x800)
+    monkeypatch.setattr(eh, "_image_max_ea", lambda: 0x1800)
+    addr, err = eh.parse_address_canonical("401000")  # 0x401000 not in [0x800, 0x1800)
+    assert addr is None
+    assert err is not None
+    assert err["code"] == eh.MCPError.ADDRESS_INVALID
+    assert "0x prefix" in err.get("hint", "")
+    # A bare token that *does* map inside the window still resolves as hex.
+    addr_ok, err_ok = eh.parse_address_canonical("1000")
+    assert err_ok is None
+    assert addr_ok == 0x1000
+    # Explicit 0x always wins regardless of the mapping.
+    addr_x, err_x = eh.parse_address_canonical("0x401000")
+    assert err_x is None
+    assert addr_x == 0x401000
+
+
+def test_parse_address_canonical_weird_types_rejected(monkeypatch):
+    eh = _load_error_handling()
+    for bad in (True, 3.14, {}, ["0x401000"], b"401000"):
+        addr, err = eh.parse_address_canonical(bad)
+        assert addr is None, bad
+        assert err is not None and err["code"] == eh.MCPError.ADDRESS_INVALID, bad
+    addr_none, err_none = eh.parse_address_canonical(None)
+    assert addr_none is None
+    assert err_none["code"] == eh.MCPError.MISSING_REQUIRED_ARG
+    addr_neg, err_neg = eh.parse_address_canonical(-1)
+    assert addr_neg is None
+    assert err_neg["code"] == eh.MCPError.ADDRESS_INVALID
+
+
 # ---------------------------------------------------------------------------
 # cache: invalidate_all physically clears entries
 # ---------------------------------------------------------------------------
@@ -135,6 +204,46 @@ def test_cache_invalidate_all_clears_entries_physically():
     inst.invalidate_all()
     assert inst.stats()["entries"] == 0
     assert inst.get("code", {"x": 1}) is None
+
+
+# ---------------------------------------------------------------------------
+# events: a recorded hook event invalidates the shared TOOL_CACHE singleton
+# ---------------------------------------------------------------------------
+
+def _load_events_with_shared_cache():
+    """Load support/events.py wired to the same cache/sync pair the tools use.
+
+    The IDA event hooks (auto-analysis-finished / function-created) must
+    invalidate exactly the TOOL_CACHE singleton that @idaread/@idawrite
+    consult, otherwise a post-analysis read serves stale pre-analysis data.
+    """
+    _install_ida_stubs()
+    _register_ida_mcp_pkg()
+    cache = _load_cache()
+    rpc_stub = types.ModuleType("ida_pro_mcp.ida_mcp.rpc")
+    rpc_stub.McpToolError = type("McpToolError", (Exception,), {})
+    sys.modules["ida_pro_mcp.ida_mcp.rpc"] = rpc_stub
+    sys.modules["ida_pro_mcp.ida_mcp.cache"] = cache
+    sync = _load_standalone("sync", "p15_sync_ut")
+    # Register the sync instance under the name events._invalidate_tool_cache
+    # resolves first, so both it and sync._tool_cache() hit the same cache.
+    sys.modules["ida_pro_mcp.ida_mcp.sync"] = sync
+    events = _load_standalone("support/events", "p15_events_ut")
+    return events, cache
+
+
+def test_events_record_invalidates_shared_tool_cache():
+    events, cache = _load_events_with_shared_cache()
+    events.EVENT_RING.clear()
+    cache.TOOL_CACHE.put("code", {"x": 1}, {"a": 1})
+    cache.TOOL_CACHE.put("data", {"x": 2}, {"a": 2})
+    assert cache.TOOL_CACHE.stats()["entries"] == 2
+    events.record_event("function_created", 0x401000, "sub_401000")
+    # The event hook cleared the exact cache singleton @idaread/@idawrite use.
+    assert cache.TOOL_CACHE.stats()["entries"] == 0
+    # The event is recorded even though no SSE server/connections exist.
+    assert len(events.EVENT_RING) == 1
+    assert events.EVENT_RING[0]["type"] == "function_created"
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +337,52 @@ def test_sync_reentrancy_guard_reports_call_name():
     assert not t.is_alive(), "nested execute_sync must not hang the thread"
     assert "outer_fn" in result.get("outer", ""), result
     assert sync._in_flight == set()
+
+
+def test_sync_is_batch_missing_attribute_falls_back_to_cvar():
+    """IDA 9.x removed ``idaapi.is_batch()``; ``_sync_wrapper`` must still work.
+
+    Regression for a real runtime failure: on IDA 9.3 the sync deadlock guard
+    called ``idaapi.is_batch()`` and died with "module 'idaapi' has no
+    attribute 'is_batch'".  The test stubs the exact 9.x condition — the
+    attribute absent from ``idaapi`` — and asserts the cvar.batch fallback
+    keeps the wrapper functional from a worker thread.
+    """
+    sync, _ = _load_sync_with_cache()
+    # 9.x runtime: is_batch() no longer exists on idaapi.
+    del sync.idaapi.is_batch
+    # 9.x runtime: batch state is exposed via ida_kernwin.cvar.batch.
+    kernwin = sync.ida_kernwin
+    if not hasattr(kernwin, "cvar"):
+        kernwin.cvar = types.SimpleNamespace(batch=False)
+    else:
+        kernwin.cvar.batch = False
+
+    assert sync._is_batch() is False
+
+    result = {}
+
+    def worker():
+        try:
+            result["value"] = sync._sync_wrapper(lambda: {"ok": True}, sync.IDASafety.SAFE_READ)
+        except Exception as e:  # pragma: no cover - surfaced via result
+            result["error"] = e
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join(timeout=10)
+    assert not t.is_alive(), "_sync_wrapper must not hang without is_batch()"
+    assert "error" not in result, f"missing is_batch() broke sync: {result.get('error')!r}"
+    assert result.get("value") == {"ok": True}
+
+
+def test_sync_is_batch_prefers_idaapi_callable():
+    """When ``idaapi.is_batch()`` exists (IDA 7.x), it takes precedence."""
+    sync, _ = _load_sync_with_cache()
+    sync.idaapi.is_batch = lambda: True
+    assert sync._is_batch() is True
+    sync.idaapi.is_batch = lambda: False
+    assert sync._is_batch() is False
 
 
 def test_idaread_and_idawrite_share_same_tool_cache():
@@ -324,31 +479,6 @@ def test_crypto_dead_constant_sets_removed():
                  "ANTI_VM_STRINGS", "GAME_ANTI_CHEAT", "HASH_RESOLVE_FUNCS",
                  "PACKER_DISPLAY_NAMES"):
         assert not hasattr(reg, name), f"{name} should have been removed"
-
-
-# ---------------------------------------------------------------------------
-# firmware_heuristics: no boost without fingerprint evidence
-# ---------------------------------------------------------------------------
-
-def _load_firmware():
-    return _load_standalone("support/firmware_heuristics", "p15_fw_ut")
-
-
-def test_fingerprint_boost_absent_evidence_no_boost():
-    fw = _load_firmware()
-    regions = [
-        {"fingerprint": "known_fp", "priority_score": 0.5},
-        {"fingerprint": "unknown_fp", "priority_score": 0.5},
-    ]
-    fp_rank = [{"fingerprint": "known_fp", "score": 90.0}]
-    out = fw.apply_fingerprint_boost(regions, fp_rank, boost_cap=0.35)
-    by_fp = {r["fingerprint"]: r for r in out}
-    # Known fingerprint got boosted above base.
-    assert by_fp["known_fp"]["priority_score"] > 0.5
-    assert by_fp["known_fp"].get("priority_boost", 0.0) > 0
-    # Unknown fingerprint: no boost at all.
-    assert "priority_boost" not in by_fp["unknown_fp"]
-    assert by_fp["unknown_fp"]["priority_score"] == 0.5
 
 
 # ---------------------------------------------------------------------------

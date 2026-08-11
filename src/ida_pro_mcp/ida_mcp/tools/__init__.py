@@ -22,8 +22,8 @@ __all__ = [
     "ctree",
     "imports_deep",
     "stack_analysis",
-    "firmware_view",
     "calc",
+    "emulate",
     "intelligence",
     "wiki",
     "analysis",
@@ -33,11 +33,14 @@ __all__ = [
     "blackboard",
     "governance",
     "knowledge",
+    "firmware",
 ]
 
 # Mapping from tool name to module name (when they differ)
 _TOOL_MODULE_MAP = {
     "governance": "governance_engine",
+    # name == module name; explicit entry keeps the registry uniform.
+    "firmware": "firmware",
 }
 
 

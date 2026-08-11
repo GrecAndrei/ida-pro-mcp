@@ -13,7 +13,7 @@ from .core import (
     _match_size_rule,
     build_response,
     iter_code,
-    iter_segments,
+    resolve_scan_segments,
     resolve_target,
     safe_generate_disasm_line,
 )
@@ -116,10 +116,13 @@ def search_regex(pattern, case_sensitive, range_start, range_end, include_contex
     timer = SearchTimeout(timeout_ms)
     timed_out = False
 
-    for seg_start, seg_end in iter_segments(range_start, range_end, require_exec=True):
+    segs, seg_note, seg_error = resolve_scan_segments(range_start, range_end, require_exec=True)
+    if seg_error:
+        return make_error(MCPError.NOT_FOUND, seg_error)
+    for seg_start, seg_end in segs:
         if timed_out:
             break
-        for ea in iter_code(seg_start, seg_end):
+        for ea in iter_code(seg_start, seg_end, force=bool(seg_note)):
             try:
                 timer.check()
             except TimeoutError:
@@ -147,6 +150,8 @@ def search_regex(pattern, case_sensitive, range_start, range_end, include_contex
                 break
 
     result = build_response(results, offset, limit, matches_seen, truncated, pattern=pattern)
+    if seg_note:
+        result["note"] = seg_note
     if timed_out:
         result["timed_out"] = True
         result["hint"] = "Search timed out. Narrow with range or increase timeout_ms."

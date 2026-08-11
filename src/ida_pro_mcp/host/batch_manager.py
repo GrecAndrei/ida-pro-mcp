@@ -28,6 +28,11 @@ _PERSIST_STATE_DIR = os.environ.get(
 _CANCEL_GRACE_SECONDS = 1.0
 _MAX_PERSIST_RESULT_BYTES = 10_000
 _MAX_PERSIST_FIELDS = {"task_id", "session_id", "action", "args", "state", "created_at", "started_at", "finished_at", "result", "error"}
+# D10: debounce interval for task-state persistence. State changes are recorded
+# in memory immediately; the full-file rewrite to disk happens at most once per
+# second, and shutdown() flushes a still-dirty state so the final transition is
+# not lost on process exit.
+_PERSIST_DEBOUNCE_SECONDS = 1.0
 
 
 @dataclass
@@ -74,12 +79,36 @@ class BatchManager:
         self._lock = threading.Lock()
         self._tasks: dict[str, BatchTask] = {}
         self._instance_id = uuid.uuid4().hex[:12]
-        self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="batch-")
+        self._max_workers = max_workers
+        # The executor is created lazily and re-created on demand. It is
+        # "parked" (shut down + dropped) as soon as the task queue is idle so
+        # its non-daemon batch-* worker threads are reclaimed promptly instead
+        # of lingering for the process lifetime. Threads carry the stable
+        # "batch-" prefix and the pool stays bounded by max_workers.
+        self._executor = self._new_executor()
+        # Set by shutdown(); guards against submitting new work after teardown
+        # and makes repeated shutdown() calls idempotent.
+        self._shutdown = False
+        # D10: persistence debounce state. _dirty records that a write is owed;
+        # _persist_lock serializes the read-snapshot + write; _last_persist_time
+        # gates the ≤1/sec rate; _persist_path_cached avoids re-stating/mkdir on
+        # every save (os.makedirs was previously on the hot path).
+        self._persist_lock = threading.Lock()
+        self._dirty = False
+        self._last_persist_time = 0.0
+        self._persist_path_cached: str | None = None
         self._load_persisted()
-        # No host teardown path calls shutdown(), so the executor's non-daemon
-        # worker threads were never explicitly reclaimed. Joining them at
-        # interpreter exit prevents orphaned workers after a stdio/daemon exit.
+        # The host's server shutdown path does not reach the BatchManager, and
+        # an idle pool otherwise leaves non-daemon workers alive for the whole
+        # process. Joining them at interpreter exit prevents orphaned workers
+        # after a stdio/daemon exit. (Per-instance reclamation is handled by
+        # _maybe_park_idle_executor, so this exit net does not pin threads.)
         atexit.register(self.shutdown)
+
+    def _new_executor(self) -> ThreadPoolExecutor:
+        return ThreadPoolExecutor(
+            max_workers=self._max_workers, thread_name_prefix="batch-"
+        )
 
     def submit(
         self,
@@ -90,11 +119,20 @@ class BatchManager:
         run_fn: Callable[[BatchTask], Any] | None = None,
     ) -> str:
         task = BatchTask(action=action, args=args, session_id=session_id)
+        # The whole add+queue sequence holds the lock so a concurrently
+        # finishing worker cannot park the executor between the task being
+        # recorded as pending and its future being queued (parking only skips
+        # when no task is pending/running, so the new task must already be
+        # visible).
         with self._lock:
+            if self._shutdown:
+                raise RuntimeError("cannot schedule new futures after shutdown")
+            if self._executor is None:
+                self._executor = self._new_executor()
+            task.state = "pending"
             self._tasks[task.task_id] = task
             self._trim_history()
-        task.state = "pending"
-        future = self._executor.submit(self._run_task, task, run_fn)
+            future = self._executor.submit(self._run_task, task, run_fn)
         task._future = future
         return task.task_id
 
@@ -133,7 +171,30 @@ class BatchManager:
         finally:
             with self._lock:
                 task.finished_at = time.time()
+                # Once no task is pending/running the pool has nothing left to
+                # do; park it so its batch-* worker threads exit instead of
+                # idling for the process lifetime.
+                self._maybe_park_idle_executor()
             self._save_persisted()
+
+    def _maybe_park_idle_executor(self) -> None:
+        """Shut down and drop the executor when no task is in flight.
+
+        Caller holds _lock. Worker threads for a parked executor consume a
+        shutdown sentinel and exit promptly; the next submit() lazily creates a
+        fresh bounded pool. This keeps batch-* threads from accumulating across
+        tests/instances while the executor stays bounded at max_workers.
+        """
+        executor = self._executor
+        if executor is None:
+            return
+        if any(t.state in ("pending", "running") for t in self._tasks.values()):
+            return
+        self._executor = None
+        # wait=False: this may run on the very worker that just finished the
+        # last task; joining here would deadlock. Sentinels already queued make
+        # the workers exit as soon as they drain.
+        executor.shutdown(wait=False)
 
     def status(self, task_id: str | None = None) -> list[dict[str, Any]]:
         with self._lock:
@@ -216,14 +277,48 @@ class BatchManager:
                 del self._tasks[t.task_id]
 
     def shutdown(self, wait: bool = True) -> None:
-        self._executor.shutdown(wait=wait)
+        # Idempotent: a parked (None) executor has no threads to join, and a
+        # repeated call (atexit + explicit teardown) must not double-flush.
+        with self._lock:
+            if self._shutdown:
+                return
+            self._shutdown = True
+            executor = self._executor
+            self._executor = None
+        if executor is not None:
+            executor.shutdown(wait=wait)
+        # D10: flush a still-dirty state so the last transition is never lost
+        # when the process exits (shutdown is registered via atexit).
+        with self._persist_lock:
+            if self._dirty:
+                self._persist_now_locked()
 
     def _persist_path(self) -> str:
+        if self._persist_path_cached:
+            return self._persist_path_cached
         state_dir = os.environ.get("IDA_MCP_BATCH_STATE_DIR") or _PERSIST_STATE_DIR
-        os.makedirs(state_dir, exist_ok=True)
-        return os.path.join(state_dir, f"tasks-{self._instance_id}.json")
+        # makedirs once, not on every save — it only needs to guarantee the
+        # first write can open the file. _load_persisted() calls this first in
+        # __init__, so the directory exists before any task completes.
+        with contextlib.suppress(Exception):
+            os.makedirs(state_dir, exist_ok=True)
+        path = os.path.join(state_dir, f"tasks-{self._instance_id}.json")
+        self._persist_path_cached = path
+        return path
 
     def _save_persisted(self) -> None:
+        # D10: debounce to at most one disk write per second. Record the dirty
+        # flag immediately (cheap, in-memory) and actually write only when the
+        # debounce window has elapsed; a later flush captures every terminal
+        # task, so skipping an intermediate write loses nothing.
+        with self._persist_lock:
+            self._dirty = True
+            if time.time() - self._last_persist_time < _PERSIST_DEBOUNCE_SECONDS:
+                return
+            self._persist_now_locked()
+
+    def _persist_now_locked(self) -> None:
+        """Write terminal task state to disk. Caller holds _persist_lock."""
         try:
             with self._lock:
                 data = []
@@ -249,6 +344,11 @@ class BatchManager:
                     with open(tmp_path, "w") as f:
                         f.write(payload)
                     os.replace(tmp_path, path)
+            # Only a successful write clears the dirty flag and opens the next
+            # debounce window; a transient failure stays dirty so the state is
+            # retried on the next flush (e.g. shutdown).
+            self._dirty = False
+            self._last_persist_time = time.time()
         except Exception:
             pass
 

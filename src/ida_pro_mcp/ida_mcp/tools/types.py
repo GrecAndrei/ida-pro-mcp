@@ -1,10 +1,21 @@
 
 from __future__ import annotations
 
+import os
+
 try:
     from ._common import *
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
+
+# ida_struct is the classic IDA 7/8 struct-editing module (add_struc_member,
+# del_struc_member, set_member_name, set_member_tinfo). IDA 9 merged it into
+# ida_typeinf and no longer ships an `ida_struct` module, so its absence is
+# expected there — the per-member helpers fall back to tinfo_t methods.
+try:
+    import ida_struct
+except ImportError:
+    ida_struct = None  # type: ignore[assignment]
 
 # Ensure utility functions for local var type modification are available
 try:
@@ -35,6 +46,25 @@ def _is_fully_mapped(ea: int, size: int) -> bool:
         return False
 
 
+def _is_data_location(ea: int) -> bool:
+    """True when ``ea`` resolves to a standalone data item (never code).
+
+    Used by type propagation to decide whether an xref origin is a safe place
+    to apply a type: an address inside a function (code) is never a data item,
+    and an undefined location has no data flags to type. Only genuine data
+    items qualify.
+    """
+    try:
+        if ida_funcs.get_func(ea) is not None:
+            return False
+        flags = ida_bytes.get_flags(ea)
+        if not flags:
+            return False
+        return bool(ida_bytes.is_data(flags))
+    except Exception:
+        return False
+
+
 # ============================================================================
 # 5. TYPES - Type operations (structs, enums, prototypes)
 # ============================================================================
@@ -44,20 +74,35 @@ def _is_fully_mapped(ea: int, size: int) -> bool:
 def types(
     action: Annotated[Literal["list", "get", "set_prototype", "parse_decl", "declare", "apply",
                               "search_structs", "infer", "read_struct", "import_header",
-                              "diff", "visualize", "propagate", "enum_values", "type_graph", "vtable"],
+                              "diff", "visualize", "propagate", "enum_values", "type_graph", "vtable",
+                              "struct_member_add", "struct_member_del", "struct_member_rename",
+                              "struct_member_set_type", "enum_member_add", "enum_member_rename",
+                              "enum_member_revalue", "til_delete", "til_export", "til_import"],
                       "Action: list|get|set_prototype|parse_decl|declare|apply|search_structs|"
-                      "infer|read_struct|import_header|diff|visualize|propagate|enum_values|type_graph|vtable"],
+                      "infer|read_struct|import_header|diff|visualize|propagate|enum_values|type_graph|vtable|"
+                      "struct_member_add|struct_member_del|struct_member_rename|struct_member_set_type|"
+                      "enum_member_add|enum_member_rename|enum_member_revalue|til_delete|til_export|til_import"],
     name: Annotated[Optional[str], "Type name (or variable name for apply)"] = None,
     addr: Annotated[Optional[str], "Address (for set_prototype/apply/infer/read_struct)"] = None,
     decl: Annotated[Optional[str], "Type declaration string (or header content)"] = None,
     query: Annotated[Optional[str], "Search query (regex/glob/substring/semantic; for list/search_structs)"] = None,
     kind: Annotated[Optional[str], "Apply kind: function, global, local"] = None,
-    offset: Annotated[int, "Pagination offset"] = 0,
+    offset: Annotated[int, "Pagination offset (or member byte offset for struct_member_add; -1 appends)"] = 0,
     count: Annotated[int, "Maximum items to return"] = 100,
     # Extended action parameters
     other_name: Annotated[Optional[str], "Second type name (for diff)"] = None,
-    value: Annotated[Optional[int], "Enum value to look up (for enum_values with lookup mode)"] = None,
+    value: Annotated[Optional[int], "Enum value to look up (for enum_values) or enum member value (for enum_member_*)"] = None,
     max_depth: Annotated[int, "Maximum recursion depth for type_graph"] = 5,
+    # Per-member struct/enum editing + TIL carry parameters
+    struct_name: Annotated[Optional[str], "Struct type name (struct_member_* actions)"] = None,
+    member_name: Annotated[Optional[str], "Member/enumerator name (struct_member_*/enum_member_* actions)"] = None,
+    new_name: Annotated[Optional[str], "Replacement name (struct_member_rename / enum_member_rename)"] = None,
+    type_str: Annotated[Optional[str], "C type string (struct_member_add / struct_member_set_type)"] = None,
+    size: Annotated[Optional[int], "Member size in bytes (struct_member_add when type_str is omitted)"] = None,
+    enum_name: Annotated[Optional[str], "Enum type name (enum_member_* actions)"] = None,
+    enum_value: Annotated[Optional[int], "Enum member value (enum_member_add / enum_member_revalue)"] = None,
+    path: Annotated[Optional[str], "TIL file path (til_export / til_import)"] = None,
+    til_filter: Annotated[Optional[str], "Type-name filter for til_export (default '*')"] = None,
     **kwargs
 ) -> dict:
     """
@@ -79,16 +124,36 @@ def types(
     - propagate:      Propagate a type from one address to all locations that reference it via xrefs.
     - enum_values:    List all enum values for a given enum name, with optional value lookup.
     - type_graph:     Build a dependency graph of structs (which structs contain which other structs).
+    - struct_member_add:       Add a member to a struct (struct_name + member_name + offset, type_str or size).
+    - struct_member_del:       Delete a member from a struct by name.
+    - struct_member_rename:    Rename a struct member.
+    - struct_member_set_type:  Retype a struct member from a C type string.
+    - enum_member_add:         Add an enumerator (enum_name + member_name + value).
+    - enum_member_rename:      Rename an enumerator.
+    - enum_member_revalue:     Revalue an enumerator (new numeric value).
+    - til_delete:              Delete a named type from the local Type Library (TIL).
+    - til_export:              Export matching named types as a C header file (cross-session carry).
+    - til_import:              Import a C header file into the local Type Library.
 
     Arguments:
     - name:       Type name, or variable name when applying types.
     - addr:       Target address.
     - decl:       C declaration string or header content.
     - query:      Name filter for 'list' or field filter for 'search_structs'.
-    - offset/count: Pagination controls for 'list'.
+    - offset/count: Pagination controls for 'list'; offset is the member byte offset for
+                   'struct_member_add' (-1 appends at the end).
     - other_name: Second type name for 'diff' action.
     - value:      Enum numeric value to look up (for 'enum_values').
     - max_depth:  Max recursion depth for 'type_graph' (default 5).
+    - struct_name: Struct type name (struct_member_* actions).
+    - member_name: Member/enumerator name (struct_member_*/enum_member_* actions).
+    - new_name:    Replacement name for the *_rename actions.
+    - type_str:    C type string for struct_member_add / struct_member_set_type.
+    - size:        Member size in bytes for struct_member_add when type_str is omitted.
+    - enum_name:   Enum type name (enum_member_* actions).
+    - enum_value:  Enum member value for enum_member_add / enum_member_revalue.
+    - path:        TIL file path for til_export / til_import.
+    - til_filter:  Type-name filter for til_export (default '*').
     """
     try:
         # ====================================================================
@@ -803,13 +868,17 @@ def types(
             if not _resolve_type_by_name(str(type_name), tif):
                 return make_error(MCPError.TYPE_ERROR, f"Type '{type_name}' not found. Use 'list' to see available types.")
 
-            # Collect code + data xrefs TO the given address.
+            # Collect code + data xrefs TO the given address. Code references
+            # (call/load/store sites) are recorded without mutating them —
+            # applying a data type to an instruction address corrupts the IDB.
+            # apply_tinfo runs only at origins that are genuine data items.
             locations = []
+            call_sites = []
             seen = set()
             MAX_XREFS = 5000
 
             for xref in idautils.XrefsTo(ea, 0):
-                if len(locations) >= MAX_XREFS:
+                if len(locations) + len(call_sites) >= MAX_XREFS:
                     break
                 frm = int(getattr(xref, "frm", xref))
                 xref_type = int(getattr(xref, "type", 0) or 0)
@@ -819,28 +888,43 @@ def types(
                 seen.add(key)
                 is_code_xref = bool(getattr(xref, "iscode", False))
 
-                loc_info = {
+                base_info = {
                     "from": frm,
                     "from_hex": hex(frm),
                     "xref_kind": "code" if is_code_xref else "data",
                     "xref_type": xref_type,
                 }
 
-                # Best-effort type propagation at the xref origin.
+                if is_code_xref:
+                    # Code origin: never mutate — record it as a call site.
+                    func = idaapi.get_func(frm)
+                    base_info["func"] = hex(func.start_ea) if func else ""
+                    base_info["func_name"] = ida_funcs.get_func_name(func.start_ea) if func else ""
+                    base_info["status"] = "referenced"
+                    call_sites.append(base_info)
+                    continue
+
+                # Data origin: apply only when it is a genuine data item.
+                if not _is_data_location(frm):
+                    base_info["applied"] = False
+                    base_info["status"] = "skipped"
+                    base_info["reason"] = "xref origin is not a data item (code or undefined)"
+                    locations.append(base_info)
+                    continue
+
                 try:
                     if ida_typeinf.apply_tinfo(frm, tif, ida_typeinf.TINFO_DEFINITE):
-                        loc_info["applied"] = True
-                        loc_info["status"] = "applied"
+                        base_info["applied"] = True
+                        base_info["status"] = "applied"
                     else:
-                        loc_info["applied"] = False
-                        loc_info["status"] = "skipped"
-                        loc_info["reason"] = "apply_tinfo failed (incompatible type or address not writable)"
+                        base_info["applied"] = False
+                        base_info["status"] = "skipped"
+                        base_info["reason"] = "apply_tinfo failed (incompatible type or address not writable)"
                 except Exception as e:
-                    loc_info["applied"] = False
-                    loc_info["status"] = "error"
-                    loc_info["reason"] = str(e)
-
-                locations.append(loc_info)
+                    base_info["applied"] = False
+                    base_info["status"] = "error"
+                    base_info["reason"] = str(e)
+                locations.append(base_info)
 
             applied_count = sum(1 for loc in locations if loc.get("applied"))
             failed_count = len(locations) - applied_count
@@ -853,8 +937,11 @@ def types(
                 "type_size": tif.get_size(),
                 "propagated_to": [loc["from_hex"] for loc in locations if loc.get("applied")],
                 "skipped": int(failed_count),
-                "total_xrefs": len(locations),
+                "total_xrefs": len(locations) + len(call_sites),
                 "locations": locations[:200],
+                "call_sites": call_sites[:200],
+                "note": ("Type applied only at data-xref origins that resolve to a data item; "
+                         "code references are recorded in call_sites without mutation."),
             }
 
         # ====================================================================
@@ -1151,6 +1238,241 @@ def types(
             }
 
         # ====================================================================
+        # struct_member_add - Add a member to a struct
+        # ====================================================================
+        elif action == "struct_member_add":
+            sname, mname = _resolve_struct_names(struct_name, name, member_name)
+            if not sname:
+                return make_error(MCPError.INVALID_ARGS, "struct_name required. "
+                                  "Provide the struct type name to extend.")
+            if not mname:
+                return make_error(MCPError.INVALID_ARGS, "member_name required. "
+                                  "Provide the name of the new member.")
+            if not type_str and not size:
+                return make_error(MCPError.INVALID_ARGS, "type_str or size required. "
+                                  "Provide a C type (e.g. 'uint32_t') or the member size in bytes.")
+            tif, err = _struct_tif(sname)
+            if err:
+                return err
+            nbytes, err = _add_struct_member(tif, sname, mname, int(offset), type_str, size)
+            if err:
+                return err
+            return {
+                "ok": True,
+                "action": "struct_member_add",
+                "struct": sname,
+                "member": mname,
+                "offset": int(offset),
+                "type": type_str or f"bytes[{int(size)}]",
+                "size": nbytes,
+            }
+
+        # ====================================================================
+        # struct_member_del - Delete a struct member by name
+        # ====================================================================
+        elif action == "struct_member_del":
+            sname, mname = _resolve_struct_names(struct_name, name, member_name)
+            if not sname or not mname:
+                return make_error(MCPError.INVALID_ARGS, "struct_name and member_name required. "
+                                  "Provide the struct type name and the member to delete.")
+            tif, err = _struct_tif(sname)
+            if err:
+                return err
+            moff, err = _del_struct_member(tif, sname, mname)
+            if err:
+                return err
+            return {"ok": True, "action": "struct_member_del", "struct": sname,
+                    "member": mname, "offset": moff}
+
+        # ====================================================================
+        # struct_member_rename - Rename a struct member
+        # ====================================================================
+        elif action == "struct_member_rename":
+            sname, mname = _resolve_struct_names(struct_name, name, member_name)
+            if not sname or not mname or not new_name:
+                return make_error(MCPError.INVALID_ARGS, "struct_name, member_name, and new_name required. "
+                                  "Provide the struct type, the current member name, and the replacement name.")
+            tif, err = _struct_tif(sname)
+            if err:
+                return err
+            moff, err = _rename_struct_member(tif, sname, mname, new_name)
+            if err:
+                return err
+            return {"ok": True, "action": "struct_member_rename", "struct": sname,
+                    "old_name": mname, "new_name": new_name, "offset": moff}
+
+        # ====================================================================
+        # struct_member_set_type - Retype a struct member from a C type string
+        # ====================================================================
+        elif action == "struct_member_set_type":
+            sname, mname = _resolve_struct_names(struct_name, name, member_name)
+            if not sname or not mname or not type_str:
+                return make_error(MCPError.INVALID_ARGS, "struct_name, member_name, and type_str required. "
+                                  "Provide the struct type, the member name, and the new C type string.")
+            tif, err = _struct_tif(sname)
+            if err:
+                return err
+            moff, nbytes, err = _set_struct_member_type(tif, sname, mname, type_str)
+            if err:
+                return err
+            return {"ok": True, "action": "struct_member_set_type", "struct": sname,
+                    "member": mname, "type": type_str, "size": nbytes, "offset": moff}
+
+        # ====================================================================
+        # enum_member_add - Add an enumerator
+        # ====================================================================
+        elif action == "enum_member_add":
+            ename, mname = _resolve_enum_names(enum_name, name, member_name)
+            ev = enum_value if enum_value is not None else value
+            if not ename or not mname:
+                return make_error(MCPError.INVALID_ARGS, "enum_name and member_name required. "
+                                  "Provide the enum type name and the name of the new enumerator.")
+            if ev is None:
+                return make_error(MCPError.INVALID_ARGS, "enum_value required. "
+                                  "Provide the numeric value for the new enumerator.")
+            tif, err = _enum_tif(ename)
+            if err:
+                return err
+            err = _add_enum_member(tif, mname, int(ev))
+            if err:
+                return err
+            return {"ok": True, "action": "enum_member_add", "enum": ename,
+                    "member": mname, "value": int(ev)}
+
+        # ====================================================================
+        # enum_member_rename - Rename an enumerator
+        # ====================================================================
+        elif action == "enum_member_rename":
+            ename, mname = _resolve_enum_names(enum_name, name, member_name)
+            if not ename or not mname or not new_name:
+                return make_error(MCPError.INVALID_ARGS, "enum_name, member_name, and new_name required. "
+                                  "Provide the enum type, the current enumerator name, and the replacement name.")
+            tif, err = _enum_tif(ename)
+            if err:
+                return err
+            err = _rename_enum_member(tif, mname, new_name)
+            if err:
+                return err
+            return {"ok": True, "action": "enum_member_rename", "enum": ename,
+                    "old_name": mname, "new_name": new_name}
+
+        # ====================================================================
+        # enum_member_revalue - Revalue an enumerator
+        # ====================================================================
+        elif action == "enum_member_revalue":
+            ename, mname = _resolve_enum_names(enum_name, name, member_name)
+            ev = enum_value if enum_value is not None else value
+            if not ename or not mname:
+                return make_error(MCPError.INVALID_ARGS, "enum_name and member_name required. "
+                                  "Provide the enum type name and the enumerator to revalue.")
+            if ev is None:
+                return make_error(MCPError.INVALID_ARGS, "enum_value required. "
+                                  "Provide the new numeric value for the enumerator.")
+            tif, err = _enum_tif(ename)
+            if err:
+                return err
+            err = _revalue_enum_member(tif, mname, int(ev))
+            if err:
+                return err
+            return {"ok": True, "action": "enum_member_revalue", "enum": ename,
+                    "member": mname, "value": int(ev)}
+
+        # ====================================================================
+        # til_delete - Delete a named type from the local Type Library
+        # ====================================================================
+        elif action == "til_delete":
+            if not name:
+                return make_error(MCPError.INVALID_ARGS, "name required. "
+                                  "Provide the name of the type (struct/enum/typedef) to delete from the library.")
+            til = ida_typeinf.get_idati()
+            if not til:
+                return make_error(MCPError.IDA_ERROR, "Type library not available. "
+                                  "Ensure IDA has finished initial analysis and a type library is loaded.")
+            ntf = getattr(ida_typeinf, "NTF_TYPE", 1)
+            if not ida_typeinf.del_named_type(til, name, ntf):
+                return make_error(MCPError.TYPE_ERROR, f"Failed to delete type '{name}'. "
+                                  "The type may not exist in the local type library.")
+            return {"ok": True, "action": "til_delete", "name": name, "deleted": True}
+
+        # ====================================================================
+        # til_export - Export matching named types as a C header file
+        # ====================================================================
+        elif action == "til_export":
+            if not path:
+                return make_error(MCPError.INVALID_ARGS, "path required. "
+                                  "Provide the file path to write the exported type declarations to.")
+            _vp = validate_path_safe(path)
+            if _vp is not None:
+                path, _verr = _vp
+                if _verr:
+                    return _verr
+            til = ida_typeinf.get_idati()
+            if not til:
+                return make_error(MCPError.IDA_ERROR, "Type library not available. "
+                                  "Ensure IDA has finished initial analysis and a type library is loaded.")
+            qty_func = getattr(ida_typeinf, 'get_ordinal_qty', None) or getattr(ida_typeinf, 'get_ordinal_count', None)
+            if not qty_func:
+                return make_error(MCPError.IDA_ERROR, "Type ordinal API not available. "
+                                  "This IDA version may use a different type enumeration API.")
+            # '*' (the default) means "all types"; any other filter is matched
+            # with the shared smart matcher (substring/glob per _SMART_MATCH_MODE).
+            matcher = compile_smart_pattern(til_filter, case_sensitive=False) \
+                if til_filter and til_filter != "*" else None
+            lines = ["/* Exported from IDA type library. Import with types(action='til_import'). */", ""]
+            exported = []
+            total_qty = qty_func(til)
+            for ordinal in range(1, total_qty + 1):
+                tif = ida_typeinf.tinfo_t()
+                if not tif.get_numbered_type(til, ordinal):
+                    continue
+                tname = tif.get_type_name()
+                if not tname or (matcher is not None and not matcher(tname)):
+                    continue
+                decl_text = str(tif).strip()
+                if not decl_text:
+                    continue
+                lines.append(decl_text)
+                lines.append("")
+                exported.append({"name": tname, "ordinal": ordinal})
+            content = "\n".join(lines)
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(content)
+            except Exception as e:
+                return handle_error(e, context="til_export")
+            return {"ok": True, "action": "til_export", "path": path,
+                    "exported_count": len(exported), "types": exported}
+
+        # ====================================================================
+        # til_import - Import a C header file into the local Type Library
+        # ====================================================================
+        elif action == "til_import":
+            if not path:
+                return make_error(MCPError.INVALID_ARGS, "path required. "
+                                  "Provide the path to a C header exported by til_export (or any header).")
+            _vp = validate_path_safe(path)
+            if _vp is not None:
+                path, _verr = _vp
+                if _verr:
+                    return _verr
+            if not os.path.exists(path):
+                return make_error(MCPError.FILE_NOT_FOUND, f"Type library file not found: {path}")
+            try:
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+            except Exception as e:
+                return handle_error(e, context="til_import")
+            if not content.strip():
+                return make_error(MCPError.INVALID_ARGS, f"Type library file is empty: {path}")
+            errors = idc.parse_decls(content, 0)
+            if errors == 0:
+                return {"ok": True, "action": "til_import", "path": path,
+                        "status": "Header imported into the local type library", "errors": 0}
+            return make_error(MCPError.TYPE_ERROR, f"Header parsing failed with {errors} errors. "
+                              "Check C syntax, ensure all referenced types exist in the type library, "
+                              "and avoid trailing semicolons in unexpected places.")
+
+        # ====================================================================
         # Unknown action
         # ====================================================================
         else:
@@ -1159,7 +1481,9 @@ def types(
                 f"Unknown action: '{action}'. "
                 f"Supported actions: list|get|set_prototype|parse_decl|declare|apply|"
                 f"search_structs|infer|read_struct|import_header|diff|visualize|"
-                f"propagate|enum_values|type_graph|vtable",
+                f"propagate|enum_values|type_graph|vtable|struct_member_add|struct_member_del|"
+                f"struct_member_rename|struct_member_set_type|enum_member_add|enum_member_rename|"
+                f"enum_member_revalue|til_delete|til_export|til_import",
             )
 
     except Exception as e:
@@ -1220,3 +1544,322 @@ def _extract_struct_name(tif: ida_typeinf.tinfo_t) -> Optional[str]:
     if tif.is_struct() or tif.is_union():
         return tif.get_type_name()
     return None
+
+
+# ============================================================================
+# Per-member struct/enum editing + TIL carry helpers
+#
+# The member-editing actions are thin wrappers over the classic IDA 7/8
+# ida_struct / ida_typeinf module functions (add_struc_member, del_struc_member,
+# set_member_name, set_member_tinfo, add_enum_member, set_enum_member_name,
+# set_enum_member_value). IDA 9 removed `ida_struct` and the classic enum
+# member functions, so each helper also falls back to the tinfo_t methods
+# (add_udm/del_udm/rename_udm/set_udm_type, add_edm/rename_edm/del_edm).
+# ============================================================================
+
+# Human-readable add_struc_member / del_struc_member / set_member_* error codes.
+_STRUC_ERROR_TEXT = {
+    -1: "member name already exists or is invalid",
+    -2: "invalid member offset (overlaps or out of range)",
+    -3: "invalid member size (zero or too small)",
+    -4: "invalid member type info",
+    -5: "member not found",
+    -6: "member already exists",
+    -7: "variable-size member not supported",
+    -8: "bitfield member not supported",
+    -9: "nested structure error",
+}
+
+
+def _struc_error_text(code: int) -> str:
+    """Best-effort description of a classic struct-editing error code."""
+    return _STRUC_ERROR_TEXT.get(int(code), "unknown error")
+
+
+def _resolve_struct_names(struct_name: Optional[str], name: Optional[str],
+                          member_name: Optional[str]):
+    """Resolve the effective (struct_name, member_name) for a struct edit.
+
+    ``struct_name`` is the canonical struct parameter and ``name`` is accepted
+    as an alias for it. When ``struct_name`` is given explicitly, the shared
+    ``name`` parameter carries the member name (matching the
+    struct_member_add(struct_name, name, offset, ...) signature).
+    """
+    sname = struct_name or name
+    if member_name is not None:
+        mname = member_name
+    elif struct_name is not None:
+        mname = name
+    else:
+        mname = None
+    return sname, mname
+
+
+def _resolve_enum_names(enum_name: Optional[str], name: Optional[str],
+                        member_name: Optional[str]):
+    """Resolve the effective (enum_name, member_name) for an enum edit.
+
+    Mirrors ``_resolve_struct_names``: ``name`` aliases the enum name, and when
+    ``enum_name`` is explicit ``name`` carries the member name (matching the
+    enum_member_add(enum_name, name, value) signature).
+    """
+    ename = enum_name or name
+    if member_name is not None:
+        mname = member_name
+    elif enum_name is not None:
+        mname = name
+    else:
+        mname = None
+    return ename, mname
+
+
+def _struct_tif(struct_name: str):
+    """Resolve a struct/union by name to its tinfo_t, or (None, error_dict)."""
+    tif = ida_typeinf.tinfo_t()
+    if not _resolve_type_by_name(struct_name, tif):
+        return None, make_error(MCPError.TYPE_ERROR, f"Struct '{struct_name}' not found in the type library. "
+                                 "Use 'list' to browse available types.")
+    if not (tif.is_struct() or tif.is_union()):
+        return None, make_error(MCPError.INVALID_ARGS, f"'{struct_name}' is not a struct/union type. "
+                                 "Use 'get' to inspect any type, or 'list' to browse available types.")
+    return tif, None
+
+
+def _enum_tif(enum_name: str):
+    """Resolve an enum by name to its tinfo_t, or (None, error_dict)."""
+    tif = ida_typeinf.tinfo_t()
+    if not _resolve_type_by_name(enum_name, tif):
+        return None, make_error(MCPError.TYPE_ERROR, f"Enum '{enum_name}' not found in the type library. "
+                                 "Use 'list' to browse available types.")
+    if not tif.is_enum():
+        return None, make_error(MCPError.INVALID_ARGS, f"'{enum_name}' is not an enum type. "
+                                 "Use 'get' to inspect any type, or 'list' to browse available types.")
+    return tif, None
+
+
+def _struct_sptr(struct_name: str):
+    """Best-effort ``struc_t*`` handle for a struct (classic ida_struct path)."""
+    sid = None
+    try:
+        sid = idc.get_struc_id(struct_name)
+    except Exception:
+        sid = None
+    if sid in (None, 0, -1, idaapi.BADADDR):
+        try:
+            sid = ida_struct.get_struc_id(struct_name)
+        except Exception:
+            return None
+    if sid in (None, 0, -1, idaapi.BADADDR):
+        return None
+    try:
+        return ida_struct.get_struc(sid)
+    except Exception:
+        return None
+
+
+def _udt_member(tif: ida_typeinf.tinfo_t, member_name: str):
+    """Return ``(index, byte_offset)`` of a named struct/union member, or None."""
+    udt = ida_typeinf.udt_type_data_t()
+    if not tif.get_udt_details(udt):
+        return None
+    for i in range(udt.size()):
+        m = udt[i]
+        if m.name == member_name:
+            return i, m.offset // 8
+    return None
+
+
+def _enum_member_index(tif: ida_typeinf.tinfo_t, member_name: str):
+    """Return the index of a named enum member, or None."""
+    ei = ida_typeinf.enum_type_data_t()
+    if not tif.get_enum_details(ei):
+        return None
+    for i in range(ei.size()):
+        if ei[i].name == member_name:
+            return i
+    return None
+
+
+def _parse_member_type(type_str: Optional[str], size: Optional[int]):
+    """Build a tinfo_t for a member from type_str (or a raw byte array of `size`).
+
+    Returns ``(tif, None)`` on success or ``(None, error_dict)``.
+    """
+    decl = type_str or (f"char[{int(size)}]" if size else "")
+    if not decl:
+        return None, make_error(MCPError.INVALID_ARGS, "type_str or size required. "
+                                 "Provide a C type (e.g. 'uint32_t') or the member size in bytes.")
+    tif = ida_typeinf.tinfo_t()
+    if not ida_typeinf.parse_decl(tif, None, decl, ida_typeinf.PT_SIL):
+        return None, make_error(MCPError.INVALID_ARGS, f"Failed to parse member type: '{decl}'. "
+                                 "Check C syntax and ensure all referenced types exist in the type library.")
+    if tif.get_size() <= 0:
+        return None, make_error(MCPError.INVALID_ARGS, f"Could not determine a positive size for member type '{decl}'.")
+    return tif, None
+
+
+def _has_classic_struct_api() -> bool:
+    """True when the classic ida_struct module (IDA 7/8) is importable and usable."""
+    return ida_struct is not None and hasattr(ida_struct, "add_struc_member")
+
+
+def _add_struct_member(tif: ida_typeinf.tinfo_t, struct_name: str, member_name: str,
+                       offset: int, type_str: Optional[str], size: Optional[int]):
+    """Add a member to a struct. Returns ``(nbytes, None)`` or ``(None, error_dict)``."""
+    mt, err = _parse_member_type(type_str, size)
+    if err:
+        return None, err
+    nbytes = mt.get_size()
+    if _has_classic_struct_api():
+        sptr = _struct_sptr(struct_name)
+        if sptr is None:
+            return None, make_error(MCPError.IDA_ERROR, f"Could not resolve struct handle for '{struct_name}'.")
+        res = ida_struct.add_struc_member(sptr, member_name, offset, 0, mt, nbytes)
+        if res != 0:
+            return None, make_error(MCPError.IDA_ERROR,
+                                    f"add_struc_member failed with code {res} ({_struc_error_text(res)}).")
+        return nbytes, None
+    # IDA 9 tinfo_t path.
+    if not hasattr(tif, "add_udm"):
+        return None, make_error(MCPError.IDA_ERROR, "No struct member API available on this IDA version.")
+    bit_offset = tif.get_size() * 8 if offset < 0 else offset * 8
+    try:
+        tif.add_udm(member_name, mt, bit_offset)
+    except Exception as e:
+        return None, make_error(MCPError.IDA_ERROR, f"add_udm failed: {e}")
+    return nbytes, None
+
+
+def _del_struct_member(tif: ida_typeinf.tinfo_t, struct_name: str, member_name: str):
+    """Delete a named member from a struct. Returns ``(byte_offset, None)`` or ``(None, error_dict)``."""
+    info = _udt_member(tif, member_name)
+    if info is None:
+        return None, make_error(MCPError.TYPE_ERROR, f"Member '{member_name}' not found in struct '{struct_name}'. "
+                                 "Use types(action='get', name='<struct>') to list members.")
+    idx, moff = info
+    if _has_classic_struct_api():
+        sptr = _struct_sptr(struct_name)
+        if sptr is None:
+            return None, make_error(MCPError.IDA_ERROR, f"Could not resolve struct handle for '{struct_name}'.")
+        res = ida_struct.del_struc_member(sptr, moff)
+        if res != 0:
+            return None, make_error(MCPError.IDA_ERROR,
+                                    f"del_struc_member failed with code {res} ({_struc_error_text(res)}).")
+        return moff, None
+    if not hasattr(tif, "del_udm"):
+        return None, make_error(MCPError.IDA_ERROR, "No struct member API available on this IDA version.")
+    res = tif.del_udm(idx)
+    if res != 0:
+        return None, make_error(MCPError.IDA_ERROR, f"del_udm failed with code {res}.")
+    return moff, None
+
+
+def _rename_struct_member(tif: ida_typeinf.tinfo_t, struct_name: str, member_name: str, new_name: str):
+    """Rename a struct member. Returns ``(byte_offset, None)`` or ``(None, error_dict)``."""
+    info = _udt_member(tif, member_name)
+    if info is None:
+        return None, make_error(MCPError.TYPE_ERROR, f"Member '{member_name}' not found in struct '{struct_name}'. "
+                                 "Use types(action='get', name='<struct>') to list members.")
+    idx, moff = info
+    if _has_classic_struct_api():
+        sptr = _struct_sptr(struct_name)
+        if sptr is None:
+            return None, make_error(MCPError.IDA_ERROR, f"Could not resolve struct handle for '{struct_name}'.")
+        res = ida_struct.set_member_name(sptr, moff, new_name)
+        if res != 0:
+            return None, make_error(MCPError.IDA_ERROR,
+                                    f"set_member_name failed with code {res} ({_struc_error_text(res)}).")
+        return moff, None
+    if not hasattr(tif, "rename_udm"):
+        return None, make_error(MCPError.IDA_ERROR, "No struct member API available on this IDA version.")
+    res = tif.rename_udm(idx, new_name)
+    if res != 0:
+        return None, make_error(MCPError.IDA_ERROR, f"rename_udm failed with code {res}.")
+    return moff, None
+
+
+def _set_struct_member_type(tif: ida_typeinf.tinfo_t, struct_name: str, member_name: str, type_str: str):
+    """Retype a struct member. Returns ``(byte_offset, nbytes, None)`` or ``(None, None, error_dict)``."""
+    info = _udt_member(tif, member_name)
+    if info is None:
+        return None, None, make_error(MCPError.TYPE_ERROR, f"Member '{member_name}' not found in struct '{struct_name}'. "
+                                      "Use types(action='get', name='<struct>') to list members.")
+    idx, moff = info
+    mt, err = _parse_member_type(type_str, None)
+    if err:
+        return None, None, err
+    if _has_classic_struct_api():
+        sptr = _struct_sptr(struct_name)
+        if sptr is None:
+            return None, None, make_error(MCPError.IDA_ERROR, f"Could not resolve struct handle for '{struct_name}'.")
+        member = ida_struct.get_member(sptr, moff)
+        res = ida_struct.set_member_tinfo(sptr, member, moff, mt, 0)
+        if res != 0:
+            return None, None, make_error(MCPError.IDA_ERROR,
+                                          f"set_member_tinfo failed with code {res} ({_struc_error_text(res)}).")
+        return moff, mt.get_size(), None
+    if not hasattr(tif, "set_udm_type"):
+        return None, None, make_error(MCPError.IDA_ERROR, "No struct member API available on this IDA version.")
+    res = tif.set_udm_type(idx, mt)
+    if res != 0:
+        return None, None, make_error(MCPError.IDA_ERROR, f"set_udm_type failed with code {res}.")
+    return moff, mt.get_size(), None
+
+
+def _add_enum_member(tif: ida_typeinf.tinfo_t, member_name: str, value: int):
+    """Add an enumerator. Returns None or an error_dict."""
+    if hasattr(ida_typeinf, "add_enum_member"):
+        res = ida_typeinf.add_enum_member(tif.get_tid(), member_name, value, -1)
+        if res != 0:
+            return make_error(MCPError.IDA_ERROR, f"add_enum_member failed with code {res}. "
+                              "The enumerator name must be unique and the value must be valid for the enum.")
+        return None
+    if hasattr(tif, "add_edm"):
+        try:
+            tif.add_edm(member_name, value, -1)
+        except Exception as e:
+            return make_error(MCPError.IDA_ERROR, f"add_edm failed: {e}")
+        return None
+    return make_error(MCPError.IDA_ERROR, "No enum member API available on this IDA version.")
+
+
+def _rename_enum_member(tif: ida_typeinf.tinfo_t, member_name: str, new_name: str):
+    """Rename an enumerator. Returns None or an error_dict."""
+    if hasattr(ida_typeinf, "set_enum_member_name"):
+        res = ida_typeinf.set_enum_member_name(tif.get_tid(), member_name, new_name)
+        if res != 0:
+            return make_error(MCPError.IDA_ERROR, f"set_enum_member_name failed with code {res}. "
+                              "The new enumerator name must be unique.")
+        return None
+    if hasattr(tif, "rename_edm"):
+        idx = _enum_member_index(tif, member_name)
+        if idx is None:
+            return make_error(MCPError.TYPE_ERROR, f"Enumerator '{member_name}' not found in the enum.")
+        res = tif.rename_edm(idx, new_name)
+        if res != 0:
+            return make_error(MCPError.IDA_ERROR, f"rename_edm failed with code {res}.")
+        return None
+    return make_error(MCPError.IDA_ERROR, "No enum member API available on this IDA version.")
+
+
+def _revalue_enum_member(tif: ida_typeinf.tinfo_t, member_name: str, value: int):
+    """Revalue an enumerator. Returns None or an error_dict."""
+    if hasattr(ida_typeinf, "set_enum_member_value"):
+        res = ida_typeinf.set_enum_member_value(tif.get_tid(), member_name, value, -1)
+        if res != 0:
+            return make_error(MCPError.IDA_ERROR, f"set_enum_member_value failed with code {res}. "
+                              "The value may collide with another enumerator's bitmask.")
+        return None
+    if hasattr(tif, "del_edm") and hasattr(tif, "add_edm"):
+        idx = _enum_member_index(tif, member_name)
+        if idx is None:
+            return make_error(MCPError.TYPE_ERROR, f"Enumerator '{member_name}' not found in the enum.")
+        res = tif.del_edm(idx)
+        if res != 0:
+            return make_error(MCPError.IDA_ERROR, f"del_edm failed with code {res}.")
+        try:
+            tif.add_edm(member_name, value, -1, 0, idx)
+        except Exception as e:
+            return make_error(MCPError.IDA_ERROR, f"add_edm failed: {e}")
+        return None
+    return make_error(MCPError.IDA_ERROR, "No enum member API available on this IDA version.")

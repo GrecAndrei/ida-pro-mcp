@@ -61,6 +61,13 @@ class MCPError:
     SIZE_LIMIT_EXCEEDED = "SIZE_LIMIT_EXCEEDED"
     RATE_LIMIT = "RATE_LIMIT"
     STUCK_LOOP = "STUCK_LOOP"
+    # Experimental feature gated behind an opt-in environment flag.
+    FEATURE_DISABLED = "FEATURE_DISABLED"
+    # Optional radare2/Rizin subprocess engine (Architecture A, Phase 1)
+    R2_ENGINE_START_FAILED = "R2_ENGINE_START_FAILED"
+    R2_TIMEOUT = "R2_TIMEOUT"
+    R2_PROCESS_DIED = "R2_PROCESS_DIED"
+    R2_BINARY_NOT_FOUND = "R2_BINARY_NOT_FOUND"
     INTERNAL = "INTERNAL"
 
 
@@ -100,6 +107,11 @@ _ERROR_CATEGORIES: dict[str, str] = {
     MCPError.SIZE_LIMIT_EXCEEDED: ErrorCategory.USER,
     MCPError.RATE_LIMIT: ErrorCategory.RUNTIME,
     MCPError.STUCK_LOOP: ErrorCategory.RUNTIME,
+    MCPError.FEATURE_DISABLED: ErrorCategory.USER,
+    MCPError.R2_ENGINE_START_FAILED: ErrorCategory.RUNTIME,
+    MCPError.R2_TIMEOUT: ErrorCategory.RUNTIME,
+    MCPError.R2_PROCESS_DIED: ErrorCategory.RUNTIME,
+    MCPError.R2_BINARY_NOT_FOUND: ErrorCategory.USER,
 }
 
 
@@ -118,7 +130,7 @@ _HOST_ERROR_HINTS = {
     MCPError.SESSION_NOT_FOUND: "Session not found. Use ida_session_list to see available sessions.",
     MCPError.BATCH_EMPTY: "The batch call list is empty. Provide at least one call.",
     MCPError.BATCH_TOO_LARGE: "Too many batch calls. Limit to 50 calls per batch.",
-    MCPError.BOOKMARK_NOT_FOUND: "Bookmark not found. Bookmarks are not exposed as public operations; use ida_python if code execution is authorized.",
+    MCPError.BOOKMARK_NOT_FOUND: "Bookmark not found. Bookmark mutation isn't a public op; list via idb(action='bookmarks'); manage via misc(action='python') if code execution is authorized.",
     MCPError.TRUNCATION_TOKEN_EXPIRED: "Continuation token expired. Re-run the original query.",
     MCPError.TRUNCATION_TOKEN_INVALID: "Invalid continuation token. Check the token value.",
     MCPError.TRUNCATION_FIELD_MISSING: "Requested field not in truncated response.",
@@ -136,6 +148,11 @@ _HOST_ERROR_HINTS = {
     MCPError.SIZE_LIMIT_EXCEEDED: "The requested size exceeds the limit. Use a smaller range or pagination.",
     MCPError.RATE_LIMIT: "Rate limit exceeded. Reduce call frequency or wait a moment before retrying.",
     MCPError.STUCK_LOOP: "Repeated identical analysis steps detected. Change approach before continuing.",
+    MCPError.FEATURE_DISABLED: "This experimental feature is disabled by default. Set the documented environment flag to enable it.",
+    MCPError.R2_ENGINE_START_FAILED: "The radare2/Rizin engine failed to start. Verify the binary is installed and executable, then retry.",
+    MCPError.R2_TIMEOUT: "The r2 engine subprocess exceeded its wall-clock cap. Increase IDA_MCP_R2_TIMEOUT_SEC or reduce the request size.",
+    MCPError.R2_PROCESS_DIED: "The r2 engine subprocess died before returning a result. Check the engine binary and retry.",
+    MCPError.R2_BINARY_NOT_FOUND: "The r2 target binary was not found, or no engine binary (rz/r2) is installed. Set IDA_MCP_R2_BIN or install the engine with the installer --with-r2 flag.",
 }
 
 # Recovery actions: suggested public operations the LLM can auto-execute when this error occurs.

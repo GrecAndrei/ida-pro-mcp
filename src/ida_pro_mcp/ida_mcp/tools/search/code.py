@@ -10,6 +10,7 @@ from .core import (
     build_response,
     iter_code,
     iter_segments,
+    resolve_scan_segments,
     safe_generate_disasm_line,
 )
 
@@ -21,10 +22,14 @@ def search_insns(pattern, range_start, range_end, include_context, offset, limit
     truncated = False
     matches_seen = 0
 
-    for seg_start, seg_end in iter_segments(range_start, range_end, require_exec=True):
+    segs, seg_note, seg_error = resolve_scan_segments(range_start, range_end, require_exec=True)
+    if seg_error:
+        return make_error(MCPError.NOT_FOUND, seg_error)
+    relaxed = bool(seg_note)
+    for seg_start, seg_end in segs:
         ea = seg_start
         while ea < seg_end and not truncated:
-            if ida_bytes.is_code(ida_bytes.get_flags(ea)):
+            if relaxed or ida_bytes.is_code(ida_bytes.get_flags(ea)):
                 match = True
                 check_ea = ea
                 sequence = []
@@ -56,7 +61,10 @@ def search_insns(pattern, range_start, range_end, include_context, offset, limit
             if ea == idaapi.BADADDR:
                 break
 
-    return build_response(results, offset, limit, matches_seen, truncated, pattern=pattern)
+    result = build_response(results, offset, limit, matches_seen, truncated, pattern=pattern)
+    if seg_note:
+        result["note"] = seg_note
+    return result
 
 
 def search_text(pattern, case_sensitive, range_start, range_end, include_context, offset, limit, timeout_ms=0):
@@ -68,10 +76,13 @@ def search_text(pattern, case_sensitive, range_start, range_end, include_context
     timer = SearchTimeout(timeout_ms)
     timed_out = False
 
-    for seg_start, seg_end in iter_segments(range_start, range_end, require_exec=True):
+    segs, seg_note, seg_error = resolve_scan_segments(range_start, range_end, require_exec=True)
+    if seg_error:
+        return make_error(MCPError.NOT_FOUND, seg_error)
+    for seg_start, seg_end in segs:
         if timed_out:
             break
-        for ea in iter_code(seg_start, seg_end):
+        for ea in iter_code(seg_start, seg_end, force=bool(seg_note)):
             try:
                 timer.check()
             except TimeoutError:
@@ -96,6 +107,8 @@ def search_text(pattern, case_sensitive, range_start, range_end, include_context
                 break
 
     result = build_response(results, offset, limit, matches_seen, truncated, pattern=pattern)
+    if seg_note:
+        result["note"] = seg_note
     if timed_out:
         result["timed_out"] = True
         result["hint"] = "Search timed out. Narrow with range or increase timeout_ms."
@@ -111,10 +124,13 @@ def search_operand(pattern, case_sensitive, range_start, range_end, include_cont
     timer = SearchTimeout(timeout_ms)
     timed_out = False
 
-    for seg_start, seg_end in iter_segments(range_start, range_end, require_exec=True):
+    segs, seg_note, seg_error = resolve_scan_segments(range_start, range_end, require_exec=True)
+    if seg_error:
+        return make_error(MCPError.NOT_FOUND, seg_error)
+    for seg_start, seg_end in segs:
         if timed_out:
             break
-        for ea in iter_code(seg_start, seg_end):
+        for ea in iter_code(seg_start, seg_end, force=bool(seg_note)):
             try:
                 timer.check()
             except TimeoutError:
@@ -141,6 +157,8 @@ def search_operand(pattern, case_sensitive, range_start, range_end, include_cont
                 break
 
     result = build_response(results, offset, limit, matches_seen, truncated, pattern=pattern)
+    if seg_note:
+        result["note"] = seg_note
     if timed_out:
         result["timed_out"] = True
         result["hint"] = "Search timed out. Narrow with range or increase timeout_ms."

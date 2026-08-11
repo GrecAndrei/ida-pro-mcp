@@ -16,6 +16,7 @@ contract. Full contracts for every operation live in
 - [Investigation](core/investigation.md) — findings, kinds, lifecycle, evidence, export, IDB round-trip
 - [Frontier](core/frontier.md) — `ida_next_target` strategies
 - [Intelligence](core/intelligence.md) — semantic indexing and search
+- [RISC-V raw-blob firmware](riscv_firmware.md) — recipe for opaque headerless firmware analysis
 
 ## Tools
 

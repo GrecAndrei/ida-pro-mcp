@@ -3,7 +3,6 @@
 
 import hashlib
 import json
-import time
 
 from ..agent_operations import list_agent_operations
 from ..config import (
@@ -62,54 +61,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
 
         step_plan: list[dict] = []
         workflow_meta: dict = {"version": 1, "action": action, "profile": profile}
-
-        def _detect_firmware_mode() -> tuple[bool, str, bool]:
-            """Best-effort firmware detection with fallback to IDB metadata."""
-            overview_failed = False
-            raw_binary_mode = False
-            try:
-                overview = self._execute_tool("idb", {"action": "overview"})
-                if isinstance(overview, dict):
-                    arch_profile = overview.get("architecture_profile") if isinstance(overview.get("architecture_profile"), dict) else {}
-                    if isinstance(arch_profile, dict):
-                        raw_binary_mode = bool(arch_profile.get("raw_binary_mode", False))
-                    if bool(overview.get("firmware_detected")):
-                        return True, "idb_overview", raw_binary_mode
-                    # Keep overview as the authoritative trigger unless fallback
-                    # can positively detect raw/firmware from explicit filetype metadata.
-                    overview_trigger = "idb_overview"
-                else:
-                    return False, "idb_overview_non_dict", raw_binary_mode
-            except Exception:
-                overview_failed = True
-            if overview_failed:
-                return False, "idb_overview_error", raw_binary_mode
-            try:
-                meta = self._execute_tool("idb", {"action": "meta"})
-                if isinstance(meta, dict):
-                    ft_info = meta.get("file_type_info") if isinstance(meta.get("file_type_info"), dict) else {}
-                    ft_name = str(
-                        meta.get("file_type_effective")
-                        or ft_info.get("effective")
-                        or meta.get("file_type")
-                        or ""
-                    ).strip().lower()
-                    ft_id = meta.get("file_type_id")
-                    raw_binary_mode = raw_binary_mode or ft_name in {"raw", "unknown", "bin", "binary", "obj", ""}
-                    if not ft_name and ft_id is None:
-                        return False, overview_trigger, raw_binary_mode
-                    if ft_name in {"raw", "unknown", "bin", "binary", "obj", ""}:
-                        return True, "idb_meta_filetype", raw_binary_mode
-                    try:
-                        ft_num = int(ft_id) if ft_id is not None else None
-                    except Exception:
-                        ft_num = None
-                    if ft_num in {0, 2, 17}:
-                        return True, "idb_meta_filetype", raw_binary_mode
-                    return False, overview_trigger, raw_binary_mode
-                return False, overview_trigger, raw_binary_mode
-            except Exception:
-                return False, overview_trigger, raw_binary_mode
 
         def _workflow_binary_stats() -> dict:
             """Best-effort stats used to gate fragile workflow steps."""
@@ -202,7 +153,11 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                     missing_calls.append(f"{n}.{a}")
                     continue
                 key = (n, a)
-                normalized_calls.append({"name": n, "arguments": call_args})
+                normalized = {"name": n, "arguments": call_args}
+                output_key = call.get("output_key") if isinstance(call, dict) else None
+                if isinstance(output_key, str) and output_key.strip():
+                    normalized["output_key"] = output_key.strip()
+                normalized_calls.append(normalized)
                 tool_counts[n] = int(tool_counts.get(n, 0)) + 1
                 key_str = f"{n}.{a}"
                 if key in seen_keys:
@@ -321,10 +276,17 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 if normalize_err or not isinstance(name, str) or not name.strip() or not isinstance(call_args, dict):
                     continue
                 # Resolve aliases the same way _execute_tool does so the plan
-                # name always maps to a canonical tool.
-                normalized_calls.append(
-                    {"name": str(_resolve_tool_alias(name.strip()) or "").strip(), "arguments": call_args}
-                )
+                # name always maps to a canonical tool. output_key is carried
+                # through so batch chaining (step{i}_{key} / step{i}.result{path}
+                # references) survives the plan round-trip.
+                normalized = {
+                    "name": str(_resolve_tool_alias(name.strip()) or "").strip(),
+                    "arguments": call_args,
+                }
+                output_key = call.get("output_key") if isinstance(call, dict) else None
+                if isinstance(output_key, str) and output_key.strip():
+                    normalized["output_key"] = output_key.strip()
+                normalized_calls.append(normalized)
 
             requested_steps = len(normalized_calls)
             truncated = False
@@ -339,29 +301,35 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                     hint="Provide planned_calls with valid tool/action entries, or use workflow_action/workflow_actions.",
                 )
 
+            bindings, bindings_err = self._extract_batch_bindings(args)
+            if bindings_err is not None:
+                return bindings_err
+
+            # Shared step executor (server_workflow_batch) resolves output→input
+            # references ($param, step{i}_{key}, step{i}.result{path}) against
+            # the accumulated results map and halts on the first error when
+            # continue_on_error is false.
+            steps = self._run_batch_steps(
+                normalized_calls,
+                continue_on_error,
+                bindings,
+                wrap_errors=True,
+                validate_tools=False,
+            )
+
             step_results: list[dict] = []
             calls_out: list[dict] = []
             completed = 0
-            for idx, step in enumerate(normalized_calls):
+            for step in steps:
                 name = str(step.get("name") or "").strip()
-                call_args = step.get("arguments") if isinstance(step.get("arguments"), dict) else {}
-                t0 = time.time()
-                try:
-                    res = self._execute_tool(name, dict(call_args))
-                except Exception as e:
-                    # Never put a bare error dict on the wire: match the host
-                    # error envelope so code/category/hint are always present.
-                    res = make_error(
-                        MCPError.INTERNAL,
-                        f"Step execution failed for '{name}': {e}",
-                        hint="Retry the step manually or check the tool arguments.",
-                    )
-                elapsed_ms = int((time.time() - t0) * 1000)
+                call_args = step.get("call_args") if isinstance(step.get("call_args"), dict) else {}
+                res = step.get("result")
+                elapsed_ms = int(step.get("elapsed_ms") or 0)
                 is_err = is_error_result(res)
                 calls_out.append({"name": name, "arguments": call_args, "result": res})
                 step_results.append(
                     {
-                        "index": idx,
+                        "index": step.get("index"),
                         "tool": name,
                         "args": call_args,
                         "outcome": "error" if is_err else "ok",
@@ -553,7 +521,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                     {
                         "action": target_action,
                         "step_count": len(calls),
-                        "firmware_detected": bool(meta.get("firmware_detected", False)),
                         "plan_diagnostics": list(meta.get("plan_diagnostics", [])) if isinstance(meta.get("plan_diagnostics"), list) else [],
                     }
                 )
@@ -639,7 +606,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
 
                 "gadgets": "exploit_surface",
                 "search": "search",
-                "firmware_view": "firmware",
 
                 "code": "code",
                 "graph": "graph",
@@ -657,7 +623,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 category_counts[cat] = int(category_counts.get(cat, 0)) + 1
 
             meta = plan_result.get("workflow_meta") if isinstance(plan_result.get("workflow_meta"), dict) else {}
-            firmware_detected = bool(meta.get("firmware_detected", False))
             step_count = len(calls)
             complexity = "low" if step_count <= 4 else ("medium" if step_count <= 7 else "high")
             risk_score = 0
@@ -691,8 +656,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
             if risk_score <= 0:
                 # Deterministic fallback by plan breadth only (no heuristic keyword weights).
                 risk_score = int(round(min(100.0, (float(step_count) / 12.0) * 100.0)))
-            if firmware_detected:
-                risk_score = min(100, risk_score + 6)
 
             return {
                 "ok": True,
@@ -705,7 +668,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                     "risk_score": risk_score,
                     "step_count": step_count,
                     "unique_tool_count": len(unique_tools),
-                    "firmware_detected": firmware_detected,
                     "category_counts": category_counts,
                 },
                 "planned_calls": calls,
@@ -749,7 +711,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 "gadgets.rop": "Maps exploit-relevant gadget surface for memory corruption risk analysis.",
                 "search.vulnerable": "Finds dangerous API/use patterns tied to common vulnerability classes.",
                 "search.structured": "Uses schema-guided retrieval to find semantically constrained candidates.",
-                "firmware_view.triage_snapshot": "Aggregates load/vector/MMIO hints for firmware-first orientation.",
                 "llm_helpers.focus_area": "Identifies the most interesting area to analyze next.",
                 "code.disasm": "Gets opcode-level view at target address for patch semantics.",
                 "code.xrefs_to": "Shows inbound dependency impact into the patch location.",
@@ -817,9 +778,8 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
         elif action == "catalog":
             catalog = {
                 "triage_fast": {
-                    "description": "Fast binary orientation + IOC/threat quick pass; firmware-aware auto-injection.",
+                    "description": "Fast binary orientation + IOC/threat quick pass.",
                     "requires_addr": False,
-                    "firmware_aware": True,
                     "default_profile": "balanced",
                     "supports_filters": True,
                     "supports_dry_run": True,
@@ -827,7 +787,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 "malware_deep": {
                     "description": "Deeper malware-oriented hunting with deobfuscation and crypto triage.",
                     "requires_addr": False,
-                    "firmware_aware": False,
                     "default_profile": "balanced",
                     "supports_filters": True,
                     "supports_dry_run": True,
@@ -835,7 +794,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 "vuln_audit": {
                     "description": "Vulnerability-focused audit: gadgets, dangerous patterns, dangerous API usage.",
                     "requires_addr": False,
-                    "firmware_aware": False,
                     "default_profile": "balanced",
                     "supports_filters": True,
                     "supports_dry_run": True,
@@ -843,7 +801,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 "recon_sweep": {
                     "description": "Broad recon pass combining orientation, structured retrieval, and IOC-oriented string scans.",
                     "requires_addr": False,
-                    "firmware_aware": True,
                     "default_profile": "balanced",
                     "supports_filters": True,
                     "supports_dry_run": True,
@@ -851,7 +808,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 "patch_review": {
                     "description": "Patch-impact review focused on one address and its xref/dependency neighborhood.",
                     "requires_addr": True,
-                    "firmware_aware": False,
                     "default_profile": "balanced",
                     "supports_filters": True,
                     "supports_dry_run": True,
@@ -873,7 +829,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 "supports_dry_run": True,
             }
         elif action == "triage_fast":
-            firmware_detected, firmware_detected_trigger, raw_binary_mode = _detect_firmware_mode()
             wf_stats = _workflow_binary_stats()
             has_functions = int(wf_stats.get("functions", 0)) > 0
 
@@ -886,12 +841,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 {"name": "search", "arguments": {"action": "find", "query": "http url ip address", "limit": limit}},
                 {"name": "blackboard", "arguments": {"action": "frontier", "limit": min(limit, 10)}},
             ]
-            if firmware_detected or raw_binary_mode:
-                step_plan.insert(2, {"name": "firmware_view", "arguments": {"action": "triage_snapshot"}})
-            workflow_meta["firmware_mode"] = "enabled" if (firmware_detected or raw_binary_mode) else "disabled"
-            workflow_meta["firmware_detected"] = firmware_detected
-            workflow_meta["raw_binary_mode"] = raw_binary_mode
-            workflow_meta["trigger"] = firmware_detected_trigger
             workflow_meta["has_functions"] = has_functions
         elif action == "malware_deep":
             step_plan = [
@@ -905,7 +854,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 {"name": "search", "arguments": {"action": "vulnerable", "limit": limit}},
             ]
         elif action == "recon_sweep":
-            firmware_detected, firmware_detected_trigger, raw_binary_mode = _detect_firmware_mode()
             wf_stats = _workflow_binary_stats()
             has_functions = int(wf_stats.get("functions", 0)) > 0
 
@@ -917,12 +865,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 {"name": "search", "arguments": {"action": "structured", "limit": limit}},
                 {"name": "blackboard", "arguments": {"action": "frontier", "limit": min(limit, 10)}},
             ]
-            if firmware_detected or raw_binary_mode:
-                step_plan.insert(2, {"name": "firmware_view", "arguments": {"action": "triage_snapshot"}})
-            workflow_meta["firmware_mode"] = "enabled" if (firmware_detected or raw_binary_mode) else "disabled"
-            workflow_meta["firmware_detected"] = firmware_detected
-            workflow_meta["raw_binary_mode"] = raw_binary_mode
-            workflow_meta["trigger"] = firmware_detected_trigger
             workflow_meta["has_functions"] = has_functions
         elif action == "patch_review":
             if not addr:

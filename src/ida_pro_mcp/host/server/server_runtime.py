@@ -16,7 +16,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +41,15 @@ NATIVE_LOADERS = (
     "pe", "pe64", "elf", "elf64", "macho", "macho64",
     "coff", "ar", "omf", "dos", "dos/exe",
 )
+
+# IDBs at or above this size are treated as "large" for teardown/checkpoint
+# purposes: the graceful-shutdown save and the periodic checkpoint both get the
+# extended budget instead of the fast 2s SIGKILL default.
+_LARGE_IDB_CHECKPOINT_THRESHOLD = 256 * 1024 * 1024
+
+# Cap on the synchronous shutdown-save RPC timeout: the SIGKILL grace is the
+# real deadline, so a hung runtime is never blocked on for longer than this.
+_SHUTDOWN_SAVE_RPC_CAP = 60.0
 
 
 def _resolve_max_rpc_bytes() -> int:
@@ -779,6 +788,17 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 hints.append(
                     "Ensure no conflicting PYTHONHOME/PYTHONPATH overrides are injected."
                 )
+            if (
+                "no space left on device" in low
+                or "not enough space" in low
+                or "enospc" in low
+            ):
+                causes.append("Insufficient disk space (ENOSPC) during initialization.")
+                hints.append(
+                    "Free disk space on the IDA/cache volume — unpacked IDB "
+                    "sidecars can consume many GB; check df -h and the "
+                    "IDA_MCP_CACHE_DIR location."
+                )
             if not causes:
                 causes.append("Generic library initialization failure.")
                 hints.append("Inspect stdout/stderr tails for missing dependency details.")
@@ -1149,16 +1169,6 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             except Exception:
                 pass
 
-    def _stop_idle_index_worker(self, session_id: str, join_timeout: float = 1.0) -> None:
-            with self._idle_index_lock:
-                stop_event = self._idle_index_stop_events.pop(session_id, None)
-                thread = self._idle_index_threads.pop(session_id, None)
-            if stop_event is not None:
-                stop_event.set()
-            if thread and thread.is_alive() and thread is not threading.current_thread():
-                with contextlib.suppress(Exception):
-                    thread.join(timeout=max(0.0, float(join_timeout or 0.0)))
-
     # ------------------------------------------------------------------
     # Analysis-state observability
     #
@@ -1313,6 +1323,265 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             if thread and thread.is_alive() and thread is not threading.current_thread():
                 with contextlib.suppress(Exception):
                     thread.join(timeout=max(0.0, float(join_timeout or 0.0)))
+
+    # ------------------------------------------------------------------
+    # Session teardown flag (replaces the thread-ident _session_closing
+    # tombstone) + graceful-shutdown grace + stale-runtime retirement +
+    # periodic analysis checkpointing.
+    # ------------------------------------------------------------------
+
+    def _begin_session_teardown(self, sid: str) -> None:
+            """Mark *sid* as having a close/delete in flight.
+
+            A boolean close-in-progress flag (not a thread-ident tombstone):
+            ``_start_server`` refuses to launch — and the registration-time
+            recheck aborts a launch already booting — while the flag is set, so
+            a session close can never be resurrected as an orphan IDA process
+            after its session is deleted. Unlike the tombstone it is cleared
+            unconditionally once teardown completes (``_end_session_teardown``),
+            so a later re-open of the same path is never blocked.
+            """
+            flags = getattr(self, "_session_teardown", None)
+            if not isinstance(flags, set):
+                self._session_teardown = set()
+                flags = self._session_teardown
+            flags.add(sid)
+
+    def _end_session_teardown(self, sid: str) -> None:
+            """Clear the close-in-progress flag for *sid* (idempotent)."""
+            flags = getattr(self, "_session_teardown", None)
+            if isinstance(flags, set):
+                flags.discard(sid)
+
+    @contextlib.contextmanager
+    def _teardown_session(self, sid: str):
+            """Context manager: hold the close-in-progress flag across a
+            teardown+delete, clearing it unconditionally (even on error) once
+            the delete completes."""
+            self._begin_session_teardown(sid)
+            try:
+                yield
+            finally:
+                self._end_session_teardown(sid)
+
+    def _session_teardown_active(self, sid: str) -> bool:
+            """True when a close/delete is in flight for *sid*.
+
+            Reads the close-in-progress flag. When the full server is composed,
+            the server_session mixin shadows ``_session_is_closing`` over the
+            same attribute; the getattr keeps a bare runtime-only mixin host
+            (which has no session mixin) working.
+            """
+            is_closing = getattr(self, "_session_is_closing", None)
+            if callable(is_closing):
+                return bool(is_closing(sid))
+            flags = getattr(self, "_session_teardown", None)
+            return isinstance(flags, set) and sid in flags
+
+    def _retire_dead_runtime(self, sid: str) -> None:
+            """Close a dead runtime's log handles and drop its stale port/token
+            before a fresh spawn, WITHOUT releasing ownership or marking the
+            session as closing.
+
+            A previously-crashed runtime stays in ``session_runtimes`` (dead) so
+            the ownership lease is not dropped mid-spawn; this retires the
+            pieces that would otherwise leak (two fds per failed run) or be
+            published stale (port/token) once the fresh runtime registers.
+            """
+            with self._runtime_lock:
+                runtime = self.session_runtimes.get(sid)
+                if not isinstance(runtime, dict):
+                    return
+                for fh in runtime.get("log_handles", []):
+                    with contextlib.suppress(Exception):
+                        fh.close()
+                runtime["log_handles"] = []
+                runtime.pop("port", None)
+                runtime.pop("auth_token", None)
+
+    def _shutdown_grace_seconds(self, sid: str, runtime: dict) -> float:
+            """Extended SIGKILL grace for a large / mid-analysis IDB.
+
+            A graceful-shutdown save_database on a multi-hundred-MB IDB can take
+            well over the default 2s; SIGKILLing too early abandons the unpacked
+            sidecars and the next open hits "Database initialization failed with
+            error 4". Small/quiet IDBs keep the fast default so a hung runtime
+            is not lingered on.
+            """
+            default = 2.0
+            try:
+                extended = float(
+                    getattr(self, "large_idb_shutdown_grace_seconds", 30.0) or 30.0
+                )
+            except Exception:
+                extended = 30.0
+            idb_path = runtime.get("idb_path") if isinstance(runtime, dict) else None
+            if idb_path:
+                try:
+                    size = os.path.getsize(idb_path)
+                except Exception:
+                    size = None
+                if size is not None and size >= _LARGE_IDB_CHECKPOINT_THRESHOLD:
+                    return max(default, extended)
+            # Mid-analysis: the watchdog records analysis_state == 'analyzing'
+            # in session metadata; an in-flight save on a still-analyzing IDB
+            # deserves the extended grace even if it is not yet "large".
+            try:
+                mgr = getattr(self, "session_mgr", None)
+                sessions = getattr(mgr, "sessions", None) if mgr is not None else None
+                sess = sessions.get(sid) if isinstance(sessions, dict) else None
+                meta = getattr(sess, "metadata", None) if sess is not None else None
+            except Exception:
+                meta = None
+            if isinstance(meta, dict) and meta.get("analysis_state") == "analyzing":
+                return max(default, extended)
+            return default
+
+    def _shutdown_rpc_save_timeout(self, grace: float) -> float:
+            """RPC timeout budget for the synchronous shutdown save.
+
+            Capped so a hung runtime is not blocked on indefinitely (the SIGKILL
+            grace is the real deadline); never below 1s so the save has a floor.
+            """
+            try:
+                grace = max(1.0, float(grace or 0.0))
+            except Exception:
+                grace = 1.0
+            return min(grace, _SHUTDOWN_SAVE_RPC_CAP)
+
+    # ------------------------------------------------------------------
+    # Periodic analysis checkpointing
+    # ------------------------------------------------------------------
+
+    def _checkpoint_save_interval(self) -> float:
+            """Checkpoint cadence from the ``checkpoint_save_seconds`` knob."""
+            try:
+                interval = float(getattr(self, "checkpoint_save_seconds", 5.0) or 5.0)
+            except Exception:
+                interval = 5.0
+            return max(1.0, interval)
+
+    def _start_analysis_checkpoint_timer(self, session_id: str, server_port: int) -> None:
+            """Start a per-session periodic saver that checkpoints the IDB
+            (analysis(action='save_idb')) so the on-disk database tracks the
+            in-memory state. Idempotent: restarting a session replaces any prior
+            timer for it. Consumes the ``checkpoint_save_seconds`` knob."""
+            self._stop_analysis_checkpoint_timer(session_id, join_timeout=0.2)
+            stop_event = threading.Event()
+            interval = self._checkpoint_save_interval()
+
+            def _worker() -> None:
+                while not stop_event.wait(interval):
+                    self._run_analysis_checkpoint(session_id)
+
+            t = threading.Thread(
+                target=_worker,
+                daemon=True,
+                name=f"ida-ckpt-{session_id}",
+            )
+            with self._runtime_lock:
+                stop_events = getattr(self, "_analysis_checkpoint_stop_events", None)
+                if not isinstance(stop_events, dict):
+                    self._analysis_checkpoint_stop_events = {}
+                    stop_events = self._analysis_checkpoint_stop_events
+                threads = getattr(self, "_analysis_checkpoint_threads", None)
+                if not isinstance(threads, dict):
+                    self._analysis_checkpoint_threads = {}
+                    threads = self._analysis_checkpoint_threads
+                stop_events[session_id] = stop_event
+                threads[session_id] = t
+            t.start()
+
+    def _stop_analysis_checkpoint_timer(self, session_id: str, join_timeout: float = 1.0) -> None:
+            with self._runtime_lock:
+                stop_events = getattr(self, "_analysis_checkpoint_stop_events", None)
+                threads = getattr(self, "_analysis_checkpoint_threads", None)
+                stop_event = (
+                    stop_events.pop(session_id, None)
+                    if isinstance(stop_events, dict)
+                    else None
+                )
+                thread = (
+                    threads.pop(session_id, None)
+                    if isinstance(threads, dict)
+                    else None
+                )
+            if stop_event is not None:
+                stop_event.set()
+            if thread and thread.is_alive() and thread is not threading.current_thread():
+                with contextlib.suppress(Exception):
+                    thread.join(timeout=max(0.0, float(join_timeout or 0.0)))
+
+    def _run_analysis_checkpoint(self, session_id: str) -> None:
+            """Perform one analysis checkpoint: save the DB and record the
+            progress marker.
+
+            Skips when the runtime is not alive, the analysis gate is still
+            pending (startup — the save would hit the bridge's
+            ANALYSIS_INCOMPLETE gate and is pointless before analysis settles),
+            or the save RPC fails. The ``analysis(action='save_idb')`` surface
+            is shared with the graceful-shutdown path.
+            """
+            with self._runtime_lock:
+                runtime = self.session_runtimes.get(session_id)
+            if not isinstance(runtime, dict):
+                return
+            proc = runtime.get("process")
+            try:
+                alive = bool(proc and proc.poll() is None)
+            except Exception:
+                alive = False
+            if not alive:
+                return
+            analysis_complete = getattr(self, "_analysis_is_complete", None)
+            if callable(analysis_complete) and not analysis_complete(session_id):
+                return
+            port = runtime.get("port")
+            auth_token = runtime.get("auth_token")
+            if not (isinstance(port, int) and port > 0):
+                return
+            try:
+                res = self._send_rpc_raw(
+                    {"tool": "analysis", "args": {"action": "save_idb"}},
+                    port,
+                    timeout=self._checkpoint_save_interval(),
+                    auth_token=auth_token,
+                    queue_timeout=0,
+                )
+            except Exception as exc:
+                log_rpc(f"[checkpoint] save failed for {session_id}: {exc}")
+                return
+            if not (isinstance(res, dict) and not is_error_result(res)):
+                return
+            self._record_analysis_checkpoint(session_id)
+
+    def _record_analysis_checkpoint(self, session_id: str) -> None:
+            """Persist the per-session analysis-progress marker so a later
+            resume can report how stale the on-disk IDB is."""
+            try:
+                state = self._query_ida_state(session_id, timeout=2.0)
+            except Exception:
+                state = None
+            funcs = None
+            if isinstance(state, dict):
+                inventory = state.get("inventory") or {}
+                try:
+                    funcs = int(inventory.get("functions_qty"))
+                except Exception:
+                    funcs = None
+            updater = getattr(self, "_update_session_indexing_metadata", None)
+            if callable(updater):
+                with contextlib.suppress(Exception):
+                    # Timezone-aware UTC, rendered as the same Z-suffixed naive
+                    # form the staleness reader (_checkpoint_staleness_warning)
+                    # parses — avoids the deprecated datetime.utcnow().
+                    now_utc = datetime.now(UTC)
+                    checkpointed_at = now_utc.replace(tzinfo=None).isoformat() + "Z"
+                    updater(
+                        session_id,
+                        analysis_checkpointed_at=checkpointed_at,
+                        analysis_progress=funcs,
+                    )
 
     def _json_safe_value(self, value: Any) -> Any:
             """Recursively convert non-JSON-safe values to safe representations."""
@@ -1570,10 +1839,57 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     log_rpc(f"Removed stale IDB artifact: {path}")
                 except Exception as e:
                     log_rpc(f"Failed to remove stale IDB artifact {path}: {e}")
+    @staticmethod
+    def _argv_targets_path(argv, target_norm: str) -> bool:
+            """True when *target_norm* appears on the command line as an EXACT
+            argument — a positional file/IDB path or the value of an ``-o`` switch
+            (attached ``-o<path>`` or next-token ``-o <path>``). Substring
+            containment is deliberately NOT matched: a target like
+            ``/tmp/SID_AB12CDEF_foo.bin.i64`` must not kill an unrelated process
+            whose cmdline merely contains that path as a prefix or fragment.
+            """
+            tokens = [str(a) for a in (argv or []) if str(a)]
+            for idx, tok in enumerate(tokens):
+                low = tok.lower()
+                if low == target_norm:
+                    return True
+                if low.startswith("-o"):
+                    body = low[2:]
+                    if body.startswith("="):
+                        body = body[1:]
+                    if body and body == target_norm:
+                        return True
+                    if not body and idx + 1 < len(tokens) and tokens[idx + 1].lower() == target_norm:
+                        return True
+            return False
+
+    def _live_runtime_pids(self) -> set[int]:
+            """PIDs of the live IDA runtimes this host owns, so the orphan
+            killer never signals a process that belongs to a currently-served
+            session (its cmdline legitimately carries the session IDB path)."""
+            live: set[int] = set()
+            runtimes = getattr(self, "session_runtimes", None)
+            if not isinstance(runtimes, dict):
+                return live
+            for runtime in runtimes.values():
+                if not isinstance(runtime, dict):
+                    continue
+                proc = runtime.get("process")
+                try:
+                    if proc is not None and proc.poll() is None:
+                        pid = getattr(proc, "pid", None)
+                        if pid:
+                            live.add(int(pid))
+                except Exception:
+                    continue
+            return live
+
     def _terminate_ida_processes_for_path(self, target_path: str) -> list[int]:
-            """Best-effort terminate any idat/ida processes whose command line references
-            the given target. Returns the list of PIDs that were killed. Used to recover
-            from orphaned IDA processes that still hold the IDB / unpacked sidecars.
+            """Best-effort terminate any idat/ida processes whose command line
+            references the given target by an EXACT argument match (positional
+            IDB/file path or ``-o`` value). Returns the list of PIDs that were
+            killed. Used to recover from orphaned IDA processes that still hold
+            the IDB / unpacked sidecars.
             """
             killed: list[int] = []
             if not target_path:
@@ -1581,6 +1897,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             target_norm = os.path.realpath(os.path.abspath(target_path)).lower()
             if not target_norm:
                 return killed
+            live_pids = self._live_runtime_pids()
 
             candidate_pids: list[int] = []
             try:
@@ -1600,20 +1917,15 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                             continue
                         try:
                             cmdline_parts = proc.info.get("cmdline") or []
-                            cmdline = (
-                                " ".join(cmdline_parts).lower()
-                                if cmdline_parts
-                                else ""
-                            )
                         except Exception:
-                            cmdline = ""
-                        if not cmdline or target_norm not in cmdline:
+                            cmdline_parts = []
+                        if not self._argv_targets_path(cmdline_parts, target_norm):
                             continue
                         try:
                             pid = int(proc.info.get("pid") or 0)
                         except Exception:
                             pid = 0
-                        if pid:
+                        if pid and pid not in live_pids:
                             candidate_pids.append(pid)
                 except Exception:
                     pass
@@ -1635,8 +1947,16 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                             except Exception:
                                 block_pid = None
                         elif line.lower().startswith("commandline"):
-                            cmd = line.split(":", 1)[1].strip().lower()
-                            if target_norm in cmd and block_pid:
+                            cmd = line.split(":", 1)[1].strip()
+                            try:
+                                cmd_parts = shlex.split(cmd)
+                            except Exception:
+                                cmd_parts = []
+                            if (
+                                block_pid
+                                and block_pid not in live_pids
+                                and self._argv_targets_path(cmd_parts, target_norm)
+                            ):
                                 candidate_pids.append(block_pid)
                             block_pid = None
                         else:
@@ -1657,10 +1977,11 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         continue
                     try:
                         with open(f"/proc/{entry}/cmdline", "rb") as fh:
-                            cmdline = fh.read().decode("utf-8", errors="ignore").lower()
+                            raw = fh.read().decode("utf-8", errors="ignore")
                     except Exception:
                         continue
-                    if not cmdline or target_norm not in cmdline:
+                    cmdline_parts = raw.split("\x00")
+                    if not self._argv_targets_path(cmdline_parts, target_norm):
                         continue
                     try:
                         exe_name = os.path.basename(
@@ -1670,7 +1991,9 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         exe_name = ""
                     if exe_name not in expected_names:
                         continue
-                    candidate_pids.append(int(entry))
+                    pid = int(entry)
+                    if pid not in live_pids:
+                        candidate_pids.append(pid)
 
             for pid in candidate_pids:
                 try:
@@ -1760,14 +2083,15 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 # already started the runtime while we were waiting.
                 if self._runtime_alive(self.session_runtimes.get(sid)):
                     return {"ok": True, "idb_path": session.idb_path, "_already_running": True}
-                # A session close is tearing this session down from another
-                # thread (_cleanup_runtime tombstoned it). A deliberate relaunch
-                # on THIS thread (safe-mode reload, retry after a failed apply)
-                # matches the tombstone's owning thread and is allowed; an
-                # automatic restart from a different thread must not resurrect a
-                # session whose delete_session is about to orphan the runtime.
-                closing_by = getattr(self, "_session_closing", {}).get(sid)
-                if closing_by is not None and closing_by != threading.get_ident():
+                # A session close/delete is in flight for this sid (the
+                # close-in-progress flag). _start_server refuses ONLY while
+                # close is actually running — the flag is cleared unconditionally
+                # once teardown completes, so a deliberate relaunch (safe-mode
+                # reload, retry after a failed apply, recovery, or a fresh open
+                # of the same path) is allowed the moment the delete is done.
+                # An automatic restart racing the delete must not resurrect the
+                # session as an orphan IDA process.
+                if self._session_teardown_active(sid):
                     return make_error(
                         MCPError.IDA_BUSY,
                         "Session is being closed; refusing to auto-restart it.",
@@ -1791,6 +2115,19 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                         details={"session_id": sid},
                     )
                 try:
+                    # h02 3a / dispatch handoff: every fresh spawn re-enters
+                    # safe mode so a call_tool auto-restart of a dead runtime
+                    # cannot bypass the analysis gate. Idempotent — paths that
+                    # already pended (create/reopen/rebuild) are unaffected and
+                    # the watcher set guards double-spawn. Bare-mixin unit
+                    # hosts that do not compose the session mixin skip it.
+                    mark_pending = getattr(self, "_mark_analysis_pending", None)
+                    if callable(mark_pending):
+                        mark_pending(session)
+                    # h02 1b: before the fresh spawn, retire the pieces of any
+                    # previously-crashed runtime (log fds, stale port/token)
+                    # WITHOUT releasing ownership or marking the session closing.
+                    self._retire_dead_runtime(sid)
                     result = self._start_server_inner(session)
                 except Exception:
                     self._release_runtime_ownership(sid)
@@ -1950,14 +2287,13 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                             log_rpc(
                                 f"IDA RPC listener is ready for {session.idb_path} on port {actual_port}"
                             )
-                            # A session close may have tombstoned this sid from
-                            # another thread while IDA was starting. Registering
-                            # now would orphan the fresh runtime once close's
+                            # A session close/delete may have begun from another
+                            # thread while IDA was starting. Registering now
+                            # would orphan the fresh runtime once close's
                             # delete_session runs, so abort the launch instead —
                             # _handles_transferred is still False, so the finally
                             # below kills the process and closes the fds.
-                            closing_by = getattr(self, "_session_closing", {}).get(session.session_id)
-                            if closing_by is not None and closing_by != threading.get_ident():
+                            if self._session_teardown_active(session.session_id):
                                 return make_error(
                                     MCPError.IDA_BUSY,
                                     "Session is being closed; aborting IDA launch.",
@@ -1981,9 +2317,10 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                                 os.remove(port_file)
                             self._write_runtime_lease(session.session_id, runtime)
                             _handles_transferred = True
-                            # A runtime is now live for this session — clear any
-                            # close tombstone so later restarts are not refused.
-                            getattr(self, "_session_closing", {}).pop(session.session_id, None)
+                            # No close-in-progress flag to clear here: the flag is
+                            # set only while a close/delete is running and is
+                            # cleared unconditionally when that delete completes,
+                            # so a later restart is never refused by a stale mark.
                             try:
                                 apply_res = self._apply_session_options(session, runtime)
                             except Exception:
@@ -1999,19 +2336,20 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                             if is_error_result(apply_res):
                                 self._cleanup_runtime(session.session_id)
                                 return apply_res
-                            # Start lightweight host services immediately, and defer
-                            # structural indexing until the session goes idle.
+                            # Start lightweight host services immediately. The
+                            # vestigial idle-index worker is gone: indexing state
+                            # is honestly reported as disabled (the semantic
+                            # index is only ever built on demand or reused).
                             self._start_session_background_services(session, actual_port)
                             return {
                                 "ok": True,
                                 "idb_path": session.idb_path,
                                 "current_options": apply_res.get("current_options"),
-                                "bootstrap_report": apply_res.get("bootstrap_report"),
                                 "apply_steps": apply_res.get("apply_steps"),
                                 "steps_done": apply_res.get("steps_done"),
                                 "analysis_in_progress": True,
-                                "indexing_state": "idle_hot_scheduled",
-                                "hint": "IDA RPC is ready. Auto-analysis continues in background, and hot structural indexing starts only after the session goes idle.",
+                                "indexing_state": "disabled",
+                                "hint": "IDA RPC is ready. Auto-analysis continues in background; the semantic index is built on demand or reused from a matching binary.",
                             }
                     except Exception:
                         pass
@@ -2178,8 +2516,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                             # Same abort-on-close guard as _start_server_inner: a
                             # recovery relaunch that races a session close must
                             # not register a runtime the close will orphan.
-                            closing_by = getattr(self, "_session_closing", {}).get(session.session_id)
-                            if closing_by is not None and closing_by != threading.get_ident():
+                            if self._session_teardown_active(session.session_id):
                                 return make_error(
                                     MCPError.IDA_BUSY,
                                     "Session is being closed; aborting IDA launch.",
@@ -2203,9 +2540,8 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                                 os.remove(port_file)
                             self._write_runtime_lease(session.session_id, runtime)
                             _handles_transferred = True
-                            # A runtime is now live for this session — clear any
-                            # close tombstone so later restarts are not refused.
-                            getattr(self, "_session_closing", {}).pop(session.session_id, None)
+                            # No close-in-progress flag to clear here (see the
+                            # _start_server_inner registration path).
                             return {"ok": True, "idb_path": session.idb_path, "port": actual_port}
                     except Exception:
                         pass
@@ -2508,18 +2844,9 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     return res
                 _record("reanalyze", res)
 
-            bootstrap_knowledge = {"chip_family": None, "imported_symbol_count": 0}
-            bootstrap_report = None
+            bootstrap_knowledge = {"imported_symbol_count": 0}
             _progress("bootstrap_knowledge", "start")
             try:
-                chip_res = self._send_rpc_raw(
-                    {"tool": "knowledge", "args": {"action": "chip_identify"}},
-                    port,
-                )
-                if isinstance(chip_res, dict) and not is_error_result(chip_res):
-                    prof = chip_res.get("profile")
-                    if isinstance(prof, dict) and prof.get("chip_family"):
-                        bootstrap_knowledge["chip_family"] = prof.get("chip_family")
                 import_res = self._send_rpc_raw(
                     {
                         "tool": "knowledge",
@@ -2536,25 +2863,6 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             except Exception:
                 pass
             _record("bootstrap_knowledge", {"ok": True})
-
-            _progress("firmware_bootstrap", "start")
-            try:
-                chip_family = str(opts.get("chip_family") or bootstrap_knowledge.get("chip_family") or "").strip()
-                if chip_family:
-                    fw_args = {
-                        "action": "bootstrap",
-                        "chip_family": chip_family,
-                        "load_base": opts.get("baseaddr"),
-                        "memory_map": opts.get("memory_map") or [],
-                        "peripheral_addresses": opts.get("peripheral_addresses") or [],
-                        "post_load_actions": opts.get("post_load_actions") or [],
-                    }
-                    fw_res = self._send_rpc_raw({"tool": "firmware_view", "args": fw_args}, port)
-                    if isinstance(fw_res, dict) and not is_error_result(fw_res):
-                        bootstrap_report = fw_res.get("bootstrap_report") or fw_res
-            except Exception:
-                bootstrap_report = None
-            _record("firmware_bootstrap", {"ok": True})
 
             if opts.get("apply_once", True):
                 session.analysis_applied = True
@@ -2619,7 +2927,6 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 "ok": True,
                 "current_options": current_options if not is_error_result(current_options) else None,
                 "bootstrap_knowledge": bootstrap_knowledge,
-                "bootstrap_report": bootstrap_report,
                 "apply_steps": apply_steps,
                 "steps_done": len(apply_steps),
             }
@@ -2640,6 +2947,11 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             # progress (and stalls).  It makes ONE lightweight idb(action='state')
             # call every 5 s — cheap enough not to starve auto-analysis.
             self._start_analysis_watchdog(session_id, server_port)
+
+            # Periodic analysis checkpointing: save_database every
+            # checkpoint_save_seconds once analysis completes, and persist the
+            # per-session progress marker so a later resume can report staleness.
+            self._start_analysis_checkpoint_timer(session_id, server_port)
 
             # Reuse an exact-content compatible semantic index without
             # coupling this IDA process to another session's live database.
@@ -2662,29 +2974,36 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             ).start()
 
     def _cleanup_runtime(self, sid):
-            self._stop_idle_index_worker(sid, join_timeout=0.5)
+            # Stop host-side helpers for this session BEFORE tearing down the
+            # process tree: the analysis-completion watcher (ida-an-<sid>), the
+            # per-session analysis watchdog, and the periodic checkpoint saver
+            # (ida-ckpt-<sid>) all poll a live runtime and must not outlive it.
             self._stop_analysis_watchdog(sid, join_timeout=0.5)
+            stop_watcher = getattr(self, "_stop_analysis_watcher", None)
+            if callable(stop_watcher):
+                stop_watcher(sid, join_timeout=0.2)
+            self._stop_analysis_checkpoint_timer(sid, join_timeout=0.2)
             self._session_last_activity.pop(sid, None)
             self._session_inflight_calls.pop(sid, None)
-            # Tombstone the session as torn down. A concurrent _start_server
-            # from a DIFFERENT thread (a batch/index worker auto-restarting a
-            # dead runtime) sees this and refuses to launch, so a session close
-            # cannot be resurrected as an orphan IDA process after its session
-            # is deleted. A deliberate restart on the SAME thread (safe-mode
-            # reload, retry after a failed apply, recovery) is allowed and
-            # clears the tombstone when the fresh runtime is registered.
-            if not hasattr(self, "_session_closing"):
-                self._session_closing = {}
-            self._session_closing[sid] = threading.get_ident()
+            # The per-session startup lock is deliberately NOT popped here:
+            # _start_server grabs it by reference and a concurrent caller may
+            # still hold it, so removing it would let two threads acquire
+            # DIFFERENT locks for the same sid and spawn duplicate IDA
+            # processes. The dict grows by one Lock per sid ever launched — a
+            # bounded, race-free cost.
             with self._runtime_lock:
                 runtime = self.session_runtimes.get(sid, None)
-                self._session_startup_locks.pop(sid, None)
             self._remove_runtime_lease(sid)
             if not runtime:
                 self._release_runtime_ownership(sid)
                 return
             proc = runtime.get("process")
             port = runtime.get("port")
+            # Large / mid-analysis IDBs get a longer SIGKILL grace so a
+            # graceful-shutdown save_database has time to merge the unpacked
+            # sidecars; the shutdown RPC gets the same budget so the
+            # synchronous save is not cut short by a 1s timeout.
+            grace = self._shutdown_grace_seconds(sid, runtime)
             if proc:
                 with contextlib.suppress(Exception):
                     # Send the graceful shutdown BEFORE removing the runtime
@@ -2693,16 +3012,25 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     # early pop makes queue_timeout=0 dead code — the shutdown
                     # would queue behind an in-flight call instead of failing
                     # fast so we can kill directly.
-                    self._send_rpc_raw(
+                    shutdown_res = self._send_rpc_raw(
                         {"type": "shutdown"},
                         port,
-                        timeout=1,
+                        timeout=self._shutdown_rpc_save_timeout(grace),
                         queue_timeout=0,
                     )
+                    # Wait for save confirmation: the shutdown response carries
+                    # saved=bool. A False/absent saved (startup-analysis race or
+                    # an unresponsive lane) is handled by the SIGKILL grace
+                    # budget below rather than blocking cleanup.
+                    if isinstance(shutdown_res, dict) and not shutdown_res.get("saved"):
+                        log_rpc(
+                            f"Shutdown save not confirmed for {sid} "
+                            f"(grace={grace}s); proceeding to kill"
+                        )
                 # Use _kill_process_tree so the full idat.exe -> ida.exe
                 # tree is terminated; otherwise ida.exe can be left
                 # orphaned holding the unpacked .id0/.id1 files.
-                _kill_process_tree(proc)
+                _kill_process_tree(proc, grace_seconds=grace)
             for fh in runtime.get("log_handles", []):
                 with contextlib.suppress(Exception):
                     fh.close()

@@ -38,13 +38,57 @@ _ALLOCA_SYMBOLS = [
 # uninitialized heuristic must only count these: instructions like
 # 'cmp [rbp-8], 0' are reads, not writes, and must not mark a local as
 # initialized.
+#
+# Extended for opaque device work:
+#   - RISC-V compressed C-extension stores (c.sw/c.swsp/c.sd/c.sdsp/c.sh/c.shsp)
+#     and single-precision float stores (fsw/fsd/fsh + compressed forms), which
+#     bare-metal RISC-V firmware uses heavily.
+#   - ARM64 store-pair / store-unprivileged (stp/stnp/sturb/stur).
 _STORE_MNEMONICS = {
     "mov", "movzx", "movsx", "movsxd", "movss", "movsd", "movd", "movq",
     "str", "strb", "strh", "strd",
     "sw", "sh", "sb", "sd", "st", "stb", "stw", "std",
     "stosb", "stosw", "stosd", "stosq",
     "fst", "fstp",
+    # RISC-V compressed C-extension stores
+    "c.sw", "c.swsp", "c.sd", "c.sdsp", "c.sh", "c.shsp",
+    # RISC-V/MIPS single-precision float stores (and RISC-V compressed forms)
+    "fsw", "fsd", "fsh",
+    "c.fsw", "c.fswsp", "c.fsd", "c.fsdsp", "c.fsh", "c.fshsp",
+    # ARM64 store-pair / store-unprivileged
+    "stp", "stnp", "sturb", "stur",
 }
+
+
+def _is_store_insn(mnem: str, arch=None) -> bool:
+    """Return True when ``mnem`` is a memory-store instruction.
+
+    Whitelist-based on purpose: only genuine store mnemonics count, so reads
+    that share a mnemonic with a store on some archs (e.g. x86 ``mov``) are
+    filtered by the destination-operand scan rather than excluded here.
+    """
+    m = (mnem or "").lower().strip()
+    return bool(m) and m in _STORE_MNEMONICS
+
+
+def _store_dest_operand_indices(insn, arch) -> list[int]:
+    """Return the operand index(es) that can hold the memory destination of a
+    store instruction.
+
+    On x86 the store destination is always operand 0 (``mov [mem], reg``) and
+    loads of the same mnemonic put memory in operand 1 — so scanning only
+    operand 0 keeps ``mov eax, [rbp-8]`` (a read) from marking a local
+    initialized. Every other family uses distinct store mnemonics and puts the
+    memory destination last (``sw a0, 0(sp)``, ``str x0, [sp]``,
+    ``stp x0, x1, [sp]``), so all operands are candidates.
+    """
+    try:
+        n_ops = len(insn.ops)
+    except Exception:
+        n_ops = 2
+    if is_x86_family(arch):
+        return [0]
+    return list(range(n_ops))
 
 # Shared buffer/array size heuristic so the `buffers`, `arrays`, and `summary`
 # actions agree on the same frame. A member is buffer-like when its type is an
@@ -596,24 +640,28 @@ def stack_analysis(
             #     comparing raw displacements (e.g. +0x10 for [rsp+0x10])
             #     against soffs.
             _arch_name = get_arch()
-            _dst_op_index = 0 if is_x86_family(_arch_name) else 1
             written_offsets = set()
             ea = func.start_ea
             uninit_iter = 0
             while ea < func.end_ea and ea != idaapi.BADADDR:
                 mnem = (idc.print_insn_mnem(ea) or "").lower()
-                if mnem in _STORE_MNEMONICS:
+                if _is_store_insn(mnem, _arch_name):
                     try:
                         insn = ida_ua.insn_t()
-                        if ida_ua.decode_insn(insn, ea) > 0 and len(insn.ops) > _dst_op_index:
-                            op = insn.ops[_dst_op_index]
-                            if op.type in (ida_ua.o_displ, ida_ua.o_phrase):
+                        if ida_ua.decode_insn(insn, ea) > 0:
+                            for idx in _store_dest_operand_indices(insn, _arch_name):
+                                if idx >= len(insn.ops):
+                                    continue
+                                op = insn.ops[idx]
+                                if op.type not in (ida_ua.o_displ, ida_ua.o_phrase):
+                                    continue
                                 try:
                                     member, _delta = ida_frame.get_stkvar(insn, op)
                                 except Exception:
                                     member = None
                                 if member is not None:
                                     written_offsets.add(member.soff)
+                                    break
                     except Exception:
                         pass
                 ea = idc.next_head(ea)

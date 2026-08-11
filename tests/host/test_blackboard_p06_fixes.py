@@ -145,10 +145,12 @@ def test_trace_run_does_not_rerun_completed_tasks(tmp_path):
     assert first["ok"] is True
 
     run_one = server._handle_blackboard({"action": "trace_run", "limit": 10})
-    assert run_one["ran"] == 1
+    assert run_one["ok"] is True
+    assert run_one["enqueued"] == 1
+    server._orchestration().drain(timeout=10)
 
     run_two = server._handle_blackboard({"action": "trace_run", "limit": 10})
-    assert run_two["ran"] == 0
+    assert run_two["enqueued"] == 0
 
 
 def test_trace_status_reads_payload_status_not_accumulated_tags(tmp_path):
@@ -298,13 +300,13 @@ def test_bb_policy_check_enforces_recent_working_set_and_decision(tmp_path):
 def test_coverage_action_computes_real_percentage(tmp_path):
     server, store = _server_with_workspace(tmp_path)
     assert server._get_blackboard_store() is not None
-    mod = type(server)._blackboard_module
-    assert mod is not None
 
     store.record_examination("0x401000", verdict="interesting", note="handler")
     store.upsert_finding("Handle recv", addr="0x402000", category="parsing")
 
-    result = mod.blackboard(action="coverage", db_path=store.db_path)
+    # The IDA-side tool module is a thin bridge after the redesign; coverage
+    # is computed by the host dispatcher over the store.
+    result = server._handle_blackboard({"action": "coverage"})
 
     assert result["ok"] is True
     assert result["analyzed"] == 1

@@ -119,7 +119,11 @@ def test_owned_close_tears_down_runtime_lease_and_session(tmp_path, monkeypatch)
     binary.write_bytes(b"close-me")
     monkeypatch.setattr(server, "_send_rpc_raw", lambda *a, **k: {})
     killed: list = []
-    monkeypatch.setattr(server_runtime, "_kill_process_tree", killed.append)
+    # The real _kill_process_tree accepts grace_seconds (SIGKILL grace budget);
+    # the mock must tolerate the kwarg even though list.append does not.
+    monkeypatch.setattr(
+        server_runtime, "_kill_process_tree", lambda proc, **kw: killed.append(proc)
+    )
 
     token = server._begin_client_connection()
     try:

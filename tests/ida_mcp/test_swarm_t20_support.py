@@ -75,6 +75,24 @@ def test_query_block_surfaces_tool_error_instead_of_silent_empty():
     assert res.get("code") == "FUNCTION_NOT_FOUND"
 
 
+def test_query_block_propagates_backend_truncation():
+    """A capped blocks response surfaces truncated + total_matches instead of
+    a silently-under-reported total (WO-Q1 promotion of the query DSL)."""
+    ql = load_support_module("query_lang")
+    ql._call_tool = lambda name, **kw: {
+        "ok": True,
+        "truncated": True,
+        "blocks": (
+            "0x1000-0x1004  succs=[0x1004]  preds=[0x1000]\n"
+            "0x1004-0x1008  succs=[0x1008]  preds=[0x1004]"
+        ),
+    }
+    res = ql.QueryExecutor()._execute_block(_block_plan())
+    assert res["ok"] is True
+    assert res["truncated"] is True
+    assert res["total_matches"] == res["total"] == 2
+
+
 # ---------------------------------------------------------------------------
 # arch_utils: mnemonic-set over-classification
 # ---------------------------------------------------------------------------
@@ -105,6 +123,34 @@ def test_is_return_mnemonic_stays_operand_aware():
     assert au.is_return_mnemonic("jr", "jr $ra", "mips") is True
     assert au.is_return_mnemonic("jr", "jr t9", "mips") is False
     assert au.is_return_mnemonic("jalr", "jalr zero, 0(ra)", "riscv") is True
+
+
+def test_riscv_c_jr_ra_and_numeric_jalr_return_classification():
+    """Register-indirect branches are returns only for the RA target (q01).
+
+    ``c.jr ra`` returns while ``c.jr t0`` is an indirect jump; the numeric
+    ``jalr x0, x1, 0`` form classifies identically to the ABI-name forms
+    regardless of how IDA renders the operands (imm(rs1) vs rs1, imm).
+    """
+    au = load_support_module("arch_utils")
+    # c.jr: RA-only return (ABI and numeric x1 names).
+    assert au.is_return_mnemonic("c.jr", "c.jr ra", "riscv") is True
+    assert au.is_return_mnemonic("c.jr", "c.jr x1", "riscv") is True
+    assert au.is_return_mnemonic("c.jr", "c.jr t0", "riscv") is False
+    assert au.is_return_mnemonic("c.jr", "c.jr a0", "riscv") is False
+    # jalr: return only when rd==x0/zero AND rs1==ra/x1, in both operand shapes.
+    for disasm in (
+        "jalr zero, 0(ra)",
+        "jalr x0, 0(x1)",
+        "jalr zero, ra, 0",
+        "jalr x0, x1, 0",
+    ):
+        assert au.is_return_mnemonic("jalr", disasm, "riscv") is True, disasm
+    assert au.is_return_mnemonic("jalr", "jalr ra, 0(t0)", "riscv") is False
+    assert au.is_return_mnemonic("jalr", "jalr x0, 0(t0)", "riscv") is False
+    # c.jalr always links to ra — a call, never a return.
+    assert au.is_return_mnemonic("c.jalr", "c.jalr ra", "riscv") is False
+    assert au.is_call_mnemonic("c.jalr", "riscv") is True
 
 
 # ---------------------------------------------------------------------------

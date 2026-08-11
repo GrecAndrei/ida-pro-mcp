@@ -1,5 +1,6 @@
 import copy
 import functools
+import inspect
 import logging
 import os
 import queue
@@ -124,6 +125,30 @@ def bypass_sync(reason: str = ""):
         _bypass_local.active = prev
 
 
+def _is_batch() -> bool:
+    """Return True when IDA runs in batch/headless mode, across IDA versions.
+
+    ``idaapi.is_batch()`` was removed in IDA 9.x; the canonical read there is
+    ``ida_kernwin.cvar.batch`` (as used by the official SDK example
+    ``decompile_entry_points.py``).  Older 7.x builds still expose
+    ``idaapi.is_batch()``.  Fall back conservatively to False — treating an
+    unknown state as interactive is safe (we may take the slower sync path).
+    """
+    fn = getattr(idaapi, "is_batch", None)
+    if callable(fn):
+        try:
+            return bool(fn())
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("idaapi.is_batch() failed (%s); falling back", exc)
+    batch = getattr(ida_kernwin, "cvar", None)
+    if batch is not None:
+        try:
+            return bool(getattr(batch, "batch", False))
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("ida_kernwin.cvar.batch read failed (%s)", exc)
+    return False
+
+
 def _sync_wrapper(ff, safety_mode: IDASafety):
     """Call a function ff with a specific IDA safety_mode."""
     # DEADLOCK PROTECTION: Nuclear Option
@@ -137,7 +162,7 @@ def _sync_wrapper(ff, safety_mode: IDASafety):
         return ff()
 
     # DEADLOCK PROTECTION 2: Batch mode usually implies main thread execution.
-    if idaapi.is_batch():
+    if _is_batch():
         return ff()
 
     if safety_mode not in [IDASafety.SAFE_READ, IDASafety.SAFE_WRITE]:
@@ -216,15 +241,63 @@ def _tool_cache():
     return None
 
 
+def _signature_defaults(f) -> dict:
+    """Best-effort map of a tool function's parameter defaults.
+
+    Returns {} when the signature is unavailable (C functions, wrapped
+    callables without __wrapped__). Defaults are used to drop kwargs equal to
+    the schema default from the cache key, so ``count=100`` on a ``count=100``
+    default matches a call that omits it.
+    """
+    try:
+        sig = inspect.signature(f)
+    except (TypeError, ValueError):
+        return {}
+    defaults = {}
+    for name, param in sig.parameters.items():
+        if param.default is not inspect.Parameter.empty:
+            defaults[name] = param.default
+    return defaults
+
+
+def _cache_key_kwargs(f, kwargs: dict) -> dict:
+    """Canonicalize *kwargs* for cache-key purposes (not the real call).
+
+    Numeric strings become ints and args equal to the tool's default are
+    dropped, so an LLM rephrasing an address as "0x401000" / 4198400 or an
+    explicit default hits the same LRU entry. The function is still called
+    with the caller's original kwargs.
+    """
+    try:
+        from ida_mcp.ida_mcp.cache import canonicalize_kwargs
+    except ImportError:
+        try:
+            from cache import canonicalize_kwargs
+        except ImportError:
+            from ida_pro_mcp.ida_mcp.cache import canonicalize_kwargs
+    return canonicalize_kwargs(kwargs, defaults=_signature_defaults(f))
+
+
 def idawrite(f):
-    """Decorator for marking a function as modifying the IDB."""
+    """Decorator for marking a function as modifying the IDB.
+
+    Invalidation is narrowed to entries whose key references the written
+    address family (see ``ToolResultCache.invalidate_for_write``) instead of
+    clearing all 256 entries on every write; a write with no address falls
+    back to the full physical clear.
+    """
 
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
         # Invalidate read cache on any write operation
         cache = _tool_cache()
         if cache is not None:
-            cache.invalidate_all()
+            invalidate = getattr(cache, "invalidate_for_write", None)
+            if callable(invalidate):
+                invalidate(kwargs)
+            else:
+                # Older cache instances without the narrow path.
+                cache.invalidate_all()
         ff = functools.partial(f, *args, **kwargs)
         ff.__name__ = f.__name__
         return sync_wrapper(ff, idaapi.MFF_WRITE)
@@ -243,8 +316,11 @@ def idaread(f):
     - On a cache miss the dict is stored unchanged; consumers that need
       a stable shape across hits/misses should ignore the ``_cache_*``
       fields.
-    - The TTL is governed by ``ToolResultCache(ttl_seconds=...)`` and
-      the cache is invalidated wholesale by ``@idawrite`` ops.
+    - The TTL is governed by ``ToolResultCache(ttl_seconds=...)``.
+    - Cache keys are canonicalized (numeric strings -> int, args equal to a
+      signature default dropped) so LLM rephrasing hits the LRU.
+    - ``@idawrite`` invalidates narrowly by address family instead of
+      clearing the whole cache.
     """
 
     @functools.wraps(f)
@@ -253,7 +329,8 @@ def idaread(f):
         cache = _tool_cache()
 
         if cache is not None:
-            cached, age = cache.get(f.__name__, kwargs, with_age=True)
+            cache_kwargs = _cache_key_kwargs(f, kwargs)
+            cached, age = cache.get(f.__name__, cache_kwargs, with_age=True)
             if cached is not None:
                 if isinstance(cached, dict):
                     # Copy before annotating: the stored object must never
@@ -272,7 +349,7 @@ def idaread(f):
         # so the caller's object and the cached object never alias: mutation
         # of the returned dict downstream must not poison later cache hits.
         if cache is not None and isinstance(result, dict) and not result.get("error"):
-            cache.put(f.__name__, kwargs, copy.deepcopy(result))
+            cache.put(f.__name__, _cache_key_kwargs(f, kwargs), copy.deepcopy(result))
 
         return result
 

@@ -23,7 +23,7 @@ except ImportError:
 
 from ...support.query_lang import run_query_lang
 from .advanced import search_constants, search_decompiled, search_structured
-from .basic import search_bytes, search_immediate, search_name, search_string
+from .basic import search_bytes, search_data_value, search_immediate, search_name, search_string
 from .code import search_comment, search_insns, search_operand, search_text
 from .combinators import (
     search_analyze,
@@ -57,6 +57,14 @@ from .unified import (
     search_symbol_info,
     search_xrefs_to_string,
 )
+
+# Bounded default deadline for whole-binary scans.  A raw opaque firmware blob
+# with no EXEC segment and no analysis can make a full-binary scan crawl; a
+# caller who does not opt in to "no limit" gets a bounded budget that reports
+# ``timed_out`` plus the partial results instead of running to completion or
+# tripping the host RPC timeout.
+DEFAULT_SEARCH_TIMEOUT_MS = 8000
+
 
 # ============================================================================
 # L1 Insight Index Pre-filtering
@@ -141,8 +149,8 @@ def search(
         "find", "callers", "callees", "api", "vulnerable", "constants", "decompiled", "structured",
         "type", "export", "summary", "query_lang", "nl", "behavior",
         "bool", "analyze", "neighborhood", "outlier", "fingerprint", "path", "reach", "noreach",
-        "symbol", "symbol_info", "demangle", "xrefs_to_string",
-    ], "Action: bytes|string|immediate|name|insns|mnemonic|instruction|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|callers|callees|api|vulnerable|constants|decompiled|structured|type|export|summary|query_lang|nl|behavior|bool|analyze|neighborhood|outlier|fingerprint|path|reach|noreach|symbol|symbol_info|demangle|xrefs_to_string"],
+        "symbol", "symbol_info", "demangle", "xrefs_to_string", "data_value",
+    ], "Action: bytes|string|immediate|name|insns|mnemonic|instruction|text|operand|comment|data_ref|code_ref|regex|func_by_sig|find|callers|callees|api|vulnerable|constants|decompiled|structured|type|export|summary|query_lang|nl|behavior|bool|analyze|neighborhood|outlier|fingerprint|path|reach|noreach|symbol|symbol_info|demangle|xrefs_to_string|data_value"],
     pattern: Annotated[Optional[str], "Pattern to search for"] = None,
     query: Annotated[Optional[str], "Alias for pattern"] = None,
     limit: Annotated[int, "Max results"] = 100,
@@ -158,7 +166,8 @@ def search(
     semantic_min_score: Annotated[float, "Minimum semantic score"] = 0.0,
     include_semantic_alternatives: Annotated[bool, "Include alternatives"] = False,
     constraints: Annotated[Optional[dict], "Schema constraints for structured search"] = None,
-    timeout_ms: Annotated[int, "Timeout in milliseconds for long searches (0 = no limit)"] = 0,
+    timeout_ms: Annotated[Optional[int], "Timeout in milliseconds for long searches (None = bounded default, 0 = no limit)"] = None,
+    kind: Annotated[Optional[str], "Restrict action='find' to one category: strings|names|imports|comments|instructions|refs (default: all)"] = None,
     **kwargs
 ) -> dict:
     """
@@ -166,7 +175,10 @@ def search(
     All results use compact text format (one match per line) to minimize LLM context.
 
     QUICK ACTIONS:
-    - find: Smart unified search (auto-detects names, strings, imports, instructions, xrefs)
+    - find: Smart unified search (auto-detects names, strings, imports, instructions, xrefs).
+            Pass kind='strings' for a dedicated string-literal search, kind='names'
+            for symbols only, or kind='imports'|'comments'|'instructions'|'refs' to
+            restrict to that one category.
     - nl: Natural language search via FunctionEmbeddingIndex (bge-code-v1 embeddings)
             Supports mode="quick" (hybrid search only) or mode="expand" (with behavior expansion)
     - behavior: Find functions matching a behavior tag (crypto_symmetric, network_http, etc.)
@@ -182,6 +194,13 @@ def search(
     DETAILED ACTIONS:
     - bytes, string, immediate, name, insns, mnemonic, instruction, text, operand, comment
     - data_ref, code_ref, regex, func_by_sig
+    - data_value: Find raw pointer-sized words equal to an address (dispatch/vector
+      tables, function-pointer arrays) that IDA created no data xref for.
+      Pass value/pattern=ADDR, endian='both'|'le'|'be' (default both),
+      word_size='auto'|'u32'|'u64' (default auto = IDB pointer width), and
+      region='0x1000-0x2000' / a segment name / start+end to narrow.
+      Each item reports {address, value, endian, kind} where kind is
+      code/data/unknown from the item flags.
     - type: Search type library names and type usages
     - export: Search exported symbols
 
@@ -239,7 +258,7 @@ def search(
                         break
 
         # Validate pattern
-        pattern_not_required = {"vulnerable", "constants", "summary", "outlier", "noreach", "demangle", "symbol_info", "structured"}
+        pattern_not_required = {"vulnerable", "constants", "summary", "outlier", "noreach", "demangle", "symbol_info", "structured", "data_value"}
         if not actual_pattern and action not in pattern_not_required:
             return make_error(MCPError.INVALID_ARGS, "pattern or query required")
         if action == "export" and not actual_pattern:
@@ -274,7 +293,10 @@ def search(
         except Exception:
             offset = 0
 
-        # timeout_ms=0 means no limit (SearchTimeout treats 0 as unlimited)
+        # timeout_ms=None (the default) resolves to a bounded whole-binary
+        # budget; the caller can pass 0 for an explicit no-limit opt-out.
+        if timeout_ms is None:
+            timeout_ms = DEFAULT_SEARCH_TIMEOUT_MS
 
         # L1 Insight Index pre-filtering
         l1_pre_filtered_addrs = None
@@ -320,7 +342,7 @@ def search(
         elif action == "func_by_sig":
             response = search_func_by_sig(actual_pattern, offset, limit, timeout_ms)
         elif action == "find":
-            response = search_find(actual_pattern, case_sensitive, range_start, range_end, include_context, include_items, include_breakdown, offset, limit, timeout_ms)
+            response = search_find(actual_pattern, case_sensitive, range_start, range_end, include_context, include_items, include_breakdown, offset, limit, timeout_ms, kind)
         elif action == "callers":
             response = search_callers(actual_pattern, include_context, offset, limit, semantic_min_score, include_semantic_alternatives, include_items)
         elif action == "callees":
@@ -347,8 +369,11 @@ def search(
         elif action == "summary":
             response = search_summary(actual_pattern, case_sensitive, range_start, range_end)
         elif action == "query_lang":
-            # query_lang uses the 'query' parameter directly, not pattern
-            response = run_query_lang(query or actual_pattern or "")
+            # query_lang uses the 'query' parameter directly, not pattern.
+            # Forward the op-level limit so ida_search_query_lang(limit=N)
+            # resizes the fetch window (run_query_lang caps at its default 1000
+            # otherwise).
+            response = run_query_lang(query or actual_pattern or "", limit=limit)
         elif action == "nl":
             mode = str(kwargs.get("mode", "expand"))
             center_ea = None
@@ -449,6 +474,28 @@ def search(
                 offset=offset,
                 limit=limit,
                 timeout_ms=timeout_ms,
+            )
+
+        elif action == "data_value":
+            # value may arrive via pattern, the value kwarg, or target.
+            target_value = actual_pattern
+            if target_value is None:
+                target_value = kwargs.get("value") or kwargs.get("target")
+            if target_value is None:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "data_value requires a target value (address or symbol name)",
+                )
+            response = search_data_value(
+                target_value,
+                range_start=range_start,
+                range_end=range_end,
+                endian=str(kwargs.get("endian", "both")),
+                word_size=str(kwargs.get("word_size", "auto")),
+                offset=offset,
+                limit=limit,
+                timeout_ms=timeout_ms,
+                region=kwargs.get("region"),
             )
 
         else:

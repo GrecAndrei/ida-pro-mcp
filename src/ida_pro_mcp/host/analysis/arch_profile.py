@@ -13,7 +13,7 @@ import struct
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..stores.chip_db import find_chip_profile, identify_chip_from_bytes
+from .patterns import looks_like_code, riscv_instruction_validity
 
 _PROC_ALIASES = {
     "aarch64": ("arm", 64),
@@ -30,6 +30,16 @@ _PROC_ALIASES = {
     "mipsel": ("mipsl", 32),
     "mipseb": ("mipsb", 32),
     "ppc": ("powerpc", None),
+    # IDA's RISC-V processor module is canonically named "riscv" (there is no
+    # separate riscv64/riscv32 module).  Aliasing the suffixed forms here means
+    # set_processor_type('riscv64') resolves to the canonical module with the
+    # bitness carried through as an option, instead of IDA silently failing to
+    # find a "riscv64" processor module on an opaque blob.
+    "riscv64": ("riscv", 64),
+    "rv64": ("riscv", 64),
+    "riscv32": ("riscv", 32),
+    "rv32": ("riscv", 32),
+    "riscv": ("riscv", None),
 }
 
 
@@ -122,10 +132,10 @@ class ArchInference:
     confidence: float = 0.0
     reason: str = ""
     candidates: list[dict[str, Any]] = field(default_factory=list)
-    load_base: int | None = None         # confirmed load base address (e.g. from WFFW header)
-    chip_family: str | None = None       # e.g. "aic8800d80", "stm32", "esp32"
-    memory_map: list[dict[str, Any]] = field(default_factory=list)
-    peripheral_addresses: list[dict[str, Any]] = field(default_factory=list)
+    load_base: int | None = None         # confirmed load base address (e.g. from a known header)
+    looks_like_code: bool = False        # entropy/instruction-validity gate on the raw sample
+    warning: str | None = None           # honest caveat for raw blobs / provisional guesses
+    ambiguous: bool = False              # top candidates are indistinguishable (same-score tie)
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -136,17 +146,15 @@ class ArchInference:
             "confidence": round(float(self.confidence), 3),
             "reason": self.reason,
             "candidates": self.candidates,
+            "looks_like_code": bool(self.looks_like_code),
+            "ambiguous": bool(self.ambiguous),
         }
         if self.loader is not None:
             d["loader"] = self.loader
         if self.load_base is not None:
             d["load_base"] = self.load_base
-        if self.chip_family is not None:
-            d["chip_family"] = self.chip_family
-        if self.memory_map:
-            d["memory_map"] = self.memory_map
-        if self.peripheral_addresses:
-            d["peripheral_addresses"] = self.peripheral_addresses
+        if self.warning:
+            d["warning"] = self.warning
         return d
 
 
@@ -193,6 +201,14 @@ def _arch_prototype_embeddings() -> dict[str, dict[int, float]]:
         "arm": b"\xf0\xb5\x70\x47\x00\xf0\x2d\xe9\xbd\xe8\x1e\xff\x2f\xe1",
         "mipsl": b"\xbd\x27\xbf\xaf\x08\x00\xe0\x03\x0c\x00\x00\x00",
         "mipsb": b"\x27\xbd\xaf\xbf\x03\xe0\x00\x08\x00\x00\x00\x0c",
+        # RISC-V RV32C/RV64C function prologue: c.addi4spn / c.addi / c.jalr /
+        # c.jr / auipc gp + addi gp + lw-sw (RV32) / ld-sd (RV64) + add + lui.
+        "riscv32": b"\x00\x04\x84\x40\xe1\x04\xc1\x40\x82\x90\x82\x80\x16\xc8"
+                   b"\x1a\x44\x97\x01\x10\x2a\x93\x81\x31\x12\x03\xa3\x02\x00"
+                   b"\x23\xa4\x62\x00",
+        "riscv64": b"\x00\x04\x84\x40\xe1\x04\xc1\x40\x82\x90\x82\x80\x16\xc8"
+                   b"\x1a\x44\x97\x01\x10\x2a\x93\x81\x31\x12\x03\xb3\x02\x00"
+                   b"\x23\xb4\x62\x00",
     }
     return {k: _byte_2gram_embedding(v) for k, v in proto.items()}
 
@@ -232,27 +248,157 @@ def _opcode_density_scores(data: bytes) -> dict[str, float]:
     mipsb_score += _count(b"\xaf\xbf") * 1.4          # sw ra (BE)
     mipsb_score += _count(b"\x03\xe0\x00\x08") * 1.8  # jr ra (BE)
 
+    # RISC-V (RV32/RV64, incl. the C extension).  The compressed return/call
+    # halfwords (c.jr ra = 0x8082, c.jalr ra = 0x9082) appear in *every*
+    # C-extension function epilogue, so they are the strongest signal; the
+    # 32-bit opcode bytes (low byte = opcode[6:0], +0x80 variant when the
+    # destination rd has bit 0 set, e.g. jal ra) are a weaker secondary.  The
+    # instruction-validity scan (see _raw_arch_candidates) gates this score so
+    # ASCII text / random bytes that happen to contain these single bytes
+    # cannot push RISC-V to the top.
+    riscv_score = 0.0
+    riscv_score += _count(b"\x82\x80") * 3.0          # c.jr ra (0x8082)
+    riscv_score += _count(b"\x82\x90") * 3.0          # c.jalr ra (0x9082)
+    riscv_score += _count(b"\x6f") * 0.03             # jal (rd even)
+    riscv_score += _count(b"\xef") * 0.03             # jal (rd odd)
+    riscv_score += _count(b"\x17") * 0.02             # auipc (rd even)
+    riscv_score += _count(b"\x97") * 0.02             # auipc (rd odd)
+    riscv_score += _count(b"\x37") * 0.02             # lui (rd even)
+    riscv_score += _count(b"\xb7") * 0.02             # lui (rd odd)
+    riscv_score += _count(b"\x67") * 0.02             # jalr (rd even)
+    riscv_score += _count(b"\xe7") * 0.02             # jalr (rd odd)
+    riscv_score += _count(b"\x73") * 0.02             # ecall / CSR / SYSTEM
+
     return {
         "metapc": x86_score,
         "arm": arm_score,
         "mipsl": mipsl_score,
         "mipsb": mipsb_score,
+        "riscv": riscv_score,
     }
+
+
+def _riscv_validity_scores(data: bytes) -> dict[str, Any]:
+    """RISC-V instruction-validity scan for a sample (see patterns.riscv_instruction_validity)."""
+    return riscv_instruction_validity(data)
+
+
+def _riscv_bitness(data: bytes) -> tuple[float, float]:
+    """RV64 vs RV32 bitness evidence from a RISC-V sample.
+
+    RV64-only load/store widths (funct3=0b011 ld/sd on opcodes 0x03/0x23) and
+    the RV64-only 32-bit ALU opcodes (0x1b OP-IMM-32, 0x3b OP-32) pull toward
+    64-bit; RV32 lw/sw (funct3=0b010) pull toward 32-bit.  Returns
+    (rv64_fraction, rv32_fraction) in [0,1] summing to 1 (0.5/0.5 when there is
+    no evidence, i.e. bitness genuinely unknown).
+    """
+    sample = data[: min(len(data), 16384)]
+    ld_sd = 0
+    lw_sw = 0
+    rv64_only = 0
+    pos = 0
+    while pos + 4 <= len(sample):
+        word = int.from_bytes(sample[pos:pos + 4], "little")
+        opcode = word & 0x7F
+        funct3 = (word >> 12) & 0x7
+        if opcode in (0x03, 0x23):  # load / store
+            if funct3 == 0b011:
+                ld_sd += 1
+            elif funct3 == 0b010:
+                lw_sw += 1
+        elif opcode in (0x1B, 0x3B):  # OP-IMM-32 / OP-32 (RV64-only)
+            rv64_only += 1
+        pos += 4
+    total = ld_sd + lw_sw + rv64_only
+    if total == 0:
+        return 0.5, 0.5
+    rv64_frac = (ld_sd + rv64_only) / total
+    return rv64_frac, 1.0 - rv64_frac
+
+
+def _dominant_hi20(data: bytes) -> int | None:
+    """Dominant absolute lui/auipc upper-20-bit constant in a RISC-V sample.
+
+    A bare-metal RISC-V binary repeatedly loads the same high-address hi20
+    (0x80000000/0x10000000-class SoC bases, or the __global_pointer$ area), so
+    the most common lui/auipc immediate is a candidate load base.  Returns
+    None when no single hi20 dominates.
+    """
+    sample = data[: min(len(data), 16384)]
+    counts: dict[int, int] = {}
+    for pos in range(0, len(sample) - 3, 4):
+        word = int.from_bytes(sample[pos:pos + 4], "little")
+        opcode = word & 0x7F
+        if opcode not in (0x17, 0x37):  # auipc / lui
+            continue
+        if ((word >> 7) & 0x1F) == 0:   # x0 destination (e.g. bare lui for a jump)
+            continue
+        hi20 = word & 0xFFFFF000
+        counts[hi20] = counts.get(hi20, 0) + 1
+    if not counts:
+        return None
+    best, cnt = max(counts.items(), key=lambda kv: kv[1])
+    total = sum(counts.values())
+    if total <= 0 or cnt < 3 or cnt / total < 0.2:
+        return None
+    return best
+
+
+# Absolute-signal calibration for raw-blob confidence.  Confidence is derived
+# from the raw opcode-density strength and the max embedding cosine — never
+# from a relative "best-of-N" ratio, which made weak blobs claim ~0.95.
+_OD_CONF_SATURATION = 20.0     # od_best == 20  ->  od_conf == 1.0
+_EM_CONF_SATURATION = 0.30     # em_best == 0.3 ->  em_conf == 1.0
+_OD_MIN_FOR_EMBED = 1.0        # embedding only counts once real opcode evidence exists
+# RISC-V candidate gates: a blob must decode plausibly AND carry opcode density
+# before RISC-V is considered.  ASCII text and high-entropy random bytes are
+# already rejected by looks_like_code (printable ratio / entropy ceiling), so the
+# od floor only has to exclude weak noise: realistic RISC-V code (even non-C,
+# which lacks the 3.0-weighted c.jr/c.jalr pairs) scores ~5-12 while incidental
+# opcode-byte hits in x86/other code stay ~1-2.
+_RV_OD_FLOOR = 5.0
+_RV_VALIDITY_FLOOR = 0.5
+# Candidate blend weights: opcode density, embedding, and (RISC-V only) the
+# instruction-validity scan, which is deliberately high-weight so a RISC-V blob
+# clears the metapc/arm/mips noise floor.
+_OD_W = 0.45
+_EM_W = 0.20
+_VALIDITY_W = 0.35
 
 
 def _raw_arch_candidates(data: bytes) -> list[dict[str, Any]]:
     """
     Blended architecture candidates for raw blobs.
-    Combines opcode-density (primary) with byte-embedding (secondary).
-    Opcode density carries 0.7 weight; embedding carries 0.3 weight.
-    Reports inference_method so callers can gauge reliability.
+
+    Combines opcode density (primary), byte-2gram embedding (secondary) and —
+    for RISC-V — an instruction-validity scan as a separate high-weight signal.
+    Confidence is ABSOLUTE signal strength (od_best + max embedding cosine),
+    not relative-to-best, so a weak/noisy blob reports a low confidence instead
+    of an inflated one.  Cross-architecture candidates whose blended score ties
+    the top are dropped as contradictory.
     """
     if not data:
         return []
     sample = data[: min(len(data), 8192)]
 
-    # --- opcode-density signal ---
+    # --- opcode-density signal (RISC-V included) ---
     od_raw = _opcode_density_scores(sample)
+    code_ok = looks_like_code(sample)
+    rv_valid = _riscv_validity_scores(sample)
+    rv_od = od_raw.get("riscv", 0.0)
+    # Gate RISC-V: needs decode plausibility, real opcode density (not ASCII
+    # lookalikes) and an entropy/printable profile consistent with code.
+    # A gated RISC-V contributes NOTHING (od AND the validity term), otherwise
+    # random/text data — which decodes plausibly by chance — would rank riscv
+    # as a candidate off its validity scan alone.
+    rv_gated = (
+        rv_od < _RV_OD_FLOOR
+        or rv_valid["valid_ratio"] < _RV_VALIDITY_FLOOR
+        or not code_ok
+    )
+    if rv_gated:
+        rv_od = 0.0
+        od_raw["riscv"] = 0.0
     od_best = max(od_raw.values()) if od_raw else 0.0
 
     # --- embedding signal ---
@@ -268,45 +414,154 @@ def _raw_arch_candidates(data: bytes) -> list[dict[str, Any]]:
         "arm":    {"processor": "arm",    "bitness": 32, "endian": "little"},
         "mipsl":  {"processor": "mipsl",  "bitness": 32, "endian": "little"},
         "mipsb":  {"processor": "mipsb",  "bitness": 32, "endian": "big"},
+        "riscv32": {"processor": "riscv", "bitness": 32, "endian": "little"},
+        "riscv64": {"processor": "riscv", "bitness": 64, "endian": "little"},
     }
+    # A single RISC-V density score feeds both RV32 and RV64 candidates, split
+    # by the ld/sd-vs-lw/sw bitness evidence (0.5/0.5 -> tied, bitness unknown).
+    rv64_frac, rv32_frac = _riscv_bitness(sample)
 
-    OPCODE_W = 0.7
-    EMBED_W = 0.3
-
-    rows: list[tuple[float, str]] = []
-    for arch in arch_meta:
+    def _blended(arch: str) -> float:
         od_norm = (od_raw.get(arch, 0.0) / (od_best + 1e-9)) if od_best > 0 else 0.0
         em_norm = (em_raw.get(arch, 0.0) / (em_best + 1e-9)) if em_best > 0 else 0.0
-        blended = OPCODE_W * od_norm + EMBED_W * em_norm
-        rows.append((blended, arch))
+        if arch == "riscv":
+            if rv_gated:
+                return 0.0
+            od_norm = (rv_od / (od_best + 1e-9)) if od_best > 0 else 0.0
+            em_norm = (em_raw.get("riscv32", 0.0) / (em_best + 1e-9)) if em_best > 0 else 0.0
+            return _OD_W * od_norm + _EM_W * em_norm + _VALIDITY_W * rv_valid["valid_ratio"]
+        return _OD_W * od_norm + _EM_W * em_norm
 
+    rows: list[tuple[float, str]] = []
+    for arch in ("metapc", "arm", "mipsl", "mipsb"):
+        rows.append((_blended(arch), arch))
+    base_rv = _blended("riscv")
+    rows.append((base_rv * (0.5 + 0.5 * rv64_frac), "riscv64"))
+    rows.append((base_rv * (0.5 + 0.5 * rv32_frac), "riscv32"))
     rows.sort(key=lambda x: x[0], reverse=True)
+
     if not rows or rows[0][0] <= 0.0:
         return []
 
     top_blended = rows[0][0]
-    # Pick label: opcode-dominated when od_best > 0, otherwise embedding.
+    # Absolute confidence from raw signal strength.
+    od_conf = min(1.0, od_best / _OD_CONF_SATURATION)
+    em_conf = min(1.0, em_best / _EM_CONF_SATURATION)
+    # The embedding alone (e.g. a lone common byte) must not confer confidence
+    # when there is no real opcode evidence.
+    em_effective = em_conf if od_best >= _OD_MIN_FOR_EMBED else 0.0
+    abs_conf = min(1.0, 0.7 * od_conf + 0.3 * em_effective)
+
     method = "opcode-density + embedding blend" if od_best > 0 else "byte-embedding similarity"
+    if rv_od > 0:
+        method = "opcode-density + embedding + RISC-V validity scan"
 
     out: list[dict[str, Any]] = []
-    for blended, arch in rows[:4]:
+    for blended, arch in rows:
+        if blended <= 0.0:
+            continue
         meta = arch_meta[arch]
-        # Relative-to-best ratio: the /top_blended and *top_blended cancelled
-        # out before, so each candidate reported its absolute blended score.
-        # Divide by top_blended only — the top candidate gets ~1.0 (capped at
-        # 0.95) and runners-up get a true relative confidence.
-        conf = max(0.01, min(0.95, blended / (top_blended + 1e-9)))
+        # Drop a runner-up with a DIFFERENT processor that ties the top — that
+        # is a genuine contradiction, not a usable suggestion.  Same-processor
+        # candidates (riscv32 vs riscv64) legitimately coexist as bitness
+        # ambiguity.
+        if (
+            arch != rows[0][1]
+            and meta["processor"] != arch_meta[rows[0][1]]["processor"]
+            and (top_blended - blended) < 0.05
+        ):
+            continue
+        conf = abs_conf * (blended / (top_blended + 1e-9))
         out.append(
             {
                 "processor": meta["processor"],
                 "bitness": meta["bitness"],
                 "endian": meta["endian"],
                 "confidence": round(conf, 3),
-                "reason": f"{method}",
+                "reason": method,
                 "inference_method": method,
+                "looks_like_code": bool(code_ok),
             }
         )
     return out
+
+
+def _cortex_m_vector_plausible(head: bytes, rv_le: int) -> bool:
+    """
+    Validate a Cortex-M vector-table guess before accepting it at high confidence.
+
+    A little-endian Cortex-M vector table starts with the initial SP followed by
+    the reset-vector pointer.  A genuine table has a reset vector that lands in a
+    plausible code region and a burst of subsequent entries that either are zero
+    or decode as Thumb (odd) pointers into flash/RAM.  A random file can satisfy
+    the SP+Thumb-bit sniff by chance, but its following words will be garbage, so
+    the scan of the following words separates a real table from noise.
+    """
+    reset = rv_le & ~1
+    if not (
+        (0x08000000 <= reset <= 0x08200000)   # flash (Cortex-M common)
+        or (0x00000000 <= reset <= 0x00200000)  # boot ROM / alias
+        or (0x20000000 <= reset <= 0x40080000)  # RAM-resident image
+    ):
+        return False
+    # Inspect the words after the reset vector.  Only a handful of entries are
+    # typically populated; the rest are zero.  Accept when most words are either
+    # zero or plausible Thumb pointers / flash-RAM addresses.
+    plausible = 0
+    total = 0
+    for off in range(8, len(head) - 3, 4):
+        (word,) = struct.unpack_from("<I", head, off)
+        total += 1
+        if word == 0 or (word & 1) == 1 or (word & ~1) in range(0x40200000):
+            plausible += 1
+    return total == 0 or (plausible / total) >= 0.5
+
+
+def prepared_profile(inferred: dict[str, Any], options: dict[str, Any] | None = None) -> dict[str, Any]:
+    """
+    Build a ready-to-open architecture profile from an inference plus any
+    explicit user options, applying proc aliases / endian synonyms.
+
+    This is the single entry point for turning a raw-blob inference (or an
+    explicit selection) into the option dict that gets merged with
+    open-binary options.  It is used by the prepared-profile helper on the
+    host side and is the hand-off point for the server_session.py revamp wave
+    to auto-apply a high-confidence inference before opening an opaque blob.
+    """
+    opts, meta = normalize_arch_options(dict(options or {}))
+    inf = dict(inferred or {})
+
+    processor = opts.get("processor") or inf.get("processor")
+    bitness = opts.get("bitness") or inf.get("bitness")
+    endian = opts.get("endian") or inf.get("endian")
+    loader = opts.get("loader") or inf.get("loader")
+
+    profile: dict[str, Any] = {
+        "processor": processor,
+        "bitness": bitness,
+        "endian": endian,
+    }
+    if loader is not None:
+        profile["loader"] = loader
+    load_base = opts.get("baseaddr") or opts.get("load_base") or inf.get("load_base")
+    if load_base is not None:
+        profile["load_base"] = load_base
+    if inf.get("confidence") is not None:
+        profile["confidence"] = inf.get("confidence")
+    if inf.get("warning"):
+        profile["warning"] = inf.get("warning")
+    profile["file_kind"] = inf.get("file_kind", "unknown")
+    profile["meta"] = meta
+    return profile
+
+
+def prepare_profile_from_inference(binary_path: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
+    """
+    Run infer_binary_arch_profile on a binary and turn it into a prepared
+    profile (see prepared_profile).  Convenience used by callers that want a
+    single call.
+    """
+    return prepared_profile(infer_binary_arch_profile(binary_path), options)
 
 
 def infer_binary_arch_profile(binary_path: str) -> dict[str, Any]:
@@ -375,19 +630,7 @@ def infer_binary_arch_profile(binary_path: str) -> dict[str, Any]:
         return inf.to_dict()
 
     inf.file_kind = "raw"
-    chip = identify_chip_from_bytes(sample)
-    if chip:
-        inf.processor = chip.get("processor")
-        inf.bitness = chip.get("bitness")
-        inf.endian = chip.get("endian")
-        inf.loader = "bin"
-        inf.confidence = float(chip.get("confidence") or 0.95)
-        inf.reason = f"chip profile match: {chip.get('chip_family', 'unknown')}"
-        inf.chip_family = str(chip.get("chip_family") or "unknown")
-        inf.load_base = chip.get("load_base")
-        inf.memory_map = chip.get("memory_map") or []
-        inf.peripheral_addresses = chip.get("peripheral_addresses") or []
-        return inf.to_dict()
+    inf.looks_like_code = looks_like_code(sample)
 
     # --- Standard Cortex-M vector-table heuristic (little-endian) ---
     if len(head) >= 8:
@@ -398,18 +641,20 @@ def infer_binary_arch_profile(binary_path: str) -> dict[str, Any]:
             inf.bitness = 32
             inf.endian = "little"
             inf.loader = "bin"
-            inf.confidence = 0.92
-            inf.reason = "raw Cortex-M vector table heuristic"
-            rv_even = rv_le & ~1
-            if 0x08000000 <= rv_even <= 0x08FFFFFF:
-                prof = find_chip_profile("STM32") or {}
-                inf.chip_family = "STM32"
+            inf.load_base = rv_le & ~1
+            if _cortex_m_vector_plausible(head, rv_le):
+                inf.confidence = 0.92
+                inf.reason = "raw Cortex-M vector table heuristic"
             else:
-                prof = find_chip_profile("Generic Cortex-M") or {}
-                inf.chip_family = "Generic Cortex-M"
-            inf.load_base = prof.get("load_base")
-            inf.memory_map = prof.get("memory_map") or []
-            inf.peripheral_addresses = prof.get("peripheral_addresses") or []
+                # Reset vector points oddly or the following words are not
+                # Thumb pointers — keep the guess but report it as provisional
+                # instead of asserting it at high confidence.
+                inf.confidence = 0.55
+                inf.reason = "raw Cortex-M vector table heuristic (provisional)"
+                inf.warning = (
+                    "Cortex-M vector-table guess is provisional (reset vector or "
+                    "vector entries look off); verify the architecture explicitly."
+                )
             return inf.to_dict()
 
     candidates = _raw_arch_candidates(sample)
@@ -422,6 +667,25 @@ def infer_binary_arch_profile(binary_path: str) -> dict[str, Any]:
         inf.endian = None
         inf.confidence = float(candidates[0].get("confidence") or 0.2)
         inf.reason = candidates[0].get("reason") or "raw candidates available; explicit selection recommended"
+        inf.looks_like_code = bool(candidates[0].get("looks_like_code", inf.looks_like_code))
+        inf.warning = "raw blob; arch unverified — set architecture explicitly or apply a high-confidence inference"
+        # Same-processor, different-bitness near-tie (riscv32 ≈ riscv64) means
+        # the architecture is known but the bitness is genuinely undecided —
+        # e.g. C-extension blobs whose ld/sd vs lw/sw evidence the alignment-
+        # blind scan cannot resolve.  A lopsided split (1.0 vs 0.5) is a clear
+        # bitness call and is NOT flagged ambiguous.
+        rv32_conf = next((c.get("confidence") for c in candidates
+                          if c.get("processor") == "riscv" and c.get("bitness") == 32), None)
+        rv64_conf = next((c.get("confidence") for c in candidates
+                          if c.get("processor") == "riscv" and c.get("bitness") == 64), None)
+        if rv32_conf is not None and rv64_conf is not None and abs(rv32_conf - rv64_conf) < 0.05:
+            inf.ambiguous = True
+        # RISC-V absolute-base scan: only meaningful when RISC-V is a candidate.
+        if any(isinstance(c, dict) and c.get("processor") == "riscv" for c in candidates):
+            hi20 = _dominant_hi20(sample)
+            if hi20 is not None:
+                inf.load_base = hi20
+                inf.reason = f"{inf.reason}; dominant lui/auipc base 0x{hi20:X}"
         return inf.to_dict()
 
     # Unknown raw: avoid forcing a wrong processor. Keep suggestions only.
@@ -430,4 +694,5 @@ def infer_binary_arch_profile(binary_path: str) -> dict[str, Any]:
     inf.endian = None
     inf.confidence = 0.2
     inf.reason = "raw binary ambiguous; no safe auto-architecture"
+    inf.warning = "raw blob; arch unverified — no safe auto-architecture, set one explicitly"
     return inf.to_dict()

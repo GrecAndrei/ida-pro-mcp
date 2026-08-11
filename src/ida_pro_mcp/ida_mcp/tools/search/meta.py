@@ -21,6 +21,7 @@ from .core import (
     get_cached_strings,
     iter_code,
     iter_segments,
+    resolve_scan_segments,
     safe_generate_disasm_line,
 )
 
@@ -180,8 +181,9 @@ def search_summary(pattern, case_sensitive, range_start, range_end):
     # Instructions (sample bounded)
     inst_sample_limit = 5000
     inst_count = 0
-    for seg_start, seg_end in iter_segments(range_start, range_end, require_exec=True):
-        for ea in iter_code(seg_start, seg_end):
+    segs, seg_note, seg_error = resolve_scan_segments(range_start, range_end, require_exec=True)
+    for seg_start, seg_end in segs:
+        for ea in iter_code(seg_start, seg_end, force=bool(seg_note)):
             if inst_count >= inst_sample_limit:
                 summary["instructions_sampled"] = True
                 break

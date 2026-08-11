@@ -6,6 +6,15 @@ This mixin provides:
   - Phase contracts and escape routes
   - Policy enforcement (staleness, working-set gates)
   - Pre-flight and follow-up gates for tool calls
+  - A durable per-session phase/policy core persisted in ``bb_machinery``
+
+The per-session phase and policy state live in the workspace's
+``bb_machinery`` table (written through the orchestration layer) so they
+survive a host restart, while still being strictly scoped per session: one
+session's machine never leaks into another sharing the same host. A legacy
+directly-assigned singleton (``_blackboard_phase_state`` /
+``_blackboard_policy_state``) is honored verbatim for back-compatibility and
+for tests that seed state by hand.
 """
 from __future__ import annotations
 
@@ -21,12 +30,26 @@ from ..errors import MCPError, make_error
 #: SDK and cannot be imported here.
 _FUNCS_WRITE_ACTIONS = frozenset({"create", "change", "delete", "set_flags"})
 
+#: Namespace under which the per-session phase core is persisted.
+_PHASE_NS = "phase"
+#: Namespace under which the per-session policy core is persisted.
+_POLICY_NS = "policy"
+
+#: Internal keys attached to a durable-backed state dict so mutation helpers
+#: know where to persist. Filtered out of every snapshot.
+_DURABLE_KEY = "_durable_key"
+_DURABLE_NS = "_durable_ns"
+
+
+def _strip_durable(state: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in state.items() if not k.startswith("_durable")}
+
 
 class ServerBlackboardPhaseMixin:
     """Phase management and policy enforcement methods."""
 
     _EVIDENCE_TOOL_HINTS = frozenset({
-        "code", "search", "graph", "firmware_view", "types", "data",
+        "code", "search", "graph", "types", "data",
         "funcs", "memory", "calc", "blackboard",
     })
 
@@ -47,10 +70,43 @@ class ServerBlackboardPhaseMixin:
             return ""
         return str(getattr(session, "session_id", "") or "").strip().upper()
 
+    def _phase_persist(self, state: dict[str, Any]) -> None:
+        """Persist a durable-backed phase state back to ``bb_machinery``."""
+        ns = state.get(_DURABLE_NS)
+        key = state.get(_DURABLE_KEY)
+        if not ns or not key:
+            return
+        try:
+            store = self._get_blackboard_store()
+        except Exception:
+            store = None
+        if store is None:
+            return
+        with contextlib.suppress(Exception):
+            self._orchestration().machinery_set(
+                store, ns, key, _strip_durable(state)
+            )
+
+    def _policy_persist(self, state: dict[str, Any]) -> None:
+        ns = state.get(_DURABLE_NS)
+        key = state.get(_DURABLE_KEY)
+        if not ns or not key:
+            return
+        try:
+            store = self._get_blackboard_store()
+        except Exception:
+            store = None
+        if store is None:
+            return
+        with contextlib.suppress(Exception):
+            self._orchestration().machinery_set(
+                store, ns, key, _strip_durable(state)
+            )
+
     def _phase_state(self, sid: str | None = None) -> dict[str, Any]:
         # Back-compat: a directly-assigned legacy singleton (some callers and
         # tests set ``_blackboard_phase_state``) is honored verbatim. Production
-        # code no longer writes it; state lives in per-session dicts instead.
+        # code no longer writes it; state lives in per-session durable state.
         legacy = getattr(self, "_blackboard_phase_state", None)
         if isinstance(legacy, dict):
             return legacy
@@ -59,8 +115,22 @@ class ServerBlackboardPhaseMixin:
         if not isinstance(states, dict):
             states = {}
             self._blackboard_phase_states = states
-        state = states.get(key)
-        if not isinstance(state, dict):
+        cached = states.get(key)
+        if isinstance(cached, dict):
+            return cached
+        # Durable load: a prior host session persisted this session's machine.
+        durable = None
+        try:
+            store = self._get_blackboard_store()
+            if store is not None:
+                durable = self._orchestration().machinery_get(
+                    store, _PHASE_NS, key, default=None
+                )
+        except Exception:
+            durable = None
+        if isinstance(durable, dict):
+            state = dict(durable)
+        else:
             state = {
                 "phase": "scout",
                 "auto_transition": True,
@@ -68,7 +138,9 @@ class ServerBlackboardPhaseMixin:
                 "seen_addrs": [],
                 "last_transition_reason": "init",
             }
-            states[key] = state
+        state[_DURABLE_NS] = _PHASE_NS
+        state[_DURABLE_KEY] = key
+        states[key] = state
         return state
 
     def _phase_snapshot(self, state: dict[str, Any], store) -> dict[str, Any]:
@@ -95,6 +167,7 @@ class ServerBlackboardPhaseMixin:
             return
         state["phase"] = phase
         state["last_transition_reason"] = reason[:160]
+        self._phase_persist(state)
 
     def _phase_log_action(self, state: dict[str, Any], action: str, addr: str = "") -> None:
         recent = state.get("recent_actions")
@@ -111,6 +184,7 @@ class ServerBlackboardPhaseMixin:
             if addr not in seen:
                 seen.append(addr)
             state["seen_addrs"] = seen[-200:]
+        self._phase_persist(state)
 
     def _phase_find_loop(self, state: dict[str, Any]) -> bool:
         recent = state.get("recent_actions") or []
@@ -273,10 +347,10 @@ class ServerBlackboardPhaseMixin:
             return None
         if phase == "prove":
             if action in {"proposal_create", "proposal_accept"} and not self._phase_has_prove_receipts(store):
-                return make_error(
-                    MCPError.INVALID_ARGS,
+                return self._governance_denied(
+                    state,
+                    None,
                     "prove phase requires evidence cards and completed trace tasks before proposal operations",
-                    hint="Create a decision_card with evidence_for, run trace_ingest + trace_run, then retry.",
                 )
             return None
         if phase == "commit":
@@ -291,20 +365,52 @@ class ServerBlackboardPhaseMixin:
                             spec = {}
                     err = self._validate_proposal_spec(proposal_type, spec if isinstance(spec, dict) else {})
                     if err:
-                        return make_error(MCPError.INVALID_ARGS, f"commit phase requires strict spec: {err}")
+                        return self._governance_denied(
+                            state,
+                            None,
+                            f"commit phase requires strict spec: {err}",
+                        )
             return None
         if phase == "finalize":
             if action in {"proposal_create", "proposal_accept"}:
                 stats = store.stats() or {}
                 contradicted = int(stats.get("contradicted") or 0)
                 if contradicted > 0:
-                    return make_error(
-                        MCPError.INVALID_ARGS,
-                        "finalize phase blocked: unresolved contradictions remain",
-                        hint=f"Resolve/contradict reconciliation required before commit actions. contradicted={contradicted}",
+                    return self._governance_denied(
+                        state,
+                        None,
+                        f"finalize phase blocked: unresolved contradictions remain (contradicted={contradicted})",
                     )
             return None
         return None
+
+    # ── Governance error envelope ───────────────────────────────────────────
+
+    def _governance_denied(
+        self, phase_state: dict[str, Any], policy_state: dict[str, Any] | None, message: str
+    ) -> dict[str, Any]:
+        """Build the POLICY_DENIED governance envelope.
+
+        Body is ``{ok:false, gate, phase, policy, message}`` on top of the
+        standard error fields, so a caller can branch on ``error``/``code``
+        while the model sees the structured governance reason.
+        """
+        env = make_error(MCPError.POLICY_DENIED, message)
+        env["ok"] = False
+        env["gate"] = "phase"
+        env["phase"] = str((phase_state or {}).get("phase") or "scout")
+        env["policy"] = (
+            self._bb_policy_snapshot(policy_state) if policy_state else {}
+        )
+        env["message"] = message
+        return env
+
+    def _policy_denied(
+        self, phase_state: dict[str, Any], policy_state: dict[str, Any], message: str
+    ) -> dict[str, Any]:
+        env = self._governance_denied(phase_state, policy_state, message)
+        env["gate"] = "policy"
+        return env
 
     # ── Pre-flight / follow-up gates ─────────────────────────────────────────
 
@@ -335,6 +441,7 @@ class ServerBlackboardPhaseMixin:
             if store is None:
                 return None
             phase_state = self._phase_state()
+            policy_state = self._bb_policy_state()
             action = str((args or {}).get("action") or "").strip().lower()
             addr = str((args or {}).get("addr") or (args or {}).get("address") or "").strip()
             logical = f"{tool_name}:{action or 'call'}"
@@ -345,20 +452,20 @@ class ServerBlackboardPhaseMixin:
                 return None
             if phase == "prove":
                 if self._phase_write_call(tool_name, action) and not self._phase_has_prove_receipts(store):
-                    return make_error(
-                        MCPError.INVALID_ARGS,
+                    return self._governance_denied(
+                        phase_state,
+                        policy_state,
                         "prove phase requires evidence cards and completed trace tasks before write-surface tools",
-                        hint="Use decision_card evidence_for with tool citations (e.g. 'code:caller graph') + trace_ingest/trace_run first.",
                     )
                 return None
             if phase == "commit":
                 if self._phase_write_call(tool_name, action):
                     ack = bool((args or {}).get("_phase_commit_ack", False))
                     if not ack:
-                        return make_error(
-                            MCPError.INVALID_ARGS,
+                        return self._governance_denied(
+                            phase_state,
+                            policy_state,
                             "commit phase requires explicit acknowledgement for write-surface tools",
-                            hint="Retry with _phase_commit_ack=true after proposal verification.",
                         )
                 return None
             if phase == "finalize":
@@ -366,10 +473,10 @@ class ServerBlackboardPhaseMixin:
                     stats = store.stats() or {}
                     contradicted = int(stats.get("contradicted") or 0)
                     if contradicted > 0:
-                        return make_error(
-                            MCPError.INVALID_ARGS,
-                            "finalize phase blocked: unresolved contradictions remain",
-                            hint=f"Resolve contradictions before write operations. contradicted={contradicted}",
+                        return self._governance_denied(
+                            phase_state,
+                            policy_state,
+                            f"finalize phase blocked: unresolved contradictions remain (contradicted={contradicted})",
                         )
                 return None
         except Exception:
@@ -412,7 +519,7 @@ class ServerBlackboardPhaseMixin:
 
     def _bb_policy_state(self, sid: str | None = None) -> dict[str, Any]:
         # Back-compat: honor a directly-assigned legacy singleton, mirroring
-        # ``_phase_state``. Per-session dicts are the default thereafter.
+        # ``_phase_state``. Per-session durable state is the default thereafter.
         legacy = getattr(self, "_blackboard_policy_state", None)
         if isinstance(legacy, dict):
             return legacy
@@ -421,8 +528,21 @@ class ServerBlackboardPhaseMixin:
         if not isinstance(states, dict):
             states = {}
             self._blackboard_policy_states = states
-        state = states.get(key)
-        if not isinstance(state, dict):
+        cached = states.get(key)
+        if isinstance(cached, dict):
+            return cached
+        durable = None
+        try:
+            store = self._get_blackboard_store()
+            if store is not None:
+                durable = self._orchestration().machinery_get(
+                    store, _POLICY_NS, key, default=None
+                )
+        except Exception:
+            durable = None
+        if isinstance(durable, dict):
+            state = dict(durable)
+        else:
             state = {
                 "strict_mode": False,
                 "max_staleness_calls": 6,
@@ -432,12 +552,15 @@ class ServerBlackboardPhaseMixin:
                 "last_call_count_at_update": 0,
                 "policy_markers": [],
             }
-            states[key] = state
+        state[_DURABLE_NS] = _POLICY_NS
+        state[_DURABLE_KEY] = key
+        states[key] = state
         return state
 
     def _bb_policy_bump(self) -> dict[str, Any]:
         state = self._bb_policy_state()
         state["last_call_count_at_update"] = int(state.get("last_call_count_at_update", 0)) + 1
+        self._policy_persist(state)
         return state
 
     def _bb_policy_mark(self, state: dict[str, Any], marker: str) -> None:
@@ -447,6 +570,7 @@ class ServerBlackboardPhaseMixin:
         call_count = int(state.get("last_call_count_at_update", 0))
         markers.append(f"{marker}@{call_count}")
         state["policy_markers"] = markers[-50:]
+        self._policy_persist(state)
 
     @staticmethod
     def _marker_call(markers: list[Any], name: str) -> int:

@@ -6,6 +6,7 @@ Every error includes an LLM-actionable hint so the calling model can self-correc
 without burning context tokens on repeated trial-and-error.
 """
 
+import errno
 import traceback
 from typing import Any, Dict, Optional, Tuple
 
@@ -174,10 +175,23 @@ class MCPError:
     # --- Governance (160-164) ---
     GOVERNANCE_BLOCKED = "GOVERNANCE_BLOCKED"
 
+    # --- Bridge / Wire (165-169) ---
+    # Codes the IDA-side RPC bridge (server_script) emits for protocol, auth,
+    # and payload-limit failures. They ride the same envelope as tool errors so
+    # the host's client matching on error.category is uniform on the wire.
+    UNAUTHORIZED = "UNAUTHORIZED"
+    INVALID_REQUEST = "INVALID_REQUEST"
+    REQUEST_TOO_LARGE = "REQUEST_TOO_LARGE"
+    INTERNAL = "INTERNAL"
+
 
 # Default LLM-actionable hints for each error code
 ERROR_HINTS: Dict[str, str] = {
     MCPError.UNKNOWN: "An unexpected error occurred. Check the traceback for details and retry.",
+    MCPError.UNAUTHORIZED: "Authenticate with the correct session token and retry.",
+    MCPError.INVALID_REQUEST: "The request envelope is malformed. Check the request shape.",
+    MCPError.REQUEST_TOO_LARGE: "The request payload exceeds the size limit. Reduce it, or raise the request-size limit for trusted local sessions.",
+    MCPError.INTERNAL: "An internal failure occurred. Check the traceback for details and retry.",
     MCPError.INVALID_ARGS: "Check the operation schema for valid parameters and retry.",
     MCPError.NOT_IMPLEMENTED: "This operation is not available. Use a different operation.",
     MCPError.NOT_FOUND: "The requested item was not found. Verify the identifier and retry.",
@@ -223,14 +237,14 @@ ERROR_HINTS: Dict[str, str] = {
     MCPError.DECOMPILER_TIMEOUT: "Decompilation timed out. The function may be too complex.",
     MCPError.CTREE_ERROR: "CTree analysis failed. The function may not be decompilable.",
     MCPError.MICROCODE_ERROR: "Microcode extraction failed. Ensure Hex-Rays is available.",
-    MCPError.DEBUGGER_NOT_RUNNING: "Debugger is not active. Debugger control is not a public operation; use ida_python (ida_dbg) if code execution is authorized.",
-    MCPError.DEBUGGER_ACTIVE: "Debugger is active; this operation requires static mode. Use ida_python (ida_dbg) to stop it if code execution is authorized.",
-    MCPError.DEBUGGER_BREAKPOINT_ERROR: "Breakpoint operation failed. Check the address is valid code.",
-    MCPError.DEBUGGER_MEMORY_ERROR: "Cannot read/write debugger memory. Check the address is accessible.",
-    MCPError.DEBUGGER_REGISTER_ERROR: "Invalid register name or the debugger is not paused.",
-    MCPError.DEBUGGER_STEP_ERROR: "Step operation failed. The process may have exited.",
-    MCPError.DEBUGGER_PROCESS_ERROR: "Process operation failed. Check the binary path and arguments.",
-    MCPError.DEBUGGER_THREAD_ERROR: "Thread operation failed. The thread may no longer exist.",
+    MCPError.DEBUGGER_NOT_RUNNING: "Debugger is not active. Debugger control is not a public op yet; drive it via misc(action='python') with the ida_dbg helpers if code execution is authorized.",
+    MCPError.DEBUGGER_ACTIVE: "Debugger is active. There is no public debugger op; detach or stop the process via misc(action='python') with the ida_dbg helpers if code execution is authorized.",
+    MCPError.DEBUGGER_BREAKPOINT_ERROR: "No public breakpoint op exists. Manage breakpoints via misc(action='python') with the ida_dbg helpers if code execution is authorized.",
+    MCPError.DEBUGGER_MEMORY_ERROR: "No public debugger-memory op exists. Read/write debugger memory via misc(action='python') with the ida_dbg helpers if code execution is authorized.",
+    MCPError.DEBUGGER_REGISTER_ERROR: "No public debugger-register op exists. Read/write registers via misc(action='python') with the ida_dbg helpers if code execution is authorized.",
+    MCPError.DEBUGGER_STEP_ERROR: "No public step op exists. Step the process via misc(action='python') with the idc/ida_dbg helpers if code execution is authorized.",
+    MCPError.DEBUGGER_PROCESS_ERROR: "No public process op exists. Start/attach/stop a process via misc(action='python') with the ida_dbg helpers if code execution is authorized.",
+    MCPError.DEBUGGER_THREAD_ERROR: "No public thread op exists. Inspect threads via misc(action='python') with the ida_dbg helpers if code execution is authorized.",
     MCPError.SESSION_REQUIRED: "No active session. Create one with ida_open_binary(binary_path='...').",
     MCPError.SESSION_NOT_FOUND: "Session not found. Use ida_session_list to see available sessions.",
     MCPError.SESSION_ALREADY_EXISTS: "A session for this binary already exists. Use force_new=true to create a new one.",
@@ -264,8 +278,17 @@ ERROR_HINTS: Dict[str, str] = {
     MCPError.SIGNATURE_ERROR: "Signature operation failed. Check the signature file format.",
     MCPError.PDB_ERROR: "PDB loading failed. Check the PDB path and format.",
     MCPError.DWARF_ERROR: "DWARF loading failed. Check the debug info format.",
-    MCPError.EMULATION_ERROR: "Emulation failed. The code may use unsupported instructions.",
-    MCPError.EMULATION_TIMEOUT: "Emulation timed out. Reduce max_steps.",
+    MCPError.EMULATION_ERROR: (
+        "Emulation/emulator operation failed. Check the details for the ida_dbg "
+        "call that failed; the active backend may not support the requested "
+        "operation. Use emulate(action='info') to see the backend and why it "
+        "was chosen."
+    ),
+    MCPError.EMULATION_TIMEOUT: (
+        "The emulation operation timed out (no suspend/breakpoint event within "
+        "the timeout). Retry with a larger timeout_ms, step in smaller counts, "
+        "or verify the run_to address is reachable. The error is recoverable."
+    ),
     MCPError.ANALYSIS_INCOMPLETE: "Analysis is still running. Wait and retry.",
     MCPError.ARCH_UNSUPPORTED: "This architecture is not supported for this operation.",
     MCPError.CALLING_CONVENTION_ERROR: "Calling convention detection failed.",
@@ -284,8 +307,8 @@ ERROR_HINTS: Dict[str, str] = {
     MCPError.SCRIPT_TIMEOUT: "Script execution timed out.",
     MCPError.HOOK_ERROR: "Hook generation failed.",
     MCPError.IDC_ERROR: "IDC script error. Check IDC syntax.",
-    MCPError.BOOKMARK_NOT_FOUND: "Bookmark not found. Bookmarks are not exposed as public operations; use ida_python if code execution is authorized.",
-    MCPError.BOOKMARK_DUPLICATE: "A bookmark already exists at this address. Manage bookmarks via ida_python if code execution is authorized.",
+    MCPError.BOOKMARK_NOT_FOUND: "Bookmark not found. Bookmark mutation isn't a public op; list via idb(action='bookmarks'); manage via misc(action='python') if code execution is authorized.",
+    MCPError.BOOKMARK_DUPLICATE: "A bookmark already exists at this address. Bookmark mutation isn't a public op; manage via misc(action='python') if code execution is authorized.",
     MCPError.DIFF_NO_CHANGES: "No differences found between the compared items.",
     MCPError.COMPARE_INCOMPATIBLE: "The items cannot be compared (different architectures or types).",
     MCPError.RPC_CONNECTION_ERROR: "Cannot connect to IDA. The IDA process may have crashed.",
@@ -331,6 +354,9 @@ _CATEGORY_USER = frozenset({
     MCPError.BOOKMARK_NOT_FOUND, MCPError.BOOKMARK_DUPLICATE,
     MCPError.COMMENT_TOO_LONG, MCPError.COMPARE_INCOMPATIBLE,
     MCPError.DIFF_NO_CHANGES, MCPError.YARA_COMPILE_ERROR,
+    # Bridge / wire failures attributable to the caller's request (protocol
+    # shape, credentials, oversized payload).
+    MCPError.UNAUTHORIZED, MCPError.INVALID_REQUEST, MCPError.REQUEST_TOO_LARGE,
 })
 _CATEGORY_POLICY = frozenset({
     MCPError.GOVERNANCE_BLOCKED,
@@ -362,19 +388,17 @@ def make_error(
     clients can branch on it without parsing the code, matching the host-side
     contract in ``host/errors.py``.
 
-    The *recoverable* flag is accepted for parity with
-    :func:`ida_pro_mcp.host.errors.make_error`; the ida_mcp tool layer does
-    not consume it today, so it is currently only stored when the caller
-    passes it explicitly.
+    ``recoverable`` is always present (matching :func:`ida_pro_mcp.host.errors.make_error`)
+    so clients can rely on the key existing and test it for truthiness rather
+    than checking ``"recoverable" in err``.
     """
     result: Dict[str, Any] = {
         "error": True,
         "code": code,
         "category": _category_for_code(code),
         "message": message,
+        "recoverable": bool(recoverable),
     }
-    if recoverable:
-        result["recoverable"] = True
     resolved_hint = hint or ERROR_HINTS.get(code)
     if resolved_hint:
         result["hint"] = resolved_hint
@@ -413,30 +437,165 @@ def _sanitize_exception_message(e: Exception) -> str:
     return raw
 
 
+_TIMEOUT_CODES = frozenset({
+    MCPError.RPC_TIMEOUT,
+    MCPError.DECOMPILER_TIMEOUT,
+    MCPError.EMULATION_TIMEOUT,
+    MCPError.SEARCH_TIMEOUT,
+})
+
+
+def _timeout_code_for_context(context: Optional[str], message: str = "") -> str:
+    """Pick the specialized timeout code for a tool *context* (or message).
+
+    A timeout surfacing from a decompile/search/emulation call is far more
+    actionable as its specific code than the generic RPC_TIMEOUT; the RPC
+    timeout is the fallback when neither the context nor the exception
+    message pins the operation (e.g. a raw ``TimeoutError("decompile hung")``
+    raised inside a tool with no context string).
+    """
+    ctx = str(context or "").lower()
+    if "decompil" in ctx or "decompil" in str(message).lower():
+        return MCPError.DECOMPILER_TIMEOUT
+    if "emulat" in ctx or "emulat" in str(message).lower():
+        return MCPError.EMULATION_TIMEOUT
+    if "search" in ctx or "search" in str(message).lower():
+        return MCPError.SEARCH_TIMEOUT
+    return MCPError.RPC_TIMEOUT
+
+
+def _is_timeout_exception(e: Exception) -> bool:
+    """Return True when *e* is a timeout-family exception.
+
+    Covers the ``TimeoutError`` builtin (which ``socket.timeout`` aliases on
+    py3.10+) and an ``OSError`` whose errno is ``ETIMEDOUT`` — the two shapes
+    a hanging RPC bridge or a wedged IDA operation produces.
+    """
+    if isinstance(e, TimeoutError):
+        return True
+    if isinstance(e, OSError):
+        etimedout = getattr(errno, "ETIMEDOUT", None)
+        if etimedout is not None and getattr(e, "errno", None) == etimedout:
+            return True
+    return False
+
+
+def _classify_error_code(e: Exception, context: Optional[str]) -> str:
+    """Map an unexpected tool exception to a specific MCPError code.
+
+    Timeouts are the common real-world failure mode — Hex-Rays hanging on a
+    pathological function, a slow search over a huge opaque raw blob, an RPC
+    socket timing out — and collapsing all of them into ``UNKNOWN_ERROR`` hid
+    their retryable nature.  Decompiler/emulation failures that are *not*
+    timeouts get their own codes too; only genuinely novel failures fall back
+    to ``UNKNOWN`` so they are not mislabeled.
+    """
+    if _is_timeout_exception(e):
+        return _timeout_code_for_context(context, str(e))
+    name = type(e).__name__.lower()
+    msg = str(e).lower()
+    if "decompil" in name or "decompil" in msg:
+        return MCPError.DECOMPILER_FAILED
+    if "emulat" in name or "emulat" in msg:
+        return MCPError.EMULATION_ERROR
+    return MCPError.UNKNOWN
+
+
 def handle_error(e: Exception, context: str = None) -> Dict[str, Any]:
     """Standardized error formatter for tool exceptions.
 
     Returns a user-facing message instead of a raw Python traceback.
     The full traceback is preserved only in debug details.
+
+    The error ``code`` is dispatched from the exception type (timeouts to
+    ``*_TIMEOUT``, decompiler/emulation failures to their codes) so clients
+    can react to the actual failure class instead of a blanket UNKNOWN_ERROR.
+    Timeout errors are marked ``recoverable`` — retrying the same call is the
+    intended remediation.
     """
     trace = traceback.format_exc()
     raw_msg = _sanitize_exception_message(e)
     msg = f"[{context}] {raw_msg}" if context else raw_msg
-    return make_error(MCPError.UNKNOWN, msg, details={"traceback": trace})
+    code = _classify_error_code(e, context)
+    return make_error(
+        code,
+        msg,
+        details={"traceback": trace},
+        recoverable=code in _TIMEOUT_CODES,
+    )
 
 # ============================================================================
 # Validation Helpers
 # ============================================================================
 
-def parse_address_safe(addr_str: str | int) -> Tuple[Optional[int], Optional[Dict]]:
-    """
-    Safely parse an address string or integer.
-    Returns (address, None) on success, or (None, error_dict) on failure.
+def _image_min_ea() -> int:
+    """Return the lowest mapped address in the IDB (0 when unavailable)."""
+    try:
+        import ida_ida
+        if hasattr(ida_ida, "inf_get_min_ea"):
+            return int(ida_ida.inf_get_min_ea())
+    except Exception:
+        pass
+    try:
+        import idaapi
+        inf = idaapi.get_inf_structure() if hasattr(idaapi, "get_inf_structure") else None
+        if inf is not None:
+            v = getattr(inf, "min_ea", None)
+            if v is not None:
+                return int(v)
+    except Exception:
+        pass
+    return 0
+
+
+def _image_max_ea() -> int:
+    """Return the highest mapped address in the IDB (BADADDR when unavailable)."""
+    try:
+        import ida_ida
+        if hasattr(ida_ida, "inf_get_max_ea"):
+            return int(ida_ida.inf_get_max_ea())
+    except Exception:
+        pass
+    try:
+        import idaapi
+        inf = idaapi.get_inf_structure() if hasattr(idaapi, "get_inf_structure") else None
+        if inf is not None:
+            v = getattr(inf, "max_ea", None)
+            if v is not None:
+                return int(v)
+    except Exception:
+        pass
+    return (1 << 64) - 1
+
+
+def parse_address_canonical(addr_str: str | int) -> Tuple[Optional[int], Optional[Dict]]:
+    """Single canonical address parser for every IDA tool.
+
+    Policy (so the same token means the same EA everywhere):
+      1. ``int`` (non-negative) → used as-is.
+      2. ``"0x"`` / ``"0X"`` prefix → parsed as hex.
+      3. known symbol name → resolved via ``idc.get_name_ea_simple``.
+      4. bare all-digit string → interpreted as HEX when the hex value maps
+         inside the loaded image; rejected with an explicit ``use 0x prefix``
+         hint when it is ambiguous (decimal-vs-hex) or unmapped.  This is the
+         anti-confusion behavior for opaque raw blobs where addresses are
+         habitually written without a prefix (e.g. a RISC-V handler at
+         ``800`` in a 0x1000-based image).
+      5. floats / booleans / any other token → ``ADDRESS_INVALID``.
+
+    Returns ``(address, None)`` on success or ``(None, error_dict)``.
     """
     if addr_str is None:
         return None, make_error(
             MCPError.MISSING_REQUIRED_ARG,
             "Address is required",
+            hint="Provide the 'address' parameter as hex (0x401000) or a symbol name (e.g. 'main').",
+        )
+
+    if isinstance(addr_str, bool):
+        return None, make_error(
+            MCPError.ADDRESS_INVALID,
+            f"Invalid address: {addr_str!r} (boolean). Addresses must be hex strings or integers.",
             hint="Provide the 'address' parameter as hex (0x401000) or a symbol name (e.g. 'main').",
         )
 
@@ -458,43 +617,96 @@ def parse_address_safe(addr_str: str | int) -> Tuple[Optional[int], Optional[Dic
             hint="Provide the 'address' parameter as hex (0x401000) or a symbol name (e.g. 'main').",
         )
 
-    try:
-        if isinstance(addr_str, str):
-            addr_str = addr_str.strip()
-            if not addr_str:
-                return None, make_error(
-                    MCPError.MISSING_REQUIRED_ARG,
-                    "Address is empty",
-                    hint="Provide a non-empty address as hex (0x401000) or symbol name.",
-                )
-            if addr_str.lower().startswith("0x"):
-                return int(addr_str, 16), None
-            if addr_str.isdigit():
-                return int(addr_str), None
-
-            # Try as symbol name
-            try:
-                import idc
-                ea = idc.get_name_ea_simple(addr_str)
-                if ea != idc.BADADDR:
-                    return ea, None
-            except Exception:
-                pass
-
-            # Try hex without prefix if it looks like hex
-            try:
-                return int(addr_str, 16), None
-            except ValueError:
-                pass
-
+    if not isinstance(addr_str, str):
         return None, make_error(
             MCPError.ADDRESS_INVALID,
-            f"Invalid address format: '{addr_str}'",
-            hint="Use hex format (0x401000), decimal, or a valid symbol name. "
-                 "Use ida_list_functions or ida_find to find addresses.",
+            f"Invalid address type: {type(addr_str).__name__!r}. Addresses must be hex strings or integers.",
+            hint="Provide the 'address' parameter as hex (0x401000) or a symbol name (e.g. 'main').",
         )
-    except Exception as e:
-        return None, make_error(MCPError.ADDRESS_INVALID, f"Failed to parse address: {str(e)}")
+
+    s = addr_str.strip()
+    if not s:
+        return None, make_error(
+            MCPError.MISSING_REQUIRED_ARG,
+            "Address is empty",
+            hint="Provide a non-empty address as hex (0x401000) or symbol name.",
+        )
+
+    # 1) Explicit 0x/0X prefix — hex, never ambiguous.
+    if s.lower().startswith("0x"):
+        try:
+            ea = int(s, 16)
+        except ValueError:
+            return None, make_error(
+                MCPError.ADDRESS_INVALID,
+                f"Invalid hex address: '{addr_str}'",
+                hint="Use 0x-prefixed hex like 0x401000, or a symbol name (e.g. 'main').",
+            )
+        if ea < 0:
+            return None, make_error(
+                MCPError.ADDRESS_INVALID,
+                f"Negative address: {addr_str}",
+                hint="Addresses must be non-negative. Use hex format like 0x401000.",
+            )
+        return ea, None
+
+    # 2) Known symbol.
+    try:
+        import idc
+        ea = idc.get_name_ea_simple(s)
+        badaddr = getattr(idc, "BADADDR", -1)
+        if ea is not None and ea != badaddr:
+            return int(ea), None
+    except Exception:
+        pass
+
+    # 3) Bare all-digit: interpret as hex only when the hex value maps inside
+    #    the loaded image.  Otherwise the token is ambiguous (decimal vs hex)
+    #    or points outside the binary — refuse instead of silently picking an
+    #    EA, which is exactly how opaque-device analysis gets confused.
+    if s.isdigit():
+        try:
+            ea = int(s, 16)
+        except ValueError:
+            ea = None
+        if ea is not None:
+            min_ea = _image_min_ea()
+            max_ea = _image_max_ea()
+            if min_ea <= ea < max_ea:
+                return ea, None
+            return None, make_error(
+                MCPError.ADDRESS_INVALID,
+                f"Ambiguous address '{addr_str}': read as hex {hex(ea)} but it does not map "
+                f"inside the loaded image ({hex(min_ea)}..{hex(max_ea - 1)}).",
+                hint="Use the 0x prefix (e.g. 0x401000) to force hex, or pass a symbol name.",
+            )
+        return None, make_error(
+            MCPError.ADDRESS_INVALID,
+            f"Invalid address: '{addr_str}'",
+            hint="Use hex format (0x401000) or a valid symbol name.",
+        )
+
+    # 4) Everything else is a weird token — reject rather than guess.
+    return None, make_error(
+        MCPError.ADDRESS_INVALID,
+        f"Invalid address format: '{addr_str}'",
+        hint="Use hex format (0x401000) or a valid symbol name. "
+             "Use ida_list_functions or ida_find to find addresses.",
+    )
+
+
+def parse_address_safe(addr_str: str | int) -> Tuple[Optional[int], Optional[Dict]]:
+    """
+    Safely parse an address string or integer.
+
+    Delegates to the single canonical parser (:func:`parse_address_canonical`)
+    so a token means the same EA everywhere — bare all-digit strings are read
+    as hex when they map inside the image and rejected with a ``use 0x prefix``
+    hint when ambiguous or unmapped.
+
+    Returns (address, None) on success, or (None, error_dict) on failure.
+    """
+    return parse_address_canonical(addr_str)
 
 def validate_addr(addr: str | int, require_code: bool = False, require_func: bool = False) -> Tuple[Optional[int], Optional[Dict]]:
     """

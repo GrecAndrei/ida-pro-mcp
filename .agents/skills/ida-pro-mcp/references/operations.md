@@ -5,7 +5,7 @@ Generated from `host.agent_operations.AGENT_OPERATIONS`.
 
 ## `ida_open_binary`
 
-Open a binary in a new or existing IDA analysis session. Large binaries are opened in the background automatically (background and safe_mode in the response); poll ida_session_status until safe_mode clears.
+Open a binary in a new or existing IDA analysis session. The open is blocking and waits until IDA auto-analysis completes, so the returned session is fully analyzed and safe_mode is off. Only when the experimental IDA_MCP_BACKGROUND_OPEN=1 flag is set may large binaries instead auto-open in the background (background and safe_mode in the response); poll ida_session_status until safe_mode clears.
 
 Input schema:
 ```json
@@ -174,7 +174,7 @@ Example:
 
 ## `ida_open_background`
 
-Open a binary in a session without blocking on IDA analysis. The session starts in safe mode (safe_mode: true): full-binary analysis, indexing, and script execution are blocked until analysis completes — manual small-area operations stay available. Poll ida_session_status for progress and for safe_mode to clear.
+EXPERIMENTAL — DISABLED BY DEFAULT. Open a binary in a session without blocking on IDA analysis. Requires IDA_MCP_BACKGROUND_OPEN=1 in the host environment; otherwise this operation fails with FEATURE_DISABLED and opens are blocking. When enabled, the session starts in safe mode (safe_mode: true): full-binary analysis, indexing, and script execution are blocked until analysis completes — manual small-area operations stay available. Poll ida_session_status for progress and for safe_mode to clear.
 
 Input schema:
 ```json
@@ -594,6 +594,10 @@ Input schema:
     "continue_on_error": {
       "type": "boolean",
       "description": "Continue later calls after an error."
+    },
+    "bindings": {
+      "type": "object",
+      "description": "Output→input bindings map: step{i}_{key} refs to later call arguments (e.g. {\"step1_addr\": {\"step\": 2, \"key\": \"addr\"}})."
     }
   },
   "required": [
@@ -653,7 +657,7 @@ Example:
 
 ## `ida_find`
 
-Find names, strings, imports, comments, and references matching text.
+Find names, strings, imports, comments, and references matching text. Pass kind='strings' for a dedicated string-literal search, kind='names' for symbol-only, or kind='imports'|'comments'|'instructions'|'refs' to restrict to that one category.
 
 Input schema:
 ```json
@@ -663,6 +667,19 @@ Input schema:
     "query": {
       "type": "string",
       "description": "Text, symbol, API, or IOC to find."
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "all",
+        "names",
+        "strings",
+        "imports",
+        "comments",
+        "instructions",
+        "refs"
+      ],
+      "description": "Restrict to one category; 'strings' = string search. Default 'all'."
     },
     "limit": {
       "type": "integer",
@@ -686,6 +703,7 @@ Example:
   "name": "ida_find",
   "arguments": {
     "query": "recv",
+    "kind": "strings",
     "limit": 20
   }
 }
@@ -3391,6 +3409,1718 @@ Example:
   "name": "ida_help",
   "arguments": {
     "topic": "ida_decompile"
+  }
+}
+```
+
+## `ida_sreg_get`
+
+Read the current segment-register mapping for a code address (segmented mode).
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "start": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "reg": {
+      "type": "string",
+      "description": "Segment register name (e.g. 'cs', 'ds', 'ss', 'es', 'fs', 'gs')."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "start",
+    "reg"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_sreg_get",
+  "arguments": {
+    "start": "0x401000",
+    "reg": "cs"
+  }
+}
+```
+
+## `ida_sreg_set`
+
+Set the segment-register mapping for a code address (segmented mode).
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "start": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "reg": {
+      "type": "string",
+      "description": "Segment register name (e.g. 'cs', 'ds', 'ss', 'es', 'fs', 'gs')."
+    },
+    "value": {
+      "type": "string",
+      "description": "Segment selector or value to map the register to (e.g. '0x30')."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "start",
+    "reg",
+    "value",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_sreg_set",
+  "arguments": {
+    "start": "0x401000",
+    "reg": "ds",
+    "value": "0x30",
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_sreg_list`
+
+List the segment-register mappings in effect for a code address (segmented mode).
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "start": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "start"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_sreg_list",
+  "arguments": {
+    "start": "0x401000"
+  }
+}
+```
+
+## `ida_create_data`
+
+Define a data item (or a run of them) at an address so raw blobs become analyzable without redeclaring types. type selects the item kind: byte|word|dword|qword|pointer|array.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "byte",
+        "word",
+        "dword",
+        "qword",
+        "pointer",
+        "array"
+      ],
+      "description": "Data item kind to lay (default: byte). 'pointer' lays FF_DWORD items; 'array' lays count dword-sized elements."
+    },
+    "count": {
+      "type": "integer",
+      "description": "Number of consecutive items to lay (default 1)."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "address",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_create_data",
+  "arguments": {
+    "address": "0x1234",
+    "type": "dword",
+    "count": 16,
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_create_strlit`
+
+Define a string literal covering [address, address+size). strtype is 'c' (C string), 'c16' (UTF-16), or 'c32' (UTF-32).
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "size": {
+      "type": "integer",
+      "description": "Byte length of the string literal."
+    },
+    "strtype": {
+      "type": "string",
+      "enum": [
+        "c",
+        "c16",
+        "c32"
+      ],
+      "description": "String encoding (default 'c')."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "address",
+    "size",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_create_strlit",
+  "arguments": {
+    "address": "0x1234",
+    "size": 16,
+    "strtype": "c",
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_undo_begin`
+
+Open an undo transaction so a failing batch can be rolled back. Pair with ida_undo_end.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    }
+  },
+  "required": [
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_undo_begin",
+  "arguments": {
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_undo_end`
+
+Commit the changes wrapped by an ida_undo_begin transaction.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    }
+  },
+  "required": [
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_undo_end",
+  "arguments": {
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_add_entry`
+
+Mark an address as an entry point in the IDB (reclassifies it as code and adds an entry-point flag).
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "address",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_add_entry",
+  "arguments": {
+    "address": "0x401000",
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_idb_snapshot`
+
+Save a named snapshot of the current IDB state so experiments can be rolled back with ida_idb_restore_snapshot.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Optional snapshot name/label."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_idb_snapshot",
+  "arguments": {
+    "name": "before_cleanup",
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_idb_restore_snapshot`
+
+Restore the IDB to a previously saved snapshot (pass ordinal or snapshot_id from ida_idb_snapshot).
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "ordinal": {
+      "type": "integer",
+      "description": "Snapshot ordinal to restore."
+    },
+    "snapshot_id": {
+      "type": "string",
+      "description": "Snapshot id/name to restore."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_idb_restore_snapshot",
+  "arguments": {
+    "ordinal": 0,
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_auto_wait`
+
+Block until IDA's automatic analysis queue is idle (waits for a quiet IDB before batch work).
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "timeout_ms": {
+      "type": "integer",
+      "description": "Max wait in milliseconds (default bounded by the RPC timeout)."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_auto_wait",
+  "arguments": {}
+}
+```
+
+## `ida_struct_member_add`
+
+Add a member to a struct type. offset is the byte offset (-1 appends at the end); provide type_str or size.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "struct_name": {
+      "type": "string",
+      "description": "Struct type name."
+    },
+    "member_name": {
+      "type": "string",
+      "description": "New member name."
+    },
+    "offset": {
+      "type": "integer",
+      "description": "Member byte offset (-1 appends)."
+    },
+    "type_str": {
+      "type": "string",
+      "description": "C type string for the member."
+    },
+    "size": {
+      "type": "integer",
+      "description": "Member size in bytes when type_str is omitted."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "struct_name",
+    "member_name",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_struct_member_add",
+  "arguments": {
+    "struct_name": "pkt_hdr",
+    "member_name": "crc",
+    "type_str": "uint32_t",
+    "offset": -1,
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_struct_member_del`
+
+Delete a member from a struct type by name.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "struct_name": {
+      "type": "string",
+      "description": "Struct type name."
+    },
+    "member_name": {
+      "type": "string",
+      "description": "Member name to delete."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "struct_name",
+    "member_name",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_struct_member_del",
+  "arguments": {
+    "struct_name": "pkt_hdr",
+    "member_name": "crc",
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_struct_member_rename`
+
+Rename a member of a struct type.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "struct_name": {
+      "type": "string",
+      "description": "Struct type name."
+    },
+    "member_name": {
+      "type": "string",
+      "description": "Current member name."
+    },
+    "new_name": {
+      "type": "string",
+      "description": "Replacement member name."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "struct_name",
+    "member_name",
+    "new_name",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_struct_member_rename",
+  "arguments": {
+    "struct_name": "pkt_hdr",
+    "member_name": "crc",
+    "new_name": "checksum",
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_struct_member_set_type`
+
+Retype a member of a struct type from a C type string.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "struct_name": {
+      "type": "string",
+      "description": "Struct type name."
+    },
+    "member_name": {
+      "type": "string",
+      "description": "Member name to retype."
+    },
+    "type_str": {
+      "type": "string",
+      "description": "C type string for the member."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "struct_name",
+    "member_name",
+    "type_str",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_struct_member_set_type",
+  "arguments": {
+    "struct_name": "pkt_hdr",
+    "member_name": "crc",
+    "type_str": "uint64_t",
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_enum_member_add`
+
+Add an enumerator to an enum type (enum_name + member_name + numeric value).
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "enum_name": {
+      "type": "string",
+      "description": "Enum type name."
+    },
+    "member_name": {
+      "type": "string",
+      "description": "New enumerator name."
+    },
+    "value": {
+      "type": "integer",
+      "description": "Numeric value of the enumerator."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "enum_name",
+    "member_name",
+    "value",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_enum_member_add",
+  "arguments": {
+    "enum_name": "status_t",
+    "member_name": "STATUS_BUSY",
+    "value": 2,
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_enum_member_rename`
+
+Rename an enumerator in an enum type.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "enum_name": {
+      "type": "string",
+      "description": "Enum type name."
+    },
+    "member_name": {
+      "type": "string",
+      "description": "Current enumerator name."
+    },
+    "new_name": {
+      "type": "string",
+      "description": "Replacement enumerator name."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "enum_name",
+    "member_name",
+    "new_name",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_enum_member_rename",
+  "arguments": {
+    "enum_name": "status_t",
+    "member_name": "STATUS_BUSY",
+    "new_name": "STATUS_WAIT",
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_enum_member_revalue`
+
+Revalue an enumerator in an enum type (new numeric value).
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "enum_name": {
+      "type": "string",
+      "description": "Enum type name."
+    },
+    "member_name": {
+      "type": "string",
+      "description": "Enumerator name to revalue."
+    },
+    "value": {
+      "type": "integer",
+      "description": "New numeric value."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "enum_name",
+    "member_name",
+    "value",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_enum_member_revalue",
+  "arguments": {
+    "enum_name": "status_t",
+    "member_name": "STATUS_WAIT",
+    "value": 5,
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_til_delete`
+
+Delete a named type from the local Type Library (TIL).
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Type name to delete."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "name",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_til_delete",
+  "arguments": {
+    "name": "OBSOLETE_STRUCT",
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_til_export`
+
+Export matching named types as a C header file (cross-session carry).
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Absolute output header path."
+    },
+    "name": {
+      "type": "string",
+      "description": "Type-name filter (default '*')."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "path",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_til_export",
+  "arguments": {
+    "path": "/tmp/session_types.h",
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_til_import`
+
+Import a C header file into the local Type Library.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Absolute header file path to import."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "path",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_til_import",
+  "arguments": {
+    "path": "/tmp/session_types.h",
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_events`
+
+Stream recent analysis/audit events from the IDB (useful to see what IDA has been doing).
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "limit": {
+      "type": "integer",
+      "description": "Max events to return."
+    },
+    "tail": {
+      "type": "integer",
+      "description": "Return only the N most recent events."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_events",
+  "arguments": {
+    "limit": 20
+  }
+}
+```
+
+## `ida_registers`
+
+Dump the register state captured at an address (debugger/emulator/analysis capture).
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "addr": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "addr"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_registers",
+  "arguments": {
+    "addr": "0x401000"
+  }
+}
+```
+
+## `ida_search_data_value`
+
+Locate raw byte/word values or ASCII strings in memory (e.g. '0xDEADBEEF' or a magic string).
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "value": {
+      "type": "string",
+      "description": "Raw value to locate (hex string or ASCII text)."
+    },
+    "size": {
+      "type": "integer",
+      "description": "Byte width for the scan (1/2/4/8; default auto-detect)."
+    },
+    "endian": {
+      "type": "string",
+      "enum": [
+        "little",
+        "big"
+      ],
+      "description": "Byte order (default: binary endianness)."
+    },
+    "start": {
+      "type": "string",
+      "description": "Inclusive start address of the scan window."
+    },
+    "end": {
+      "type": "string",
+      "description": "Exclusive end address of the scan window."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Maximum result items to return."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "value"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_search_data_value",
+  "arguments": {
+    "value": "0xDEADBEEF",
+    "limit": 10
+  }
+}
+```
+
+## `ida_search_query_lang`
+
+Run a structured query-language search over names, strings, and imports. Lenient grammar: MATCH/WHERE are optional, aliases and operator synonyms are accepted, bare identifiers become name/text filters, and free text falls back to unified find. Examples: 'functions with size > 100', 'strings containing cmd.exe', 'calls to malloc', 'function main', 'size > 100'.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "Query-language expression (or free text)."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Maximum result items to return."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "query"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_search_query_lang",
+  "arguments": {
+    "query": "functions with size > 100 LIMIT 10"
+  }
+}
+```
+
+## `ida_r2_status`
+
+Check availability of the r2 sidecar engine for a binary.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "binary_path": {
+      "type": "string",
+      "description": "Absolute path to the raw binary (default: current session binary)."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_r2_status",
+  "arguments": {}
+}
+```
+
+## `ida_r2_bininfo`
+
+Get r2 file metadata (arch/bits/entry/imports) for a binary without an IDB.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "binary_path": {
+      "type": "string",
+      "description": "Absolute path to the raw binary (default: current session binary)."
+    },
+    "addr": {
+      "type": "string",
+      "description": "Optional address/offset to resolve into the binary."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_r2_bininfo",
+  "arguments": {}
+}
+```
+
+## `ida_r2_load_hints`
+
+Get r2-suggested load addresses for a raw binary (base/entry hypotheses).
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "binary_path": {
+      "type": "string",
+      "description": "Absolute path to the raw binary (default: current session binary)."
+    },
+    "addr": {
+      "type": "string",
+      "description": "Optional address/offset to frame the hints."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_r2_load_hints",
+  "arguments": {}
+}
+```
+
+## `ida_r2_disassemble_hypothesis`
+
+Disassemble at an address/offset with r2, without an IDB — useful to test a load-base or instruction-boundary hypothesis.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Address or file offset to disassemble at."
+    },
+    "binary_path": {
+      "type": "string",
+      "description": "Absolute path to the raw binary (default: current session binary)."
+    },
+    "count": {
+      "type": "integer",
+      "description": "Max instructions to disassemble."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "address"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_r2_disassemble_hypothesis",
+  "arguments": {
+    "address": "0x1000",
+    "count": 16
+  }
+}
+```
+
+## `ida_r2_vxrefs`
+
+Find raw pointer-word references to a value with r2 (no IDB cross-references needed).
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "value": {
+      "type": "string",
+      "description": "Target value to find pointer-word references to."
+    },
+    "binary_path": {
+      "type": "string",
+      "description": "Absolute path to the raw binary (default: current session binary)."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Maximum result items to return."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "value"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_r2_vxrefs",
+  "arguments": {
+    "value": "0x20000000",
+    "limit": 20
+  }
+}
+```
+
+## `ida_mark_dangerous`
+
+Mark dangerous API calls with warning comments (optionally scoped to one function).
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address, for example 0x401000."
+    },
+    "prefix": {
+      "type": "string",
+      "description": "Prefix for generated comments (default '[MCP] ')."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Max warnings to add."
+    },
+    "dry_run": {
+      "type": "boolean",
+      "description": "Preview without writing."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "address",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_mark_dangerous",
+  "arguments": {
+    "address": "0x401000",
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_fw_detect_vector_table`
+
+Detect a Cortex-M reset/ISR vector table in a raw firmware blob (start/end bound the scan window).
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "start": {
+      "type": "string",
+      "description": "Inclusive start address of the scan window."
+    },
+    "end": {
+      "type": "string",
+      "description": "Exclusive end address of the scan window."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Maximum result items to return."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_fw_detect_vector_table",
+  "arguments": {
+    "start": "0x0",
+    "end": "0x400"
+  }
+}
+```
+
+## `ida_fw_detect_load_base`
+
+Infer the preferred load base for a raw firmware blob.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "start": {
+      "type": "string",
+      "description": "Inclusive start address of the candidate window."
+    },
+    "end": {
+      "type": "string",
+      "description": "Exclusive end address of the candidate window."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_fw_detect_load_base",
+  "arguments": {}
+}
+```
+
+## `ida_fw_detect_mmio`
+
+Locate memory-mapped peripheral regions in a raw firmware blob.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "start": {
+      "type": "string",
+      "description": "Inclusive start address of the scan window."
+    },
+    "end": {
+      "type": "string",
+      "description": "Exclusive end address of the scan window."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Maximum result items to return."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_fw_detect_mmio",
+  "arguments": {}
+}
+```
+
+## `ida_fw_rtos_scan`
+
+Heuristically detect an RTOS kernel inside a raw firmware blob.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "start": {
+      "type": "string",
+      "description": "Inclusive start address of the scan window."
+    },
+    "end": {
+      "type": "string",
+      "description": "Exclusive end address of the scan window."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Maximum result items to return."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_fw_rtos_scan",
+  "arguments": {}
+}
+```
+
+## `ida_fw_carve`
+
+Extract a code/data region of a raw firmware blob into a bounded range.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "start": {
+      "type": "string",
+      "description": "Inclusive start address of the region to carve."
+    },
+    "end": {
+      "type": "string",
+      "description": "Exclusive end address of the region to carve."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "start",
+    "end",
+    "risk_ack"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_fw_carve",
+  "arguments": {
+    "start": "0x800",
+    "end": "0x2000",
+    "risk_ack": true
+  }
+}
+```
+
+## `ida_emulate`
+
+Drive IDA's built-in emulator/debugger (ida_dbg) end to end. Auto-selects a backend at runtime (built-in emulator candidates first, then the native backend) and reports the active backend in every response. Actions: info (overview: backend, why chosen, process state, registers), backend, start, state, step (mode into|over|ret, count), run_to, suspend, continue, stop, get_reg, set_reg, read_mem, set_mem. Mutating actions require risk_ack=true.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "info",
+        "backend",
+        "start",
+        "state",
+        "step",
+        "run_to",
+        "suspend",
+        "continue",
+        "stop",
+        "get_reg",
+        "set_reg",
+        "read_mem",
+        "set_mem"
+      ],
+      "description": "Emulation action to run."
+    },
+    "name": {
+      "type": "string",
+      "description": "Register name (get_reg/set_reg) or backend name (backend)."
+    },
+    "names": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Registers to read in one get_reg call."
+    },
+    "value": {
+      "type": "string",
+      "description": "Register value for set_reg (hex string like '0x10' or decimal string)."
+    },
+    "address": {
+      "type": "string",
+      "description": "Function name or hexadecimal address for run_to/read_mem/set_mem."
+    },
+    "size": {
+      "type": "integer",
+      "description": "Byte count for read_mem (default 16)."
+    },
+    "data": {
+      "type": "string",
+      "description": "Hex bytes to write for set_mem (e.g. '9090')."
+    },
+    "start_addr": {
+      "type": "string",
+      "description": "Optional start address for start."
+    },
+    "args": {
+      "type": "string",
+      "description": "Process argv string for start."
+    },
+    "input_file": {
+      "type": "string",
+      "description": "Input file path for start."
+    },
+    "dir": {
+      "type": "string",
+      "description": "Working directory for start."
+    },
+    "count": {
+      "type": "integer",
+      "description": "Step count (default 1)."
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "into",
+        "over",
+        "ret"
+      ],
+      "description": "Step mode (default 'into')."
+    },
+    "force": {
+      "type": "boolean",
+      "description": "Reload the backend even if one is loaded (backend action)."
+    },
+    "unload": {
+      "type": "boolean",
+      "description": "Unload the backend after stop."
+    },
+    "governed": {
+      "type": "boolean",
+      "description": "Run the governance pre-check on mutating actions (default true)."
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "description": "Per-action timeout in milliseconds (default 30000)."
+    },
+    "risk_ack": {
+      "type": "boolean",
+      "description": "Set true only after verifying this IDB mutation is intended."
+    },
+    "idb": {
+      "type": "string",
+      "description": "Optional session ID, IDB path, or binary path. Must refer to a session owned by this MCP client."
+    }
+  },
+  "required": [
+    "action"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_emulate",
+  "arguments": {
+    "action": "info"
   }
 }
 ```

@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import threading
 import time
 import uuid
 from typing import Any
@@ -41,14 +42,31 @@ from .postprocess import (
     extract_post_process_params,
     has_post_process,
 )
+from .rate_limit import is_rate_limit_exempt
 from .rpc_args import prepare_rpc_args
 from .server_client_state import ServerClientStateMixin
 from .server_response import truncate_response
 from .server_runtime import RpcQueueTimeout
 
+# D1: cached parsed policy config, keyed by (mtime_ns, size) of the config
+# file. Re-parsed only when the file changes; missing files are re-probed
+# (stat) each call, which is far cheaper than open+parse.
+_POLICY_CONFIG_CACHE: dict[str, tuple[tuple[int, int], str]] = {}
+_POLICY_CONFIG_CACHE_LOCK = threading.RLock()
+
+# D3: tools that natively paginate with offset/count and report a pre-slice
+# `total`. A pure PP page-slice (offset+limit, no grep/tail) is forwarded to
+# these so IDA returns only the requested page instead of the full list.
+# Only the listed actions are safe: they are the paged list views.
+_SLICE_FORWARDABLE_TOOLS: dict[str, frozenset[str]] = {
+    "data": frozenset(
+        {"functions", "globals", "strings", "imports", "exports", "annotations"}
+    ),
+    "funcs": frozenset({"list"}),
+}
+
 # Actions that legitimately walk the IDB at scale (full-program scans,
-# embedding pipelines, decompile pumps, multi-region firmware carving,
-# bulk-session housekeeping). For these we extend the socket recv
+# embedding pipelines, decompile pumps, bulk-session housekeeping). For these we extend the socket recv
 # timeout past the IDA_MCP_RPC_TIMEOUT default so the host doesn't
 # kill the connection before IDA finishes.
 #
@@ -79,20 +97,9 @@ LONG_RUNNING_ACTIONS: set[tuple[str, str]] = {
     ("search", "nl"),
     ("search", "path"),
     ("search", "constants"),
-    # blackboard — large semantic rebuild / trace operations
-    ("blackboard", "semantic_rebuild"),
+    # blackboard — trace operations
     ("blackboard", "trace_ingest"),
     ("blackboard", "trace_run"),
-    # firmware_view — range / multi-region carves
-    ("firmware_view", "smart_carve"),
-    ("firmware_view", "multi_region_campaign"),
-    ("firmware_view", "campaign"),
-    ("firmware_view", "segment_sweep"),
-    ("firmware_view", "region_profile"),
-    ("firmware_view", "pointer_sweep"),
-    ("firmware_view", "scan_region"),
-    ("firmware_view", "detect_mmio"),
-    ("firmware_view", "rtos_scan"),
     # funcs — whole-program walks
     ("funcs", "metrics"),
     ("funcs", "suggest_names"),
@@ -100,6 +107,10 @@ LONG_RUNNING_ACTIONS: set[tuple[str, str]] = {
 
     ("workflow", "execute_plan"),
     ("workflow", "plan"),
+    # r2 — raw-binary sidecar engine: whole-file word scans + windowed
+    # multi-arch disassembly can exceed the default RPC recv timeout.
+    ("r2", "vxrefs"),
+    ("r2", "disassemble_hypothesis"),
 }
 
 # (tool, action) pairs blocked while a session is in safe mode (IDA
@@ -129,8 +140,6 @@ SAFE_MODE_BLOCKED_ACTIONS: set[tuple[str, str]] = {
     ("intelligence", "refresh_anchors"),
     ("intelligence", "semantic_search"),
     ("intelligence", "similar_functions"),
-    # firmware bootstrap runs post-load actions (analysis passes)
-    ("firmware_view", "bootstrap"),
     # whole-program automated workflow runs
     ("workflow", "execute_plan"),
     ("workflow", "triage_fast"),
@@ -227,21 +236,54 @@ class ServerDispatchMixin(ServerClientStateMixin):
     def _policy_baseline_mode(self) -> str:
         """The operator-set policy mode: env var, then config file, then assist.
 
-        The config file is read on every call so it can be changed without
-        restarting the bridge.
+        The config file is re-read only when its (mtime_ns, size) changes, so
+        an operator can edit it live without paying 2-5 disk reads + a JSON
+        parse on every tool call (previously done per call via
+        _resolve_policy_mode, itself invoked up to 4-6 times per call).
         """
         env_mode = os.environ.get("IDA_MCP_POLICY_MODE")
         if env_mode:
             return env_mode
         config_path = os.path.expanduser("~/.config/ida-pro-mcp/policy.json")
         try:
-            if os.path.exists(config_path):
-                with open(config_path, encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    mode = data.get("mode")
-                    if isinstance(mode, str) and mode:
-                        return mode
+            try:
+                _st = os.stat(config_path)
+            except OSError:
+                # No file (or unreadable stat): a missing config must still be
+                # detected if it appears later, so only cache the "missing"
+                # state keyed on the path's absence — a config created after
+                # the first call is picked up on the next call.
+                return self._policy_baseline_mode_cached(None, config_path)
+            key = (_st.st_mtime_ns, _st.st_size)
+            with _POLICY_CONFIG_CACHE_LOCK:
+                cached = _POLICY_CONFIG_CACHE.get(config_path)
+                if cached is not None and cached[0] == key:
+                    return cached[1]
+            mode = self._policy_baseline_mode_cached(key, config_path)
+            with _POLICY_CONFIG_CACHE_LOCK:
+                _POLICY_CONFIG_CACHE[config_path] = (key, mode)
+            return mode
+        except Exception as e:
+            log_rpc(f"Ignoring unreadable policy config {config_path}: {e}")
+            return "assist"
+
+    @staticmethod
+    def _policy_baseline_mode_cached(
+        _key: tuple[int, int] | None, config_path: str
+    ) -> str:
+        """Parse ``policy.json`` and return its mode (no cache read/write).
+
+        Split out so the read path can reuse it for the cold-miss and
+        missing-file cases. ``_key`` is informational only — it keeps the two
+        call sites symmetric and makes the intent explicit.
+        """
+        try:
+            with open(config_path, encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                mode = data.get("mode")
+                if isinstance(mode, str) and mode:
+                    return mode
         except Exception as e:
             log_rpc(f"Ignoring unreadable policy config {config_path}: {e}")
         return "assist"
@@ -327,13 +369,15 @@ class ServerDispatchMixin(ServerClientStateMixin):
             if safe_gate is not None:
                 return safe_gate
 
-            # The analysis-completion watcher is reloading this session
-            # against the fully analyzed IDB; calls would race the restart.
+            # A rebuild/recovery restart is in flight for this session
+            # (reload-on-completion was removed in the lifecycle revamp: the
+            # completing runtime IS the serving runtime); calls would race the
+            # restart.
             _reloading = getattr(self, "_reloading_sessions", None)
             if isinstance(_reloading, set) and _sid in _reloading:
                 return make_error(
                     MCPError.IDA_BUSY,
-                    "Session is reloading against the fully analyzed IDB; retry in a moment.",
+                    "Session is being rebuilt/reloaded; retry in a moment.",
                     recoverable=True,
                     hint="Poll ida_session_status until safe_mode clears.",
                     details={"session_id": _sid},
@@ -537,6 +581,38 @@ class ServerDispatchMixin(ServerClientStateMixin):
                         "idb_path": getattr(session, "idb_path", None),
                         "image_base": hex(_img_base) if _img_base else None,
                     }
+                # ---- D3: post-process BEFORE truncation ----
+                # PP's offset/limit/grep must see the full (untruncated) RPC
+                # result. Applying it after truncation sliced a truncated
+                # window, so pages beyond the first and grep matches past the
+                # truncation budget were silently lost. Runs only for fresh
+                # calls (_pending_pp carries no next_token here); next_token
+                # continuations drive their own PP in _handle_next_continuation.
+                _pp = getattr(self, "_pending_pp", None)
+                if (
+                    _pp
+                    and has_post_process(_pp)
+                    and not _pp.get("next_token")
+                    and not (isinstance(res, dict) and res.get("_post_processed"))
+                    and not is_error_result(res)
+                ):
+                    try:
+                        if _pp.get("_forwarded_offset") is not None:
+                            # The tool already skipped the PP offset server-side;
+                            # re-applying it would double-skip. Pagination still
+                            # uses the original offset (see _cache_post_process_next).
+                            _apply_pp = {
+                                k: v for k, v in _pp.items()
+                                if k != "offset"
+                            }
+                        else:
+                            _apply_pp = _pp
+                        res = apply_post_processing(res, _apply_pp)
+                    except Exception as _pp_err:
+                        import logging
+                        logging.getLogger(__name__).debug(
+                            "post-process pipeline failed: %s", _pp_err
+                        )
                 # Apply truncation with per-call overrides
                 _tc = getattr(self, "_pending_truncation", None) or {}
                 if _tc.get("no_truncate"):
@@ -1017,7 +1093,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
             return make_error(
                 MCPError.ACTION_NOT_FOUND,
                 f"Unsupported bookmarks action: '{action}'",
-                hint="Bookmarks are not exposed as public operations; use ida_python if code execution is authorized.",
+                hint="Bookmark mutation isn't a public op; list via idb(action='bookmarks'); manage via misc(action='python') if code execution is authorized.",
             )
 
     def _handle_truncation(self, args: dict) -> dict:
@@ -1307,7 +1383,11 @@ class ServerDispatchMixin(ServerClientStateMixin):
                 "tool": tool_name,
                 "action": base_args.get("action"),
                 "args": {k: v for k, v in base_args.items() if k != "action"},
-                "post_process": {k: v for k, v in pp_params.items() if k != "next_token"},
+                "post_process": {
+                    k: v
+                    for k, v in pp_params.items()
+                    if k not in {"next_token", "_forwarded_offset"}
+                },
                 "next_offset": current_offset + effective_page,
                 "created_at": time.time(),
             }
@@ -1341,11 +1421,23 @@ class ServerDispatchMixin(ServerClientStateMixin):
             )
 
             # ---- Rate Limiting ----
-            allowed, reason = self.rate_limiter.check(resolved_tool)
+            # D9: cheap host-only bookkeeping (status polls, truncation
+            # continue, blackboard reads) is exempt from the token buckets —
+            # it does no IDA RPC and is legitimately called in tight loops.
+            # Everything else (including host-only writes) keeps the hard
+            # RATE_LIMIT so a spamming agent cannot exhaust host resources.
+            _rl_action = (
+                str(args.get("action", "")) if isinstance(args, dict) else ""
+            )
+            _rl_exempt = is_rate_limit_exempt(resolved_tool, _rl_action)
+            allowed = True
+            reason = ""
+            if not _rl_exempt:
+                allowed, reason = self.rate_limiter.check(resolved_tool)
             if not allowed:
                 self.audit.log(
                     tool=resolved_tool,
-                    action=str(args.get("action", "")) if isinstance(args, dict) else "",
+                    action=_rl_action,
                     args=args if isinstance(args, dict) else {},
                     result=None,
                     latency_ms=0.0,
@@ -1362,10 +1454,22 @@ class ServerDispatchMixin(ServerClientStateMixin):
             result = self._execute_tool_inner(resolved_tool, original_tool_name, args)
 
             # ---- Post-processing pipeline ----
+            # D3: for RPC tools, call_tool already applied PP *before*
+            # truncation and stamped `_post_processed`; here we only mint the
+            # continuation token. Host-only tools (session/blackboard/…)
+            # returned directly from _execute_tool_inner with PP still pending,
+            # so this block applies it.
             pp_params = getattr(self, "_pending_pp", None)
             if pp_params and has_post_process(pp_params) and not is_error_result(result):
                 try:
-                    result = apply_post_processing(result, pp_params)
+                    if not (isinstance(result, dict) and result.get("_post_processed")):
+                        if pp_params.get("_forwarded_offset") is not None:
+                            _apply_pp = {
+                                k: v for k, v in pp_params.items() if k != "offset"
+                            }
+                        else:
+                            _apply_pp = pp_params
+                        result = apply_post_processing(result, _apply_pp)
                     # Cache the args that will actually be replayed by a
                     # continuation (normalized, PP keys stripped). Using the raw
                     # caller args here would replay head/grep/limit into call_tool
@@ -1615,6 +1719,71 @@ class ServerDispatchMixin(ServerClientStateMixin):
             else:
                 args, self._pending_pp = extract_post_process_params(args)
 
+            # ---- D3: forward the page-slice to natively-paging tools ----
+            # When the PP is a *pure* page-slice (offset + limit/head, no
+            # grep/tail/pick/field that must see every item) and the tool
+            # supports offset/count natively and reports a pre-slice `total`,
+            # forward the slice so IDA returns only the requested page instead
+            # of the full list. The host-side PP then applies with offset=0
+            # (the tool already skipped) and pagination bookkeeping uses the
+            # original offset (see _cache_post_process_next). Marked via the
+            # `_forwarded_offset` key on _pending_pp so it travels with the
+            # per-request context.
+            self._pending_pp.pop("_forwarded_offset", None)
+            if self._pending_pp and not self._pending_pp.get("next_token"):
+                _forwardable_actions = _SLICE_FORWARDABLE_TOOLS.get(tool_name)
+                if _forwardable_actions and args.get("action") in _forwardable_actions:
+                    _pp = self._pending_pp
+                    _off = _pp.get("offset")
+                    _lim = _pp.get("limit")
+                    if _lim is None:
+                        _lim = _pp.get("head")
+                    # D3: for these tools the page size frequently arrives as a
+                    # native `count` — the caller's `limit` is aliased to
+                    # `count` by arg normalization (data/funcs schema uses
+                    # `count`) before PP extraction, so it never lands in pp.
+                    # Treat that native count as the page size, but only when
+                    # pp itself carries no limit/head (conflicting sizes).
+                    _native_count = args.get("count")
+                    _lim_from_count = _lim is None and _native_count is not None
+                    if _lim_from_count:
+                        _lim = _native_count
+                    _pp_has_size = (
+                        _pp.get("limit") is not None or _pp.get("head") is not None
+                    )
+                    _pure_slice = (
+                        _off is not None
+                        and _lim is not None
+                        and "offset" not in args
+                        and not (_native_count is not None and _pp_has_size)
+                        and not any(
+                            k in _pp
+                            for k in (
+                                "grep", "grep_regex", "grep_invert",
+                                "grep_case", "tail", "pick", "field",
+                            )
+                        )
+                    )
+                    if _pure_slice:
+                        try:
+                            _off_i, _lim_i = int(_off), int(_lim)
+                        except Exception:
+                            _off_i = _lim_i = None
+                        if (
+                            _off_i is not None and _lim_i is not None
+                            and _off_i >= 0 and _lim_i > 0
+                        ):
+                            args["offset"] = _off_i
+                            args["count"] = _lim_i
+                            _forwarded_pp = {**_pp, "_forwarded_offset": _off_i}
+                            if _lim_from_count:
+                                # The page size lives in args (native count),
+                                # not pp; record it so the host-side envelope
+                                # still builds and pagination bookkeeping has
+                                # a limit.
+                                _forwarded_pp["limit"] = _lim_i
+                            self._pending_pp = _forwarded_pp
+
             # ---- Truncation control params (captured before IDA strips them) ----
             _trunc_no_truncate = _coerce_bool(args.pop("no_truncate", None), False)
             _trunc_max_tokens = args.pop("max_tokens", None)
@@ -1632,7 +1801,14 @@ class ServerDispatchMixin(ServerClientStateMixin):
             # continuation token can replay them without re-introducing keys
             # IDA would reject or double-apply. Consumed by _execute_tool's
             # post-processing pipeline when it caches the next_token.
+            #
+            # D3: a forwarded offset/count must NOT be replayed — a continuation
+            # re-fetches the full result and advances the host-side slice, so
+            # replaying the tool-side cursor would double-advance the page.
             self._pending_tool_args = dict(args)
+            if self._pending_pp.get("_forwarded_offset") is not None:
+                self._pending_tool_args.pop("offset", None)
+                self._pending_tool_args.pop("count", None)
 
             # ---- next_token continuation (auto-recovers action from cache) ----
             next_token = self._pending_pp.get("next_token")
@@ -1890,6 +2066,13 @@ class ServerDispatchMixin(ServerClientStateMixin):
                             "No active session. Open a binary before starting semantic indexing.",
                         )
                     return self._submit_semantic_index(args, idb_ref)
+
+            if tool_name == "r2":
+                # Host-side raw-binary sidecar engine (Architecture A, Phase 1):
+                # subprocess-only, never touches the IDB, works during safe_mode
+                # and when IDA is down. Mandatory branch — without it the r2 tool
+                # would forward to IDA, which has no r2 backend.
+                return self._handle_r2(args)
 
             ip = args.pop(
                 "idb", self.current_session.idb_path if self.current_session else None
