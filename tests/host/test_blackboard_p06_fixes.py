@@ -157,6 +157,9 @@ def test_trace_status_reads_payload_status_not_accumulated_tags(tmp_path):
     server, store = _server_with_workspace(tmp_path)
     server._handle_blackboard({"action": "trace_ingest", "text": "inspect 0x401000"})
     server._handle_blackboard({"action": "trace_run", "limit": 10})
+    # trace_run is non-blocking (enqueue + worker pool); drain so the status
+    # assertions below are deterministic.
+    server._orchestration().drain(timeout=10)
 
     pending = server._handle_blackboard({"action": "trace_status", "status": "pending"})
     assert pending["count"] == 0
