@@ -184,7 +184,8 @@ def _build(segment, *, reg_names=None, max_ea=0x90000000, mapped=None):
     idaapi.is_mapped = _in_mapped
 
     ida_segment = types.ModuleType("ida_segment")
-    ida_segment.get_segm_name = lambda seg: getattr(seg, "name", "")
+    ida_segment.getseg = idaapi.getseg
+    ida_segment.get_segm_name = lambda seg, flags=0: getattr(seg, "name", "")
     ida_segment.get_segm_class = lambda seg: getattr(seg, "sclass", "DATA")
 
     def validate_addr(addr, *a, **kw):

@@ -8,6 +8,15 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from ... import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 from .core import (
     SearchTimeout,
     build_response,
@@ -353,8 +362,9 @@ def _resolve_data_value_region(region: str, word_size: int):
     if m:
         return int(m.group(1), 16), int(m.group(2), 16)
     try:
-        seg = ida_segment.get_segm_by_name(region)
-        if seg is not None:
+        seg_ea = _compat.get_segment_ea_by_name(region)
+        if seg_ea is not None:
+            seg = _compat.get_segment(seg_ea)
             return seg.start_ea, seg.end_ea
     except Exception:
         pass

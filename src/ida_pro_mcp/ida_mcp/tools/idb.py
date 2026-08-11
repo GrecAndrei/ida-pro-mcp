@@ -3,6 +3,15 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from .. import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 import contextlib
 import glob
 import json
@@ -300,12 +309,12 @@ def idb_segments_detailed(include_head_counts=True):
                     break
 
         segments.append({
-            "name": ida_segment.get_segm_name(seg),
+            "name": _compat.get_segment_name(ea),
             "start": hex(seg.start_ea),
             "end": hex(seg.end_ea),
             "size": hex(seg.end_ea - seg.start_ea),
             "perms": perms or "---",
-            "class": ida_segment.get_segm_class(seg),
+            "class": _compat.get_segment_class(ea),
             "type": seg_type,
             "align": seg.align,
             "bitness": {0: 16, 1: 32, 2: 64}.get(seg.bitness, seg.bitness * 16),
@@ -419,7 +428,7 @@ def idb_summary(fast=False):
     # Count comments
     comment_count = 0
     for seg_ea in idautils.Segments():
-        seg = ida_segment.getseg(seg_ea)
+        seg = _compat.get_segment(seg_ea)
         if not seg:
             continue
         head = seg.start_ea

@@ -60,7 +60,8 @@ class TestFindDataStrlitValuesJsonSafe(unittest.TestCase):
         ida_nalt.STRTYPE_C = 0
 
         ida_segment = types.ModuleType("ida_segment")
-        ida_segment.get_segm_name = lambda seg: getattr(seg, "name", "")
+        ida_segment.getseg = idaapi.getseg
+        ida_segment.get_segm_name = lambda seg, flags=0: getattr(seg, "name", "")
 
         idautils = types.ModuleType("idautils")
 

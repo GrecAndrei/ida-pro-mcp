@@ -8,6 +8,15 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from ... import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 try:
     from ...support.semantic_matching import (
         DEFAULT_RESCORE_TOP_N,
@@ -675,7 +684,7 @@ def search_symbol(pattern, include_alternatives=True, offset=0, limit=20):
                 "demangled": demangled,
                 "is_function": func is not None,
                 "type": "function" if func else ("data" if idc.is_data(idc.get_full_flags(ea)) else "code" if idc.is_code(idc.get_full_flags(ea)) else "unknown"),
-                "segment": ida_segment.get_segm_name(seg) if seg else "",
+                "segment": _compat.get_segment_name(ea) if seg else "",
                 "xrefs_to": xref_count_limited(ea, 512),
                 "alternatives": [],
             }
@@ -696,7 +705,7 @@ def search_symbol(pattern, include_alternatives=True, offset=0, limit=20):
             "demangled": demangled,
             "is_function": func is not None,
             "type": "function" if func else ("data" if idc.is_data(idc.get_full_flags(ea)) else "code" if idc.is_code(idc.get_full_flags(ea)) else "unknown"),
-            "segment": ida_segment.get_segm_name(seg) if seg else "",
+            "segment": _compat.get_segment_name(ea) if seg else "",
             "xrefs_to": xref_count_limited(ea, 512),
             "alternatives": _alternatives_for_name(raw, exclude_ea=ea, limit=5) if include_alternatives else [],
         }
@@ -822,7 +831,7 @@ def search_symbol_info(pattern, include_xrefs=False):
         "addr": hex(ea),
         "name": name,
         "demangled": demangled or name,
-        "segment": ida_segment.get_segm_name(seg) if seg else "",
+        "segment": _compat.get_segment_name(ea) if seg else "",
         "segment_perms": _perm_str(seg) if seg else "",
         "is_function": containing_func is not None,
     }

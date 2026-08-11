@@ -23,6 +23,8 @@ docs/research/ida-9.4-migration.md
 
 from __future__ import annotations
 
+import sys
+
 import ida_funcs
 import ida_hexrays
 import ida_segment
@@ -60,3 +62,78 @@ def decompile_function(func_ea, hf, flags: int = 0):
     if HAS_EA_DECOMPILE:
         return ida_hexrays.decompile_function(func_ea, hf, flags)
     return ida_hexrays.decompile_func(func_ea, hf, flags)
+
+
+# --- segments --------------------------------------------------------------
+
+def _ida_segment():
+    """Resolve the live ``ida_segment`` module at call time.
+
+    The import-time global is correct inside a single IDA process, but the
+    host test harness swaps ``sys.modules["ida_segment"]`` per test while this
+    module can stay cached (e.g. when imported during test collection). Going
+    through ``sys.modules`` keeps the legacy fallbacks duck-typed against
+    whichever ``ida_segment`` surface is actually live.
+    """
+    return sys.modules.get("ida_segment") or ida_segment
+
+
+def get_segment(ea):
+    """Return the segment containing ``ea`` (or None when unmapped).
+
+    On 9.4+ this fills a fresh ``segment_info_t`` through the EA-based
+    ``get_segment_info`` (no IDA-allocated pointer); on <= 9.3 it returns
+    ``getseg``'s ``segment_t``. Callers rely on None-on-miss — both paths
+    preserve it exactly.
+    """
+    if HAS_EA_SEGMENT:
+        seg = _ida_segment()
+        si = seg.segment_info_t()
+        if seg.get_segment_info(si, ea):
+            return si
+        return None
+    return _ida_segment().getseg(ea)
+
+
+def get_segment_name(ea, flags: int = 0):
+    """Get the name of the segment containing ``ea``."""
+    if HAS_EA_SEGMENT:
+        return _ida_segment().get_segment_name(ea, flags)
+    return _ida_segment().get_segm_name(_ida_segment().getseg(ea), flags)
+
+
+def get_segment_class(ea):
+    """Get the class of the segment containing ``ea`` (or None)."""
+    if HAS_EA_SEGMENT:
+        return _ida_segment().get_segment_class(ea)
+    return _ida_segment().get_segm_class(_ida_segment().getseg(ea))
+
+
+def set_segment_name(ea, name, flags: int = 0):
+    """Rename the segment containing ``ea``; nonzero return means success."""
+    if HAS_EA_SEGMENT:
+        return _ida_segment().set_segment_name(ea, name, flags)
+    return _ida_segment().set_segm_name(_ida_segment().getseg(ea), name, flags)
+
+
+def move_segment(ea, to, flags: int = 0):
+    """Move the segment containing ``ea`` so it starts at ``to``."""
+    if HAS_EA_SEGMENT:
+        return _ida_segment().move_segment(ea, to, flags)
+    return _ida_segment().move_segm(_ida_segment().getseg(ea), to, flags)
+
+
+def get_segment_ea_by_name(name):
+    """Get the start EA of the segment named ``name`` (or None if absent).
+
+    The 9.4 replacement for the deprecated ``get_segm_by_name`` is the
+    EA-returning ``get_segment_ea_by_name`` (BADADDR on miss); we normalize
+    that back to None to match the legacy pointer contract.
+    """
+    if HAS_EA_SEGMENT:
+        seg = _ida_segment()
+        ea = seg.get_segment_ea_by_name(name)
+        badaddr = seg.ida_idaapi.BADADDR
+        return None if ea == badaddr else ea
+    seg = _ida_segment().get_segm_by_name(name)
+    return seg.start_ea if seg else None

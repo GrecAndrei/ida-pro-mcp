@@ -26,6 +26,15 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from .. import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 import re
 from typing import Any
 
@@ -227,7 +236,7 @@ def _function_index_metadata(func) -> dict[str, Any]:
         "has_loops": 1 if has_loops else 0,
         "api_count": min(api_count, 999),
         "string_count": min(string_count, 999),
-        "segment": ida_segment.get_segm_name(idaapi.getseg(func.start_ea)) or "",
+        "segment": _compat.get_segment_name(func.start_ea) or "",
         "is_thunk": 1 if (func.flags & idaapi.FUNC_THUNK) else 0,
         "cyclomatic": cyclomatic,
     }

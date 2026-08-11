@@ -603,7 +603,7 @@ class TestSegmentsCodeDataRatioSentinel(unittest.TestCase):
         idc = _make_idc()
         ida_segment = types.ModuleType("ida_segment")
         ida_segment.getseg = lambda ea: None
-        ida_segment.get_segm_name = lambda seg: getattr(seg, "name", "")
+        ida_segment.get_segm_name = lambda seg, flags=0: getattr(seg, "name", "")
         ida_bytes = types.ModuleType("ida_bytes")
         ida_bytes.get_flags = lambda ea: 0
         ida_bytes.is_code = lambda f: True

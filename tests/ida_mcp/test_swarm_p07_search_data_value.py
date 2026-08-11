@@ -202,6 +202,10 @@ def test_data_value_region_segment_name():
     sys.modules["ida_segment"].get_segm_by_name = (
         lambda name: _Seg(BASE, BASE + 0x20) if name == ".vector" else None
     )
+    # get_segment_ea_by_name unwraps the pointer, then get_segment re-fetches it.
+    sys.modules["ida_segment"].getseg = (
+        lambda ea: _Seg(BASE, BASE + 0x20) if ea == BASE else None
+    )
 
     resp = basic.search_data_value("0x400000", word_size="u64", endian="be", timeout_ms=0, region=".vector")
     assert resp["ok"] is True

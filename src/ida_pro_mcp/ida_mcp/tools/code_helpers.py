@@ -1151,7 +1151,7 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
             perms = int(getattr(seg, "perm", 0) or 0)
             # Check if code is in a writable segment (shellcode/ROP)
             if perms & idaapi.SEGPERM_WRITE and perms & idaapi.SEGPERM_EXEC:
-                seg_name = ida_segment.get_segm_name(seg) or ""
+                seg_name = _compat.get_segment_name(func_ea) or ""
                 findings.append({"severity": "high", "pattern": "writable_executable_segment",
                                  "evidence": f"function in segment '{seg_name}' with W+X permissions",
                                  "detail": "Code in writable+executable segment — shellcode injection risk"})
@@ -1318,7 +1318,7 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
                             # Check if global is writable
                             seg = ida_segment.getseg(mem_ea)
                             if seg and int(getattr(seg, "perm", 0) or 0) & idaapi.SEGPERM_WRITE:
-                                seg_name = ida_segment.get_segm_name(seg) or ""
+                                seg_name = _compat.get_segment_name(mem_ea) or ""
                                 findings.append({"severity": "medium", "pattern": "global_writable_ref",
                                                  "evidence": f"operand references writable global at {hex_ea(mem_ea)} (seg '{seg_name}') from {hex_ea(dea)}",
                                                  "detail": "Dangerous call references writable global — TOCTOU or race condition risk"})
@@ -1349,8 +1349,7 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
             for pattern_bytes, desc in shellcode_prologues:
                 if func_bytes[:len(pattern_bytes)] == pattern_bytes:
                     # Check if this is in a non-code section
-                    seg = ida_segment.getseg(func_ea)
-                    seg_name = ida_segment.get_segm_name(seg) if seg else ""
+                    seg_name = _compat.get_segment_name(func_ea)
                     if seg_name and seg_name.lower() not in (".text", ".code", "CODE", "text"):
                         findings.append({"severity": "high", "pattern": "shellcode_in_data_seg",
                                          "evidence": f"function at {hex_ea(func_ea)} in segment '{seg_name}' starts with {desc}",

@@ -437,7 +437,7 @@ def install_raw_blob(
     )
     ida_segment.SEGPERM_X = 4
     ida_segment.getseg = lambda ea: seg if _in_segment(ea) else None
-    ida_segment.get_segm_name = lambda s: getattr(s, "name", "")
+    ida_segment.get_segm_name = lambda s, flags=0: getattr(s, "name", "")
     ida_segment.get_segm_class = lambda s: getattr(s, "sclass", "DATA")
     ida_segment.get_segm_start = lambda s: getattr(s, "start_ea", 0)
     ida_segment.get_segm_end = lambda s: getattr(s, "end_ea", 0)

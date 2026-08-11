@@ -161,10 +161,16 @@ def _build_namespace():
         SR_auto=2,
     )
     ida_segment = types.SimpleNamespace(
-        getseg=lambda _ea: None,
+        getseg=lambda _ea: idaapi.getseg(_ea),  # noqa: PLW0108 - defers to per-test override
         get_segm_name=lambda _s: "",
         set_segm_class=lambda *a, **k: None,
         update_segm=lambda _s: None,
+    )
+    # The sliced helpers call the compat shim (EA-based get_segment_name on
+    # 9.4, get_segm_name(getseg(ea)) on <=9.3). Mirror the legacy fallback
+    # against the namespace's own ida_segment stubs.
+    _compat = types.SimpleNamespace(
+        get_segment_name=lambda ea: ida_segment.get_segm_name(ida_segment.getseg(ea)),
     )
     ida_funcs = types.SimpleNamespace(
         add_func=lambda *a, **k: True,
@@ -194,6 +200,7 @@ def _build_namespace():
         ida_funcs=ida_funcs,
         ida_auto=ida_auto,
         ida_entry=ida_entry,
+        _compat=_compat,
     )
 
     exec(compile(_extract_helpers_src(), "<analysis.py:helpers>", "exec"), ns)

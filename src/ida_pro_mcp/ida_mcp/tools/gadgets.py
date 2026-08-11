@@ -3,6 +3,16 @@ try:
     from ._common import *
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
+
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from .. import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 from collections import OrderedDict
 from functools import partial
 
@@ -731,7 +741,7 @@ def _find_shellcode_space(addr, limit, _max_insns, _query):
         if seg.type == idaapi.SEG_CODE:
             has_exec = True
         if has_write and has_exec:
-            name = ida_segment.get_segm_name(seg) or ""
+            name = _compat.get_segment_name(seg_ea) or ""
             perms = "{}{}{}".format(
                 "R" if seg.perm & idaapi.SEGPERM_READ else "-",
                 "W" if seg.perm & idaapi.SEGPERM_WRITE else "-",
@@ -807,7 +817,7 @@ def _detect_mitigations(addr, _limit, _max_insns, _query):
         for seg_ea in idautils.Segments():
             seg = idaapi.getseg(seg_ea)
             if seg:
-                name = ida_segment.get_segm_name(seg) or ""
+                name = _compat.get_segment_name(seg_ea) or ""
                 if name == ".got.plt":
                     got_plt = seg
                 elif name == ".got":

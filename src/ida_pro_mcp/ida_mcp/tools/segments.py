@@ -14,6 +14,15 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from .. import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 # _common does not re-export parse_address_safe (not in its __all__); import it
 # here so add/delete/move can accept unmapped destination addresses. Tried in
 # the three layouts this module is loaded under: IDA plugin package mode,
@@ -60,7 +69,7 @@ def _find_segment(start=None, name=None):
     if name:
         for ea in idautils.Segments():
             s = idaapi.getseg(ea)
-            if s and ida_segment.get_segm_name(s) == name:
+            if s and _compat.get_segment_name(ea) == name:
                 return s, None
         return None, make_error(MCPError.SEGMENT_NOT_FOUND,
                                 f"Segment named '{name}' not found")
@@ -175,7 +184,7 @@ def _seg_density_analysis(seg):
     code_data_ratio = round(code_count / data_count, 2) if data_count else ("inf" if code_count else 0.0)
 
     return {
-        "name": ida_segment.get_segm_name(seg),
+        "name": _compat.get_segment_name(seg.start_ea),
         "start": hex(seg.start_ea),
         "end": hex(seg.end_ea),
         "size": size,
@@ -439,14 +448,14 @@ def segments(
                     total += 1
                     if total > offset and (count == 0 or len(results) < count):
                         results.append({
-                            "name": ida_segment.get_segm_name(seg),
+                            "name": _compat.get_segment_name(ea),
                             "address": hex(seg.start_ea),
                             "start": hex(seg.start_ea),
                             "end_address": hex(seg.end_ea),
                             "end": hex(seg.end_ea),
                             "size": hex(seg.end_ea - seg.start_ea),
                             "perms": _perms_string(seg),
-                            "class": ida_segment.get_segm_class(seg),
+                            "class": _compat.get_segment_class(ea),
                         })
             return {
                 "ok": True,
@@ -471,7 +480,7 @@ def segments(
             return {
                 "ok": True,
                 "segment": {
-                    "name": ida_segment.get_segm_name(seg),
+                    "name": _compat.get_segment_name(seg.start_ea),
                     "address": hex(seg.start_ea),
                     "start": hex(seg.start_ea),
                     "end_address": hex(seg.end_ea),
@@ -480,7 +489,7 @@ def segments(
                     "size_bytes": seg.end_ea - seg.start_ea,
                     "perms": perms,
                     "perms_int": seg.perm,
-                    "class": ida_segment.get_segm_class(seg),
+                    "class": _compat.get_segment_class(seg.start_ea),
                     "type": seg_type,
                     "type_int": seg.type,
                     "align": seg.align,
@@ -519,7 +528,7 @@ def segments(
             if existing:
                 return make_error(MCPError.SEGMENT_OVERLAP,
                                   f"Address {hex(s_ea)} already belongs to segment "
-                                  f"'{ida_segment.get_segm_name(existing)}'")
+                                  f"'{_compat.get_segment_name(s_ea)}'")
 
             seg = idaapi.segment_t()
             seg.start_ea, seg.end_ea = s_ea, e_ea
@@ -564,7 +573,7 @@ def segments(
             if not seg:
                 return make_error(MCPError.SEGMENT_NOT_FOUND,
                                   f"No segment found at address {start}")
-            seg_name = ida_segment.get_segm_name(seg)
+            seg_name = _compat.get_segment_name(s_ea)
             if idaapi.del_segm(s_ea, idaapi.SEGMOD_KILL):
                 return {"ok": True, "start": hex(s_ea), "name": seg_name}
             return make_error(MCPError.IDA_ERROR,
@@ -597,7 +606,7 @@ def segments(
                                   f"Unknown attribute '{attr}'. Valid attributes: {', '.join(sorted(valid_attrs))}")
 
             if attr == "name":
-                if not ida_segment.set_segm_name(seg, str(value)):
+                if not _compat.set_segment_name(s_ea, str(value)):
                     return make_error(MCPError.IDA_ERROR,
                                       f"Failed to rename segment to '{value}'")
             elif hasattr(seg, attr):
@@ -831,7 +840,7 @@ def segments(
             return {
                 "ok": True,
                 "address": hex(s_ea),
-                "segment": ida_segment.get_segm_name(seg),
+                "segment": _compat.get_segment_name(s_ea),
                 "reg": _sreg_name(sr) if sr is not None else None,
                 "ranges": ranges,
                 "count": len(ranges),
@@ -884,7 +893,7 @@ def segments(
             return {
                 "ok": True,
                 "segment": {
-                    "name": ida_segment.get_segm_name(seg),
+                    "name": _compat.get_segment_name(seg.start_ea),
                     "address": hex(seg.start_ea),
                     "start": hex(seg.start_ea),
                     "end_address": hex(seg.end_ea),
@@ -931,7 +940,7 @@ def segments(
             return {
                 "ok": True,
                 "segment": {
-                    "name": ida_segment.get_segm_name(seg),
+                    "name": _compat.get_segment_name(seg.start_ea),
                     "address": hex(seg.start_ea),
                     "start": hex(seg.start_ea),
                     "end_address": hex(seg.end_ea),
@@ -969,12 +978,12 @@ def segments(
             def _snapshot(seg):
                 cc, dc, sc, fc = _count_heads(seg)
                 return {
-                    "name": ida_segment.get_segm_name(seg),
+                    "name": _compat.get_segment_name(seg.start_ea),
                     "start": hex(seg.start_ea),
                     "end": hex(seg.end_ea),
                     "size": seg.end_ea - seg.start_ea,
                     "perms": _perms_string(seg),
-                    "class": ida_segment.get_segm_class(seg),
+                    "class": _compat.get_segment_class(seg.start_ea),
                     "entropy": _seg_entropy(seg),
                     "function_count": fc,
                     "code_heads": cc,

@@ -4,6 +4,15 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from .. import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 import json
 import re
 import struct
@@ -641,7 +650,7 @@ def calc(
                 if va == idaapi.BADADDR:
                     return make_error(MCPError.INVALID_ARGS, f"File offset {hex(file_off)} not mapped")
                 seg = idaapi.getseg(va)
-                seg_name = ida_segment.get_segm_name(seg) if seg else "none"
+                seg_name = _compat.get_segment_name(va) if seg else "none"
                 return _finalize({
                     "ok": True,
                     "file_offset": hex(file_off),
@@ -668,7 +677,7 @@ def calc(
                          "address itself (0x-prefixed) or a segment name instead.",
                 )
             seg = idaapi.getseg(ea)
-            seg_name = ida_segment.get_segm_name(seg) if seg else "none"
+            seg_name = _compat.get_segment_name(ea) if seg else "none"
 
             return _finalize({
                 "ok": True,

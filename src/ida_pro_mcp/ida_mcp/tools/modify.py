@@ -4,6 +4,15 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from .. import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 try:
     from .governance_engine import evaluate_operation
 except ImportError:
@@ -44,7 +53,7 @@ def _gather_governance_metadata(action: str, ea: int, value: str) -> dict:
         # Check if address is in import/plt section or executable code
         seg = ida_segment.getseg(ea)
         if seg:
-            sname = ida_segment.get_segm_name(seg)
+            sname = _compat.get_segment_name(ea)
             metadata["section_type"] = sname or ""
             metadata["is_import_addr"] = sname in (".idata", ".plt", ".edata", ".iat")
             # Patching bytes in an executable section rewrites code flow.

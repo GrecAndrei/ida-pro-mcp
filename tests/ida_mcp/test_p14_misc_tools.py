@@ -153,7 +153,7 @@ def _load_modify(real_make_error: bool = True):
 def test_modify_patch_bytes_blocked_on_exec_section_with_details():
     mod = _load_modify()
     mod.ida_segment.getseg = lambda ea: _Seg(".text", 1)
-    mod.ida_segment.get_segm_name = lambda seg: seg.name
+    mod.ida_segment.get_segm_name = lambda seg, flags=0: seg.name
 
     r = mod.modify(action="patch_bytes", addr="0x401000", hex_bytes="9090")
     assert r["error"] is True
@@ -166,7 +166,7 @@ def test_modify_patch_bytes_blocked_on_exec_section_with_details():
 def test_modify_patch_bytes_ok_on_non_exec_section():
     mod = _load_modify()
     mod.ida_segment.getseg = lambda ea: _Seg(".data", 2)
-    mod.ida_segment.get_segm_name = lambda seg: seg.name
+    mod.ida_segment.get_segm_name = lambda seg, flags=0: seg.name
     mod.ida_bytes.patch_bytes = lambda *a, **k: None
 
     r = mod.modify(action="patch_bytes", addr="0x402000", hex_bytes="9090")

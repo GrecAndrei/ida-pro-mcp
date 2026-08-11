@@ -88,7 +88,8 @@ def _stub_calc_ida(symbols=None, file_offset_map=None):
     sys.modules["idc"].get_name_ea_simple = lambda name: symbols.get(name, BADADDR)
     sys.modules["idc"].get_func_name = lambda ea: ""
     idaapi.getseg = lambda ea: types.SimpleNamespace(start_ea=0x400000, end_ea=0x401000)
-    sys.modules["ida_segment"].get_segm_name = lambda seg: ".text"
+    sys.modules["ida_segment"].getseg = idaapi.getseg
+    sys.modules["ida_segment"].get_segm_name = lambda seg, flags=0: ".text"
     sys.modules["idautils"].Names = list
     if file_offset_map is not None:
         idaapi.get_fileregion_offset = lambda ea: file_offset_map.get(ea, BADADDR)

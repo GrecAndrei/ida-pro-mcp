@@ -57,7 +57,8 @@ def _stub_resolve_ida():
     idaapi.getseg = lambda ea: types.SimpleNamespace(
         start_ea=0x400000, end_ea=0x401000
     )
-    sys.modules["ida_segment"].get_segm_name = lambda seg: ".text"
+    sys.modules["ida_segment"].getseg = idaapi.getseg
+    sys.modules["ida_segment"].get_segm_name = lambda seg, flags=0: ".text"
     sys.modules["idautils"].Names = list
 
 

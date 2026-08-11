@@ -42,8 +42,8 @@ Call sites in `ida_mcp/` hitting deprecated APIs (~300 total):
 | sites | deprecated | 9.4 replacement |
 |------:|------------|-----------------|
 |   193 | `ida_funcs.get_func` | `get_func_start` / `get_func_entry_info` |
-|    46 | `ida_segment.getseg` | `get_segment_info` |
-|    29 | `ida_segment.get_segm_name` | `get_segment_name` |
+|    46 | `ida_segment.getseg` | `get_segment_info` (7 sites migrated 2026-08-11; the rest read `segment_t` attrs `segment_info_t` lacks and stay on the legacy call) |
+|    29 | `ida_segment.get_segm_name` | `get_segment_name` (25 sites migrated 2026-08-11) |
 |  13+5 | `ida_funcs.get_func_cmt` / `set_func_cmt` | EA variants |
 |     3 | `ida_hexrays.decompile_func` | `decompile_function` |
 |   ~10 | segment/frame/hidden-range misc (`get_spd`, `add_segm_ex`, `move_segm`, `get_next_seg`, `calc_thunk_func_target`, `tinfo_t.get_func_frame`, ...) | EA variants |
@@ -126,9 +126,12 @@ collapse to direct calls and the module is deleted.
       `utils.refresh_decompiler_ctext`, `code_helpers` incl. its retry
       path) — the worked example; `tests/ida_mcp/test_compat.py` pins
       selection on both fake surfaces
-- [ ] Segment getters family (`getseg`, `get_segm_name`, `get_first_seg`,
-      `get_next_seg`, `get_segm_class`, `get_segm_by_name`,
-      `set_segm_name`, `move_segm`, `add_segm_ex`) — ~85 sites
+- [x] Segment getters family (`getseg`, `get_segm_name`, `get_segm_class`,
+      `set_segm_name`, `move_segm`, `get_segm_by_name`, `add_segm_ex`) —
+      compat wrappers + 37 migrated call sites across 13 tool files
+      (details below); `get_first_seg`/`get_next_seg` are NOT migrated in
+      this pass (see note) and `add_segm_ex`/`move_segm` have no
+      `ida_segment.`-prefixed call sites
 - [ ] Function-comment family (`get_func_cmt`, `set_func_cmt`,
       `update_func`) — ~20 sites
 - [ ] **`get_func` epic** — 193 sites; not mechanical: sites that only need
@@ -149,6 +152,49 @@ collapse to direct calls and the module is deleted.
 
 ## Notes
 
+- **Segment getters family — what was actually migrated (2026-08-11).**
+  `ida_mcp/compat.py` gained `get_segment(ea)`, `get_segment_name(ea, flags)`,
+  `get_segment_class(ea)`, `set_segment_name(ea, name, flags)`,
+  `move_segment(ea, to, flags)`, and `get_segment_ea_by_name(name)` — all
+  feature-detected off `HAS_EA_SEGMENT`, all preserving None-on-miss. Migrated
+  37 `ida_segment.`-prefixed call sites: 26 `get_segm_name`, 4
+  `get_segm_class`, 1 `set_segm_name`, 1 `get_segm_by_name`, plus 4
+  `getseg`→`get_segment` (imports_deep ×3, idb_summary comment count) and 1
+  `getseg`+`get_segm_name` collapse (code_helpers shellcode-prologue check).
+  **Left on the legacy call (audit rule — the returned object's `segment_t`
+  attributes that the surrounding code reads do not exist on
+  `segment_info_t`, which exposes its fields only via `get_*()` methods, not
+  properties):** `code_helpers.py` getseg at 1149/1319/1427 and `idb.py` getseg
+  at 275/448 and `memory.py`/`modify.py` getseg — all read `.perm` (or
+  `.type`/`.align`/`.bitness`). `get_segm_by_name` HAS a sanctioned 9.4
+  replacement — `get_segment_ea_by_name(name)` (returns start EA, BADADDR on
+  miss); the wrapper unwraps BADADDR back to None. `add_segm_ex` has a
+  replacement (`add_segment_ex(si: segment_info_t)`) but the only call sites
+  (segments.py add, firmware.py carve) use the `idaapi.add_segm_ex` spelling
+  and read `seg.perm` after the call, so they were left for a later pass;
+  `move_segm` similarly has only `idaapi.move_segm` call sites.
+- **`get_first_seg`/`get_next_seg` caveat.** The task premise stated these were
+  not deprecated, but they DO appear in the authoritative list
+  (`/tmp/ida94_deprecated.txt` lines 37/56) and the 9.4 stub keeps them with
+  EA replacements `get_first_segment_ea()`/`get_next_segment_ea(ea)`. They
+  were intentionally left unmigrated in this pass (out of the declared scope);
+  worth a small follow-up.
+- **Compat wrappers resolve `ida_segment` via `sys.modules` at call time**
+  (`_ida_segment()` helper), not the import-time global. The host test harness
+  swaps `sys.modules["ida_segment"]` per test while `compat` can stay cached
+  (imported during test collection, e.g. via test_swarm_t11's module-level
+  `intelligence` load, so it lands in the conftest's frozen session snapshot);
+  a stale global made the legacy fallbacks hit the wrong module.
+- **Test updates alongside the migration (AGENTS.md: update tests with the
+  behavior change):** the compat `get_segment_name` legacy fallback calls
+  `get_segm_name(seg, flags)` — matching the real IDA signature — and
+  re-fetches via `ida_segment.getseg`, so test mocks that mocked
+  `ida_segment.get_segm_name`/`idaapi.getseg` but not `ida_segment.getseg`
+  (or used 1-arg `get_segm_name` lambdas) were updated: raw_blob_fake.py and
+  the p02/p07/p13/p14/q05a/t07/t08/t09/t14 swarm tests. The host test
+  `test_auto_reanalyze_text_segments.py` execs live `analysis.py` helper
+  source, so its namespace gained a `_compat` stub mirroring the legacy
+  fallback.
 - The earlier `~/Downloads/ida-sdk-linux.tar.gz` is the SDK repo's CI-built
   sample binaries (their CI "splits release assets per component"), not the
   SDK itself — the GitHub clone supersedes it.

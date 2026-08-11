@@ -34,6 +34,15 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from .. import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 # _common does not re-export parse_address_safe (not in its __all__); import it
 # here so carve/detect windows can address unmapped regions (mirrors segments.py).
 try:
@@ -698,7 +707,7 @@ def _carve(start, end, name, sclass, limit, kwargs):
     if existing:
         return make_error(MCPError.SEGMENT_OVERLAP,
                           f"Address {hex(s_ea)} already belongs to segment "
-                          f"'{ida_segment.get_segm_name(existing)}'")
+                          f"'{_compat.get_segment_name(s_ea)}'")
 
     seg = idaapi.segment_t()
     seg.start_ea, seg.end_ea = s_ea, e_ea

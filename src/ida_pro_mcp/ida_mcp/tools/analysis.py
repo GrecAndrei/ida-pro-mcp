@@ -3,6 +3,15 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from .. import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 import contextlib
 import hashlib
 import json
@@ -12,7 +21,6 @@ import time
 
 import ida_ida
 import ida_loader
-import ida_segment
 import ida_entry
 
 # ============================================================================
@@ -1418,7 +1426,7 @@ def _find_text_segments() -> list[tuple[int, int, str]]:
             continue
         name = ""
         try:
-            name = ida_segment.get_segm_name(seg)
+            name = _compat.get_segment_name(seg_ea)
         except Exception:
             name = ""
         if name in _SKIP_SEGMENT_NAMES:

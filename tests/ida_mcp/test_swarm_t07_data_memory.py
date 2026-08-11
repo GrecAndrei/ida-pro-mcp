@@ -74,7 +74,7 @@ class TestMemoryWriteGovernance(unittest.TestCase):
         self.seg.SEGPERM_X = 1
         # Default: a non-executable, non-import segment so governance approves.
         self.seg.getseg = lambda ea: _Seg(".data", 3)
-        self.seg.get_segm_name = lambda seg: seg.name
+        self.seg.get_segm_name = lambda seg, flags=0: seg.name
         self.patched = []
         self.ida_bytes.patch_bytes = lambda ea, buf: (self.patched.append((ea, buf)) or len(buf))
 
@@ -122,7 +122,7 @@ class TestMemoryWritePartialPatch(unittest.TestCase):
         seg = self.mem.ida_segment
         seg.SEGPERM_X = 1
         seg.getseg = lambda ea: _Seg(".data", 3)
-        seg.get_segm_name = lambda s: s.name
+        seg.get_segm_name = lambda s, flags=0: s.name
 
     def test_zero_bytes_written_reports_error(self):
         self.mem.ida_bytes.patch_bytes = lambda ea, buf: 0

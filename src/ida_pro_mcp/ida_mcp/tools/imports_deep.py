@@ -4,6 +4,15 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from .. import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 
 # ============================================================================
 # 32. IMPORTS_DEEP - Deep Import Analysis
@@ -85,7 +94,7 @@ def _elf_plt_thunks(query_matcher=None):
     got_segs = []
     for seg_ea in idautils.Segments():
         seg_name = (idc.get_segm_name(seg_ea) or "").lower()
-        seg = ida_segment.getseg(seg_ea)
+        seg = _compat.get_segment(seg_ea)
         if not seg:
             continue
         if seg_name.startswith(_ELF_PLT_PREFIX):
@@ -184,7 +193,7 @@ def imports_deep(
             for seg_ea in idautils.Segments():
                 seg_name = idc.get_segm_name(seg_ea)
                 if '.idata' in seg_name.lower() or 'iat' in seg_name.lower():
-                    seg = ida_segment.getseg(seg_ea)
+                    seg = _compat.get_segment(seg_ea)
                     if not seg:
                         continue
 
@@ -221,7 +230,7 @@ def imports_deep(
             for seg_ea in idautils.Segments():
                 seg_name = idc.get_segm_name(seg_ea)
                 if 'delay' in seg_name.lower() or '.didat' in seg_name.lower():
-                    seg = ida_segment.getseg(seg_ea)
+                    seg = _compat.get_segment(seg_ea)
                     if seg:
                         ea = seg.start_ea
                         _delay_items = 0

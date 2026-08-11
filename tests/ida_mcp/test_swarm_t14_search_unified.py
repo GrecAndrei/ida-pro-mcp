@@ -134,7 +134,9 @@ def test_symbol_info_data_block_passes_ea_for_comment_check():
     uni.idaapi.SEGPERM_READ = 1
     uni.idaapi.SEGPERM_WRITE = 2
     uni.idaapi.SEGPERM_EXEC = 4
-    uni.ida_segment.get_segm_name = lambda seg: ".bss"
+    # The compat get_segment_name wrapper re-fetches the segment via ida_segment.
+    uni.ida_segment.getseg = lambda ea: _Seg()
+    uni.ida_segment.get_segm_name = lambda seg, flags=0: ".bss"
     uni.xref_count_limited = lambda ea, n=256: 0
     uni._count_xrefs_from_limited = lambda ea, n: 0
 

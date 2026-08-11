@@ -4,6 +4,15 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from .. import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 try:
     from .governance_engine import evaluate_operation
 except ImportError:
@@ -163,7 +172,7 @@ def _write_governance_metadata(ea):
     metadata = {}
     seg = ida_segment.getseg(ea)
     if seg:
-        sname = ida_segment.get_segm_name(seg)
+        sname = _compat.get_segment_name(ea)
         metadata["section_type"] = sname or ""
         metadata["is_import_addr"] = sname in (".idata", ".plt", ".edata", ".iat")
         executable = (getattr(seg, "perm", 0) & getattr(ida_segment, "SEGPERM_X", 1)) != 0
