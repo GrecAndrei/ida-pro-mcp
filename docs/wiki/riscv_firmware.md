@@ -135,6 +135,16 @@ survives IDB reload, and queues `plan_range` reanalysis so GP-relative xrefs
 re-evaluate.  The `_APPLIED_RISCV_GP` cache means a re-apply is skipped after
 the first successful set this session.
 
+> **Headless limitation (verified 9.3/9.4, 2026-08-12):** `idc.set_processor_options`
+> does not exist in the idat runtime (probed on every module in both
+> installs; it is not in any stub), and the sreg seams
+> (`split_sreg_range`, 9.4's `set_default_sreg_value_ea`) do not drive the
+> processor plugin's GP-relative resolution. In headless sessions `set_gp`
+> therefore reports `ok=False` with the apply error, and GP-relative
+> operands stay unresolved (`ld a3, -7FFFFFE0h`). The only known working
+> path is the GUI processor-options dialog. The tool still returns a
+> truthful error; treat GP-relative xrefs as best-effort in headless runs.
+
 Equivalent via the segment-register seam (same GP state, different surface):
 
 ```

@@ -373,7 +373,7 @@ class TestModifyRawBlobAuthoring(unittest.TestCase):
         self.assertTrue(res["ok"], res)
         self.assertEqual(res["size"], 6)
         self.assertEqual(res["length"], 6)
-        self.assertEqual(self.blob.state["strlits"], [(msg_addr, msg_addr + 6, 0)])
+        self.assertEqual(self.blob.state["strlits"], [(msg_addr, 6, 0)])
 
     def test_create_strlit_requires_size(self):
         res = self.mod.modify(action="create_strlit", addr="0x800000c7")

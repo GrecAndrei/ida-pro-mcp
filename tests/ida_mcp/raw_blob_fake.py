@@ -424,7 +424,9 @@ def install_raw_blob(
 
     ida_bytes.get_bytes = _get_bytes
     ida_bytes.create_data = lambda ea, flag, size, tid=0: state.__setitem__("data_items", state["data_items"] + [(ea, size, flag)]) or True
-    ida_bytes.create_strlit = lambda ea, end, st: state.__setitem__("strlits", state["strlits"] + [(ea, end, st)]) or (end - ea)
+    # Real signature: (start, length, strtype); the tool passes the byte
+    # length (not an end address).
+    ida_bytes.create_strlit = lambda ea, length, st: state.__setitem__("strlits", state["strlits"] + [(ea, length, st)]) or length
     ida_bytes.undo_begin = lambda: True
     ida_bytes.undo_end = lambda: True
 

@@ -76,6 +76,37 @@ Final commit of the day closes out the mechanical migration entirely:
   gracefully in the meantime.
 - Suite: 2831 passed / ruff clean (21 compat dispatch tests).
 
+### 2026-08-12 — 9.4 validation closes every remaining work item
+
+- **Live runtime matrix (9.3 + 9.4)**: `scripts/run_ida_matrix.py` runs
+  `tests/integration` against every detected install; the self-hosted
+  `ida-runtime-matrix.yml` workflow is the CI form (dispatch-only,
+  guard-tested). **42 passed / 8 skipped on both 9.3.260421 and
+  9.4.260714 live** — the EA-API migration is end-to-end validated.
+- **RISC-V on 9.4**: fixture decode byte-identical to 9.3 except the
+  documented `c.` compressed-instruction prefix; auipc sites unchanged;
+  `lui`/`%hi/%lo` constant recovery identical. GP-relative resolution
+  remains unreachable headless on both versions (`idc.set_processor_options`
+  absent from the idat runtime; sreg seams don't drive the plugin) —
+  documented in the wiki with a truthful-error note.
+- **Bug found by validation**: `modify` `create_strlit` passed an end
+  address as the length arg to `ida_bytes.create_strlit(start, len,
+  strtype)` (defined strings to segment end, or failed); fixed, fakes
+  updated to the real signature.
+- **`ida_list_strings`**: API unchanged on 9.4 (`get_strlist_qty`/
+  `get_strlist_item` live-verified); `get_strlist_item_ex` +
+  `decompiler_string` is an additive watch-item only.
+- **`ida_indexer` not adopted**: `ENABLE_INDEXER` is disabled under batch
+  mode (confirmed live), so the indexer can't serve headless `ida_find`.
+- **idalib not adopted**: design doc at
+  `docs/research/idalib-runtime.md` (verified idapro whl/activation/API
+  facts, acceptance criteria); spawn-idat stays default.
+- **Installer**: `python_environment_kind()` classifies uv/conda/
+  homebrew/pyenv/asdf interpreters and the wizard warns on 9.4+ installs,
+  mirroring IDA's own libpython-mismatch awareness.
+- Suite: 2836 passed / ruff clean (24 compat dispatch tests, 19 installer
+  host tests, 3 CI-guard tests).
+
 ## 2026-08-09 — settle wave: q05 tool verification, h02 runtime lifecycle, arch auto-apply
 
 Settle/integration pass over the completed feature waves: the q05 analysis-surface

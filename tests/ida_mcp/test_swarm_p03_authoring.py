@@ -63,8 +63,8 @@ class _FakeIdb:
         # successful byte item is nonzero.
         return flags | 0x2
 
-    def create_strlit(self, ea, endea, strtype):
-        size = endea - ea
+    def create_strlit(self, ea, length, strtype):
+        size = length
         if self._overlaps(ea, size):
             return 0
         self.items[ea] = {"flags": 0xC000, "size": size, "tid": 0}
@@ -254,7 +254,7 @@ class TestCreateStrlit(unittest.TestCase):
 
     def test_create_strlit_failure_returns_ida_error(self):
         mod, idb = _load_modify()
-        idb.create_strlit = lambda ea, endea, st: 0  # always fails
+        idb.create_strlit = lambda ea, length, strtype: 0  # always fails
         r = mod.modify(action="create_strlit", addr="0x1000", size=4)
         self.assertIs(r["ok"], False)
         self.assertEqual(r["code"], "IDA_ERROR")

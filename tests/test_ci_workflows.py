@@ -69,3 +69,35 @@ def test_llama_cpp_pin_matches_build_script():
     assert expected in script_text, (
         "native-build.yml verify grep would not match build_native_llama.sh"
     )
+
+
+def test_ida_runtime_matrix_never_runs_on_hosted_runners():
+    """The live-IDA matrix needs a licensed install, so it must be
+    self-hosted-only and dispatch-triggered. A push/PR trigger would queue
+    on GitHub-hosted runners (no IDA) or bill the repo without consent."""
+    wf = _load_workflow("ida-runtime-matrix.yml")
+
+    # PyYAML is YAML 1.1, where the bare key `on` parses as boolean True;
+    # GitHub reads YAML 1.2 semantics. Accept either spelling.
+    triggers_raw = wf.get("on")
+    if not isinstance(triggers_raw, dict):
+        triggers_raw = wf.get(True)
+    triggers = set(triggers_raw or {})
+    assert triggers == {"workflow_dispatch"}, (
+        "ida-runtime-matrix.yml must be workflow_dispatch-only; "
+        f"found triggers: {triggers}"
+    )
+
+    for job in wf.get("jobs", {}).values():
+        labels = job.get("runs-on")
+        assert isinstance(labels, list) and "self-hosted" in labels, (
+            "ida-runtime-matrix.yml jobs must run on a self-hosted runner "
+            f"(licensed IDA cannot be provisioned on hosted runners); got {labels}"
+        )
+        for step in job.get("steps", []):
+            run = step.get("run")
+            if run and "run_ida_matrix" in run:
+                assert "tests/integration" not in run, (
+                    "the matrix runner must stay the single source of truth; "
+                    "do not inline pytest test paths into the workflow"
+                )

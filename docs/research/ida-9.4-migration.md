@@ -170,16 +170,65 @@ collapse to direct calls and the module is deleted.
       so that path needs a `get_func_frame_ea` + tinfo/udt member
       iteration rewrite (both sites degrade gracefully today).
 - [x] **tinfo-based stack-frame walk** — DONE (2026-08-11): `_compat.frame_members(func_ea)` / `_compat.frame_size(func_ea)` replaced the last `ida_frame.get_frame` (removed in 9.4) / `ida_struct` (module gone) sites. 9.4 path: `ida_frame.get_func_frame_ea(tif, func_ea)` → `udt_type_data_t` walk (gaps skipped, bit→byte normalization) + `get_frame_size_ea`. Legacy path mirrors both old call sites exactly: frame via `ida_frame.get_frame` → `ida_funcs.get_frame` → `idc.get_frame_id`+`ida_struct.get_struc`; members via the canonical `struc_t.members` list (NOT `get_member(i)` — that takes a byte offset); names via `ida_frame` → `ida_struct` → `idc` `get_member_name`; sizes via `get_member_size` → `member.size` → `eoff-soff`. stack_analysis.py (all 10 actions) and code_helpers.py migrated; 3 new compat dispatch tests. `types.py` struct editing was already 9.4-ready (tinfo `add_udm`/`del_udm`/`rename_udm`/`set_udm_type` fallbacks gated by `_has_classic_struct_api()`).
-- [ ] `ida_list_strings` behavior check on 9.4 (decompiler strings now
-      included lazily)
-- [ ] RISC-V validation: run `tests/fixtures/riscv_blob.bin` (and a real
-      firmware) through 9.4; confirm the auipc/decoding fixes; document
-      which of our workarounds are still needed
-- [ ] Evaluate `ida_indexer` for `ida_find` / query-lang
-- [ ] Evaluate idalib `execute_sync()` runtime (design doc first)
-- [ ] Installer: align Python detection with 9.4's uv/conda/homebrew
-      support
-- [ ] CI matrix: run the suite against both 9.3 and 9.4 runtimes
+- [x] `ida_list_strings` behavior check on 9.4 — DONE (2026-08-12): the
+      string-list API is unchanged (`get_strlist_qty`/`get_strlist_item`
+      verified live on the 9.4 runtime; neither is deprecated). 9.4 adds
+      `get_strlist_item_ex(string_info_ex_t)` with the
+      `decompiler_string` field — decompiler-recovered strings land in the
+      list lazily per decompiled function, so string counts may grow after
+      decompilation. No code change needed; watch the summary counts.
+- [x] RISC-V validation — DONE (2026-08-12, live headless 9.3 vs 9.4 on
+      `tests/fixtures/riscv_blob.bin`): instruction decode is byte-identical
+      except the documented `c.` prefix for compressed instructions
+      (`c.mv`/`c.j`/`c.addi`/`c.sd`/`c.lw`/`c.sw`/`c.ld`/`c.ret`/`c.addw`).
+      `auipc gp, 80000h` still decodes as auipc + mv (no over-merge);
+      lui-based `%hi/%lo` constant recovery resolves identically.
+      **Finding:** the `set_gp` workaround's primary mechanism
+      (`idc.set_processor_options`) does not exist in the idat runtime —
+      probed 7 modules on both 9.3 and 9.4, all absent, and it is in no
+      stub. The sreg seams (`split_sreg_range`, 9.4-only
+      `set_default_sreg_value_ea`) return False for GP and do not drive
+      plugin xref resolution. GP-relative operands (`ld a3, -7FFFFFE0h`)
+      stay unresolved headless on both versions, so `set_gp`'s failure is
+      honest (ok=False + apply_error) but the resolution itself is
+      unreachable in headless sessions — the GUI-only processor option is
+      the only known path. Keep `set_gp` as-is; document the limitation.
+- [x] Evaluate `ida_indexer` for `ida_find` / query-lang — DONE
+      (2026-08-12), **not adopted**: `ida.cfg` documents
+      `ENABLE_INDEXER = YES // Enabled by default but disabled under batch
+      mode`, and our runtime is batch mode — live probe on 9.4 confirms
+      `indexer_is_enabled() == False` and `indexer_match_all` returns None.
+      The indexer is the Jump Anywhere GUI backend; the linear scans in
+      `tools/search/` remain the right implementation for headless MCP.
+- [x] Evaluate idalib `execute_sync()` runtime — DONE (2026-08-12),
+      **not adopted**; design doc at `docs/research/idalib-runtime.md`
+      with verified facts (idapro whl, `open_database`/`close_database`
+      surface, activation script, undo-point value) and the future port's
+      acceptance criteria. Spawn-idat stays default: crash isolation,
+      9.2 floor, license simplicity, and the live integration suite passes
+      on both 9.3 and 9.4.
+- [x] Installer: align Python detection with 9.4's uv/conda/homebrew
+      support — DONE (2026-08-12): `installer/runtime.py` gains
+      `python_environment_kind()` (uv/conda/homebrew/pyenv/asdf/system,
+      path+env based); `main.py` warns on 9.4+ installs when the venv
+      builder runs on a managed interpreter, and records `python_kind` in
+      the report. Host unit test added.
+- [x] CI matrix: run the suite against both 9.3 and 9.4 runtimes — DONE
+      (2026-08-12): `scripts/run_ida_matrix.py` discovers every install
+      (installer discovery) and runs `tests/integration` per install with
+      IDA_DIR pinned; `.github/workflows/ida-runtime-matrix.yml` is a
+      self-hosted-only `workflow_dispatch` job (guard-tested) since
+      licensed IDA cannot be provisioned on GitHub-hosted runners.
+      **Validated live: 42 passed / 8 skipped on BOTH 9.3.260421 and
+      9.4.260714.**
+- [x] **Bonus bug found during validation** (2026-08-12): `modify.py`
+      `create_strlit` passed `ea + size` (an end address) as the *length*
+      argument to `ida_bytes.create_strlit(start, len, strtype)` — on real
+      IDA this defines a string spanning to the segment end (verified
+      live: a 6-byte request created a 64-byte string) or fails outright.
+      Fixed to pass `size`; test fakes (p03, p11, raw_blob_fake) updated
+      to model the real signature. Version-agnostic, surfaced by 9.4
+      validation.
 
 ## Notes
 

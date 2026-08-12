@@ -401,3 +401,38 @@ def test_run_install_with_r2_records_env_into_client_config(tmp_path, monkeypatc
     assert main_mod.run_install(opts, main_mod.UI()) == 0
 
     assert captured["server_cfg"]["env"].get("IDA_MCP_R2_BIN") == fake_rz
+
+
+# ---------------------------------------------------------------------------
+# python_environment_kind — IDA 9.4 uv/conda/homebrew interpreter awareness
+# ---------------------------------------------------------------------------
+
+def test_python_environment_kind_detects_managed_interpreters(monkeypatch):
+    from ida_pro_mcp.installer.runtime import python_environment_kind
+
+    monkeypatch.delenv("UV_ACTIVE", raising=False)
+    monkeypatch.delenv("UV_CACHE_DIR", raising=False)
+    monkeypatch.delenv("CONDA_PREFIX", raising=False)
+    monkeypatch.delenv("CONDA_DEFAULT_ENV", raising=False)
+
+    cases = [
+        (str(Path.home() / ".local/share/uv/python/3.12.1/bin/python3"), "uv"),
+        ("/opt/homebrew/opt/python@3.12/bin/python3.12", "homebrew"),
+        ("/usr/local/Cellar/python@3.12/3.12.4/bin/python3", "homebrew"),
+        ("/usr/local/opt/python@3.12/bin/python3", "homebrew"),
+        ("/opt/miniconda3/bin/python", "conda"),
+        ("/home/user/anaconda3/envs/re/bin/python", "conda"),
+        ("/home/user/.pyenv/versions/3.12.4/bin/python", "pyenv"),
+        ("/home/user/.asdf/installs/python/3.12.4/bin/python", "asdf"),
+        ("/usr/bin/python3", "system"),
+        (str(Path.home() / ".venvs/project/bin/python"), "system"),
+    ]
+    for path, expected in cases:
+        assert python_environment_kind(Path(path)) == expected, path
+
+    # uv/conda also announce themselves via env vars regardless of path.
+    monkeypatch.setenv("UV_ACTIVE", "1")
+    assert python_environment_kind(Path("/usr/bin/python3")) == "uv"
+    monkeypatch.delenv("UV_ACTIVE")
+    monkeypatch.setenv("CONDA_PREFIX", "/opt/miniconda3")
+    assert python_environment_kind(Path("/usr/bin/python3")) == "conda"

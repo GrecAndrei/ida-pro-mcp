@@ -549,7 +549,10 @@ def modify(
             st_name, st_fallback = st_spec
             st = getattr(idc, st_name, st_fallback)
             try:
-                length = ida_bytes.create_strlit(ea, ea + size, st)
+                # ida_bytes.create_strlit takes (start, len, strtype) — the
+                # length, not an end address. Passing ea+size would define a
+                # string up to the segment end (wrong size) or fail outright.
+                length = ida_bytes.create_strlit(ea, size, st)
             except Exception as e:
                 return handle_error(e, context="create_strlit")
             if not length:

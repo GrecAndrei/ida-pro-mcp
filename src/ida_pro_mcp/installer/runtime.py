@@ -846,6 +846,59 @@ def _venv_python_exe(venv_dir: Path) -> Path:
     return venv_dir / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
 
 
+def python_environment_kind(python_exe: Path | None = None) -> str:
+    """Classify the interpreter the runtime venv will be built from.
+
+    IDA 9.4's IDAPython detects uv/anaconda/homebrew-managed Pythons and
+    warns about libpython/venv mismatch, so the installer surfaces the same
+    awareness instead of silently building a venv from such an interpreter.
+    Returns one of: "uv", "conda", "homebrew", "pyenv", "asdf", "system".
+
+    Detection is path/env based (no subprocesses): uv exports UV_* env vars
+    and lives under ``~/.local/share/uv``; conda sets ``CONDA_PREFIX`` and
+    lives under ``*/anaconda3|miniconda3|conda``; Homebrew python lives
+    under ``/opt/homebrew`` (macOS ARM) or ``/usr/local/Cellar`` /
+    ``/usr/local/opt``; pyenv shims under ``.pyenv/versions`` / ``pyenv``;
+    asdf under ``.asdf/installs`` / ``asdf``. Anything else is "system".
+    """
+    exe = python_exe or Path(sys.executable)
+    try:
+        resolved = str(Path(exe).resolve())
+    except OSError:
+        resolved = str(exe)
+    low = resolved.lower()
+    path_parts = [p for p in low.replace("\\", "/").split("/") if p]
+
+    if (
+        os.environ.get("UV_ACTIVE")
+        or os.environ.get("UV_CACHE_DIR")
+        or "share/uv" in low
+        or "uv/python" in low
+        or "uv" in path_parts
+    ):
+        return "uv"
+    if (
+        os.environ.get("CONDA_PREFIX")
+        or os.environ.get("CONDA_DEFAULT_ENV")
+        or any(k in low for k in ("/anaconda3", "/miniconda3", "/conda/", "conda\\"))
+        or "conda" in path_parts
+    ):
+        return "conda"
+    if (
+        low.startswith("/opt/homebrew")
+        or "/homebrew/" in low
+        or "/cellar/" in low
+        or "/usr/local/opt/" in low
+        or "homebrew" in path_parts
+    ):
+        return "homebrew"
+    if "/.pyenv/versions" in low or "/pyenv/" in low or "pyenv" in path_parts:
+        return "pyenv"
+    if "/.asdf/installs" in low or "/asdf/" in low or "asdf" in path_parts:
+        return "asdf"
+    return "system"
+
+
 def _probe_venv(python_exe: Path) -> bool:
     """Return True if the venv's python can launch and reports its own path."""
     if not python_exe.is_file():

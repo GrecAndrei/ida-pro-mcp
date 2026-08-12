@@ -1,0 +1,49 @@
+name: IDA Runtime Matrix
+
+# Runs the live-IDA suites (tests/integration) against every IDA install
+# detected on the runner — typically 9.3 and 9.4 side by side. This needs a
+# LICENSED IDA Pro/Home install, which GitHub-hosted runners cannot provide,
+# so the job only runs on a self-hosted runner labeled `ida` (provision it
+# with IDA_MCP_LIVE_IDADIR or installs in the default locations; the
+# installer's detect_ida_installs discovery finds them).
+#
+# Triggering:
+#   - workflow_dispatch from the Actions tab (recommended)
+#   - push/PR is intentionally NOT wired: without a self-hosted runner the
+#     job would queue forever, and with one it would be a surprise cost.
+#
+# Local equivalent (no CI needed): python scripts/run_ida_matrix.py
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ida-runtime-matrix-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    runs-on: [self-hosted, ida]
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . --group dev
+
+      - name: Run runtime matrix
+        env:
+          IDA_MCP_DISABLE_RATE_LIMIT: "1"
+          IDA_MCP_POLICY_MODE: "permissive"
+        run: python scripts/run_ida_matrix.py

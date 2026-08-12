@@ -839,6 +839,40 @@ def _phase_enabled(opts: InstallerOptions, name: str) -> bool:
     return not opts.only or name in opts.only
 
 
+def _warn_ida_python_compat(chosen_install, report, ui) -> None:
+    """Surface IDA 9.4's IDAPython uv/conda/homebrew interpreter warning.
+
+    IDA 9.4's IDAPython detects uv/anaconda/homebrew-managed Pythons and
+    warns about libpython/venv mismatch. The MCP server venv works fine
+    regardless of the interpreter it is built from, but if IDAPython is
+    pointed at the same interpreter (idapyswitch), IDA itself will warn.
+    Mirror that awareness in the wizard instead of letting it surface as
+    an unexplained IDA warning later. No-op on IDA < 9.4.
+    """
+    try:
+        from .runtime import python_environment_kind
+    except ImportError:
+        return
+    try:
+        major = int(chosen_install.version[0])
+        minor = int(chosen_install.version[1])
+    except (TypeError, IndexError, ValueError):
+        return
+    if (major, minor) < (9, 4):
+        return
+    kind = python_environment_kind()
+    if kind == "system":
+        return
+    report.metadata["python_kind"] = kind
+    ui.warn(
+        f"Running the installer on a {kind}-managed Python interpreter. "
+        "IDA 9.4 warns when IDAPython uses such interpreters (libpython/"
+        "venv mismatch). The MCP server runtime venv is unaffected, but if "
+        "IDA's own Python check complains, point idapyswitch at a standard "
+        "python.org or system Python."
+    )
+
+
 def run_install(opts: InstallerOptions, ui: UI) -> int:
     report = InstallReport()
     install_root = opts.install_root or get_install_root()
@@ -872,6 +906,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
             opts._ida_install = chosen_install  # type: ignore[attr-defined]
             report.metadata["ida_install"] = chosen_install.to_dict()
             report.metadata["ida_version"] = chosen_install.full_version_str
+            _warn_ida_python_compat(chosen_install, report, ui)
             if not opts.dry_run:
                 try:
                     write_install_state(install_root, chosen_install)
