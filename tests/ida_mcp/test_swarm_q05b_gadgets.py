@@ -101,6 +101,14 @@ class _RawRiscvIDB:
         idaapi.SEG_CODE = 2
         idaapi.getseg = lambda ea: _Seg(self.START, self.END, 4, 2)
 
+        # compat.get_segment_* resolves ida_segment via sys.modules; expose the
+        # legacy getseg surface (mirroring idaapi.getseg) plus the 9.4 EA one.
+        ida_segment = sys.modules["ida_segment"]
+        ida_segment.getseg = idaapi.getseg
+        ida_segment.ida_idaapi = types.SimpleNamespace(BADADDR=self.BADADDR)
+        ida_segment.segment_info_t = types.SimpleNamespace
+        ida_segment.get_segment_info = lambda out, ea, flags=0: False
+
         autils = sys.modules["idautils"]
         autils.Segments = lambda: iter([self.START])
 

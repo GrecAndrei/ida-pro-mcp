@@ -4,6 +4,16 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from .. import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
+
 
 # ============================================================================
 # 19. GRAPH - Export call graphs and CFGs for visualization/analysis
@@ -55,8 +65,8 @@ def _code_items(f_ea):
     blobs with no defined functions still yield a call graph. Bounded by
     ``_MAX_CODE_SCAN`` to prevent hangs on pathological scans.
     """
-    func = ida_funcs.get_func(f_ea)
-    if func:
+    func = _compat.get_func_start(f_ea)
+    if func is not None:
         return list(idautils.FuncItems(f_ea))
     seg = idaapi.getseg(f_ea)
     end = seg.end_ea if seg else idaapi.BADADDR
@@ -249,7 +259,7 @@ def graph(
             cycle_nodes = set()
             item_count = 0
             function_less_targets = 0
-            auto_defined = ida_funcs.get_func(ea) is None
+            auto_defined = _compat.get_func_start(ea) is None
 
             def add_node(f_ea):
                 nonlocal item_count
@@ -270,11 +280,11 @@ def graph(
                         if item_count >= max_items: break
                         if not xref.iscode or xref.type not in (idaapi.fl_CN, idaapi.fl_CF):
                             continue
-                        target_func = ida_funcs.get_func(xref.to)
-                        if target_func:
-                            if target_func.start_ea == f_ea:
+                        target_func = _compat.get_func_start(xref.to)
+                        if target_func is not None:
+                            if target_func == f_ea:
                                 continue
-                            target = target_func.start_ea
+                            target = target_func
                             recurse = True
                         else:
                             # Function-less target: keep the edge and a
@@ -457,8 +467,8 @@ def graph(
                     for xref in idautils.XrefsTo(target_ea):
                         if item_count >= max_items: break
                         if not xref.iscode: continue
-                        src_func = ida_funcs.get_func(xref.frm)
-                        src_ea = src_func.start_ea if src_func else xref.frm
+                        src_func = _compat.get_func_start(xref.frm)
+                        src_ea = src_func if src_func is not None else xref.frm
                         src_name = idc.get_name(src_ea) or hex(src_ea)
                         if src_ea not in nodes:
                             nodes[src_ea] = src_name
@@ -474,15 +484,14 @@ def graph(
                             traverse_xrefs(src_ea, d + 1, stack)
                 # Traverse callees (xrefs FROM this address)
                 if direction in ("down", "both"):
-                    func = ida_funcs.get_func(target_ea)
-                    if func:
+                    if _compat.get_func_start(target_ea) is not None:
                         for item in idautils.FuncItems(target_ea):
                             if item_count >= max_items: break
                             for xref in idautils.XrefsFrom(item, 0):
                                 if item_count >= max_items: break
                                 if not xref.iscode: continue
-                                dst_func = ida_funcs.get_func(xref.to)
-                                dst_ea = dst_func.start_ea if dst_func else xref.to
+                                dst_func = _compat.get_func_start(xref.to)
+                                dst_ea = dst_func if dst_func is not None else xref.to
                                 if dst_ea == target_ea: continue
                                 dst_name = idc.get_name(dst_ea) or hex(dst_ea)
                                 if dst_ea not in nodes:

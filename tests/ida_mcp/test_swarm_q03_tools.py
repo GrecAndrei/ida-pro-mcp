@@ -368,6 +368,12 @@ class TestDecompileAllPagination(unittest.TestCase):
 
         ida_funcs = types.ModuleType("ida_funcs")
         ida_funcs.get_func_name = lambda ea: f"firmware_{(ea - 0x8000) // 0x10}"
+        # compat.get_func_info resolves ida_funcs via sys.modules; expose both
+        # the legacy get_func (mirroring idaapi.get_func) and the 9.4 EA surface.
+        ida_funcs.get_func = idaapi.get_func
+        ida_funcs.ida_idaapi = types.SimpleNamespace(BADADDR=BADADDR)
+        ida_funcs.func_entry_info_t = types.SimpleNamespace
+        ida_funcs.get_func_entry_info = lambda out, ea, flags=0: False
 
         idautils = types.ModuleType("idautils")
         idautils.Functions = lambda: iter([0x8000 + i * 0x10 for i in range(5)])
@@ -603,6 +609,10 @@ class TestExplainBareMetalFirmware(unittest.TestCase):
 
         ida_funcs = types.ModuleType("ida_funcs")
         ida_funcs.get_func_name = lambda ea: "soc_power_mgr"
+        # code.py's explain action resolves get_func through _compat, which
+        # reads sys.modules["ida_funcs"] at call time — expose the legacy
+        # get_func there (mirrors idaapi.get_func).
+        ida_funcs.get_func = idaapi.get_func
 
         idautils = types.ModuleType("idautils")
         idautils.XrefsTo = lambda ea, f: iter([])
@@ -615,7 +625,10 @@ class TestExplainBareMetalFirmware(unittest.TestCase):
         sys.modules["idaapi"] = idaapi
         sys.modules["ida_funcs"] = ida_funcs
         sys.modules["idautils"] = idautils
-        sys.modules["idc"].get_strlit_contents = lambda ea, n=0, m=0: None
+        # idc previously leaked in from an earlier test; be self-sufficient.
+        idc = sys.modules.get("idc") or types.ModuleType("idc")
+        sys.modules["idc"] = idc
+        idc.get_strlit_contents = lambda ea, n=0, m=0: None
         sys.modules["idc"].get_name = lambda ea: ""
         sys.modules["idc"].get_func_name = lambda ea: "soc_power_mgr"
 

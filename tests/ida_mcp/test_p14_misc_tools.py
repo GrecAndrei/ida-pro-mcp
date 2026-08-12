@@ -176,7 +176,15 @@ def test_modify_patch_bytes_ok_on_non_exec_section():
 
 def test_modify_rename_local_accepts_new_name_kwarg():
     mod = _load_modify()
-    mod.ida_funcs.get_func = lambda ea: None
+    mod.ida_funcs.get_func = lambda ea: types.SimpleNamespace(
+        start_ea=0x401000, end_ea=0x402000, flags=0
+    )
+    mod.ida_funcs.get_func_start = lambda ea: 0x401000
+    mod.ida_funcs.ida_idaapi = types.SimpleNamespace(BADADDR=-1)
+    mod.ida_funcs.func_entry_info_t = types.SimpleNamespace
+    mod.ida_funcs.get_func_entry_info = lambda out, ea, flags=0: False
+    mod.ida_funcs.get_func_flags = lambda ea: 0
+    mod.ida_funcs.set_func_flags = lambda ea, flags: True
 
     class _Lv:
         def __init__(self, name):

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import struct
 import sys
+import types
 from pathlib import Path
 
 TESTS = Path(__file__).resolve().parents[1]
@@ -64,6 +65,16 @@ def _load_modify():
 
 def _func(start, end):
     return type("_F", (), {"start_ea": start, "end_ea": end})
+
+
+def _wire_funcs(mod, get_func):
+    """Dual-surface ida_funcs wiring: compat.get_func_* resolves ida_funcs via
+    sys.modules, so expose the legacy get_func (mirroring idaapi.get_func) and
+    the 9.4 EA surface off the same mock."""
+    mod.ida_funcs.get_func = get_func
+    mod.ida_funcs.ida_idaapi = types.SimpleNamespace(BADADDR=-1)
+    mod.ida_funcs.func_entry_info_t = types.SimpleNamespace
+    mod.ida_funcs.get_func_entry_info = lambda out, ea, flags=0: False
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +206,7 @@ def test_vtable_skips_duplicate_targets_instead_of_truncating():
     mod.ida_bytes.get_bytes = lambda ea, size: struct.pack("<Q", slots.get(ea, 0))
     mod.ida_bytes.is_loaded = lambda ea: ea != 0
     mod.idaapi.get_func = lambda ea: _func(ea, ea + 1)
+    _wire_funcs(mod, mod.idaapi.get_func)
     mod.idc.get_name = lambda ea: f"f_{ea:x}"
     mod.idc.INF_SHORT_DN = 1
     mod.idc.get_inf_attr = lambda attr: 0
@@ -218,6 +230,7 @@ def test_vtable_demangle_uses_portable_idc_api():
     mod.ida_bytes.get_bytes = lambda ea, size: struct.pack("<Q", slots.get(ea, 0))
     mod.ida_bytes.is_loaded = lambda ea: ea != 0
     mod.idaapi.get_func = lambda ea: _func(ea, ea + 1)
+    _wire_funcs(mod, mod.idaapi.get_func)
     mod.idc.get_name = lambda ea: "_ZN7android14KloProxy7methodEi"
     mod.idc.INF_SHORT_DN = 1
     mod.idc.get_inf_attr = lambda attr: 0
@@ -246,6 +259,12 @@ def _setup_apply(mod):
     mod.ida_typeinf.PT_SIL = 0
     mod.ida_typeinf.TINFO_DEFINITE = 0
     mod.idaapi.get_func = lambda ea: None
+    # compat.get_func_start resolves ida_funcs via sys.modules; mirror the
+    # idaapi.get_func miss (no function at 0x1000 -> default kind "global").
+    mod.ida_funcs.get_func = mod.idaapi.get_func
+    mod.ida_funcs.ida_idaapi = types.SimpleNamespace(BADADDR=-1)
+    mod.ida_funcs.func_entry_info_t = types.SimpleNamespace
+    mod.ida_funcs.get_func_entry_info = lambda out, ea, flags=0: False
 
 
 def test_apply_rejects_stack_kind():

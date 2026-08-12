@@ -501,6 +501,12 @@ def test_strings_pagination_does_not_rewalk(monkeypatch):
     monkeypatch.setattr(mod.idautils, "Strings", _strings, raising=False)
     monkeypatch.setattr(mod.idautils, "XrefsTo", lambda ea: iter([]), raising=False)
     monkeypatch.setattr(mod.idaapi, "getseg", lambda ea: None, raising=False)
+    # compat.get_segment_perm resolves ida_segment via sys.modules; mirror the
+    # idaapi.getseg miss on the live segment module.
+    monkeypatch.setattr(mod.ida_segment, "getseg", lambda ea: None, raising=False)
+    monkeypatch.setattr(mod.ida_segment, "ida_idaapi", types.SimpleNamespace(BADADDR=-1), raising=False)
+    monkeypatch.setattr(mod.ida_segment, "segment_info_t", types.SimpleNamespace, raising=False)
+    monkeypatch.setattr(mod.ida_segment, "get_segment_info", lambda out, ea, flags=0: False, raising=False)
     monkeypatch.setattr(mod.idaapi, "get_func_qty", lambda: 0, raising=False)
     monkeypatch.setattr(mod.ida_nalt, "get_root_filename", lambda: "walk_test.bin", raising=False)
 

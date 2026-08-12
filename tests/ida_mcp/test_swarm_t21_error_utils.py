@@ -157,6 +157,16 @@ class TestResolveSymbolDemangleFallback(unittest.TestCase):
         idaapi.get_func = lambda ea: None
         sys.modules["idaapi"] = idaapi
 
+        # compat.get_func_start resolves ida_funcs via sys.modules; mirror the
+        # idaapi.get_func miss (no scanned name is a function here).
+        ida_funcs = sys.modules["ida_funcs"]
+        ida_funcs.get_func = idaapi.get_func
+        ida_funcs.ida_idaapi = types.SimpleNamespace(BADADDR=BADADDR)
+        ida_funcs.func_entry_info_t = types.SimpleNamespace
+        ida_funcs.get_func_entry_info = lambda out, ea, flags=0: False
+        ida_funcs.get_prev_func = lambda ea: None
+        ida_funcs.get_next_func = lambda ea: None
+
         self.names = [
             (0x4000, "_ZTVN7android14SystemKloProxyE"),
             (0x3000, "sub_1234"),

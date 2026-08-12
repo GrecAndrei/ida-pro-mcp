@@ -51,22 +51,23 @@ def _gather_governance_metadata(action: str, ea: int, value: str) -> dict:
 
     if action in ("patch_asm", "patch_bytes"):
         # Check if address is in import/plt section or executable code
-        seg = ida_segment.getseg(ea)
+        seg = _compat.get_segment(ea)
         if seg:
             sname = _compat.get_segment_name(ea)
             metadata["section_type"] = sname or ""
             metadata["is_import_addr"] = sname in (".idata", ".plt", ".edata", ".iat")
             # Patching bytes in an executable section rewrites code flow.
-            executable = (getattr(seg, "perm", 0) & getattr(ida_segment, "SEGPERM_X", 1)) != 0
+            executable = (_compat.get_segment_perm(ea) or 0) & getattr(ida_segment, "SEGPERM_X", 1) != 0
             if executable or sname in (".text", ".code"):
                 metadata["modifies_control_flow"] = True
 
     elif action in ("rename", "rename_local"):
-        fn = ida_funcs.get_func(ea)
+        fn = _compat.get_func_info(ea)
         if fn:
+            flags = _compat.get_func_flags(ea)
             # FLIRT-identified library functions are marked FUNC_LIB; FUNC_THUNK
             # only denotes jump stubs (which are not FLIRT matches).
-            metadata["is_library_function"] = (fn.flags & ida_funcs.FUNC_LIB) != 0
+            metadata["is_library_function"] = ((flags or 0) & ida_funcs.FUNC_LIB) != 0
             # Gather API calls for misleading rename check
             api_calls = []
             for head in idautils.Heads(fn.start_ea, fn.end_ea):
@@ -83,8 +84,7 @@ def _gather_governance_metadata(action: str, ea: int, value: str) -> dict:
                     metadata["arg_count"] = fi.size()
 
     elif action == "set_type":
-        fn = ida_funcs.get_func(ea)
-        if fn:
+        if _compat.get_func_start(ea) is not None:
             metadata["targets_stack"] = True
             # Heuristic: if the type string mentions frame size changes
             metadata["changes_frame_size"] = "__frame" in value or "__sp" in value
@@ -103,18 +103,18 @@ def _persist_symbol_knowledge(func_ea: int, name: str) -> None:
             from host.stores.symbol_db import SymbolDB  # type: ignore
         except Exception:
             return
-    fn = ida_funcs.get_func(func_ea)
-    if not fn:
+    fn = _compat.get_func_start(func_ea)
+    if fn is None:
         return
-    callers = sorted({ida_funcs.get_func(x).start_ea for x in idautils.CodeRefsTo(fn.start_ea, 0) if ida_funcs.get_func(x)})
+    callers = sorted({_compat.get_func_start(x) for x in idautils.CodeRefsTo(fn, 0) if _compat.get_func_start(x) is not None})
     callees = set()
-    for item_ea in idautils.FuncItems(fn.start_ea):
+    for item_ea in idautils.FuncItems(fn):
         for ref in idautils.CodeRefsFrom(item_ea, 0):
-            cf = ida_funcs.get_func(ref)
-            if cf and cf.start_ea != fn.start_ea:
-                callees.add(cf.start_ea)
+            cf = _compat.get_func_start(ref)
+            if cf is not None and cf != fn:
+                callees.add(cf)
     strs = []
-    for item_ea in idautils.FuncItems(fn.start_ea):
+    for item_ea in idautils.FuncItems(fn):
         for ref in idautils.DataRefsFrom(item_ea):
             s = idc.get_strlit_contents(ref, -1, idc.STRTYPE_C)
             if not s:
@@ -134,7 +134,7 @@ def _persist_symbol_knowledge(func_ea: int, name: str) -> None:
             {
                 "symbol_name": name,
                 "source_binary": idc.get_idb_path() or "",
-                "source_addr": hex(fn.start_ea),
+                "source_addr": hex(fn),
                 "fingerprint": fingerprint,
                 "callgraph_hash": callgraph_hash,
                 "strings": strs,
@@ -448,11 +448,11 @@ def modify(
             new_name = kwargs.get("new_name") or value
             if not var_name or not new_name:
                 return make_error(MCPError.INVALID_ARGS, "var_name and new_name required for rename_local")
-            func = idaapi.get_func(ea)
-            if not func:
+            func = _compat.get_func_start(ea)
+            if func is None:
                 return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
             try:
-                cfunc = ida_hexrays.decompile(func.start_ea)
+                cfunc = ida_hexrays.decompile(func)
                 if not cfunc:
                     return make_error(MCPError.IDA_ERROR, "Decompilation failed")
                 lvar = next((lv for lv in cfunc.lvars if lv.name == var_name), None)
@@ -475,8 +475,8 @@ def modify(
                         return False
 
                 modifier = _rename_modifier_t(var_name, new_name)
-                if ida_hexrays.modify_user_lvars(func.start_ea, modifier):
-                    return {"ok": True, "addr": hex(func.start_ea), "var": var_name, "new_name": new_name}
+                if ida_hexrays.modify_user_lvars(func, modifier):
+                    return {"ok": True, "addr": hex(func), "var": var_name, "new_name": new_name}
                 return make_error(MCPError.IDA_ERROR, f"Failed to rename '{var_name}' — variable may be optimized out")
             except Exception as e:
                 return handle_error(e, context="rename_local")

@@ -8,6 +8,15 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from .. import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 # ida_struct is the classic IDA 7/8 struct-editing module (add_struc_member,
 # del_struc_member, set_member_name, set_member_tinfo). IDA 9 merged it into
 # ida_typeinf and no longer ships an `ida_struct` module, so its absence is
@@ -55,7 +64,7 @@ def _is_data_location(ea: int) -> bool:
     items qualify.
     """
     try:
-        if ida_funcs.get_func(ea) is not None:
+        if _compat.get_func_start(ea) is not None:
             return False
         flags = ida_bytes.get_flags(ea)
         if not flags:
@@ -388,10 +397,10 @@ def types(
                                   "Check C syntax and ensure all referenced types exist.")
 
             apply_kind = kind
-            func = idaapi.get_func(ea)
+            func = _compat.get_func_start(ea)
 
             if not apply_kind:
-                apply_kind = "function" if func and func.start_ea == ea else "global"
+                apply_kind = "function" if func is not None and func == ea else "global"
 
             if apply_kind not in ("function", "global", "local"):
                 return make_error(
@@ -408,14 +417,14 @@ def types(
                 if not name:
                     return make_error(MCPError.INVALID_ARGS, "name required for local variable. "
                                       "Provide the local variable name as it appears in the decompiler.")
-                if not func:
+                if func is None:
                     return make_error(MCPError.FUNCTION_NOT_FOUND, f"Address {hex(ea)} is not inside a function. "
                                       "For local variables, addr must be within a recognized function.")
 
                 try:
-                    cfunc = ida_hexrays.decompile(func.start_ea)
+                    cfunc = ida_hexrays.decompile(func)
                     if not cfunc:
-                        return make_error(MCPError.IDA_ERROR, f"Decompilation failed at {hex(func.start_ea)}. "
+                        return make_error(MCPError.IDA_ERROR, f"Decompilation failed at {hex(func)}. "
                                           "Hex-Rays may not be available or the function is too complex.")
 
                     lvar_found = None
@@ -432,8 +441,8 @@ def types(
                         return make_error(MCPError.INVALID_ARGS, f"Local variable '{name}' not found in function. {hint}")
 
                     modifier = my_modifier_t(name, tif)
-                    if ida_hexrays.modify_user_lvars(func.start_ea, modifier):
-                        refresh_decompiler_ctext(func.start_ea)
+                    if ida_hexrays.modify_user_lvars(func, modifier):
+                        refresh_decompiler_ctext(func)
                         return {"ok": True, "addr": hex(ea), "var": name, "type": str(tif), "kind": "local"}
                     return make_error(MCPError.IDA_ERROR, f"Failed to modify local variable '{name}' type. "
                                       "The variable may be optimized out or the type is incompatible.")
@@ -524,7 +533,7 @@ def types(
             # Object-init pattern heuristic: detect allocator usage without
             # guessing sizes from call operands (often callee addresses).
             try:
-                fn = idaapi.get_func(ea)
+                fn = _compat.get_func_info(ea)
                 if fn:
                     alloc_hits = 0
                     for head in idautils.Heads(fn.start_ea, fn.end_ea):
@@ -897,9 +906,9 @@ def types(
 
                 if is_code_xref:
                     # Code origin: never mutate — record it as a call site.
-                    func = idaapi.get_func(frm)
-                    base_info["func"] = hex(func.start_ea) if func else ""
-                    base_info["func_name"] = ida_funcs.get_func_name(func.start_ea) if func else ""
+                    func = _compat.get_func_start(frm)
+                    base_info["func"] = hex(func) if func is not None else ""
+                    base_info["func_name"] = ida_funcs.get_func_name(func) if func is not None else ""
                     base_info["status"] = "referenced"
                     call_sites.append(base_info)
                     continue
@@ -1190,7 +1199,7 @@ def types(
                     idx += 1
                     continue
                 seen_targets.add(target)
-                func = idaapi.get_func(target)
+                func = _compat.get_func_info(target)
                 func_name = idc.get_name(target) or ""
                 demangled = func_name
                 # ida_nalt.demangle_name / get_short_name_synonym are absent or

@@ -52,15 +52,16 @@ def _get_exec_segments(addr):
         ea, err = validate_addr(addr)
         if err:
             return
-        seg = idaapi.getseg(ea)
-        if seg and (seg.perm & idaapi.SEGPERM_EXEC or seg.type == idaapi.SEG_CODE):
+        seg = _compat.get_segment(ea)
+        if seg and ((_compat.get_segment_perm(ea) & idaapi.SEGPERM_EXEC)
+                    or _compat.get_segment_type(ea) == idaapi.SEG_CODE):
             yield (seg.start_ea, seg.end_ea)
         return
     for seg_ea in idautils.Segments():
-        seg = idaapi.getseg(seg_ea)
+        seg = _compat.get_segment(seg_ea)
         if not seg:
             continue
-        if (seg.perm & idaapi.SEGPERM_EXEC) or seg.type == idaapi.SEG_CODE:
+        if (_compat.get_segment_perm(seg_ea) & idaapi.SEGPERM_EXEC) or _compat.get_segment_type(seg_ea) == idaapi.SEG_CODE:
             yield (seg.start_ea, seg.end_ea)
 
 
@@ -725,7 +726,7 @@ def _find_shellcode_space(addr, limit, _max_insns, _query):
     for seg_ea in idautils.Segments():
         if len(regions) >= limit:
             break
-        seg = idaapi.getseg(seg_ea)
+        seg = _compat.get_segment(seg_ea)
         if not seg:
             continue
         if addr is not None:
@@ -735,17 +736,18 @@ def _find_shellcode_space(addr, limit, _max_insns, _query):
             if not (seg.start_ea <= ea < seg.end_ea):
                 continue
         # Check for both write and execute permissions
-        has_write = bool(seg.perm & idaapi.SEGPERM_WRITE)
-        has_exec = bool(seg.perm & idaapi.SEGPERM_EXEC)
+        perm = _compat.get_segment_perm(seg_ea)
+        has_write = bool(perm & idaapi.SEGPERM_WRITE)
+        has_exec = bool(perm & idaapi.SEGPERM_EXEC)
         # Fallback: check segment type
-        if seg.type == idaapi.SEG_CODE:
+        if _compat.get_segment_type(seg_ea) == idaapi.SEG_CODE:
             has_exec = True
         if has_write and has_exec:
             name = _compat.get_segment_name(seg_ea) or ""
             perms = "{}{}{}".format(
-                "R" if seg.perm & idaapi.SEGPERM_READ else "-",
-                "W" if seg.perm & idaapi.SEGPERM_WRITE else "-",
-                "X" if seg.perm & idaapi.SEGPERM_EXEC else "-",
+                "R" if perm & idaapi.SEGPERM_READ else "-",
+                "W" if perm & idaapi.SEGPERM_WRITE else "-",
+                "X" if perm & idaapi.SEGPERM_EXEC else "-",
             )
             regions.append(f"{hex_ea(seg.start_ea)}-{hex_ea(seg.end_ea)}  {name}  {perms}  size={hex_size(seg.end_ea - seg.start_ea)}")
     return regions
@@ -815,20 +817,19 @@ def _detect_mitigations(addr, _limit, _max_insns, _query):
         got_plt = None
         got = None
         for seg_ea in idautils.Segments():
-            seg = idaapi.getseg(seg_ea)
-            if seg:
+            if _compat.get_segment(seg_ea):
                 name = _compat.get_segment_name(seg_ea) or ""
                 if name == ".got.plt":
-                    got_plt = seg
+                    got_plt = seg_ea
                 elif name == ".got":
-                    got = seg
-        if got_plt:
-            if got_plt.perm & 2:  # writable
+                    got = seg_ea
+        if got_plt is not None:
+            if (_compat.get_segment_perm(got_plt) or 0) & 2:  # writable
                 mitigations["RELRO"] = "partial"
             else:
                 mitigations["RELRO"] = "full"
-        elif got:
-            mitigations["RELRO"] = "full" if not (got.perm & 2) else "none"
+        elif got is not None:
+            mitigations["RELRO"] = "full" if not ((_compat.get_segment_perm(got) or 0) & 2) else "none"
         else:
             mitigations["RELRO"] = "unknown"
 
@@ -836,8 +837,8 @@ def _detect_mitigations(addr, _limit, _max_insns, _query):
         has_wx = False
         wx_mask = idaapi.SEGPERM_WRITE | idaapi.SEGPERM_EXEC
         for seg_ea in idautils.Segments():
-            seg = idaapi.getseg(seg_ea)
-            if seg and (seg.perm & wx_mask) == wx_mask:
+            perm = _compat.get_segment_perm(seg_ea)
+            if perm is not None and (perm & wx_mask) == wx_mask:
                 has_wx = True
                 break
         mitigations["NX"] = not has_wx

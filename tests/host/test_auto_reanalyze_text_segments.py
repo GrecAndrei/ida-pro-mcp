@@ -174,6 +174,10 @@ def _build_namespace():
         get_func_start=lambda ea: (
             idaapi.get_func(ea).start_ea if idaapi.get_func(ea) else None
         ),
+        get_segment=ida_segment.getseg,
+        get_segment_perm=lambda ea: (
+            ida_segment.getseg(ea).perm if ida_segment.getseg(ea) else None
+        ),
     )
     ida_funcs = types.SimpleNamespace(
         add_func=lambda *a, **k: True,
@@ -495,7 +499,8 @@ def test_segment_code_score_skips_non_exec_segments():
     """A segment without SEGPERM_EXEC must score 0/0/0 even if huge."""
     # .rodata: large but read-only
     rodata = _Seg(0x1A1980, 0x1D0CD9, ".rodata", 1)  # SEGPERM_READ=1, no EXEC
-    d, t, h = _segment_code_score(rodata)
+    _NS["idaapi"].getseg = _make_getseg({0x1A1980: rodata})
+    d, t, h = _segment_code_score(0x1A1980)
     assert d == 0
     assert t == 0
     assert h == 0
@@ -535,7 +540,8 @@ def test_segment_code_score_counts_code_heads():
     idc.get_item_size = fake_get_item_size
     idc.next_head = fake_next_head
 
-    d, t, h = _segment_code_score(text)
+    idaapi.getseg = _make_getseg({0x1000: text})
+    d, t, h = _segment_code_score(text.start_ea)
 
     # Total: 0x2000 - 0x1000 = 0x1000
     assert t == 0x1000

@@ -369,8 +369,8 @@ def data(
                         return False
                     if len(content) < min_len:
                         return False
-                    seg = idaapi.getseg(ea)
-                    if seg and (seg.perm & idaapi.SEGPERM_EXEC) and len(content) < 12:
+                    seg_perm = _compat.get_segment_perm(ea)
+                    if seg_perm is not None and (seg_perm & idaapi.SEGPERM_EXEC) and len(content) < 12:
                         return False
                     if len(content) < 20:
                         alnum_count = sum(

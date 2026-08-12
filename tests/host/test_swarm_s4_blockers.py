@@ -145,6 +145,22 @@ def _install_riscv_blob_fakes(chain_names):
     ida_funcs.get_next_func = get_next_func
     ida_funcs.get_func = get_func
     ida_funcs.get_func_name = get_func_name
+    # compat.get_prev/next_func_start resolve ida_funcs via sys.modules and, on
+    # the legacy branch, read .start_ea off a func_t-or-None — the idaapi-style
+    # int-EA/BADADDR walk must be wrapped (BADADDR -> None terminates the loop).
+    ida_funcs.get_prev_func = lambda ea: None
+    _real_get_next = get_next_func
+
+    def _get_next_func_t(ea):
+        next_ea = _real_get_next(ea)
+        if next_ea == idaapi.BADADDR:
+            return None
+        return types.SimpleNamespace(start_ea=next_ea, end_ea=next_ea + funcs.get(next_ea, {}).get("size", 0x40))
+
+    ida_funcs.get_next_func = _get_next_func_t
+    ida_funcs.ida_idaapi = types.SimpleNamespace(BADADDR=idaapi.BADADDR)
+    ida_funcs.func_entry_info_t = types.SimpleNamespace
+    ida_funcs.get_func_entry_info = lambda out, ea, flags=0: False
     idc.get_func_name = get_func_name  # code_helpers calls idc.get_func_name
     idautils.FuncItems = func_items
     idautils.CodeRefsFrom = code_refs_from

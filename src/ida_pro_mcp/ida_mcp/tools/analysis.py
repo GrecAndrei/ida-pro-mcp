@@ -1356,7 +1356,7 @@ def _raw_mapped_range():
     return None
 
 
-def _segment_code_score(seg) -> tuple[int, int, int]:
+def _segment_code_score(seg_ea: int) -> tuple[int, int, int]:
     """Return (defined_code_bytes, total_code_bytes, code_head_count) for a segment.
 
     The score is used by the auto-reanalysis logic to detect "loader finished but
@@ -1368,10 +1368,11 @@ def _segment_code_score(seg) -> tuple[int, int, int]:
     defined = 0
     total = 0
     heads = 0
+    seg = _compat.get_segment(seg_ea)
     if seg is None:
         return 0, 0, 0
     try:
-        if not (seg.perm & idaapi.SEGPERM_EXEC):
+        if not (_compat.get_segment_perm(seg_ea) & idaapi.SEGPERM_EXEC):
             return 0, 0, 0
     except Exception:
         return 0, 0, 0
@@ -1412,11 +1413,11 @@ def _find_text_segments() -> list[tuple[int, int, str]]:
     out: list[tuple[int, int, str]] = []
     seen: set[tuple[int, int]] = set()
     for seg_ea in idautils.Segments():
-        seg = idaapi.getseg(seg_ea)
+        seg = _compat.get_segment(seg_ea)
         if not seg:
             continue
         try:
-            if not (seg.perm & idaapi.SEGPERM_EXEC):
+            if not (_compat.get_segment_perm(seg_ea) & idaapi.SEGPERM_EXEC):
                 continue
         except Exception:
             continue
@@ -1498,7 +1499,7 @@ def _auto_reanalyze_text_segments(
         pass
     for s, _e, _name in ranges:
         try:
-            d, t, _h = _segment_code_score(idaapi.getseg(s))
+            d, t, _h = _segment_code_score(s)
             before_defined += d
             before_total += t
         except Exception:
@@ -1576,7 +1577,7 @@ def _auto_reanalyze_text_segments(
         pass
     for s, _e, _name in ranges:
         try:
-            d, t, h = _segment_code_score(idaapi.getseg(s))
+            d, t, h = _segment_code_score(s)
             after_defined += d
             after_total += t
             after_heads += h

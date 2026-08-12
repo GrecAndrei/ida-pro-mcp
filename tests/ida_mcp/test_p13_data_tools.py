@@ -246,6 +246,12 @@ class TestStringsPrintableGateNewlines(unittest.TestCase):
         sys.modules["idaapi"] = idaapi
         sys.modules["idc"] = idc
         sys.modules["idautils"] = idautils
+        # compat.get_segment_perm resolves ida_segment via sys.modules; mirror
+        # the idaapi.getseg miss (no segment covers the string EAs).
+        sys.modules["ida_segment"].getseg = idaapi.getseg
+        sys.modules["ida_segment"].ida_idaapi = types.SimpleNamespace(BADADDR=-1)
+        sys.modules["ida_segment"].segment_info_t = types.SimpleNamespace
+        sys.modules["ida_segment"].get_segment_info = lambda out, ea, flags=0: False
         overrides = {"idaapi": idaapi, "idc": idc, "idautils": idautils,
                      "_inf_filetype_id": lambda: 11}
         self.mod = load_tool_module("data", common_overrides=overrides)
@@ -337,6 +343,12 @@ class TestVtableBigEndian(unittest.TestCase):
         sys.modules["idc"] = idc
         sys.modules["ida_bytes"] = ida_bytes
         sys.modules["ida_nalt"] = ida_nalt
+        # compat.get_func_info resolves ida_funcs via sys.modules; mirror the
+        # idaapi.get_func miss (the vtable targets are data, not functions).
+        sys.modules["ida_funcs"].get_func = idaapi.get_func
+        sys.modules["ida_funcs"].ida_idaapi = types.SimpleNamespace(BADADDR=-1)
+        sys.modules["ida_funcs"].func_entry_info_t = types.SimpleNamespace
+        sys.modules["ida_funcs"].get_func_entry_info = lambda out, ea, flags=0: False
         overrides = {"idaapi": idaapi, "idc": idc, "ida_bytes": ida_bytes,
                      "ida_nalt": ida_nalt}
         self.mod = load_tool_module("types", common_overrides=overrides)

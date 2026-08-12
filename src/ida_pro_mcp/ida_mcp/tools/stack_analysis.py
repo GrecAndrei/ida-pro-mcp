@@ -4,6 +4,15 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from .. import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 try:
     import ida_struct
 except Exception:
@@ -353,8 +362,8 @@ def stack_analysis(
                     continue
                 xref_count = 0
                 for xref in idautils.XrefsTo(sym_ea, 0):
-                    ref_func = idaapi.get_func(xref.frm)
-                    if ref_func and ref_func.start_ea == func.start_ea:
+                    ref_func = _compat.get_func_start(xref.frm)
+                    if ref_func is not None and ref_func == func.start_ea:
                         has_canary = True
                         if "security_cookie" in sym.lower():
                             canary_type = "MSVC_security_cookie"
@@ -480,8 +489,8 @@ def stack_analysis(
                     continue
                 xref_count = 0
                 for xref in idautils.XrefsTo(sym_ea, 0):
-                    ref_func = idaapi.get_func(xref.frm)
-                    if ref_func and ref_func.start_ea == func.start_ea:
+                    ref_func = _compat.get_func_start(xref.frm)
+                    if ref_func is not None and ref_func == func.start_ea:
                         has_dynamic_alloc = True
                         alloca_calls.append({
                             "symbol": sym,
@@ -720,8 +729,8 @@ def stack_analysis(
                     continue
                 xref_count = 0
                 for xref in idautils.XrefsTo(sym_ea, 0):
-                    ref_func = idaapi.get_func(xref.frm)
-                    if ref_func and ref_func.start_ea == func.start_ea:
+                    ref_func = _compat.get_func_start(xref.frm)
+                    if ref_func is not None and ref_func == func.start_ea:
                         has_canary = True
                         break
                     xref_count += 1

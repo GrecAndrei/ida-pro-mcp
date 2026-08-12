@@ -99,6 +99,22 @@ def _setup_fake_ida(funcs_db: dict, xrefs_db: dict | None = None, strings_db: li
 
     ida_funcs.get_func = get_func
     ida_funcs.get_func_name = get_func_name
+    # compat.get_next_func_start resolves ida_funcs via sys.modules; mirror the
+    # idaapi.get_next_func walk as func_t-or-None (the legacy compat branch
+    # reads .start_ea off the returned object).
+    def get_next_func_t(ea):
+        next_ea = get_next_func(ea)
+        if next_ea == idaapi.BADADDR:
+            return None
+        f_info = funcs_db.get(next_ea) or {}
+        return FakeFunc(next_ea, f_info.get("size", 0x100))
+    ida_funcs.get_next_func = get_next_func_t
+    ida_funcs.get_prev_func = lambda ea: None
+    ida_funcs.ida_idaapi = types.SimpleNamespace(BADADDR=idaapi.BADADDR)
+    ida_funcs.func_entry_info_t = types.SimpleNamespace
+    ida_funcs.get_func_entry_info = lambda out, ea, flags=0: False
+    ida_funcs.get_func_flags = lambda ea: 0
+    ida_funcs.set_func_flags = lambda ea, flags: True
 
     # idautils — make Strings() subscriptable and iterable
     class FakeStringItem:

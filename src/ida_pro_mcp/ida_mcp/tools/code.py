@@ -11,6 +11,15 @@ try:
 except Exception:
     ida_ua = None  # type: ignore[assignment]
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from .. import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 try:
     from ida_pro_mcp.ida_mcp.support.arch_utils import detect_riscv_gp as _detect_riscv_gp
 except Exception:
@@ -349,7 +358,7 @@ def code(
                         # Fast disasm-only listing mode: no Hex-Rays decompile.
                         # Gives a cheap triage table over a whole opaque blob.
                         size = 0
-                        fobj = idaapi.get_func(func_ea)
+                        fobj = _compat.get_func_info(func_ea)
                         if fobj is not None:
                             size = int(getattr(fobj, "end_ea", func_ea)) - int(func_ea)
                         all_results.append({
@@ -444,13 +453,13 @@ def code(
                 func = idaapi.get_func(ea)
                 if not func:
                     # Find nearest function for better error
-                    prev_func = _get_prev_func(ea)
-                    next_func = _get_next_func(ea)
+                    prev_ea = _get_prev_func(ea)
+                    next_ea = _get_next_func(ea)
                     suggestion = ""
-                    if prev_func:
-                        suggestion = f" Try {hex_ea(prev_func.start_ea)} ({ida_funcs.get_func_name(prev_func.start_ea) or 'unnamed'})"
-                    elif next_func:
-                        suggestion = f" Try {hex_ea(next_func.start_ea)} ({ida_funcs.get_func_name(next_func.start_ea) or 'unnamed'})"
+                    if prev_ea is not None:
+                        suggestion = f" Try {hex_ea(prev_ea)} ({ida_funcs.get_func_name(prev_ea) or 'unnamed'})"
+                    elif next_ea is not None:
+                        suggestion = f" Try {hex_ea(next_ea)} ({ida_funcs.get_func_name(next_ea) or 'unnamed'})"
 
                     results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}.{suggestion}", details={"addr": addr}))
                     continue
@@ -544,13 +553,13 @@ def code(
             elif action == "decompile_chain":
                 func = idaapi.get_func(ea)
                 if not func:
-                    prev_func = _get_prev_func(ea)
-                    next_func = _get_next_func(ea)
+                    prev_ea = _get_prev_func(ea)
+                    next_ea = _get_next_func(ea)
                     suggestion = ""
-                    if prev_func:
-                        suggestion = f" Try {hex_ea(prev_func.start_ea)} ({ida_funcs.get_func_name(prev_func.start_ea) or 'unnamed'})"
-                    elif next_func:
-                        suggestion = f" Try {hex_ea(next_func.start_ea)} ({ida_funcs.get_func_name(next_func.start_ea) or 'unnamed'})"
+                    if prev_ea is not None:
+                        suggestion = f" Try {hex_ea(prev_ea)} ({ida_funcs.get_func_name(prev_ea) or 'unnamed'})"
+                    elif next_ea is not None:
+                        suggestion = f" Try {hex_ea(next_ea)} ({ida_funcs.get_func_name(next_ea) or 'unnamed'})"
                     results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}.{suggestion}", details={"addr": addr}))
                     continue
                 chain_depth = max(1, min(max_depth, 3))  # hard cap at 3
@@ -572,21 +581,21 @@ def code(
                     decompiled_callers = set()
                     all_caller_addrs = set()
                     for xref in idautils.CodeRefsTo(func.start_ea, 0):
-                        caller_fn = ida_funcs.get_func(xref)
-                        if not caller_fn:
+                        caller_fn = _compat.get_func_start(xref)
+                        if caller_fn is None:
                             continue
-                        all_caller_addrs.add(caller_fn.start_ea)
+                        all_caller_addrs.add(caller_fn)
                         if len(callers_ctx) >= chain_depth:
                             continue
-                        if caller_fn.start_ea in decompiled_callers:
+                        if caller_fn in decompiled_callers:
                             continue
-                        decompiled_callers.add(caller_fn.start_ea)
-                        ccfunc, _ = _decompile_with_diagnostics(caller_fn.start_ea)
+                        decompiled_callers.add(caller_fn)
+                        ccfunc, _ = _decompile_with_diagnostics(caller_fn)
                         if ccfunc:
                             pseudo_lines = str(ccfunc).splitlines()
                             callers_ctx.append({
-                                "addr": hex_ea(caller_fn.start_ea),
-                                "name": ida_funcs.get_func_name(caller_fn.start_ea),
+                                "addr": hex_ea(caller_fn),
+                                "name": ida_funcs.get_func_name(caller_fn),
                                 # First 8 lines only — enough for call context
                                 "pseudocode_head": "\n".join(pseudo_lines[:8]),
                                 "total_lines": len(pseudo_lines),
@@ -597,21 +606,21 @@ def code(
                     all_callee_addrs = set()
                     for item in idautils.FuncItems(func.start_ea):
                         for ref in idautils.CodeRefsFrom(item, 0):
-                            callee_fn = ida_funcs.get_func(ref)
-                            if not callee_fn:
+                            callee_fn = _compat.get_func_start(ref)
+                            if callee_fn is None:
                                 continue
-                            all_callee_addrs.add(callee_fn.start_ea)
+                            all_callee_addrs.add(callee_fn)
                             if len(callees_ctx) >= chain_depth:
                                 continue
-                            if callee_fn.start_ea in decompiled_callees:
+                            if callee_fn in decompiled_callees:
                                 continue
-                            decompiled_callees.add(callee_fn.start_ea)
-                            ccfunc, _ = _decompile_with_diagnostics(callee_fn.start_ea)
+                            decompiled_callees.add(callee_fn)
+                            ccfunc, _ = _decompile_with_diagnostics(callee_fn)
                             if ccfunc:
                                 pseudo_lines = str(ccfunc).splitlines()
                                 callees_ctx.append({
-                                    "addr": hex_ea(callee_fn.start_ea),
-                                    "name": ida_funcs.get_func_name(callee_fn.start_ea),
+                                    "addr": hex_ea(callee_fn),
+                                    "name": ida_funcs.get_func_name(callee_fn),
                                     "pseudocode_head": "\n".join(pseudo_lines[:8]),
                                     "total_lines": len(pseudo_lines),
                                 })
@@ -637,7 +646,7 @@ def code(
                     )
 
             elif action == "disasm":
-                func = idaapi.get_func(ea)
+                func = _compat.get_func_info(ea)
                 end_ea = None
                 if end:
                     end_ea, end_err = validate_addr(end)
@@ -780,8 +789,8 @@ def code(
                     if len(xref_lines) >= max_items:
                         break
                     kind = "code" if x.iscode else "data"
-                    fn = idaapi.get_func(x.frm)
-                    fn_name = ida_funcs.get_func_name(fn.start_ea) if fn else ""
+                    fn = _compat.get_func_start(x.frm)
+                    fn_name = ida_funcs.get_func_name(fn) if fn is not None else ""
                     xref_lines.append(f"{hex_ea(x.frm)}  {kind}  {fn_name}")
                 results.append({"ok": True, "addr": addr, "xrefs": "\n".join(xref_lines), "count": len(xref_lines)})
 
@@ -796,31 +805,31 @@ def code(
                 results.append({"ok": True, "addr": addr, "xrefs": "\n".join(xref_lines), "count": len(xref_lines)})
 
             elif action == "callees":
-                func = idaapi.get_func(ea)
-                if not func:
+                func = _compat.get_func_start(ea)
+                if func is None:
                     results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}", "Use 'funcs.create' to define a function here first"))
                     continue
                 callees = set()
-                for item in idautils.FuncItems(func.start_ea):
+                for item in idautils.FuncItems(func):
                     for xref in idautils.XrefsFrom(item, 0):
                         if xref.iscode:
-                            target_func = idaapi.get_func(xref.to)
-                            if target_func and target_func.start_ea != func.start_ea:
-                                callees.add((hex_ea(target_func.start_ea),
-                                            ida_funcs.get_func_name(target_func.start_ea)))
+                            target_func = _compat.get_func_start(xref.to)
+                            if target_func is not None and target_func != func:
+                                callees.add((hex_ea(target_func),
+                                            ida_funcs.get_func_name(target_func)))
                 callee_lines = [f"{a}  {n}" for a, n in sorted(callees)]
                 results.append({"ok": True, "addr": addr, "callees": "\n".join(callee_lines), "count": len(callee_lines)})
 
             elif action == "callers":
-                func = idaapi.get_func(ea)
-                start = func.start_ea if func else ea
+                func = _compat.get_func_start(ea)
+                start = func if func is not None else ea
                 callers = set()
                 for xref in idautils.XrefsTo(start, 0):
                     if xref.iscode:
-                        caller_func = idaapi.get_func(xref.frm)
-                        if caller_func:
-                            callers.add((hex_ea(caller_func.start_ea),
-                                        ida_funcs.get_func_name(caller_func.start_ea)))
+                        caller_func = _compat.get_func_start(xref.frm)
+                        if caller_func is not None:
+                            callers.add((hex_ea(caller_func),
+                                        ida_funcs.get_func_name(caller_func)))
                 caller_lines = [f"{a}  {n}" for a, n in sorted(callers)]
                 results.append({"ok": True, "addr": addr, "callers": "\n".join(caller_lines), "count": len(caller_lines)})
 
@@ -843,13 +852,13 @@ def code(
 
             elif action == "callgraph":
                 # BFS for call graph
-                func = idaapi.get_func(ea)
-                if not func:
+                func = _compat.get_func_start(ea)
+                if func is None:
                     results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
                     continue
 
-                visited = {func.start_ea: 0}
-                queue = [(func.start_ea, 0)]
+                visited = {func: 0}
+                queue = [(func, 0)]
                 edge_set = set()
 
                 while queue and len(edge_set) < max_items:
@@ -860,9 +869,9 @@ def code(
                     for item_ea in idautils.FuncItems(curr_ea):
                         for xref in idautils.XrefsFrom(item_ea, 0):
                             if xref.iscode:
-                                tf = idaapi.get_func(xref.to)
-                                if tf and tf.start_ea != curr_ea:
-                                    target_ea = tf.start_ea
+                                tf = _compat.get_func_start(xref.to)
+                                if tf is not None and tf != curr_ea:
+                                    target_ea = tf
                                     edge_set.add((curr_ea, target_ea))
                                     if target_ea not in visited:
                                         visited[target_ea] = dist + 1
@@ -871,7 +880,7 @@ def code(
                 # Compact: nodes with depth, then edges
                 node_lines = [f"{hex_ea(k)}  depth={v}  {ida_funcs.get_func_name(k)}" for k, v in sorted(visited.items(), key=lambda x: x[1])]
                 edge_lines = [f"{hex_ea(c)} -> {hex_ea(t)}" for c, t in sorted(edge_set)]
-                results.append({"ok": True, "addr": hex_ea(func.start_ea), "nodes": "\n".join(node_lines), "edges": "\n".join(edge_lines)})
+                results.append({"ok": True, "addr": hex_ea(func), "nodes": "\n".join(node_lines), "edges": "\n".join(edge_lines)})
 
             elif action == "export":
                 # Export function info
@@ -1059,15 +1068,15 @@ def code(
 
                     # Get succs
                     succs = []
-                    func = idaapi.get_func(curr) # if callgraph
-                    if func:
+                    func = _compat.get_func_start(curr) # if callgraph
+                    if func is not None:
                         # Intra-procedural flow? Or callgraph? Let's do callgraph for now as it's more useful typically
-                        for item in idautils.FuncItems(func.start_ea):
+                        for item in idautils.FuncItems(func):
                             for xref in idautils.XrefsFrom(item, 0):
                                 if xref.iscode:
-                                    tf = idaapi.get_func(xref.to)
-                                    if tf and tf.start_ea != func.start_ea:
-                                        succs.append(tf.start_ea)
+                                    tf = _compat.get_func_start(xref.to)
+                                    if tf is not None and tf != func:
+                                        succs.append(tf)
 
                     for s in succs:
                         if s == target_ea:
@@ -1083,12 +1092,12 @@ def code(
                 results.append({"ok": True, "from": addr, "to": target, "paths": paths})
 
             elif action == "strings_in_func":
-                func = idaapi.get_func(ea)
-                if not func:
+                func = _compat.get_func_start(ea)
+                if func is None:
                     results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
                     continue
 
-                entries = _collect_function_string_entries(func.start_ea, result_limit=max_items)
+                entries = _collect_function_string_entries(func, result_limit=max_items)
                 str_lines = [f"{e['addr']}  {e['value']}" for e in entries]
                 entry: dict = {
                     "ok": True,
@@ -1169,7 +1178,7 @@ def code(
                 }
 
             elif action == "semantic_decompile":
-                func = idaapi.get_func(ea)
+                func = _compat.get_func_info(ea)
                 if not func:
                     results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
                     continue
@@ -1194,11 +1203,11 @@ def code(
                 )
 
             elif action == "decomp_dataflow":
-                func = idaapi.get_func(ea)
-                if not func:
+                func = _compat.get_func_start(ea)
+                if func is None:
                     results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
                     continue
-                cfunc, dec_err = _decompile_with_diagnostics(func.start_ea)
+                cfunc, dec_err = _decompile_with_diagnostics(func)
                 if not cfunc:
                     results.append(_decompile_error_entry(addr, dec_err))
                     continue
@@ -1210,8 +1219,8 @@ def code(
                 results.append(
                     {
                         "ok": True,
-                        "addr": hex_ea(func.start_ea),
-                        "function": ida_funcs.get_func_name(func.start_ea),
+                        "addr": hex_ea(func),
+                        "function": ida_funcs.get_func_name(func),
                         "dataflow": flow,
                         "edges": "\n".join(edge_lines),
                         "count": len(flow.get("edges", [])),
@@ -1223,7 +1232,7 @@ def code(
                 # Returns pseudocode + behavior_tags + api_calls + crypto_hints +
                 # dangerous_patterns + var_rename_hints + callers + callees +
                 # strings + blackboard_context + complexity + suggested_next_actions.
-                func = idaapi.get_func(ea)
+                func = _compat.get_func_info(ea)
                 if not func:
                     results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
                     continue
@@ -1317,7 +1326,7 @@ def code(
                 # Plain-English explanation of what a function does.
                 # Decompiles, extracts signals, and synthesizes a structured summary
                 # without requiring the LLM to read raw pseudocode.
-                func = idaapi.get_func(ea)
+                func = _compat.get_func_info(ea)
                 if not func:
                     results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
                     continue

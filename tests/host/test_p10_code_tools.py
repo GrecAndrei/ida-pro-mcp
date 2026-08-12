@@ -95,9 +95,10 @@ class TestDetectTypeMatchesUsesGetTinfo(unittest.TestCase):
         def _get_next_func(ea):
             for f in _funcs:
                 if f > ea:
-                    return f
+                    return types.SimpleNamespace(start_ea=f)
             return None
         ida_funcs.get_next_func = _get_next_func
+        ida_funcs.get_prev_func = lambda ea: None
 
         ida_typeinf = _make_minimal_module("ida_typeinf")
         ida_typeinf.tinfo_t = lambda: types.SimpleNamespace(
@@ -249,6 +250,14 @@ class TestFindPathsMultiplePaths(unittest.TestCase):
         # Call graph: 0x401000 -> 0x402000 and 0x401000 -> 0x403000 -> 0x402000
         idaapi.get_func = lambda ea: _make_func(start_ea=ea)
 
+        ida_funcs = _make_minimal_module("ida_funcs")
+        # compat.get_func_start resolves ida_funcs via sys.modules; mirror the
+        # idaapi.get_func mock plus the 9.4 EA surface.
+        ida_funcs.get_func = idaapi.get_func
+        ida_funcs.ida_idaapi = types.SimpleNamespace(BADADDR=idaapi.BADADDR)
+        ida_funcs.func_entry_info_t = types.SimpleNamespace
+        ida_funcs.get_func_entry_info = lambda out, ea, flags=0: False
+
         idautils = _make_minimal_module("idautils")
         idautils.FuncItems = lambda start: iter([start])
 
@@ -262,9 +271,12 @@ class TestFindPathsMultiplePaths(unittest.TestCase):
 
         _install_base_sys_modules()
         sys.modules["idaapi"] = idaapi
+        sys.modules["ida_funcs"] = ida_funcs
         sys.modules["idautils"] = idautils
-        install_common_stub({"idaapi": idaapi, "idautils": idautils})
+        install_common_stub({"idaapi": idaapi, "ida_funcs": ida_funcs,
+                             "idautils": idautils})
         self.mod = load_tool_module("code", common_overrides={"idaapi": idaapi,
+                                                              "ida_funcs": ida_funcs,
                                                               "idautils": idautils})
 
     def test_multiple_paths_returned(self):
@@ -402,6 +414,10 @@ class TestDisasmWindowStructuredRejected(unittest.TestCase):
         idaapi.get_func = lambda ea: _make_func(start_ea=ea, end_ea=ea + 0x20)
         ida_funcs = _make_minimal_module("ida_funcs")
         ida_funcs.get_func_name = lambda ea: f"fn_{ea:x}"
+        # code.py's disasm action resolves get_func through _compat, which
+        # reads sys.modules["ida_funcs"] at call time — expose the legacy
+        # get_func there (mirrors idaapi.get_func).
+        ida_funcs.get_func = idaapi.get_func
         idautils = _make_minimal_module("idautils")
         idautils.Functions = lambda: iter([0x401000])
         idautils.FuncItems = lambda start: iter([start])

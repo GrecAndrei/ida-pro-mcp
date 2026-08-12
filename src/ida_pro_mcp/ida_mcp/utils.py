@@ -37,6 +37,15 @@ import idaapi
 import idautils
 import idc
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from . import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 from ida_pro_mcp.services import parse_str_list
 
 # Support both package mode and standalone mode
@@ -149,14 +158,14 @@ def resolve_symbol(query: str) -> dict:
         if looks_like_address(str(query)):
             ea = parse_address(str(query))
             name = idc.get_name(ea) or ""
-            func = idaapi.get_func(ea)
+            func = _compat.get_func_start(ea)
             return {"addr": hex(ea), "name": name, "is_func": func is not None}
     except Exception:
         pass
     # Try as exact name
     ea = idc.get_name_ea_simple(str(query))
     if ea != idaapi.BADADDR:
-        func = idaapi.get_func(ea)
+        func = _compat.get_func_start(ea)
         return {"addr": hex(ea), "name": str(query), "is_func": func is not None}
     # Try demangled C++ name (e.g. "vtable for android::SystemKloProxy").
     # NOTE: ida_name.get_ea's flags param is for SN_* name-search flags, not
@@ -169,7 +178,7 @@ def resolve_symbol(query: str) -> dict:
         for ea, name in idautils.Names():
             dname = ida_name.demangle_name(name, ida_name.MNG_LONG_FORM)
             if dname and dname == clean:
-                func = idaapi.get_func(ea)
+                func = _compat.get_func_start(ea)
                 return {"addr": hex(ea), "name": name, "is_func": func is not None}
     except Exception:
         pass
@@ -177,7 +186,7 @@ def resolve_symbol(query: str) -> dict:
     clean = str(query).strip()
     for ea, name in idautils.Names():
         if name == clean:
-            func = idaapi.get_func(ea)
+            func = _compat.get_func_start(ea)
             return {"addr": hex(ea), "name": name, "is_func": func is not None}
     raise IDAError(f"Not found: {query}")
 

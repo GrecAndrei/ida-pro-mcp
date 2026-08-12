@@ -117,9 +117,9 @@ def _build_function_structure_summary(func, cfunc=None, max_items=12, details=Fa
     try:
         for item_ea in idautils.FuncItems(func.start_ea):
             for target in idautils.CodeRefsFrom(item_ea, 0):
-                target_func = ida_funcs.get_func(target)
-                if target_func and target_func.start_ea != func.start_ea:
-                    name = ida_funcs.get_func_name(target_func.start_ea) or hex_ea(target_func.start_ea)
+                target_func = _compat.get_func_start(target)
+                if target_func is not None and target_func != func.start_ea:
+                    name = ida_funcs.get_func_name(target_func) or hex_ea(target_func)
                     if name not in call_targets:
                         call_targets.append(name)
                         if len(call_targets) >= max_items:
@@ -333,13 +333,13 @@ def _semantic_pseudocode_summary(pseudocode):
 
 
 def _get_prev_func(ea: int):
-    getter = getattr(ida_funcs, "get_prev_func", None) or getattr(idaapi, "get_prev_func", None)
-    return getter(ea) if getter else None
+    """Start EA of the last function before ``ea``, or None (all IDA versions)."""
+    return _compat.get_prev_func_start(ea)
 
 
 def _get_next_func(ea: int):
-    getter = getattr(ida_funcs, "get_next_func", None) or getattr(idaapi, "get_next_func", None)
-    return getter(ea) if getter else None
+    """Start EA of the next function after ``ea``, or None (all IDA versions)."""
+    return _compat.get_next_func_start(ea)
 
 
 def _extract_var_rename_hints(cfunc) -> list:
@@ -532,7 +532,7 @@ def _detect_firmware_signals(func_start_ea: int, pseudo: str = "") -> list[str]:
     """
     signals: list[str] = []
     try:
-        func = ida_funcs.get_func(func_start_ea)
+        func = _compat.get_func_info(func_start_ea)
         if not func:
             return signals
         is_rv = is_riscv_family()
@@ -1123,9 +1123,9 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
             # Check if function is called from network-facing code
             caller_funcs = set()
             for ref_ea in idautils.CodeRefsTo(func_ea, 0):
-                caller_func = ida_funcs.get_func(ref_ea)
-                if caller_func:
-                    caller_name = ida_funcs.get_func_name(caller_func.start_ea) or ""
+                caller_func = _compat.get_func_start(ref_ea)
+                if caller_func is not None:
+                    caller_name = ida_funcs.get_func_name(caller_func) or ""
                     caller_funcs.add(caller_name)
             # If callers include network/socket functions, flag as network-reachable
             network_callers = [c for c in caller_funcs if any(kw in c.lower() for kw in ("recv", "socket", "handle", "dispatch", "process", "parse", "http", "tcp", "udp", "server"))]
@@ -1146,9 +1146,9 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
 
     # --- Segment analysis: writable segments with executable permissions ---
     try:
-        seg = ida_segment.getseg(func_ea)
-        if seg:
-            perms = int(getattr(seg, "perm", 0) or 0)
+        seg_perm = _compat.get_segment_perm(func_ea)
+        if seg_perm is not None:
+            perms = int(seg_perm)
             # Check if code is in a writable segment (shellcode/ROP)
             if perms & idaapi.SEGPERM_WRITE and perms & idaapi.SEGPERM_EXEC:
                 seg_name = _compat.get_segment_name(func_ea) or ""
@@ -1316,8 +1316,7 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
                         mem_ea = idc.get_operand_value(dea, i)
                         if mem_ea and mem_ea != idaapi.BADADDR:
                             # Check if global is writable
-                            seg = ida_segment.getseg(mem_ea)
-                            if seg and int(getattr(seg, "perm", 0) or 0) & idaapi.SEGPERM_WRITE:
+                            if (_compat.get_segment_perm(mem_ea) or 0) & idaapi.SEGPERM_WRITE:
                                 seg_name = _compat.get_segment_name(mem_ea) or ""
                                 findings.append({"severity": "medium", "pattern": "global_writable_ref",
                                                  "evidence": f"operand references writable global at {hex_ea(mem_ea)} (seg '{seg_name}') from {hex_ea(dea)}",
@@ -1381,10 +1380,10 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
             ref_count = 0
             ref_funcs = set()
             for xref_ea in idautils.XrefsTo(str_ea):
-                xref_func = ida_funcs.get_func(xref_ea.frm)
-                if xref_func and int(xref_func.start_ea) != func_ea:
+                xref_func = _compat.get_func_start(xref_ea.frm)
+                if xref_func is not None and int(xref_func) != func_ea:
                     ref_count += 1
-                    ref_name = ida_funcs.get_func_name(xref_func.start_ea) or hex_ea(xref_func.start_ea)
+                    ref_name = ida_funcs.get_func_name(xref_func) or hex_ea(xref_func)
                     ref_funcs.add(ref_name)
                     if ref_count >= 5:
                         break
@@ -1424,8 +1423,7 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
                             target = idc.get_operand_value(last_ea, 0)
                             if target and target != idaapi.BADADDR:
                                 # Check if target is in a writable segment
-                                seg = ida_segment.getseg(target)
-                                if seg and int(getattr(seg, "perm", 0) or 0) & idaapi.SEGPERM_WRITE:
+                                if (_compat.get_segment_perm(target) or 0) & idaapi.SEGPERM_WRITE:
                                     findings.append({"severity": "high", "pattern": "arm_branch_to_writable",
                                                      "evidence": f"{mnem} to {hex_ea(target)} (writable) at {hex_ea(last_ea)}",
                                                      "detail": "ARM branch to writable memory — code execution hijack via buffer overflow"})
@@ -1451,8 +1449,7 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
 
         elif "x86" in proc_lower or "metapc" in proc_lower:
             # x86: check for segment override in dangerous calls
-            func_obj = ida_funcs.get_func(func_ea)
-            if func_obj:
+            if _compat.get_func_start(func_ea) is not None:
                 # Check if function uses FS/GS segment (SEH, TEB access)
                 uses_seh = False
                 for item_ea in idautils.FuncItems(func_ea):
@@ -1626,11 +1623,11 @@ def _collect_compact_callers(func_start_ea: int, *, scan_limit: int = 30, result
     for i, xref in enumerate(idautils.CodeRefsTo(func_start_ea, 0)):
         if i >= scan_limit:
             break
-        cf = ida_funcs.get_func(xref)
-        if not cf or cf.start_ea in seen:
+        cf = _compat.get_func_start(xref)
+        if cf is None or cf in seen:
             continue
-        seen.add(cf.start_ea)
-        callers_compact.append({"addr": hex_ea(cf.start_ea), "name": ida_funcs.get_func_name(cf.start_ea)})
+        seen.add(cf)
+        callers_compact.append({"addr": hex_ea(cf), "name": ida_funcs.get_func_name(cf)})
         if len(callers_compact) >= result_limit:
             break
     return callers_compact
@@ -1641,11 +1638,11 @@ def _collect_compact_callees(func_start_ea: int, *, result_limit: int = 8) -> li
     seen = set()
     for item in idautils.FuncItems(func_start_ea):
         for ref in idautils.CodeRefsFrom(item, 0):
-            cf = ida_funcs.get_func(ref)
-            if not cf or cf.start_ea in seen:
+            cf = _compat.get_func_start(ref)
+            if cf is None or cf in seen:
                 continue
-            seen.add(cf.start_ea)
-            callees_compact.append({"addr": hex_ea(cf.start_ea), "name": ida_funcs.get_func_name(cf.start_ea)})
+            seen.add(cf)
+            callees_compact.append({"addr": hex_ea(cf), "name": ida_funcs.get_func_name(cf)})
             if len(callees_compact) >= result_limit:
                 break
         if len(callees_compact) >= result_limit:
@@ -1700,7 +1697,7 @@ def _scan_constant_load_strings(func_start_ea: int, result_limit: int = 10) -> l
     """
     results: list[dict] = []
     try:
-        func = ida_funcs.get_func(func_start_ea)
+        func = _compat.get_func_info(func_start_ea)
         if not func:
             return results
         regs: dict[str, int] = {}
@@ -1952,7 +1949,7 @@ def _decompile_with_diagnostics(func_ea: int):
             failure_code = getattr(failure, "code", None)
             if failure_code is not None:
                 try:
-                    fn = ida_funcs.get_func(func_ea)
+                    fn = _compat.get_func_info(func_ea)
                     if fn:
                         import ida_auto as _ida_auto
                         if hasattr(_ida_auto, "plan_range"):
@@ -2390,10 +2387,9 @@ def _trace_argument_origin(func, arg_index, max_depth, max_callers_per_level):
             for xr in idautils.XrefsTo(func_ea, 0):
                 if not xr.iscode:
                     continue
-                caller_func = idaapi.get_func(xr.frm)
-                if not caller_func:
+                caller_ea = _compat.get_func_start(xr.frm)
+                if caller_ea is None:
                     continue
-                caller_ea = caller_func.start_ea
                 caller_name = ida_funcs.get_func_name(caller_ea) or hex(caller_ea)
                 call_site = hex(xr.frm)
 
@@ -2468,16 +2464,16 @@ def gather_function_context(func_ea: int, max_refs: int = 10) -> dict:
     """Gather compact inline context for a function: callers, callees, strings, xrefs."""
     ctx: dict[str, Any] = {}
     try:
-        func = ida_funcs.get_func(func_ea)
-        if not func:
+        func_start = _compat.get_func_start(func_ea)
+        if func_start is None:
             return ctx
         # Callers
         callers = []
-        ref = idaapi.get_first_cref_to(func.start_ea)
+        ref = idaapi.get_first_cref_to(func_start)
         while ref and ref != idaapi.BADADDR and len(callers) < max_refs:
-            caller_func = ida_funcs.get_func(ref)
-            if caller_func:
-                cname = ida_funcs.get_func_name(caller_func.start_ea) or hex_ea(caller_func.start_ea)
+            caller_func = _compat.get_func_start(ref)
+            if caller_func is not None:
+                cname = ida_funcs.get_func_name(caller_func) or hex_ea(caller_func)
                 if cname not in callers:
                     callers.append(cname)
             ref = idaapi.get_next_cref_to(func.start_ea, ref)
@@ -2490,9 +2486,9 @@ def gather_function_context(func_ea: int, max_refs: int = 10) -> dict:
         while ea != idaapi.BADADDR and len(callees) < max_refs:
             cref = idaapi.get_first_cref_from(ea)
             while cref and cref != idaapi.BADADDR and len(callees) < max_refs:
-                callee_func = ida_funcs.get_func(cref)
-                if callee_func and callee_func.start_ea != func.start_ea:
-                    cname = ida_funcs.get_func_name(callee_func.start_ea) or hex_ea(callee_func.start_ea)
+                callee_func = _compat.get_func_start(cref)
+                if callee_func is not None and callee_func != func.start_ea:
+                    cname = ida_funcs.get_func_name(callee_func) or hex_ea(callee_func)
                     if cname not in callees:
                         callees.append(cname)
                 cref = idaapi.get_next_cref_from(ea, cref)
@@ -2665,11 +2661,11 @@ def _function_may_reference_apis(func_ea: int, api_names: set, api_ea_set: set) 
     dropped legitimate api_chain matches.
     """
     try:
-        func = ida_funcs.get_func(func_ea)
-        if not func:
+        func = _compat.get_func_start(func_ea)
+        if func is None:
             return True  # cannot inspect; decompile() yields no cfunc either
         scan_count = 0
-        for item_ea in idautils.FuncItems(func.start_ea):
+        for item_ea in idautils.FuncItems(func):
             scan_count += 1
             if scan_count > 4000:
                 return True  # too large to scan fully — cannot rule out a match
@@ -2811,13 +2807,13 @@ def _detect_string_refs(pattern: str, *, max_items: int = 100) -> list[dict]:
             continue
         # Find functions referencing this string
         for xref_ea in idautils.XrefsTo(s_ea):
-            func = ida_funcs.get_func(xref_ea.frm)
-            if func:
-                fname = ida_funcs.get_func_name(func.start_ea) or hex_ea(func.start_ea)
+            func = _compat.get_func_start(xref_ea.frm)
+            if func is not None:
+                fname = ida_funcs.get_func_name(func) or hex_ea(func)
                 if fname in seen:
                     continue
                 seen.add(fname)
-                matches.append({"addr": hex_ea(func.start_ea), "name": fname,
+                matches.append({"addr": hex_ea(func), "name": fname,
                                 "string": content[:80], "string_addr": hex_ea(s_ea)})
                 if len(matches) >= max_items:
                     return matches
@@ -2864,11 +2860,11 @@ def _detect_xor_heavy(*, threshold: int = 4, max_items: int = 100) -> list[dict]
         if len(matches) >= max_items:
             break
         try:
-            func = ida_funcs.get_func(func_ea)
-            if not func:
+            func = _compat.get_func_start(func_ea)
+            if func is None:
                 continue
             xor_count = 0
-            for item_ea in idautils.FuncItems(func.start_ea):
+            for item_ea in idautils.FuncItems(func):
                 mnem = idc.print_insn_mnem(item_ea) or ""
                 if mnem.upper() in ("XOR", "EOR", "XORI"):
                     xor_count += 1
@@ -2893,20 +2889,20 @@ def _detect_callers_of(target: str, *, max_items: int = 100) -> list[dict]:
     if target_ea == idaapi.BADADDR:
         return []
 
-    func = ida_funcs.get_func(target_ea)
-    if not func:
+    func = _compat.get_func_start(target_ea)
+    if func is None:
         return []
 
     matches = []
     seen = set()
-    for item_ea in idautils.FuncItems(func.start_ea):
+    for item_ea in idautils.FuncItems(func):
         for ref_ea in idautils.CodeRefsFrom(item_ea, 0):
-            callee_func = ida_funcs.get_func(ref_ea)
-            if callee_func and callee_func.start_ea != func.start_ea:
-                cname = idc.get_func_name(callee_func.start_ea) or hex_ea(callee_func.start_ea)
+            callee_func = _compat.get_func_start(ref_ea)
+            if callee_func is not None and callee_func != func:
+                cname = idc.get_func_name(callee_func) or hex_ea(callee_func)
                 if cname not in seen:
                     seen.add(cname)
-                    matches.append({"addr": hex_ea(callee_func.start_ea), "name": cname})
+                    matches.append({"addr": hex_ea(callee_func), "name": cname})
                     if len(matches) >= max_items:
                         return matches
     return matches
@@ -2926,12 +2922,12 @@ def _detect_callees_of(target: str, *, max_items: int = 100) -> list[dict]:
     matches = []
     seen = set()
     for ref_ea in idautils.CodeRefsTo(target_ea, 0):
-        caller_func = ida_funcs.get_func(ref_ea)
-        if caller_func:
-            fname = idc.get_func_name(caller_func.start_ea) or hex_ea(caller_func.start_ea)
+        caller_func = _compat.get_func_start(ref_ea)
+        if caller_func is not None:
+            fname = idc.get_func_name(caller_func) or hex_ea(caller_func)
             if fname not in seen:
                 seen.add(fname)
-                matches.append({"addr": hex_ea(caller_func.start_ea), "name": fname})
+                matches.append({"addr": hex_ea(caller_func), "name": fname})
                 if len(matches) >= max_items:
                     return matches
     return matches
@@ -2941,10 +2937,5 @@ def _iter_all_functions():
     """Iterate over all function EAs in the binary."""
     ea = _get_next_func(0)
     while ea is not None:
-        # IDA 9.x get_next_func returns an EA; older bindings may return a
-        # func_t object — normalize both to an int EA.
-        start = ea if isinstance(ea, int) else int(getattr(ea, "start_ea", idaapi.BADADDR))
-        if start == idaapi.BADADDR:
-            break
-        yield start
-        ea = _get_next_func(start)
+        yield ea
+        ea = _get_next_func(ea)
