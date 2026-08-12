@@ -709,8 +709,6 @@ def _carve(start, end, name, sclass, limit, kwargs):
                           f"Address {hex(s_ea)} already belongs to segment "
                           f"'{_compat.get_segment_name(s_ea)}'")
 
-    seg = idaapi.segment_t()
-    seg.start_ea, seg.end_ea = s_ea, e_ea
     # Derive permissions from the segment class (mirrors segments.add) so a code
     # carve on an opaque blob is actually analyzed as code.
     perm = getattr(idaapi, "SEGPERM_READ", 1)
@@ -718,8 +716,7 @@ def _carve(start, end, name, sclass, limit, kwargs):
         perm |= getattr(idaapi, "SEGPERM_EXEC", 4)
     elif sclass_upper == "BSS":
         perm |= getattr(idaapi, "SEGPERM_WRITE", 2)
-    seg.perm = perm
-    if not idaapi.add_segm_ex(seg, seg_name, sclass, 0):
+    if not _compat.add_segment(s_ea, e_ea, seg_name, sclass, perm):
         return make_error(MCPError.IDA_ERROR,
                           f"Failed to carve segment '{seg_name}' at {hex(s_ea)}-{hex(e_ea)}")
 

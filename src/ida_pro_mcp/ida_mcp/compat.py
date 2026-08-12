@@ -203,6 +203,77 @@ def get_segment_bitness(ea):
     return _segment_attr(ea, "get_bitness", "bitness")
 
 
+def get_segment_comb(ea):
+    """Combination flags of the segment containing ``ea`` (or None)."""
+    return _segment_attr(ea, "get_comb", "comb")
+
+
+def get_segment_color(ea):
+    """Display color of the segment containing ``ea`` (or None)."""
+    return _segment_attr(ea, "get_color", "color")
+
+
+def set_segment_attr(ea, attr, int_val):
+    """Set a numeric segment attribute; True/False success, None if unknown.
+
+    Replaces the deprecated ``setattr(getseg(ea), attr, v); update_segm(seg)``
+    mutation pair. On 9.4 the change is staged on a ``segment_info_t`` via
+    its ``set_<attr>`` method and committed with ``set_segment_info``; on
+    <= 9.3 the ``segment_t`` is mutated and committed with ``update_segm``
+    (which is not deprecated). Returns None when the attribute has no setter
+    on the active surface (the caller reports "no such attribute").
+    """
+    segmod = _ida_segment()
+    if HAS_EA_SEGMENT:
+        si = segmod.segment_info_t()
+        if not segmod.get_segment_info(si, ea):
+            return False
+        setter = getattr(si, f"set_{attr}", None)
+        if setter is None:
+            return None
+        try:
+            setter(int_val)
+        except Exception:
+            return None
+        return bool(segmod.set_segment_info(si))
+    seg = segmod.getseg(ea)
+    if seg is None:
+        return False
+    if not hasattr(seg, attr):
+        return None
+    setattr(seg, attr, int_val)
+    return bool(segmod.update_segm(seg))
+
+
+def add_segment(start_ea, end_ea, name, sclass, perm):
+    """Add a segment over ``[start_ea, end_ea)``; bool success.
+
+    9.4 replacement for ``add_segm_ex(segment_t, name, sclass, flags)``:
+    stages a ``segment_info_t`` (bounds as plain ``range_t`` members, the
+    rest via setters) and commits via ``add_segment_ex``. Only the fields
+    the tools layer sets (bounds, name, class, permissions) are staged.
+    The legacy path keeps the ``idaapi`` namespace so existing fixtures and
+    minimal builds resolve ``segment_t``/``add_segm_ex`` the same way the
+    call sites did.
+    """
+    if HAS_EA_SEGMENT:
+        segmod = _ida_segment()
+        si = segmod.segment_info_t()
+        si.start_ea = start_ea
+        si.end_ea = end_ea
+        si.set_name(name or "")
+        si.set_sclass(sclass or "")
+        si.set_perm(perm)
+        return bool(segmod.add_segment_ex(si, 0))
+    idaapi = _resolve_module("idaapi")
+    if idaapi is None:
+        return False
+    seg = idaapi.segment_t()
+    seg.start_ea, seg.end_ea = start_ea, end_ea
+    seg.perm = perm
+    return bool(idaapi.add_segm_ex(seg, name or "", sclass, 0))
+
+
 # --- functions ---------------------------------------------------------------
 
 def _ida_funcs():
@@ -294,3 +365,168 @@ def get_next_func_start(ea):
         return None if start == funcs.ida_idaapi.BADADDR else start
     pfn = funcs.get_next_func(ea)
     return pfn.start_ea if pfn else None
+
+
+# --- flow charts / frames / thunks / prototypes ------------------------------
+
+def _resolve_module(name):
+    """Resolve a module at call time without growing import-time surface.
+
+    Host-side tests fake individual ``ida_*`` modules in ``sys.modules``;
+    importing them here at module top would force every fixture to provide
+    every module. Falling back to a real import keeps IDA-runtime behavior
+    when the module simply has not been imported yet.
+    """
+    mod = sys.modules.get(name)
+    if mod is None:
+        try:
+            mod = __import__(name)
+        except ImportError:
+            mod = None
+    return mod
+
+
+class _RangeLike:
+    """Duck-typed ``ea_range_t`` stand-in for minimal IDA builds / test fakes."""
+
+    def __init__(self, start_ea, end_ea):
+        self.start_ea = start_ea
+        self.end_ea = end_ea
+
+
+def get_flow_chart(ea, flags: int = 0):
+    """``ida_gdl.FlowChart`` over the function containing ``ea``, or None.
+
+    ``FlowChart`` itself is not deprecated in 9.4, but its canonical input
+    (a ``func_t *`` from ``get_func``) is unobtainable there. IDA accepts a
+    range in place of the function pointer on every supported version
+    (precedent: ``tools/graph.py::_build_range_chart``), so this wrapper
+    resolves the function bounds and constructs the chart from a range.
+    Returns None when no function contains ``ea``.
+    """
+    ida_gdl = _resolve_module("ida_gdl")
+    idaapi = _resolve_module("idaapi")
+    flow = getattr(ida_gdl, "FlowChart", None) if ida_gdl is not None else None
+    if flow is None:
+        # ``idaapi.FlowChart`` is the same class re-exported; some minimal
+        # builds (and test fakes) only provide it there.
+        flow = getattr(idaapi, "FlowChart", None) if idaapi is not None else None
+    if flow is None:
+        return None
+    info = get_func_info(ea)
+    if info is None:
+        return None
+    rng_cls = getattr(idaapi, "ea_range_t", None)
+    rng = (
+        rng_cls(info.start_ea, info.end_ea)
+        if rng_cls is not None
+        else _RangeLike(info.start_ea, info.end_ea)
+    )
+    # ``flags`` is only passed when set so narrow fakes/lambdas taking a
+    # single positional argument keep working (``flags=0`` is the default
+    # on every real FlowChart anyway).
+    if flags:
+        return flow(rng, flags=flags)
+    return flow(rng)
+
+
+def calc_thunk_target(ea):
+    """Target EA of the thunk function containing ``ea``, or ``BADADDR``.
+
+    Same contract as the deprecated ``calc_thunk_func_target`` (BADADDR when
+    there is no function or it is not a thunk). 9.4 replaces it with
+    ``calc_thunk_function_target``, which consumes the ``func_entry_info_t``
+    filled by ``get_func_entry_info``.
+    """
+    funcs = _ida_funcs()
+    ida_idaapi = _resolve_module("ida_idaapi")
+    badaddr = (
+        ida_idaapi.BADADDR if ida_idaapi is not None else funcs.ida_idaapi.BADADDR
+    )
+    if HAS_EA_FUNCS:
+        fi = funcs.func_entry_info_t()
+        if not funcs.get_func_entry_info(fi, ea):
+            return badaddr
+        return funcs.calc_thunk_function_target(fi)
+    pfn = funcs.get_func(ea)
+    if not pfn:
+        return badaddr
+    return funcs.calc_thunk_func_target(pfn)
+
+
+def get_frame_id(ea):
+    """Netnode id of the stack-frame structure of ``ea``'s function, or None.
+
+    Replaces the deprecated ``ida_frame.get_frame(pfn)`` /
+    ``pfn.frame`` attribute read with the 9.4
+    ``func_entry_info_t.get_frame_id()``.
+    """
+    funcs = _ida_funcs()
+    if HAS_EA_FUNCS:
+        fi = funcs.func_entry_info_t()
+        if not funcs.get_func_entry_info(fi, ea):
+            return None
+        return fi.get_frame_id()
+    pfn = funcs.get_func(ea)
+    return pfn.frame if pfn else None
+
+
+def get_spd(func_ea, ea):
+    """Stack-pointer delta at ``ea`` within the function at ``func_ea``.
+
+    9.4 replaces the deprecated ``ida_frame.get_spd(pfn, ea)`` with the
+    EA-based ``ida_frame.get_func_spd(func_ea, ea)``. Returns 0 when the
+    function does not exist (the legacy ``pfn=None`` case is UB upstream).
+    """
+    ida_frame = _resolve_module("ida_frame")
+    if ida_frame is None:
+        return 0
+    get_func_spd = getattr(ida_frame, "get_func_spd", None)
+    if get_func_spd is not None:
+        return get_func_spd(func_ea, ea)
+    pfn = _ida_funcs().get_func(func_ea)
+    if not pfn:
+        return 0
+    return ida_frame.get_spd(pfn, ea)
+
+
+def get_prototype_string(ea):
+    """Best-effort prototype string for the function at ``ea``, or None.
+
+    Mirrors ``ida_mcp.utils.get_prototype`` without needing a ``func_t *``:
+    on <= 9.3 the primary ``func_t.get_prototype()`` path runs first
+    (identical output to the legacy helper), then the EA-based
+    ``idc.get_type`` fallback, then ``ida_nalt.get_tinfo`` on error. On 9.4
+    the EA-based fallbacks are the only path. Kept here rather than in
+    utils because utils imports this module (no circular import).
+    """
+    funcs = _ida_funcs()
+    if not HAS_EA_FUNCS:
+        pfn = funcs.get_func(ea)
+        if pfn is None:
+            return None
+        try:
+            proto = pfn.get_prototype()
+            if proto is not None:
+                return str(proto)
+            return None
+        except AttributeError:
+            pass
+        except Exception:
+            return None
+    idc_mod = _resolve_module("idc")
+    if idc_mod is not None:
+        try:
+            return idc_mod.get_type(ea)
+        except Exception:
+            pass
+    ida_nalt = _resolve_module("ida_nalt")
+    ida_typeinf = _resolve_module("ida_typeinf")
+    if ida_nalt is not None and ida_typeinf is not None:
+        try:
+            tif = ida_typeinf.tinfo_t()
+            if ida_nalt.get_tinfo(tif, ea):
+                return str(tif)
+        except Exception:
+            pass
+    return None

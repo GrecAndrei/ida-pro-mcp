@@ -126,7 +126,7 @@ def _get_func_or_error(addr):
         ea = idc.get_screen_ea()
         if ea == idaapi.BADADDR:
             return None, make_error(MCPError.INVALID_ARGS, "addr required (no cursor position in headless mode)")
-    func = idaapi.get_func(ea)
+    func = _compat.get_func_info(ea)
     if not func:
         return None, make_error(MCPError.INVALID_ARGS,
                                 f"No function at {hex(ea)}")
@@ -472,7 +472,7 @@ def stack_analysis(
             ea = func.start_ea
             usage_iter = 0
             while ea < func.end_ea and ea != idaapi.BADADDR:
-                spd = ida_frame.get_spd(func, ea)
+                spd = _compat.get_spd(func.start_ea, ea)
                 if spd is not None:
                     max_spd = max(max_spd, spd)
                     min_spd = min(min_spd, spd)

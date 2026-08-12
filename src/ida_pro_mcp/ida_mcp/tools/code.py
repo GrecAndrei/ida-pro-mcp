@@ -366,7 +366,7 @@ def code(
                             "addr": hex_ea(func_ea),
                             "name": ida_funcs.get_func_name(func_ea) or "",
                             "size": max(size, 0),
-                            "prototype": get_prototype(idaapi.get_func(func_ea)),
+                            "prototype": _compat.get_prototype_string(func_ea),
                             "mode": "listing",
                         })
                         continue
@@ -377,7 +377,7 @@ def code(
                             "addr": hex_ea(func_ea),
                             "name": ida_funcs.get_func_name(func_ea) or "",
                             "code": str(cfunc),
-                            "prototype": get_prototype(idaapi.get_func(func_ea)),
+                            "prototype": _compat.get_prototype_string(func_ea),
                         })
                     else:
                         entry = _decompile_error_entry(hex_ea(func_ea), dec_err)
@@ -450,7 +450,7 @@ def code(
                 continue
 
             if action == "decompile":
-                func = idaapi.get_func(ea)
+                func = _compat.get_func_info(ea)
                 if not func:
                     # Find nearest function for better error
                     prev_ea = _get_prev_func(ea)
@@ -466,10 +466,10 @@ def code(
 
                 # Thunk auto-resolution: if this is a thunk, follow to the real implementation
                 thunk_target = None
-                flags = func.flags if hasattr(func, 'flags') else 0
+                flags = _compat.get_func_flags(ea) or 0
                 if flags & ida_funcs.FUNC_THUNK:
                     try:
-                        target_ea = idaapi.calc_thunk_func_target(func)
+                        target_ea = _compat.calc_thunk_target(ea)
                         if target_ea and target_ea != idaapi.BADADDR:
                             thunk_target = target_ea
                     except Exception:
@@ -494,7 +494,7 @@ def code(
                             "ok": True,
                             "addr": hex_ea(func.start_ea),
                             "code": pseudo,
-                            "prototype": get_prototype(func),
+                            "prototype": _compat.get_prototype_string(func.start_ea),
                             "structure": _build_function_structure_summary(func, cfunc, details=details),
                         }
                         # Inline enrichment — heavy fields gated behind details=True
@@ -551,7 +551,7 @@ def code(
                     }))
 
             elif action == "decompile_chain":
-                func = idaapi.get_func(ea)
+                func = _compat.get_func_info(ea)
                 if not func:
                     prev_ea = _get_prev_func(ea)
                     next_ea = _get_next_func(ea)
@@ -572,7 +572,7 @@ def code(
                         results.append(_decompile_error_entry(addr, dec_err))
                         continue
                     main_pseudo = str(cfunc)
-                    main_proto = get_prototype(func)
+                    main_proto = _compat.get_prototype_string(func.start_ea)
                     # Collect callers (compact: name + first 8 lines of pseudocode).
                     # caller_count reflects every unique caller found; only the
                     # first chain_depth get their pseudocode decompiled into
@@ -834,11 +834,11 @@ def code(
                 results.append({"ok": True, "addr": addr, "callers": "\n".join(caller_lines), "count": len(caller_lines)})
 
             elif action == "blocks":
-                func = idaapi.get_func(ea)
+                func = _compat.get_func_info(ea)
                 if not func:
                     results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
                     continue
-                fc = idaapi.FlowChart(func)
+                fc = _compat.get_flow_chart(ea)
                 block_lines = []
                 block_count = 0
                 for block in fc:
@@ -884,13 +884,13 @@ def code(
 
             elif action == "export":
                 # Export function info
-                func = idaapi.get_func(ea)
+                func = _compat.get_func_info(ea)
                 if not func:
                     results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
                     continue
 
                 name = ida_funcs.get_func_name(func.start_ea)
-                proto = get_prototype(func)
+                proto = _compat.get_prototype_string(func.start_ea)
 
                 if format == "c_header":
                     results.append({"addr": addr, "header": f"{proto};"})
@@ -1194,7 +1194,7 @@ def code(
                         "ok": True,
                         "addr": hex_ea(func.start_ea),
                         "function": ida_funcs.get_func_name(func.start_ea),
-                        "prototype": get_prototype(func),
+                        "prototype": _compat.get_prototype_string(func.start_ea),
                         "pseudocode": pseudo,
                         "semantic_summary": _semantic_pseudocode_summary(pseudo),
                         "cfg_semantics": cfg_semantics,
@@ -1307,7 +1307,7 @@ def code(
                     "ok": True,
                     "addr": hex_ea(func.start_ea),
                     "name": fname,
-                    "prototype": get_prototype(func),
+                    "prototype": _compat.get_prototype_string(func.start_ea),
                     "pseudocode": pseudo,
                     "behavior_tags": behavior_tags,
                     "api_calls": found_apis[:15],
@@ -1339,7 +1339,7 @@ def code(
 
                 pseudo = str(cfunc)
                 fname = ida_funcs.get_func_name(func.start_ea)
-                proto = get_prototype(func)
+                proto = _compat.get_prototype_string(func.start_ea)
 
                 # Collect signals
                 _KNOWN_APIS = [
@@ -1375,7 +1375,7 @@ def code(
                 str_refs = list(dict.fromkeys(str_refs))[:6]
 
                 # Complexity
-                n_blocks = sum(1 for _ in idaapi.FlowChart(func))
+                n_blocks = sum(1 for _ in (_compat.get_flow_chart(func.start_ea) or []))
                 n_lines = len(pseudo.splitlines())
 
                 # Symbol-free firmware signals (MMIO stores, traps, CSR access,
@@ -1451,7 +1451,7 @@ def code(
                     results[-1]["api_note"] = "no libc APIs detected — bare-metal firmware?"
 
             elif action == "trace_argument_origin":
-                func = idaapi.get_func(ea)
+                func = _compat.get_func_info(ea)
                 if not func:
                     results.append(make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex_ea(ea)}"))
                     continue

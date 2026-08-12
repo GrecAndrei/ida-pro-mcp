@@ -183,13 +183,12 @@ def data(
                 ea = rec["ea"]
                 name = rec["name"]
                 func_size = rec["size"]
-                fn = idaapi.get_func(ea)
                 # Always include capped xref count (hot functions can have thousands)
                 xrefs_to = sum(1 for _ in zip(idautils.XrefsTo(ea), range(999), strict=False))
                 parts = [hex_ea(ea), hex_size(func_size), f"xrefs={xrefs_to}", name]
 
                 if include_prototype:
-                    parts.append(get_prototype(fn))
+                    parts.append(_compat.get_prototype_string(ea))
 
                 if include_xrefs:
                     xrefs_from = sum(1 for _ in zip(idautils.XrefsFrom(ea), range(999), strict=False))
@@ -199,7 +198,7 @@ def data(
                 if structured:
                     item: dict = {"addr": hex_ea(ea), "name": name, "size": func_size, "xrefs_to": xrefs_to}
                     if include_prototype:
-                        item["prototype"] = get_prototype(fn)
+                        item["prototype"] = _compat.get_prototype_string(ea)
                     if include_xrefs:
                         item["xrefs_from"] = xrefs_from
                     func_items.append(item)

@@ -220,7 +220,7 @@ def _function_index_metadata(func) -> dict[str, Any]:
             if idc.get_strlit_contents(ref, -1, 0):
                 string_count += 1
 
-    blocks = list(idaapi.FlowChart(func))
+    blocks = list(_compat.get_flow_chart(func.start_ea) or [])
     edge_count = 0
     has_loops = False
     for block in blocks:
@@ -499,7 +499,7 @@ def intelligence(
                 return make_error(MCPError.IDA_ERROR, "failed to decompile function")
             idx, db_path = _index_for_current_idb()
             name = ida_funcs.get_func_name(ea) or hex(ea)
-            func = idaapi.get_func(ea)
+            func = _compat.get_func_info(ea)
             document = _build_full_index_document(ea, name, pseudo, func, embedder)
             metadata = _function_index_metadata(func) if func else {}
             metadata["index_quality"] = "full"
@@ -637,7 +637,7 @@ def intelligence(
             eligible: list[tuple[int, Any, str]] = []
             for fea in idautils.Functions():
                 try:
-                    func = idaapi.get_func(fea)
+                    func = _compat.get_func_info(fea)
                     if not func:
                         failures += 1
                         continue
@@ -848,7 +848,7 @@ def intelligence(
                     hint="Index your functions first:\n  index_fast:  seconds, disassembly-based (good for quick triage)\n  index_batch: minutes, decompile-based (best quality embeddings)",
                 )
             qname = ida_funcs.get_func_name(ea) or hex(ea)
-            func = idaapi.get_func(ea)
+            func = _compat.get_func_info(ea)
             document = _build_full_index_document(ea, qname, pseudo, func, embedder)
             metadata = _function_index_metadata(func) if func else {}
             metadata["index_quality"] = "full"

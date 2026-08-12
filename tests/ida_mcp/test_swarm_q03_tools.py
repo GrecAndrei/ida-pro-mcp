@@ -925,6 +925,9 @@ class TestUninitializedRiscVStores(unittest.TestCase):
 
         ida_funcs = types.ModuleType("ida_funcs")
         ida_funcs.get_func_name = lambda ea: "rtos_task"
+        # _compat resolves get_func through sys.modules["ida_funcs"] (mirrors
+        # idaapi.get_func); same alias pattern as the other q03 fixtures.
+        ida_funcs.get_func = idaapi.get_func
 
         ida_frame = types.ModuleType("ida_frame")
 

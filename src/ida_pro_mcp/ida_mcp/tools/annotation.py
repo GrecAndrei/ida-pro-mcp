@@ -484,9 +484,8 @@ def annotation(
             if err:
                 return err
 
-            fn = ida_funcs.get_func(ea)
             fname = idc.get_func_name(ea)
-            fc = idaapi.FlowChart(fn)
+            fc = _compat.get_flow_chart(ea)
 
             loops = []
             for block in fc:
@@ -524,9 +523,8 @@ def annotation(
             if err:
                 return err
 
-            fn = ida_funcs.get_func(ea)
             fname = idc.get_func_name(ea)
-            fc = idaapi.FlowChart(fn)
+            fc = _compat.get_flow_chart(ea)
 
             branches = []
             for block in fc:

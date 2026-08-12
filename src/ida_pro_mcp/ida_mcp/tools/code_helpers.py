@@ -57,7 +57,9 @@ def _collect_expr_rows_from_cfunc(cfunc, max_items=2000):
 def _compute_cfg_semantics(func):
     """Compute richer CFG semantics and complexity metrics for a function."""
     try:
-        fc = idaapi.FlowChart(func)
+        fc = _compat.get_flow_chart(func.start_ea)
+        if fc is None:
+            raise RuntimeError("flow chart unavailable")
     except Exception:
         return {
             "nodes": 0,
@@ -1218,9 +1220,8 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
                     pass
         if danger_eas and func_ea:
             # Build basic block map
-            func = ida_funcs.get_func(func_ea)
-            if func:
-                fc = idaapi.FlowChart(func)
+            fc = _compat.get_flow_chart(func_ea)
+            if fc is not None:
                 bb_map = {}
                 for _bb in fc:
                     bb_map[int(_bb.start_ea)] = _bb
@@ -1253,8 +1254,11 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
 
     # --- Stack frame analysis: large buffers, canary, frame pointer ---
     try:
-        func_obj = ida_funcs.get_func(func_ea)
+        func_obj = _compat.get_func_info(func_ea)
         if func_obj:
+            # get_frame (struc_t-based frame) only exists on <= 9.3; on 9.4
+            # this raises AttributeError and the block is skipped. The
+            # tinfo-based frame walk is tracked in docs/research/ida-9.4-migration.md.
             frame = ida_funcs.get_frame(func_obj)
             if frame:
                 # func_frame_t is a struc_t subclass; walk its members list.
@@ -1411,9 +1415,8 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
         if "arm" in proc_lower or "thumb" in proc_lower:
             # ARM: check for interworking calls (BLX to data)
             # Check if function has BX LR (standard return) vs BX R14 (interworking)
-            func_obj = ida_funcs.get_func(func_ea)
-            if func_obj:
-                fc = idaapi.FlowChart(func_obj)
+            fc = _compat.get_flow_chart(func_ea)
+            if fc is not None:
                 for bb in fc:
                     # Check last instruction of each BB
                     last_ea = int(bb.end_ea) - 4  # ARM instructions are 4 bytes (or 2 for Thumb)
@@ -1430,9 +1433,8 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
 
         elif "mips" in proc_lower:
             # MIPS: check for delay slot hazards
-            func_obj = ida_funcs.get_func(func_ea)
-            if func_obj:
-                fc = idaapi.FlowChart(func_obj)
+            fc = _compat.get_flow_chart(func_ea)
+            if fc is not None:
                 for _bb in fc:
                     # Check if branch delay slot contains a dangerous instruction
                     for item_ea in idautils.FuncItems(func_ea):

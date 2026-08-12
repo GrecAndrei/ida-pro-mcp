@@ -179,6 +179,10 @@ class TestMoveToUnmappedRegion(unittest.TestCase):
                         "ida_bytes", "ida_funcs", "ida_hexrays", "ida_frame",
                         "ida_struct", "ida_ua", "ida_kernwin", "ida_loader",
                         "ida_dbg"])
+        # _compat.move_segment resolves getseg/move_segm through
+        # sys.modules["ida_segment"] (the canonical home; idaapi re-exports).
+        sys.modules["ida_segment"].getseg = idaapi.getseg
+        sys.modules["ida_segment"].move_segm = idaapi.move_segm
         sys.modules["idaapi"] = idaapi
         sys.modules["idc"] = idc
         sys.modules["ida_nalt"] = ida_nalt

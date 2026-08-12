@@ -321,9 +321,9 @@ def graph(
             if err: return err
 
             import ida_gdl
-            func = ida_funcs.get_func(ea)
+            func = _compat.get_func_info(ea)
             auto_defined = func is None
-            fc = ida_gdl.FlowChart(func) if func else _build_range_chart(ida_gdl, ea)
+            fc = _compat.get_flow_chart(ea) if func is not None else _build_range_chart(ida_gdl, ea)
             max_items = min(max(1, int(max_items)), 500)
             id_by_start = {}
             nodes = []
@@ -400,9 +400,9 @@ def graph(
             ea, err = validate_addr(addr)
             if err: return err
             import ida_gdl
-            func = ida_funcs.get_func(ea)
+            func = _compat.get_func_info(ea)
             auto_defined = func is None
-            fc = ida_gdl.FlowChart(func) if func else _build_range_chart(ida_gdl, ea)
+            fc = _compat.get_flow_chart(ea) if func is not None else _build_range_chart(ida_gdl, ea)
             blocks = list(fc)
             if not blocks:
                 resp = {"ok": True, "action": "dominators", "dominators": []}

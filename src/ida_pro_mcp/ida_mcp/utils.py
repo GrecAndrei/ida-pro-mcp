@@ -278,18 +278,15 @@ def get_function(addr: int, *, raise_error: Literal[False]) -> Optional[Function
 
 
 def get_function(addr, *, raise_error=True):
-    fn = idaapi.get_func(addr)
-    if fn is None:
+    fi = _compat.get_func_info(addr)
+    if fi is None:
         if raise_error:
             raise IDAError(f"No function found at address {hex(addr)}")
         return None
 
-    try:
-        name = fn.get_name()
-    except AttributeError:
-        name = ida_funcs.get_func_name(fn.start_ea)
+    name = ida_funcs.get_func_name(addr) or ""
 
-    return Function(addr=hex(addr), name=name, size=hex(fn.end_ea - fn.start_ea))
+    return Function(addr=hex(addr), name=name, size=hex(fi.end_ea - fi.start_ea))
 
 
 def get_prototype(fn: ida_funcs.func_t) -> Optional[str]:
@@ -473,14 +470,14 @@ def get_stack_frame_variables_internal(
     if ida_major < 9:
         return []
 
-    func = idaapi.get_func(fn_addr)
+    func = _compat.get_func_info(fn_addr)
     if not func:
         if raise_error:
             raise IDAError(f"No function found at address {fn_addr}")
         return []
 
     tif = ida_typeinf.tinfo_t()
-    if not tif.get_type_by_tid(func.frame) or not tif.is_udt():
+    if not tif.get_type_by_tid(_compat.get_frame_id(fn_addr)) or not tif.is_udt():
         return []
 
     members: list[StackFrameVariable] = []

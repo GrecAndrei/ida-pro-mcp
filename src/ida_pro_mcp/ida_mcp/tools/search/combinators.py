@@ -825,16 +825,15 @@ def _outlier_rows_from_ida(metric: str) -> list[tuple[int, str, int]]:
         return []
     rows = []
     for ea in idautils.Functions():
-        func = idaapi.get_func(ea)
+        func = _compat.get_func_info(ea)
         if not func:
             continue
         fea = int(ea)
         if metric in ("size", "tiny", "huge"):
-            value = int(func.size())
+            value = int(func.end_ea - func.start_ea)
         else:  # bb_count
             try:
-                import ida_gdl
-                value = len(list(ida_gdl.FlowChart(func)))
+                value = len(list(_compat.get_flow_chart(fea) or []))
             except Exception:
                 value = 0
         rows.append((fea, _func_name(fea), value))

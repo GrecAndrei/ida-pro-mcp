@@ -589,7 +589,7 @@ def _funcs_impl(
         elif action == "info":
             ea, err = _resolve_func_addr(addr)
             if err: return err
-            fn = ida_funcs.get_func(ea)
+            fn = _compat.get_func_info(ea)
             if not fn:
                 return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at or containing {hex(ea)}")
             fname = ida_funcs.get_func_name(fn.start_ea)
@@ -620,7 +620,7 @@ def _funcs_impl(
                 info["callers_sample"] = [hex_ea(x) for x in callers[:16]]
                 info["callees_sample"] = [hex_ea(x) for x in callees[:16]]
             if include_prototype:
-                info["prototype"] = get_prototype(fn)
+                info["prototype"] = _compat.get_prototype_string(fn.start_ea)
                 # Add structured parameter list using ida_typeinf
                 try:
                     tinfo = ida_typeinf.tinfo_t()
@@ -660,7 +660,7 @@ def _funcs_impl(
         elif action == "metrics":
             ea, err = _resolve_func_addr(addr)
             if err: return err
-            fn = ida_funcs.get_func(ea)
+            fn = _compat.get_func_info(ea)
             if not fn:
                 return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at or containing {hex(ea)}")
             insn_count = 0
@@ -671,7 +671,7 @@ def _funcs_impl(
             jump_count = 0
             cond_jump_count = 0
             try:
-                fc = idaapi.FlowChart(fn)
+                fc = _compat.get_flow_chart(ea)
                 for b in fc:
                     bb_count += 1
                     for _s in b.succs():

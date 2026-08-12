@@ -61,14 +61,14 @@ def _find_segment(start=None, name=None):
         s_ea, err = validate_addr(start)
         if err:
             return None, err
-        seg = idaapi.getseg(s_ea)
+        seg = _compat.get_segment(s_ea)
         if not seg:
             return None, make_error(MCPError.SEGMENT_NOT_FOUND,
                                     f"No segment at address {start}")
         return seg, None
     if name:
         for ea in idautils.Segments():
-            s = idaapi.getseg(ea)
+            s = _compat.get_segment(ea)
             if s and _compat.get_segment_name(ea) == name:
                 return s, None
         return None, make_error(MCPError.SEGMENT_NOT_FOUND,
@@ -77,11 +77,8 @@ def _find_segment(start=None, name=None):
                             "Specify 'start' (address) or 'name' to identify a segment")
 
 
-def _perms_string(seg):
-    """Build human-readable permission string from a segment object."""
-    perm = getattr(seg, "perm", None)
-    if perm is None:
-        perm = seg.get_perm()  # 9.4 segment_info_t exposes perm via get_perm()
+def _perms_string(perm):
+    """Build a human-readable permission string from a SEGPERM_* bitmap."""
     perms = ""
     if perm & idaapi.SEGPERM_READ:
         perms += "r"
@@ -92,8 +89,8 @@ def _perms_string(seg):
     return perms or "---"
 
 
-def _seg_type_name(seg):
-    """Resolve segment type to a readable name (IDA 9 compatible)."""
+def _seg_type_name(seg_type):
+    """Resolve a segment type code to a readable name (IDA 9 compatible)."""
     seg_types = {}
     for attr_name, type_name in [
         ("SEG_CODE", "code"), ("SEG_DATA", "data"),
@@ -103,7 +100,7 @@ def _seg_type_name(seg):
     ]:
         if hasattr(ida_segment, attr_name):
             seg_types[getattr(ida_segment, attr_name)] = type_name
-    return seg_types.get(seg.type, f"type_{seg.type}")
+    return seg_types.get(seg_type, f"type_{seg_type}")
 
 
 def _count_heads(seg, max_items=500000):
@@ -457,7 +454,7 @@ def segments(
                             "end_address": hex(seg.end_ea),
                             "end": hex(seg.end_ea),
                             "size": hex(seg.end_ea - seg.start_ea),
-                            "perms": _perms_string(seg),
+                            "perms": _perms_string(_compat.get_segment_perm(ea) or 0),
                             "class": _compat.get_segment_class(ea),
                         })
             return {
@@ -476,8 +473,14 @@ def segments(
             if err:
                 return err
 
-            perms = _perms_string(seg)
-            seg_type = _seg_type_name(seg)
+            perm_int = _compat.get_segment_perm(seg.start_ea)
+            type_int = _compat.get_segment_type(seg.start_ea)
+            align = _compat.get_segment_align(seg.start_ea)
+            bitness = _compat.get_segment_bitness(seg.start_ea)
+            comb = _compat.get_segment_comb(seg.start_ea)
+            color = _compat.get_segment_color(seg.start_ea)
+            perms = _perms_string(perm_int or 0)
+            seg_type = _seg_type_name(type_int)
             code_count, data_count, string_count, func_count = _count_heads(seg)
 
             return {
@@ -491,14 +494,15 @@ def segments(
                     "size": hex(seg.end_ea - seg.start_ea),
                     "size_bytes": seg.end_ea - seg.start_ea,
                     "perms": perms,
-                    "perms_int": seg.perm,
+                    "perms_int": perm_int,
                     "class": _compat.get_segment_class(seg.start_ea),
                     "type": seg_type,
-                    "type_int": seg.type,
-                    "align": seg.align,
-                    "bitness": {0: 16, 1: 32, 2: 64}.get(seg.bitness, seg.bitness * 16),
-                    "comb": seg.comb,
-                    "color": hex(seg.color) if seg.color != 0xFFFFFFFF else None,
+                    "type_int": type_int,
+                    "align": align,
+                    "bitness": ({0: 16, 1: 32, 2: 64}.get(bitness, bitness * 16)
+                                if bitness is not None else None),
+                    "comb": comb,
+                    "color": hex(color) if color is not None and color != 0xFFFFFFFF else None,
                     "code_heads": code_count,
                     "data_heads": data_count,
                     "functions": func_count,
@@ -533,8 +537,6 @@ def segments(
                                   f"Address {hex(s_ea)} already belongs to segment "
                                   f"'{_compat.get_segment_name(s_ea)}'")
 
-            seg = idaapi.segment_t()
-            seg.start_ea, seg.end_ea = s_ea, e_ea
             # add_segm_ex leaves seg.perm at 0 unless the loader set it, which
             # silently makes analysis treat a CODE segment as data (no EXEC on
             # raw blobs).  Derive permissions from the segment class so a code
@@ -545,11 +547,10 @@ def segments(
                 perm |= getattr(idaapi, "SEGPERM_EXEC", 4)
             elif sclass_upper == "BSS":
                 perm |= getattr(idaapi, "SEGPERM_WRITE", 2)
-            seg.perm = perm
-            if idaapi.add_segm_ex(seg, name or "", sclass, 0):
+            if _compat.add_segment(s_ea, e_ea, name or "", sclass, perm):
                 result = {"ok": True, "start": hex(s_ea), "end": hex(e_ea), "name": name, "class": sclass}
                 if sclass_upper in ("CODE", "XTRN"):
-                    result["perms"] = _perms_string(seg)
+                    result["perms"] = _perms_string(perm)
                     result["note"] = (
                         "Segment permissions set to READ|EXEC from sclass. "
                         "If code is still misread as data, run segments(action='set_perms', ...)."
@@ -598,8 +599,7 @@ def segments(
             s_ea, err = validate_addr(start)
             if err:
                 return err
-            seg = idaapi.getseg(s_ea)
-            if not seg:
+            if _compat.get_segment(s_ea) is None:
                 return make_error(MCPError.SEGMENT_NOT_FOUND,
                                   f"No segment at address {start}")
 
@@ -612,22 +612,24 @@ def segments(
                 if not _compat.set_segment_name(s_ea, str(value)):
                     return make_error(MCPError.IDA_ERROR,
                                       f"Failed to rename segment to '{value}'")
-            elif hasattr(seg, attr):
+            else:
                 try:
                     # Convert string values to int for numeric attributes
                     if isinstance(value, str):
                         int_val = int(value, 0)  # handles "0x1F", "31", "0b11" etc.
                     else:
                         int_val = int(value)
-                    setattr(seg, attr, int_val)
                 except (ValueError, TypeError):
                     return make_error(MCPError.INVALID_ARG_TYPE,
                                       f"Cannot set attribute '{attr}' to value '{value}'")
-            else:
-                return make_error(MCPError.INVALID_ARGS,
-                                  f"Segment object has no attribute '{attr}'")
+                rc = _compat.set_segment_attr(s_ea, attr, int_val)
+                if rc is None:
+                    return make_error(MCPError.INVALID_ARGS,
+                                      f"Segment object has no attribute '{attr}'")
+                if not rc:
+                    return make_error(MCPError.IDA_ERROR,
+                                      f"Failed to set segment attribute '{attr}'")
 
-            idaapi.update_segm(seg)
             return {"ok": True, "start": hex(s_ea), "attr": attr, "value": value}
 
         # ------------------------------------------------------------------
@@ -643,8 +645,7 @@ def segments(
             s_ea, err = validate_addr(start)
             if err:
                 return err
-            seg = idaapi.getseg(s_ea)
-            if not seg:
+            if _compat.get_segment(s_ea) is None:
                 return make_error(MCPError.SEGMENT_NOT_FOUND,
                                   f"No segment at address {start}")
 
@@ -657,16 +658,18 @@ def segments(
                     perms |= idaapi.SEGPERM_WRITE
                 if "x" in v:
                     perms |= idaapi.SEGPERM_EXEC
-                seg.perm = perms
+                new_perm = perms
             else:
-                seg.perm = int(value)
+                new_perm = int(value)
 
-            idaapi.update_segm(seg)
+            if not _compat.set_segment_attr(s_ea, "perm", new_perm):
+                return make_error(MCPError.IDA_ERROR,
+                                  f"Failed to set permissions on segment at {hex(s_ea)}")
             return {
                 "ok": True,
                 "start": hex(s_ea),
-                "perms": _perms_string(seg),
-                "perms_int": seg.perm,
+                "perms": _perms_string(new_perm),
+                "perms_int": new_perm,
             }
 
         # ------------------------------------------------------------------
@@ -689,12 +692,12 @@ def segments(
             if err:
                 return err
 
-            seg = idaapi.getseg(s_ea)
+            seg = _compat.get_segment(s_ea)
             if not seg:
                 return make_error(MCPError.SEGMENT_NOT_FOUND,
                                   f"No segment at source address {start}")
 
-            result = idaapi.move_segm(seg, t_ea, 0)
+            result = _compat.move_segment(s_ea, t_ea, 0)
             if result == idaapi.MOVE_SEGM_OK:
                 return {"ok": True, "old": hex(s_ea), "new": hex(t_ea)}
 
@@ -985,7 +988,7 @@ def segments(
                     "start": hex(seg.start_ea),
                     "end": hex(seg.end_ea),
                     "size": seg.end_ea - seg.start_ea,
-                    "perms": _perms_string(seg),
+                    "perms": _perms_string(_compat.get_segment_perm(seg.start_ea) or 0),
                     "class": _compat.get_segment_class(seg.start_ea),
                     "entropy": _seg_entropy(seg),
                     "function_count": fc,

@@ -741,7 +741,6 @@ def analysis(
                 return err
             import ida_bytes as _ida_bytes
             import ida_ua as _ida_ua
-            import ida_funcs as _ida_funcs
             # Undefine whatever is sitting at the address.
             item_sz = max(1, idc.get_item_size(ea) if hasattr(idc, "get_item_size") else 1)
             clear_sz = size if size and size > 0 else item_sz
@@ -763,7 +762,7 @@ def analysis(
             if insn_len == 0:
                 return make_error(MCPError.IDA_ERROR, f"create_insn failed at {hex(ea)} — processor may not recognize bytes as a valid instruction")
             # If the address is inside a function, requeue that function for analysis.
-            func = _ida_funcs.get_func(ea) if hasattr(_ida_funcs, "get_func") else None
+            func = _compat.get_func_info(ea)
             requeued = False
             if func:
                 try:
