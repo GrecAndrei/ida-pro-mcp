@@ -33,12 +33,77 @@ def _fake_hexrays(*, ea_api: bool) -> types.ModuleType:
     return m
 
 
+def _fake_funcs(*, ea_api: bool) -> types.ModuleType:
+    """Fake ``ida_funcs``: 9.3 surface (get_func/get_prev_func/get_next_func/
+    update_func) or 9.4 surface (EA variants only)."""
+    funcs = types.ModuleType("ida_funcs")
+    if not ea_api:
+        def _get_func(ea):
+            if 0x401000 <= ea < 0x402000:
+                return types.SimpleNamespace(
+                    start_ea=0x401000, end_ea=0x402000, flags=0x10
+                )
+            return None
+
+        funcs.get_func = _get_func
+        funcs.get_prev_func = lambda ea: (
+            types.SimpleNamespace(start_ea=0x400000) if ea == 0x401000 else None
+        )
+        funcs.get_next_func = lambda ea: (
+            types.SimpleNamespace(start_ea=0x402000)
+            if 0x401000 <= ea < 0x402000 else None
+        )
+        funcs._updated = []
+
+        def _update_func(pfn):
+            funcs._updated.append(pfn.flags)
+            return True
+
+        funcs.update_func = _update_func
+        return funcs
+    funcs.ida_idaapi = types.ModuleType("ida_idaapi")
+    funcs.ida_idaapi.BADADDR = -1
+    funcs.get_func_start = lambda ea: 0x401000 if 0x401000 <= ea < 0x402000 else -1
+    funcs.func_entry_info_t = types.SimpleNamespace
+
+    def _get_func_entry_info(out, ea, flags=0):
+        if 0x401000 <= ea < 0x402000:
+            out.start_ea = 0x401000
+            out.end_ea = 0x402000
+            return True
+        return False
+
+    funcs.get_func_entry_info = _get_func_entry_info
+    funcs.get_func_flags = lambda ea: 0x10
+    funcs._flag_sets = []
+
+    def _set_func_flags(ea, flags):
+        funcs._flag_sets.append((ea, flags))
+        return True
+
+    funcs.set_func_flags = _set_func_flags
+    funcs.get_prev_func_ea = lambda ea: 0x400000 if ea == 0x401000 else -1
+    funcs.get_next_func_ea = lambda ea: (
+        0x402000 if 0x401000 <= ea < 0x402000 else -1
+    )
+    return funcs
+
+
 def _fake_segment(*, ea_api: bool) -> types.ModuleType:
     """Fake ``ida_segment`` matching a 9.3 surface (legacy pointer API only)
     or a 9.4 surface (EA-based segment_info_t API only, no ``getseg``)."""
     segment = types.ModuleType("ida_segment")
     if not ea_api:
-        segment.getseg = lambda ea: "seg-legacy" if ea == 0x401000 else None
+        def _getseg(ea):
+            if ea == 0x401000:
+                return "seg-legacy"
+            if ea == 0x500000:
+                return types.SimpleNamespace(
+                    start_ea=0x500000, perm=5, type=2, align=4, bitness=2
+                )
+            return None
+
+        segment.getseg = _getseg
         segment.get_segm_name = lambda s, flags=0: f"name({s})"
         segment.get_segm_class = lambda s: "CODE"
         segment.set_segm_name = lambda s, name, flags=0: 1
@@ -62,6 +127,13 @@ def _fake_segment(*, ea_api: bool) -> types.ModuleType:
             out.start_ea = 0x401000
             out.end_ea = 0x402000
             return True
+        if ea == 0x500000:
+            out.start_ea = 0x500000
+            out.get_perm = lambda: 5
+            out.get_type = lambda: 2
+            out.get_align = lambda: 4
+            out.get_bitness = lambda: 2
+            return True
         return False
 
     segment.get_segment_info = _get_segment_info
@@ -78,12 +150,7 @@ def _fake_segment(*, ea_api: bool) -> types.ModuleType:
 def _install_ida_stubs(*, ea_api: bool) -> types.ModuleType:
     hexrays = _fake_hexrays(ea_api=ea_api)
     sys.modules["ida_hexrays"] = hexrays
-
-    funcs = types.ModuleType("ida_funcs")
-    if ea_api:
-        funcs.get_func_start = lambda ea: ea
-    sys.modules["ida_funcs"] = funcs
-
+    sys.modules["ida_funcs"] = _fake_funcs(ea_api=ea_api)
     sys.modules["ida_segment"] = _fake_segment(ea_api=ea_api)
     return hexrays
 
@@ -202,3 +269,74 @@ def test_segment_iteration_wrappers_fallback_to_legacy_on_93_surface():
     assert compat.get_next_segment_ea(0x401000) == 0x402000
     # Legacy None-on-miss propagates.
     assert compat.get_next_segment_ea(0x402000) is None
+
+
+def test_segment_attr_accessors_on_both_surfaces():
+    for ea_api in (True, False):
+        _install_ida_stubs(ea_api=ea_api)
+        compat = _load_compat()
+
+        assert compat.get_segment_perm(0x500000) == 5
+        assert compat.get_segment_type(0x500000) == 2
+        assert compat.get_segment_align(0x500000) == 4
+        assert compat.get_segment_bitness(0x500000) == 2
+        # Unmapped EA -> None on both surfaces.
+        assert compat.get_segment_perm(0x9999) is None
+
+
+# ---------------------------------------------------------------------------
+# Function family: get_func_start / get_func_info / get_func_flags /
+# set_func_flags / get_prev_func_start / get_next_func_start
+# ---------------------------------------------------------------------------
+
+def test_func_wrappers_use_ea_api_on_94_surface():
+    _install_ida_stubs(ea_api=True)
+    compat = _load_compat()
+
+    assert compat.HAS_EA_FUNCS is True
+
+    # EA in, start EA out; BADADDR-on-miss normalizes to None.
+    assert compat.get_func_start(0x401500) == 0x401000
+    assert compat.get_func_start(0x9999) is None
+
+    # func_entry_info_t exposes the same start_ea/end_ea pair as func_t.
+    fi = compat.get_func_info(0x401500)
+    assert (fi.start_ea, fi.end_ea) == (0x401000, 0x402000)
+    assert compat.get_func_info(0x9999) is None
+
+    assert compat.get_func_flags(0x401500) == 0x10
+    assert compat.get_func_flags(0x9999) is None
+
+    assert compat.set_func_flags(0x401500, 0x30) is True
+    assert sys.modules["ida_funcs"]._flag_sets == [(0x401500, 0x30)]
+
+    assert compat.get_prev_func_start(0x401000) == 0x400000
+    assert compat.get_next_func_start(0x401500) == 0x402000
+    assert compat.get_next_func_start(0x9999) is None
+
+
+def test_func_wrappers_fallback_to_legacy_on_93_surface():
+    _install_ida_stubs(ea_api=False)
+    compat = _load_compat()
+
+    assert compat.HAS_EA_FUNCS is False
+
+    # get_func(ea).start_ea unwrapping; None-on-miss propagates.
+    assert compat.get_func_start(0x401500) == 0x401000
+    assert compat.get_func_start(0x9999) is None
+
+    fi = compat.get_func_info(0x401500)
+    assert (fi.start_ea, fi.end_ea) == (0x401000, 0x402000)
+    assert compat.get_func_info(0x9999) is None
+
+    assert compat.get_func_flags(0x401500) == 0x10
+    assert compat.get_func_flags(0x9999) is None
+
+    # Legacy set_func_flags mutates the func_t and commits via update_func.
+    assert compat.set_func_flags(0x401500, 0x30) is True
+    assert sys.modules["ida_funcs"]._updated == [0x30]
+    assert compat.set_func_flags(0x9999, 0x30) is False
+
+    assert compat.get_prev_func_start(0x401000) == 0x400000
+    assert compat.get_next_func_start(0x401500) == 0x402000
+    assert compat.get_next_func_start(0x9999) is None

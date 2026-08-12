@@ -164,3 +164,133 @@ def get_next_segment_ea(ea):
         return None if nxt == seg.ida_idaapi.BADADDR else nxt
     s = seg.get_next_seg(ea)
     return s.start_ea if s else None
+
+
+def _segment_attr(ea, ea_getter, legacy_attr):
+    """Shared body for the segment-attribute accessors below.
+
+    9.4's ``segment_info_t`` exposes ``perm``/``type``/``align``/``bitness``
+    only via ``get_*()`` methods, while the legacy ``segment_t`` carries them
+    as plain attributes. Both paths return None when ``ea`` is unmapped.
+    """
+    seg = _ida_segment()
+    if HAS_EA_SEGMENT:
+        si = seg.segment_info_t()
+        if not seg.get_segment_info(si, ea):
+            return None
+        return getattr(si, ea_getter)()
+    s = seg.getseg(ea)
+    return getattr(s, legacy_attr) if s else None
+
+
+def get_segment_perm(ea):
+    """Permission bits of the segment containing ``ea`` (or None)."""
+    return _segment_attr(ea, "get_perm", "perm")
+
+
+def get_segment_type(ea):
+    """Segment type of the segment containing ``ea`` (or None)."""
+    return _segment_attr(ea, "get_type", "type")
+
+
+def get_segment_align(ea):
+    """Alignment code of the segment containing ``ea`` (or None)."""
+    return _segment_attr(ea, "get_align", "align")
+
+
+def get_segment_bitness(ea):
+    """Bitness code of the segment containing ``ea`` (or None)."""
+    return _segment_attr(ea, "get_bitness", "bitness")
+
+
+# --- functions ---------------------------------------------------------------
+
+def _ida_funcs():
+    """Resolve the live ``ida_funcs`` module at call time.
+
+    Same rationale as :func:`_ida_segment`: the host test harness swaps
+    ``sys.modules["ida_funcs"]`` per test while this module can stay cached.
+    """
+    return sys.modules.get("ida_funcs") or ida_funcs
+
+
+def get_func_start(ea):
+    """Start EA of the function containing ``ea``, or None.
+
+    Replaces the overwhelmingly common ``pfn = get_func(ea); pfn.start_ea``
+    pattern. Normalizes the 9.4 ``get_func_start`` BADADDR-on-miss contract
+    to the legacy ``get_func`` None-on-miss contract.
+    """
+    funcs = _ida_funcs()
+    if HAS_EA_FUNCS:
+        start = funcs.get_func_start(ea)
+        return None if start == funcs.ida_idaapi.BADADDR else start
+    pfn = funcs.get_func(ea)
+    return pfn.start_ea if pfn else None
+
+
+def get_func_info(ea):
+    """Function descriptor for the function containing ``ea``, or None.
+
+    Returns a ``func_entry_info_t`` on 9.4+ (filled through the out-param
+    ``get_func_entry_info``) and the legacy ``func_t`` on <= 9.3. Only
+    ``.start_ea``/``.end_ea`` are guaranteed on both surfaces — use
+    :func:`get_func_flags` for flags.
+    """
+    funcs = _ida_funcs()
+    if HAS_EA_FUNCS:
+        fi = funcs.func_entry_info_t()
+        return fi if funcs.get_func_entry_info(fi, ea) else None
+    return funcs.get_func(ea)
+
+
+def get_func_flags(ea):
+    """Flags of the function containing ``ea``, or None when none exists."""
+    funcs = _ida_funcs()
+    if HAS_EA_FUNCS:
+        if funcs.get_func_start(ea) == funcs.ida_idaapi.BADADDR:
+            return None
+        return funcs.get_func_flags(ea)
+    pfn = funcs.get_func(ea)
+    return pfn.flags if pfn else None
+
+
+def set_func_flags(ea, flags):
+    """Set the flags of the function containing ``ea``; bool success.
+
+    This is the EA-based replacement for the deprecated
+    ``pfn.flags = v; update_func(pfn)`` pair: on 9.4+ it is the direct
+    ``set_func_flags`` call, on <= 9.3 it mutates the ``func_t`` and commits
+    with ``update_func``.
+    """
+    funcs = _ida_funcs()
+    if HAS_EA_FUNCS:
+        return funcs.set_func_flags(ea, flags)
+    pfn = funcs.get_func(ea)
+    if not pfn:
+        return False
+    pfn.flags = flags
+    return funcs.update_func(pfn)
+
+
+def get_prev_func_start(ea):
+    """Start EA of the last function starting before ``ea``, or None.
+
+    Same BADADDR→None normalization as :func:`get_func_start`.
+    """
+    funcs = _ida_funcs()
+    if HAS_EA_FUNCS:
+        start = funcs.get_prev_func_ea(ea)
+        return None if start == funcs.ida_idaapi.BADADDR else start
+    pfn = funcs.get_prev_func(ea)
+    return pfn.start_ea if pfn else None
+
+
+def get_next_func_start(ea):
+    """Start EA of the first function starting after ``ea``, or None."""
+    funcs = _ida_funcs()
+    if HAS_EA_FUNCS:
+        start = funcs.get_next_func_ea(ea)
+        return None if start == funcs.ida_idaapi.BADADDR else start
+    pfn = funcs.get_next_func(ea)
+    return pfn.start_ea if pfn else None
