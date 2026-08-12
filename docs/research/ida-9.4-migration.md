@@ -155,10 +155,23 @@ collapse to direct calls and the module is deleted.
       param), FlowChart/metadata ×3 (intelligence 502/640/851), and
       utils.py:281 (`fn.get_name()` method call). These need a
       FlowChart/frame/prototype/thunk API audit — a separate batch.
-- [ ] **`func_t`-holding remnant audit** (the 25 sites above): check 9.4
-      replacements for `FlowChart`, `get_prototype`, `get_frame`,
-      `calc_thunk_func_target` (likely `calc_thunk_func_target_ea`) and
-      migrate or wrap each
+- [x] **`func_t`-holding remnant audit** — DONE (2026-08-11): every audit
+      target had an answer. FlowChart accepts an `ea_range_t` in place of
+      `func_t *` on all versions (precedent: `graph._build_range_chart`) →
+      `_compat.get_flow_chart(ea)`. `calc_thunk_func_target` → 9.4
+      `calc_thunk_function_target(fi)` → `_compat.calc_thunk_target(ea)`.
+      `ida_frame.get_spd` → `get_func_spd(func_ea, ea)` → `_compat.get_spd`.
+      `pfn.frame` → `func_entry_info_t.get_frame_id()` → `_compat.get_frame_id`.
+      Our own `utils.get_prototype(fn)` → `_compat.get_prototype_string(ea)`.
+      `fn.get_name()`/`func.size()` were plain EA-derivable. All 25 sites
+      migrated; the only func_t-bound code left is the struc-based frame
+      member walk (code_helpers `ida_funcs.get_frame`, stack_analysis
+      `_get_frame_or_error`) — 9.4 REMOVED `ida_frame.get_frame` outright,
+      so that path needs a `get_func_frame_ea` + tinfo/udt member
+      iteration rewrite (both sites degrade gracefully today).
+- [ ] **tinfo-based stack-frame walk** (the deferral above): rewrite
+      frame member enumeration on 9.4 using `ida_frame.get_func_frame_ea`
+      + `udt_type_data_t`; keep the struc path on <= 9.3
 - [ ] `ida_list_strings` behavior check on 9.4 (decompiler strings now
       included lazily)
 - [ ] RISC-V validation: run `tests/fixtures/riscv_blob.bin` (and a real
@@ -188,15 +201,23 @@ collapse to direct calls and the module is deleted.
   1427), idb.py (275/448), memory.py (173), modify.py (54), search/core.py
   `iter_segments`, gadgets.py ×5, analysis.py ×3, data.py:372, types.py:52,
   graph.py:49/71, calc.py:652/679, firmware.py:706, and 8 segments.py
-  read sites. **Still legacy (5 sites, all in segments.py):** `_find_segment`
-  (64/71) feeds readers of `.comb`/`.color` (no accessor), `set_attr` (601)
-  and `set_perms` (646) mutate `seg.perm` and commit via `update_segm`, and
-  `move` (692) passes the segment to `move_segm` — all need a
-  segment-mutation pass, not attribute accessors. `add_segm_ex` has a
-  replacement (`add_segment_ex(si: segment_info_t)`) but the only call sites
-  (segments.py add, firmware.py carve) use the `idaapi.add_segm_ex` spelling
-  and read `seg.perm` after the call, so they were left for a later pass;
-  `move_segm` similarly has only `idaapi.move_segm` call sites.
+  read sites.   `get_segm_by_name` HAS a sanctioned 9.4
+  replacement — `get_segment_ea_by_name(name)` (returns start EA, BADADDR on
+  miss); the wrapper unwraps BADADDR back to None.
+  **Mutation sites — now migrated (2026-08-11):** `update_segm` turned out
+  NOT to be deprecated, and `segment_info_t` has a full `set_*` surface
+  (incl. `set_comb`/`set_color`), so `_compat.set_segment_attr` stages
+  setters + commits via `set_segment_info` on 9.4 and keeps
+  setattr+`update_segm` on <= 9.3; `_compat.add_segment` likewise wraps
+  `add_segment_ex(segment_info_t)` / `add_segm_ex(segment_t)`. This closed
+  the last five `getseg` sites (`_find_segment`, `set_attr`, `set_perms`,
+  `move`), both `add_segm_ex` sites (segments.add, firmware.carve) and the
+  `move_segm` site. A repo-wide sweep over all 118 deprecated names now
+  finds zero real call sites outside compat.py (remaining regex matches:
+  `idc.get_func_cmt`/`idc.get_segm_name`/`idc.get_type`, which are
+  EA-based and NOT deprecated — the deprecated entries are the
+  pointer-based `ida_funcs`/`ida_segment` spellings — plus `tinfo_t`
+  constructors and local variables named `func`).
 - **`get_first_seg`/`get_next_seg` caveat.** The task premise stated these were
   not deprecated, but they DO appear in the authoritative list
   (`/tmp/ida94_deprecated.txt` lines 37/56) and the 9.4 stub keeps them with

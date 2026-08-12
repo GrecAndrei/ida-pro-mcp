@@ -54,6 +54,28 @@ Follow-up commits the same day complete the mechanical migration:
   exercise migrated code gained dual-surface `sys.modules` wiring for the
   call-time module resolver.
 
+Final commit of the day closes out the mechanical migration entirely:
+
+- **`func_t`-holding remnant** (25 sites): FlowChart accepts an
+  `ea_range_t` in place of `func_t *` on every supported version, so
+  `_compat.get_flow_chart` builds charts from function bounds;
+  `calc_thunk_func_target` → `calc_thunk_function_target`
+  (func_entry_info_t-based), `ida_frame.get_spd` → `get_func_spd`,
+  `pfn.frame` → `func_entry_info_t.get_frame_id()`, and our own
+  `utils.get_prototype(fn)` → `_compat.get_prototype_string(ea)`.
+- **Segment mutation**: `update_segm` is not deprecated and
+  `segment_info_t` has full `set_*` methods, so `_compat.set_segment_attr`
+  (set_segment_info on 9.4) and `_compat.add_segment` (add_segment_ex on
+  9.4) close the last `getseg`/`add_segm_ex`/`move_segm` sites in
+  segments.py and firmware.py; `get_segment_comb`/`get_segment_color`
+  accessors complete the read surface.
+- A sweep over all 118 deprecated names finds zero real call sites outside
+  compat.py. Only deferral left: the struc-based stack-frame member walk
+  (`ida_frame.get_frame` was *removed* in 9.4, not deprecated) needs a
+  `get_func_frame_ea` + `udt_type_data_t` rewrite; both sites degrade
+  gracefully in the meantime.
+- Suite: 2831 passed / ruff clean (21 compat dispatch tests).
+
 ## 2026-08-09 — settle wave: q05 tool verification, h02 runtime lifecycle, arch auto-apply
 
 Settle/integration pass over the completed feature waves: the q05 analysis-surface
