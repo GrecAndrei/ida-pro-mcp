@@ -703,7 +703,7 @@ def _carve(start, end, name, sclass, limit, kwargs):
     sclass = sclass or "DATA"
     sclass_upper = str(sclass).upper()
 
-    existing = idaapi.getseg(s_ea)
+    existing = _compat.get_segment(s_ea)
     if existing:
         return make_error(MCPError.SEGMENT_OVERLAP,
                           f"Address {hex(s_ea)} already belongs to segment "

@@ -246,6 +246,7 @@ def test_code_items_scans_mapped_code_heads_without_function():
     idaapi.getseg = lambda ea: types.SimpleNamespace(
         start_ea=0x80000000, end_ea=0x80000100
     )
+    sys.modules["ida_segment"].getseg = idaapi.getseg
     sys.modules["ida_bytes"].get_flags = lambda ea: 0
     sys.modules["ida_bytes"].is_code = lambda flags: True
     sys.modules["idc"].next_head = lambda ea, end: ea + 1
@@ -268,6 +269,7 @@ def test_cfg_raw_blob_fallback_and_note():
     idaapi.getseg = lambda ea: types.SimpleNamespace(
         start_ea=0x80000000, end_ea=0x80000100
     )
+    sys.modules["ida_segment"].getseg = idaapi.getseg
     sys.modules["ida_funcs"].get_func = lambda ea: None
     sys.modules["idc"].next_head = lambda ea, end: ea + 1
     sys.modules["idc"].prev_head = lambda end, start: end - 1
@@ -290,6 +292,7 @@ def test_cfg_truncation_counts_reported():
     idaapi.getseg = lambda ea: types.SimpleNamespace(
         start_ea=0x80000000, end_ea=0x80001000
     )
+    sys.modules["ida_segment"].getseg = idaapi.getseg
     sys.modules["ida_funcs"].get_func = lambda ea: None
     sys.modules["idc"].next_head = lambda ea, end: ea + 1
     sys.modules["idc"].prev_head = lambda end, start: end - 1
@@ -367,6 +370,7 @@ def test_dominators_raw_blob_fallback_note_and_truncation_counts():
     idaapi.getseg = lambda ea: types.SimpleNamespace(
         start_ea=0x80000000, end_ea=0x80001000
     )
+    sys.modules["ida_segment"].getseg = idaapi.getseg
     sys.modules["ida_funcs"].get_func = lambda ea: None
     sys.modules["idc"].get_func_name = lambda ea: ""
     b0, b1, b2 = _FakeBlock(0x80000000), _FakeBlock(0x80000010), _FakeBlock(0x80000020)

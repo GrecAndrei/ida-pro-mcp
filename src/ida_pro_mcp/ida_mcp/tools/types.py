@@ -49,7 +49,7 @@ def _is_fully_mapped(ea: int, size: int) -> bool:
             return False
         if not ida_bytes.is_loaded(start) or not ida_bytes.is_loaded(end):
             return False
-        seg = idaapi.getseg(start)
+        seg = _compat.get_segment(start)
         return bool(seg) and int(end) < int(seg.end_ea)
     except Exception:
         return False

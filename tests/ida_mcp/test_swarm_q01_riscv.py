@@ -509,6 +509,7 @@ def _load_segments(record):
         (seg, name, sclass)
     ) or True
     idaapi.BADADDR = 0xFFFFFFFFFFFFFFFF
+    sys.modules["ida_segment"].getseg = idaapi.getseg
     sys.modules["ida_segment"].get_segm_name = lambda seg: "seg"
     return load_tool_module("segments")
 

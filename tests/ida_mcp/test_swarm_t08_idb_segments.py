@@ -210,6 +210,7 @@ class TestAddActionResolvesParseAddressSafe(unittest.TestCase):
         ida_nalt = types.ModuleType("ida_nalt")
         ida_nalt.STRTYPE_C = 0
         ida_segment = types.ModuleType("ida_segment")
+        ida_segment.getseg = idaapi.getseg
         idautils = types.ModuleType("idautils")
         _blank_modules(["ida_typeinf", "ida_name", "ida_lines", "ida_bytes",
                         "ida_funcs", "ida_hexrays", "ida_frame", "ida_struct",

@@ -46,7 +46,7 @@ def _build_range_chart(ida_gdl, ea):
     FlowChart accepts a range in place of a function_t, so the graph tools can
     still produce cfg/dominator output without auto-defining functions.
     """
-    seg = idaapi.getseg(ea)
+    seg = _compat.get_segment(ea)
     end = seg.end_ea if seg else idaapi.BADADDR
     rng_cls = getattr(idaapi, "ea_range_t", None)
     if rng_cls is not None:
@@ -68,7 +68,7 @@ def _code_items(f_ea):
     func = _compat.get_func_start(f_ea)
     if func is not None:
         return list(idautils.FuncItems(f_ea))
-    seg = idaapi.getseg(f_ea)
+    seg = _compat.get_segment(f_ea)
     end = seg.end_ea if seg else idaapi.BADADDR
     items = []
     cur = f_ea

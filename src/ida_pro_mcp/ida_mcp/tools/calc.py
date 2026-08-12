@@ -649,7 +649,7 @@ def calc(
                 va = _get_frea(file_off)
                 if va == idaapi.BADADDR:
                     return make_error(MCPError.INVALID_ARGS, f"File offset {hex(file_off)} not mapped")
-                seg = idaapi.getseg(va)
+                seg = _compat.get_segment(va)
                 seg_name = _compat.get_segment_name(va) if seg else "none"
                 return _finalize({
                     "ok": True,
@@ -676,7 +676,7 @@ def calc(
                          "region, so there is no file offset to resolve. Use the "
                          "address itself (0x-prefixed) or a segment name instead.",
                 )
-            seg = idaapi.getseg(ea)
+            seg = _compat.get_segment(ea)
             seg_name = _compat.get_segment_name(ea) if seg else "none"
 
             return _finalize({

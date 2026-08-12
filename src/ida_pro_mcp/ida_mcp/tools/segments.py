@@ -79,12 +79,15 @@ def _find_segment(start=None, name=None):
 
 def _perms_string(seg):
     """Build human-readable permission string from a segment object."""
+    perm = getattr(seg, "perm", None)
+    if perm is None:
+        perm = seg.get_perm()  # 9.4 segment_info_t exposes perm via get_perm()
     perms = ""
-    if seg.perm & idaapi.SEGPERM_READ:
+    if perm & idaapi.SEGPERM_READ:
         perms += "r"
-    if seg.perm & idaapi.SEGPERM_WRITE:
+    if perm & idaapi.SEGPERM_WRITE:
         perms += "w"
-    if seg.perm & idaapi.SEGPERM_EXEC:
+    if perm & idaapi.SEGPERM_EXEC:
         perms += "x"
     return perms or "---"
 
@@ -443,7 +446,7 @@ def segments(
             results = []
             total = 0
             for ea in idautils.Segments():
-                seg = idaapi.getseg(ea)
+                seg = _compat.get_segment(ea)
                 if seg:
                     total += 1
                     if total > offset and (count == 0 or len(results) < count):
@@ -524,7 +527,7 @@ def segments(
                                   f"start ({hex(s_ea)}) must be less than end ({hex(e_ea)})")
 
             # Check for existing segment overlap
-            existing = idaapi.getseg(s_ea)
+            existing = _compat.get_segment(s_ea)
             if existing:
                 return make_error(MCPError.SEGMENT_OVERLAP,
                                   f"Address {hex(s_ea)} already belongs to segment "
@@ -569,7 +572,7 @@ def segments(
             s_ea, err = parse_address_safe(start)
             if err:
                 return err
-            seg = idaapi.getseg(s_ea)
+            seg = _compat.get_segment(s_ea)
             if not seg:
                 return make_error(MCPError.SEGMENT_NOT_FOUND,
                                   f"No segment found at address {start}")
@@ -728,7 +731,7 @@ def segments(
             if sr is None:
                 return make_error(MCPError.INVALID_ARGS,
                                   f"Unknown segment register '{reg}'. Use a name like 'T', 'GP', 'CS' or a register number.")
-            seg = idaapi.getseg(s_ea)
+            seg = _compat.get_segment(s_ea)
             if not seg:
                 return make_error(MCPError.SEGMENT_NOT_FOUND,
                                   f"No segment at address {start}")
@@ -780,7 +783,7 @@ def segments(
             if sr is None:
                 return make_error(MCPError.INVALID_ARGS,
                                   f"Unknown segment register '{reg}'. Use a name like 'T', 'GP', 'CS' or a register number.")
-            seg = idaapi.getseg(s_ea)
+            seg = _compat.get_segment(s_ea)
             if not seg:
                 return make_error(MCPError.SEGMENT_NOT_FOUND,
                                   f"No segment at address {start}")
@@ -818,7 +821,7 @@ def segments(
             s_ea, err = validate_addr(start)
             if err:
                 return err
-            seg = idaapi.getseg(s_ea)
+            seg = _compat.get_segment(s_ea)
             if not seg:
                 return make_error(MCPError.SEGMENT_NOT_FOUND,
                                   f"No segment at address {start}")
@@ -866,7 +869,7 @@ def segments(
             # Analyze all segments
             results = []
             for ea in idautils.Segments():
-                seg = idaapi.getseg(ea)
+                seg = _compat.get_segment(ea)
                 if seg:
                     results.append(_seg_density_analysis(seg))
             return {"ok": True, "segments": results, "count": len(results)}
@@ -1023,7 +1026,7 @@ def segments(
             seg_count = 0
 
             for ea in idautils.Segments():
-                seg = idaapi.getseg(ea)
+                seg = _compat.get_segment(ea)
                 if seg:
                     d = _seg_density_analysis(seg)
                     analyses.append(d)
