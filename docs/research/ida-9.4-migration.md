@@ -132,13 +132,33 @@ collapse to direct calls and the module is deleted.
       (details below); `get_first_seg`/`get_next_seg` are NOT migrated in
       this pass (see note) and `add_segm_ex`/`move_segm` have no
       `ida_segment.`-prefixed call sites
-- [ ] Function-comment family (`get_func_cmt`, `set_func_cmt`,
-      `update_func`) — ~20 sites
-- [ ] **`get_func` epic** — 193 sites; not mechanical: sites that only need
-      `start_ea` go to `get_func_start`; sites holding `func_t *` need
-      `get_func_entry_info` / iterators. Wrapper must preserve the
-      `None` vs `BADADDR` contract (`get_func` returns `None`;
-      `get_func_start` returns `BADADDR`).
+- [x] Function-comment family — turned out to be a non-issue:
+      `idc.get_func_cmt`/`idc.set_func_cmt` are already EA-based and NOT
+      deprecated in 9.4 (no `_ida_deprecated` marker in idc.py). The only
+      real sites were `ida_funcs.update_func` ×2 in funcs.py, migrated to
+      the `_compat.get_func_flags` + `_compat.set_func_flags` composition
+      (9.4's `set_func_flags(ea, flags)` is the EA replacement)
+- [x] **`get_func` epic** — DONE (2026-08-11, three delegated batches):
+      ~168 of ~193 call sites migrated to `_compat.get_func_start` /
+      `get_func_info` / `get_func_flags` across all 26 files, incl.
+      `error_handling.py` (guarded import keeps host-side pure-stdlib
+      loadability) and the `_get_prev_func`/`_get_next_func` helpers in
+      code_helpers.py (now EA-or-None on all versions). **25 sites remain
+      legacy by design** — they hold `func_t *` across a boundary:
+      FlowChart ×7 (graph 324/403, code_helpers 1221/1414/1433, code 837,
+      combinators 828), get_prototype ×8 (code 369/380/887, data 186,
+      funcs 592/663, annotation 487/527, code 554), get_frame ×1
+      (code_helpers 1256), frame helpers ×2 (stack_analysis 129,
+      utils 476 — read `.frame`), thunk path ×1 (code 453 — `.flags` +
+      `calc_thunk_func_target`, itself deprecated), internal signature ×1
+      (code 1454 `_trace_argument_origin` — tests pin the func-object
+      param), FlowChart/metadata ×3 (intelligence 502/640/851), and
+      utils.py:281 (`fn.get_name()` method call). These need a
+      FlowChart/frame/prototype/thunk API audit — a separate batch.
+- [ ] **`func_t`-holding remnant audit** (the 25 sites above): check 9.4
+      replacements for `FlowChart`, `get_prototype`, `get_frame`,
+      `calc_thunk_func_target` (likely `calc_thunk_func_target_ea`) and
+      migrate or wrap each
 - [ ] `ida_list_strings` behavior check on 9.4 (decompiler strings now
       included lazily)
 - [ ] RISC-V validation: run `tests/fixtures/riscv_blob.bin` (and a real
@@ -161,14 +181,18 @@ collapse to direct calls and the module is deleted.
   `get_segm_class`, 1 `set_segm_name`, 1 `get_segm_by_name`, plus 4
   `getseg`→`get_segment` (imports_deep ×3, idb_summary comment count) and 1
   `getseg`+`get_segm_name` collapse (code_helpers shellcode-prologue check).
-  **Left on the legacy call (audit rule — the returned object's `segment_t`
-  attributes that the surrounding code reads do not exist on
-  `segment_info_t`, which exposes its fields only via `get_*()` methods, not
-  properties):** `code_helpers.py` getseg at 1149/1319/1427 and `idb.py` getseg
-  at 275/448 and `memory.py`/`modify.py` getseg — all read `.perm` (or
-  `.type`/`.align`/`.bitness`). `get_segm_by_name` HAS a sanctioned 9.4
-  replacement — `get_segment_ea_by_name(name)` (returns start EA, BADADDR on
-  miss); the wrapper unwraps BADADDR back to None. `add_segm_ex` has a
+  **Attribute-reading sites — now migrated (2026-08-11):**
+  `_compat.get_segment_perm/type/align/bitness(ea)` accessors were added
+  (9.4: `segment_info_t.get_*()` methods; 9.3: `segment_t` attributes) and
+  all pure attribute-read sites moved over: code_helpers.py (1149/1319/
+  1427), idb.py (275/448), memory.py (173), modify.py (54), search/core.py
+  `iter_segments`, gadgets.py ×5, analysis.py ×3, data.py:372, types.py:52,
+  graph.py:49/71, calc.py:652/679, firmware.py:706, and 8 segments.py
+  read sites. **Still legacy (5 sites, all in segments.py):** `_find_segment`
+  (64/71) feeds readers of `.comb`/`.color` (no accessor), `set_attr` (601)
+  and `set_perms` (646) mutate `seg.perm` and commit via `update_segm`, and
+  `move` (692) passes the segment to `move_segm` — all need a
+  segment-mutation pass, not attribute accessors. `add_segm_ex` has a
   replacement (`add_segment_ex(si: segment_info_t)`) but the only call sites
   (segments.py add, firmware.py carve) use the `idaapi.add_segm_ex` spelling
   and read `seg.perm` after the call, so they were left for a later pass;

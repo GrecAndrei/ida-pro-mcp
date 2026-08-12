@@ -31,6 +31,29 @@ against the install the user selected in the installer — not a floor bump.
   `detect_ida_installs()` reports both side-by-side installs with correct
   version/build strings.
 
+Follow-up commits the same day complete the mechanical migration:
+
+- **Segment family** (37 sites / 13 files, then the rest): all
+  `get_segm_name`/`get_segm_class`/`set_segm_name`/`move_segm`/
+  `get_segm_by_name` call sites plus every pure attribute-read `getseg`
+  site migrated; `compat` gained `get_segment`, name/class/set/move
+  wrappers, `get_segment_ea_by_name`, first/next segment iteration, and
+  the `get_segment_perm/type/align/bitness` accessors (9.4's
+  `segment_info_t` exposes those only via `get_*()` methods).
+- **Function family** (~168 of ~193 `get_func` sites / 26 files):
+  `get_func_start` / `get_func_info` / `get_func_flags` /
+  `set_func_flags` / `get_prev_func_start` / `get_next_func_start`
+  wrappers; both `update_func` sites became the flags composition; the
+  `_get_prev_func`/`_get_next_func` helpers are EA-or-None on all
+  versions. 25 sites remain legacy by design (they hold `func_t *` for
+  FlowChart / get_prototype / get_frame / thunk APIs) — tracked in the
+  migration doc as the next audit batch.
+- `idc.get_func_cmt`/`idc.set_func_cmt` verified already EA-based and not
+  deprecated — no migration needed there.
+- Suite stays at 2820 passed / ruff-clean throughout; test fixtures that
+  exercise migrated code gained dual-surface `sys.modules` wiring for the
+  call-time module resolver.
+
 ## 2026-08-09 — settle wave: q05 tool verification, h02 runtime lifecycle, arch auto-apply
 
 Settle/integration pass over the completed feature waves: the q05 analysis-surface
