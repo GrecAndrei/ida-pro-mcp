@@ -47,6 +47,11 @@ class InstallerOptions:
     ida_version: str = ""  # explicit version override (e.g. "9.3" or "9.3.260421")
     no_ida_prompt: bool = False  # don't prompt; pick highest-version automatically
     disable_policy: bool = False  # set IDA_MCP_POLICY_MODE=off in the spawned server
+    # Session runtime backend: idat (default, crash-isolated per-session
+    # processes) or idalib (experimental in-process kernel; needs the idapro
+    # whl + activation on the chosen 9.3+ install). Written into the client
+    # config env as IDA_MCP_RUNTIME.
+    ida_runtime: str = "idat"  # idat | idalib
     # r2/Rizin engine (paper §8.2 item 11) — Phase 1 locates an existing
     # rz/r2 on PATH and records it as IDA_MCP_R2_BIN in the generated client
     # config; it does NOT download a pinned release (documented follow-up,

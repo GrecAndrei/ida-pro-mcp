@@ -1,8 +1,44 @@
-# idalib as the MCP runtime — evaluation & design (draft)
+# idalib as the MCP runtime — evaluation & design
 
-Status: **evaluated, not adopted** (2026-08-12). This doc is the design
-write-up the tracking doc requires before any porting. It exists so a
-future attempt starts from verified facts instead of release-note prose.
+Status: **adopted as an opt-in backend** (2026-08-12). Spawn-idat stays
+the default; `IDA_MCP_RUNTIME=idalib` runs sessions inside the idalib
+kernel.  Verified live: the full integration suite passes under idalib on
+**both 9.3.260421 and 9.4.260714** (42 passed / 8 skipped each, matching
+the idat legs), and the runtime matrix runs all four legs
+(scripts/run_ida_matrix.py --idalib).
+
+## What shipped
+
+- `ida_pro_mcp/idalib_worker.py` — worker process: imports `idapro`
+  (must be the first IDA import, hence a top-level module — the `ida_mcp`
+  package `__init__` imports `sync`/`ida_kernwin` and would break the
+  first-import rule), `open_database(file, run_analysis, args,
+  enable_history=True)`, then `runpy.run_path(server_script.py,
+  run_name="__main__")` so the existing RPC listener + main-thread dispatch
+  loop run unmodified.  On the host's shutdown RPC the `__main__` block
+  returns and the worker performs `close_database(save=True)` (flush on
+  exit).
+- Host seam (`host/server/server_runtime.py`): `IDA_MCP_RUNTIME=idalib`
+  swaps the idat spawn for `python -m ida_pro_mcp.idalib_worker` with the
+  same `IDA_MCP_*` env, port handoff, ping protocol, leases and teardown —
+  the host treats the worker exactly like an idat runtime.  Preload load
+  args extracted into `_preload_ida_args(session)` so both backends load
+  with the same architecture flags; the idalib worker receives them via
+  `IDA_MCP_IDALIB_OPEN` (`-o` is only passed for new databases — idalib
+  refuses an existing output with rc=2).
+- Snapshot/undo mapping: idalib exposes no `ida_loader.save_snapshot`/
+  `restore_snapshot` — `analysis(snapshot/restore_snapshot)` feature-
+  detects this and falls back to `ida_undo.create_undo_point` /
+  `perform_undo` (LIFO restore; verified live on 9.4).  Undo history is
+  enabled per session by `open_database(enable_history=True)`.
+- Installer: wizard section "IDA session runtime backend" (idat
+  recommended / idalib experimental), `--ida-runtime {idat,idalib}` CLI
+  flag, `find_idalib_python_dir`/`activate_idalib` helpers, and
+  `IDA_MCP_RUNTIME` written into the client config env by
+  `build_stdio_config(ida_runtime=...)`.
+- Matrix: `run_ida_matrix.py --idalib` runs the integration suite under
+  idalib per install (activating idalib per install; skips installs
+  without idalib/python); the self-hosted workflow passes `--idalib`.
 
 ## The question
 
@@ -72,23 +108,46 @@ Phase 1 — runtime abstraction, not a rewrite:
    (it already speaks the same request/response shape; the backend only
    changes where closures run).
 
-## Decision
+## Decision (revised)
 
-Not adopted now. The spawn-idat model is crash-isolated, version-agnostic
-(9.2 floor), and license-simple; the integration suite passes live on both
-9.3 and 9.4 (2026-08-12 matrix run). idalib's wins (undo points, no
-process spawn, flush-on-exit) matter for long-running batch farms, not
-interactive sessions. Revisit when: (a) multi-session throughput on one
-box becomes the bottleneck, (b) a runtime feature (e.g. `gen_disasm_text`)
-is needed that spawned idat can't reach, or (c) the 9.2 floor rises.
+Adopted as an opt-in backend behind `IDA_MCP_RUNTIME=idalib`; spawn-idat
+remains the default.  Rationale: the worker reuses server_script.py's
+listener + main-thread dispatch loop verbatim (no RPC protocol change),
+which made the port cheap enough to ship behind a flag.  idat is still the
+right default — crash isolation and the 9.2 floor matter more than the
+idalib wins (undo points, no process spawn, flush-on-exit) for interactive
+use — but the idalib path is now continuously validated by the matrix
+instead of being design prose.
+
+Known trade-offs of the current idalib implementation:
+- One worker per session (matching spawn-idat resilience: a worker crash
+  takes the session down, the host recovers/restarts it; the server
+  survives).  Multi-session-on-one-worker (DB swap) is NOT implemented —
+  idalib is one-kernel-per-process and swapping databases would require
+  resetting per-IDB Python state (netnode handles, LRU caches).
+- `open_database(run_auto_analysis=True)` blocks through auto-analysis
+  before the RPC listener binds, so the host's startup ping timeout
+  (IDA_MCP_STARTUP_TIMEOUT, default 240s) covers the open.
+- Revisit multi-session batching when: (a) multi-session throughput on one
+  box becomes the bottleneck, (b) a runtime feature (e.g.
+  `gen_disasm_text`) is needed that spawned idat can't reach, or (c) the
+  9.2 floor rises.
 
 ## Acceptance criteria for the future port
 
-- [ ] `IDA_MCP_RUNTIME=idalib` runs the full integration suite on 9.4
-- [ ] session crash inside idalib (bad script) does not take the worker
-      down (worker restart + session retry, matching spawn-idat resilience)
+- [x] `IDA_MCP_RUNTIME=idalib` runs the full integration suite on 9.4
+      (and 9.3): 42 passed / 8 skipped on both, matrix-validated
+- [x] session crash inside idalib (bad script) does not take the worker
+      down — per-session workers + host recovery give spawn-idat-equivalent
+      resilience (worker restart + session retry)
 - [ ] two concurrent sessions on one worker (execute_sync serialization)
-- [ ] `ida_undo` snapshot/restore mapped to the existing
-      `ida_idb_snapshot` surface
-- [ ] installer: idapro whl install + activation surfaced in the wizard
-      (AGENTS.md installer touchpoints apply: new backend binary)
+      — NOT implemented; requires DB-swap + per-IDB state reset (see
+      Decision above)
+- [x] `ida_undo` snapshot/restore mapped to the existing
+      `ida_idb_snapshot` surface — `analysis(snapshot/restore_snapshot)`
+      falls back to `ida_undo.create_undo_point`/`perform_undo` (LIFO)
+      when `ida_loader.save_snapshot` is absent; history enabled per
+      session
+- [x] installer: idapro whl install + activation surfaced in the wizard
+      (wizard section + `--ida-runtime` flag + `IDA_MCP_RUNTIME` in the
+      client config env)

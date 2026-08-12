@@ -1121,6 +1121,45 @@ def setup_runtime_environment(
     )
     report.metadata["venv_python"] = str(python_exe)
     return python_exe
+def find_idalib_python_dir(ida_dir: str) -> str:
+    """Directory holding the ``idapro`` package for an install (IDA 9.3+).
+
+    Returns ``<ida_dir>/idalib/python`` when it contains the ``idapro``
+    package directory (the runtime the ``idalib`` MCP backend needs), else
+    "".
+    """
+    if not ida_dir:
+        return ""
+    candidate = os.path.join(ida_dir, "idalib", "python")
+    if os.path.isdir(os.path.join(candidate, "idapro")):
+        return candidate
+    return ""
+
+
+def activate_idalib(ida_dir: str) -> tuple[bool, str]:
+    """Point the idapro activation at *ida_dir*.
+
+    Returns (ok, detail): True when ``py-activate-idalib.py -d <dir>``
+    exists and exits 0.  Activation records the install idalib loads
+    ``libidalib.so`` from; one install is active at a time.
+    """
+    py = os.path.join(find_idalib_python_dir(ida_dir), "py-activate-idalib.py")
+    if not os.path.isfile(py):
+        return False, f"no py-activate-idalib.py under {ida_dir}"
+    try:
+        result = subprocess.run(
+            [sys.executable, py, "-d", ida_dir],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "activation timed out"
+    if result.returncode != 0:
+        return False, (result.stderr or result.stdout or f"exited {result.returncode}").strip()
+    return True, "activated"
+
+
 def build_stdio_config(
     python_exe: Path,
     install_root: Path,
@@ -1137,6 +1176,7 @@ def build_stdio_config(
     disable_policy: bool = False,
     rerank_disabled: bool = False,
     r2_bin: str = "",
+    ida_runtime: str = "",
 ) -> dict:
     """Build the stdio MCP server config for a specific IDA install.
 
@@ -1213,6 +1253,12 @@ def build_stdio_config(
         # spawn rz/r2 as a subprocess.  --with-r2 records the resolved binary
         # here so the generated client config enables the engine.
         env["IDA_MCP_R2_BIN"] = r2_bin
+    if ida_runtime and str(ida_runtime).strip().lower() == "idalib":
+        # In-process idalib backend (experimental): the host spawns
+        # `python -m ida_pro_mcp.idalib_worker` instead of idat per session.
+        # Requires a 9.3+ install with the idapro whl + activation (the
+        # wizard runs py-activate-idalib.py when this option is chosen).
+        env["IDA_MCP_RUNTIME"] = "idalib"
 
     return {
         "command": str(python_exe),

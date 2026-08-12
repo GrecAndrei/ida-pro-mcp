@@ -1674,6 +1674,122 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
 
             return "\n".join(_lines(value))
 
+    def _preload_ida_args(self, session) -> list[str]:
+        """CLI load-args for a NEW database (processor/loader/baseaddr/...).
+
+        Shared by the idat command builder and the idalib worker's
+        ``open_database(args=...)`` so both backends load with the same
+        architecture from the start.  These flags only make sense before
+        the database exists; existing-IDB opens pass no preload args.
+        """
+        opts = session.analysis_options or {}
+        out: list[str] = []
+        ida_prefixes = {str(a)[:2] for a in (session.ida_args or [])}
+        if opts.get("processor") and "-p" not in ida_prefixes:
+            out.append(f"-p{opts['processor']}")
+        loader = opts.get("loader")
+        _t_emitted = False
+        if loader and "-T" not in ida_prefixes:
+            out.append(f"-T{loader}")
+            _t_emitted = True
+        elif not loader and "-T" not in ida_prefixes:
+            # Sniff the file magic — if it's a known container format let
+            # IDA's native loader handle it; otherwise force -Tbin so raw
+            # blobs load correctly regardless of processor/architecture.
+            # Explicit loader= always overrides this (handled above).
+            _bin_path = session.binary_path or ""
+            _is_native = False
+            try:
+                with open(_bin_path, "rb") as _fh:
+                    _magic = _fh.read(4)
+                if (_magic[:4] == b"\x7fELF"           # ELF
+                        or _magic[:2] in (b"MZ", b"ZM")  # PE/DOS
+                        or _magic[:4] in (b"\xca\xfe\xba\xbe", b"\xcf\xfa\xed\xfe",
+                                          b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf",
+                                          b"\xfe\xed\xfa\xce")):  # Mach-O
+                    _is_native = True
+            except Exception:
+                pass
+            if not _is_native:
+                out.append("-Tbin")
+                _t_emitted = True
+        # Apply inferred load base so IDA maps the binary at the correct
+        # address from the start (e.g. AIC8800D80 WFFW at 0x120000).
+        if opts.get("baseaddr") is not None and "-b" not in ida_prefixes:
+            # baseaddr arrives as a string like "0x400000" or an int.
+            # IDA -b flag is in 16-byte paragraphs, not bytes.
+            # Addresses < 16 (e.g. 0x8) would collapse to paragraph 0 and
+            # load at 0x0 — pass the raw byte address as a paragraph-1 value
+            # via the idb_id offset instead (IDA accepts 0-based hex paragraphs).
+            # Simplest correct fix: pass the byte address directly when it is
+            # not paragraph-aligned, IDA accepts fractional-paragraph values
+            # as a raw linear address when the value is prefixed with 0x and
+            # exceeds the paragraph size. For sub-paragraph addresses we just
+            # emit the byte address verbatim — IDA treats -b as a linear base
+            # when no paragraph boundary applies.
+            with contextlib.suppress(TypeError, ValueError):
+                _base = int(str(opts["baseaddr"]), 0)
+                if _base % 16 == 0:
+                    out.append(f"-b{_base // 16:#x}")
+                else:
+                    # Non-paragraph-aligned: pass byte address directly.
+                    out.append(f"-b{_base:#x}")
+        # skip_analysis=true: pass -c to create IDB without running auto-analysis.
+        # Use for large/raw binaries where analysis blocks indefinitely.
+        # After session create, call analysis(action='run') to trigger manually.
+        if opts.get("skip_analysis") or opts.get("no_analysis"):
+            if "-c" not in (session.ida_args or []):
+                out.append("-c")
+        # Force a specific file format parser (e.g. bin, elf, pe, macho,
+        # ihex, srec). IDA's file-type switch is -T, not -F — a previous
+        # -F emission made every launch abort with "Unknown switch '-F'"
+        # (the i64 was never created, so every resume re-crashed). Only
+        # emitted when no -T (loader/raw) was already added.
+        input_format = opts.get("input_format")
+        if input_format and not _t_emitted:
+            out.append(f"-T{input_format}")
+        # Override the entry point address. IDA's entry-point switch is
+        # -i (hex), not -e.
+        entry_point = opts.get("entry_point")
+        if entry_point is not None and "-i" not in ida_prefixes:
+            with contextlib.suppress(TypeError, ValueError):
+                if isinstance(entry_point, str):
+                    out.append(f"-i{entry_point.strip()}")
+                else:
+                    out.append(f"-i{int(entry_point):x}")
+        # rebase_to: the previous emission used -R, which in IDA means
+        # "load MS Windows resources" (wrong). There is no post-load
+        # rebase switch; a target load address is expressed with -b (the
+        # same switch baseaddr uses), so map rebase_to there when no
+        # explicit baseaddr was given.
+        rebase_to = opts.get("rebase_to")
+        if (
+            rebase_to is not None
+            and opts.get("baseaddr") is None
+            and "-b" not in ida_prefixes
+        ):
+            with contextlib.suppress(TypeError, ValueError):
+                _rebase = int(str(rebase_to), 0)
+                if _rebase % 16 == 0:
+                    out.append(f"-b{_rebase // 16:#x}")
+                else:
+                    out.append(f"-b{_rebase:#x}")
+        # The following options have NO idat command-line equivalent:
+        #   processor_options  -P is IDA's "pack database" switch
+        #   stack_size         -s is not an idat switch
+        #   memory_model       -m is not an idat switch
+        # Emitting any of them made IDA reject the command line and abort
+        # (or silently do the wrong thing), so they are intentionally not
+        # passed on the CLI. They are best applied after load via the
+        # pre-analysis hook / a follow-up session(action=...) call.
+        for _drop_key in ("processor_options", "stack_size", "memory_model"):
+            if opts.get(_drop_key) is not None:
+                log_rpc(
+                    f"Ignoring {_drop_key}={opts.get(_drop_key)!r}: no idat CLI "
+                    f"switch exists for it (previous -P/-s/-m emissions were invalid)"
+                )
+        return out
+
     def _build_ida_command(
             self, session, log_file, script_path, use_existing_idb: bool, effective_idb_path: str | None = None
         ):
@@ -1684,111 +1800,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             # with the correct architecture from the start instead of defaulting
             # to metapc and requiring a post-load switch.
             if not use_existing_idb:
-                opts = session.analysis_options or {}
-                ida_prefixes = {str(a)[:2] for a in (session.ida_args or [])}
-                if opts.get("processor") and "-p" not in ida_prefixes:
-                    cmd.append(f"-p{opts['processor']}")
-                loader = opts.get("loader")
-                _t_emitted = False
-                if loader and "-T" not in ida_prefixes:
-                    cmd.append(f"-T{loader}")
-                    _t_emitted = True
-                elif not loader and "-T" not in ida_prefixes:
-                    # Sniff the file magic — if it's a known container format let
-                    # IDA's native loader handle it; otherwise force -Tbin so raw
-                    # blobs load correctly regardless of processor/architecture.
-                    # Explicit loader= always overrides this (handled above).
-                    _bin_path = session.binary_path or ""
-                    _is_native = False
-                    try:
-                        with open(_bin_path, "rb") as _fh:
-                            _magic = _fh.read(4)
-                        if (_magic[:4] == b"\x7fELF"           # ELF
-                                or _magic[:2] in (b"MZ", b"ZM")  # PE/DOS
-                                or _magic[:4] in (b"\xca\xfe\xba\xbe", b"\xcf\xfa\xed\xfe",
-                                                  b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf",
-                                                  b"\xfe\xed\xfa\xce")):  # Mach-O
-                            _is_native = True
-                    except Exception:
-                        pass
-                    if not _is_native:
-                        cmd.append("-Tbin")
-                        _t_emitted = True
-                # Apply inferred load base so IDA maps the binary at the correct
-                # address from the start (e.g. AIC8800D80 WFFW at 0x120000).
-                if opts.get("baseaddr") is not None and "-b" not in ida_prefixes:
-                    # baseaddr arrives as a string like "0x400000" or an int.
-                    # IDA -b flag is in 16-byte paragraphs, not bytes.
-                    # Addresses < 16 (e.g. 0x8) would collapse to paragraph 0 and
-                    # load at 0x0 — pass the raw byte address as a paragraph-1 value
-                    # via the idb_id offset instead (IDA accepts 0-based hex paragraphs).
-                    # Simplest correct fix: pass the byte address directly when it is
-                    # not paragraph-aligned, IDA accepts fractional-paragraph values
-                    # as a raw linear address when the value is prefixed with 0x and
-                    # exceeds the paragraph size. For sub-paragraph addresses we just
-                    # emit the byte address verbatim — IDA treats -b as a linear base
-                    # when no paragraph boundary applies.
-                    with contextlib.suppress(TypeError, ValueError):
-                        _base = int(str(opts["baseaddr"]), 0)
-                        if _base % 16 == 0:
-                            cmd.append(f"-b{_base // 16:#x}")
-                        else:
-                            # Non-paragraph-aligned: pass byte address directly.
-                            cmd.append(f"-b{_base:#x}")
-                # skip_analysis=true: pass -c to create IDB without running auto-analysis.
-                # Use for large/raw binaries where analysis blocks indefinitely.
-                # After session create, call analysis(action='run') to trigger manually.
-                if opts.get("skip_analysis") or opts.get("no_analysis"):
-                    if "-c" not in (session.ida_args or []):
-                        cmd.append("-c")
-                # Force a specific file format parser (e.g. bin, elf, pe, macho,
-                # ihex, srec). IDA's file-type switch is -T, not -F — a previous
-                # -F emission made every launch abort with "Unknown switch '-F'"
-                # (the i64 was never created, so every resume re-crashed). Only
-                # emitted when no -T (loader/raw) was already added.
-                input_format = opts.get("input_format")
-                if input_format and not _t_emitted:
-                    cmd.append(f"-T{input_format}")
-                # Override the entry point address. IDA's entry-point switch is
-                # -i (hex), not -e.
-                entry_point = opts.get("entry_point")
-                if entry_point is not None and "-i" not in ida_prefixes:
-                    with contextlib.suppress(TypeError, ValueError):
-                        if isinstance(entry_point, str):
-                            cmd.append(f"-i{entry_point.strip()}")
-                        else:
-                            cmd.append(f"-i{int(entry_point):x}")
-                # rebase_to: the previous emission used -R, which in IDA means
-                # "load MS Windows resources" (wrong). There is no post-load
-                # rebase switch; a target load address is expressed with -b (the
-                # same switch baseaddr uses), so map rebase_to there when no
-                # explicit baseaddr was given.
-                rebase_to = opts.get("rebase_to")
-                if (
-                    rebase_to is not None
-                    and opts.get("baseaddr") is None
-                    and "-b" not in ida_prefixes
-                ):
-                    with contextlib.suppress(TypeError, ValueError):
-                        _rebase = int(str(rebase_to), 0)
-                        if _rebase % 16 == 0:
-                            cmd.append(f"-b{_rebase // 16:#x}")
-                        else:
-                            cmd.append(f"-b{_rebase:#x}")
-                # The following options have NO idat command-line equivalent:
-                #   processor_options  -P is IDA's "pack database" switch
-                #   stack_size         -s is not an idat switch
-                #   memory_model       -m is not an idat switch
-                # Emitting any of them made IDA reject the command line and abort
-                # (or silently do the wrong thing), so they are intentionally not
-                # passed on the CLI. They are best applied after load via the
-                # pre-analysis hook / a follow-up session(action=...) call.
-                for _drop_key in ("processor_options", "stack_size", "memory_model"):
-                    if opts.get(_drop_key) is not None:
-                        log_rpc(
-                            f"Ignoring {_drop_key}={opts.get(_drop_key)!r}: no idat CLI "
-                            f"switch exists for it (previous -P/-s/-m emissions were invalid)"
-                        )
+                cmd.extend(self._preload_ida_args(session))
 
             cmd.append(f"-S{script_path}")
             cmd.append(f"-L{log_file}")
@@ -1801,6 +1813,74 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 if session.binary_path:
                     cmd.append(session.binary_path)
             return cmd
+
+    def _idalib_python_dir(self) -> str:
+        """Directory containing the ``idapro`` package for the detected install."""
+        if self.ida_dir:
+            candidate = os.path.join(self.ida_dir, "idalib", "python")
+            if os.path.isdir(os.path.join(candidate, "idapro")):
+                return candidate
+            # A non-ida-mcp scratch copy next to the install (dev layouts).
+            for sub in ("idalib",):
+                p = os.path.join(self.ida_dir, sub, "python")
+                if os.path.isdir(p):
+                    return p
+        for candidate in (
+            os.path.join(self.ida_dir, "idalib", "python"),
+            os.path.join(os.path.dirname(self.idat_exe), "idalib", "python"),
+        ):
+            if self.ida_dir or self.idat_exe:
+                if os.path.isdir(os.path.join(candidate, "idapro")):
+                    return candidate
+        return ""
+
+    def _build_idalib_command(self, session, script_path, use_existing_idb: bool,
+                              effective_idb_path: str | None = None, log_file: str = ""):
+        """Worker command for the idalib backend.
+
+        The worker process (``ida_pro_mcp.ida_mcp.idalib_worker``) imports
+        ``idapro``, opens the target database via
+        ``open_database(..., enable_history=True)``, then runs
+        ``server_script.py``'s ``__main__`` unchanged.  Everything else —
+        the ``IDA_MCP_*`` env, the port handoff, the ping protocol, leases
+        and teardown — is identical to the idat backend, so the host treats
+        the worker exactly like an idat runtime.
+        """
+        # SCRIPT_DIR is host/server/; the import root (the directory
+        # containing the ida_pro_mcp package) is three levels up.
+        package_root = os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))
+        cmd = [sys.executable, "-m", "ida_pro_mcp.idalib_worker"]
+        open_spec = {
+            "file": (effective_idb_path or session.idb_path)
+            if use_existing_idb
+            else (session.binary_path or ""),
+            "existing": bool(use_existing_idb),
+            "skip_analysis": bool(
+                (session.analysis_options or {}).get("skip_analysis")
+                or (session.analysis_options or {}).get("no_analysis")
+            ),
+            "server_script": script_path,
+        }
+        # Preload load-args mirror the idat CLI (processor/loader/baseaddr/
+        # entry/rebase/skip). -o names the output IDB for new databases;
+        # -L redirects IDA's own log to the session log dir for diagnostics.
+        args: list[str] = []
+        if not use_existing_idb:
+            args.extend(self._preload_ida_args(session))
+        if not use_existing_idb and session.idb_path:
+            args.append(f"-o{session.idb_path}")
+        if log_file:
+            args.append(f"-L{log_file}")
+        open_spec["args"] = " ".join(args)
+        return cmd, open_spec, package_root
+
+    @staticmethod
+    def _runtime_backend() -> str:
+        """Runtime backend in effect: ``idat`` (default) or ``idalib``."""
+        return (os.environ.get("IDA_MCP_RUNTIME") or "idat").strip().lower()
+
+    def _is_idalib_runtime(self) -> bool:
+        return self._runtime_backend() == "idalib"
 
     def _backup_idb(self, idb_path: str) -> str | None:
             if not idb_path or not os.path.exists(idb_path):
@@ -2145,7 +2225,19 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             )
 
             # Validate IDA installation
-            if not self.idat_exe or not self._is_executable_file(self.idat_exe):
+            idalib_runtime = self._is_idalib_runtime()
+            if idalib_runtime:
+                idalib_python_dir = self._idalib_python_dir()
+                if not idalib_python_dir:
+                    return make_error(
+                        MCPError.FILE_NOT_FOUND,
+                        "idalib runtime requested (IDA_MCP_RUNTIME=idalib) but the "
+                        "idapro Python package was not found under the IDA install. "
+                        "Run py-activate-idalib.py -d <install_dir> and check "
+                        "<install>/idalib/python exists.",
+                        details={"ida_dir": self.ida_dir, "idat_exe": self.idat_exe},
+                    )
+            elif not self.idat_exe or not self._is_executable_file(self.idat_exe):
                 return make_error(
                     MCPError.FILE_NOT_FOUND,
                     "IDA executable not found. Set IDADIR or IDA_MCP_IDAT, or ensure idat64/idat is in PATH.",
@@ -2240,7 +2332,20 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 # Ensure session directory exists
                 os.makedirs(os.path.dirname(session.idb_path), exist_ok=True)
                 self._cleanup_stale_idb_family(session.idb_path)
-            cmd = self._build_ida_command(session, log_file, script_path, use_existing_idb, effective_idb_path)
+            if idalib_runtime:
+                cmd, idalib_open_spec, package_root = self._build_idalib_command(
+                    session, script_path, use_existing_idb, effective_idb_path, log_file=log_file
+                )
+                env["IDA_MCP_IDALIB_PYTHON_DIR"] = idalib_python_dir
+                env["IDA_MCP_IDALIB_OPEN"] = json.dumps(idalib_open_spec)
+                _cur_pypath = env.get("PYTHONPATH", "")
+                env["PYTHONPATH"] = (
+                    package_root + (os.pathsep + _cur_pypath if _cur_pypath else "")
+                )
+            else:
+                cmd = self._build_ida_command(
+                    session, log_file, script_path, use_existing_idb, effective_idb_path
+                )
 
             log_rpc(f"Launching IDA: {' '.join(cmd)}")
 
@@ -2461,7 +2566,29 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     f"Creating new IDB for binary: {session.binary_path} -> {session.idb_path}"
                 )
                 os.makedirs(os.path.dirname(session.idb_path), exist_ok=True)
-            cmd = self._build_ida_command(session, log_file, script_path, use_existing_idb, effective_idb_path)
+            if self._is_idalib_runtime():
+                idalib_python_dir = self._idalib_python_dir()
+                if not idalib_python_dir:
+                    return make_error(
+                        MCPError.FILE_NOT_FOUND,
+                        "idalib runtime requested (IDA_MCP_RUNTIME=idalib) but the "
+                        "idapro Python package was not found under the IDA install.",
+                        details={"ida_dir": self.ida_dir},
+                    )
+                cmd, idalib_open_spec, package_root = self._build_idalib_command(
+                    session, script_path, use_existing_idb, effective_idb_path,
+                    log_file=log_file,
+                )
+                env["IDA_MCP_IDALIB_PYTHON_DIR"] = idalib_python_dir
+                env["IDA_MCP_IDALIB_OPEN"] = json.dumps(idalib_open_spec)
+                if sanitize_env:
+                    env.pop("PYTHONPATH", None)
+                _cur_pypath = env.get("PYTHONPATH", "")
+                env["PYTHONPATH"] = (
+                    package_root + (os.pathsep + _cur_pypath if _cur_pypath else "")
+                )
+            else:
+                cmd = self._build_ida_command(session, log_file, script_path, use_existing_idb, effective_idb_path)
 
             stdout_fh = open(stdout_log, "a", encoding="utf-8")
             stderr_fh = open(stderr_log, "a", encoding="utf-8")

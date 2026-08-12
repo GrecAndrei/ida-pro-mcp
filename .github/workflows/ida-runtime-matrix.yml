@@ -46,4 +46,7 @@ jobs:
         env:
           IDA_MCP_DISABLE_RATE_LIMIT: "1"
           IDA_MCP_POLICY_MODE: "permissive"
-        run: python scripts/run_ida_matrix.py
+        # --idalib: each install also runs the integration suite under the
+        # idalib in-process backend (IDA_MCP_RUNTIME=idalib); installs
+        # without an idalib/python are skipped with a note.
+        run: python scripts/run_ida_matrix.py --idalib

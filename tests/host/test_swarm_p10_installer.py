@@ -436,3 +436,78 @@ def test_python_environment_kind_detects_managed_interpreters(monkeypatch):
     monkeypatch.delenv("UV_ACTIVE")
     monkeypatch.setenv("CONDA_PREFIX", "/opt/miniconda3")
     assert python_environment_kind(Path("/usr/bin/python3")) == "conda"
+
+
+# ---------------------------------------------------------------------------
+# idalib runtime backend: helpers + client-config env
+# ---------------------------------------------------------------------------
+
+
+def test_find_idalib_python_dir_detected(tmp_path):
+    from ida_pro_mcp.installer.runtime import find_idalib_python_dir
+
+    install = tmp_path / "ida-pro-9.4"
+    (install / "idalib" / "python" / "idapro").mkdir(parents=True)
+    assert find_idalib_python_dir(str(install)) == str(install / "idalib" / "python")
+
+
+def test_find_idalib_python_dir_missing(tmp_path):
+    from ida_pro_mcp.installer.runtime import find_idalib_python_dir
+
+    install = tmp_path / "ida-pro-9.2"
+    install.mkdir()
+    assert find_idalib_python_dir(str(install)) == ""
+
+
+def test_activate_idalib_runs_activator(tmp_path, monkeypatch):
+    import ida_pro_mcp.installer.runtime as runtime_mod
+
+    install = tmp_path / "ida-pro-9.4"
+    (install / "idalib" / "python" / "idapro").mkdir(parents=True)
+    activator = install / "idalib" / "python" / "py-activate-idalib.py"
+    activator.write_text("exit 0\n")
+
+    calls = []
+
+    def fake_run(cmd, capture_output=True, text=True, timeout=120):
+        calls.append(list(cmd))
+        class R:
+            returncode = 0
+            stdout = "activated"
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(runtime_mod.subprocess, "run", fake_run)
+    ok, detail = runtime_mod.activate_idalib(str(install))
+    assert ok is True
+    assert calls and calls[0][-2:] == ["-d", str(install)]
+
+
+def test_activate_idalib_reports_failure(tmp_path, monkeypatch):
+    import ida_pro_mcp.installer.runtime as runtime_mod
+
+    install = tmp_path / "ida-pro-9.4"
+    (install / "idalib" / "python" / "idapro").mkdir(parents=True)
+    (install / "idalib" / "python" / "py-activate-idalib.py").write_text("exit 1\n")
+
+    class R:
+        returncode = 1
+        stdout = ""
+        stderr = "no license"
+
+    monkeypatch.setattr(
+        runtime_mod.subprocess, "run", lambda *a, **k: R()
+    )
+    ok, detail = runtime_mod.activate_idalib(str(install))
+    assert ok is False
+    assert "no license" in detail
+
+
+def test_build_stdio_config_records_idalib_runtime(tmp_path):
+    from ida_pro_mcp.installer.runtime import build_stdio_config
+
+    cfg = build_stdio_config(tmp_path / "python", tmp_path, ida_runtime="idalib")
+    assert cfg["env"].get("IDA_MCP_RUNTIME") == "idalib"
+
+    cfg2 = build_stdio_config(tmp_path / "python", tmp_path)
+    assert "IDA_MCP_RUNTIME" not in cfg2["env"]

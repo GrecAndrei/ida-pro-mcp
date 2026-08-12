@@ -1037,15 +1037,28 @@ def analysis(
             # patching, type fixes) can be rolled back with restore_snapshot
             # before publishing findings. Pass DBFL_SNAPSHOT when the build
             # exposes it, else 0; fall back to the 1-arg form.
+            # idalib (IDA_MCP_RUNTIME=idalib) does NOT expose the loader
+            # snapshot API — it maps to the ida_undo checkpoint surface
+            # instead (create_undo_point + perform_undo, verified live on
+            # 9.4): undo points are enabled per session by the worker's
+            # open_database(enable_history=True).
             if not snapshot_name:
                 return make_error(MCPError.INVALID_ARGS, "snapshot_name required")
             saved = False
+            mechanism = "ida_loader"
             try:
-                flags = getattr(ida_loader, "DBFL_SNAPSHOT", 0)
-                try:
-                    saved = bool(ida_loader.save_snapshot(snapshot_name, flags))
-                except TypeError:
-                    saved = bool(ida_loader.save_snapshot(snapshot_name))
+                if hasattr(ida_loader, "save_snapshot"):
+                    flags = getattr(ida_loader, "DBFL_SNAPSHOT", 0)
+                    try:
+                        saved = bool(ida_loader.save_snapshot(snapshot_name, flags))
+                    except TypeError:
+                        saved = bool(ida_loader.save_snapshot(snapshot_name))
+                else:
+                    import ida_undo as _ida_undo
+                    saved = bool(
+                        _ida_undo.create_undo_point("ida_mcp_snapshot", snapshot_name)
+                    )
+                    mechanism = "ida_undo"
             except Exception as e:
                 return make_error(MCPError.IDA_ERROR, f"save_snapshot failed: {e}")
             if not saved:
@@ -1054,17 +1067,33 @@ def analysis(
                     f"save_snapshot failed for {snapshot_name!r}",
                     details={"snapshot_name": snapshot_name},
                 )
-            return {"ok": True, "snapshot_name": snapshot_name, "result": True}
+            return {
+                "ok": True,
+                "snapshot_name": snapshot_name,
+                "result": True,
+                "mechanism": mechanism,
+            }
 
         if action == "restore_snapshot":
             # Roll the live DB back to a previously saved ida_loader snapshot.
             # restore_snapshot replaces the current database with the snapshot,
             # so any experiment done after snapshot() is discarded.
+            # idalib fallback: perform_undo() rolls back the most recent undo
+            # point (LIFO — the standard snapshot→experiment→restore flow
+            # restores the last saved snapshot). The point name is recorded
+            # at snapshot time; the Python binding exposes no point
+            # enumeration, so the restore is by LIFO position, not by name.
             if not snapshot_name:
                 return make_error(MCPError.INVALID_ARGS, "snapshot_name required")
             restored = False
+            mechanism = "ida_loader"
             try:
-                restored = bool(ida_loader.restore_snapshot(snapshot_name))
+                if hasattr(ida_loader, "restore_snapshot"):
+                    restored = bool(ida_loader.restore_snapshot(snapshot_name))
+                else:
+                    import ida_undo as _ida_undo
+                    restored = bool(_ida_undo.perform_undo())
+                    mechanism = "ida_undo"
             except Exception as e:
                 return make_error(MCPError.IDA_ERROR, f"restore_snapshot failed: {e}")
             if not restored:
@@ -1073,7 +1102,12 @@ def analysis(
                     f"restore_snapshot failed for {snapshot_name!r} — snapshot may not exist",
                     details={"snapshot_name": snapshot_name},
                 )
-            return {"ok": True, "snapshot_name": snapshot_name, "result": True}
+            return {
+                "ok": True,
+                "snapshot_name": snapshot_name,
+                "result": True,
+                "mechanism": mechanism,
+            }
 
         if action == "auto_wait":
             # Bounded wait for auto-analysis to drain. The unbounded

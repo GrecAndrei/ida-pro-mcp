@@ -2,6 +2,52 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-08-12 — idalib runtime backend (opt-in) + 9.4 memory_model/GP closure
+
+- **idalib backend (`IDA_MCP_RUNTIME=idalib`)** — sessions run inside the
+  IDA kernel via the idapro whl instead of spawned idat processes.  The
+  worker (`ida_pro_mcp/idalib_worker.py`) imports `idapro` first (it must
+  be the first IDA import — hence a top-level module, not under `ida_mcp`,
+  whose package `__init__` imports `sync`/`ida_kernwin`), opens the
+  database with `enable_history=True`, then executes `server_script.py`'s
+  `__main__` unchanged — the RPC listener, startup analysis and main-thread
+  dispatch loop are byte-identical, so the host treats the worker exactly
+  like an idat runtime (same env, port handoff, ping protocol, leases,
+  teardown).  Shutdown runs `close_database(save=True)` (flush on exit).
+  **Verified live: the full integration suite passes under idalib on both
+  9.3.260421 and 9.4.260714 (42 passed / 8 skipped each)**; the runtime
+  matrix (`run_ida_matrix.py --idalib`) runs all four legs and the
+  self-hosted workflow passes `--idalib`.
+- **Snapshot/undo mapping** — idalib has no `ida_loader.save_snapshot`/
+  `restore_snapshot`; `analysis(snapshot/restore_snapshot)` feature-detects
+  this and falls back to `ida_undo.create_undo_point`/`perform_undo`
+  (LIFO restore), with `mechanism` reported in the response.  Verified live
+  on 9.4 (rename → undo → restored).
+- **Host seam** — `_preload_ida_args(session)` extracted from
+  `_build_ida_command` so idat and idalib load with identical architecture
+  flags; `_build_idalib_command` passes them via `IDA_MCP_IDALIB_OPEN`
+  (`-o` only for new databases — idalib refuses an existing output with
+  rc=2, surfaced with a diagnostic hint).  `--ida-runtime`-style selection
+  is host-env driven (`IDA_MCP_RUNTIME`), validated per launch.
+- **Installer** — wizard section "IDA session runtime backend" (idat
+  recommended / idalib experimental) with idapro detection + activation
+  (`py-activate-idalib.py -d <install>`), `--ida-runtime {idat,idalib}`
+  flag, `find_idalib_python_dir`/`activate_idalib` helpers, and
+  `IDA_MCP_RUNTIME` written into the generated client config env.
+- **Regression fixed during the port** — `_build_idalib_command`'s
+  PYTHONPATH root is the import root three levels above `host/server/`
+  (the matrix only passed earlier runs because the host's cwd happened to
+  be the repo root).
+- Earlier 2026-08-12 items closed in this wave: headless RISC-V
+  GP-relative xref resolution (`set_gp`), `get_arch()` on 9.4, and the
+  `memory_model`/`processor_options` pre-analysis TODO (see the
+  ida-9.4-migration research doc + wiki).  The GP `sreg_set` wiki seam was
+  removed (RISC-V registers zero segment registers — live-probed).
+- Not implemented (documented in `docs/research/idalib-runtime.md`):
+  two concurrent sessions on one idalib worker (DB-swap + per-IDB state
+  reset); the current model is one worker per session, preserving
+  spawn-idat crash isolation.
+
 ## 2026-08-11 — IDA 9.4 support: compat layer + migration inventory
 
 IDA 9.4 (build 9.4.260714) deprecates ~118 pointer-based IDAPython APIs in

@@ -20,11 +20,13 @@ from .discovery import (
     write_install_state,
 )
 from .runtime import (
+    activate_idalib,
     build_stdio_config,
     choose_runtime_source,
     download_and_install_llama_server,
     download_embed_model,
     find_embed_model,
+    find_idalib_python_dir,
     find_llama_server_bin,
     find_rerank_model,
     get_install_root,
@@ -534,11 +536,47 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
             "(per-pair context, default 1024)."
         )
 
+    # Session runtime backend. idat is the default (crash-isolated
+    # per-session idat processes); idalib runs the IDA kernel in-process
+    # (python -m ida_pro_mcp.idalib_worker) — faster session start and undo
+    # history, but one crash takes the session down and it needs the idapro
+    # whl + activation on the chosen install.
+    _runtime_choices = {
+        "idat (per-session processes, recommended)": "idat",
+        "idalib (in-process kernel, experimental)": "idalib",
+    }
+    current_runtime = opts.ida_runtime if opts.ida_runtime in _runtime_choices.values() else "idat"
+    default_runtime_label = next(k for k, v in _runtime_choices.items() if v == current_runtime)
+    opts.ida_runtime = _runtime_choices[
+        _prompt_choice(
+            "IDA session runtime backend",
+            list(_runtime_choices.keys()),
+            default_runtime_label,
+        )
+    ]
+    if opts.ida_runtime == "idalib":
+        chosen_install = getattr(opts, "_ida_install", None)
+        ida_dir = str(chosen_install.path) if chosen_install is not None else ""
+        idalib_py = find_idalib_python_dir(ida_dir)
+        if not idalib_py:
+            ui.warn(
+                "idalib backend selected but no idapro package found under "
+                f"{ida_dir or '<IDA install>'}/idalib/python. The runtime flag "
+                "will be written anyway; sessions will fail until the whl is "
+                "present and activated."
+            )
+        else:
+            ui.ok(f"idapro package found: {idalib_py}")
+            ok, detail = activate_idalib(ida_dir)
+            if ok:
+                ui.ok(f"idalib activated for {ida_dir} — IDA_MCP_RUNTIME=idalib will be written to client configs.")
+            else:
+                ui.warn(f"idalib activation failed ({detail}); sessions will fail until activation succeeds.")
+
     opts.rollback_on_fail = _prompt_yes_no(
         "Rollback backed-up config files on failure?",
         default=True if not opts.rollback_on_fail else opts.rollback_on_fail,
     )
-
     ui.info(
         "Policy gates are ON by default — they require evidence cards and "
         "acknowledgements for write-surface tools. Disable them only if you "
@@ -753,6 +791,14 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
     parser.add_argument("--only", action="append", choices=["runtime", "clients", "skills", "shell", "r2", "sigs"], default=[], help="run only selected install phases")
     parser.add_argument("--install-root", default="", help="override install root directory")
     parser.add_argument(
+        "--ida-runtime",
+        choices=["idat", "idalib"],
+        default=None,
+        help="session runtime backend written to the client config env "
+        "(default: idat). idalib runs the IDA kernel in-process; requires a "
+        "9.3+ install with the idapro whl and activation.",
+    )
+    parser.add_argument(
         "--ida-dir",
         default="",
         help="explicit path to an IDA install directory (e.g. /opt/ida-pro-9.3)",
@@ -809,6 +855,7 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         disable_policy=args.disable_policy,
         with_r2=args.with_r2,
         sigs_dir=args.sigs,
+        ida_runtime=args.ida_runtime or "idat",
     )
     if opts.setup_embedder:
         opts.embed_auto = True
@@ -1097,6 +1144,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                     disable_policy=opts.disable_policy,
                     rerank_disabled=opts.rerank_disabled,
                     r2_bin=r2_bin,
+                    ida_runtime=opts.ida_runtime,
                 )
                 configured = configure_clients(
                     source_root=source_root,
@@ -1200,6 +1248,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                     disable_policy=opts.disable_policy,
                     rerank_disabled=opts.rerank_disabled,
                     r2_bin=r2_bin,
+                    ida_runtime=opts.ida_runtime,
                 )
                 configured = configure_clients(
                     source_root=source_root,
