@@ -32,6 +32,14 @@ from .core import (
 )
 from .advanced import _coerce_ea
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from ... import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
 # ============================================================================
 # Set arithmetic on function addresses (the "address algebra")
 # ============================================================================
@@ -62,26 +70,26 @@ def _func_callees(fea: int) -> set[int]:
     mid-analysis), fall back to resolving the target's name to the import
     function so the edge still lands in the graph.
     """
-    func = idaapi.get_func(fea)
-    if not func:
+    start = _compat.get_func_start(fea)
+    if start is None:
         return set()
     out: set[int] = set()
-    for item in idautils.FuncItems(func.start_ea):
+    for item in idautils.FuncItems(start):
         try:
             for xref in idautils.XrefsFrom(item, 0):
                 if xref.type not in CALL_XREF_TYPES:
                     continue
-                f = idaapi.get_func(xref.to)
-                if f:
-                    out.add(int(f.start_ea))
+                fstart = _compat.get_func_start(xref.to)
+                if fstart is not None:
+                    out.add(int(fstart))
                     continue
                 tname = idc.get_name(xref.to) or ""
                 if tname:
                     tea = idc.get_name_ea_simple(tname.lstrip("._"))
                     if tea != idaapi.BADADDR:
-                        tf = idaapi.get_func(tea)
-                        if tf:
-                            out.add(int(tf.start_ea))
+                        tfstart = _compat.get_func_start(tea)
+                        if tfstart is not None:
+                            out.add(int(tfstart))
         except Exception:
             continue
     return out
@@ -165,7 +173,7 @@ def _prim_funcs_by_mnem(pattern: str, case_sensitive: bool = False) -> set[int]:
     out = set()
     for ea in idautils.Functions():
         try:
-            func = idaapi.get_func(ea)
+            func = _compat.get_func_info(ea)
             if not func:
                 continue
             head = func.start_ea
@@ -194,9 +202,9 @@ def _prim_callers(target: str) -> set[int]:
     for xref in idautils.XrefsTo(ea, 0):
         if not xref.iscode:
             continue
-        f = idaapi.get_func(xref.frm)
-        if f:
-            out.add(int(f.start_ea))
+        fstart = _compat.get_func_start(xref.frm)
+        if fstart is not None:
+            out.add(int(fstart))
     return out
 
 
@@ -205,10 +213,10 @@ def _prim_callees(target: str) -> set[int]:
     ea, err, _ = resolve_target(target)
     if err or ea == idaapi.BADADDR:
         return set()
-    func = idaapi.get_func(ea)
-    if not func:
+    start = _compat.get_func_start(ea)
+    if start is None:
         return set()
-    return _func_callees(int(func.start_ea))
+    return _func_callees(int(start))
 
 
 def _prim_size(pattern: str) -> set[int]:
@@ -226,7 +234,7 @@ def _prim_size(pattern: str) -> set[int]:
     out = set()
     for ea in idautils.Functions():
         try:
-            func = idaapi.get_func(ea)
+            func = _compat.get_func_info(ea)
             if not func:
                 continue
             size = func.end_ea - func.start_ea
@@ -581,18 +589,18 @@ def search_path(src: str, dst: str, max_depth: int) -> dict:
     dst_ea, dst_err, _ = resolve_target(dst)
     if dst_err or dst_ea == idaapi.BADADDR:
         return make_error(MCPError.INVALID_ARGS, f"could not resolve dst {dst!r}")
-    src_func = idaapi.get_func(src_ea)
-    dst_func = idaapi.get_func(dst_ea)
-    if not src_func or not dst_func:
+    src_func = _compat.get_func_start(src_ea)
+    dst_func = _compat.get_func_start(dst_ea)
+    if src_func is None or dst_func is None:
         return make_error(MCPError.INVALID_ARGS, "src/dst must be functions")
 
-    path = _bfs_path(int(src_func.start_ea), int(dst_func.start_ea), max_depth=max(1, max_depth))
+    path = _bfs_path(int(src_func), int(dst_func), max_depth=max(1, max_depth))
     if path is None:
         return {
             "ok": True,
             "action": "path",
-            "src": {"addr": hex(src_func.start_ea), "name": _func_name(src_func.start_ea)},
-            "dst": {"addr": hex(dst_func.start_ea), "name": _func_name(dst_func.start_ea)},
+            "src": {"addr": hex(src_func), "name": _func_name(src_func)},
+            "dst": {"addr": hex(dst_func), "name": _func_name(dst_func)},
             "results": "",
             "count": 0,
             "items": [],
@@ -644,19 +652,19 @@ def search_reach(root: str, depth: int, offset: int, limit: int) -> dict:
     root_ea, err, _ = resolve_target(root)
     if err or root_ea == idaapi.BADADDR:
         return make_error(MCPError.INVALID_ARGS, f"could not resolve root {root!r}")
-    func = idaapi.get_func(root_ea)
-    if not func:
+    func = _compat.get_func_start(root_ea)
+    if func is None:
         return make_error(MCPError.INVALID_ARGS, f"root {root!r} is not a function")
 
-    reached = _reach_from(int(func.start_ea), max(0, depth))
-    reached.discard(int(func.start_ea))
+    reached = _reach_from(int(func), max(0, depth))
+    reached.discard(int(func))
     total = len(reached)
     items = _set_to_items(reached, offset, limit)
     text = _set_to_text(items)
     return {
         "ok": True,
         "action": "reach",
-        "root": {"addr": hex(func.start_ea), "name": _func_name(func.start_ea)},
+        "root": {"addr": hex(func), "name": _func_name(func)},
         "depth": depth,
         "results": text,
         "count": len(items),
@@ -679,9 +687,9 @@ def _all_entry_points() -> list[int]:
         for idx in range(ida_nalt.get_entry_qty()):
             ea = ida_nalt.get_entry(ida_nalt.get_entry_ordinal(idx))
             if ea != idaapi.BADADDR:
-                f = idaapi.get_func(ea)
-                if f:
-                    out.add(int(f.start_ea))
+                f = _compat.get_func_start(ea)
+                if f is not None:
+                    out.add(int(f))
     except Exception:
         pass
     if not out:
@@ -690,9 +698,9 @@ def _all_entry_points() -> list[int]:
             try:
                 ea = idc.get_name_ea_simple(sym)
                 if ea != idaapi.BADADDR:
-                    f = idaapi.get_func(ea)
-                    if f:
-                        out.add(int(f.start_ea))
+                    f = _compat.get_func_start(ea)
+                    if f is not None:
+                        out.add(int(f))
                         break
             except Exception:
                 continue
@@ -994,7 +1002,7 @@ def search_analyze(
         ea, err, _ = resolve_target(addr)
         if err or ea == idaapi.BADADDR:
             return make_error(MCPError.INVALID_ARGS, f"could not resolve addr {addr!r}")
-        func = idaapi.get_func(ea)
+        func = _compat.get_func_info(ea)
         if not func:
             return make_error(MCPError.INVALID_ARGS, f"{hex(ea)} is not inside a function")
         fea = int(func.start_ea)
@@ -1203,10 +1211,10 @@ def search_analyze(
         ea, err, _ = resolve_target(addr)
         if err or ea == idaapi.BADADDR:
             return make_error(MCPError.INVALID_ARGS, f"could not resolve addr {addr!r}")
-        func = idaapi.get_func(ea)
-        if not func:
+        func = _compat.get_func_start(ea)
+        if func is None:
             return make_error(MCPError.INVALID_ARGS, f"{hex(ea)} is not inside a function")
-        fea = int(func.start_ea)
+        fea = int(func)
 
         similar_hits = _get_embedding_similar(fea, top_k=top_k)
         items = []
@@ -1251,9 +1259,9 @@ def search_analyze(
         for ea, name in idautils.Names():
             base = name.split("@")[0].split("$")[0].lstrip("._")
             if base in _TAINT_SOURCE_NAMES:
-                func = idaapi.get_func(ea)
-                if func:
-                    sources.add(int(func.start_ea))
+                func = _compat.get_func_start(ea)
+                if func is not None:
+                    sources.add(int(func))
         # Expand each source to all functions sharing its base name.
         expanded_sources = set(sources)
         for src in sources:
@@ -1283,8 +1291,7 @@ def search_analyze(
         # from a taint source instead of the whole program (O(k) not O(n)).
         vuln_hits = []
         for fea in reachable_from_source:
-            func = idaapi.get_func(fea)
-            if not func:
+            if _compat.get_func_start(fea) is None:
                 continue
             for callee_ea in graph["callees"].get(fea, set()):
                 callee_name = idc.get_name(callee_ea) or ""
@@ -1317,10 +1324,10 @@ def search_analyze(
                             hit_ea = _coerce_ea(hit.get("addr") or hit.get("ea"))
                             if hit_ea == idaapi.BADADDR or hit_ea in seen_addrs:
                                 continue
-                            hit_func = idaapi.get_func(hit_ea)
-                            if not hit_func:
+                            hit_func = _compat.get_func_start(hit_ea)
+                            if hit_func is None:
                                 continue
-                            hit_fea = int(hit_func.start_ea)
+                            hit_fea = int(hit_func)
                             if hit_fea not in reachable_from_source:
                                 continue
                             seen_addrs.add(hit_fea)

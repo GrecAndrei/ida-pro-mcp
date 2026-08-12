@@ -20,7 +20,11 @@ TESTS = Path(__file__).resolve().parents[1]
 if str(TESTS) not in sys.path:
     sys.path.insert(0, str(TESTS))
 
-from _isolated_repo_loader import load_support_module, load_tool_submodule  # noqa: E402
+from _isolated_repo_loader import (  # noqa: E402
+    install_common_stub,
+    load_support_module,
+    load_tool_submodule,
+)
 
 REPO = TESTS.parent
 SEARCH = REPO / "src" / "ida_pro_mcp" / "ida_mcp" / "tools" / "search"
@@ -49,6 +53,7 @@ def test_search_path_returns_text_for_found_path():
 
     funcs = {0x1000: _Func(0x1000, 0x1001), 0x2000: _Func(0x2000, 0x2001)}
     comb.idaapi.get_func = funcs.get
+    comb.ida_funcs.get_func = funcs.get
     comb.idc.get_func_name = lambda ea: {0x1000: "src", 0x2000: "dst"}.get(ea, "")
     comb._func_name = lambda ea: {0x1000: "src", 0x2000: "dst"}.get(ea, hex(ea))
     comb.resolve_target = lambda raw, *a, **k: (
@@ -100,6 +105,7 @@ def test_prim_size_rules_are_and():
     comb.idaapi.BADADDR = -1
     funcs = {0x1: _Func(0, 50), 0x2: _Func(0, 150)}
     comb.idaapi.get_func = funcs.get
+    comb.ida_funcs.get_func = funcs.get
     comb.idautils.Functions = lambda: [0x1, 0x2]
 
     # >100 <200: only size 150 satisfies both
@@ -119,6 +125,7 @@ def test_search_func_by_sig_size_rules_are_and():
     refs.idaapi.BADADDR = -1
     funcs = {0x1: _Func(0, 50), 0x2: _Func(0, 150)}
     refs.idaapi.get_func = funcs.get
+    refs.ida_funcs.get_func = funcs.get
     refs.idautils.Functions = lambda: [0x1, 0x2]
     refs.ida_funcs.get_func_name = lambda ea: f"f{ea}"
     refs.idautils.XrefsTo = lambda *a, **k: []
@@ -174,6 +181,7 @@ def test_search_constants_terminates_on_badaddr():
     adv.paginate_records = lambda rows, off, lim, **k: (rows, len(rows), False)
     adv.build_response = lambda *a, **k: {"ok": True}
     adv.idaapi.get_func = lambda ea: None
+    adv.ida_funcs.get_func = adv.idaapi.get_func
     _assert_terminates(adv.search_constants, "x", None, None, False, 0, 10, False)
 
 
@@ -181,6 +189,7 @@ def test_prim_funcs_by_mnem_terminates_on_badaddr():
     comb = _module("search.combinators")
     comb.idaapi.BADADDR = -1
     comb.idaapi.get_func = lambda ea: _Func(0x1000, 0x1010)
+    comb.ida_funcs.get_func = comb.idaapi.get_func
     comb.idautils.Functions = lambda: [0x1]
     comb.idc.next_head = lambda ea, end: -1
     comb.idc.print_insn_mnem = lambda ea: "nop"
@@ -295,6 +304,7 @@ def test_search_find_heap_survives_duplicate_keys():
     unified.idautils.XrefsTo = lambda *a, **k: []
     unified.ida_funcs.get_func_name = lambda ea: "foo"
     unified.idaapi.get_func = lambda ea: _Func(ea, ea + 1)
+    unified.ida_funcs.get_func = unified.idaapi.get_func
     unified.xref_count_limited = lambda ea, **k: 0
     unified._rescore_find_ranked = lambda ranked, p: None
     unified.build_response = lambda *a, **k: {"ok": True}
@@ -324,6 +334,7 @@ def test_search_find_kind_restricts_to_strings():
     unified.idautils.XrefsTo = lambda *a, **k: []
     unified.ida_funcs.get_func_name = lambda ea: "foo"
     unified.idaapi.get_func = lambda ea: _Func(ea, ea + 1)
+    unified.ida_funcs.get_func = unified.idaapi.get_func
     unified.xref_count_limited = lambda ea, **k: 0
     unified.semantic_score_cheap = lambda *a, **k: 60.0
     unified.semantic_scores = lambda *a, **k: [60.0, 60.0]
@@ -360,6 +371,7 @@ def test_search_find_kind_names_excludes_strings():
     unified.idautils.XrefsTo = lambda *a, **k: []
     unified.ida_funcs.get_func_name = lambda ea: "foo"
     unified.idaapi.get_func = lambda ea: _Func(ea, ea + 1)
+    unified.ida_funcs.get_func = unified.idaapi.get_func
     unified.xref_count_limited = lambda ea, **k: 0
     unified.semantic_score_cheap = lambda *a, **k: 60.0
     unified.semantic_scores = lambda *a, **k: [60.0, 60.0]
@@ -396,6 +408,10 @@ def test_search_find_unknown_kind_degrades_to_all():
     unified.idautils.XrefsTo = lambda *a, **k: []
     unified.ida_funcs.get_func_name = lambda ea: "foo"
     unified.idaapi.get_func = lambda ea: _Func(ea, ea + 1)
+    unified.ida_funcs.get_func = unified.idaapi.get_func
+    # Unknown kinds degrade to all categories, so the instruction scan runs and
+    # compat.iter_segments walks segments via ida_segment (get_first_seg=legacy).
+    unified.ida_segment.get_first_seg = lambda: None
     unified.xref_count_limited = lambda ea, **k: 0
     unified.semantic_score_cheap = lambda *a, **k: 60.0
     unified.semantic_scores = lambda *a, **k: [60.0, 60.0]
@@ -421,6 +437,9 @@ def test_search_find_unknown_kind_degrades_to_all():
 # ---------------------------------------------------------------------------
 
 def test_query_lang_uses_real_error_envelope():
+    # error_handling imports ida_mcp.compat (IDA 9.4 shims) at module load,
+    # which requires the ida_* stub modules to be registered first.
+    install_common_stub()
     ql = load_support_module("query_lang")
     err = ql.make_error(ql.MCPError.INVALID_ARGS, "Tool 'x' not available")
     # The real error_handling.make_error adds an ERROR_HINTS hint; the old

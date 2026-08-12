@@ -130,6 +130,7 @@ def test_symbol_info_data_block_passes_ea_for_comment_check():
 
     uni.idaapi.BADADDR = -1
     uni.idaapi.get_func = lambda ea: None
+    uni.ida_funcs.get_func = uni.idaapi.get_func
     uni.idaapi.getseg = lambda ea: _Seg()
     uni.idaapi.SEGPERM_READ = 1
     uni.idaapi.SEGPERM_WRITE = 2
@@ -168,6 +169,7 @@ def test_xrefs_to_string_delegates_to_safe_strlit_contents():
 
     uni.idautils.XrefsTo = lambda ea, flow: iter([_Xref(0x1100, True)])
     uni.idaapi.get_func = lambda ea: _Func(ea, ea + 0x10)
+    uni.ida_funcs.get_func = uni.idaapi.get_func
     uni.ida_funcs.get_func_name = lambda ea: "sub_1100"
 
     resp = uni.search_xrefs_to_string("hello", include_context=False, timeout_ms=0)
@@ -187,6 +189,7 @@ def _config_constants_ida(adv):
     sys.modules["ida_ua"].insn_t = _Insn
     sys.modules["ida_ua"].o_imm = 0x20
     adv.idaapi.get_func = lambda ea: _Func(ea, ea + 4)
+    adv.ida_funcs.get_func = adv.idaapi.get_func
     adv.ida_funcs.get_func_name = lambda ea: f"sub_{ea:x}"
     adv.resolve_scan_segments = lambda range_start, range_end, require_exec=True: (
         [(0x1000, 0x2000)],
@@ -279,6 +282,7 @@ def test_seed_decompiled_parses_cache_key_with_name_fingerprint():
     adv = _module("search.advanced")
     sys.modules["idaapi"].BADADDR = -1
     adv.idaapi.get_func = lambda ea: _Func(ea, ea + 0x20)
+    adv.ida_funcs.get_func = adv.idaapi.get_func
     sys.modules["idautils"].Functions = lambda *a, **k: iter([])
     adv.get_cached_strings = list
     adv.get_cached_imports = list
@@ -309,6 +313,7 @@ def test_seed_decompiled_parses_cache_key_with_name_fingerprint():
 def _config_decompiled_ida(adv):
     sys.modules["idaapi"].BADADDR = -1
     adv.idaapi.get_func = lambda ea: _Func(ea, ea + 0x20)
+    adv.ida_funcs.get_func = adv.idaapi.get_func
     sys.modules["ida_hexrays"].init_hexrays_plugin = lambda: True
     sys.modules["ida_hexrays"].decompile = _Cfunc
     sys.modules["idc"].get_func_name = lambda ea: f"sub_{ea:x}"

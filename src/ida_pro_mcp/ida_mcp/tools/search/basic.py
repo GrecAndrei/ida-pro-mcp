@@ -185,9 +185,9 @@ def search_string(pattern, case_sensitive, include_context, offset, limit, timeo
                     xref_count = len(list(idautils.XrefsTo(sc.ea)))
                     line = f"{hex(sc.ea)}  xrefs={xref_count}  {s[:500]}"
                     if include_context:
-                        func = idaapi.get_func(sc.ea)
-                        if func:
-                            line += f"  in:{ida_funcs.get_func_name(func.start_ea)}"
+                        func = _compat.get_func_start(sc.ea)
+                        if func is not None:
+                            line += f"  in:{ida_funcs.get_func_name(func)}"
                     results.append(line)
                     if len(results) >= limit:
                         truncated = True
@@ -246,9 +246,9 @@ def search_immediate(pattern, range_start, range_end, include_context, offset, l
                             if include_context:
                                 disasm_line = safe_generate_disasm_line(curr)
                                 line += f"  {ida_lines.tag_remove(disasm_line) if disasm_line else ''}"
-                                func = idaapi.get_func(curr)
-                                if func:
-                                    line += f"  in:{ida_funcs.get_func_name(func.start_ea)}"
+                                func = _compat.get_func_start(curr)
+                                if func is not None:
+                                    line += f"  in:{ida_funcs.get_func_name(func)}"
                             results.append(line)
                             if len(results) >= limit:
                                 truncated = True
@@ -275,9 +275,9 @@ def search_immediate(pattern, range_start, range_end, include_context, offset, l
                                         if include_context:
                                             disasm_line = safe_generate_disasm_line(curr)
                                             line += f"  {ida_lines.tag_remove(disasm_line) if disasm_line else ''}"
-                                            func = idaapi.get_func(curr)
-                                            if func:
-                                                line += f"  in:{ida_funcs.get_func_name(func.start_ea)}"
+                                            func = _compat.get_func_start(curr)
+                                            if func is not None:
+                                                line += f"  in:{ida_funcs.get_func_name(func)}"
                                         results.append(line)
                                         if len(results) >= limit:
                                             truncated = True
@@ -315,7 +315,7 @@ def search_name(pattern, case_sensitive, offset, limit):
         if matcher(name):
             matches_seen += 1
             if matches_seen > offset:
-                kind = "func" if idaapi.get_func(ea) else ("data" if ida_bytes.is_data(ida_bytes.get_flags(ea)) else "label")
+                kind = "func" if _compat.get_func_start(ea) is not None else ("data" if ida_bytes.is_data(ida_bytes.get_flags(ea)) else "label")
                 xr = xref_count_limited(ea, 256)
                 results.append(f"{hex(ea)}  {kind}  xrefs={xr}  {name}")
                 if len(results) >= limit:

@@ -10,6 +10,20 @@ import errno
 import traceback
 from typing import Any, Dict, Optional, Tuple
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py). This module is otherwise
+# pure stdlib (host-side code and standalone bridge tests import it without
+# IDA), so a failed compat import degrades to None instead of failing load.
+try:
+    from . import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        try:
+            import compat as _compat  # type: ignore[import-not-found,no-redef]
+        except ImportError:
+            _compat = None  # type: ignore[no-redef]
+
 
 class MCPError:
     """Structured error codes with LLM-guiding hints.
@@ -719,7 +733,6 @@ def validate_addr(addr: str | int, require_code: bool = False, require_func: boo
 
     try:
         import ida_bytes
-        import ida_funcs
         import idaapi
 
         # Check if address is valid in IDB
@@ -742,8 +755,7 @@ def validate_addr(addr: str | int, require_code: bool = False, require_func: boo
                 )
 
         if require_func:
-            func = ida_funcs.get_func(ea)
-            if not func:
+            if _compat is None or _compat.get_func_start(ea) is None:
                 return None, make_error(
                     MCPError.FUNCTION_NOT_FOUND,
                     f"No function found at {hex(ea)}",

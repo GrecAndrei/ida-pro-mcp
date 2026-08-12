@@ -110,6 +110,7 @@ def _install_insn_fakes(mod, table):
     mod.ida_ua.insn_t = _InsnT
     mod.ida_ua.decode_insn = decode.decode
     mod.idaapi.get_func = lambda ea: None
+    mod.ida_funcs.get_func = mod.idaapi.get_func
     mod.idc.next_head = lambda ea, end: -1
 
 

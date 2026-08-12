@@ -140,8 +140,8 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
                 ea = idaapi.BADADDR
         if ea != idaapi.BADADDR:
             for xref in idautils.XrefsTo(ea, 0):
-                func = idaapi.get_func(xref.frm)
-                fn_name = ida_funcs.get_func_name(func.start_ea) if func else ""
+                func = _compat.get_func_start(xref.frm)
+                fn_name = ida_funcs.get_func_name(func) if func is not None else ""
                 dem = demangle_safe(fn_name) if fn_name else ""
                 display = dem if dem and dem != fn_name else fn_name
                 sem_name = semantic_score_cheap(pattern, fn_name, substring_bonus=SCORE_SUBSTRING) if fn_name else 0.0
@@ -159,7 +159,7 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
             hit = matcher(name) or (dem and dem != name and matcher(dem))
             if not hit:
                 continue
-            kind = "func" if idaapi.get_func(ea) else "data"
+            kind = "func" if _compat.get_func_start(ea) is not None else "data"
             xref_count = xref_count_limited(ea)
             display = dem if dem and dem != name else name
             score = max(
@@ -222,8 +222,8 @@ def search_find(pattern, case_sensitive, range_start, range_end, include_context
                 if not blob or not matcher(blob):
                     continue
                 score = semantic_score_cheap(pattern, blob, substring_bonus=SCORE_SUBSTRING)
-                fn = idaapi.get_func(head)
-                fn_name = ida_funcs.get_func_name(fn.start_ea) if fn else ""
+                fn = _compat.get_func_start(head)
+                fn_name = ida_funcs.get_func_name(fn) if fn is not None else ""
                 line = f"{hex(head)}  comment  {fn_name}  {clip_text(blob, 160)}"
                 add_find("comments", head, line, score, fn_name, sem_text=blob)
                 comment_hits += 1
@@ -369,10 +369,10 @@ def _build_call_graph_rows(func, get_relations):
     """
     rows = {}
     for other_ea, site_ea in get_relations(func):
-        other_func = idaapi.get_func(other_ea)
-        if not other_func:
+        other_func = _compat.get_func_start(other_ea)
+        if other_func is None:
             continue
-        key = other_func.start_ea
+        key = other_func
         if key not in rows:
             rows[key] = {
                 "address_ea": key, "address": hex(key),
@@ -396,7 +396,7 @@ def _format_call_graph_response(
         return build_response(
             [], offset, limit, 0, False,
             target=idc.get_name(target_ea) or hex(target_ea),
-            target_addr=hex(func.start_ea),
+            target_addr=hex(func),
             note=empty_note,
         )
 
@@ -418,7 +418,7 @@ def _format_call_graph_response(
     )
     result = build_response(
         [r["line"] for r in page], offset, limit, total, is_truncated,
-        target=idc.get_name(target_ea) or hex(target_ea), target_addr=hex(func.start_ea)
+        target=idc.get_name(target_ea) or hex(target_ea), target_addr=hex(func)
     )
     result.update(sem_meta)
     if include_items:
@@ -442,12 +442,12 @@ def search_callers(pattern, include_context, offset, limit, semantic_min_score, 
             hint="Pass a hex address or exact function name. Try search(action='find') first.",
         )
 
-    func = idaapi.get_func(target_ea)
-    if not func:
+    func = _compat.get_func_start(target_ea)
+    if func is None:
         return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(target_ea)}")
 
     def _iter_caller_edges(target_func):
-        for xref in idautils.XrefsTo(target_func.start_ea, 0):
+        for xref in idautils.XrefsTo(target_func, 0):
             if not xref.iscode:
                 continue
             yield (xref.frm, xref.frm)
@@ -474,12 +474,12 @@ def search_callees(pattern, include_context, offset, limit, semantic_min_score, 
             hint="Pass a hex address or exact function name. Try search(action='find') first.",
         )
 
-    func = idaapi.get_func(target_ea)
-    if not func:
+    func = _compat.get_func_start(target_ea)
+    if func is None:
         return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(target_ea)}")
 
     def _iter_callee_edges(target_func):
-        for item in idautils.FuncItems(target_func.start_ea):
+        for item in idautils.FuncItems(target_func):
             for xref in idautils.XrefsFrom(item, 0):
                 if xref.type not in CALL_XREF_TYPES:
                     continue
@@ -536,8 +536,8 @@ def search_api(pattern, include_context, offset, limit, include_items, include_b
         xrefs = [xr for xr in idautils.XrefsTo(ea, 0) if xr.iscode]
         call_total = len(xrefs)
         for xr in xrefs:
-            func = idaapi.get_func(xr.frm)
-            fn_name = ida_funcs.get_func_name(func.start_ea) if func else "unknown"
+            func = _compat.get_func_start(xr.frm)
+            fn_name = ida_funcs.get_func_name(func) if func is not None else "unknown"
             line = f"{hex(xr.frm)}  {fn_name}  -> {name} ({mod_name})  calls={call_total}"
             if include_context:
                 disasm_line = safe_generate_disasm_line(xr.frm)
@@ -671,8 +671,8 @@ def search_symbol(pattern, include_alternatives=True, offset=0, limit=20):
         ea, err = validate_addr(raw)
         if not err and ea != idaapi.BADADDR:
             name = idc.get_name(ea) or ""
-            func = idaapi.get_func(ea)
-            seg = idaapi.getseg(ea)
+            func = _compat.get_func_start(ea)
+            seg = _compat.get_segment(ea)
             typeinf = idc.get_inf_attr(idc.INF_SHORT_DN)
             demangled = idc.demangle_name(name, typeinf) or name
             return {
@@ -683,7 +683,7 @@ def search_symbol(pattern, include_alternatives=True, offset=0, limit=20):
                 "name": name,
                 "demangled": demangled,
                 "is_function": func is not None,
-                "type": "function" if func else ("data" if idc.is_data(idc.get_full_flags(ea)) else "code" if idc.is_code(idc.get_full_flags(ea)) else "unknown"),
+                "type": "function" if func is not None else ("data" if idc.is_data(idc.get_full_flags(ea)) else "code" if idc.is_code(idc.get_full_flags(ea)) else "unknown"),
                 "segment": _compat.get_segment_name(ea) if seg else "",
                 "xrefs_to": xref_count_limited(ea, 512),
                 "alternatives": [],
@@ -692,8 +692,8 @@ def search_symbol(pattern, include_alternatives=True, offset=0, limit=20):
     # --- Fast path 2: exact name ---
     ea = idc.get_name_ea_simple(raw)
     if ea != idaapi.BADADDR:
-        func = idaapi.get_func(ea)
-        seg = idaapi.getseg(ea)
+        func = _compat.get_func_start(ea)
+        seg = _compat.get_segment(ea)
         typeinf = idc.get_inf_attr(idc.INF_SHORT_DN)
         demangled = idc.demangle_name(raw, typeinf) or raw
         return {
@@ -704,7 +704,7 @@ def search_symbol(pattern, include_alternatives=True, offset=0, limit=20):
             "name": raw,
             "demangled": demangled,
             "is_function": func is not None,
-            "type": "function" if func else ("data" if idc.is_data(idc.get_full_flags(ea)) else "code" if idc.is_code(idc.get_full_flags(ea)) else "unknown"),
+            "type": "function" if func is not None else ("data" if idc.is_data(idc.get_full_flags(ea)) else "code" if idc.is_code(idc.get_full_flags(ea)) else "unknown"),
             "segment": _compat.get_segment_name(ea) if seg else "",
             "xrefs_to": xref_count_limited(ea, 512),
             "alternatives": _alternatives_for_name(raw, exclude_ea=ea, limit=5) if include_alternatives else [],
@@ -720,7 +720,7 @@ def search_symbol(pattern, include_alternatives=True, offset=0, limit=20):
         dem = demangle_safe(cand_name)
         if not matcher(cand_name) and not (dem and dem != cand_name and matcher(dem)):
             continue
-        is_func = bool(idaapi.get_func(cand_ea))
+        is_func = _compat.get_func_start(cand_ea) is not None
         score = 0.0
         if cand_name.lower() == raw_l or (dem and dem.lower() == raw_l):
             score = 200.0
@@ -787,7 +787,7 @@ def _alternatives_for_name(query, exclude_ea=None, limit=5):
         if exclude_ea is not None and cand_ea == exclude_ea:
             continue
         alts.append({"addr": hex(cand_ea), "name": cand_name,
-                     "type": "function" if idaapi.get_func(cand_ea) else "symbol"})
+                     "type": "function" if _compat.get_func_start(cand_ea) is not None else "symbol"})
         if len(alts) >= limit:
             break
     return alts
@@ -819,8 +819,8 @@ def search_symbol_info(pattern, include_xrefs=False):
     else:
         name = raw or idc.get_name(ea)
 
-    containing_func = idaapi.get_func(ea)
-    seg = idaapi.getseg(ea)
+    containing_func = _compat.get_func_info(ea)
+    seg = _compat.get_segment(ea)
     flags = idc.get_full_flags(ea)
     typeinf = idc.get_inf_attr(idc.INF_SHORT_DN)
     demangled = idc.demangle_name(name, typeinf) if name else ""
@@ -832,7 +832,7 @@ def search_symbol_info(pattern, include_xrefs=False):
         "name": name,
         "demangled": demangled or name,
         "segment": _compat.get_segment_name(ea) if seg else "",
-        "segment_perms": _perm_str(seg) if seg else "",
+        "segment_perms": _perm_str(ea) if seg else "",
         "is_function": containing_func is not None,
     }
 
@@ -841,7 +841,7 @@ def search_symbol_info(pattern, include_xrefs=False):
             "start": hex(containing_func.start_ea),
             "end": hex(containing_func.end_ea),
             "size": containing_func.end_ea - containing_func.start_ea,
-            "flags": _func_flags(containing_func),
+            "flags": _func_flags(_compat.get_func_flags(ea)),
         }
         try:
             proto = idc.get_type(containing_func.start_ea)
@@ -865,11 +865,11 @@ def search_symbol_info(pattern, include_xrefs=False):
     if include_xrefs:
         xrefs_to = []
         for xr in idautils.XrefsTo(ea, 0):
-            src_func = idaapi.get_func(xr.frm)
+            src_func = _compat.get_func_start(xr.frm)
             xrefs_to.append({
                 "from": hex(xr.frm),
                 "type": "code" if xr.iscode else "data",
-                "function": ida_funcs.get_func_name(src_func.start_ea) if src_func else "",
+                "function": ida_funcs.get_func_name(src_func) if src_func is not None else "",
             })
             if len(xrefs_to) >= 64:
                 break
@@ -903,29 +903,34 @@ def _count_xrefs_from_limited(ea, max_count):
     return count
 
 
-def _perm_str(seg):
+def _perm_str(ea):
+    perm = _compat.get_segment_perm(ea)
+    if perm is None:
+        return ""
     perms = []
-    if seg.perm & idaapi.SEGPERM_READ:
+    if perm & idaapi.SEGPERM_READ:
         perms.append("R")
-    if seg.perm & idaapi.SEGPERM_WRITE:
+    if perm & idaapi.SEGPERM_WRITE:
         perms.append("W")
-    if seg.perm & idaapi.SEGPERM_EXEC:
+    if perm & idaapi.SEGPERM_EXEC:
         perms.append("X")
     return "".join(perms)
 
 
-def _func_flags(func):
+def _func_flags(func_flags):
     out = []
-    if func.flags & idaapi.FUNC_NORET:
+    if not func_flags:
+        return out
+    if func_flags & idaapi.FUNC_NORET:
         out.append("noreturn")
-    if func.flags & idaapi.FUNC_LIB:
+    if func_flags & idaapi.FUNC_LIB:
         out.append("library")
-    if func.flags & idaapi.FUNC_THUNK:
+    if func_flags & idaapi.FUNC_THUNK:
         out.append("thunk")
     _static_flag = getattr(idaapi, "FUNC_STATIC", getattr(idaapi, "FUNC_STATICDEF", 0))
-    if _static_flag and (func.flags & _static_flag):
+    if _static_flag and (func_flags & _static_flag):
         out.append("static")
-    if func.flags & idaapi.FUNC_FRAME:
+    if func_flags & idaapi.FUNC_FRAME:
         out.append("frame")
     return out
 
@@ -1005,9 +1010,9 @@ def search_xrefs_to_string(pattern, include_context=False, offset=0, limit=100, 
         for xr in idautils.XrefsTo(te_a, 0):
             if not xr.iscode:
                 continue
-            src_func = idaapi.get_func(xr.frm)
-            fn_name = ida_funcs.get_func_name(src_func.start_ea) if src_func else ""
-            ref_addr = hex(src_func.start_ea) if src_func else ""
+            src_func = _compat.get_func_start(xr.frm)
+            fn_name = ida_funcs.get_func_name(src_func) if src_func is not None else ""
+            ref_addr = hex(src_func) if src_func is not None else ""
             if ref_addr not in ref_funcs:
                 ref_funcs.add(ref_addr)
                 entry = {"addr": ref_addr, "call_site": hex(xr.frm), "function": fn_name}

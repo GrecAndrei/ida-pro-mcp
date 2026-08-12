@@ -31,6 +31,15 @@ from .core import (  # noqa: E402
     safe_generate_disasm_line,
 )
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from ... import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 def _known_const_name(value: int, known: dict) -> str:
     """Name an immediate constant: known DB hit, else pattern-based magic.
 
@@ -168,7 +177,7 @@ def _seed_decompiled_candidates(pattern, matcher, range_start, range_end, max_fu
     def add_candidate(ea: int, score: float, reason: str):
         if ea == idaapi.BADADDR:
             return
-        func = idaapi.get_func(ea)
+        func = _compat.get_func_info(ea)
         if not func or not _function_in_range(func, range_start, range_end):
             return
         start_ea = func.start_ea
@@ -370,8 +379,8 @@ def search_constants(pattern, range_start, range_end, include_context, offset, l
                         continue
                     const_name = _known_const_name(op.value, KNOWN_CONSTANTS)
                     if const_name:
-                        func = idaapi.get_func(curr)
-                        fn_name = ida_funcs.get_func_name(func.start_ea) if func else "unknown"
+                        func = _compat.get_func_start(curr)
+                        fn_name = ida_funcs.get_func_name(func) if func is not None else "unknown"
                         if const_matcher and not const_matcher(f"{const_name} {hex(op.value)} {fn_name}"):
                             continue
                         line = f"{hex(curr)}  {hex(op.value)}  {const_name}  in:{fn_name}"
@@ -399,8 +408,8 @@ def search_constants(pattern, range_start, range_end, include_context, offset, l
                                     resolved, addi_ea = pair
                                     const_name = _known_const_name(resolved, KNOWN_CONSTANTS)
                                     if const_name:
-                                        func = idaapi.get_func(curr)
-                                        fn_name = ida_funcs.get_func_name(func.start_ea) if func else "unknown"
+                                        func = _compat.get_func_start(curr)
+                                        fn_name = ida_funcs.get_func_name(func) if func is not None else "unknown"
                                         if const_matcher and not const_matcher(f"{const_name} {hex(resolved)} {fn_name}"):
                                             pass
                                         else:
@@ -505,10 +514,10 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
         target_ea, err = validate_addr(str(scope_addr))
         if err:
             target_ea = idc.get_name_ea_simple(str(scope_addr))
-        scope_func = idaapi.get_func(target_ea) if target_ea != idaapi.BADADDR else None
-        if not scope_func:
+        scope_func = _compat.get_func_start(target_ea) if target_ea != idaapi.BADADDR else None
+        if scope_func is None:
             return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {scope_addr}")
-        target_funcs = [scope_func.start_ea]
+        target_funcs = [scope_func]
     else:
         all_funcs = list(_iter_function_starts(range_start, range_end))
         total_available = len(all_funcs)
@@ -685,7 +694,7 @@ def search_decompiled(pattern, case_sensitive, range_start, range_end, offset, l
         if planning_meta.get("planning_timed_out"):
             result["planning_timed_out"] = True
     if scope_func:
-        result["scope"] = hex(scope_func.start_ea)
+        result["scope"] = hex(scope_func)
     if scan_truncated or timed_out:
         result["analysis_truncated"] = True
         result["hint"] = (

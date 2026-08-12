@@ -135,6 +135,7 @@ def test_func_by_sig_name_starting_with_call_not_treated_as_calls_filter():
     refs.idaapi.BADADDR = -1
     funcs = {0x1: _Func(0x1, 0x50), 0x2: _Func(0x2, 0x50)}
     refs.idaapi.get_func = funcs.get
+    refs.ida_funcs.get_func = funcs.get
     refs.idautils.Functions = lambda: [0x1, 0x2]
     refs.ida_funcs.get_func_name = lambda ea: {0x1: "caller", 0x2: "callee_helper"}.get(ea, "")
     refs.idautils.XrefsTo = lambda *a, **k: []
@@ -153,6 +154,7 @@ def test_func_by_sig_no_callers_does_not_parse_call_pattern():
     refs.idaapi.BADADDR = -1
     funcs = {0x1: _Func(0x1, 0x50), 0x2: _Func(0x2, 0x50)}
     refs.idaapi.get_func = funcs.get
+    refs.ida_funcs.get_func = funcs.get
     refs.idautils.Functions = lambda: [0x1, 0x2]
     refs.ida_funcs.get_func_name = lambda ea: {0x1: "entry_candidate", 0x2: "busy"}.get(ea, "")
     # 0x1 has no code callers; 0x2 has one.
@@ -174,6 +176,7 @@ def test_func_by_sig_name_with_leaf_substring_not_treated_as_leaf_filter():
     refs.idaapi.BADADDR = -1
     funcs = {0x1: _Func(0x1, 0x50), 0x2: _Func(0x2, 0x50)}
     refs.idaapi.get_func = funcs.get
+    refs.ida_funcs.get_func = funcs.get
     refs.idautils.Functions = lambda: [0x1, 0x2]
     refs.ida_funcs.get_func_name = lambda ea: {0x1: "leaflet", 0x2: "other"}.get(ea, "")
     refs.idautils.XrefsTo = lambda *a, **k: []
@@ -192,6 +195,7 @@ def test_func_by_sig_calls_keyword_still_filters():
     refs.idaapi.BADADDR = -1
     funcs = {0x1: _Func(0x1, 0x50), 0x2: _Func(0x2, 0x50)}
     refs.idaapi.get_func = funcs.get
+    refs.ida_funcs.get_func = funcs.get
     refs.idautils.Functions = lambda: [0x1, 0x2]
     refs.ida_funcs.get_func_name = lambda ea: {0x1: "malloc_wrapper", 0x2: "free_wrapper"}.get(ea, "")
     refs.idautils.XrefsTo = lambda *a, **k: []

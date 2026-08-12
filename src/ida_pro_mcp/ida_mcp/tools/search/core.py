@@ -29,6 +29,14 @@ except ImportError:
         semantic_scores,
     )
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from ... import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
 # ============================================================================
 # Module-Level Caches
 # ============================================================================
@@ -345,18 +353,21 @@ def xref_count_limited(ea: int, max_count: int = 256) -> int:
 def iter_segments(range_start=None, range_end=None, require_exec: bool = True):
     """Yield (seg_start, seg_end) for searchable segments."""
     if range_start is not None and range_end is not None:
-        seg = idaapi.getseg(range_start)
-        while seg and seg.start_ea < range_end:
-            if not require_exec or (seg.perm & idaapi.SEGPERM_EXEC):
+        seg = _compat.get_segment(range_start)
+        while seg is not None and seg.start_ea < range_end:
+            if not require_exec or (_compat.get_segment_perm(seg.start_ea) & idaapi.SEGPERM_EXEC):
                 yield (max(seg.start_ea, range_start), min(seg.end_ea, range_end))
-            seg = idaapi.get_next_seg(seg.end_ea)
+            next_ea = _compat.get_next_segment_ea(seg.end_ea)
+            seg = _compat.get_segment(next_ea) if next_ea is not None else None
     else:
-        for seg_ea in idautils.Segments():
-            seg = idaapi.getseg(seg_ea)
-            if not seg:
-                continue
-            if not require_exec or (seg.perm & idaapi.SEGPERM_EXEC):
+        seg_ea = _compat.get_first_segment_ea()
+        while seg_ea is not None:
+            seg = _compat.get_segment(seg_ea)
+            if seg is None:
+                break
+            if not require_exec or (_compat.get_segment_perm(seg_ea) & idaapi.SEGPERM_EXEC):
                 yield (seg.start_ea, seg.end_ea)
+            seg_ea = _compat.get_next_segment_ea(seg_ea)
 
 
 def resolve_scan_segments(range_start=None, range_end=None, *, require_exec: bool = True):
@@ -674,14 +685,14 @@ def resolve_target(
     if looks_like_address(target):
         ea, err = validate_addr(target)
         if not err and ea != idaapi.BADADDR:
-            if require_function and not idaapi.get_func(ea):
+            if require_function and _compat.get_func_start(ea) is None:
                 return idaapi.BADADDR, f"No function at {hex(ea)}", {}
             return ea, None, {"match": "address"}
 
     # Fast path: exact name
     exact_ea = idc.get_name_ea_simple(target)
     if exact_ea != idaapi.BADADDR:
-        if require_function and not idaapi.get_func(exact_ea):
+        if require_function and _compat.get_func_start(exact_ea) is None:
             return idaapi.BADADDR, f"No function at {hex(exact_ea)}", {}
         return exact_ea, None, {"match": "exact_name"}
 
@@ -692,11 +703,11 @@ def resolve_target(
         if not sym_name:
             continue
         if target_l == sym_name.lower():
-            if require_function and not idaapi.get_func(sym_ea):
+            if require_function and _compat.get_func_start(sym_ea) is None:
                 continue
             return sym_ea, None, {"match": "exact_name_ci", "resolved_name": sym_name}
         if target_l in sym_name.lower():
-            if require_function and not idaapi.get_func(sym_ea):
+            if require_function and _compat.get_func_start(sym_ea) is None:
                 continue
             substr_hits.append((sym_ea, sym_name))
             if len(substr_hits) > 8:
@@ -726,7 +737,7 @@ def resolve_target(
         if not dem or dem == sym_name:
             continue
         if dem.lower() == target_l or target_l in dem.lower():
-            if require_function and not idaapi.get_func(sym_ea):
+            if require_function and _compat.get_func_start(sym_ea) is None:
                 continue
             demangle_hits.append((sym_ea, sym_name, dem))
             if len(demangle_hits) > 8:
@@ -747,7 +758,7 @@ def resolve_target(
                 try:
                     bb_ea = int(addr, 16) if isinstance(addr, str) else int(addr)
                     if bb_ea != idaapi.BADADDR:
-                        if require_function and not idaapi.get_func(bb_ea):
+                        if require_function and _compat.get_func_start(bb_ea) is None:
                             continue
                         return bb_ea, None, {"match": "blackboard_name", "blackboard_title": title}
                 except Exception:
@@ -785,7 +796,7 @@ def resolve_target(
             dem = demangle_cached(sym_name) if sym_name.startswith(("_Z", "?")) else ""
             if not dem or dem == sym_name or not matcher(dem):
                 continue
-        is_func = bool(idaapi.get_func(sym_ea))
+        is_func = _compat.get_func_start(sym_ea) is not None
         if require_function and not is_func:
             continue
         display = dem if dem and dem != sym_name else sym_name
@@ -826,9 +837,9 @@ def resolve_target(
     top_score, top_ea, top_name, top_kind, top_module = ranked[0]
 
     if require_function:
-        top_func = idaapi.get_func(top_ea)
-        if top_func:
-            top_ea = top_func.start_ea
+        top_func = _compat.get_func_start(top_ea)
+        if top_func is not None:
+            top_ea = top_func
 
     if top_score < semantic_min_score:
         return idaapi.BADADDR, (

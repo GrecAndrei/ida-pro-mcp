@@ -14,6 +14,15 @@ from .core import (
     safe_generate_disasm_line,
 )
 
+# IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
+try:
+    from ... import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 
 def search_insns(pattern, range_start, range_end, include_context, offset, limit):
     """Search instruction sequences."""
@@ -50,9 +59,9 @@ def search_insns(pattern, range_start, range_end, include_context, offset, limit
                         line = hex(ea)
                         if include_context:
                             line += f"  [{','.join(sequence)}]"
-                            func = idaapi.get_func(ea)
-                            if func:
-                                line += f"  in:{ida_funcs.get_func_name(func.start_ea)}"
+                            func = _compat.get_func_start(ea)
+                            if func is not None:
+                                line += f"  in:{ida_funcs.get_func_name(func)}"
                         results.append(line)
                         if len(results) >= limit:
                             truncated = True
@@ -96,9 +105,9 @@ def search_text(pattern, case_sensitive, range_start, range_end, include_context
                     if matches_seen > offset:
                         result_line = f"{hex(ea)}  {line_clean}"
                         if include_context:
-                            func = idaapi.get_func(ea)
-                            if func:
-                                result_line += f"  in:{ida_funcs.get_func_name(func.start_ea)}"
+                            func = _compat.get_func_start(ea)
+                            if func is not None:
+                                result_line += f"  in:{ida_funcs.get_func_name(func)}"
                         results.append(result_line)
                         if len(results) >= limit:
                             truncated = True
