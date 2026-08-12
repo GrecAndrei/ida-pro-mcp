@@ -14,11 +14,6 @@ except ImportError:
         import compat as _compat  # type: ignore[import-not-found,no-redef]
 
 try:
-    import ida_struct
-except Exception:
-    ida_struct = None
-
-try:
     import ida_ua
 except Exception:
     ida_ua = None
@@ -134,63 +129,23 @@ def _get_func_or_error(addr):
 
 
 def _get_frame_or_error(func):
-    """Get stack frame for a function, returning (frame, error_dict_or_None)."""
-    frame = None
-    get_frame_fn = getattr(ida_frame, "get_frame", None)
-    if callable(get_frame_fn):
-        try:
-            frame = get_frame_fn(func)
-        except Exception:
-            frame = None
+    """Return (has_frame, err) for the function at ``func``.
 
-    if not frame and ida_struct is not None and hasattr(idc, "get_frame_id"):
-        try:
-            sid = idc.get_frame_id(func.start_ea)
-            if sid not in (None, idaapi.BADADDR, -1):
-                frame = ida_struct.get_struc(sid)
-        except Exception:
-            frame = None
-
-    if not frame:
-        return None, {"ok": True, "members": [],
-                      "note": "No stack frame for this function"}
-    return frame, None
-
-
-def _member_name(frame, member, idx):
-    """Get a member name, handling IDA version differences."""
-    if hasattr(ida_frame, "get_member_name"):
-        name = ida_frame.get_member_name(member.id)
-    elif hasattr(idc, "get_member_name"):
-        name = idc.get_member_name(frame.id, member.soff)
-    else:
-        name = None
-    return name or f"var_{idx}"
-
-
-def _member_type_str(member):
-    """Get type string for a frame member."""
-    tif = ida_typeinf.tinfo_t()
-    if hasattr(ida_frame, "get_member_tinfo"):
-        try:
-            if ida_frame.get_member_tinfo(tif, member):
-                return str(tif)
-        except Exception:
-            pass
-    return ""
-
-
-def _iter_frame_members(frame):
-    """Iterate over all frame members, yielding (index, member, name, offset, size, type_str)."""
-    for i in range(frame.memqty):
-        member = frame.get_member(i)
-        if not member:
-            continue
-        name = _member_name(frame, member, i)
-        offset = member.soff
-        size = member.eoff - member.soff
-        type_str = _member_type_str(member)
-        yield i, member, name, offset, size, type_str
+    ``has_frame`` is True when the function has a stack frame; ``err`` is
+    None then. When the function has no frame, returns (False, ok-note) so
+    callers short-circuit with the same "No stack frame" result as before.
+    The frame itself is walked through ``_compat.frame_members`` /
+    ``_compat.frame_size``, which use the legacy ``struc_t`` surface on
+    <= 9.3 and the 9.4 tinfo/udt surface (``ida_frame.get_func_frame_ea``)
+    where ``ida_frame.get_frame`` and the ``ida_struct`` module are gone.
+    """
+    members = _compat.frame_members(func.start_ea)
+    if members:
+        return True, None
+    if _compat.frame_size(func.start_ea) > 0:
+        return True, None
+    return False, {"ok": True, "members": [],
+                   "note": "No stack frame for this function"}
 
 
 def _get_arch_info():
@@ -204,36 +159,6 @@ def _get_arch_info():
         "bits": bits,
         "ptr_size": ptr_size,
     }
-
-
-def _frame_size(frame) -> int:
-    """Compute frame size with compatibility fallbacks across IDA builds."""
-    if not frame:
-        return 0
-
-    if ida_struct is not None and hasattr(ida_struct, "get_struc_size"):
-        try:
-            return int(ida_struct.get_struc_size(frame))
-        except Exception:
-            pass
-
-    getter = getattr(ida_frame, "get_struc_size", None)
-    if callable(getter):
-        try:
-            return int(getter(frame))
-        except Exception:
-            pass
-
-    # Last-resort estimate from member end offsets.
-    try:
-        max_eoff = 0
-        for i in range(getattr(frame, "memqty", 0)):
-            member = frame.get_member(i)
-            if member and hasattr(member, "eoff"):
-                max_eoff = max(max_eoff, int(member.eoff))
-        return max_eoff
-    except Exception:
-        return 0
 
 
 @tool
@@ -299,12 +224,12 @@ def stack_analysis(
 
         # ---- frame: Full stack frame layout ----
         if action == "frame":
-            frame, err = _get_frame_or_error(func)
+            has_frame, err = _get_frame_or_error(func)
             if err:
                 return err
-            frame_size = _frame_size(frame)
+            frame_size = _compat.frame_size(func.start_ea) if has_frame else 0
             members = []
-            for idx, _member, name, offset, size, type_str in _iter_frame_members(frame):
+            for idx, name, offset, size, type_str in _compat.frame_members(func.start_ea):
                 members.append({
                     "index": idx,
                     "name": name,
@@ -326,11 +251,11 @@ def stack_analysis(
 
         # ---- buffers: Find stack buffers ----
         elif action == "buffers":
-            frame, err = _get_frame_or_error(func)
+            has_frame, err = _get_frame_or_error(func)
             if err:
                 return err
             buffers = []
-            for _, _member, name, offset, size, type_str in _iter_frame_members(frame):
+            for _, name, offset, size, type_str in _compat.frame_members(func.start_ea):
                 # Arrays are buffers; shared heuristic keeps `summary`/`arrays`
                 # in agreement on the same frame.
                 if _is_buffer_like(type_str, size):
@@ -388,10 +313,10 @@ def stack_analysis(
 
         # ---- alignment: Stack alignment requirements ----
         elif action == "alignment":
-            frame, err = _get_frame_or_error(func)
+            has_frame, err = _get_frame_or_error(func)
             if err:
                 return err
-            frame_size = _frame_size(frame)
+            frame_size = _compat.frame_size(func.start_ea) if has_frame else 0
             # Determine alignment from frame size and architecture
             if frame_size == 0:
                 alignment = arch["ptr_size"]
@@ -404,7 +329,7 @@ def stack_analysis(
             # Check member alignments
             max_member_align = 1
             member_details = []
-            for _, _member, name, offset, size, _type_str in _iter_frame_members(frame):
+            for _, name, offset, size, _type_str in _compat.frame_members(func.start_ea):
                 m_align = 1
                 for a in (16, 8, 4, 2):
                     if offset % a == 0 and size >= a:
@@ -432,14 +357,14 @@ def stack_analysis(
 
         # ---- spills: Find register spills to stack ----
         elif action == "spills":
-            frame, err = _get_frame_or_error(func)
+            has_frame, err = _get_frame_or_error(func)
             if err:
                 return err
             spills = []
             # Build a set of callee-saved registers for the current arch
             _arch_name = get_arch()
             callee_saved = get_callee_saved_registers(_arch_name)
-            for _, _member, name, offset, size, _type_str in _iter_frame_members(frame):
+            for _, name, offset, size, _type_str in _compat.frame_members(func.start_ea):
                 is_spill = False
                 n = name.lower()
                 # Saved register detection (common IDA naming patterns)
@@ -464,8 +389,8 @@ def stack_analysis(
 
         # ---- usage: Stack usage analysis ----
         elif action == "usage":
-            frame, _ = _get_frame_or_error(func)
-            frame_size = _frame_size(frame) if frame else 0
+            has_frame, _ = _get_frame_or_error(func)
+            frame_size = _compat.frame_size(func.start_ea) if has_frame else 0
             # Track stack pointer delta across the function
             max_spd = 0
             min_spd = 0
@@ -513,12 +438,12 @@ def stack_analysis(
 
         # ---- variables: Enhanced local variable analysis ----
         elif action == "variables":
-            frame, err = _get_frame_or_error(func)
+            has_frame, err = _get_frame_or_error(func)
             if err:
                 return err
-            frame_size = _frame_size(frame)
+            frame_size = _compat.frame_size(func.start_ea) if has_frame else 0
             variables = []
-            for _, _member, name, offset, size, type_str in _iter_frame_members(frame):
+            for _, name, offset, size, type_str in _compat.frame_members(func.start_ea):
                 # Classify the variable
                 n = name.lower()
                 kind = "local"
@@ -566,11 +491,11 @@ def stack_analysis(
 
         # ---- arrays: Detect array variables ----
         elif action == "arrays":
-            frame, err = _get_frame_or_error(func)
+            has_frame, err = _get_frame_or_error(func)
             if err:
                 return err
             arrays = []
-            for _, _member, name, offset, size, type_str in _iter_frame_members(frame):
+            for _, name, offset, size, type_str in _compat.frame_members(func.start_ea):
                 is_array = False
                 element_size = 0
                 element_count = 0
@@ -622,12 +547,12 @@ def stack_analysis(
 
         # ---- uninitialized: Find potentially uninitialized stack variables ----
         elif action == "uninitialized":
-            frame, err = _get_frame_or_error(func)
+            has_frame, err = _get_frame_or_error(func)
             if err:
                 return err
             # Collect all local variable offsets
             local_vars = []
-            for _, _member, name, offset, size, type_str in _iter_frame_members(frame):
+            for _, name, offset, size, type_str in _compat.frame_members(func.start_ea):
                 n = name.lower()
                 # Skip saved regs, return addr, and arguments
                 if (n.startswith((" s", "__saved", " r", "arg_", "param_")) or n == "r"):
@@ -702,15 +627,15 @@ def stack_analysis(
 
         # ---- summary: Quick stack frame summary ----
         elif action == "summary":
-            frame, _ = _get_frame_or_error(func)
-            frame_size = _frame_size(frame) if frame else 0
+            has_frame, _ = _get_frame_or_error(func)
+            frame_size = _compat.frame_size(func.start_ea) if has_frame else 0
             local_count = 0
             arg_count = 0
             saved_count = 0
             buffer_count = 0
             has_canary = False
-            if frame:
-                for _, _member, name, _offset, size, type_str in _iter_frame_members(frame):
+            if has_frame:
+                for _, name, _offset, size, type_str in _compat.frame_members(func.start_ea):
                     n = name.lower()
                     if n.startswith(("arg_", "param_")):
                         arg_count += 1

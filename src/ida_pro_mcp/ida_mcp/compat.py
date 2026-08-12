@@ -490,6 +490,253 @@ def get_spd(func_ea, ea):
     return ida_frame.get_spd(pfn, ea)
 
 
+def _legacy_frame_struc(func_ea):
+    """The ``struc_t`` stack frame of ``func_ea``'s function, or None.
+
+    Only meaningful on <= 9.3 — 9.4 removed ``ida_frame.get_frame`` outright
+    and with it the ``ida_struct`` module. Mirrors the pre-9.4 resolution
+    chain used by the legacy stack-analysis helper: ``ida_frame.get_frame``
+    first, then ``idc.get_frame_id`` + ``ida_struct.get_struc``.
+    """
+    ida_frame = _resolve_module("ida_frame")
+    if ida_frame is not None:
+        get_frame = getattr(ida_frame, "get_frame", None)
+        if callable(get_frame):
+            try:
+                func = get_func_info(func_ea)
+                if func is not None:
+                    frame = get_frame(func)
+                    if frame is not None:
+                        return frame
+            except Exception:
+                pass
+    # ``ida_funcs.get_frame`` is the same struc_t frame reachable through the
+    # funcs module (legacy callers used both spellings).
+    ida_funcs_mod = _resolve_module("ida_funcs")
+    if ida_funcs_mod is not None:
+        get_frame = getattr(ida_funcs_mod, "get_frame", None)
+        if callable(get_frame):
+            try:
+                func = get_func_info(func_ea)
+                if func is not None:
+                    frame = get_frame(func)
+                    if frame is not None:
+                        return frame
+            except Exception:
+                pass
+    ida_struct = _resolve_module("ida_struct")
+    idc = _resolve_module("idc")
+    if ida_struct is not None and idc is not None:
+        try:
+            get_frame_id = getattr(idc, "get_frame_id", None)
+            if get_frame_id is None:
+                return None
+            sid = get_frame_id(func_ea)
+            if sid is None:
+                return None
+            ida_idaapi = _resolve_module("ida_idaapi")
+            badaddr = (
+                getattr(ida_idaapi, "BADADDR", None)
+                if ida_idaapi is not None else None
+            )
+            if sid not in (badaddr, -1):
+                struc = ida_struct.get_struc(sid)
+                if struc is not None:
+                    return struc
+        except Exception:
+            pass
+    return None
+
+
+def _legacy_frame_members(func_ea):
+    """struc_t-based member walk matching the pre-9.4 callers.
+
+    Iterates ``frame.members`` (the authoritative struc_t iteration —
+    ``get_member`` takes a byte offset, so index loops only reach members
+    at offsets 0..N). Name resolution mirrors both legacy call sites:
+    ``ida_frame.get_member_name`` first, then ``ida_struct.get_member_name``
+    (code_helpers' source), then ``idc.get_member_name``; sizes come from
+    ``ida_struct.get_member_size``, then ``member.size``, then
+    ``eoff - soff``; types from ``ida_frame.get_member_tinfo``.
+    """
+    frame = _legacy_frame_struc(func_ea)
+    if frame is None:
+        return []
+    ida_frame = _resolve_module("ida_frame")
+    ida_struct = _resolve_module("ida_struct")
+    ida_typeinf = _resolve_module("ida_typeinf")
+    members = []
+    # struc_t.members is the canonical member list; index-based
+    # get_member() fallback keeps minimal fakes working.
+    frame_member_list = getattr(frame, "members", None) or []
+    get_member = getattr(frame, "get_member", None)
+    idx = 0
+    for i in range(int(getattr(frame, "memqty", 0) or 0)):
+        if i < len(frame_member_list):
+            member = frame_member_list[i]
+        elif callable(get_member):
+            try:
+                member = get_member(i)
+            except Exception:
+                member = None
+        else:
+            member = None
+        if not member:
+            continue
+        # name: ida_frame.get_member_name(member.id), then
+        # ida_struct.get_member_name(member.id), then
+        # idc.get_member_name(frame.id, member.soff), then var_<i>
+        name = None
+        for mod_name, fn_name in (
+            ("ida_frame", "get_member_name"),
+            ("ida_struct", "get_member_name"),
+            ("idc", "get_member_name"),
+        ):
+            mod = _resolve_module(mod_name)
+            fn = getattr(mod, fn_name, None) if mod is not None else None
+            if fn is None:
+                continue
+            try:
+                if mod_name == "idc":
+                    name = fn(frame.id, member.soff)
+                else:
+                    name = fn(member.id)
+            except Exception:
+                name = None
+            if name:
+                break
+        name = name or f"var_{i}"
+        soff = int(getattr(member, "soff", 0) or 0)
+        eoff = int(getattr(member, "eoff", soff) or soff)
+        # size: ida_struct.get_member_size(member), then member.size,
+        # then member.eoff - member.soff
+        msize = None
+        if ida_struct is not None and hasattr(ida_struct, "get_member_size"):
+            try:
+                msize = int(ida_struct.get_member_size(member) or 0)
+            except Exception:
+                msize = None
+        if not msize:
+            msize = int(getattr(member, "size", 0) or 0)
+        if not msize:
+            msize = max(0, eoff - soff)
+        # type: ida_frame.get_member_tinfo(tif, member) -> str(tif)
+        type_str = ""
+        if ida_frame is not None and ida_typeinf is not None:
+            get_member_tinfo = getattr(ida_frame, "get_member_tinfo", None)
+            if get_member_tinfo is not None:
+                try:
+                    tif = ida_typeinf.tinfo_t()
+                    if get_member_tinfo(tif, member):
+                        type_str = str(tif)
+                except Exception:
+                    type_str = ""
+        members.append((idx, name, soff, msize, type_str))
+        idx += 1
+    return members
+
+
+def _udt_frame_members(udt):
+    """Convert a bit-addressed ``udt_type_data_t`` to byte-normalized
+    ``(index, name, offset, size, type_str)`` members; gaps are skipped."""
+    members = []
+    idx = 0
+    for udm in udt:
+        try:
+            if udm.is_gap():
+                continue
+        except Exception:
+            pass
+        name = getattr(udm, "name", "") or ""
+        if not name:
+            name = f"var_{idx}"
+        t = getattr(udm, "type", None)
+        members.append((
+            idx,
+            name,
+            int(getattr(udm, "offset", 0) or 0) // 8,
+            int(getattr(udm, "size", 0) or 0) // 8,
+            str(t) if t is not None else "",
+        ))
+        idx += 1
+    return members
+
+
+def frame_members(func_ea):
+    """``(index, name, offset, size, type_str)`` for every real stack-frame
+    member of ``func_ea``'s function (byte offsets/sizes), or ``[]`` when
+    there is no frame.
+
+    On 9.4+ the frame is a ``tinfo_t``: ``ida_frame.get_func_frame_ea``
+    fills it and the ``udt_type_data_t`` walk yields members (gaps
+    skipped). On <= 9.3 the legacy ``struc_t`` walk runs unchanged, so
+    callers see byte-identical output to the old
+    ``ida_frame.get_frame``-based iteration.
+    """
+    ida_frame = _resolve_module("ida_frame")
+    get_func_frame_ea = (
+        getattr(ida_frame, "get_func_frame_ea", None)
+        if ida_frame is not None else None
+    )
+    if get_func_frame_ea is not None:
+        ida_typeinf = _resolve_module("ida_typeinf")
+        if ida_typeinf is not None:
+            try:
+                tif = ida_typeinf.tinfo_t()
+                if get_func_frame_ea(tif, func_ea):
+                    udt = ida_typeinf.udt_type_data_t()
+                    tif.get_udt_details(udt)
+                    return _udt_frame_members(udt)
+                return []
+            except Exception:
+                return []
+    return _legacy_frame_members(func_ea)
+
+
+def frame_size(func_ea):
+    """Byte size of the stack frame of ``func_ea``'s function, or 0.
+
+    9.4+ uses the EA-based ``ida_frame.get_frame_size_ea``; <= 9.3 mirrors
+    the legacy computation chain (``ida_struct.get_struc_size``, then
+    ``ida_frame.get_struc_size``, then the max member end offset).
+    """
+    ida_frame = _resolve_module("ida_frame")
+    if ida_frame is not None:
+        get_size_ea = getattr(ida_frame, "get_frame_size_ea", None)
+        if get_size_ea is not None:
+            try:
+                return int(get_size_ea(func_ea))
+            except Exception:
+                return 0
+    frame = _legacy_frame_struc(func_ea)
+    if frame is None:
+        return 0
+    ida_struct = _resolve_module("ida_struct")
+    if ida_struct is not None and hasattr(ida_struct, "get_struc_size"):
+        try:
+            return int(ida_struct.get_struc_size(frame))
+        except Exception:
+            pass
+    getter = (
+        getattr(ida_frame, "get_struc_size", None)
+        if ida_frame is not None else None
+    )
+    if callable(getter):
+        try:
+            return int(getter(frame))
+        except Exception:
+            pass
+    max_eoff = 0
+    for i in range(int(getattr(frame, "memqty", 0) or 0)):
+        try:
+            member = frame.get_member(i)
+            if member and hasattr(member, "eoff"):
+                max_eoff = max(max_eoff, int(member.eoff))
+        except Exception:
+            pass
+    return max_eoff
+
+
 def get_prototype_string(ea):
     """Best-effort prototype string for the function at ``ea``, or None.
 

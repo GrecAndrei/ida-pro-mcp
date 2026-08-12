@@ -169,9 +169,7 @@ collapse to direct calls and the module is deleted.
       `_get_frame_or_error`) — 9.4 REMOVED `ida_frame.get_frame` outright,
       so that path needs a `get_func_frame_ea` + tinfo/udt member
       iteration rewrite (both sites degrade gracefully today).
-- [ ] **tinfo-based stack-frame walk** (the deferral above): rewrite
-      frame member enumeration on 9.4 using `ida_frame.get_func_frame_ea`
-      + `udt_type_data_t`; keep the struc path on <= 9.3
+- [x] **tinfo-based stack-frame walk** — DONE (2026-08-11): `_compat.frame_members(func_ea)` / `_compat.frame_size(func_ea)` replaced the last `ida_frame.get_frame` (removed in 9.4) / `ida_struct` (module gone) sites. 9.4 path: `ida_frame.get_func_frame_ea(tif, func_ea)` → `udt_type_data_t` walk (gaps skipped, bit→byte normalization) + `get_frame_size_ea`. Legacy path mirrors both old call sites exactly: frame via `ida_frame.get_frame` → `ida_funcs.get_frame` → `idc.get_frame_id`+`ida_struct.get_struc`; members via the canonical `struc_t.members` list (NOT `get_member(i)` — that takes a byte offset); names via `ida_frame` → `ida_struct` → `idc` `get_member_name`; sizes via `get_member_size` → `member.size` → `eoff-soff`. stack_analysis.py (all 10 actions) and code_helpers.py migrated; 3 new compat dispatch tests. `types.py` struct editing was already 9.4-ready (tinfo `add_udm`/`del_udm`/`rename_udm`/`set_udm_type` fallbacks gated by `_has_classic_struct_api()`).
 - [ ] `ida_list_strings` behavior check on 9.4 (decompiler strings now
       included lazily)
 - [ ] RISC-V validation: run `tests/fixtures/riscv_blob.bin` (and a real

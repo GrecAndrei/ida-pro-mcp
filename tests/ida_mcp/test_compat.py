@@ -647,3 +647,168 @@ def test_add_segment_on_93_surface():
     assert added == [(0x600000, 0x601000, 5, "carve", "CODE", 0)]
 
     sys.modules.pop("idaapi", None)
+
+
+# ---------------------------------------------------------------------------
+# stack-frame walkers (frame_members / frame_size) — 9.4 tinfo/udt surface
+# and the legacy struc_t surface (incl. the idc.get_frame_id tier)
+# ---------------------------------------------------------------------------
+
+class _Tif:
+    """tinfo_t stand-in whose str() is its .value, like a real tinfo_t."""
+
+    def __init__(self, value=""):
+        self.value = value
+
+    def __str__(self):
+        return self.value
+
+
+def _install_frame_stubs(*, ea_api: bool):
+    """Fake ida_frame/ida_typeinf/idc/ida_struct surfaces for the walkers.
+
+    The 9.4 surface exposes get_func_frame_ea (fills a tinfo_t UDT) and
+    get_frame_size_ea; the legacy surface exposes get_frame + member
+    accessors on ida_frame/ida_struct, with idc.get_frame_id as the
+    tier-2 fallback.
+    """
+    if ea_api:
+        typeinf = types.ModuleType("ida_typeinf")
+
+        class _UDM:
+            def __init__(self, name, offset_bits, size_bits, type_str, gap=False):
+                self.name = name
+                self.offset = offset_bits
+                self.size = size_bits
+                self.type = type_str
+                self._gap = gap
+
+            def is_gap(self):
+                return self._gap
+
+        class _UDT(list):
+            pass
+
+        typeinf.tinfo_t = _Tif
+        typeinf.udt_type_data_t = _UDT
+
+        def _get_func_frame_ea(tif, ea):
+            if ea == 0x401500:
+                tif.value = "frame"
+                tif._udt = _UDT([
+                    _UDM("arg_0", 0, 32, "int"),
+                    _UDM("", 32, 96, "int", gap=True),      # gap -> skipped
+                    _UDM("buf", 128, 512, "char[64]"),
+                ])
+                return True
+            return False
+
+        class _TifWithUdt(_Tif):
+            def get_udt_details(self, udt):
+                udt.extend(getattr(self, "_udt", []))
+
+        typeinf.tinfo_t = _TifWithUdt
+        frame = types.ModuleType("ida_frame")
+        frame.get_func_frame_ea = _get_func_frame_ea
+        frame.get_frame_size_ea = lambda ea: 0x24 if ea == 0x401500 else 0
+        sys.modules["ida_frame"] = frame
+        sys.modules["ida_typeinf"] = typeinf
+        return
+
+    # Legacy surface: get_frame + struc member accessors.
+    class _Member:
+        def __init__(self, idx, soff, eoff, size=None, id_=None):
+            self.id = idx if id_ is None else id_
+            self.soff = soff
+            self.eoff = eoff
+            self.size = size
+
+    class _Frame:
+        def __init__(self):
+            self.id = 0x100
+            self.members = [
+                _Member(0, 0x0, 0x4),
+                _Member(1, 0x10, 0x50, size=0x40),
+            ]
+            self.memqty = len(self.members)
+
+        def get_member(self, i):
+            return self.members[i] if i < self.memqty else None
+
+    frame = types.ModuleType("ida_frame")
+    frame._frame = _Frame()
+    frame.get_frame = lambda func: frame._frame
+    _member_names = {0: "arg_0"}
+    frame.get_member_name = _member_names.get
+
+    def _get_member_tinfo(tif, member):
+        tif.value = "int"
+        return True
+
+    frame.get_member_tinfo = _get_member_tinfo
+    sys.modules["ida_frame"] = frame
+
+    ida_struct = types.ModuleType("ida_struct")
+    ida_struct.get_struc_size = lambda f: 0x24
+    ida_struct.get_member_size = lambda m: m.eoff - m.soff
+    ida_struct.get_struc = lambda sid: frame._frame if sid == 0x100 else None
+    sys.modules["ida_struct"] = ida_struct
+
+    idc = types.ModuleType("idc")
+    idc.get_frame_id = lambda ea: 0x100 if ea == 0x401500 else -1
+    idc.get_member_name = lambda sid, soff: "arg_0" if soff == 0x0 else None
+    sys.modules["idc"] = idc
+
+    typeinf = types.ModuleType("ida_typeinf")
+    typeinf.tinfo_t = _Tif
+    sys.modules["ida_typeinf"] = typeinf
+
+
+def test_frame_members_use_tinfo_udt_walk_on_94_surface():
+    _install_ida_stubs(ea_api=True)
+    _install_frame_stubs(ea_api=True)
+    compat = _load_compat()
+
+    # UDT walk: gaps skipped, bit offsets/sizes normalized to bytes.
+    assert compat.frame_members(0x401500) == [
+        (0, "arg_0", 0x0, 0x4, "int"),
+        (1, "buf", 0x10, 0x40, "char[64]"),
+    ]
+    assert compat.frame_size(0x401500) == 0x24
+    # No frame -> [] / 0, not a legacy fallback.
+    assert compat.frame_members(0x9999) == []
+    assert compat.frame_size(0x9999) == 0
+
+
+def test_frame_members_fallback_to_struc_on_93_surface():
+    _install_ida_stubs(ea_api=False)
+    _install_frame_stubs(ea_api=False)
+    compat = _load_compat()
+
+    # get_frame tier: names via ida_frame.get_member_name, sizes via
+    # ida_struct.get_member_size, types via get_member_tinfo.
+    assert compat.frame_members(0x401500) == [
+        (0, "arg_0", 0x0, 0x4, "int"),
+        (1, "var_1", 0x10, 0x40, "int"),
+    ]
+    assert compat.frame_size(0x401500) == 0x24
+    assert compat.frame_members(0x9999) == []
+    assert compat.frame_size(0x9999) == 0
+
+
+def test_frame_members_legacy_tier2_uses_idc_frame_id():
+    _install_ida_stubs(ea_api=False)
+    _install_frame_stubs(ea_api=False)
+    # Remove the get_frame tier: the walk must fall back to
+    # idc.get_frame_id + ida_struct.get_struc.
+    frame = sys.modules["ida_frame"]
+    del frame.get_frame
+    frame._frame.members[1].id = 1
+    compat = _load_compat()
+
+    assert compat.frame_members(0x401500) == [
+        (0, "arg_0", 0x0, 0x4, "int"),
+        (1, "var_1", 0x10, 0x40, "int"),
+    ]
+    assert compat.frame_size(0x401500) == 0x24
+    assert compat.frame_members(0x9999) == []

@@ -1253,39 +1253,27 @@ def _scan_ctree_vulns(cfunc) -> list[dict]:
         pass
 
     # --- Stack frame analysis: large buffers, canary, frame pointer ---
+    # The member walk runs through _compat.frame_members: the legacy struc
+    # surface on <= 9.3, and the tinfo/udt walk (ida_frame.get_func_frame_ea)
+    # on 9.4 where get_frame and the ida_struct module are gone.
     try:
-        func_obj = _compat.get_func_info(func_ea)
-        if func_obj:
-            # get_frame (struc_t-based frame) only exists on <= 9.3; on 9.4
-            # this raises AttributeError and the block is skipped. The
-            # tinfo-based frame walk is tracked in docs/research/ida-9.4-migration.md.
-            frame = ida_funcs.get_frame(func_obj)
-            if frame:
-                # func_frame_t is a struc_t subclass; walk its members list.
-                # get_member() takes a byte offset, not an index — iterating
-                # 0..memqty would only ever reach members at those offsets.
-                for member in (getattr(frame, "members", None) or []):
-                    if member:
-                        mname = ida_struct.get_member_name(member.id) or ""
-                        try:
-                            msize = int(ida_struct.get_member_size(member) or 0)
-                        except Exception:
-                            msize = int(getattr(member, "size", 0) or 0)
-                        # Large stack buffer
-                        if msize > 256 and any(kw in mname.lower() for kw in ("buf", "buffer", "data", "tmp", "temp", "stack", "local")):
-                            findings.append({"severity": "high", "pattern": "large_stack_buffer",
-                                             "evidence": f"'{mname}' ({msize} bytes) in stack frame at {hex_ea(func_ea)}",
-                                             "detail": f"Large stack buffer ({msize} bytes) — high risk of stack overflow if used with unbounded input"})
-                        # Stack canary detection
-                        if "canary" in mname.lower() or "cookie" in mname.lower() or "__stack_chk" in mname.lower():
-                            findings.append({"severity": "low", "pattern": "stack_canary_present",
-                                             "evidence": f"canary '{mname}' in stack frame at {hex_ea(func_ea)}",
-                                             "detail": "Stack canary detected — overflow will be caught before return (if not bypassed)"})
-                        # Sensitive field names in stack vars
-                        if any(kw in mname.lower() for kw in ("password", "passwd", "secret", "key", "token", "credential")):
-                            findings.append({"severity": "medium", "pattern": "sensitive_stack_var",
-                                             "evidence": f"'{mname}' in stack frame at {hex_ea(func_ea)}",
-                                             "detail": "Sensitive data in stack variable — may leak on stack overflow or memory dump"})
+        for _idx, mname, _off, msize, _type_str in _compat.frame_members(func_ea):
+            if mname:
+                # Large stack buffer
+                if msize > 256 and any(kw in mname.lower() for kw in ("buf", "buffer", "data", "tmp", "temp", "stack", "local")):
+                    findings.append({"severity": "high", "pattern": "large_stack_buffer",
+                                     "evidence": f"'{mname}' ({msize} bytes) in stack frame at {hex_ea(func_ea)}",
+                                     "detail": f"Large stack buffer ({msize} bytes) — high risk of stack overflow if used with unbounded input"})
+                # Stack canary detection
+                if "canary" in mname.lower() or "cookie" in mname.lower() or "__stack_chk" in mname.lower():
+                    findings.append({"severity": "low", "pattern": "stack_canary_present",
+                                     "evidence": f"canary '{mname}' in stack frame at {hex_ea(func_ea)}",
+                                     "detail": "Stack canary detected — overflow will be caught before return (if not bypassed)"})
+                # Sensitive field names in stack vars
+                if any(kw in mname.lower() for kw in ("password", "passwd", "secret", "key", "token", "credential")):
+                    findings.append({"severity": "medium", "pattern": "sensitive_stack_var",
+                                     "evidence": f"'{mname}' in stack frame at {hex_ea(func_ea)}",
+                                     "detail": "Sensitive data in stack variable — may leak on stack overflow or memory dump"})
     except Exception:
         pass
 
