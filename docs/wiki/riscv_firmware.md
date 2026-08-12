@@ -129,21 +129,26 @@ ida_analysis(action="set_gp", gp="0x80002000")
 ```
 
 `set_gp` is RISC-V-only; on a non-RISC-V target it returns
-`INVALID_ARGS`/`only valid for RISC-V`.  On success it records
-`idc.set_processor_options("gp=0x...")`, persists the value in a netnode so it
-survives IDB reload, and queues `plan_range` reanalysis so GP-relative xrefs
-re-evaluate.  The `_APPLIED_RISCV_GP` cache means a re-apply is skipped after
-the first successful set this session.
+`INVALID_ARGS`/`only valid for RISC-V`.  On success it persists the value in
+a netnode so it survives IDB reload, and queues `plan_range` reanalysis so
+GP-relative xrefs re-evaluate.  The `_APPLIED_RISCV_GP` cache means a
+re-apply is skipped after the first successful set this session.
 
-> **Headless limitation (verified 9.3/9.4, 2026-08-12):** `idc.set_processor_options`
-> does not exist in the idat runtime (probed on every module in both
-> installs; it is not in any stub), and the sreg seams
-> (`split_sreg_range`, 9.4's `set_default_sreg_value_ea`) do not drive the
-> processor plugin's GP-relative resolution. In headless sessions `set_gp`
-> therefore reports `ok=False` with the apply error, and GP-relative
-> operands stay unresolved (`ld a3, -7FFFFFE0h`). The only known working
-> path is the GUI processor-options dialog. The tool still returns a
-> truthful error; treat GP-relative xrefs as best-effort in headless runs.
+**Headless behavior (verified live on 9.3 and 9.4, 2026-08-12):**
+`idc.set_processor_options` does not exist in the idat runtime, and
+`ida_idp.process_config_directive("gp=...")` is rejected by the RISC-V
+plugin ("Illegal keyword"), so no processor-option mechanism is available.
+Instead the tool **re-points the GP-relative data refs itself**: IDA decodes
+GP-relative loads/stores as `o_displ` operands whose base is x3/GP and
+creates data refs against an implicit GP of 0 — the raw sign-extended
+displacement (e.g. `ld a3, -7FFFFFE0h` gains a ref to `0xffffffff80000020`
+instead of `0x40`).  `set_gp` scans the segments, computes
+`target = GP + disp` masked to the XLEN, and re-points each stale ref
+(`ida_xref.del_dref` + `add_dref`, `dr_R` for loads / `dr_W` for stores).
+Unmapped targets are skipped; existing correct refs (GUI-style resolution)
+are left alone; changing GP cleans up the refs created for the previous
+value.  The response reports `refs_fixed` / `refs_skipped`, and
+`xrefs_to` / `ida_calc` then resolve correctly in headless sessions.
 
 Equivalent via the segment-register seam (same GP state, different surface):
 

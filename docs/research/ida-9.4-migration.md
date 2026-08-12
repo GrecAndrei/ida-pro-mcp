@@ -183,16 +183,34 @@ collapse to direct calls and the module is deleted.
       (`c.mv`/`c.j`/`c.addi`/`c.sd`/`c.lw`/`c.sw`/`c.ld`/`c.ret`/`c.addw`).
       `auipc gp, 80000h` still decodes as auipc + mv (no over-merge);
       lui-based `%hi/%lo` constant recovery resolves identically.
-      **Finding:** the `set_gp` workaround's primary mechanism
-      (`idc.set_processor_options`) does not exist in the idat runtime —
-      probed 7 modules on both 9.3 and 9.4, all absent, and it is in no
-      stub. The sreg seams (`split_sreg_range`, 9.4-only
-      `set_default_sreg_value_ea`) return False for GP and do not drive
-      plugin xref resolution. GP-relative operands (`ld a3, -7FFFFFE0h`)
-      stay unresolved headless on both versions, so `set_gp`'s failure is
-      honest (ok=False + apply_error) but the resolution itself is
-      unreachable in headless sessions — the GUI-only processor option is
-      the only known path. Keep `set_gp` as-is; document the limitation.
+      **Finding + fix:** the processor-option mechanism does not exist in
+      idat (`idc.set_processor_options` absent on 9.3/9.4, probed 7 modules
+      each; `ida_idp.process_config_directive("gp=...")` is rejected by the
+      plugin with "Illegal keyword"; the sreg seams
+      (`split_sreg_range`, 9.4 `set_default_sreg_value_ea`) return False for
+      GP because x3 is not a segment register).  The plugin therefore
+      creates GP-relative data refs against an implicit GP of 0 — the raw
+      sign-extended displacement (`ld a3, -7FFFFFE0h` → ref to
+      0xffffffff80000020 instead of 0x40).  Implemented
+      `arch_utils._riscv_gp_fix_refs()`: scans segments for `o_displ`
+      operands whose base is x3/GP, computes `target = GP + disp` (XLEN
+      mask), and re-points the stale refs via `ida_xref.del_dref` +
+      `add_dref` (`dr_R` loads / `dr_W` stores); unmapped targets skipped,
+      existing correct refs untouched, refs from a previous GP value
+      cleaned.  `set_gp`/`set_riscv_gp` now report `refs_fixed` /
+      `refs_skipped`; reanalysis is only queued on the (GUI-only)
+      directive path.  **Validated live on BOTH 9.4 and 9.3**: 3 fixture
+      refs re-pointed 0x40/0x48/0x50, `xrefs_to` resolves, GP re-set moves
+      them and cleans the stale ones.
+- [x] **`get_arch()` regression found during GP work** (2026-08-12):
+      `idaapi.get_inf_structure` was removed in 9.4, so `get_arch()` (and
+      every arch-gated behavior) silently returned "unknown" on 9.4 —
+      missed by the earlier disasm validation because it never exercised
+      the inf API.  Fixed: `_proc_name_and_bitness()` prefers
+      `ida_ida.inf_get_procname`/`inf_get_app_bitness` (present in 9.3 and
+      9.4), falls back to the legacy structure and finally
+      `idc.get_inf_attr(INF_PROCNAME)`; confirmed live (`riscv` →
+      `riscv64`).
 - [x] Evaluate `ida_indexer` for `ida_find` / query-lang — DONE
       (2026-08-12), **not adopted**: `ida.cfg` documents
       `ENABLE_INDEXER = YES // Enabled by default but disabled under batch

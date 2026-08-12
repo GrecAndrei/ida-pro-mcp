@@ -107,6 +107,30 @@ Final commit of the day closes out the mechanical migration entirely:
 - Suite: 2836 passed / ruff clean (24 compat dispatch tests, 19 installer
   host tests, 3 CI-guard tests).
 
+### 2026-08-12 — RISC-V GP-relative xrefs resolve headless; get_arch fixed for 9.4
+
+- **`set_gp` now works headless**: `arch_utils._riscv_gp_fix_refs()`
+  re-points GP-relative data refs. IDA decodes `ld rd, disp(x3)` as
+  `o_displ(reg=GP)` and creates refs against an implicit GP of 0 (raw
+  displacement — `ld a3, -7FFFFFE0h` ref'd 0xffffffff80000020). The scan
+  computes `target = GP + disp` (XLEN-masked) and re-points stale refs via
+  `del_dref`/`add_dref` (dr_R loads, dr_W stores); unmapped targets
+  skipped, existing correct refs untouched, previous-GP refs cleaned on
+  re-set. Response reports `refs_fixed`/`refs_skipped`; reanalysis is only
+  queued on the GUI directive path (neither `set_processor_options` nor a
+  usable `process_config_directive` exists in idat — verified live).
+  **Validated on real 9.3 and 9.4**: fixture refs re-pointed to
+  0x40/0x48/0x50, `xrefs_to` resolves, GP re-set moves and cleans refs.
+- **`get_arch()` 9.4 regression fixed**: `idaapi.get_inf_structure` was
+  removed in 9.4, silently degrading arch detection (and everything gated
+  on it) to "unknown"; now prefers
+  `ida_ida.inf_get_procname`/`inf_get_app_bitness` (both 9.3/9.4) with
+  legacy fallbacks. Confirmed live (`riscv` → `riscv64`).
+- Host tests: 9 new scripted-IDA dispatch tests (ref re-pointing, unmapped
+  skip, idempotency, non-GP operand rejection, previous-GP cleanup, XLEN
+  masking, non-RISC-V no-op, 9.4 inf-API arch detection, headless apply
+  path). Suite: 2845 passed / ruff clean; live matrix PASS on 9.3 + 9.4.
+
 ## 2026-08-09 — settle wave: q05 tool verification, h02 runtime lifecycle, arch auto-apply
 
 Settle/integration pass over the completed feature waves: the q05 analysis-surface

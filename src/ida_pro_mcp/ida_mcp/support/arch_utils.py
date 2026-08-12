@@ -37,6 +37,45 @@ def _is_64bit_from_proc(proc):
 # Architecture detection
 # ============================================================================
 
+def _proc_name_and_bitness():
+    """Return (procname, is_64_or_None) across IDA versions.
+
+    idaapi.get_inf_structure was removed in 9.4 (probed live: missing), so
+    the primary path uses ida_ida.inf_get_procname/inf_get_app_bitness
+    (present in both 9.3 and 9.4), falling back to the legacy structure and
+    finally to idc.get_inf_attr.
+    """
+    try:
+        import ida_ida
+        proc = ida_ida.inf_get_procname()
+        if proc:
+            bitness = ida_ida.inf_get_app_bitness()
+            return str(proc).lower().strip(), (bitness >= 64) if bitness else None
+    except Exception:
+        pass
+    if hasattr(idaapi, "get_inf_structure"):
+        try:
+            info = idaapi.get_inf_structure()
+            if info is not None:
+                proc = info.procname
+                if hasattr(info, "is_64bit"):
+                    try:
+                        return str(proc).lower().strip(), bool(info.is_64bit())
+                    except Exception:
+                        pass
+                return str(proc).lower().strip(), None
+        except Exception:
+            pass
+    try:
+        import idc
+        proc = idc.get_inf_attr(idc.INF_PROCNAME)
+        if proc:
+            return str(proc).lower().strip(), None
+    except Exception:
+        pass
+    return "", None
+
+
 def get_arch():
     """Return normalized architecture string.
 
@@ -52,14 +91,11 @@ def get_arch():
     """
     if idaapi is None:
         return "unknown"
-    info = idaapi.get_inf_structure() if hasattr(idaapi, 'get_inf_structure') else None
-    if info is None:
+    proc, is_64 = _proc_name_and_bitness()
+    if not proc:
         return "unknown"
-    proc = info.procname.lower().strip() if info.procname else ""
     normalized_proc = proc.translate(_ARCH_TOKEN_STRIP_TABLE)
-    if hasattr(info, 'is_64bit'):
-        is_64 = info.is_64bit()
-    else:
+    if is_64 is None:
         inferred_is_64 = _is_64bit_from_proc(proc)
         is_64 = inferred_is_64 if inferred_is_64 is not None else False
 
@@ -852,41 +888,199 @@ def get_tail_call_mnemonics(arch=None):
 _APPLIED_RISCV_GP: int | None = None
 
 
+def _riscv_gp_fix_refs(gp_val: int, old_gp: int | None = None) -> dict:
+    """Re-point RISC-V GP-relative data refs at the correct target.
+
+    IDA's RISC-V module decodes GP-relative loads/stores as o_displ operands
+    whose base register is x3/GP (the raw displacement lives in op.addr).
+    Without a processor-option mechanism (idc.set_processor_options and
+    ida_idp.process_config_directive are both unavailable in idat on 9.3/9.4
+    — verified by probing every module), the plugin creates data refs against
+    an implicit GP of 0, i.e. the raw sign-extended displacement resolves to
+    garbage (e.g. 0xffffffff80000020 instead of 0x40).
+
+    This scan finds every such operand, computes target = GP + disp (masked
+    to the XLEN), and re-points the stale raw ref (del + add) or adds the
+    correct ref when missing.  Idempotent: an existing ref at the correct
+    target is left alone; when GP changes (old_gp), refs created for the
+    previous value are also cleaned up.  RISC-V only — other architectures
+    must not run this (their o_displ operands with register 3 are ordinary).
+
+    Returns {"fixed": n, "skipped": n}.
+    """
+    if not is_riscv_family():
+        return {"fixed": 0, "skipped": 0}
+    try:
+        import idc
+        import ida_ida
+        import ida_segment
+        import ida_ua
+        import ida_xref
+    except ImportError:
+        return {"fixed": 0, "skipped": 0}
+
+    try:
+        import ida_idp
+        gp_reg = ida_idp.str2reg("GP")
+    except Exception:
+        gp_reg = 3  # x3 = gp per the RISC-V ABI
+    if not gp_reg:
+        gp_reg = 3
+
+    try:
+        bitness = ida_ida.inf_get_app_bitness()
+    except Exception:
+        bitness = 32 if idaapi and getattr(idaapi, "__EA64__", False) else 64
+    xlen_mask = (1 << bitness) - 1 if bitness else 0xFFFFFFFFFFFFFFFF
+
+    o_displ = 2
+    fixed = 0
+    skipped = 0
+    insn = None
+
+    # Iterate per segment: get_first/last_segment_ea() return the segment's
+    # start EA (the last segment's start, not its end), so the scan must use
+    # each segment's end_ea as the bound.  The ida_segment EA family exists
+    # on 9.3 and 9.4; idc.get_first_seg/get_last_seg were removed in 9.4.
+    try:
+        seg_ea = ida_segment.get_first_segment_ea()
+    except AttributeError:
+        seg_ea = idc.get_first_seg()
+
+    while seg_ea != idc.BADADDR:
+        try:
+            seg = ida_segment.getseg(seg_ea)
+        except AttributeError:
+            break
+        if seg is None:
+            break
+        ea = seg.start_ea
+        end = seg.end_ea
+        while ea != idc.BADADDR and ea < end:
+            try:
+                if insn is None:
+                    insn = ida_ua.insn_t()
+                if not ida_ua.decode_insn(insn, ea):
+                    ea = idc.next_head(ea)
+                    continue
+                seen_targets = set()
+                for i in range(6):
+                    op = insn.ops[i]
+                    if op.type != o_displ or op.reg != gp_reg:
+                        continue
+                    raw = op.addr
+                    target = (gp_val + raw) & xlen_mask
+                    if target in seen_targets:
+                        continue
+                    seen_targets.add(target)
+                    if target == raw and not raw:
+                        # disp 0 and GP 0 — nothing to re-point either way
+                        continue
+                    existing = set()
+                    r = ida_xref.get_first_dref_from(ea)
+                    while r != idc.BADADDR:
+                        existing.add(r)
+                        r = ida_xref.get_next_dref_from(ea, r)
+                    if target in existing:
+                        continue  # already correct (e.g. GUI already resolved)
+                    if ida_segment.getseg(target) is None:
+                        skipped += 1  # unmapped target — don't create garbage refs
+                        continue
+                    # drop the stale raw-target ref the plugin created with GP=0
+                    if raw in existing and raw != target:
+                        try:
+                            ida_xref.del_dref(ea, raw)
+                        except Exception:
+                            pass
+                    if old_gp is not None and old_gp != gp_val:
+                        stale = (old_gp + raw) & xlen_mask
+                        if stale in existing and stale != target:
+                            try:
+                                ida_xref.del_dref(ea, stale)
+                            except Exception:
+                                pass
+                    mnem = insn.get_canon_mnem() or ""
+                    dtp = ida_xref.dr_W if mnem.startswith("s") else ida_xref.dr_R
+                    ida_xref.add_dref(ea, target, dtp)
+                    fixed += 1
+            except Exception:
+                pass
+            ea = idc.next_head(ea)
+        try:
+            seg_ea = ida_segment.get_next_segment_ea(seg_ea)
+        except AttributeError:
+            break
+
+    return {"fixed": fixed, "skipped": skipped}
+
+
 def _apply_riscv_gp(gp_val: int):
     """Set GP in the RISC-V processor plugin and queue reanalysis.
 
-    Returns (applied: bool, apply_error: str|None, reanalysis_queued: bool).
+    Returns (applied: bool, apply_error: str|None, reanalysis_queued: bool,
+    refs: dict).
 
-    The correct API is idc.set_processor_options("gp=0x...") — this tells the
-    RISC-V processor plugin the GP base so it can resolve gp-relative operands
-    into real data xrefs.  idc.set_reg_value() only sets a hint at a specific
-    address and is NOT read by the processor plugin for xref resolution.
+    The GUI mechanism is the processor-option string "gp=0x..." (this tells
+    the RISC-V processor plugin the GP base so it can resolve gp-relative
+    operands into real data xrefs).  idc.set_reg_value() only sets a hint at
+    a specific address and is NOT read by the processor plugin for xref
+    resolution.
 
-    Reanalysis is queued (plan_range) but never awaited: this runs inside an
-    MCP RPC request, and blocking on auto_wait() for a full-binary reanalysis
-    can exceed the socket timeout.  Once a GP value has been applied this
-    session the whole apply + reanalysis is skipped on subsequent calls.
+    In headless runs neither idc.set_processor_options nor
+    ida_idp.process_config_directive exists/work (verified on 9.3/9.4), so
+    this falls back to _riscv_gp_fix_refs(), which re-points the data refs
+    IDA already created (with an implicit GP of 0) at gp + displacement.
+    Reanalysis is never awaited: this runs inside an MCP RPC request, and
+    blocking on auto_wait() for a full-binary reanalysis can exceed the
+    socket timeout.  Once a GP value has been applied this session the whole
+    apply is skipped on subsequent calls.
     """
     global _APPLIED_RISCV_GP
     if gp_val == _APPLIED_RISCV_GP:
-        return True, None, False
+        return True, None, False, {}
 
     try:
         import idc as _idc
         import idaapi as _idaapi
     except ImportError:
-        return False, "IDA not available", False
+        return False, "IDA not available", False, {}
 
     applied = False
+    directive_applied = False
     apply_error = None
     reanalysis_queued = False
 
-    # Primary: processor options string — what the RISC-V plugin actually reads
+    # Primary: processor options string — what the RISC-V plugin actually
+    # reads.  idc.set_processor_options does not exist in idat on 9.3/9.4,
+    # and ida_idp.process_config_directive rejects "gp=" (it prints "Illegal
+    # keyword" — no exception, no return value), so this path is GUI-only /
+    # forward-compatible.  The ref-fix scan below is the effective mechanism.
     try:
-        _idc.set_processor_options(f"gp=0x{gp_val:x}")
-        applied = True
+        import ida_idp as _ida_idp
+    except ImportError:
+        _ida_idp = None
+    try:
+        if hasattr(_idc, "set_processor_options"):
+            _idc.set_processor_options(f"gp=0x{gp_val:x}")
+            applied = True
+            directive_applied = True
+        elif _ida_idp is not None and hasattr(_ida_idp, "process_config_directive"):
+            _ida_idp.process_config_directive(f"gp=0x{gp_val:x}")
+            directive_applied = True
     except Exception as _e:
         apply_error = str(_e)
+
+    # Headless fallback: re-point the refs IDA already created against GP=0.
+    # Always run — idempotent, and it is the only verifiable effect.
+    refs = {}
+    try:
+        refs = _riscv_gp_fix_refs(gp_val, old_gp=_APPLIED_RISCV_GP)
+        applied = True
+        if apply_error and not directive_applied:
+            apply_error = None
+    except Exception as _e:
+        if not applied:
+            apply_error = f"{apply_error or 'apply failed'}; ref fix: {_e}"
 
     # Also persist via netnode so it survives IDB reload
     if applied:
@@ -898,8 +1092,12 @@ def _apply_riscv_gp(gp_val: int):
 
     # Queue reanalysis over the full address space so IDA re-evaluates every
     # gp-relative load/store and creates data xrefs.  Deliberately does NOT
-    # call auto_wait() — see docstring.
-    if applied:
+    # call auto_wait() — see docstring.  Only on the directive path when the
+    # scan had nothing to fix (the plugin took the option and reanalysis is
+    # the follow-up); the ref-fix path re-pointed the refs directly, and
+    # reanalysis would only reproduce the stale raw-target refs the plugin
+    # computes with its implicit GP of 0.
+    if applied and directive_applied and not refs.get("fixed"):
         try:
             import ida_auto as _ida_auto
             import idc as _idc2
@@ -916,23 +1114,33 @@ def _apply_riscv_gp(gp_val: int):
     if applied:
         _APPLIED_RISCV_GP = gp_val
 
-    return applied, apply_error, reanalysis_queued
+    return applied, apply_error, reanalysis_queued, refs
 
 
-def _riscv_gp_note(gp_val: int, detected_at: int, applied: bool, apply_error, reanalysis_queued: bool) -> str:
+def _riscv_gp_note(gp_val: int, detected_at: int, applied: bool, apply_error, reanalysis_queued: bool, refs=None) -> str:
     gp_hex = hex(gp_val)
     at_hex = hex(detected_at)
+    refs = refs or {}
+    ref_note = ""
+    if refs.get("fixed"):
+        ref_note = f", {refs['fixed']} GP-relative data xrefs re-pointed"
+        if refs.get("skipped"):
+            ref_note += f" ({refs['skipped']} unmapped targets skipped)"
     if applied and reanalysis_queued:
         return (
             f"RISC-V: GP (x3) = {gp_hex} detected at {at_hex}, applied via "
             f"set_processor_options and reanalysis queued in the background — "
             f"GP-relative xrefs will resolve shortly."
         )
-    if applied:
+    if applied and refs.get("fixed"):
         return (
-            f"RISC-V: GP (x3) = {gp_hex} detected at {at_hex}, applied via "
-            f"set_processor_options (no reanalysis queued on this call — "
-            f'run analysis(action="reanalyze") if GP-relative xrefs are missing).'
+            f"RISC-V: GP (x3) = {gp_hex} detected at {at_hex}, applied "
+            f"(headless ref-fix){ref_note}."
+        )
+    if applied and not reanalysis_queued:
+        return (
+            f"RISC-V: GP (x3) = {gp_hex} detected at {at_hex} already applied "
+            f"this session — GP-relative xrefs are resolved."
         )
     return (
         f"RISC-V: GP (x3) = {gp_hex} detected at {at_hex} but auto-apply failed "
@@ -945,14 +1153,16 @@ def set_riscv_gp(gp_val: int) -> dict:
     context) and queue reanalysis.  Returns a result dict suitable for
     returning directly from an MCP tool action.
     """
-    applied, apply_error, reanalysis_queued = _apply_riscv_gp(gp_val)
+    applied, apply_error, reanalysis_queued, refs = _apply_riscv_gp(gp_val)
     return {
         "ok": applied,
         "gp": gp_val,
         "gp_hex": hex(gp_val),
         "applied": applied,
         "reanalysis_queued": reanalysis_queued,
-        "note": _riscv_gp_note(gp_val, 0, applied, apply_error, reanalysis_queued),
+        "refs_fixed": refs.get("fixed", 0),
+        "refs_skipped": refs.get("skipped", 0),
+        "note": _riscv_gp_note(gp_val, 0, applied, apply_error, reanalysis_queued, refs),
     }
 
 
@@ -1053,8 +1263,8 @@ def detect_riscv_gp():
                         raw -= 0x1000
                     prev = prev_auipc_val if prev_auipc_val is not None else prev_lui_val
                     gp_val = (prev + raw) & 0xFFFFFFFFFFFFFFFF
-                    applied, apply_error, reanalysis_queued = _apply_riscv_gp(gp_val)
-                    note = _riscv_gp_note(gp_val, start_ea, applied, apply_error, reanalysis_queued)
+                    applied, apply_error, reanalysis_queued, refs = _apply_riscv_gp(gp_val)
+                    note = _riscv_gp_note(gp_val, start_ea, applied, apply_error, reanalysis_queued, refs)
                     return {
                         "found": True,
                         "gp": gp_val,
@@ -1062,6 +1272,8 @@ def detect_riscv_gp():
                         "at": hex(start_ea),
                         "applied": applied,
                         "reanalysis_queued": reanalysis_queued,
+                        "refs_fixed": refs.get("fixed", 0),
+                        "refs_skipped": refs.get("skipped", 0),
                         "note": note,
                     }
                 else:

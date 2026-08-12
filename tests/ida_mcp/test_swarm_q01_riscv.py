@@ -205,7 +205,7 @@ class _GpFakeIda:
 
 def test_detect_riscv_gp_lui_addi_prologue():
     au = _fresh_arch()
-    au._apply_riscv_gp = lambda gp_val: (True, None, False)
+    au._apply_riscv_gp = lambda gp_val: (True, None, False, {})
     au._riscv_gp_note = lambda *a: "gp-note"
     fake = _GpFakeIda({
         0x1000: ("lui", "gp", 0x20),       # gp = 0x20 << 12
@@ -220,7 +220,7 @@ def test_detect_riscv_gp_lui_addi_prologue():
 
 def test_detect_riscv_gp_auipc_addi_prologue():
     au = _fresh_arch()
-    au._apply_riscv_gp = lambda gp_val: (True, None, False)
+    au._apply_riscv_gp = lambda gp_val: (True, None, False, {})
     au._riscv_gp_note = lambda *a: "gp-note"
     fake = _GpFakeIda({
         0x1000: ("auipc", "gp", 0x2),
