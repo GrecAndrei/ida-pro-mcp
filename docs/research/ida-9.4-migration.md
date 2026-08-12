@@ -211,6 +211,18 @@ collapse to direct calls and the module is deleted.
       9.4), falls back to the legacy structure and finally
       `idc.get_inf_attr(INF_PROCNAME)`; confirmed live (`riscv` →
       `riscv64`).
+- [x] `memory_model` open-binary option — RESOLVED (2026-08-12): IDA 9.x
+      removed the memory-model attribute from the API (no
+      `ida_ida.inf_set_mtype`, no `idc.INF_MTYPE`, no `idainfo.mtype`;
+      the MT_* constants are gone — verified live on both 9.3 and 9.4).
+      `server_script._apply_pre_analysis_options` now maps the documented
+      host encoding (0=flat, 1=16-bit segmented, 2=32-bit segmented) to
+      the old MT_* values (MT_FLAT=6 / MT_16=3 / MT_32=4) and applies it
+      only if a future IDA reintroduces `inf_set_mtype`, otherwise emits
+      an explicit warning instead of silently dropping it.  The
+      `processor_options` pre-analysis path also gained the
+      `ida_idp.process_config_directive` fallback (the only
+      processor-option API present in the idat runtime on 9.3/9.4).
 - [x] Evaluate `ida_indexer` for `ida_find` / query-lang — DONE
       (2026-08-12), **not adopted**: `ida.cfg` documents
       `ENABLE_INDEXER = YES // Enabled by default but disabled under batch

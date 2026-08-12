@@ -148,7 +148,7 @@ Input schema:
     },
     "memory_model": {
       "type": "integer",
-      "description": "Memory model: 0=flat, 1=16-bit segmented, 2=32-bit segmented."
+      "description": "Memory model: 0=flat, 1=16-bit segmented, 2=32-bit segmented (no-op on IDA 9.x, which removed the API)."
     }
   },
   "required": [
@@ -310,7 +310,7 @@ Input schema:
     },
     "memory_model": {
       "type": "integer",
-      "description": "Memory model: 0=flat, 1=16-bit segmented, 2=32-bit segmented."
+      "description": "Memory model: 0=flat, 1=16-bit segmented, 2=32-bit segmented (no-op on IDA 9.x, which removed the API)."
     },
     "ida_args": {
       "type": "array",

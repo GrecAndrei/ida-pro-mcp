@@ -130,6 +130,17 @@ Final commit of the day closes out the mechanical migration entirely:
   skip, idempotency, non-GP operand rejection, previous-GP cleanup, XLEN
   masking, non-RISC-V no-op, 9.4 inf-API arch detection, headless apply
   path). Suite: 2845 passed / ruff clean; live matrix PASS on 9.3 + 9.4.
+- **`memory_model` TODO resolved**: the option is documented in the
+  open_binary contract but IDA 9.x removed the memory-model attribute
+  entirely (no `ida_ida.inf_set_mtype`, no `INF_MTYPE`, no
+  `idainfo.mtype`; MT_* constants gone — verified live on 9.3 and 9.4).
+  `_apply_pre_analysis_options` now applies it via `inf_set_mtype` with
+  the host→MT_* mapping (0→MT_FLAT, 1→MT_16, 2→MT_32) when a future IDA
+  reintroduces the setter, and otherwise emits an explicit warning instead
+  of silently dropping it.  The `processor_options` path also gained the
+  `ida_idp.process_config_directive` fallback (the only processor-option
+  API that exists in the 9.3/9.4 idat runtime).  Open-binary schema
+  descriptions updated; generated docs refreshed.
 
 ## 2026-08-09 — settle wave: q05 tool verification, h02 runtime lifecycle, arch auto-apply
 

@@ -237,7 +237,7 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
                 "rebase_to": {"type": "string", "description": "Rebase the database to this address (hex or decimal), e.g. 0x400000."},
                 "entry_point": {"type": "string", "description": "Override the entry point address (hex or decimal)."},
                 "stack_size": {"type": "integer", "description": "Stack size in bytes for stack analysis."},
-                "memory_model": {"type": "integer", "description": "Memory model: 0=flat, 1=16-bit segmented, 2=32-bit segmented."},
+                "memory_model": {"type": "integer", "description": "Memory model: 0=flat, 1=16-bit segmented, 2=32-bit segmented (no-op on IDA 9.x, which removed the API)."},
             },
             ["binary_path"],
         ),
@@ -307,7 +307,7 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
                 "rebase_to": {"type": "string", "description": "Rebase the database to this address (hex or decimal), e.g. 0x400000."},
                 "entry_point": {"type": "string", "description": "Override the entry point address (hex or decimal)."},
                 "stack_size": {"type": "integer", "description": "Stack size in bytes for stack analysis."},
-                "memory_model": {"type": "integer", "description": "Memory model: 0=flat, 1=16-bit segmented, 2=32-bit segmented."},
+                "memory_model": {"type": "integer", "description": "Memory model: 0=flat, 1=16-bit segmented, 2=32-bit segmented (no-op on IDA 9.x, which removed the API)."},
                 "ida_args": {
                     "type": "array",
                     "description": "Extra raw IDA CLI args (e.g. -A -Sscript -Llog).",

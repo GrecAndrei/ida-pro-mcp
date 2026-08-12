@@ -875,27 +875,57 @@ def _apply_pre_analysis_options():
         except Exception as e:
             warnings_list.append(f"stack_size={stack_size}: {e}")
 
-    # Processor options (e.g. ARM CPU type or MIPS ISA variant). Applied via
-    # idc.set_processor_options — the same call arch_utils._apply_riscv_gp uses
-    # for the RISC-V GP base, which the processor plugin actually reads.
+    # Processor options (e.g. ARM CPU type or MIPS ISA variant).  Applied via
+    # the processor-options directive: idc.set_processor_options on older IDA;
+    # ida_idp.process_config_directive on 9.3/9.4 (idc.set_processor_options
+    # does not exist in the idat runtime — verified live on both).
     processor_options = opts.get("processor_options")
     if processor_options:
         try:
+            _opts_applied = False
             if hasattr(idc, "set_processor_options"):
                 idc.set_processor_options(str(processor_options))
+                _opts_applied = True
+            else:
+                import ida_idp as _ida_idp
+                if hasattr(_ida_idp, "process_config_directive"):
+                    _ida_idp.process_config_directive(str(processor_options))
+                    _opts_applied = True
+            if _opts_applied:
                 changed.append(f"processor_options={processor_options}")
             else:
-                warnings_list.append("set_processor_options unavailable")
+                warnings_list.append("processor_options: no processor-option API in this runtime")
         except Exception as e:
             warnings_list.append(f"processor_options: {e}")
 
-    # memory_model: NOT applied here. The host open_binary contract documents
-    # 0=flat / 1=16-bit segmented / 2=32-bit segmented, but IDA's inf mtype uses
-    # the MT_* encoding (MT_1=0, MT_2=1, MT_4=2, ... MT_FLAT=6), so the
-    # documented values do not map onto ida_ida.inf_set_mtype() directly and
-    # applying them would set a wrong memory model. TODO: define an explicit
-    # host encoding -> MT_* mapping and validate against a live IDA before
-    # wiring this up.
+    # memory_model: the host contract documents 0=flat / 1=16-bit segmented /
+    # 2=32-bit segmented, but IDA 9.x removed the memory-model attribute from
+    # the API (no ida_ida.inf_set_mtype, no idc.INF_MTYPE, no idainfo.mtype —
+    # verified live on 9.3 and 9.4; the MT_* constants are gone with it).
+    # Apply it only if a future IDA reintroduces the setter; otherwise warn
+    # instead of silently dropping it.
+    memory_model = opts.get("memory_model")
+    if memory_model is not None:
+        try:
+            if hasattr(ida_ida, "inf_set_mtype"):
+                _mt_encoding = {0: 6, 1: 3, 2: 4}  # flat / MT_16 / MT_32
+                mtype = _mt_encoding.get(int(memory_model))
+                if mtype is None:
+                    warnings_list.append(
+                        f"memory_model={memory_model}: invalid value "
+                        "(0=flat, 1=16-bit segmented, 2=32-bit segmented)"
+                    )
+                elif ida_ida.inf_set_mtype(mtype):
+                    changed.append(f"memory_model={memory_model}")
+                else:
+                    warnings_list.append(f"memory_model={memory_model}: inf_set_mtype rejected")
+            else:
+                warnings_list.append(
+                    f"memory_model={memory_model}: not supported by this IDA build "
+                    "(memory-model API removed in IDA 9.x; ignored)"
+                )
+        except Exception as e:
+            warnings_list.append(f"memory_model={memory_model}: {e}")
 
     # Loader options (best-effort before auto_wait)
     if loader_options and loader:
