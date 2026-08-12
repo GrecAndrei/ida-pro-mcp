@@ -542,6 +542,14 @@ class TestDataGlobalsStructFields(unittest.TestCase):
                       "ida_hexrays", "ida_frame", "ida_struct", "ida_ua",
                       "ida_kernwin", "ida_loader", "ida_dbg"):
             sys.modules[name] = _make_minimal_module(name)
+        # compat.get_func_start resolves ida_funcs via sys.modules; mirror the
+        # idaapi.get_func miss (no globals here are functions).
+        sys.modules["ida_funcs"].get_func = idaapi.get_func
+        sys.modules["ida_funcs"].get_func_start = lambda ea: -1
+        sys.modules["ida_funcs"].ida_idaapi = types.ModuleType("ida_idaapi")
+        sys.modules["ida_funcs"].ida_idaapi.BADADDR = -1
+        sys.modules["ida_funcs"].get_func_flags = lambda ea: None
+        sys.modules["ida_funcs"].set_func_flags = lambda ea, flags: True
 
         common_overrides = {
             "idaapi": idaapi, "idc": idc, "idautils": idautils,

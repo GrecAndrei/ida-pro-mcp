@@ -13,14 +13,22 @@ try:
 except ImportError:
     from host.stores.symbol_db import SymbolDB  # type: ignore[import-not-found]
 
+try:
+    from .. import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 
 def _collect_string_refs(func_ea: int, limit: int = 24) -> List[str]:
     out: List[str] = []
-    fn = ida_funcs.get_func(func_ea)
-    if not fn:
+    fn_start = _compat.get_func_start(func_ea)
+    if fn_start is None:
         return out
     seen = set()
-    for item_ea in idautils.FuncItems(fn.start_ea):
+    for item_ea in idautils.FuncItems(fn_start):
         for ref in idautils.DataRefsFrom(item_ea):
             s = idc.get_strlit_contents(ref, -1, idc.STRTYPE_C)
             if not s:
@@ -36,15 +44,15 @@ def _collect_string_refs(func_ea: int, limit: int = 24) -> List[str]:
 
 
 def _fingerprint_function(func_ea: int) -> Dict[str, Any]:
-    callers = sorted({ida_funcs.get_func(x).start_ea for x in idautils.CodeRefsTo(func_ea, 0) if ida_funcs.get_func(x)})
+    callers = sorted({start for x in idautils.CodeRefsTo(func_ea, 0) if (start := _compat.get_func_start(x)) is not None})
     callees = set()
-    fn = ida_funcs.get_func(func_ea)
-    if fn:
-        for item_ea in idautils.FuncItems(fn.start_ea):
+    fn_start = _compat.get_func_start(func_ea)
+    if fn_start is not None:
+        for item_ea in idautils.FuncItems(fn_start):
             for ref in idautils.CodeRefsFrom(item_ea, 0):
-                cf = ida_funcs.get_func(ref)
-                if cf and cf.start_ea != fn.start_ea:
-                    callees.add(cf.start_ea)
+                cf_start = _compat.get_func_start(ref)
+                if cf_start is not None and cf_start != fn_start:
+                    callees.add(cf_start)
     strs = _collect_string_refs(func_ea)
     callgraph_payload = "|".join([f"c:{hex(x)}" for x in callers[:32]] + [f"d:{hex(x)}" for x in sorted(callees)[:64]])
     callgraph_hash = hashlib.sha1(callgraph_payload.encode("utf-8")).hexdigest()

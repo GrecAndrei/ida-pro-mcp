@@ -733,6 +733,17 @@ def _bootstrap_ida(au, idaapi, idc, data, mnem_map=None, operand_map=None):
     idc.create_insn = lambda ea: 4
     ida_funcs = sys.modules["ida_funcs"]
     ida_funcs.add_func = lambda ea: True
+    # compat.get_func_* resolves ida_funcs via sys.modules and may run either
+    # feature-detection branch; expose the legacy get_func plus the 9.4 EA
+    # surface (these fixtures seed no existing functions, so lookups miss).
+    ida_funcs.get_func = idaapi.get_func
+    ida_funcs.get_func_start = lambda ea: -1
+    ida_funcs.ida_idaapi = types.ModuleType("ida_idaapi")
+    ida_funcs.ida_idaapi.BADADDR = -1
+    ida_funcs.func_entry_info_t = types.SimpleNamespace
+    ida_funcs.get_func_entry_info = lambda out, ea, flags=0: False
+    ida_funcs.get_func_flags = lambda ea: None
+    ida_funcs.set_func_flags = lambda ea, flags: True
     ida_entry = sys.modules["ida_entry"]
     added = []
     ida_entry._q01_added = added

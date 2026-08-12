@@ -914,12 +914,12 @@ def _find_seh_handlers(addr, limit, _max_insns, _query):
                         if pm == "push":
                             handler_ea = idc.get_operand_value(prev, 0)
                             if handler_ea not in (idaapi.BADADDR, 0):
-                                func = idaapi.get_func(handler_ea)
-                                fname = ida_funcs.get_func_name(func.start_ea) \
-                                    if func else idc.get_name(handler_ea) or ""
-                                func_name = (ida_funcs.get_func_name(
-                                    idaapi.get_func(ea).start_ea)
-                                    if idaapi.get_func(ea) else "unknown")
+                                handler_start = _compat.get_func_start(handler_ea)
+                                fname = ida_funcs.get_func_name(handler_start) \
+                                    if handler_start is not None else idc.get_name(handler_ea) or ""
+                                in_start = _compat.get_func_start(ea)
+                                func_name = (ida_funcs.get_func_name(in_start)
+                                    if in_start is not None else "unknown")
                                 handlers.append(f"{hex_ea(prev)}  handler={hex_ea(handler_ea)}  {fname}  in={func_name}")
             ea = idc.next_head(ea)
             if ea == idaapi.BADADDR:

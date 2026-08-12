@@ -10,6 +10,14 @@ try:
 except ImportError:
     from governance_engine import evaluate_operation  # type: ignore[import-not-found]
 
+try:
+    from .. import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 # ============================================================================
 # ANNOTATION - Intelligent Bulk Annotation for LLMs
 # ============================================================================
@@ -43,8 +51,8 @@ _DANGEROUS_APIS_LOW = {k.lower(): v for k, v in _DANGEROUS_APIS.items()}
 
 def _get_func_callees_with_addr(func_ea):
     """Return list of (call_addr, callee_name) for actual CALL instructions only."""
-    fn = ida_funcs.get_func(func_ea)
-    if not fn:
+    fn = _compat.get_func_info(func_ea)
+    if fn is None:
         return []
     callees = []
     for head in idautils.Heads(fn.start_ea, fn.end_ea):
@@ -91,8 +99,8 @@ def _mmio_label(addr: int) -> str:
 def _detect_crypto_algorithm(func_ea: int) -> str:
     alg = "unknown"
     try:
-        fn = ida_funcs.get_func(func_ea)
-        if not fn:
+        fn = _compat.get_func_info(func_ea)
+        if fn is None:
             return alg
         text = []
         for head in idautils.Heads(fn.start_ea, fn.end_ea):
@@ -209,11 +217,11 @@ def _auto_comment_one(addr_ea: int, prefix: str, dry_run: bool = False,
 
     # Crypto behavior annotation (function-level behavior at this instruction)
     if not comment:
-        fn = idaapi.get_func(addr_ea)
-        if fn:
+        fn_start = _compat.get_func_start(addr_ea)
+        if fn_start is not None:
             if crypto_map is not None:
                 # Precomputed per-function classification (auto_comment_function)
-                alg = crypto_map.get(fn.start_ea)
+                alg = crypto_map.get(fn_start)
                 if alg:
                     comment = f"{prefix}CRYPTO: {alg}"
                     reason = "crypto"
@@ -222,14 +230,14 @@ def _auto_comment_one(addr_ea: int, prefix: str, dry_run: bool = False,
                     from ida_pro_mcp.services import BehaviorClassifier, BgeCodeEmbedder
                     pseudo = ""
                     try:
-                        pseudo = str(idaapi.decompile(fn.start_ea) or "")
+                        pseudo = str(idaapi.decompile(fn_start) or "")
                     except Exception:
                         pseudo = ""
                     if pseudo:
                         clf = BehaviorClassifier.instance(BgeCodeEmbedder())
                         hits = clf.classify(pseudo, threshold=0.25, top_k=3, block=False)
                         if any("crypto" in str(h.get("behavior", "")).lower() for h in hits):
-                            comment = f"{prefix}CRYPTO: {_detect_crypto_algorithm(fn.start_ea)}"
+                            comment = f"{prefix}CRYPTO: {_detect_crypto_algorithm(fn_start)}"
                             reason = "crypto"
                 except Exception:
                     pass
@@ -257,8 +265,8 @@ def _governance_check_proposed_comment(addr: int, proposed_comment: str, action_
     metadata = {}
     context = {"action": action_type}
 
-    fn = ida_funcs.get_func(addr)
-    if fn:
+    fn = _compat.get_func_info(addr)
+    if fn is not None:
         api_calls = []
         for head in idautils.Heads(fn.start_ea, fn.end_ea):
             for xref in idautils.CodeRefsFrom(head, 0):
@@ -448,7 +456,7 @@ def annotation(
             ea, err = validate_addr(addr, require_func=True)
             if err:
                 return err
-            fn = ida_funcs.get_func(ea)
+            fn = _compat.get_func_info(ea)
             fname = idc.get_func_name(ea)
             # Classify crypto behavior once per function instead of once per
             # instruction (decompile + embedder/classifier instantiation).
@@ -617,7 +625,7 @@ def annotation(
             if err:
                 return err
 
-            fn = ida_funcs.get_func(ea)
+            fn = _compat.get_func_info(ea)
             fname = idc.get_func_name(ea)
             constants = []
 
@@ -709,7 +717,6 @@ def annotation(
             if err:
                 return err
 
-            fn = ida_funcs.get_func(ea)
             fname = idc.get_func_name(ea)
 
             # Try to get function type info for parameter names
@@ -771,7 +778,7 @@ def annotation(
             if err:
                 return err
 
-            fn = ida_funcs.get_func(ea)
+            fn = _compat.get_func_info(ea)
             fname = idc.get_func_name(ea)
 
             # Find call sites, then look for conditional branches immediately
@@ -844,7 +851,6 @@ def annotation(
             if err:
                 return err
 
-            fn = ida_funcs.get_func(ea)
             fname = idc.get_func_name(ea)
 
             # Only propagate from meaningfully named functions
@@ -905,8 +911,8 @@ def annotation(
             for func_ea in func_eas:
                 if len(removed) >= limit:
                     break
-                fn = ida_funcs.get_func(func_ea)
-                if not fn:
+                fn = _compat.get_func_info(func_ea)
+                if fn is None:
                     continue
 
                 # Clean function-level comments
@@ -1020,7 +1026,7 @@ def _annotation_comment_mgr_action(action, addr, text, items, path, fmt,
         if err:
             return err
 
-        func = ida_funcs.get_func(ea)
+        func = _compat.get_func_info(ea)
 
         result = {
             "ok": True,
@@ -1028,7 +1034,7 @@ def _annotation_comment_mgr_action(action, addr, text, items, path, fmt,
             "name": idc.get_name(ea),
         }
 
-        if func:
+        if func is not None:
             result["func_name"] = idc.get_func_name(func.start_ea)
             result["func_comment"] = idc.get_func_cmt(func.start_ea, 0)
             result["func_comment_repeatable"] = idc.get_func_cmt(func.start_ea, 1)
@@ -1055,7 +1061,7 @@ def _annotation_comment_mgr_action(action, addr, text, items, path, fmt,
         result["posterior"] = posterior
 
         nearby = []
-        if func:
+        if func is not None:
             curr = func.start_ea
             while curr < func.end_ea and len(nearby) < 20:
                 cmt = idc.get_cmt(curr, 0) or idc.get_cmt(curr, 1)
@@ -1166,8 +1172,8 @@ def _annotation_comment_mgr_action(action, addr, text, items, path, fmt,
                 if func_cmt:
                     func_comments.append(f"**Function**: {func_cmt}")
                     count += 1
-                func = ida_funcs.get_func(func_ea)
-                if func:
+                func = _compat.get_func_info(func_ea)
+                if func is not None:
                     curr = func.start_ea
                     while curr < func.end_ea:
                         cmt = idc.get_cmt(curr, 0) or idc.get_cmt(curr, 1)
@@ -1236,8 +1242,8 @@ def _annotation_comment_mgr_action(action, addr, text, items, path, fmt,
                 func_cmt = idc.get_func_cmt(func_ea, 0) or idc.get_func_cmt(func_ea, 1)
                 if func_cmt:
                     commented += 1
-                func = ida_funcs.get_func(func_ea)
-                if func:
+                func = _compat.get_func_info(func_ea)
+                if func is not None:
                     curr = func.start_ea
                     while curr < func.end_ea:
                         if idc.get_cmt(curr, 0) or idc.get_cmt(curr, 1):

@@ -4,6 +4,14 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+try:
+    from .. import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 # Bounded cache of full (filtered-but-unpaginated) walks for the list actions.
 # Pagination then slices offset/count without re-walking idautils.Functions()/
 # Names()/Strings() on every page. Keyed by (action, filters, idb fingerprint)
@@ -135,8 +143,8 @@ def data(
                     if named_only and name.startswith("sub_"):
                         continue
 
-                    fn = idaapi.get_func(ea)
-                    if not fn:
+                    fn = _compat.get_func_info(ea)
+                    if fn is None:
                         continue
 
                     # Filter by min_size
@@ -259,7 +267,7 @@ def data(
                 for ea, name in idautils.Names():
                     if not name:
                         continue
-                    if idaapi.get_func(ea):
+                    if _compat.get_func_start(ea) is not None:
                         continue
                     if named_only and (name.startswith(("unk_", "off_", "loc_", "byte_", "word_", "dword_", "qword_"))):
                         continue
@@ -485,8 +493,8 @@ def data(
 
                 total += 1
                 if total > offset and (count == 0 or len(export_lines) < count):
-                    func = idaapi.get_func(ea)
-                    size_str = hex_size(func.end_ea - func.start_ea) if func else ""
+                    func = _compat.get_func_info(ea)
+                    size_str = hex_size(func.end_ea - func.start_ea) if func is not None else ""
                     export_lines.append(f"{hex_ea(ea)}  {name}  {size_str}")
 
             return {"ok": True, "exports": "\n".join(export_lines), "total": total, "offset": offset, "count": len(export_lines)}
@@ -500,8 +508,8 @@ def data(
                 ea = parse_address(result.get("addr", query)) if result.get("addr") else None
                 if ea:
                     result["size"] = idc.get_item_size(ea)
-                    func = idaapi.get_func(ea)
-                    if func:
+                    func = _compat.get_func_info(ea)
+                    if func is not None:
                         result["is_function"] = True
                         result["func_size"] = hex(func.end_ea - func.start_ea)
                     else:
@@ -519,9 +527,9 @@ def data(
                     if not matcher(name):
                         continue
                     item = {"addr": hex_ea(ea), "name": name}
-                    func = idaapi.get_func(ea)
-                    item["type"] = "function" if func else "symbol"
-                    if func:
+                    func = _compat.get_func_info(ea)
+                    item["type"] = "function" if func is not None else "symbol"
+                    if func is not None:
                         item["func_size"] = hex_size(func.end_ea - func.start_ea)
                     else:
                         item["size"] = idc.get_item_size(ea)
@@ -621,8 +629,8 @@ def data(
                 if func_count >= 200:
                     break
                 func_count += 1
-                fn = ida_funcs.get_func(func_ea)
-                if not fn:
+                fn = _compat.get_func_info(func_ea)
+                if fn is None:
                     continue
                 for head in idautils.Heads(fn.start_ea, fn.end_ea):
                     for xref in idautils.CodeRefsFrom(head, 0):
@@ -729,10 +737,9 @@ def data(
                         frm = getattr(xr, "frm", None)
                         if frm is None:
                             continue
-                        fn = idaapi.get_func(frm)
-                        if not fn:
+                        fstart = _compat.get_func_start(frm)
+                        if fstart is None:
                             continue
-                        fstart = fn.start_ea
                         if fstart in seen_funcs:
                             continue
                         seen_funcs.add(fstart)

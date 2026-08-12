@@ -1256,7 +1256,7 @@ def _bootstrap_raw_entry_points(start_ea: int, end_ea: int) -> dict:
             continue
         seen.add(ea)
         try:
-            if idaapi.get_func(ea):
+            if _compat.get_func_start(ea) is not None:
                 seeded += 1
                 continue
             # Use ida_ua.create_insn first (IDA 9.x), fall back to idc
@@ -1641,7 +1641,7 @@ def _ensure_entry_point_functions() -> dict:
     failed = []
     for ea in _entry_point_addrs():
         try:
-            if idaapi.get_func(ea):
+            if _compat.get_func_start(ea) is not None:
                 skipped.append(hex(ea))
                 continue
             ok = False

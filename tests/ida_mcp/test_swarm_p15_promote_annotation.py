@@ -91,6 +91,30 @@ def _build(funcs, calls, *, mnemonics=None, functions=None, existing_cmt=None):
         return None
 
     ida_funcs.get_func = _get_func
+    # The compat shims resolve the live ida_funcs via sys.modules; register
+    # the fake there and expose both the legacy get_func and the 9.4 EA
+    # surface so the function lookup survives either feature-detection result.
+    sys.modules["ida_funcs"] = ida_funcs
+    ida_funcs.ida_idaapi = types.ModuleType("ida_idaapi")
+    ida_funcs.ida_idaapi.BADADDR = -1
+    ida_funcs.func_entry_info_t = types.SimpleNamespace
+
+    def _func_start(ea):
+        f = _get_func(ea)
+        return f.start_ea if f else -1
+
+    def _func_entry_info(out, ea, flags=0):
+        f = _get_func(ea)
+        if f is None:
+            return False
+        out.start_ea = f.start_ea
+        out.end_ea = f.end_ea
+        return True
+
+    ida_funcs.get_func_start = _func_start
+    ida_funcs.get_func_entry_info = _func_entry_info
+    ida_funcs.get_func_flags = lambda ea: 0
+    ida_funcs.set_func_flags = lambda ea, flags: True
 
     def _validate_addr(addr, *_args, require_func=False, **_kw):
         ea = int(str(addr), 0)

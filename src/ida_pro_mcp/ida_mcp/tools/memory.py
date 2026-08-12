@@ -170,12 +170,12 @@ def _write_governance_metadata(ea):
     import-table guard.
     """
     metadata = {}
-    seg = ida_segment.getseg(ea)
-    if seg:
+    seg_perm = _compat.get_segment_perm(ea)
+    if seg_perm is not None:
         sname = _compat.get_segment_name(ea)
         metadata["section_type"] = sname or ""
         metadata["is_import_addr"] = sname in (".idata", ".plt", ".edata", ".iat")
-        executable = (getattr(seg, "perm", 0) & getattr(ida_segment, "SEGPERM_X", 1)) != 0
+        executable = (seg_perm & getattr(ida_segment, "SEGPERM_X", 1)) != 0
         if executable or sname in (".text", ".code"):
             metadata["modifies_control_flow"] = True
     return metadata

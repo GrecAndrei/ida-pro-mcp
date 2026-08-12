@@ -171,6 +171,9 @@ def _build_namespace():
     # against the namespace's own ida_segment stubs.
     _compat = types.SimpleNamespace(
         get_segment_name=lambda ea: ida_segment.get_segm_name(ida_segment.getseg(ea)),
+        get_func_start=lambda ea: (
+            idaapi.get_func(ea).start_ea if idaapi.get_func(ea) else None
+        ),
     )
     ida_funcs = types.SimpleNamespace(
         add_func=lambda *a, **k: True,

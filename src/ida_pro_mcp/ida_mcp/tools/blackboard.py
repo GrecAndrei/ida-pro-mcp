@@ -369,16 +369,16 @@ class CrawlerProbe:
     def _ida_xrefs_to(addr_str: str, limit: int) -> List[Dict[str, Any]]:
         try:
             import ida_funcs  # type: ignore[import-not-found]
-            import idaapi  # type: ignore[import-not-found]
             import idautils  # type: ignore[import-not-found]
+            from ida_mcp import compat as _compat  # type: ignore[import-not-found]
 
             ea = int(addr_str, 16)
             out: List[Dict[str, Any]] = []
             for x in idautils.XrefsTo(ea, 0):
                 if len(out) >= limit:
                     break
-                fn = idaapi.get_func(x.frm)
-                name = ida_funcs.get_func_name(fn.start_ea) if fn else ""
+                fn_start = _compat.get_func_start(x.frm)
+                name = ida_funcs.get_func_name(fn_start) if fn_start is not None else ""
                 out.append(
                     {
                         "addr": hex(x.frm),
@@ -412,23 +412,22 @@ class CrawlerProbe:
     def _ida_function_probe(addr_str: str) -> Dict[str, Any]:
         try:
             import ida_funcs  # type: ignore[import-not-found]
-            import idaapi  # type: ignore[import-not-found]
             import idautils  # type: ignore[import-not-found]
+            from ida_mcp import compat as _compat  # type: ignore[import-not-found]
 
             ea = int(addr_str, 16)
-            func = idaapi.get_func(ea)
+            func_start = _compat.get_func_start(ea)
             name = ida_funcs.get_func_name(ea) or ""
             callees: List[Dict[str, Any]] = []
-            if func:
+            if func_start is not None:
                 seen = set()
-                for item in idautils.FuncItems(func.start_ea):
+                for item in idautils.FuncItems(func_start):
                     for xref in idautils.XrefsFrom(item, 0):
                         if not xref.iscode:
                             continue
-                        tgt = idaapi.get_func(xref.to)
-                        if not tgt or tgt.start_ea == func.start_ea:
+                        t_ea = _compat.get_func_start(xref.to)
+                        if t_ea is None or t_ea == func_start:
                             continue
-                        t_ea = tgt.start_ea
                         if t_ea in seen:
                             continue
                         seen.add(t_ea)

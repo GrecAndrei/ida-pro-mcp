@@ -54,8 +54,8 @@ def _build_fast_signature(fea: int, func=None) -> str:
     """Build a fast signature string from disassembly + metadata (no decompile).
     Used by index_fast and index_range for fast embedding indexing."""
     if func is None:
-        func = idaapi.get_func(fea)
-    if not func:
+        func = _compat.get_func_info(fea)
+    if func is None:
         return ida_funcs.get_func_name(fea) or hex(fea)
     name = ida_funcs.get_func_name(fea) or hex(fea)
     parts = [name]

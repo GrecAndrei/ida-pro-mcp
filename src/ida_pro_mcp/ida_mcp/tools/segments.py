@@ -881,8 +881,8 @@ def segments(
 
             functions = []
             for func_ea in idautils.Functions(seg.start_ea, seg.end_ea):
-                func = idaapi.get_func(func_ea)
-                if func:
+                func = _compat.get_func_info(func_ea)
+                if func is not None:
                     fname = ida_funcs.get_func_name(func_ea) or f"sub_{func_ea:x}"
                     functions.append({
                         "addr": hex(func_ea),

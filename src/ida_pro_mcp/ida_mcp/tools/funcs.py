@@ -56,8 +56,8 @@ except ImportError:
 def _iter_overlapping_functions(start_ea: int, end_ea: int):
     """Yield functions whose ranges overlap [start_ea, end_ea)."""
     for fn_start in idautils.Functions():
-        fn = ida_funcs.get_func(fn_start)
-        if not fn:
+        fn = _compat.get_func_info(fn_start)
+        if fn is None:
             continue
         if fn.end_ea <= start_ea or fn.start_ea >= end_ea:
             continue
@@ -139,22 +139,22 @@ def _try_create_insn(ea: int) -> int:
 def _collect_callers(func_start_ea: int) -> list[int]:
     callers = set()
     for xref_ea in idautils.CodeRefsTo(func_start_ea, 0):
-        caller = ida_funcs.get_func(xref_ea)
-        if caller and caller.start_ea != func_start_ea:
-            callers.add(caller.start_ea)
+        caller_start = _compat.get_func_start(xref_ea)
+        if caller_start is not None and caller_start != func_start_ea:
+            callers.add(caller_start)
     return sorted(callers)
 
 
 def _collect_callees(func_start_ea: int, max_items=50000) -> list[int]:
-    fn = ida_funcs.get_func(func_start_ea)
-    if not fn:
+    fn_start = _compat.get_func_start(func_start_ea)
+    if fn_start is None:
         return []
     callees = set()
-    for item_ea in idautils.FuncItems(fn.start_ea):
+    for item_ea in idautils.FuncItems(fn_start):
         for ref in idautils.CodeRefsFrom(item_ea, 0):
-            target = ida_funcs.get_func(ref)
-            if target and target.start_ea != fn.start_ea:
-                callees.add(target.start_ea)
+            target_start = _compat.get_func_start(ref)
+            if target_start is not None and target_start != fn_start:
+                callees.add(target_start)
         if len(callees) >= max_items:
             break
     return sorted(callees)
@@ -173,9 +173,9 @@ def _persist_symbol_knowledge(func_ea: int, name: str) -> None:
     callers = _collect_callers(func_ea)[:32]
     callees = _collect_callees(func_ea, max_items=128)[:64]
     strs = []
-    fn = ida_funcs.get_func(func_ea)
-    if fn:
-        for item_ea in idautils.FuncItems(fn.start_ea):
+    fn_start = _compat.get_func_start(func_ea)
+    if fn_start is not None:
+        for item_ea in idautils.FuncItems(fn_start):
             for ref in idautils.DataRefsFrom(item_ea):
                 s = idc.get_strlit_contents(ref, -1, idc.STRTYPE_C)
                 if not s:
@@ -260,9 +260,9 @@ def _resolve_func_addr(addr: Any) -> tuple[Optional[int], Optional[dict]]:
             if sym == idaapi.BADADDR:
                 return None, err
             ea = sym
-    fn = ida_funcs.get_func(ea)
-    if fn:
-        return fn.start_ea, None
+    fn_start = _compat.get_func_start(ea)
+    if fn_start is not None:
+        return fn_start, None
     return ea, None
 
 
@@ -410,8 +410,8 @@ def _funcs_impl(
             if name is not None and not str(name).strip():
                 return make_error(MCPError.INVALID_ARGS, "name cannot be empty")
 
-            existing = ida_funcs.get_func(ea)
-            if existing and existing.start_ea == ea:
+            existing = _compat.get_func_info(ea)
+            if existing is not None and existing.start_ea == ea:
                 if name and not idc.set_name(ea, name, ida_name.SN_FORCE):
                     return make_error(MCPError.IDA_ERROR, f"Function exists at {hex(ea)} but failed to rename to '{name}'")
                 return {
@@ -421,7 +421,7 @@ def _funcs_impl(
                     "name": ida_funcs.get_func_name(ea),
                     "note": "Function already exists at this address",
                 }
-            if existing:
+            if existing is not None:
                 if not force:
                     return make_error(
                         MCPError.ADDRESS_INVALID,
@@ -493,17 +493,26 @@ def _funcs_impl(
                     f"Function created at {hex(ea)} but failed to set name '{name}'",
                 )
             if flags:
-                fn.flags |= flags
-                ida_funcs.update_func(fn)
+                old = _compat.get_func_flags(ea)
+                if old is None:
+                    return make_error(
+                        MCPError.IDA_ERROR,
+                        f"Function created at {hex(ea)} but failed to read its flags",
+                    )
+                if not _compat.set_func_flags(ea, old | flags):
+                    return make_error(
+                        MCPError.IDA_ERROR,
+                        f"Function created at {hex(ea)} but failed to set flags",
+                    )
             # Do NOT call auto_wait() — it blocks IDA's main thread inside
             # the socket server loop and can crash IDA. Let the idle loop
             # handle follow-up analysis.
-            fn = ida_funcs.get_func(ea)
+            fn = _compat.get_func_info(ea)
             result = {
                 "ok": True,
                 "addr": hex(ea),
-                "end": hex(fn.end_ea) if fn else (hex(end_ea) if end_ea else None),
-                "name": ida_funcs.get_func_name(ea) if fn else name,
+                "end": hex(fn.end_ea) if fn is not None else (hex(end_ea) if end_ea else None),
+                "name": ida_funcs.get_func_name(ea) if fn is not None else name,
             }
             if remap_note:
                 result["addr_remap"] = remap_note
@@ -514,10 +523,10 @@ def _funcs_impl(
         elif action == "delete":
             ea, err = _resolve_func_addr(addr)
             if err: return err
-            func = ida_funcs.get_func(ea)
-            if not func:
+            start_ea = _compat.get_func_start(ea)
+            if start_ea is None:
                 return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function found at or containing {hex(ea)}")
-            target_ea = func.start_ea
+            target_ea = start_ea
             func_name = ida_funcs.get_func_name(target_ea)
             if ida_funcs.del_func(target_ea):
                 result = {"ok": True, "addr": hex(target_ea), "name": func_name}
@@ -533,8 +542,8 @@ def _funcs_impl(
             ea, err = _resolve_func_addr(addr)
             if err:
                 return err
-            func = ida_funcs.get_func(ea)
-            if not func:
+            func = _compat.get_func_info(ea)
+            if func is None:
                 return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at or containing {hex(ea)}")
             if not end:
                 return make_error(MCPError.INVALID_ARGS, "end required to change a function boundary")
@@ -553,31 +562,29 @@ def _funcs_impl(
                     f"IDA could not set function end to {hex(new_end)}",
                     "The requested boundary may overlap another function or invalid code; inspect the function first.",
                 )
-            updated = ida_funcs.get_func(func.start_ea)
+            updated = _compat.get_func_info(func.start_ea)
             return {
                 "ok": True,
                 "addr": hex(func.start_ea),
                 "old_end": hex(old_end),
-                "end": hex(updated.end_ea if updated else new_end),
+                "end": hex(updated.end_ea if updated is not None else new_end),
                 "changed": old_end != new_end,
             }
 
         elif action == "set_flags":
             ea, err = _resolve_func_addr(addr)
             if err: return err
-            func = ida_funcs.get_func(ea)
-            if not func:
+            old_flags = _compat.get_func_flags(ea)
+            if old_flags is None:
                 return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
-            old_flags = func.flags
-            func.flags |= flags
-            if ida_funcs.update_func(func):
-                return {
-                    "ok": True,
-                    "addr": hex(func.start_ea),
-                    "old_flags": hex(old_flags),
-                    "flags": hex(flags),
-                }
-            return make_error(MCPError.IDA_ERROR, "Failed to update flags")
+            if not _compat.set_func_flags(ea, old_flags | flags):
+                return make_error(MCPError.IDA_ERROR, "Failed to update flags")
+            return {
+                "ok": True,
+                "addr": hex(ea),
+                "old_flags": hex(old_flags),
+                "flags": hex(flags),
+            }
 
         elif action == "info":
             ea, err = _resolve_func_addr(addr)
@@ -723,8 +730,8 @@ def _funcs_impl(
                 return make_error(MCPError.INVALID_ARGS, "addr required")
             ea, err = _resolve_func_addr(addr)
             if err: return err
-            target_fn = ida_funcs.get_func(ea)
-            if not target_fn:
+            target_fn = _compat.get_func_info(ea)
+            if target_fn is None:
                 return make_error(MCPError.FUNCTION_NOT_FOUND, f"No function at {hex(ea)}")
             target_bytes = ida_bytes.get_bytes(target_fn.start_ea, target_fn.end_ea - target_fn.start_ea) or b""
             target_size = len(target_bytes)
@@ -742,8 +749,8 @@ def _funcs_impl(
             for func_ea in idautils.Functions():
                 if func_ea == target_fn.start_ea:
                     continue
-                fn = ida_funcs.get_func(func_ea)
-                if not fn:
+                fn = _compat.get_func_info(func_ea)
+                if fn is None:
                     continue
                 scanned += 1
                 if scanned >= _FIND_SIMILAR_MAX_FUNCS:

@@ -272,15 +272,19 @@ def idb_segments_detailed(include_head_counts=True):
     """Detailed segment information."""
     segments = []
     for ea in idautils.Segments():
-        seg = ida_segment.getseg(ea)
-        if not seg:
+        seg = _compat.get_segment(ea)
+        if seg is None:
             continue
+        seg_perm = _compat.get_segment_perm(ea)
+        seg_type_val = _compat.get_segment_type(ea)
+        seg_align = _compat.get_segment_align(ea)
+        seg_bitness = _compat.get_segment_bitness(ea)
 
         # Permissions string
         perms = ""
-        if seg.perm & idaapi.SEGPERM_READ: perms += "r"
-        if seg.perm & idaapi.SEGPERM_WRITE: perms += "w"
-        if seg.perm & idaapi.SEGPERM_EXEC: perms += "x"
+        if seg_perm & idaapi.SEGPERM_READ: perms += "r"
+        if seg_perm & idaapi.SEGPERM_WRITE: perms += "w"
+        if seg_perm & idaapi.SEGPERM_EXEC: perms += "x"
 
         # Segment type - build dict safely for IDA 9 compatibility
         seg_types = {}
@@ -290,7 +294,7 @@ def idb_segments_detailed(include_head_counts=True):
                                       ("SEG_NORM", "normal"), ("SEG_ABS", "absolute")]:
             if hasattr(ida_segment, attr_name):
                 seg_types[getattr(ida_segment, attr_name)] = type_name
-        seg_type = seg_types.get(seg.type, f"type_{seg.type}")
+        seg_type = seg_types.get(seg_type_val, f"type_{seg_type_val}")
 
         code_count = None
         data_count = None
@@ -316,8 +320,8 @@ def idb_segments_detailed(include_head_counts=True):
             "perms": perms or "---",
             "class": _compat.get_segment_class(ea),
             "type": seg_type,
-            "align": seg.align,
-            "bitness": {0: 16, 1: 32, 2: 64}.get(seg.bitness, seg.bitness * 16),
+            "align": seg_align,
+            "bitness": {0: 16, 1: 32, 2: 64}.get(seg_bitness, seg_bitness * 16),
             "code_heads": code_count,
             "data_heads": data_count,
         })
@@ -345,9 +349,9 @@ def idb_entrypoints_detailed():
             entry_type = "dll_entry"
 
         # Get function info if available
-        func = ida_funcs.get_func(ea)
+        func = _compat.get_func_info(ea)
         func_size = None
-        if func:
+        if func is not None:
             func_size = hex(func.end_ea - func.start_ea)
 
         entries.append({
@@ -370,12 +374,12 @@ def idb_bookmarks():
             if ea == idaapi.BADADDR:
                 break
             desc = idc.get_bookmark_desc(i)
-            func = ida_funcs.get_func(ea)
+            func_start = _compat.get_func_start(ea)
             bookmarks.append({
                 "index": i,
                 "addr": hex(ea),
                 "desc": desc or "",
-                "func": idc.get_func_name(func.start_ea) if func else None
+                "func": idc.get_func_name(func_start) if func_start is not None else None
             })
     except AttributeError:
         pass
@@ -445,8 +449,9 @@ def idb_summary(fast=False):
     total_code_bytes = 0
     defined_code_bytes = 0
     for seg_ea in idautils.Segments():
-        seg = ida_segment.getseg(seg_ea)
-        if seg and seg.perm & idaapi.SEGPERM_EXEC:
+        seg = _compat.get_segment(seg_ea)
+        seg_perm = _compat.get_segment_perm(seg_ea)
+        if seg is not None and seg_perm is not None and seg_perm & idaapi.SEGPERM_EXEC:
             seg_size = seg.end_ea - seg.start_ea
             total_code_bytes += seg_size
             head = seg.start_ea

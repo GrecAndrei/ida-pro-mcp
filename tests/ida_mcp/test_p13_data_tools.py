@@ -133,6 +133,27 @@ class TestFunctionsMinXrefsNoCap(unittest.TestCase):
         idc = _make_idc()
         ida_funcs = types.ModuleType("ida_funcs")
         ida_funcs.get_func_name = lambda ea: "hot_func" if ea == 0x1000 else ""
+        # compat.get_func_* resolves ida_funcs via sys.modules; expose both the
+        # legacy get_func and the 9.4 EA surface off the idaapi.get_func mock.
+        ida_funcs.get_func = idaapi.get_func
+        ida_funcs.get_func_start = lambda ea: (
+            idaapi.get_func(ea).start_ea if idaapi.get_func(ea) else -1
+        )
+        ida_funcs.ida_idaapi = types.ModuleType("ida_idaapi")
+        ida_funcs.ida_idaapi.BADADDR = -1
+        ida_funcs.func_entry_info_t = types.SimpleNamespace
+
+        def _func_entry_info(out, ea, flags=0):
+            f = idaapi.get_func(ea)
+            if f is None:
+                return False
+            out.start_ea = f.start_ea
+            out.end_ea = f.end_ea
+            return True
+
+        ida_funcs.get_func_entry_info = _func_entry_info
+        ida_funcs.get_func_flags = lambda ea: 0
+        ida_funcs.set_func_flags = lambda ea, flags: True
         idautils = types.ModuleType("idautils")
         idautils.Functions = lambda: iter([0x1000])
         idautils.XrefsTo = lambda ea: _Xrefs(2000)
@@ -174,6 +195,14 @@ class TestGlobalsXrefsCapped(unittest.TestCase):
                         "ida_hexrays", "ida_frame", "ida_struct", "ida_ua", "ida_kernwin",
                         "ida_loader", "ida_dbg"])
         sys.modules["idaapi"] = idaapi
+        # compat.get_func_start resolves ida_funcs via sys.modules; mirror the
+        # idaapi.get_func miss (no names here are functions).
+        sys.modules["ida_funcs"].get_func = idaapi.get_func
+        sys.modules["ida_funcs"].get_func_start = lambda ea: -1
+        sys.modules["ida_funcs"].ida_idaapi = types.ModuleType("ida_idaapi")
+        sys.modules["ida_funcs"].ida_idaapi.BADADDR = -1
+        sys.modules["ida_funcs"].get_func_flags = lambda ea: None
+        sys.modules["ida_funcs"].set_func_flags = lambda ea, flags: True
         sys.modules["idc"] = idc
         sys.modules["ida_nalt"] = ida_nalt
         sys.modules["ida_typeinf"] = ida_typeinf

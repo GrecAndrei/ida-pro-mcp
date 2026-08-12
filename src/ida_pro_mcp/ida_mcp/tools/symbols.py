@@ -4,6 +4,14 @@ try:
 except ImportError:
     from _common import *  # type: ignore[import-not-found]
 
+try:
+    from .. import compat as _compat
+except ImportError:
+    try:
+        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
+    except ImportError:
+        import compat as _compat  # type: ignore[import-not-found,no-redef]
+
 
 # ============================================================================
 # 24. SYMBOLS - Debug Symbol Loading (PDB, DWARF, COFF)
@@ -92,9 +100,9 @@ def symbols(
                         "note": "Type read but re-apply failed"}
 
             # Try to infer from function prototype in TIL
-            func = ida_funcs.get_func(ea)
-            if func:
-                name = idc.get_func_name(func.start_ea)
+            func_start = _compat.get_func_start(ea)
+            if func_start is not None:
+                name = idc.get_func_name(func_start)
                 if name:
                     til = ida_typeinf.get_idati()
                     if til and ida_typeinf.get_named_type(til, name, ida_typeinf.NTF_TYPE, tif):

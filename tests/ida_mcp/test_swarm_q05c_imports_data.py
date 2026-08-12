@@ -331,6 +331,24 @@ def _install_string_xrefs(monkeypatch, *, filetype, riscv):
     monkeypatch.setattr(mod.idautils, "Strings", lambda: iter(list(items)), raising=False)
     monkeypatch.setattr(mod.idautils, "XrefsTo", lambda ea: iter([types.SimpleNamespace(frm=f) for f in refs.get(ea, [])]), raising=False)
     monkeypatch.setattr(mod.idaapi, "get_func", _get_func, raising=False)
+    # compat.get_func_start resolves ida_funcs via sys.modules; expose both the
+    # legacy get_func and the 9.4 EA surface off the same _get_func mock.
+    monkeypatch.setattr(mod.ida_funcs, "get_func", _get_func, raising=False)
+    monkeypatch.setattr(mod.ida_funcs, "get_func_start", lambda frm: (_get_func(frm).start_ea if _get_func(frm) else -1), raising=False)
+    monkeypatch.setattr(mod.ida_funcs, "ida_idaapi", types.SimpleNamespace(BADADDR=-1), raising=False)
+    monkeypatch.setattr(mod.ida_funcs, "func_entry_info_t", types.SimpleNamespace, raising=False)
+
+    def _func_entry_info(out, frm, flags=0):
+        f = _get_func(frm)
+        if f is None:
+            return False
+        out.start_ea = f.start_ea
+        out.end_ea = f.start_ea
+        return True
+
+    monkeypatch.setattr(mod.ida_funcs, "get_func_entry_info", _func_entry_info, raising=False)
+    monkeypatch.setattr(mod.ida_funcs, "get_func_flags", lambda ea: None, raising=False)
+    monkeypatch.setattr(mod.ida_funcs, "set_func_flags", lambda ea, flags: True, raising=False)
     monkeypatch.setattr(mod.ida_funcs, "get_func_name", _func_name, raising=False)
     return mod
 
@@ -385,7 +403,26 @@ def test_functions_pagination_does_not_rewalk(monkeypatch):
     monkeypatch.setattr(mod.idautils, "Functions", _functions, raising=False)
     monkeypatch.setattr(mod.idautils, "XrefsTo", lambda ea: iter([]), raising=False)
     monkeypatch.setattr(mod.idautils, "XrefsFrom", lambda ea, f=0: iter([]), raising=False)
-    monkeypatch.setattr(mod.idaapi, "get_func", lambda ea: types.SimpleNamespace(start_ea=ea, end_ea=ea + 0x100), raising=False)
+
+    def _get_func(ea):
+        return types.SimpleNamespace(start_ea=ea, end_ea=ea + 0x100)
+
+    monkeypatch.setattr(mod.idaapi, "get_func", _get_func, raising=False)
+    # compat.get_func_info resolves ida_funcs via sys.modules; expose both the
+    # legacy get_func and the 9.4 EA surface off the same _get_func mock.
+    monkeypatch.setattr(mod.ida_funcs, "get_func", _get_func, raising=False)
+    monkeypatch.setattr(mod.ida_funcs, "get_func_start", lambda ea: _get_func(ea).start_ea, raising=False)
+    monkeypatch.setattr(mod.ida_funcs, "ida_idaapi", types.SimpleNamespace(BADADDR=-1), raising=False)
+    monkeypatch.setattr(mod.ida_funcs, "func_entry_info_t", types.SimpleNamespace, raising=False)
+
+    def _func_entry_info(out, ea, flags=0):
+        out.start_ea = ea
+        out.end_ea = ea + 0x100
+        return True
+
+    monkeypatch.setattr(mod.ida_funcs, "get_func_entry_info", _func_entry_info, raising=False)
+    monkeypatch.setattr(mod.ida_funcs, "get_func_flags", lambda ea: 0, raising=False)
+    monkeypatch.setattr(mod.ida_funcs, "set_func_flags", lambda ea, flags: True, raising=False)
     monkeypatch.setattr(mod.idaapi, "get_func_qty", lambda: len(func_ea), raising=False)
     monkeypatch.setattr(mod.ida_funcs, "get_func_name", lambda ea: names.get(ea, ""), raising=False)
     monkeypatch.setattr(mod.ida_nalt, "get_root_filename", lambda: "walk_test.bin", raising=False)
@@ -416,6 +453,13 @@ def test_globals_pagination_does_not_rewalk(monkeypatch):
     monkeypatch.setattr(mod.idautils, "Names", _names, raising=False)
     monkeypatch.setattr(mod.idautils, "XrefsTo", lambda ea: iter([]), raising=False)
     monkeypatch.setattr(mod.idaapi, "get_func", lambda ea: None, raising=False)  # not a function -> global
+    # compat.get_func_start resolves ida_funcs via sys.modules; mirror the
+    # idaapi.get_func miss so globals classifies these names as non-functions.
+    monkeypatch.setattr(mod.ida_funcs, "get_func", lambda ea: None, raising=False)
+    monkeypatch.setattr(mod.ida_funcs, "get_func_start", lambda ea: -1, raising=False)
+    monkeypatch.setattr(mod.ida_funcs, "ida_idaapi", types.SimpleNamespace(BADADDR=-1), raising=False)
+    monkeypatch.setattr(mod.ida_funcs, "get_func_flags", lambda ea: None, raising=False)
+    monkeypatch.setattr(mod.ida_funcs, "set_func_flags", lambda ea, flags: True, raising=False)
     monkeypatch.setattr(mod.idaapi, "get_func_qty", lambda: 0, raising=False)
     monkeypatch.setattr(mod.idc, "get_item_size", lambda ea: 8, raising=False)
     monkeypatch.setattr(mod.ida_nalt, "get_tinfo", lambda tif, ea: False, raising=False)
