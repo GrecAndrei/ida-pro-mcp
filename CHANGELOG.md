@@ -140,7 +140,15 @@ Final commit of the day closes out the mechanical migration entirely:
   of silently dropping it.  The `processor_options` path also gained the
   `ida_idp.process_config_directive` fallback (the only processor-option
   API that exists in the 9.3/9.4 idat runtime).  Open-binary schema
-  descriptions updated; generated docs refreshed.
+  descriptions updated; generated docs refreshed.  Live probe on 9.4:
+  `processor_options` applies via the directive fallback; `memory_model`
+  yields the explicit "not supported" warning.
+- **Wiki corrected**: RISC-V registers zero segment registers (live probe:
+  `get_sreg_names` empty; `split_sreg_range`/`set_default_sreg_value_ea`
+  reject x3), so the previously documented
+  `ida_segments(action="sreg_set", reg="GP")` seam does not exist — the
+  section now directs users to `set_gp`, marks the sreg recipe as
+  unsupported, and scopes the reanalysis-queue claim to the directive path.
 
 ## 2026-08-09 — settle wave: q05 tool verification, h02 runtime lifecycle, arch auto-apply
 

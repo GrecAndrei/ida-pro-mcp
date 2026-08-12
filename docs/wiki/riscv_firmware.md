@@ -130,8 +130,8 @@ ida_analysis(action="set_gp", gp="0x80002000")
 
 `set_gp` is RISC-V-only; on a non-RISC-V target it returns
 `INVALID_ARGS`/`only valid for RISC-V`.  On success it persists the value in
-a netnode so it survives IDB reload, and queues `plan_range` reanalysis so
-GP-relative xrefs re-evaluate.  The `_APPLIED_RISCV_GP` cache means a
+a netnode so it survives IDB reload (reanalysis is queued only on the
+GUI-directive path — see below).  The `_APPLIED_RISCV_GP` cache means a
 re-apply is skipped after the first successful set this session.
 
 **Headless behavior (verified live on 9.3 and 9.4, 2026-08-12):**
@@ -150,13 +150,12 @@ are left alone; changing GP cleans up the refs created for the previous
 value.  The response reports `refs_fixed` / `refs_skipped`, and
 `xrefs_to` / `ida_calc` then resolve correctly in headless sessions.
 
-Equivalent via the segment-register seam (same GP state, different surface):
-
-```
-ida_segments(action="sreg_set", start="0x80000000", reg="GP", value="0x80002000")
-ida_segments(action="sreg_get", start="0x80000000", reg="GP")   # read back
-ida_segments(action="sreg_list", start="0x80000000", reg="GP")  # enumerate ranges
-```
+> **No sreg seam exists for GP** (verified live on 9.3/9.4): RISC-V
+> registers zero segment registers (`ida_idp.get_sreg_names()` empty;
+> `split_sreg_range`/`set_default_sreg_value_ea` reject x3 as "wrong
+> segment register number"), so `ida_segments(action="sreg_set", reg="GP")
+> ` errors out — the ARM-Thumb-style `T` seam does not apply to GP.  Use
+> `set_gp` (above) instead.
 
 `sreg_get` on an untouched register returns `value: BADSEL` (-1); `sreg_set`
 on an unmapped address is rejected with `ADDRESS_NOT_MAPPED`.
