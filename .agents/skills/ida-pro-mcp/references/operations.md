@@ -1317,7 +1317,7 @@ Example:
 {
   "name": "ida_calc_convert",
   "arguments": {
-    "value": "1234"
+    "value": "0x1234"
   }
 }
 ```
@@ -2390,7 +2390,6 @@ Example:
   "name": "ida_export_findings",
   "arguments": {
     "format": "markdown",
-    "path": "/tmp/findings.md",
     "limit": 50
   }
 }
@@ -2965,7 +2964,7 @@ Example:
   "name": "ida_apply_type",
   "arguments": {
     "address": "0x401000",
-    "type_str": "int __fastcall foo(int a, int b)",
+    "type_str": "int __fastcall foo(int a, int b);",
     "kind": "function",
     "risk_ack": true
   }
@@ -3820,7 +3819,7 @@ Input schema:
   "properties": {
     "ordinal": {
       "type": "integer",
-      "description": "Snapshot ordinal to restore."
+      "description": "Snapshot ordinal to restore (0 = most recent)."
     },
     "snapshot_id": {
       "type": "string",
@@ -3847,7 +3846,7 @@ Example:
 {
   "name": "ida_idb_restore_snapshot",
   "arguments": {
-    "ordinal": 0,
+    "snapshot_id": "before_cleanup",
     "risk_ack": true
   }
 }

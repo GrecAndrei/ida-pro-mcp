@@ -598,7 +598,7 @@ def _funcs_impl(
                 "end": hex(fn.end_ea),
                 "size": hex(fn.end_ea - fn.start_ea),
                 "name": fname,
-                "flags": hex(fn.flags),
+                "flags": hex(getattr(fn, "flags", _compat.get_func_flags(fn.start_ea) or 0)),
                 "chunk_count": len(list(idautils.Chunks(fn.start_ea))),
             }
             cmt = idc.get_func_cmt(fn.start_ea, 0)

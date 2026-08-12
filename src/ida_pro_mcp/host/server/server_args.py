@@ -143,8 +143,12 @@ class ServerArgsMixin:
         }
         schema = TOOL_ARG_SCHEMAS.get(tool_name, {})
         wrapper_fields.update(str(k) for k in schema)
+        # C-declaration fields legitimately end with ';' (and may contain ';'
+        # internally); the wrapper stripper would eat the trailing ';' and the
+        # IDA parser would reject the declaration. Never touch their text.
+        _decl_like = {"decl", "type_str", "declaration", "prototype"}
         for key, value in list(normalized.items()):
-            if key not in wrapper_fields:
+            if key in _decl_like or key not in wrapper_fields:
                 continue
             if not isinstance(value, str):
                 continue

@@ -144,8 +144,29 @@ def misc(
             return err
         try:
             import ida_libfuncs
-            # Plan and apply signature
-            ida_libfuncs.plan_to_apply_ldes(name)
+            import idc
+            # Plan and apply signature. The signature-planning API moved
+            # between versions: ida_libfuncs.plan_to_apply_ldes (pre-9.x)
+            # and idc.plan_to_apply_idasgn (9.x; the 9.3/9.4 Python surface
+            # ships neither apply_ldes nor apply_idasgn — verified on both
+            # runtimes). Try each planning API in order; immediate
+            # application is attempted when the version exposes it, else the
+            # signature is queued for auto-analysis.
+            planned = False
+            if hasattr(ida_libfuncs, "plan_to_apply_ldes"):
+                ida_libfuncs.plan_to_apply_ldes(name)
+                planned = True
+            elif hasattr(idc, "plan_to_apply_idasgn"):
+                idc.plan_to_apply_idasgn(name)
+                planned = True
+            if not planned:
+                return make_error(
+                    MCPError.UNKNOWN_ERROR,
+                    "signature application API not available in this IDA build "
+                    "(tried ida_libfuncs.plan_to_apply_ldes, idc.plan_to_apply_idasgn)",
+                    hint="Use ida_list_sigs to confirm the signature exists; signature "
+                         "application may require an idat session on this version.",
+                )
             # Try to trigger immediate application
             applied = False
             try:

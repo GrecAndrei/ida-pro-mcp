@@ -361,6 +361,10 @@ def types(
             til = ida_typeinf.get_idati()
             tif = ida_typeinf.tinfo_t()
             result = ida_typeinf.parse_decl(tif, til, decl, ida_typeinf.PT_TYP)
+            if result is None and not decl.rstrip().endswith(";"):
+                # C declarations end with ';'; LLM callers routinely drop it.
+                tif = ida_typeinf.tinfo_t()
+                result = ida_typeinf.parse_decl(tif, til, decl + ";", ida_typeinf.PT_TYP)
             if result is None:
                 return make_error(MCPError.INVALID_ARGS, f"Failed to parse declaration: '{decl}'. "
                                   "Check C syntax; all referenced types must already exist in the type library.")
@@ -374,7 +378,31 @@ def types(
                     return make_error(MCPError.INVALID_ARGS, "Could not determine type name from declaration. "
                                       "Provide a 'name' parameter or use a named struct/enum/union declaration.")
             ordinal = ida_typeinf.alloc_type_ordinal(til)
-            if ida_typeinf.set_numbered_type(til, ordinal, ida_typeinf.NTF_TYPE, type_name, tif):
+            saved = False
+            try:
+                saved = bool(ida_typeinf.set_numbered_type(til, ordinal, ida_typeinf.NTF_TYPE, type_name, tif))
+            except Exception:
+                # IDA 9.4 binding changed the type argument to serialized
+                # bytes (verified live); use the tinfo method form instead.
+                try:
+                    tif.set_named_type(til, type_name, ida_typeinf.NTF_TYPE)
+                except Exception as e:
+                    return make_error(MCPError.IDA_ERROR, f"Failed to save type '{type_name}': {e}")
+            # set_named_type may return falsy while still creating the type
+            # (observed on 9.4); verify by lookup rather than trusting the
+            # return value.
+            if not saved:
+                try:
+                    check = ida_typeinf.get_named_type(til, type_name, ida_typeinf.NTF_TYPE)
+                    saved = bool(check)
+                    if saved:
+                        try:
+                            ordinal = check.get_ordinal() or ordinal
+                        except Exception:
+                            pass
+                except Exception:
+                    saved = False
+            if saved:
                 return {"ok": True, "name": type_name, "ordinal": ordinal, "size": tif.get_size()}
             return make_error(MCPError.IDA_ERROR, f"Failed to save type '{type_name}' to the type library. "
                               "A type with the same name may already exist; use a different name.")
@@ -393,8 +421,15 @@ def types(
 
             tif = ida_typeinf.tinfo_t()
             if not ida_typeinf.parse_decl(tif, None, decl, ida_typeinf.PT_SIL):
-                return make_error(MCPError.INVALID_ARGS, f"Failed to parse type: '{decl}'. "
-                                  "Check C syntax and ensure all referenced types exist.")
+                # Prototype parsing needs the trailing ';' (PT_SIL rejects
+                # 'int foo(int a)' without it on IDA 9.x — verified live);
+                # LLM callers routinely drop it, so retry once with it.
+                tif = ida_typeinf.tinfo_t()
+                if decl.rstrip().endswith(";") or not ida_typeinf.parse_decl(
+                    tif, None, decl + ";", ida_typeinf.PT_SIL
+                ):
+                    return make_error(MCPError.INVALID_ARGS, f"Failed to parse type: '{decl}'. "
+                                      "Check C syntax and ensure all referenced types exist.")
 
             apply_kind = kind
             func = _compat.get_func_start(ea)
@@ -1430,6 +1465,10 @@ def types(
             lines = ["/* Exported from IDA type library. Import with types(action='til_import'). */", ""]
             exported = []
             total_qty = qty_func(til)
+            # PRTYPE_DEF|PRTYPE_MULTI prints the full C declaration; the
+            # undocumented SEMI flag (8) adds the terminating ';' so the
+            # output parses with idc.parse_decls on import.
+            print_flags = 0x20 | 0x1 | 0x8
             for ordinal in range(1, total_qty + 1):
                 tif = ida_typeinf.tinfo_t()
                 if not tif.get_numbered_type(til, ordinal):
@@ -1437,7 +1476,21 @@ def types(
                 tname = tif.get_type_name()
                 if not tname or (matcher is not None and not matcher(tname)):
                     continue
-                decl_text = str(tif).strip()
+                # typedef aliases (uint32_t, int8_t, ...) exist in every local
+                # til; exporting them pollutes the header with non-parsing
+                # declaration fragments. Carry real struct/union/enum types.
+                try:
+                    if tif.is_typedef():
+                        continue
+                except Exception:
+                    pass
+                decl_text = ""
+                try:
+                    decl_text = ida_typeinf.print_tinfo(
+                        "", 0, 0, print_flags, tif, tname, ""
+                    ).strip()
+                except Exception:
+                    decl_text = str(tif).strip()
                 if not decl_text:
                     continue
                 lines.append(decl_text)
@@ -1473,6 +1526,54 @@ def types(
                 return handle_error(e, context="til_import")
             if not content.strip():
                 return make_error(MCPError.INVALID_ARGS, f"Type library file is empty: {path}")
+            if content.lstrip().startswith("/* Exported from IDA type library"):
+                # Own export format: one declaration per blank-line-separated
+                # block. idc.parse_decls silently creates nothing on IDA 9.x
+                # (verified live: it reports 0 errors and the til stays
+                # unchanged), so each block is parsed with parse_decl and
+                # saved with the same named-type path as `declare`.
+                import re as _re2
+                imported = []
+                failed = []
+                til = ida_typeinf.get_idati()
+                blocks = [
+                    b.strip()
+                    for b in _re2.split(r"\n\s*\n", content)
+                    if b.strip() and not b.lstrip().startswith("/*")
+                ]
+                for blk in blocks:
+                    # "struct\n{\n...\n} Name;" parses back with a generated
+                    # hash name; rewrite to "struct Name { ... };" so the
+                    # declared name is preserved.
+                    m = _re2.fullmatch(r"(struct|union|enum)\s*\n(.*?)\}\s*(\w+)\s*;", blk, _re2.S)
+                    if m:
+                        blk = f"{m.group(1)} {m.group(3)}\n{m.group(2)}}};\n"
+                    tif = ida_typeinf.tinfo_t()
+                    parsed = None
+                    try:
+                        parsed = ida_typeinf.parse_decl(tif, til, blk, ida_typeinf.PT_TYP)
+                    except Exception:
+                        parsed = None
+                    if not parsed:
+                        failed.append(blk.splitlines()[0][:60] if blk else blk)
+                        continue
+                    tname = tif.get_type_name() or parsed
+                    try:
+                        tif.set_named_type(til, tname, ida_typeinf.NTF_TYPE)
+                    except Exception:
+                        failed.append(tname)
+                        continue
+                    imported.append(tname)
+                if failed:
+                    return make_error(
+                        MCPError.TYPE_ERROR,
+                        f"Type library import: {len(imported)} type(s) imported, "
+                        f"{len(failed)} failed to parse: {', '.join(failed[:5])}",
+                        details={"imported": imported, "failed": failed},
+                    )
+                return {"ok": True, "action": "til_import", "path": path,
+                        "status": "Header imported into the local type library",
+                        "imported": imported, "errors": 0}
             errors = idc.parse_decls(content, 0)
             if errors == 0:
                 return {"ok": True, "action": "til_import", "path": path,
@@ -1698,10 +1799,70 @@ def _parse_member_type(type_str: Optional[str], size: Optional[int]):
     if not decl:
         return None, make_error(MCPError.INVALID_ARGS, "type_str or size required. "
                                  "Provide a C type (e.g. 'uint32_t') or the member size in bytes.")
+    til = ida_typeinf.get_idati()
+
+    # Primitives (char/int/float/...) are not named types in the til on
+    # IDA 9.x and cannot be resolved by get_named_type (verified live); map
+    # them to the fixed-width typedefs the local til does carry.
+    _PRIMITIVE_ALIASES = {
+        "char": "int8_t", "signed char": "int8_t", "unsigned char": "uint8_t",
+        "short": "int16_t", "unsigned short": "uint16_t",
+        "int": "int32_t", "unsigned int": "uint32_t",
+        "long": "int64_t", "unsigned long": "uint64_t",
+        "long long": "int64_t", "unsigned long long": "uint64_t",
+        "int8": "int8_t", "uint8": "uint8_t", "int16": "int16_t",
+        "uint16": "uint16_t", "int32": "int32_t", "uint32": "uint32_t",
+        "int64": "int64_t", "uint64": "uint64_t", "size_t": "size_t",
+    }
+
+    def _resolve_named(name: str):
+        """Resolve a bare type name (uint32_t, struct tag, builtin) to a
+        tinfo. On IDA 9.x parse_decl cannot resolve bare type names or
+        plain declarations ('int x;' returns empty) — verified live; the
+        named-type lookup is the reliable path."""
+        for candidate in (name, _PRIMITIVE_ALIASES.get(name)):
+            if not candidate:
+                continue
+            tif = ida_typeinf.tinfo_t()
+            try:
+                if tif.get_named_type(til, candidate):
+                    return tif
+            except Exception:
+                pass
+        return None
+
+    text = decl.strip()
+    # Array form: 'uint8_t[16]' / 'char[4]'.
+    import re as _re
+    arr = _re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*(\d+)\s*\]", text)
+    if arr:
+        base = _resolve_named(arr.group(1))
+        if base is not None:
+            try:
+                arr_tif = ida_typeinf.tinfo_t()
+                if arr_tif.create_array(base, int(arr.group(2))):
+                    size = arr_tif.get_size()
+                    if size > 0 and size == int(arr.group(2)) * base.get_size():
+                        return arr_tif, None
+            except Exception:
+                pass
+    # Bare identifier: named-type lookup first, then the signed/unsigned
+    # builtin spellings, then the declaration parser.
+    ident = text.rstrip(";").strip()
+    if _re.fullmatch(r"[A-Za-z_][A-Za-z0-9_ ]*", ident):
+        for cand in (ident, "unsigned " + ident if not ident.startswith(("unsigned", "signed")) else ident):
+            tif = _resolve_named(cand)
+            if tif is not None and tif.get_size() > 0:
+                return tif, None
+    # Full declaration form (with a trailing-';' retry).
     tif = ida_typeinf.tinfo_t()
-    if not ida_typeinf.parse_decl(tif, None, decl, ida_typeinf.PT_SIL):
-        return None, make_error(MCPError.INVALID_ARGS, f"Failed to parse member type: '{decl}'. "
-                                 "Check C syntax and ensure all referenced types exist in the type library.")
+    if not ida_typeinf.parse_decl(tif, til, text, ida_typeinf.PT_TYP):
+        tif = ida_typeinf.tinfo_t()
+        if text.rstrip().endswith(";") or not ida_typeinf.parse_decl(
+            tif, til, text + ";", ida_typeinf.PT_TYP
+        ):
+            return None, make_error(MCPError.INVALID_ARGS, f"Failed to parse member type: '{decl}'. "
+                                     "Check C syntax and ensure all referenced types exist in the type library.")
     if tif.get_size() <= 0:
         return None, make_error(MCPError.INVALID_ARGS, f"Could not determine a positive size for member type '{decl}'.")
     return tif, None
@@ -1811,7 +1972,44 @@ def _set_struct_member_type(tif: ida_typeinf.tinfo_t, struct_name: str, member_n
         return None, None, make_error(MCPError.IDA_ERROR, "No struct member API available on this IDA version.")
     res = tif.set_udm_type(idx, mt)
     if res != 0:
-        return None, None, make_error(MCPError.IDA_ERROR, f"set_udm_type failed with code {res}.")
+        # IDA 9.4 refuses an in-place retype when the new type is larger and
+        # would overlap the next member (UDM_TYPE_INVALID, verified live).
+        # Emulate the C re-declaration semantics: delete the member and every
+        # member after it, then re-add them shifted by the size delta.
+        try:
+            udt = ida_typeinf.udt_type_data_t()
+            if not tif.get_udt_details(udt):
+                return None, None, make_error(MCPError.IDA_ERROR, f"set_udm_type failed with code {res}.")
+            old_bits = udt[idx].size
+            new_bits = mt.get_size() * 8
+            if new_bits <= old_bits:
+                return None, None, make_error(MCPError.IDA_ERROR, f"set_udm_type failed with code {res}.")
+            tail = [
+                (udt[i].name, udt[i].type, udt[i].offset)
+                for i in range(idx + 1, udt.size())
+            ]
+            # Remove members from the tail end down through idx (refetch the
+            # details each pass — the udt object does not track deletions).
+            while True:
+                cur = ida_typeinf.udt_type_data_t()
+                if not tif.get_udt_details(cur):
+                    break
+                if cur.size() <= idx:
+                    break
+                if tif.del_udm(cur.size() - 1) != 0:
+                    return None, None, make_error(MCPError.IDA_ERROR, f"set_udm_type failed with code {res}.")
+            delta = new_bits - old_bits
+            if tif.add_udm(member_name, mt, moff * 8) != 0:
+                return None, None, make_error(MCPError.IDA_ERROR, f"set_udm_type failed with code {res}.")
+            for tname, ttype, toff in tail:
+                try:
+                    if tif.add_udm(tname, ttype, toff + delta) != 0:
+                        return None, None, make_error(MCPError.IDA_ERROR, f"set_udm_type failed with code {res}.")
+                except Exception:
+                    return None, None, make_error(MCPError.IDA_ERROR, f"set_udm_type failed with code {res}.")
+            return moff, mt.get_size(), None
+        except Exception:
+            return None, None, make_error(MCPError.IDA_ERROR, f"set_udm_type failed with code {res}.")
     return moff, mt.get_size(), None
 
 

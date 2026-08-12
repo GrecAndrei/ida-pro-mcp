@@ -2,6 +2,55 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-08-13 — full-surface live integration suite + 9.3/9.4 API-drift fixes
+
+- **Expanded live integration coverage** — two new opt-in suites
+  (`tests/integration/`): `test_agent_surface_catalog_live.py` runs every
+  public `ida_*` operation from `AGENT_OPERATIONS` against a real stdio
+  server + real IDA (101 ops: must answer correctly with the documented
+  example, or fail with a coded error), and
+  `test_agent_surface_behavior_live.py` proves 66 deep behaviors (exact
+  decompile/disasm shapes, calc semantics, type round-trips incl. TIL
+  export/import, findings lifecycle, mutation→verify→restore, undo
+  transactions, snapshots, batch bindings/chaining, r2 sidecar, firmware
+  heuristics, python tool). The full 217-test integration package now
+  passes on idalib 9.3 and 9.4.
+- **`FlowChart` construction fixed on 9.4 (unbreaks indexing)** —
+  `compat.get_flow_chart` now cascades through the range overload, the
+  idalib 9.4 pythonized ctor (`FlowChart(f=None, bounds=(start, end))`),
+  and the legacy title-based ctor; `_build_range_chart` gets the same
+  fallback. Previously every function's index metadata collection crashed
+  on 9.4 (`qflow_chart_t` TypeError), so background indexing reported "No
+  embeddings were created" and indexing was broken in production. Also
+  fixed `func_entry_info_t.flags` (absent on 9.4) in index metadata and
+  function info via `compat.get_func_flags`.
+- **Undo/snapshot/entry fixes (9.3 + 9.4)** — `undo_begin`/`undo_end`
+  feature-detect `ida_undo.undo_begin` → `ida_bytes.undo_begin` →
+  `create_undo_point` fallback (the transaction API moved out of the Python
+  surface on 9.x), reporting the `mechanism`; `restore_snapshot` accepts
+  `snapshot_id`/`snapshot_name`/`ordinal` with LIFO pops (capped) and gains
+  the `snapshot_id` param; `add_entry` derives the entry ordinal
+  automatically instead of requiring one.
+- **Types rework** — `declare`/`apply_type` retry parsing with a trailing
+  `;` and verify saves via `get_named_type` (never trust `set_named_type`'s
+  return); `_parse_member_type` resolves named types, maps
+  `char`/`int`/`short`/etc. to fixed-width aliases, and builds `char[N]`
+  via `create_array`; `struct_member_set_type` falls back to delete-tail +
+  re-add when a retype overlaps trailing members; `til_export` emits
+  parseable C via `print_tinfo` (typedefs skipped) and `til_import` parses
+  native-format headers per-declaration with struct-name rewriting,
+  falling back to `parse_decls` for foreign headers.
+- **Other fixes** — `save_idb` treats an empty path as in-place (9.4
+  rejects `save_database("")`); register classes are synthesized via
+  `get_reg_name` + `ph_get_reg_*_sreg` accessors; `load_sig` falls back to
+  `idc.plan_to_apply_idasgn`; `set_segment_attrs perm` accepts `"rwx"`
+  strings; declaration-like args (`decl`/`type_str`/`declaration`/
+  `prototype`) no longer lose their trailing `;` to wrapper stripping, and
+  `struct_member_add` keeps its semantic `offset`.
+- **Docs** — TOOLS_REFERENCE/SKILL.md regenerated; wiki updated (edit:
+  undo/snapshot/add_entry, types: declare/member/TIL invariants);
+  LIVE_IDA_TESTING.md documents all three live suites.
+
 ## 2026-08-12 — idalib runtime backend (opt-in) + 9.4 memory_model/GP closure
 
 - **idalib backend (`IDA_MCP_RUNTIME=idalib`)** — sessions run inside the

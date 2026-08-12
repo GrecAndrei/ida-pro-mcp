@@ -206,6 +206,12 @@ class FakeTinfo:
             return 0
         return -5
 
+    def set_named_type(self, til, name, ntf_flags=0):
+        """Mirror tinfo_t.set_named_type: save this type into the til by name."""
+        self.name = name
+        til.register(self)
+        return 1
+
     def del_edm(self, idx, etf_flags=0):
         if 0 <= idx < len(self.members):
             del self.members[idx]
@@ -826,8 +832,10 @@ def test_til_import_loads_header_back(tmp_path):
     r = mod.types(action="til_import", path=str(out))
     assert r.get("ok"), r
     assert r["errors"] == 0
-    # parse_decls received the exported header content.
-    assert any(c[0] == "parse_decls" and "struct Periph" in c[1] for c in lib.calls)
+    assert "Periph" in r["imported"]
+    # The exported type is present in the til after import (idc.parse_decls
+    # silently creates nothing on IDA 9.x, so import goes per-declaration).
+    assert lib.get("Periph") is not None
 
 
 def test_til_import_missing_file_errors(tmp_path):
@@ -865,7 +873,8 @@ def test_til_carry_riscv_firmware_peripheral_types(tmp_path):
     r = mod.types(action="til_import", path=str(out))
     assert r.get("ok"), r
     assert r["errors"] == 0
-    assert any(c[0] == "parse_decls" and "struct mmio_gpio" in c[1] for c in lib.calls)
+    assert "mmio_gpio" in r["imported"]
+    assert lib.get("mmio_gpio") is not None
 
     # And a fresh raw blob can be shaped against the carried struct.
     mod.types(action="declare", decl="struct mmio_gpio { uint32_t MODER; uint32_t OTYPER; uint32_t BSRR; };")

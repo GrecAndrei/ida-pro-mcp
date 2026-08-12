@@ -518,6 +518,7 @@ TOOL_ARG_SCHEMAS = {
         "ordinal": {"type": "integer", "description": "Snapshot ordinal for restore_snapshot"},
         "timeout_ms": {"type": "integer", "description": "Wait timeout in milliseconds for auto_wait (default: bounded by RPC timeout)"},
         "snapshot_id": {"type": "string", "description": "Snapshot id/name for restore_snapshot"},
+        "snapshot_name": {"type": "string", "description": "Snapshot name for snapshot/restore_snapshot"},
     },
     "annotation": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["annotation"]},

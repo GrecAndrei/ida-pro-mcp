@@ -933,6 +933,9 @@ def _register_classes(proc):
 
     Uses ``ida_idp.ph.reg_names`` plus the segment/ideal-register index ranges
     (``reg_first_sreg``/``reg_last_sreg``, ``reg_first_ireg``/``reg_last_ireg``).
+    On IDA 9.x Python the processor table is not populated (``ph.reg_names``
+    is empty/None on 9.3 and 9.4 under both idat and idalib — verified live),
+    so the table is synthesized from ``ida_idp.get_reg_name`` instead.
     For RISC-V, a documented CSR name set is appended under the ``csr`` class
     (deduplicated against what the module already names). Returns a list of
     ``{reg_class, registers}`` dicts; empty when the register table is
@@ -941,16 +944,54 @@ def _register_classes(proc):
     if ida_idp is None:
         return []
     ph = getattr(ida_idp, "ph", None)
-    if ph is None:
-        return []
-    reg_names = [str(r) for r in (getattr(ph, "reg_names", None) or [])]
-    reg_names = [r for r in reg_names if r]
+
+    def _synthesize_reg_names():
+        """Enumerate registers via get_reg_name when ph.reg_names is absent.
+
+        Prefers the widest naming per register (rax over al/ax), iterating
+        index + width until the table runs out; deduplicates aliases.
+        """
+        names: list[str] = []
+        seen: set[str] = set()
+        for reg in range(1024):
+            found = None
+            for width in (8, 4, 2, 1):
+                try:
+                    candidate = ida_idp.get_reg_name(reg, width)
+                except Exception:
+                    candidate = None
+                if candidate:
+                    found = candidate
+                    break
+            if found is None:
+                # metapc stops around index 35; keep scanning a short tail in
+                # case a processor module has sparse indices, then stop.
+                if reg > 128:
+                    break
+                continue
+            if found not in seen:
+                seen.add(found)
+                names.append(found)
+        return names
+
+    raw_names = [str(r) for r in (getattr(ph, "reg_names", None) or [])]
+    reg_names = [r for r in raw_names if r]
+    synthesized = False
+    if not reg_names:
+        reg_names = _synthesize_reg_names()
+        synthesized = bool(reg_names)
     if not reg_names:
         return []
 
-    def _range(attr_first, attr_last):
-        first = int(getattr(ph, attr_first, 0) or 0)
-        last = int(getattr(ph, attr_last, 0) or 0)
+    def _range(attr_first, attr_last, accessor_first=None, accessor_last=None):
+        if not synthesized:
+            first = int(getattr(ph, attr_first, 0) or 0)
+            last = int(getattr(ph, attr_last, 0) or 0)
+        else:
+            # ph index attributes are also unpopulated on 9.x; the dedicated
+            # accessors ph_get_reg_first_sreg()/ph_get_reg_last_sreg() exist.
+            first = int(getattr(ida_idp, accessor_first, lambda: 0)() or 0) if accessor_first else 0
+            last = int(getattr(ida_idp, accessor_last, lambda: 0)() or 0) if accessor_last else 0
         if last < first or first < 0 or last >= len(reg_names):
             return None
         return (first, last)
@@ -964,7 +1005,10 @@ def _register_classes(proc):
         used.update(range(first, last + 1))
         classes.append({"reg_class": "gpr", "registers": reg_names[first:last + 1]})
 
-    sreg = _range("reg_first_sreg", "reg_last_sreg")
+    sreg = _range(
+        "reg_first_sreg", "reg_last_sreg",
+        accessor_first="ph_get_reg_first_sreg", accessor_last="ph_get_reg_last_sreg",
+    )
     if sreg is not None:
         first, last = sreg
         used.update(range(first, last + 1))

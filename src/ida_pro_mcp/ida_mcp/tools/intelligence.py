@@ -237,7 +237,7 @@ def _function_index_metadata(func) -> dict[str, Any]:
         "api_count": min(api_count, 999),
         "string_count": min(string_count, 999),
         "segment": _compat.get_segment_name(func.start_ea) or "",
-        "is_thunk": 1 if (func.flags & idaapi.FUNC_THUNK) else 0,
+        "is_thunk": 1 if (getattr(func, "flags", _compat.get_func_flags(func.start_ea) or 0) & idaapi.FUNC_THUNK) else 0,
         "cyclomatic": cyclomatic,
     }
 

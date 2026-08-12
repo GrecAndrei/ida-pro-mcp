@@ -207,11 +207,14 @@ class TestAddEntry(_AnalysisBase):
         self.assertEqual(res.get("code"), "INVALID_ARGS")
         self.assertEqual(self.ida_entry.calls, [])
 
-    def test_missing_ordinal_errors(self):
+    def test_missing_ordinal_auto_derives(self):
+        """The public surface (ida_add_entry) has no ordinal; the tool must
+        derive the next free ordinal (ida_entry.get_entry_qty) instead of
+        rejecting the call."""
         res = self.mod.analysis(action="add_entry", addr="0x1000")
-        self.assertTrue(res.get("error"))
-        self.assertEqual(res.get("code"), "INVALID_ARGS")
-        self.assertEqual(self.ida_entry.calls, [])
+        self.assertEqual(res.get("ok"), True)
+        self.assertEqual(res["ordinal"], 0)
+        self.assertEqual(self.ida_entry.calls, [(0, 0x1000, "", True)])
 
     def test_invalid_ordinal_errors(self):
         res = self.mod.analysis(action="add_entry", ordinal="not-an-int", addr="0x1000")

@@ -14,6 +14,11 @@ interpretation, saving, and local variables.
 | `ida_make_code(address)` | Force bytes at an address to be disassembled as a CPU instruction. Use when IDA marked the location as data or undefined but you know it is valid code (missed entry point, tail-call target, obfuscated branch destination). Requeues the containing function for reanalysis. | `address`, `risk_ack` |
 | `ida_undefine(address)` | Undefine code or data at an address range (turn it to raw bytes), removing all IDA annotations so the region can be reinterpreted. **Destructive** — it clears annotations for the whole range; follow with `ida_make_code`, a type declaration, or reanalysis. | `address`, `risk_ack` |
 | `ida_save_idb(path=...)` | Save the current IDB to disk. In-place by default, or to a different file via `path`. Use after significant changes (renames, comments, type fixes, patches) so work is not lost if IDA exits. | `risk_ack` |
+| `ida_undo_begin()` | Open an undo transaction so a failing batch can be rolled back; pair with `ida_undo_end`. On IDA 9.x the transaction API moved out of the Python surface, so it falls back to an `ida_undo` undo point (`create_undo_point`); the response reports the `mechanism` used. | `risk_ack` |
+| `ida_undo_end()` | Commit the changes wrapped by an `ida_undo_begin` transaction (no-op when the 9.x undo-point fallback is active). | `risk_ack` |
+| `ida_idb_snapshot(name=...)` | Save a named snapshot of the current IDB so experiments can be rolled back with `ida_idb_restore_snapshot`. | `risk_ack` |
+| `ida_idb_restore_snapshot(snapshot_id, ordinal)` | Restore the IDB to a previously saved snapshot. Pass `ordinal` (0 = most recent) or `snapshot_id` from `ida_idb_snapshot`. Restores are LIFO: each restore pops the most recent snapshot. | `risk_ack` |
+| `ida_add_entry(address)` | Mark an address as an entry point (reclassifies it as code and adds an entry-point flag). The entry ordinal is derived automatically. | `address`, `risk_ack` |
 
 Every mutation requires `risk_ack: true` — set it only after verifying the
 change is intended. These are IDB writes; they persist in the IDB, so be
@@ -22,4 +27,7 @@ undone via the MCP surface — double-check the address and bytes before
 setting `risk_ack`. `ida_undefine` is similarly destructive: it clears a
 range's annotations and cannot be reversed through the MCP surface. For batch
 propagation of confirmed findings, prefer `ida_publish_findings` (see
-[Investigation](../core/investigation.md)).
+[Investigation](../core/investigation.md)). For experiments, save an
+`ida_idb_snapshot` first — `ida_idb_restore_snapshot` rolls the IDB back to
+that state, and `ida_undo_begin`/`ida_undo_end` bracket a batch so a failing
+run can be reverted.

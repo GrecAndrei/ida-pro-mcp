@@ -247,7 +247,10 @@ class TestSaveIdb(unittest.TestCase):
         res = self.mod.analysis(action="save_idb")
         self.assertEqual(res.get("ok"), True)
         self.assertEqual(res["saved_to"], "/tmp/foo.i64")
-        self.assertEqual(self.calls, [("", 0)])
+        # In-place saves must pass outfile=None, never "" — an empty string
+        # makes ida_loader.save_database try to write to a file named "" and
+        # report failure (verified live on 9.3/9.4 under idat and idalib).
+        self.assertEqual(self.calls, [(None, 0)])
 
     def test_explicit_path_save_reports_path(self):
         res = self.mod.analysis(action="save_idb", path="/tmp/custom.i64")

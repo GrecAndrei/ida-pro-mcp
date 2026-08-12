@@ -50,6 +50,7 @@ def analysis(
     ordinal: Annotated[Optional[int], "Entry ordinal for add_entry"] = None,
     name: Annotated[Optional[str], "Entry name for add_entry (optional)"] = None,
     snapshot_name: Annotated[Optional[str], "Snapshot name for snapshot/restore_snapshot"] = None,
+    snapshot_id: Annotated[Optional[str], "Snapshot id/name for restore_snapshot (public-surface spelling)"] = None,
     timeout_ms: Annotated[Optional[int], "Bounded wait budget in milliseconds for auto_wait (default 15000)"] = None,
     **kwargs
 ) -> dict:
@@ -85,9 +86,8 @@ def analysis(
     - force_offset: Tell IDA a value at addr is a pointer/offset (creates xref).
         Params: addr (REQUIRED), size optional (4 or 8 bytes, default: address size).
     - add_entry: Register a real entry point at addr under ordinal. Use for a
-        bootstrapped reset-vector/ISR candidate on an opaque raw blob (RISC-V
-        etc.) so IDA keeps analyzing and exposing it.
-        Params: addr (REQUIRED), ordinal (REQUIRED, integer), name (optional).
+        bootstrapped reset-vector / ISR candidate on raw firmware.
+        Params: addr (REQUIRED), ordinal (optional, auto-derived), name (optional).
     - snapshot: Save an ida_loader snapshot of the current database under
         snapshot_name so an experiment (reanalysis, patching, types) can be
         rolled back before publishing findings.
@@ -710,8 +710,12 @@ def analysis(
 
         if action == "save_idb":
             import ida_loader as _ida_loader
-            save_path = path or ""
+            save_path = path or None
             try:
+                # save_database(outfile=None) saves to the current DB path.
+                # An empty STRING is NOT None: passing "" makes IDA try to
+                # write to a file named "" and report failure (verified on
+                # 9.3/9.4 under both idat and idalib).
                 saved_ok = _ida_loader.save_database(save_path, 0)
             except Exception as e:
                 return make_error(MCPError.IDA_ERROR, f"save_database failed: {e}")
@@ -990,11 +994,16 @@ def analysis(
             # entry so IDA keeps analyzing and exposing it.
             if addr is None or addr == "":
                 return make_error(MCPError.INVALID_ARGS, "addr required")
-            if ordinal is None:
-                return make_error(MCPError.INVALID_ARGS, "ordinal required")
             ea, err = validate_addr(addr)
             if err:
                 return err
+            if ordinal is None:
+                # Public surface (ida_add_entry) has no ordinal: derive the
+                # next free ordinal instead of requiring callers to track them.
+                try:
+                    ordinal = int(ida_entry.get_entry_qty())
+                except Exception:
+                    return make_error(MCPError.INVALID_ARGS, "ordinal required")
             try:
                 ord_int = int(ordinal)
             except (TypeError, ValueError):
@@ -1083,28 +1092,45 @@ def analysis(
             # restores the last saved snapshot). The point name is recorded
             # at snapshot time; the Python binding exposes no point
             # enumeration, so the restore is by LIFO position, not by name.
-            if not snapshot_name:
+            # Accepts the public surface spellings: snapshot_name (legacy),
+            # snapshot_id (public op), or ordinal (0 = most recent undo point).
+            key = snapshot_name or snapshot_id
+            if not key and ordinal is None:
                 return make_error(MCPError.INVALID_ARGS, "snapshot_name required")
             restored = False
             mechanism = "ida_loader"
             try:
                 if hasattr(ida_loader, "restore_snapshot"):
-                    restored = bool(ida_loader.restore_snapshot(snapshot_name))
+                    if key:
+                        restored = bool(ida_loader.restore_snapshot(key))
+                    else:
+                        return make_error(
+                            MCPError.INVALID_ARGS,
+                            "ordinal restore requires the undo-based snapshot mechanism "
+                            "(not available in this IDA build)",
+                        )
                 else:
                     import ida_undo as _ida_undo
-                    restored = bool(_ida_undo.perform_undo())
                     mechanism = "ida_undo"
+                    steps = 1 if key else int(ordinal) + 1
+                    # perform_undo pops the most recent point each call; an
+                    # ordinal n rolls back n+1 points (0 = most recent).
+                    for _ in range(max(1, min(steps, 64))):
+                        restored = bool(_ida_undo.perform_undo())
+                        if not restored:
+                            break
             except Exception as e:
                 return make_error(MCPError.IDA_ERROR, f"restore_snapshot failed: {e}")
             if not restored:
                 return make_error(
                     MCPError.IDA_ERROR,
-                    f"restore_snapshot failed for {snapshot_name!r} — snapshot may not exist",
-                    details={"snapshot_name": snapshot_name},
+                    f"restore_snapshot failed for {key or ordinal!r} — snapshot may not exist",
+                    details={"snapshot_name": key or None, "ordinal": ordinal},
                 )
             return {
                 "ok": True,
-                "snapshot_name": snapshot_name,
+                "snapshot_name": key,
+                "ordinal": ordinal,
                 "result": True,
                 "mechanism": mechanism,
             }

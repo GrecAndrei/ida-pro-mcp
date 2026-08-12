@@ -397,12 +397,18 @@ class _RangeLike:
 def get_flow_chart(ea, flags: int = 0):
     """``ida_gdl.FlowChart`` over the function containing ``ea``, or None.
 
-    ``FlowChart`` itself is not deprecated in 9.4, but its canonical input
-    (a ``func_t *`` from ``get_func``) is unobtainable there. IDA accepts a
-    range in place of the function pointer on every supported version
-    (precedent: ``tools/graph.py::_build_range_chart``), so this wrapper
-    resolves the function bounds and constructs the chart from a range.
-    Returns None when no function contains ``ea``.
+    The constructor surface differs across supported versions and runtimes:
+
+    * 8.x / 9.x idat and 9.3-era bindings accept a range object in place of
+      the function pointer (``FlowChart(ea_range_t)``).
+    * idalib 9.4 rebinds ``qflow_chart_t`` to a pythonized
+      ``FlowChart(f=None, bounds=(start, end), flags=0)`` and drops both the
+      ``ea_range_t`` class and the legacy title-based ctor.
+    * the legacy ``qflow_chart_t(char const*, func_t*, ea_t, ea_t, int)``
+      still exists on <= 9.3 builds.
+
+    This wrapper tries each form in order and returns None when no function
+    contains ``ea`` or no form is accepted.
     """
     ida_gdl = _resolve_module("ida_gdl")
     idaapi = _resolve_module("idaapi")
@@ -422,12 +428,35 @@ def get_flow_chart(ea, flags: int = 0):
         if rng_cls is not None
         else _RangeLike(info.start_ea, info.end_ea)
     )
-    # ``flags`` is only passed when set so narrow fakes/lambdas taking a
-    # single positional argument keep working (``flags=0`` is the default
-    # on every real FlowChart anyway).
-    if flags:
-        return flow(rng, flags=flags)
-    return flow(rng)
+    # Strategy 1: the range-overload form (8.x / 9.x idat and 9.3-era
+    # bindings; also narrow fakes/lambdas taking a single positional
+    # argument). ``flags`` is only passed when set so those fakes keep
+    # working (``flags=0`` is the default on every real FlowChart anyway).
+    try:
+        if flags:
+            return flow(rng, flags=flags)
+        return flow(rng)
+    except (TypeError, ValueError, AttributeError):
+        pass
+    # Strategy 2: the pythonized idalib 9.4 ctor FlowChart(f=None,
+    # bounds=(start, end), flags=0), which rejects the range object above.
+    try:
+        return flow(None, (info.start_ea, info.end_ea), flags)
+    except (TypeError, ValueError, AttributeError):
+        pass
+    # Strategy 3: the legacy title-based ctor
+    # qflow_chart_t(char const*, func_t*, ea_t, ea_t, int) on <= 9.3.
+    f = None
+    try:
+        f = _ida_funcs().get_func(ea)
+    except (AttributeError, TypeError):
+        f = None
+    if f is not None:
+        try:
+            return flow("", f, info.start_ea, info.end_ea, flags)
+        except (TypeError, ValueError, AttributeError):
+            pass
+    return None
 
 
 def calc_thunk_target(ea):

@@ -1,35 +1,48 @@
 # Live IDA integration testing
 
 `pytest -q` intentionally does not start IDA. The public agent surface has a
-separate opt-in test suite that runs the real stdio MCP server, launches IDA,
-and calls every advertised `ida_*` operation through JSON-RPC.
+separate opt-in test package that runs the real stdio MCP server, launches
+IDA, and exercises every advertised `ida_*` operation through JSON-RPC.
+All suites are marked `live_ida` and skip unless `IDA_MCP_LIVE_TEST=1`.
 
 ```bash
-python scripts/run_live_agent_surface.py --ida-dir /path/to/ida
+IDA_MCP_LIVE_TEST=1 IDA_MCP_LIVE_IDADIR=/path/to/ida \
+  pytest -q tests/integration
 ```
 
 The runner compiles a temporary ELF fixture with known functions, caller and
 callee relationships, imports, strings, and a safe mutation target. It uses a
 temporary runtime directory, so the checkout and existing IDBs are untouched.
+`IDA_MCP_LIVE_IDADIR` (or `IDADIR`/`IDA_DIR`) selects the IDA install;
+`IDA_MCP_RUNTIME=idalib` selects the idalib backend and
+`IDA_MCP_LIVE_IDAT=/path/to/idat64` selects a native idat run.
 
-To use a representative sample instead, provide a binary explicitly:
+## Suites (217 tests, idalib 9.3 + 9.4)
+
+| Suite | Tests | What it proves |
+| --- | --- | --- |
+| `test_agent_surface_live.py` | 50 | Session lifecycle, indexing (incl. the full background decompile index), semantic search, and continuation tokens. The original live suite. |
+| `test_agent_surface_catalog_live.py` | 101 | One test per operation in `AGENT_OPERATIONS`: every `ida_*` op must answer correctly with its documented example, or fail with a *coded* error (never a protocol error, never an exception). Pins graceful expectations where the environment makes them deterministic (e.g. `GOVERNANCE_BLOCKED` for the hard-blocked `ida_patch_bytes`, `TRUNCATION_TOKEN_INVALID` for a bogus token). |
+| `test_agent_surface_behavior_live.py` | 66 | Deep behavior: exact decompile/disassembly shapes, calc semantics, type round-trips (declare/get/struct/enum/TIL export-import), findings lifecycle, mutation→verify→restore round-trips, undo transactions, snapshots, batch bindings/chaining, the r2 sidecar, firmware heuristics, and the python tool. |
+
+Run a single suite with:
 
 ```bash
-python scripts/run_live_agent_surface.py \
-  --ida-dir /path/to/ida \
-  --binary /path/to/sample.exe
+IDA_MCP_LIVE_TEST=1 IDA_MCP_LIVE_IDADIR=/path/to/ida \
+  pytest -q tests/integration/test_agent_surface_behavior_live.py
 ```
 
-The suite verifies the complete public operation set:
+The catalog smoke proves *every* operation answers correctly with its
+documented example; the behavior suite proves the operations do the *right
+thing*. The two suites share one module-scoped session per module and use a
+deterministic fixture, so runs are repeatable — a failing suite usually means
+a real product bug (this is how the 9.3/9.4 API drift bugs in undo
+transactions, snapshots, TIL import/export, and `FlowChart` construction were
+found and fixed).
 
-- session open/state/status/close and `ida_help`;
-- discovery, indexing, semantic search, functions, strings, imports, and text
-  search;
-- decompilation, disassembly, cross-references, callers, and callees;
-- rename/comment mutations and durable findings;
-- strict invalid-argument handling and a real continuation token round trip.
+## Semantic coverage
 
-Semantic coverage uses the configured local embedding profile. By default this
+Semantic indexing uses the configured local embedding profile. By default this
 is `qwen3-embedding-0.6b`; an explicit Zembed run can be selected without
 changing the installed client configuration:
 

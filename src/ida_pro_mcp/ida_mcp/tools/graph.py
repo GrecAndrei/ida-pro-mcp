@@ -54,7 +54,16 @@ def _build_range_chart(ida_gdl, ea):
             return ida_gdl.FlowChart(rng_cls(ea, end))
         except Exception:
             pass
-    return ida_gdl.FlowChart(_RangeLike(ea, end))
+    try:
+        return ida_gdl.FlowChart(_RangeLike(ea, end))
+    except Exception:
+        pass
+    # idalib 9.4 pythonized ctor: FlowChart(f=None, bounds=(start, end)).
+    try:
+        return ida_gdl.FlowChart(None, (ea, end))
+    except Exception:
+        pass
+    return None
 
 
 def _code_items(f_ea):

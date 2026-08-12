@@ -612,6 +612,22 @@ def segments(
                 if not _compat.set_segment_name(s_ea, str(value)):
                     return make_error(MCPError.IDA_ERROR,
                                       f"Failed to rename segment to '{value}'")
+            elif attr == "perm" and isinstance(value, str):
+                # perm accepts 'rwx'-style permission strings too (the public
+                # surface documents both spellings); a plain int() parse
+                # would reject them.
+                perms = 0
+                v = value.lower()
+                if "r" in v:
+                    perms |= idaapi.SEGPERM_READ
+                if "w" in v:
+                    perms |= idaapi.SEGPERM_WRITE
+                if "x" in v:
+                    perms |= idaapi.SEGPERM_EXEC
+                rc = _compat.set_segment_attr(s_ea, "perm", perms)
+                if not rc:
+                    return make_error(MCPError.IDA_ERROR,
+                                      f"Failed to set segment attribute '{attr}'")
             else:
                 try:
                     # Convert string values to int for numeric attributes

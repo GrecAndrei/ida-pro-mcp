@@ -576,23 +576,65 @@ def modify(
             # Open an undo transaction; wrapped edits can be reverted with
             # undo() or committed via undo_end(). Recommended around ida_batch
             # runs so a failed batch can be rolled back.
+            #
+            # The undo transaction API moved out of the Python surface on
+            # IDA 9.x: neither ida_bytes nor ida_undo exposes undo_begin()
+            # there (verified on 9.3/9.4 under idat AND idalib). Fall back to
+            # an ida_undo undo point (create_undo_point) so the transaction
+            # still gives a rollback handle; undo_end then commits (no-op)
+            # and the wrapped edits are permanent.
             try:
-                started = ida_bytes.undo_begin()
+                import ida_undo as _ida_undo
+            except Exception:
+                _ida_undo = None
+            mechanism = "ida_undo"
+            started = False
+            try:
+                if _ida_undo is not None and hasattr(_ida_undo, "undo_begin"):
+                    started = bool(_ida_undo.undo_begin())
+                elif hasattr(ida_bytes, "undo_begin"):
+                    mechanism = "ida_bytes"
+                    started = bool(ida_bytes.undo_begin())
+                elif _ida_undo is not None and hasattr(_ida_undo, "create_undo_point"):
+                    started = bool(
+                        _ida_undo.create_undo_point("ida_mcp_txn", "MCP undo transaction")
+                    )
             except Exception as e:
                 return handle_error(e, context="undo_begin")
             if started is False:
                 return make_error(MCPError.IDA_ERROR, "undo_begin failed", hint="Undo may be unavailable for this IDB.")
+            note = (
+                "Undo transaction started. Wrap a batch-patch or experiment between undo_begin and undo_end, then call undo_end to commit."
+                if mechanism != "ida_undo" or (_ida_undo is not None and hasattr(_ida_undo, "undo_begin"))
+                else "Undo transaction started (undo-point fallback). Wrap an experiment between undo_begin and undo_end, then call undo_end to commit; roll back with ida_idb_restore_snapshot if the batch fails."
+            )
             return {
                 "ok": True,
                 "action": "undo_begin",
-                "note": "Undo transaction started. Wrap a batch-patch or experiment between undo_begin and undo_end, then call undo_end to commit.",
+                "mechanism": mechanism,
+                "note": note,
             }
 
         elif action == "undo_end":
             # Commit the transaction opened by undo_begin(). After this, the
             # wrapped edits are permanent and no longer individually undoable.
+            # On IDA 9.x Python there is no undo_begin/undo_end pair; the
+            # fallback commit is a no-op (the undo point stays as a snapshot
+            # boundary, matching the snapshot semantics of undo_begin).
             try:
-                committed = ida_bytes.undo_end()
+                import ida_undo as _ida_undo
+            except Exception:
+                _ida_undo = None
+            mechanism = "ida_undo"
+            committed = False
+            try:
+                if _ida_undo is not None and hasattr(_ida_undo, "undo_end"):
+                    committed = bool(_ida_undo.undo_end())
+                elif hasattr(ida_bytes, "undo_end"):
+                    mechanism = "ida_bytes"
+                    committed = bool(ida_bytes.undo_end())
+                else:
+                    committed = True  # undo-point fallback: nothing to commit
             except Exception as e:
                 return handle_error(e, context="undo_end")
             if committed is False:
@@ -600,7 +642,10 @@ def modify(
             return {
                 "ok": True,
                 "action": "undo_end",
-                "note": "Undo transaction committed. Wrap a batch-patch or experiment between undo_begin and undo_end, then call undo_end to commit.",
+                "mechanism": mechanism,
+                "note": "Undo transaction committed. Wrap a batch-patch or experiment between undo_begin and undo_end, then call undo_end to commit."
+                if mechanism != "ida_undo" or (_ida_undo is not None and hasattr(_ida_undo, "undo_end"))
+                else "Undo transaction committed (undo-point fallback). The wrapped edits are permanent; the undo point created by undo_begin remains available for ida_idb_restore_snapshot.",
             }
 
         else:

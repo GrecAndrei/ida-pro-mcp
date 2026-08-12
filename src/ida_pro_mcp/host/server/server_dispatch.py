@@ -1714,7 +1714,14 @@ class ServerDispatchMixin(ServerClientStateMixin):
             # Extract PP params before they reach IDA or policy checks.
             # Skip PP extraction for the truncation tool — it has its own
             # offset/count params that conflict with PP's offset/limit.
-            if tool_name == "truncation":
+            # Also skip tools where offset/limit are SEMANTIC arguments, not
+            # pagination: types:struct_member_add uses `offset` as the member
+            # byte offset (-1 appends); stripping it silently appends at 0.
+            _pp_exempt = tool_name == "truncation" or (
+                tool_name == "types"
+                and args.get("action") in ("struct_member_add",)
+            )
+            if _pp_exempt:
                 self._pending_pp = {}
             else:
                 args, self._pending_pp = extract_post_process_params(args)
