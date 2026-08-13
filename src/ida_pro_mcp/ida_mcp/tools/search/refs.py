@@ -2,10 +2,19 @@
 
 import re as re_module
 
-try:
-    from .._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from .._common import (
+    MCPError,
+    compile_smart_pattern,
+    ida_funcs,
+    ida_lines,
+    ida_nalt,
+    ida_typeinf,
+    idautils,
+    idc,
+    make_error,
+    public_arg,
+    run_action
+)
 
 from .core import (
     CALL_XREF_TYPES,
@@ -19,13 +28,7 @@ from .core import (
 )
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
-try:
-    from ... import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from ... import compat as _compat
 
 
 def search_data_ref(pattern, include_context, offset, limit, semantic_min_score, include_alternatives):

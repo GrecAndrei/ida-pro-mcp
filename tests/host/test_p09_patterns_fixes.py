@@ -66,6 +66,15 @@ class TestFuzzyDoubleCount:
         assert smart_match("decrypt buffer input", "decrypt buffer xor input") is True
 
 
+class TestNumericIdentifierTokens:
+    def test_numbered_string_does_not_match_sibling(self):
+        assert smart_match("AGENT_SURFACE_STRING_007", "AGENT_SURFACE_STRING_007") is True
+        assert smart_match("AGENT_SURFACE_STRING_007", "AGENT_SURFACE_STRING_008") is False
+
+    def test_shared_prefix_without_number_still_matches(self):
+        assert smart_match("AGENT_SURFACE_STRING", "AGENT_SURFACE_STRING_008") is True
+
+
 class TestStemming:
     def test_decompilers_stems_to_canonical_decompile(self):
         assert _normalize_semantic_token("decompilers") == "decompile"

@@ -18,6 +18,7 @@ import contextlib
 import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -34,14 +35,31 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from ida_pro_mcp.host.agent_operations import AGENT_OPERATIONS  # noqa: E402
 
 LIVE_FLAG = "IDA_MCP_LIVE_TEST"
+# Per-RPC budget for ordinary live calls. A 300s floor turned every hung IDA
+# call into a five-minute stall; fail fast instead. The tiny ELF fixture
+# answers in milliseconds when IDA is healthy.
+DEFAULT_LIVE_CALL_TIMEOUT = 15
+# Indexing / llama-server work is the one legitimately slow path.
+DEFAULT_LIVE_INDEX_TIMEOUT = 180
+# First test in a module also pays for idat startup.
+DEFAULT_LIVE_PYTEST_TIMEOUT = 120
+DEFAULT_LIVE_INDEX_PYTEST_TIMEOUT = 600
+
 pytestmark = [
     pytest.mark.live_ida,
     pytest.mark.skipif(
         os.environ.get(LIVE_FLAG) != "1",
         reason=f"set {LIVE_FLAG}=1 to run tests against a licensed IDA installation",
     ),
-    pytest.mark.timeout(600),
+    pytest.mark.timeout(DEFAULT_LIVE_INDEX_PYTEST_TIMEOUT),
 ]
+
+
+def live_call_timeout(*, index: bool = False) -> int:
+    raw = os.environ.get("IDA_MCP_LIVE_CALL_TIMEOUT")
+    if raw:
+        return int(raw)
+    return DEFAULT_LIVE_INDEX_TIMEOUT if index else DEFAULT_LIVE_CALL_TIMEOUT
 
 
 def _fixture_source() -> str:
@@ -128,6 +146,72 @@ def _ida_dir() -> Path:
     pytest.fail("IDA was requested but not found. Set IDA_MCP_LIVE_IDADIR or IDA_MCP_LIVE_IDAT.")
 
 
+_FUNC_LINE = re.compile(r"(0x[0-9a-fA-F]+)\s+\S+\s+\S+\s+(\S+)")
+
+
+def parse_function_listing(payload: dict[str, Any] | None) -> dict[str, str]:
+    """Extract {name: addr} from ida_list_functions, in any response shape."""
+    found: dict[str, str] = {}
+    if not isinstance(payload, dict):
+        return found
+
+    def _record(name: Any, addr: Any) -> None:
+        if name and addr:
+            found[str(name)] = str(addr)
+
+    items = payload.get("items")
+    if isinstance(items, list):
+        for item in items:
+            if isinstance(item, dict):
+                _record(item.get("name"), item.get("addr") or item.get("address") or item.get("ea"))
+
+    functions = payload.get("functions")
+    lines: list[str] = []
+    if isinstance(functions, str):
+        lines = functions.splitlines()
+    elif isinstance(functions, list):
+        for row in functions:
+            if isinstance(row, str):
+                lines.append(row)
+            elif isinstance(row, dict):
+                _record(row.get("name"), row.get("addr") or row.get("address") or row.get("ea"))
+    elif isinstance(functions, dict):
+        rows = functions.get("rows") or []
+        cols = [str(c).lower() for c in (functions.get("columns") or [])]
+        name_i = next((i for i, c in enumerate(cols) if c in {"name", "function", "symbol"}), None)
+        addr_i = next((i for i, c in enumerate(cols) if c in {"addr", "address", "ea"}), None)
+        if name_i is not None and addr_i is not None and isinstance(rows, list):
+            for row in rows:
+                if isinstance(row, (list, tuple)) and len(row) > max(name_i, addr_i):
+                    _record(row[name_i], row[addr_i])
+    for line in lines:
+        match = _FUNC_LINE.search(line)
+        if match:
+            _record(match.group(2), match.group(1))
+    if not found:
+        for match in _FUNC_LINE.finditer(json.dumps(payload)):
+            _record(match.group(2), match.group(1))
+    return found
+
+
+def wait_until_analyzed(client: "LiveMCPClient") -> None:
+    """Drain IDA auto-analysis so symbols and strings are present."""
+    client.call("ida_auto_wait", {"timeout_ms": 5000})
+
+
+def seed_function_addrs(client: "LiveMCPClient") -> dict[str, str]:
+    wait_until_analyzed(client)
+    payload = client.call("ida_list_functions", {"limit": 200})
+    found = parse_function_listing(payload if isinstance(payload, dict) else {})
+    if "main" not in found:
+        lookup = client.call("ida_find", {"query": "main", "kind": "names", "limit": 20})
+        blob = json.dumps(lookup) if isinstance(lookup, dict) else ""
+        match = re.search(r"(0x[0-9a-fA-F]+).*?\bmain\b", blob)
+        if match:
+            found["main"] = match.group(1)
+    return found
+
+
 class LiveMCPClient:
     """Small stdio client used only at the process boundary in live tests."""
 
@@ -138,13 +222,15 @@ class LiveMCPClient:
         runtime_dir: Path,
         response_mode: str,
         timeout: int,
-        embeddings_enabled: bool = True,
+        embeddings_enabled: bool = False,
+        index_timeout: int | None = None,
     ) -> None:
         self.ida_dir = ida_dir
         self.runtime_dir = runtime_dir
         self.response_mode = response_mode
         self.timeout = timeout
         self.embeddings_enabled = embeddings_enabled
+        self.index_timeout = int(index_timeout or DEFAULT_LIVE_INDEX_TIMEOUT)
         self.process: subprocess.Popen[str] | None = None
         self._responses: queue.Queue[str] = queue.Queue()
         self._stderr: queue.Queue[str] = queue.Queue()
@@ -157,7 +243,7 @@ class LiveMCPClient:
                 "IDADIR": str(self.ida_dir),
                 "IDA_MCP_TOOL_SURFACE": "agent",
                 "IDA_MCP_RESPONSE_MODE": self.response_mode,
-                "IDA_MCP_COMPACT_CHAR_BUDGET": "500",
+                "IDA_MCP_QOL_MODE": os.environ.get("IDA_MCP_LIVE_QOL_MODE", "balanced"),
                 "IDA_MCP_CACHE_DIR": str(self.runtime_dir),
                 "IDA_MCP_RUNTIME_DIR": str(self.runtime_dir),
                 "IDA_MCP_DISABLE_RATE_LIMIT": "1",
@@ -165,10 +251,19 @@ class LiveMCPClient:
                 "IDA_MCP_POLICY_MODE": "permissive",
                 "IDA_MCP_EMBED_DISABLED": "0" if self.embeddings_enabled else "1",
                 "IDA_MCP_STRUCTURED_CONTENT": "1",
-                "IDA_MCP_STARTUP_TIMEOUT": str(self.timeout),
-                "IDA_MCP_RPC_TIMEOUT": str(max(int(self.timeout), 120)),
+                "IDA_MCP_RESPONSE_ENRICH": "0",
+                "IDA_MCP_STARTUP_TIMEOUT": str(max(int(self.timeout), 90)),
+                "IDA_MCP_RPC_TIMEOUT": str(int(self.timeout)),
+                "IDA_MCP_RPC_MAX_RECV_TIMEOUT": str(
+                    int(self.index_timeout) if self.embeddings_enabled else int(self.timeout)
+                ),
+                "IDA_MCP_FULL_INDEX_RPC_TIMEOUT": str(
+                    int(self.index_timeout) if self.embeddings_enabled else int(self.timeout)
+                ),
             }
         )
+        if self.response_mode == "compact":
+            env["IDA_MCP_COMPACT_CHAR_BUDGET"] = "500"
         source_root = str(REPO_ROOT / "src")
         env["PYTHONPATH"] = source_root + os.pathsep + env.get("PYTHONPATH", "")
         self.process = subprocess.Popen(
@@ -266,7 +361,7 @@ def _assert_ok(payload: dict[str, Any], operation: str) -> dict[str, Any]:
     return payload
 
 
-def _wait_for_index(client: LiveMCPClient, submission: dict[str, Any], timeout: float = 300) -> dict[str, Any]:
+def _wait_for_index(client: LiveMCPClient, submission: dict[str, Any], timeout: float = DEFAULT_LIVE_INDEX_TIMEOUT) -> dict[str, Any]:
     task_id = submission.get("task_id")
     assert task_id, f"background index did not return a task_id: {submission}"
     deadline = time.monotonic() + timeout
@@ -297,7 +392,8 @@ def live_context(tmp_path_factory: pytest.TempPathFactory) -> LiveContext:
         ida_dir=_ida_dir(),
         runtime_dir=runtime_dir,
         response_mode="full",
-        timeout=int(os.environ.get("IDA_MCP_LIVE_CALL_TIMEOUT", "180")),
+        timeout=live_call_timeout(index=True),
+        embeddings_enabled=True,
     )
     client.start()
     try:
@@ -490,7 +586,7 @@ def test_live_index_fails_honestly_when_embeddings_are_disabled(
         ida_dir=_ida_dir(),
         runtime_dir=runtime_dir,
         response_mode="full",
-        timeout=int(os.environ.get("IDA_MCP_LIVE_CALL_TIMEOUT", "180")),
+        timeout=live_call_timeout(),
         embeddings_enabled=False,
     )
     client.start()
@@ -515,7 +611,7 @@ def test_live_continuation_reads_a_real_truncated_response(tmp_path_factory: pyt
         ida_dir=_ida_dir(),
         runtime_dir=runtime_dir,
         response_mode="compact",
-        timeout=int(os.environ.get("IDA_MCP_LIVE_CALL_TIMEOUT", "180")),
+        timeout=live_call_timeout(),
     )
     client.start()
     try:
@@ -523,8 +619,20 @@ def test_live_continuation_reads_a_real_truncated_response(tmp_path_factory: pyt
         payload = _assert_ok(client.call("ida_list_strings", {"query": "AGENT_SURFACE_STRING_", "limit": 200}), "ida_list_strings (truncation)")
         continuation = payload.get("_continue")
         assert isinstance(continuation, dict) and continuation.get("token"), f"expected a continuation token, got {payload}"
-        resumed = _assert_ok(client.call("ida_continue", {"token": continuation["token"]}), "ida_continue")
-        assert resumed.get("count", 0) > 0
+        resume_args: dict[str, Any] = {"token": continuation["token"]}
+        fields = continuation.get("fields")
+        if isinstance(fields, dict) and fields:
+            resume_args["field"] = "strings" if "strings" in fields else next(iter(fields))
+        elif isinstance(fields, list) and fields:
+            resume_args["field"] = str(fields[0])
+        resumed = _assert_ok(client.call("ida_continue", resume_args), "ida_continue")
+        items = resumed.get("items")
+        text = resumed.get("text") or resumed.get("results")
+        assert resumed.get("count", 0) > 0 or (
+            isinstance(items, list) and items
+        ) or (
+            isinstance(text, str) and text
+        ), resumed
     finally:
         with contextlib.suppress(Exception):
             _assert_ok(client.call("ida_close_session", {"risk_ack": True}), "ida_close_session (truncation)")

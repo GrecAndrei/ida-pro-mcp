@@ -73,46 +73,9 @@ import importlib
 import re
 from typing import Any, Dict, List, Optional
 
-try:
-    from ._common import *
-except ImportError:
-    try:
-        from _common import *  # type: ignore[import-not-found]
-    except ImportError:
-        pass
-
-# The support package has no _common.py, so the star-import above normally
-# falls back to stubs.  Pull in the real error envelope from error_handling
-# (pure stdlib, no IDA SDK dependency) so every error response honors the
-# {error: True, code, message, hint} contract instead of a bare dict.  The
-# relative import resolves against whatever parent package hosts this module
-# (ida_pro_mcp.ida_mcp in the venv, ida_mcp in standalone IDA mode).
-try:
-    from ..error_handling import ERROR_HINTS, MCPError, make_error  # noqa: F401
-except (ImportError, ValueError):
-    pass
-
-# Arch-aware call alias set for MATCH call: exact-mnemonic search over the
-# real cross-arch CALL_MNEMONICS (call/jal/jalr/c.jal/c.jalr + link branches).
-try:
-    from ida_pro_mcp.ida_mcp.support.arch_utils import CALL_MNEMONICS as _CALL_MNEMONICS
-    from ida_pro_mcp.ida_mcp.support.arch_utils import get_arch as _get_arch
-except ImportError:
-    try:
-        from arch_utils import CALL_MNEMONICS as _CALL_MNEMONICS  # type: ignore[import-not-found]
-        from arch_utils import get_arch as _get_arch  # type: ignore[import-not-found]
-    except ImportError:
-        _CALL_MNEMONICS = frozenset({
-            "call", "jal", "jalr", "c.jal", "c.jalr",
-            "bl", "blx", "blr", "bla", "bsr", "jsr",
-            "call0", "call4", "call8", "call12",
-            "callx0", "callx4", "callx8", "callx12",
-            "calla", "calli", "rcall", "icall", "eicall",
-        })
-
-        def _get_arch() -> str:
-            """Fallback arch probe when arch_utils is unavailable."""
-            return "unknown"
+from ..error_handling import ERROR_HINTS, MCPError, make_error  # noqa: F401
+from .arch_utils import CALL_MNEMONICS as _CALL_MNEMONICS
+from .arch_utils import get_arch as _get_arch
 
 # Per-arch subsets so MATCH call * on, say, x86 searches only "call" instead of
 # re-scanning every exec segment for each of ~25 aliases.

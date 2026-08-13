@@ -2,10 +2,16 @@ import difflib
 import re
 from collections import OrderedDict
 
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    Annotated,
+    Literal,
+    MCPError,
+    Optional,
+    handle_error,
+    make_error,
+    os,
+    tool
+)
 
 
 SEMANTIC_ALIASES = {

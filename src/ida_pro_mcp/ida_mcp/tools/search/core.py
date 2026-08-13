@@ -5,38 +5,36 @@ import time as _time
 from collections import OrderedDict
 from typing import Optional
 
-try:
-    from .._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from .._common import (
+    MAGIC_CONSTANTS,
+    Optional,
+    compile_smart_pattern,
+    ida_bytes,
+    ida_lines,
+    ida_nalt,
+    idaapi,
+    idautils,
+    idc,
+    looks_like_address,
+    public_arg,
+    run_action,
+    validate_addr
+)
 
 # Use _re throughout to guarantee stdlib re even if a module in the
 # wildcard chain pollutes the local ``re`` binding (e.g. MagicMock in CI).
 re = _re
 
-try:
-    from ...support.semantic_matching import (  # noqa: F401
-        DEFAULT_RESCORE_TOP_N,
-        normalize_action,
-        semantic_score_cheap,
-        semantic_scores,
-        semantic_tokens,
-    )
-except ImportError:
-    from support.semantic_matching import (  # type: ignore[import-not-found]
-        DEFAULT_RESCORE_TOP_N,
-        semantic_score_cheap,
-        semantic_scores,
-    )
+from ...support.semantic_matching import (  # noqa: F401
+    DEFAULT_RESCORE_TOP_N,
+    normalize_action,
+    semantic_score_cheap,
+    semantic_scores,
+    semantic_tokens,
+)
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
-try:
-    from ... import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from ... import compat as _compat
 # ============================================================================
 # Module-Level Caches
 # ============================================================================
@@ -748,7 +746,7 @@ def resolve_target(
 
     # Fast path: blackboard custom name lookup (broader limit)
     try:
-        from blackboard import BlackboardStore  # type: ignore
+        from ..blackboard import BlackboardStore
         store = BlackboardStore()
         bb_entries = store.list(limit=50, include_resolved=False) or []
         for entry in bb_entries:

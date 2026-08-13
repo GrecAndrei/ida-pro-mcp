@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Mapping
 
 from .errors import MCPError, is_error_result, make_error
+from .policy import RiskTier, classify_legacy_pair
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,7 @@ class AgentOperation:
     argument_map: Mapping[str, str] = field(default_factory=dict)
     backend_defaults: Mapping[str, Any] = field(default_factory=dict)
     help_only: bool = False
+    risk_tier: RiskTier | None = None
 
     def validate(self, arguments: Any) -> dict[str, Any] | None:
         """Return a structured error for an invalid public operation call."""
@@ -54,13 +56,25 @@ class AgentOperation:
             )
         required = self.input_schema.get("required", [])
         for key in required:
-            if key not in arguments or arguments[key] is None or arguments[key] == "":
+            if key not in arguments or arguments[key] is None:
                 return make_error(
                     MCPError.INVALID_ARGS,
                     f"'{key}' is required for operation '{self.name}'",
                     hint=f"Example: {self.name}({self._example_text()})",
                     details={"operation": self.name, "required": key},
                 )
+            if arguments[key] == "":
+                schema = properties.get(key) if isinstance(properties.get(key), dict) else {}
+                # Required strings reject "" unless the schema opts into empty
+                # (ida_comment uses minLength 0 so "" clears the comment).
+                min_len = schema.get("minLength")
+                if min_len is None or int(min_len) > 0:
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        f"'{key}' is required for operation '{self.name}'",
+                        hint=f"Example: {self.name}({self._example_text()})",
+                        details={"operation": self.name, "required": key},
+                    )
         for key, value in arguments.items():
             schema = properties.get(key)
             if isinstance(schema, dict) and not _matches_schema_type(value, schema):
@@ -90,7 +104,12 @@ class AgentOperation:
         return None
 
     def to_backend_call(self, arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-        """Translate a public operation call to the legacy dispatcher shape."""
+        """Translate a public operation call to the backend dispatcher.
+
+        Public argument names stay on the wire. Host-only keys (``risk_ack``
+        and any ``argument_map`` target that starts with ``_``) stay on the
+        host for policy / job control and are stripped before IDA RPC.
+        """
         if not self.backend_tool or not self.backend_action:
             raise ValueError(f"Operation {self.name} does not dispatch to a backend tool")
         backend_args: dict[str, Any] = {
@@ -98,7 +117,11 @@ class AgentOperation:
             **self.backend_defaults,
         }
         for key, value in arguments.items():
-            backend_args[self.argument_map.get(key, key)] = value
+            dest = self.argument_map.get(key, key)
+            if isinstance(dest, str) and dest.startswith("_"):
+                backend_args[dest] = value
+                continue
+            backend_args[key] = value
         return self.backend_tool, backend_args
 
     def _example_text(self) -> str:
@@ -949,10 +972,19 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     ),
     AgentOperation(
         name="ida_comment",
-        description="Add or replace a comment at an address in the IDB.",
+        description="Add, replace, or clear a comment at an address in the IDB.",
         category="edit",
         input_schema=_schema(
-            {"address": ADDRESS, "comment": {"type": "string", "description": "Comment text."}, "risk_ack": RISK_ACK, "idb": IDB},
+            {
+                "address": ADDRESS,
+                "comment": {
+                    "type": "string",
+                    "minLength": 0,
+                    "description": "Comment text. An empty string clears the comment.",
+                },
+                "risk_ack": RISK_ACK,
+                "idb": IDB,
+            },
             ["address", "comment", "risk_ack"],
         ),
         example={"address": "0x401000", "comment": "handles inbound packets", "risk_ack": True},
@@ -1556,7 +1588,8 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     AgentOperation(
         name="ida_python",
         description=(
-            "Execute a Python expression or script in the active IDA process. "
+            "Execute a Python expression or script in the active IDA process; "
+            "idaapi, idc, and idautils are in scope. "
             "When several agents share one MCP connection, pass idb=<session_id> "
             "to target a specific session instead of the shared active one."
         ),
@@ -2313,12 +2346,42 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
     ),
 )
 
+
+def _stamp_risk_tiers(ops: tuple[AgentOperation, ...]) -> tuple[AgentOperation, ...]:
+    """Fill ``risk_tier`` from the backend pair so policy has one record per op."""
+    stamped: list[AgentOperation] = []
+    for op in ops:
+        if op.risk_tier is not None:
+            stamped.append(op)
+            continue
+        if op.help_only or not op.backend_tool:
+            stamped.append(replace(op, risk_tier=RiskTier.READ))
+            continue
+        stamped.append(
+            replace(
+                op,
+                risk_tier=classify_legacy_pair(op.backend_tool, op.backend_action),
+            )
+        )
+    return tuple(stamped)
+
+
+AGENT_OPERATIONS = _stamp_risk_tiers(AGENT_OPERATIONS)
+
 _OPERATIONS_BY_NAME = {operation.name: operation for operation in AGENT_OPERATIONS}
 _OPERATIONS_BY_BACKEND = {
     (operation.backend_tool, operation.backend_action): operation
     for operation in AGENT_OPERATIONS
     if operation.backend_tool and operation.backend_action
 }
+
+
+def backend_risk_tier(tool: str, action: str) -> RiskTier | None:
+    """Return the public operation's risk tier for this backend pair, if any."""
+    op = _OPERATIONS_BY_BACKEND.get((str(tool or ""), str(action or "")))
+    if op is None or op.risk_tier is None:
+        return None
+    return op.risk_tier
 
 # A few backend actions have a deliberately different public name or are
 # aliases of an action-specific operation.  Keep these here so public errors
@@ -2448,8 +2511,17 @@ def adapt_agent_error_payload(payload: Any, operation_name: Any) -> Any:
     }
 
 
-def translate_public_batch_arguments(arguments: Any) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    """Translate nested public ``ida_*`` calls to the compatibility batch form."""
+def translate_public_batch_arguments(
+    arguments: Any,
+    *,
+    agent_surface: bool = False,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Translate nested public ``ida_*`` calls to the compatibility batch form.
+
+    When ``agent_surface`` is true (the default MCP surface), nested calls that
+    are not public ``ida_*`` operations are rejected instead of being forwarded
+    as legacy ``tool(action=...)`` entries.
+    """
     if not isinstance(arguments, dict):
         return None, make_error(MCPError.INVALID_ARGS, "arguments must be an object")
     calls = arguments.get("calls")
@@ -2477,6 +2549,16 @@ def translate_public_batch_arguments(arguments: Any) -> tuple[dict[str, Any] | N
 
         operation = get_agent_operation(name) if isinstance(name, str) else None
         if operation is None:
+            if agent_surface:
+                return None, make_error(
+                    MCPError.TOOL_NOT_FOUND,
+                    f"'{name}' is not a public operation.",
+                    hint=(
+                        "Use ida_help(query=...) to find the matching ida_* "
+                        "operation, or set IDA_MCP_TOOL_SURFACE=legacy."
+                    ),
+                    details={"name": name, "batch_index": index},
+                )
             # Preserve legacy entries for compatibility with callers migrating
             # to the public surface; the outer batch dispatcher validates them.
             translated.append(raw_call)
@@ -2489,7 +2571,18 @@ def translate_public_batch_arguments(arguments: Any) -> tuple[dict[str, Any] | N
             validation_error.setdefault("details", {})
             if isinstance(validation_error["details"], dict):
                 validation_error["details"] = {"batch_index": index, **validation_error["details"]}
-            return None, validation_error
+            # Keep later calls runnable when continue_on_error is set; the
+            # batch executor records this as the step result and does not
+            # send it to IDA.
+            backend_args: dict[str, Any] = {}
+            if operation.backend_action:
+                backend_args["action"] = operation.backend_action
+            translated.append({
+                "name": operation.backend_tool or operation.name,
+                "arguments": backend_args,
+                "_precomputed_error": validation_error,
+            })
+            continue
         if operation.help_only:
             return None, make_error(MCPError.INVALID_ARGS, "ida_help cannot be used inside ida_batch")
         backend_tool, backend_args = operation.to_backend_call(nested_args)

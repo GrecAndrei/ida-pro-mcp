@@ -159,7 +159,20 @@ def advertised_tools() -> list[str]:
 
 
 def tool_actions() -> dict[str, list[str]]:
-    return _TOOL_ACTIONS
+    """Backend action catalog: unpublished lists plus every public op's pair."""
+    merged = {tool: list(actions) for tool, actions in _TOOL_ACTIONS.items()}
+    try:
+        from ..agent_operations import list_agent_operations
+
+        for op in list_agent_operations():
+            if not op.backend_tool or not op.backend_action:
+                continue
+            bucket = merged.setdefault(op.backend_tool, [])
+            if op.backend_action not in bucket:
+                bucket.append(op.backend_action)
+    except Exception:
+        pass
+    return merged
 
 
 

@@ -201,6 +201,8 @@ def test_evidence_gravity_is_bounded_and_persisted(tmp_path):
     assert raw is not None
     assert raw["source_entry_id"] == "new-entry"
     assert len(raw["items"]) <= EVIDENCE_GRAVITY_MAX_ITEMS
+    tools_used = [item.get("tool") for item in snap["items"] if item.get("tool") != "semantic"]
+    assert "search" not in tools_used
 
 
 def test_write_fires_gravity_only_on_create(tmp_path, monkeypatch):

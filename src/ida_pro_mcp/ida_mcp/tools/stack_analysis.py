@@ -1,17 +1,30 @@
 
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    Annotated,
+    Literal,
+    MCPError,
+    Optional,
+    _inf_bitness,
+    _inf_procname,
+    get_arch,
+    get_callee_saved_registers,
+    handle_error,
+    hex_ea,
+    ida_frame,
+    ida_funcs,
+    idaapi,
+    idaread,
+    idautils,
+    idc,
+    is_x86_family,
+    make_error,
+    public_arg,
+    tool,
+    validate_addr
+)
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
-try:
-    from .. import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from .. import compat as _compat
 
 try:
     import ida_ua
@@ -169,6 +182,7 @@ def stack_analysis(
                       "Stack analysis action"],
     addr: Annotated[Optional[str], "Function address to analyze"] = None,
     limit: Annotated[int, "Max results for scanning actions"] = 50,
+    **kwargs,
 ) -> dict:
     """
     Deep stack frame analysis for LLM-assisted reverse engineering.
@@ -216,6 +230,8 @@ def stack_analysis(
         Example: stack_analysis(action="summary", addr="0x401000")
     """
     try:
+        # Public MCP names stay on the wire; accept them beside legacy aliases.
+        addr = public_arg(kwargs, 'address', addr)
         func, err = _get_func_or_error(addr)
         if err:
             return err

@@ -29,42 +29,38 @@ Scope notes (per the WO-F1 design): ``pointer_sweep`` is covered by
 here; ``auto_retype`` is deferred until the type-inference stack lands.
 """
 
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    Annotated,
+    Literal,
+    MCPError,
+    Optional,
+    get_arch,
+    get_prologue_pattern,
+    handle_error,
+    ida_bytes,
+    idaapi,
+    idautils,
+    idawrite,
+    idc,
+    is_arm_family,
+    is_riscv_family,
+    make_error,
+    public_arg,
+    run_action,
+    tool
+)
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
-try:
-    from .. import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from .. import compat as _compat
 
 # _common does not re-export parse_address_safe (not in its __all__); import it
 # here so carve/detect windows can address unmapped regions (mirrors segments.py).
-try:
-    from ida_mcp.error_handling import parse_address_safe
-except ImportError:
-    try:
-        from ida_pro_mcp.ida_mcp.error_handling import parse_address_safe
-    except ImportError:
-        from error_handling import parse_address_safe  # type: ignore[import-not-found]
+from ..error_handling import parse_address_safe
 
 # arch_utils is not re-exported by the isolated-test _common stub; import the
 # multi-arch helpers directly so the module is self-contained in both real IDA
 # and the host unit-test harness.
-try:
-    from ..support.arch_utils import (
-        get_arch,
-        get_prologue_pattern,
-        is_arm_family,
-        is_riscv_family,
-    )
-except ImportError:
-    from support.arch_utils import (  # type: ignore[import-not-found]
+from ..support.arch_utils import (
         get_arch,
         get_prologue_pattern,
         is_arm_family,
@@ -174,6 +170,88 @@ def _addr_is_mapped(v):
         return False
 
 
+# Inf min/max spans holes between distant segments. Walking those holes
+# word-by-word (a 0x61000000 extra segment after a typical ELF) is hundreds
+# of millions of Python iterations and blocks the IDA RPC thread.
+_FW_MAX_SCAN_BYTES = 16 * 1024 * 1024
+
+
+def _fw_seg_span(item):
+    """Return (start, end) for an ``idautils.Segments()`` item (EA or object)."""
+    if item is None:
+        return None
+    start = getattr(item, "start_ea", None)
+    end = getattr(item, "end_ea", None)
+    if start is not None and end is not None:
+        try:
+            return int(start), int(end)
+        except Exception:
+            return None
+    try:
+        ea = int(item)
+    except Exception:
+        return None
+    try:
+        seg = idaapi.getseg(ea)
+    except Exception:
+        seg = None
+    if seg is not None:
+        try:
+            return int(seg.start_ea), int(seg.end_ea)
+        except Exception:
+            pass
+    try:
+        return ea, int(idc.get_segm_end(ea))
+    except Exception:
+        return None
+
+
+def _fw_mapped_windows(s_ea, e_ea):
+    """Mapped ``[lo, hi)`` ranges clipped to ``[s_ea, e_ea)``."""
+    s_ea, e_ea = int(s_ea), int(e_ea)
+    if s_ea >= e_ea:
+        return []
+    windows = []
+    try:
+        items = list(idautils.Segments())
+    except Exception:
+        items = []
+    for item in items:
+        span = _fw_seg_span(item)
+        if not span:
+            continue
+        lo, hi = max(s_ea, span[0]), min(e_ea, span[1])
+        if lo < hi:
+            windows.append((lo, hi))
+    if not windows and 0 < (e_ea - s_ea) <= _FW_MAX_SCAN_BYTES:
+        windows.append((s_ea, e_ea))
+    return windows
+
+
+def _fw_iter_aligned(s_ea, e_ea, step, max_bytes=_FW_MAX_SCAN_BYTES):
+    """Yield mapped EAs in ``[s_ea, e_ea)`` stepping by *step*, skipping holes."""
+    step = int(step)
+    if step <= 0:
+        return
+    scanned = 0
+    for lo, hi in _fw_mapped_windows(s_ea, e_ea):
+        ea = lo
+        while ea + step <= hi:
+            if scanned >= max_bytes:
+                return
+            yield ea
+            ea += step
+            scanned += step
+
+
+def _fw_page_overlaps_windows(page, windows):
+    page_end = int(page) + 0x1000
+    for lo, hi in windows:
+        if int(page) < hi and page_end > lo:
+            return True
+    return False
+
+
 def _read_word_bytes(ea, size):
     """Read *size* bytes at *ea*, or None when unavailable/short."""
     try:
@@ -262,25 +340,32 @@ def _detect_vector_table(s_ea, e_ea, base, word, endian, limit):
     chosen_word_size = word_sizes[0]
     for word_size in word_sizes:
         for enc in endians:
-            run_base = None
-            run = []
-            ea = scan_s
-            while ea + word_size <= scan_e:
-                data = _read_word_bytes(ea, word_size)
-                val = _decode_word(data, enc) if data is not None and len(data) == word_size else None
-                if val is not None and _addr_is_mapped(val):
-                    if run_base is None:
-                        run_base = ea
+            scanned = 0
+            for lo, hi in _fw_mapped_windows(scan_s, scan_e):
+                run_base = None
+                run = []
+                ea = lo
+                while ea + word_size <= hi:
+                    if scanned >= _FW_MAX_SCAN_BYTES:
+                        break
+                    data = _read_word_bytes(ea, word_size)
+                    val = _decode_word(data, enc) if data is not None and len(data) == word_size else None
+                    if val is not None and _addr_is_mapped(val):
+                        if run_base is None:
+                            run_base = ea
+                            run = []
+                        run.append((ea, val))
+                    else:
+                        if run_base is not None and len(run) >= _FW_MIN_RUN:
+                            candidates.append(_fw_table_candidate(run_base, run, enc, word_size))
+                        run_base = None
                         run = []
-                    run.append((ea, val))
-                else:
-                    if run_base is not None and len(run) >= _FW_MIN_RUN:
-                        candidates.append(_fw_table_candidate(run_base, run, enc, word_size))
-                    run_base = None
-                    run = []
-                ea += word_size
-            if run_base is not None and len(run) >= _FW_MIN_RUN:
-                candidates.append(_fw_table_candidate(run_base, run, enc, word_size))
+                    ea += word_size
+                    scanned += word_size
+                if run_base is not None and len(run) >= _FW_MIN_RUN:
+                    candidates.append(_fw_table_candidate(run_base, run, enc, word_size))
+                if scanned >= _FW_MAX_SCAN_BYTES:
+                    break
         if candidates:
             chosen_word_size = word_size
             break
@@ -320,8 +405,7 @@ def _default_load_base_candidates(s_ea, e_ea, ptr_size, limit=12):
         return cands
     hits = {}
     chunk_end = min(e_ea, s_ea + 256)
-    ea = s_ea
-    while ea + ptr_size <= chunk_end:
+    for ea in _fw_iter_aligned(s_ea, chunk_end, ptr_size):
         data = _read_word_bytes(ea, ptr_size)
         if data is not None:
             v = _decode_word(data, "le" if not _fw_is_be() else "be")
@@ -329,7 +413,6 @@ def _default_load_base_candidates(s_ea, e_ea, ptr_size, limit=12):
                 if cb <= v < cb + image_size:
                     hits[cb] = hits.get(cb, 0) + 1
                     break
-        ea += ptr_size
     for cb, n in sorted(hits.items(), key=lambda kv: -kv[1]):
         if n >= 2 and cb not in cands:
             cands.append(cb)
@@ -395,14 +478,12 @@ def _count_hypothetical_pointers(s_ea, e_ea, b, ptr_size):
     image_size = e_ea - s_ea
     if image_size <= 0:
         return 0
-    ea = s_ea
-    while ea + ptr_size <= e_ea:
+    for ea in _fw_iter_aligned(s_ea, e_ea, ptr_size):
         data = _read_word_bytes(ea, ptr_size)
         if data is not None:
             v = _decode_word(data, "le" if not _fw_is_be() else "be")
             if b <= v < b + image_size:
                 count += 1
-        ea += ptr_size
     return count
 
 
@@ -546,34 +627,34 @@ def _detect_mmio(s_ea, e_ea, addr, addr_radius, limit):
     # Register words are 32-bit even on 64-bit blobs (peripheral cells).
     word_size = 4
     pages = {}
-    ea = scan_s
-    while ea + word_size <= scan_e:
+    windows = _fw_mapped_windows(scan_s, scan_e)
+    for ea in _fw_iter_aligned(scan_s, scan_e, word_size):
         data = _read_word_bytes(ea, word_size)
-        if data is not None:
-            v = _decode_word(data, "le" if not _fw_is_be() else "be")
-            if v and v >= _MMIO_MIN_VALUE and not _addr_is_mapped(v):
-                page = v & ~0xFFF
-                # A page overlapping the mapped image is RAM/ROM, not a
-                # peripheral window — stray instruction words routinely decode
-                # to addresses just past the image end and would otherwise
-                # shadow the image's own page as an MMIO candidate.  Guarded
-                # with ``not`` (not ``continue``) so the scan cursor advances.
-                if not (page < scan_e and page + 0x1000 > scan_s):
-                    rec = pages.setdefault(page, {
-                        "base": hex(page),
-                        "count": 0,
-                        "peripheral_name": None,
-                        "chip_family": None,
-                        "example_registers": [],
-                    })
-                    rec["count"] += 1
-                    if len(rec["example_registers"]) < 5:
-                        rec["example_registers"].append(hex(v))
-                    match = _peripheral_match(v)
-                    if match:
-                        rec["peripheral_name"] = rec["peripheral_name"] or match[0]
-                        rec["chip_family"] = rec["chip_family"] or match[1]
-        ea += word_size
+        if data is None:
+            continue
+        v = _decode_word(data, "le" if not _fw_is_be() else "be")
+        if v and v >= _MMIO_MIN_VALUE and not _addr_is_mapped(v):
+            page = v & ~0xFFF
+            # A page overlapping a mapped segment is RAM/ROM, not a
+            # peripheral window — stray instruction words routinely decode
+            # to addresses just past a segment end. Use mapped windows, not
+            # inf min/max, so a far-away extra segment cannot treat the
+            # unmapped hole as "the image".
+            if not _fw_page_overlaps_windows(page, windows):
+                rec = pages.setdefault(page, {
+                    "base": hex(page),
+                    "count": 0,
+                    "peripheral_name": None,
+                    "chip_family": None,
+                    "example_registers": [],
+                })
+                rec["count"] += 1
+                if len(rec["example_registers"]) < 5:
+                    rec["example_registers"].append(hex(v))
+                match = _peripheral_match(v)
+                if match:
+                    rec["peripheral_name"] = rec["peripheral_name"] or match[0]
+                    rec["chip_family"] = rec["chip_family"] or match[1]
 
     ranges = sorted(pages.values(), key=lambda r: -r["count"])
     ranges = ranges[:max(1, int(limit or 32))]
@@ -799,6 +880,8 @@ def firmware(
     until the type-inference stack lands.
     """
     try:
+        # Public MCP names stay on the wire; accept them beside legacy aliases.
+        start = public_arg(kwargs, 'address', start)
         action_lower = str(action or "").strip().lower()
         if action_lower not in ("detect_vector_table", "detect_load_base",
                                 "detect_mmio", "rtos_scan", "carve"):
@@ -823,15 +906,11 @@ def firmware(
                 return err
             s_ea, e_ea = ws, we
 
-        if action_lower == "detect_vector_table":
-            return _detect_vector_table(s_ea, e_ea, base, word, endian, limit)
-        if action_lower == "detect_load_base":
-            return _detect_load_base(s_ea, e_ea, base_candidates, limit)
-        if action_lower == "detect_mmio":
-            return _detect_mmio(s_ea, e_ea, addr, addr_radius, limit)
-        if action_lower == "rtos_scan":
-            return _rtos_scan(s_ea, e_ea, query, limit)
-
-        return make_error(MCPError.INVALID_ARGS, f"Unknown action: '{action}'")
+        return run_action(action_lower, {
+            "detect_vector_table": lambda: _detect_vector_table(s_ea, e_ea, base, word, endian, limit),
+            "detect_load_base": lambda: _detect_load_base(s_ea, e_ea, base_candidates, limit),
+            "detect_mmio": lambda: _detect_mmio(s_ea, e_ea, addr, addr_radius, limit),
+            "rtos_scan": lambda: _rtos_scan(s_ea, e_ea, query, limit),
+        }, tool_name="firmware")
     except Exception as e:
         return handle_error(e, "firmware")

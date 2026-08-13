@@ -468,6 +468,35 @@ def test_d3_slice_not_forwarded_when_grep_needs_full_list(monkeypatch):
     assert res["_count"] is not None
 
 
+def test_code_disasm_limit_reaches_ida_not_stolen_by_pp(monkeypatch):
+    """ida_disassemble(limit=N) is a native instruction cap, not host PP."""
+    ses = _FakeSession("SID", "/tmp/fw.bin")
+    server = _server_with_live_runtime([ses])
+    captured = {}
+
+    def fake_call_tool(tool, ip, **kwargs):
+        captured["args"] = dict(kwargs)
+        n = int(kwargs.get("limit") or kwargs.get("max_items") or 11)
+        return {
+            "ok": True,
+            "addr": "0x401000",
+            "name": "main",
+            "disasm": "\n".join(f"0x{0x401000 + i:x}  nop" for i in range(n)),
+            "count": n,
+        }
+
+    monkeypatch.setattr(server, "call_tool", fake_call_tool)
+    monkeypatch.setattr(server, "_record_activity", lambda *_a, **_k: None)
+
+    res = server._execute_tool(
+        "code",
+        {"action": "disasm", "addrs": "0x401000", "limit": 4, "idb": "SID"},
+    )
+    assert captured["args"].get("limit") == 4
+    assert captured["args"].get("max_items") == 4
+    assert res.get("count") == 4
+
+
 # ---------------------------------------------------------------------------
 # D10 — batch_manager persistence debounce + cached persist path
 # ---------------------------------------------------------------------------

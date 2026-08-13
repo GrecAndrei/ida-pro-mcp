@@ -368,6 +368,13 @@ class TestEmulateHost(unittest.TestCase):
         self.assertEqual(result.get("code"), "EMULATION_ERROR")
 
     # -- info --------------------------------------------------------------
+    def test_info_does_not_auto_select_backend(self):
+        self.dbg._load_results = {"linux": True, "gdb": True}
+        result = self.mod.emulate(action="info")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["backend"], "none")
+        self.assertEqual(self._load_debugger_calls(), [])
+
     def test_info_reports_backend_registers_and_why(self):
         self._prime_backend("linux")
         self.dbg._regs = {"rip": 0x401000, "rax": 0x10, "rbx": 0x20, "rcx": 0x30}

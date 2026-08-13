@@ -5,15 +5,19 @@ Architecture:
 - Structured Semantic Retrieval: type search uses semantic matching on type names
 """
 
-try:
-    from .._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from .._common import (
+    compile_smart_pattern,
+    ida_lines,
+    ida_nalt,
+    ida_typeinf,
+    idaapi,
+    idautils,
+    idc,
+    public_arg,
+    run_action
+)
 
-try:
-    from ...support.semantic_matching import semantic_score  # noqa: F401
-except ImportError:
-    from support.semantic_matching import semantic_score  # type: ignore[import-not-found]  # noqa: F401
+from ...support.semantic_matching import semantic_score  # noqa: F401
 
 from .core import (
     build_response,

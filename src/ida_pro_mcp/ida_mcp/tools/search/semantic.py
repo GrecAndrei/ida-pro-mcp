@@ -15,10 +15,16 @@ from __future__ import annotations
 
 import time as _time
 
-try:
-    from .._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from .._common import (
+    MCPError,
+    ida_hexrays,
+    idautils,
+    idc,
+    make_error,
+    os,
+    public_arg,
+    run_action
+)
 
 from .core import (
     SearchTimeout,

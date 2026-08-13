@@ -164,6 +164,36 @@ def test_calc_bare_token_outside_image_is_address_invalid_not_decimal():
     assert "0x prefix" in resp.get("message", "")
 
 
+def test_calc_convert_bare_digits_are_decimal_not_hex_address():
+    # convert is a numeric reinterpretation tool: "255" is decimal 255 / 0xff,
+    # never an in-image hex address probe that fails with ADDRESS_INVALID.
+    errhand = load_ida_module("error_handling")
+    errhand._image_min_ea = lambda: 0x1000
+    errhand._image_max_ea = lambda: 0x2000
+    mod = load_tool_module(
+        "calc",
+        common_overrides={"parse_address_canonical": errhand.parse_address_canonical},
+    )
+    _stub_calc_ida()
+
+    resp = mod.calc(action="convert", value="255")
+
+    assert resp.get("ok") is True, resp
+    assert resp["dec"] == 255
+    assert resp["hex"] == "0xff"
+
+
+def test_calc_convert_0x_prefix_still_hex():
+    mod = load_tool_module("calc")
+    _stub_calc_ida()
+
+    resp = mod.calc(action="convert", value="0xff")
+
+    assert resp.get("ok") is True, resp
+    assert resp["dec"] == 255
+    assert resp["hex"] == "0xff"
+
+
 def test_calc_resolve_fileregion_badaddr_crisp_error_on_headerless_blob():
     # Headerless raw blobs have no segment-to-file mapping, so
     # get_fileregion_offset returns BADADDR for every VA. Surface a crisp

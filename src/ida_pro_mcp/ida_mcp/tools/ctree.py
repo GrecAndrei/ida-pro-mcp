@@ -1,46 +1,24 @@
 
 import contextlib
-import os
-import sys
-from typing import Annotated, Literal, Optional
 
 import ida_hexrays
 import ida_lines
 import idaapi
 import idc
 
-# Infrastructure discovery
-try:
-    # Package mode
-    from ..error_handling import (
-        MCPError,
-        handle_error,
-        make_error,
-        validate_addr,
-    )
-    from ..rpc import tool
-    from ..sync import idaread
-    from ..utils import (
-        compile_smart_pattern,
-    )
-except (ImportError, ValueError):
-    # Standalone IDA mode
-    _this_dir = os.path.dirname(os.path.abspath(__file__))
-    _mcp_root = os.path.dirname(_this_dir)
-    if _mcp_root not in sys.path:
-        sys.path.insert(0, _mcp_root)
-
-    from error_handling import (
-        MCPError,
-        handle_error,
-        make_error,
-        validate_addr,
-    )
-    from rpc import tool
-    from sync import idaread
-    from utils import (
-        compile_smart_pattern,
-    )
+from ._common import (
+    Annotated,
+    Literal,
+    MCPError,
+    Optional,
+    compile_smart_pattern,
+    handle_error,
+    idaread,
+    make_error,
+    public_arg,
+    tool,
+    validate_addr,
+)
 
 
 # ============================================================================
@@ -399,6 +377,7 @@ def ctree(
     addr: Annotated[str, "Address of function to analyze"],
     query: Annotated[Optional[str], "Filter pattern (regex/glob/substring/semantic auto-detected; for find_* actions)"] = None,
     depth: Annotated[int, "Max traversal depth"] = 10,
+    **kwargs,
 ) -> dict:
     """
     Hex-Rays AST (CTree) analysis utilities.
@@ -415,6 +394,8 @@ def ctree(
     - var_dependency_graph: Build variable dependency graph + phi-like merge candidates.
     """
     try:
+        # Public MCP names stay on the wire; accept them beside legacy aliases.
+        addr = public_arg(kwargs, 'address', addr)
         ea, err = validate_addr(addr, require_func=True)
         if err: return err
 

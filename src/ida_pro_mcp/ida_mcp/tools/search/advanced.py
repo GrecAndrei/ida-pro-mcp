@@ -2,10 +2,21 @@
 
 import time as _time
 
-try:
-    from .._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from .._common import (
+    ERROR_HINTS,
+    MCPError,
+    compile_smart_pattern,
+    ida_funcs,
+    ida_hexrays,
+    ida_lines,
+    idaapi,
+    idautils,
+    idc,
+    make_error,
+    public_arg,
+    run_action,
+    validate_addr
+)
 
 # Import re after the wildcard import — the latter may shadow `re` with
 # typing.re (Python 3.12+) which is a deprecated proxy that lacks
@@ -32,13 +43,7 @@ from .core import (  # noqa: E402
 )
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
-try:
-    from ... import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from ... import compat as _compat
 
 def _known_const_name(value: int, known: dict) -> str:
     """Name an immediate constant: known DB hit, else pattern-based magic.

@@ -29,7 +29,14 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from tests.integration.test_agent_surface_live import LiveMCPClient, _fixture_source, _ida_dir  # noqa: E402
+from tests.integration.test_agent_surface_live import (  # noqa: E402
+    LiveMCPClient,
+    _fixture_source,
+    _ida_dir,
+    live_call_timeout,
+    seed_function_addrs,
+    DEFAULT_LIVE_PYTEST_TIMEOUT,
+)
 
 LIVE_FLAG = "IDA_MCP_LIVE_TEST"
 pytestmark = [
@@ -38,7 +45,7 @@ pytestmark = [
         os.environ.get(LIVE_FLAG) != "1",
         reason=f"set {LIVE_FLAG}=1 to run tests against a licensed IDA installation",
     ),
-    pytest.mark.timeout(900),
+    pytest.mark.timeout(DEFAULT_LIVE_PYTEST_TIMEOUT),
 ]
 
 _FUNC_LINE = re.compile(r"(0x[0-9a-fA-F]+)\s+\S+\s+\S+\s+(\S+)")
@@ -113,7 +120,7 @@ def ctx(tmp_path_factory: pytest.TempPathFactory):
         ida_dir=_ida_dir(),
         runtime_dir=runtime_dir,
         response_mode="full",
-        timeout=int(os.environ.get("IDA_MCP_LIVE_CALL_TIMEOUT", "180")),
+        timeout=live_call_timeout(),
     )
     client.start()
     try:
@@ -122,14 +129,9 @@ def ctx(tmp_path_factory: pytest.TempPathFactory):
             raise AssertionError(f"ida_open_binary failed: {opened}")
         context = BehaviorContext(client, opened.get("session_id"), runtime_dir,
                                   str(opened.get("idb_path") or ""))
-        payload = client.call("ida_list_functions", {"limit": 200})
-        text = payload.get("functions") if isinstance(payload, dict) else ""
-        for line in str(text).splitlines():
-            m = _FUNC_LINE.match(line)
-            if m:
-                context.functions[m.group(2)] = m.group(1)
-                if m.group(2) == "main":
-                    context.main_addr = m.group(1)
+        context.functions = seed_function_addrs(client)
+        if "main" in context.functions:
+            context.main_addr = context.functions["main"]
         yield context
     finally:
         import contextlib

@@ -39,6 +39,7 @@ class _FakeIdaProcess:
 def server(tmp_path, monkeypatch):
     monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
     monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
+    monkeypatch.setenv("IDA_MCP_TOOL_SURFACE", "legacy")
     # Safe-mode lifecycle is exercised through the background open path here,
     # which is experimental and needs the opt-in flag.
     monkeypatch.setenv("IDA_MCP_BACKGROUND_OPEN", "1")

@@ -797,6 +797,18 @@ class IDAMCPServer(
                     tn, call_args = operation.to_backend_call(call_args)
                     resolved_tn = _resolve_tool_alias(tn)
 
+            elif getattr(self, "tool_surface", "agent") == "agent":
+                # Public surface: backend tool(action=...) names are not MCP
+                # operations. Opt back in with IDA_MCP_TOOL_SURFACE=legacy.
+                precomputed_result = make_error(
+                    MCPError.TOOL_NOT_FOUND,
+                    f"'{public_tool_name}' is not a public operation.",
+                    hint=(
+                        "Use ida_help(query=...) to find the matching ida_* "
+                        "operation, or set IDA_MCP_TOOL_SURFACE=legacy."
+                    ),
+                    details={"name": public_tool_name},
+                )
             if precomputed_result is not None:
                 res = precomputed_result
             elif resolved_tn == "batch":
@@ -805,7 +817,10 @@ class IDAMCPServer(
                         MCPError.INVALID_ARGS, "arguments must be an object"
                     )
                 elif operation is not None and operation.name == "ida_batch":
-                    call_args, batch_error = translate_public_batch_arguments(call_args)
+                    call_args, batch_error = translate_public_batch_arguments(
+                        call_args,
+                        agent_surface=getattr(self, "tool_surface", "agent") == "agent",
+                    )
                     res = (
                         batch_error
                         if batch_error

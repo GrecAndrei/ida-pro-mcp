@@ -178,92 +178,66 @@ def _canonical_tool_name(name):
     return TOOL_ALIASES.get(name, name)
 
 
+def _ensure_ida_mcp_packages():
+    import types
+
+    def _ensure_ns(name, path):
+        mod = sys.modules.get(name)
+        if mod is None:
+            mod = types.ModuleType(name)
+            mod.__path__ = [path]
+            mod.__package__ = name
+            sys.modules[name] = mod
+        elif not hasattr(mod, "__path__"):
+            mod.__path__ = [path]
+        return mod
+
+    support_root = os.path.join(_mcp_root, "support")
+    _ensure_ns("ida_mcp", _mcp_root)
+    _ensure_ns("ida_mcp.tools", _tools_root)
+    _ensure_ns("ida_mcp.support", support_root)
+
+
 def _try_load_single_tool(name):
     import importlib
-    import importlib.util
 
     canonical = _canonical_tool_name(name)
     if canonical in TOOLS:
         return TOOLS[canonical], canonical, None
-    tools_dir = os.path.join(_mcp_root, "tools")
-    flat_path = os.path.join(tools_dir, f"{canonical}.py")
-    package_init = os.path.join(tools_dir, canonical, "__init__.py")
-    module_path = None
-    module_kwargs = {}
-    if os.path.exists(flat_path):
-        module_path = flat_path
-    elif os.path.exists(package_init):
-        try:
-            module = importlib.import_module(f"ida_mcp.tools.{canonical}")
-            if hasattr(module, canonical):
-                tool_func = getattr(module, canonical)
-                TOOLS[canonical] = tool_func
-                return tool_func, canonical, None
-            return None, canonical, f"module 'ida_mcp.tools.{canonical}' missing callable '{canonical}'"
-        except Exception as e:
-            return None, canonical, str(e)
-    else:
-        return None, canonical, f"no tool file or package: {canonical}.py"
+    _ensure_ida_mcp_packages()
     try:
-        spec = importlib.util.spec_from_file_location(canonical, module_path, **module_kwargs)
-        module = importlib.util.module_from_spec(spec)
-        # Preserve any real module the flat name would shadow (e.g. stdlib
-        # 'types'/'code') so a lazy load cannot break later imports.
-        prior = sys.modules.get(canonical)
-        sys.modules[canonical] = module
-        try:
-            spec.loader.exec_module(module)
-        finally:
-            if prior is not None:
-                sys.modules[canonical] = prior
+        module = importlib.import_module(f"ida_mcp.tools.{canonical}")
         if hasattr(module, canonical):
             tool_func = getattr(module, canonical)
             TOOLS[canonical] = tool_func
             return tool_func, canonical, None
-        return None, canonical, f"module '{canonical}' missing callable '{canonical}'"
+        return None, canonical, f"module 'ida_mcp.tools.{canonical}' missing callable '{canonical}'"
     except Exception as e:
         return None, canonical, str(e)
 
 
 def load_tools():
     try:
-        tools_dir = os.path.join(_mcp_root, "tools")
-        # tools_dir is on sys.path directly; use flat importlib to avoid
-        # triggering ida_mcp/__init__.py → rpc.py → zeromcp which is not
-        # available in the IDA process and would crash every tool load.
         import importlib
-        import importlib.util
-        # Tool files can shadow real modules (tools/types.py vs stdlib
-        # 'types'). Registering flatly would overwrite sys.modules['types'],
-        # which breaks the later zeromcp import (`from types import
-        # UnionType`) and silently disables the startup reanalysis in
-        # __main__. Snapshot the modules we shadow so we can restore them.
-        shadowed = {}
-        try:
-            for f in os.listdir(tools_dir):
-                if f.endswith(".py") and f != "__init__.py":
-                    name = f[:-3]
-                    if name in sys.modules and name not in shadowed:
-                        shadowed[name] = sys.modules[name]
-                    try:
-                        spec = importlib.util.spec_from_file_location(
-                            name, os.path.join(tools_dir, f)
-                        )
-                        module = importlib.util.module_from_spec(spec)
-                        sys.modules[name] = module          # flat name so intra-tool imports work
-                        spec.loader.exec_module(module)
-                        if hasattr(module, name): TOOLS[name] = getattr(module, name)
-                    except Exception as e: log_ev(f"Load error {name}: {e}")
-        finally:
-            # Put the real modules back so stdlib imports still resolve.
-            for name, orig in shadowed.items():
-                sys.modules[name] = orig
-        # Register aliases only if target exists
+
+        _ensure_ida_mcp_packages()
+        tools_dir = _tools_root
+        for f in os.listdir(tools_dir):
+            if not f.endswith(".py") or f in {"__init__.py", "_common.py"}:
+                continue
+            name = f[:-3]
+            try:
+                module = importlib.import_module(f"ida_mcp.tools.{name}")
+                if hasattr(module, name):
+                    TOOLS[name] = getattr(module, name)
+            except Exception as e:
+                log_ev(f"Load error {name}: {e}")
         for alias, target in TOOL_ALIASES.items():
             if target in TOOLS:
                 TOOLS[alias] = TOOLS[target]
         log_ev(f"Loaded {len(TOOLS)} tools")
-    except Exception as e: log_ev(f"Tool load error: {e}")
+    except Exception as e:
+        log_ev(f"Tool load error: {e}")
 
 def _extract_literal(param_type):
     origin = get_origin(param_type)

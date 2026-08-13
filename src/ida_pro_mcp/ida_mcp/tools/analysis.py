@@ -1,16 +1,37 @@
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    Annotated,
+    Literal,
+    MCPError,
+    Optional,
+    Union,
+    _filetype_name,
+    _inf_bitness,
+    _inf_filetype_id,
+    _inf_is_64bit,
+    _inf_is_be,
+    _inf_procname,
+    get_arch,
+    handle_error,
+    ida_bytes,
+    ida_funcs,
+    ida_nalt,
+    ida_segment,
+    idaapi,
+    idautils,
+    idawrite,
+    idc,
+    is_arm_family,
+    is_riscv_family,
+    make_error,
+    os,
+    public_arg,
+    run_action,
+    tool,
+    validate_addr
+)
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
-try:
-    from .. import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from .. import compat as _compat
 
 import contextlib
 import hashlib
@@ -103,6 +124,10 @@ def analysis(
         Params: timeout_ms (optional, default 15000; 0 = single pump, no wait).
     """
     try:
+        # Public MCP names stay on the wire; accept them beside legacy aliases.
+        addr = public_arg(kwargs, 'address', addr)
+        if action in ('snapshot', 'restore_snapshot'):
+            snapshot_name = snapshot_name or snapshot_id or name
         inf = None
         try:
             if hasattr(idaapi, "get_inf_structure"):
@@ -346,10 +371,7 @@ def analysis(
                 gp_int = int(str(gp).strip(), 16) if str(gp).startswith("0x") else int(str(gp).strip(), 0)
             except ValueError:
                 return make_error(MCPError.INVALID_ARGS, f"invalid gp value: {gp!r} — expected hex string like '0x2556f0'")
-            try:
-                from ida_pro_mcp.ida_mcp.support.arch_utils import set_riscv_gp
-            except ImportError:
-                from arch_utils import set_riscv_gp  # type: ignore[import-not-found]
+            from ..support.arch_utils import set_riscv_gp
             return set_riscv_gp(gp_int)
 
         if action == "set_loader_options":

@@ -11,7 +11,7 @@ from typing import Any
 
 from ..batch_manager import BatchManager
 from ..errors import MCPError, is_error_result, make_error
-from ..policy import PolicyDecision, evaluate_policy
+from ..policy import PolicyDecision, ack_from_args, evaluate_policy
 from .server_client_state import ServerClientStateMixin, _ClientRequestState
 
 _BACKGROUND_ACTIONS = {
@@ -630,7 +630,7 @@ class BackgroundMixin(ServerClientStateMixin):
                 # A caller may set _purpose on the background request itself,
                 # not just inside tool_call.args; honour both.
                 purpose=call_args.get("_purpose") or purpose,
-                ack=bool(call_args.get("_risk_ack") or call_args.get("_guardrail_ack")),
+                ack=ack_from_args(call_args),
             )
             if decision.decision in {PolicyDecision.BLOCK, PolicyDecision.REQUIRE_ACK}:
                 return make_error(
@@ -785,9 +785,9 @@ class BackgroundMixin(ServerClientStateMixin):
             if denied:
                 return denied
             tasks = self._batch_manager.status(task_id)
-            return {"tasks": self._filter_owned_batch_tasks(tasks)}
+            return {"ok": True, "tasks": self._filter_owned_batch_tasks(tasks)}
         tasks = self._batch_manager.status(None)
-        return {"tasks": self._filter_owned_batch_tasks(tasks)}
+        return {"ok": True, "tasks": self._filter_owned_batch_tasks(tasks)}
 
     def _bg_result(self, args: dict) -> dict:
         task_id = args.get("task_id")
@@ -814,9 +814,9 @@ class BackgroundMixin(ServerClientStateMixin):
         if session_id:
             owned = self._owned_batch_session_ids()
             if owned is not None and str(session_id) not in owned:
-                return {"tasks": []}
+                return {"ok": True, "tasks": []}
             tasks = [t for t in tasks if t.get("session_id") == session_id]
-        return {"tasks": tasks}
+        return {"ok": True, "tasks": tasks}
 
     def _bg_wait(self, args: dict) -> dict:
         task_id = args.get("task_id")

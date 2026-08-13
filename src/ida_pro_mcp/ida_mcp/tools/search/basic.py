@@ -3,19 +3,24 @@
 import re as _re  # keep stdlib re out of the wildcard namespace
 import struct as _struct
 
-try:
-    from .._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from .._common import (
+    MCPError,
+    _inf_ptr_size,
+    compile_smart_pattern,
+    ida_bytes,
+    ida_funcs,
+    ida_lines,
+    idaapi,
+    idautils,
+    idc,
+    looks_like_address,
+    make_error,
+    public_arg,
+    run_action
+)
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
-try:
-    from ... import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from ... import compat as _compat
 
 from .core import (
     SearchTimeout,
@@ -158,6 +163,55 @@ def search_bytes(pattern, range_start, range_end, include_context, offset, limit
     return result
 
 
+def _literal_ascii_needle(pattern) -> bytes | None:
+    """UTF-8 bytes of a literal string query, or None if glob/regex-like."""
+    text = str(pattern or "")
+    if not (4 <= len(text) <= 256):
+        return None
+    if any(ch in text for ch in "*?[\\") or text.startswith("/"):
+        return None
+    try:
+        return text.encode("utf-8")
+    except Exception:
+        try:
+            return text.encode("latin-1", errors="replace")
+        except Exception:
+            return None
+
+
+def _iter_mapped_byte_hits(needle: bytes, range_start=None, range_end=None, max_hits: int = 256):
+    """Yield EAs of *needle* in mapped segments. IDA's string list is incomplete
+    for packed .rodata tables; a literal query still has to find those bytes.
+    """
+    if not needle:
+        return
+    hits = 0
+    try:
+        windows = list(iter_segments(range_start, range_end, require_exec=False))
+    except Exception:
+        return
+    for seg_start, seg_end in windows:
+        if hits >= max_hits:
+            return
+        size = int(seg_end) - int(seg_start)
+        if size <= 0:
+            continue
+        try:
+            blob = ida_bytes.get_bytes(int(seg_start), min(size, 16 * 1024 * 1024))
+        except Exception:
+            continue
+        if not blob:
+            continue
+        idx = 0
+        while hits < max_hits:
+            pos = blob.find(needle, idx)
+            if pos < 0:
+                break
+            yield int(seg_start) + pos
+            hits += 1
+            idx = pos + 1
+
+
 def search_string(pattern, case_sensitive, include_context, offset, limit, timeout_ms=0, range_start=None, range_end=None):
     """Search string literals."""
     matcher = compile_smart_pattern(pattern, case_sensitive=case_sensitive)
@@ -166,6 +220,25 @@ def search_string(pattern, case_sensitive, include_context, offset, limit, timeo
     matches_seen = 0
     timer = SearchTimeout(timeout_ms)
     timed_out = False
+    seen = set()
+
+    def _append_hit(ea, text):
+        nonlocal matches_seen, truncated
+        if ea in seen:
+            return
+        seen.add(ea)
+        matches_seen += 1
+        if matches_seen <= offset:
+            return
+        xref_count = len(list(idautils.XrefsTo(ea)))
+        line = f"{hex(ea)}  xrefs={xref_count}  {text[:500]}"
+        if include_context:
+            func = _compat.get_func_start(ea)
+            if func is not None:
+                line += f"  in:{ida_funcs.get_func_name(func)}"
+        results.append(line)
+        if len(results) >= limit:
+            truncated = True
 
     for sc in safe_get_strlist_items():
         if truncated or timed_out:
@@ -180,20 +253,37 @@ def search_string(pattern, case_sensitive, include_context, offset, limit, timeo
         try:
             s = safe_get_strlit_contents(sc.ea)
             if s is not None and matcher(s):
-                matches_seen += 1
-                if matches_seen > offset:
-                    xref_count = len(list(idautils.XrefsTo(sc.ea)))
-                    line = f"{hex(sc.ea)}  xrefs={xref_count}  {s[:500]}"
-                    if include_context:
-                        func = _compat.get_func_start(sc.ea)
-                        if func is not None:
-                            line += f"  in:{ida_funcs.get_func_name(func)}"
-                    results.append(line)
-                    if len(results) >= limit:
-                        truncated = True
-                        break
+                _append_hit(sc.ea, s)
         except Exception:
             pass
+
+    needle = _literal_ascii_needle(pattern)
+    if needle and not truncated and not timed_out:
+        for ea in _iter_mapped_byte_hits(needle, range_start, range_end):
+            if truncated or timed_out:
+                break
+            try:
+                timer.check()
+            except TimeoutError:
+                timed_out = True
+                break
+            if ea in seen:
+                continue
+            try:
+                s = safe_get_strlit_contents(ea)
+            except Exception:
+                s = None
+            if not s:
+                try:
+                    raw = ida_bytes.get_bytes(ea, min(len(needle) + 64, 256)) or needle
+                    zero = raw.find(b"\x00")
+                    if zero >= 0:
+                        raw = raw[:zero]
+                    s = raw.decode("utf-8", errors="replace")
+                except Exception:
+                    s = str(pattern)
+            if matcher(s):
+                _append_hit(ea, s)
 
     result = build_response(results, offset, limit, matches_seen, truncated, pattern=pattern)
     if timed_out:
@@ -428,12 +518,15 @@ def search_data_value(
                 except ValueError:
                     return make_error(MCPError.INVALID_ARGS, f"Invalid data_value target: {value!r}")
             else:
-                target_ea, err, _sem_meta = resolve_target(
-                    text, require_function=False, include_imports=False
-                )
-                if err:
-                    return make_error(MCPError.INVALID_ARGS, f"Invalid data_value target: {err}")
-                target = target_ea
+                # Exact IDA name only. resolve_target's semantic/embedding path
+                # can block the IDA thread for minutes on an ASCII magic string.
+                exact_ea = idc.get_name_ea_simple(text)
+                if exact_ea is None or exact_ea == idaapi.BADADDR:
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        f"Invalid data_value target: {value!r}",
+                    )
+                target = int(exact_ea)
 
     # Resolve the word size ('auto' = pointer width of the IDB).
     ws_raw = str(word_size or "auto").lower().strip()

@@ -23,6 +23,39 @@ from .schemas_data import (
 
 TOOL_ACTIONS = _TOOL_ACTIONS_DATA
 
+
+def _augment_arg_schemas(schemas: dict) -> dict:
+    """Admit public operation argument names on the backend tool schemas.
+
+    ``to_backend_call`` always sends ``action``. Tools that are missing from
+    ``TOOL_ARG_SCHEMAS`` (or only gained a bucket here) would otherwise reject
+    ``action`` as unknown once the bucket is non-empty.
+    """
+    try:
+        from .agent_operations import list_agent_operations
+    except Exception:
+        return schemas
+    out = {name: dict(fields) for name, fields in schemas.items()}
+    action_spec = {"type": "string", "description": "Backend action name."}
+    # Host-only tools that never send `action` over RPC (batch pops it;
+    # injecting it here would also attach post-process params to tools/list).
+    no_action_tools = {"batch"}
+    for op in list_agent_operations():
+        if not op.backend_tool:
+            continue
+        bucket = out.setdefault(op.backend_tool, {})
+        if op.backend_tool not in no_action_tools and "action" not in bucket:
+            bucket["action"] = action_spec
+        for key, spec in (op.input_schema.get("properties") or {}).items():
+            if key in {"risk_ack"}:
+                continue
+            if key not in bucket:
+                bucket[key] = spec
+    return out
+
+
+TOOL_ARG_SCHEMAS = _augment_arg_schemas(TOOL_ARG_SCHEMAS)
+
 # Compatibility anchors for source-based regression tests.
 # "semantic_decompile"
 # "decomp_dataflow"

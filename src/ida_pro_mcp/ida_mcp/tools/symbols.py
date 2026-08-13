@@ -1,16 +1,24 @@
 
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    Annotated,
+    Literal,
+    MCPError,
+    Optional,
+    handle_error,
+    ida_nalt,
+    ida_typeinf,
+    idaapi,
+    idautils,
+    idawrite,
+    idc,
+    make_error,
+    os,
+    tool,
+    validate_addr,
+    validate_path_safe
+)
 
-try:
-    from .. import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from .. import compat as _compat
 
 
 # ============================================================================

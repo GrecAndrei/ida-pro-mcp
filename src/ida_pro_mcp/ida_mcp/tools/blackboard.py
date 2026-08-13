@@ -36,12 +36,22 @@ import json
 from typing import Any, Dict, List, Optional
 
 try:
-    from ._common import *  # noqa: F403
+    from ._common import (
+        Any,
+        IDAError,
+        MCPError,
+        Optional,
+        ida_funcs,
+        idaread,
+        idautils,
+        idawrite,
+        make_error,
+        tool
+    )
 except ImportError:
-    try:
-        from _common import *  # type: ignore[import-not-found]  # noqa: F403
-    except ImportError:
-        pass
+    # Host loads this file via spec_from_file_location as `_host_blackboard`,
+    # which has no package parent — relative `_common` cannot resolve.
+    pass
 
 if "tool" not in globals():
     def tool(f):

@@ -579,7 +579,7 @@ def _truncate_recursive(
     """Recursively truncate large lists and strings in nested structures."""
     if isinstance(obj, list) and len(obj) > 10:
         original_len = len(obj)
-        keep_count = max(5, max_tokens // 200)
+        keep_count = max(32, max_tokens // 200)
         if trunc_limit is not None and trunc_limit > 0:
             keep_count = min(keep_count, trunc_limit)
         if original_len > keep_count or trunc_offset is not None:

@@ -279,12 +279,18 @@ def _compile_semantic_matcher(pattern: str, *, fuzzy_cutoff: float = _SEMANTIC_F
         return None
 
     query_set = set(query_tokens)
+    # Digit-only tokens are identifiers (STRING_007, vtable_401000), not
+    # fuzzy vocabulary. Sharing "agent"+"surface"+"string" must not make
+    # AGENT_SURFACE_STRING_007 match AGENT_SURFACE_STRING_008.
+    query_numeric = frozenset(t for t in query_set if t.isdigit())
     pathlike_query = len(query_set) == 2 and bool(re.search(r"[./\\:_-]", pattern))
     overlap_needed = 2 if pathlike_query else max(1, (len(query_set) + 1) // 2)
 
     def _semantic_matches(text: str) -> bool:
         text_tokens = set(_semantic_tokenize(text))
         if not text_tokens:
+            return False
+        if query_numeric and not query_numeric.issubset(text_tokens):
             return False
         overlap = len(query_set.intersection(text_tokens))
         if overlap >= overlap_needed:

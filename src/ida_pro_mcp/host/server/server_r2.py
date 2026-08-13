@@ -157,7 +157,7 @@ class ServerR2Mixin:
         if action == "disassemble_hypothesis":
             # addr is a hex address/file offset (schema: addr); also accept
             # offset for direct engine parity.
-            addr = args.get("addr") or args.get("offset")
+            addr = args.get("addr") or args.get("address") or args.get("offset")
             offset = 0
             if addr is not None:
                 try:

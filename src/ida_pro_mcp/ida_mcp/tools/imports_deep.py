@@ -1,17 +1,24 @@
 
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    Annotated,
+    Literal,
+    MCPError,
+    Optional,
+    _inf_bitness,
+    compile_smart_pattern,
+    handle_error,
+    ida_nalt,
+    idaapi,
+    idaread,
+    idautils,
+    idc,
+    make_error,
+    tool,
+    validate_addr
+)
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
-try:
-    from .. import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from .. import compat as _compat
 
 
 # ============================================================================

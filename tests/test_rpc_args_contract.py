@@ -39,12 +39,14 @@ class TestPrepareRpcArgs:
                 "action": "find",
                 "pattern": "recv",
                 "_risk_ack": True,
+                "risk_ack": True,
                 "_response_mode": "compact",
             },
             schemas_data.TOOL_ARG_SCHEMAS,
         )
         assert not errors.is_error_result(out)
         assert "_risk_ack" not in out
+        assert "risk_ack" not in out
         assert "_response_mode" not in out
         assert out["action"] == "find"
         assert out["pattern"] == "recv"
@@ -96,6 +98,21 @@ class TestPrepareRpcArgs:
         assert not errors.is_error_result(funcs)
         assert funcs["limit"] == 5
         assert funcs["min_score"] == 0.5
+
+    def test_graph_admits_action_and_address(self, rpc_args, schemas_data, errors):
+        out = rpc_args.prepare_rpc_args(
+            "graph",
+            {
+                "action": "callgraph",
+                "address": "0x401000",
+                "depth": 3,
+                "format": "json",
+            },
+            schemas_data.TOOL_ARG_SCHEMAS,
+        )
+        assert not errors.is_error_result(out)
+        assert out["action"] == "callgraph"
+        assert out["address"] == "0x401000"
 
     def test_open_schema_passes_all_non_underscore(self, rpc_args, errors):
         # Empty schema map for the tool → no admission filter

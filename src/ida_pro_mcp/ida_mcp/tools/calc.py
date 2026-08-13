@@ -1,17 +1,29 @@
 
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    Annotated,
+    Literal,
+    MCPError,
+    Optional,
+    Union,
+    _inf_bitness,
+    _inf_is_be,
+    compile_smart_pattern,
+    handle_error,
+    ida_bytes,
+    ida_nalt,
+    idaapi,
+    idaread,
+    idautils,
+    idc,
+    make_error,
+    normalize_list_input,
+    parse_address_canonical,
+    public_arg,
+    tool
+)
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
-try:
-    from .. import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from .. import compat as _compat
 
 import json
 import re
@@ -20,10 +32,7 @@ import struct
 
 from ida_pro_mcp.services import parse_str_list
 
-try:
-    from ..support.semantic_matching import semantic_scores
-except ImportError:
-    from support.semantic_matching import semantic_scores  # type: ignore[import-not-found]
+from ..support.semantic_matching import semantic_scores
 
 
 _CALC_ACTIONS = {"eval", "offset", "convert", "resolve", "deref", "chain", "align", "bitops"}
@@ -164,6 +173,8 @@ def calc(
     - deref_depth: Number of pointer dereference hops when type=ptr
     """
     try:
+        # Public MCP names stay on the wire; accept them beside legacy aliases.
+        addr = public_arg(kwargs, 'address', addr)
         interpreted_action = None
         nl_query = str(intent or kwargs.get("query") or "").strip()
         normalized_action = _normalize_calc_action(semantic_action or action, fallback=action)
@@ -316,6 +327,47 @@ def calc(
                         if sem_ea != idaapi.BADADDR:
                             return sem_ea
                     raise ValueError(msg)
+                raise ValueError(f"Invalid {label}: {val}")
+            raise ValueError(f"Invalid {label}: {val}")
+
+        def resolve_numeric_value(val, label="value"):
+            """Parse a scalar for convert: decimal, 0x/0b/0o, k/m/g suffixes.
+
+            Unlike resolve_ea, a bare digit string is decimal (255 → 255),
+            not an in-image hex address (255 → 0x255).
+            """
+            if val is None:
+                raise ValueError(f"{label} required")
+            if isinstance(val, bool):
+                raise ValueError(f"Invalid {label}: {val}")
+            if isinstance(val, int):
+                return val
+            if isinstance(val, str):
+                s = val.strip()
+                if not s:
+                    raise ValueError(f"{label} required")
+                m = _INT_SUFFIX_RE.match(s)
+                if m and m.group(2):
+                    base_txt = m.group(1).replace("_", "")
+                    scale = {
+                        "k": 1024,
+                        "m": 1024 ** 2,
+                        "g": 1024 ** 3,
+                        "t": 1024 ** 4,
+                    }[m.group(2).lower()]
+                    return int(base_txt, 0) * scale
+                compact = s.replace("_", "")
+                try:
+                    return int(compact, 0)
+                except ValueError:
+                    if compact.lstrip("+-").isdigit():
+                        return int(compact, 10)
+                try:
+                    sym_ea = idc.get_name_ea_simple(s)
+                    if sym_ea != idaapi.BADADDR:
+                        return sym_ea
+                except Exception:
+                    pass
                 raise ValueError(f"Invalid {label}: {val}")
             raise ValueError(f"Invalid {label}: {val}")
 
@@ -574,9 +626,8 @@ def calc(
             if value is None:
                 return make_error(MCPError.INVALID_ARGS, "value required")
 
-            # Parse value
             try:
-                v = resolve_int(value)
+                v = resolve_numeric_value(value)
             except ValueError as e:
                 return make_error(MCPError.INVALID_ARGS, str(e))
 
@@ -919,7 +970,7 @@ def _calc_persist_capture(input_summary: dict, result: dict, action: str) -> Non
         from .blackboard import BlackboardStore
     except ImportError:
         try:
-            from blackboard import BlackboardStore  # type: ignore
+            from .blackboard import BlackboardStore
         except ImportError:
             return
     try:

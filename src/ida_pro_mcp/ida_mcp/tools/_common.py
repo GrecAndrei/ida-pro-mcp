@@ -1,12 +1,11 @@
-"""
-Shared imports for all IDA MCP tool modules.
+"""Shared IDA SDK + MCP imports for tool modules.
 
-Usage in tool files:
-    from ._common import *
-    # or in standalone mode:
-    from _common import *
+Tool files import this package-relatively::
 
-This eliminates ~30 lines of boilerplate per tool file.
+    from ._common import make_error, tool, idaread, ...
+
+The IDA bridge loads tools as ``ida_mcp.tools.<name>`` so relative imports
+resolve. There is no flat/standalone import fallback.
 """
 
 import io
@@ -28,187 +27,87 @@ import ida_name
 import ida_segment
 import ida_typeinf
 
-# IDA SDK imports
 import idaapi
 import idautils
 import idc
 
-# Infrastructure discovery - supports both package and standalone modes
-try:
-    # Package mode
-    from ida_mcp.error_handling import (
-        ERROR_HINTS,
-        MCPError,
-        check_debugger,
-        handle_error,
-        make_error,
-        parse_address_canonical,
-        require_arg,
-        require_one_of,
-        validate_action,
-        validate_addr,
-        validate_count,
-        validate_path_safe,
-        validate_range,
-    )
-    from ida_mcp.rpc import tool, unsafe
-    from ida_mcp.sync import IDAError, idaread, idawrite
-    from ida_mcp.utils import (
-        compile_smart_pattern,
-        get_function,
-        get_image_size,
-        get_prototype,
-        get_stack_frame_variables_internal,
-        get_type_by_name,
-        hex_ea,
-        hex_size,
-        looks_like_address,
-        normalize_dict_list,
-        normalize_list_input,
-        parse_address,
-        resolve_symbol,
-        smart_match,
-    )
-except (ImportError, ValueError):
-    # Standalone IDA mode
-    _this_dir = os.path.dirname(os.path.abspath(__file__))
-    _mcp_root = os.path.dirname(_this_dir)
-    if _mcp_root not in sys.path:
-        sys.path.insert(0, _mcp_root)
-
-    from error_handling import (  # type: ignore[import-not-found]
-        ERROR_HINTS,
-        MCPError,
-        check_debugger,
-        handle_error,
-        make_error,
-        parse_address_canonical,
-        require_arg,
-        require_one_of,
-        validate_action,
-        validate_addr,
-        validate_count,
-        validate_path_safe,
-        validate_range,
-    )
-    from rpc import tool, unsafe  # type: ignore[import-not-found]
-    from sync import IDAError, idaread, idawrite  # type: ignore[import-not-found]
-    from utils import (  # type: ignore[import-not-found]
-        compile_smart_pattern,
-        get_function,
-        get_image_size,
-        get_prototype,
-        get_stack_frame_variables_internal,
-        get_type_by_name,
-        hex_ea,
-        hex_size,
-        looks_like_address,
-        normalize_dict_list,
-        normalize_list_input,
-        parse_address,
-        resolve_symbol,
-        smart_match,
-    )
-
-# Centralized API categories (deduplication)
-try:
-    from ..support._api_categories import (
-        API_CATEGORIES,
-        API_TO_TAG,
-        DANGEROUS_APIS,
-        MAGIC_CONSTANTS,
-        TAG_CATEGORIES,
-    )
-except ImportError:
-    from support._api_categories import (  # type: ignore[import-not-found]
-        API_CATEGORIES,
-        API_TO_TAG,
-        DANGEROUS_APIS,
-        MAGIC_CONSTANTS,
-        TAG_CATEGORIES,
-    )
-
-# Canonical taint source/sink registry (deduplication)
-try:
-    from ..support.taint_registry import (
-        TAINT_SOURCES,
-        DANGEROUS_SINKS,
-        DANGEROUS_SINK_NAMES,
-        VULN_TYPE_TO_CWE,
-        DANGEROUS_APIS_CATEGORIZED,
-        MITIGATION_CHECKS,
-    )
-except ImportError:
-    from support.taint_registry import (  # type: ignore[import-not-found]
-        TAINT_SOURCES,
-        DANGEROUS_SINKS,
-        DANGEROUS_SINK_NAMES,
-        VULN_TYPE_TO_CWE,
-        DANGEROUS_APIS_CATEGORIZED,
-        MITIGATION_CHECKS,
-    )
-
-# Multi-architecture helpers
-try:
-    from ..support.arch_utils import (  # type: ignore[import-not-found]
-        ARITHMETIC_MNEMONICS,
-        CALL_MNEMONICS,
-        COMPARISON_MNEMONICS,
-        CONDITIONAL_BRANCH_MNEMONICS,
-        INTERESTING_INSTRUCTIONS,
-        MOV_MNEMONICS,
-        RETURN_MNEMONICS,
-        SYSCALL_MNEMONICS,
-        TERMINATOR_MNEMONICS,
-        UNCONDITIONAL_JUMP_MNEMONICS,
-        XOR_MNEMONICS,
-        get_arch,
-        get_callee_saved_registers,
-        get_epilogue_pattern,
-        get_prologue_pattern,
-        get_return_register,
-        get_stack_pointer_names,
-        get_tail_call_mnemonics,
-        is_arm_family,
-        is_call_mnemonic,
-        is_mips_family,
-        is_ppc_family,
-        is_return_mnemonic,
-        is_riscv_family,
-        is_sparc_family,
-        is_syscall_mnemonic,
-        is_x86_family,
-    )
-except ImportError:
-    from support.arch_utils import (  # type: ignore[import-not-found]
-        ARITHMETIC_MNEMONICS,
-        CALL_MNEMONICS,
-        COMPARISON_MNEMONICS,
-        CONDITIONAL_BRANCH_MNEMONICS,
-        INTERESTING_INSTRUCTIONS,
-        MOV_MNEMONICS,
-        RETURN_MNEMONICS,
-        SYSCALL_MNEMONICS,
-        TERMINATOR_MNEMONICS,
-        UNCONDITIONAL_JUMP_MNEMONICS,
-        XOR_MNEMONICS,
-        get_arch,
-        get_callee_saved_registers,
-        get_epilogue_pattern,
-        get_prologue_pattern,
-        get_return_register,
-        get_stack_pointer_names,
-        get_tail_call_mnemonics,
-        is_arm_family,
-        is_call_mnemonic,
-        is_mips_family,
-        is_ppc_family,
-        is_return_mnemonic,
-        is_riscv_family,
-        is_sparc_family,
-        is_syscall_mnemonic,
-        is_x86_family,
-    )
+from ida_mcp.error_handling import (
+    ERROR_HINTS,
+    MCPError,
+    check_debugger,
+    handle_error,
+    make_error,
+    parse_address_canonical,
+    require_arg,
+    require_one_of,
+    validate_action,
+    validate_addr,
+    validate_count,
+    validate_path_safe,
+    validate_range,
+)
+from ida_mcp.rpc import tool, unsafe
+from ida_mcp.sync import IDAError, idaread, idawrite
+from ida_mcp.utils import (
+    compile_smart_pattern,
+    get_function,
+    get_image_size,
+    get_prototype,
+    get_stack_frame_variables_internal,
+    get_type_by_name,
+    hex_ea,
+    hex_size,
+    looks_like_address,
+    normalize_dict_list,
+    normalize_list_input,
+    parse_address,
+    resolve_symbol,
+    smart_match,
+)
+from ..support._api_categories import (
+    API_CATEGORIES,
+    API_TO_TAG,
+    DANGEROUS_APIS,
+    MAGIC_CONSTANTS,
+    TAG_CATEGORIES,
+)
+from ..support.taint_registry import (
+    TAINT_SOURCES,
+    DANGEROUS_SINKS,
+    DANGEROUS_SINK_NAMES,
+    VULN_TYPE_TO_CWE,
+    DANGEROUS_APIS_CATEGORIZED,
+    MITIGATION_CHECKS,
+)
+from ..support.arch_utils import (
+    ARITHMETIC_MNEMONICS,
+    CALL_MNEMONICS,
+    COMPARISON_MNEMONICS,
+    CONDITIONAL_BRANCH_MNEMONICS,
+    INTERESTING_INSTRUCTIONS,
+    MOV_MNEMONICS,
+    RETURN_MNEMONICS,
+    SYSCALL_MNEMONICS,
+    TERMINATOR_MNEMONICS,
+    UNCONDITIONAL_JUMP_MNEMONICS,
+    XOR_MNEMONICS,
+    get_arch,
+    get_callee_saved_registers,
+    get_epilogue_pattern,
+    get_prologue_pattern,
+    get_return_register,
+    get_stack_pointer_names,
+    get_tail_call_mnemonics,
+    is_arm_family,
+    is_call_mnemonic,
+    is_mips_family,
+    is_ppc_family,
+    is_return_mnemonic,
+    is_riscv_family,
+    is_sparc_family,
+    is_syscall_mnemonic,
+    is_x86_family,
+)
 
 
 # ============================================================================
@@ -416,6 +315,24 @@ def _inf_bitness() -> int:
     return 32
 
 
+def public_arg(kwargs: dict, name: str, current=None):
+    """Prefer a public MCP name from ``kwargs`` when the caller sent one."""
+    if name in kwargs and kwargs[name] is not None:
+        return kwargs[name]
+    return current
+
+
+def run_action(action, handlers, *, tool_name: str = ""):
+    """Dispatch ``action`` through a name→callable table."""
+    fn = handlers.get(action)
+    if fn is None:
+        err = validate_action(action, list(handlers), tool_name=tool_name)
+        return err if err is not None else make_error(
+            MCPError.ACTION_NOT_FOUND, f"Unknown action '{action}'"
+        )
+    return fn()
+
+
 __all__ = [
     # typing
     "Annotated", "Optional", "Literal", "Union", "Any",
@@ -438,6 +355,7 @@ __all__ = [
     "validate_addr", "validate_range", "check_debugger", "validate_path_safe",
     "require_arg", "require_one_of", "validate_action", "validate_count",
     "parse_address_canonical",
+    "public_arg", "run_action",
     # Centralized API categories
     "API_CATEGORIES", "DANGEROUS_APIS",
     "TAG_CATEGORIES", "API_TO_TAG", "MAGIC_CONSTANTS",

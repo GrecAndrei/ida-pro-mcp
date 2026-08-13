@@ -3,23 +3,29 @@ from __future__ import annotations
 import hashlib
 from typing import Annotated, Any, Dict, List, Literal, Optional
 
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    Annotated,
+    Any,
+    Literal,
+    MCPError,
+    Optional,
+    handle_error,
+    ida_name,
+    idautils,
+    idawrite,
+    idc,
+    make_error,
+    public_arg,
+    run_action,
+    tool
+)
 
 try:
     from ida_pro_mcp.services import SymbolDB
 except ImportError:
     from host.stores.symbol_db import SymbolDB  # type: ignore[import-not-found]
 
-try:
-    from .. import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from .. import compat as _compat
 
 
 def _collect_string_refs(func_ea: int, limit: int = 24) -> List[str]:

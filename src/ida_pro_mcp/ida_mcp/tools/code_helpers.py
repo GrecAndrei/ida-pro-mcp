@@ -3,19 +3,36 @@ import time
 
 from ida_pro_mcp.ida_mcp.support.crypto_registry import DECOMP_CRYPTO_SIGS as _DECOMP_CRYPTO_SIGS
 
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    Any,
+    CONDITIONAL_BRANCH_MNEMONICS,
+    ERROR_HINTS,
+    MCPError,
+    UNCONDITIONAL_JUMP_MNEMONICS,
+    get_arch,
+    hex_ea,
+    ida_bytes,
+    ida_funcs,
+    ida_hexrays,
+    ida_lines,
+    ida_nalt,
+    ida_name,
+    ida_typeinf,
+    idaapi,
+    idautils,
+    idc,
+    is_arm_family,
+    is_call_mnemonic,
+    is_return_mnemonic,
+    is_riscv_family,
+    is_syscall_mnemonic,
+    make_error,
+    public_arg,
+    run_action
+)
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
-try:
-    from .. import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from .. import compat as _compat
 
 # ida_ua is intentionally not exported by _common.__all__ — import it directly.
 try:

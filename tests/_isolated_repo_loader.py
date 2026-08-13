@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import importlib.util
+import io
+import math
 import os
 import sys
 import types
 import typing
+from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -133,7 +136,29 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
             pass
         return None, {"error": True, "code": "ADDRESS_INVALID", "message": f"Invalid address format: '{addr_str}'", "category": "user", "recoverable": False}
     common.parse_address_canonical = _default_parse_address_canonical
-    common.make_error = lambda code, message, **kw: {"ok": False, "code": code, "message": message, **kw}
+    def _public_arg(kwargs, name, current=None):
+        if isinstance(kwargs, dict) and name in kwargs and kwargs[name] is not None:
+            return kwargs[name]
+        return current
+    common.public_arg = _public_arg
+    def _run_action(action, handlers, tool_name=""):
+        fn = handlers.get(action) if isinstance(handlers, dict) else None
+        if fn is None:
+            return {"ok": False, "error": True, "code": "ACTION_NOT_FOUND", "message": f"Unknown action '{action}'"}
+        return fn()
+    common.run_action = _run_action
+    def _make_error(code, message, **kw):
+        out = {
+            "error": True,
+            "ok": False,
+            "code": code,
+            "message": message,
+            "category": kw.pop("category", "runtime"),
+            "recoverable": bool(kw.pop("recoverable", False)),
+        }
+        out.update(kw)
+        return out
+    common.make_error = _make_error
     common.handle_error = lambda e, *a, **kw: {"ok": False, "error": str(e)}
     common.ERROR_HINTS = {}
 
@@ -147,6 +172,63 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
         return round(-sum((c / length) * __import__("math").log2(c / length) for c in counts.values()), 4)
 
     common.shannon_entropy = shannon_entropy
+    common.os = os
+    common.sys = sys
+    common.io = io
+    common.math = math
+    common.Counter = Counter
+    common.IDAError = type("IDAError", (Exception,), {})
+    common._inf_is_64bit = lambda: False
+    common._inf_is_be = lambda: False
+    common._inf_min_ea = lambda: 0
+    common._inf_max_ea = lambda: 0
+    common._inf_start_ea = lambda: 0
+    common._inf_ptr_size = lambda: 4
+    common._inf_procname = lambda: ""
+    common._inf_filetype_id = lambda: 0
+    common._inf_bitness = lambda: 32
+    common._filetype_name = lambda filetype_id=None: "unknown"
+    common.get_arch = lambda: "unknown"
+    common.get_prologue_pattern = lambda *a, **kw: None
+    common.get_epilogue_pattern = lambda *a, **kw: None
+    common.get_stack_pointer_names = lambda *a, **kw: ()
+    common.get_callee_saved_registers = lambda *a, **kw: ()
+    common.get_return_register = lambda *a, **kw: None
+    common.get_tail_call_mnemonics = lambda *a, **kw: frozenset()
+    common.is_arm_family = lambda *a, **kw: False
+    common.is_riscv_family = lambda *a, **kw: False
+    common.is_mips_family = lambda *a, **kw: False
+    common.is_ppc_family = lambda *a, **kw: False
+    common.is_sparc_family = lambda *a, **kw: False
+    common.is_x86_family = lambda *a, **kw: False
+    common.is_return_mnemonic = lambda *a, **kw: False
+    common.is_call_mnemonic = lambda *a, **kw: False
+    common.is_syscall_mnemonic = lambda *a, **kw: False
+    common.API_CATEGORIES = {}
+    common.API_TO_TAG = {}
+    common.DANGEROUS_APIS = set()
+    common.MAGIC_CONSTANTS = {}
+    common.TAG_CATEGORIES = {}
+    common.TAINT_SOURCES = {}
+    common.DANGEROUS_SINKS = {}
+    common.DANGEROUS_SINK_NAMES = set()
+    common.VULN_TYPE_TO_CWE = {}
+    common.DANGEROUS_APIS_CATEGORIZED = {}
+    common.MITIGATION_CHECKS = {}
+    for _mnem in (
+        "ARITHMETIC_MNEMONICS",
+        "CALL_MNEMONICS",
+        "COMPARISON_MNEMONICS",
+        "CONDITIONAL_BRANCH_MNEMONICS",
+        "INTERESTING_INSTRUCTIONS",
+        "MOV_MNEMONICS",
+        "RETURN_MNEMONICS",
+        "SYSCALL_MNEMONICS",
+        "TERMINATOR_MNEMONICS",
+        "UNCONDITIONAL_JUMP_MNEMONICS",
+        "XOR_MNEMONICS",
+    ):
+        setattr(common, _mnem, frozenset())
 
     class _MCPError:
         INVALID_ARGS = "INVALID_ARGS"
@@ -176,10 +258,13 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
         "idaapi", "idc", "idautils", "ida_funcs", "ida_bytes", "ida_segment",
         "ida_name", "ida_typeinf", "ida_nalt", "ida_hexrays", "ida_frame",
         "ida_struct", "ida_lines", "ida_ua", "ida_kernwin", "ida_loader",
-        "ida_dbg",
+        "ida_dbg", "ida_fixup", "ida_ida", "ida_entry", "ida_auto",
     ):
         mod = sys.modules.setdefault(name, types.ModuleType(name))
         setattr(common, name, mod)
+    _base_hexrays = sys.modules["ida_hexrays"]
+    if not hasattr(_base_hexrays, "user_lvar_modifier_t"):
+        _base_hexrays.user_lvar_modifier_t = type("user_lvar_modifier_t", (), {})
     # ida_mcp.sync builds its IDASafety enum from these at import time, so any
     # module that imports a tool transitively needs them present.
     _base_kernwin = sys.modules["ida_kernwin"]
@@ -226,6 +311,15 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
         for key, value in overrides.items():
             setattr(common, key, value)
 
+    def _getattr(name: str):
+        # Isolated tests import many _common re-exports. Unknown names should
+        # not fail the import; callables return None, containers stay empty.
+        if name.isupper():
+            return {}
+        return lambda *a, **kw: None
+
+    common.__getattr__ = _getattr  # type: ignore[attr-defined]
+
     sys.modules["_common"] = common
     sys.modules["ida_pro_mcp.ida_mcp.tools._common"] = common
     return common
@@ -237,6 +331,28 @@ def _load_module(fullname: str, path: Path):
     sys.modules[fullname] = mod
     assert spec.loader is not None
     spec.loader.exec_module(mod)
+    return mod
+
+
+_IDA_SDK_NAMES = (
+    "idaapi", "idc", "idautils", "ida_funcs", "ida_bytes", "ida_segment",
+    "ida_name", "ida_typeinf", "ida_nalt", "ida_hexrays", "ida_frame",
+    "ida_struct", "ida_lines", "ida_ua", "ida_kernwin", "ida_loader",
+    "ida_dbg", "ida_fixup", "ida_ida", "ida_entry", "ida_auto",
+)
+
+
+def _bind_ida_sdk_names(mod: types.ModuleType) -> types.ModuleType:
+    """Expose IDA SDK modules on the tool module, matching the old star-import seam.
+
+    Isolated tests patch ``mod.ida_funcs`` / ``mod.ida_ua`` / etc. After
+    dropping ``from ._common import *``, those names are only bound if the
+    tool imported them. Re-bind from ``sys.modules`` so patches still land
+    on the same objects the functions use.
+    """
+    for name in _IDA_SDK_NAMES:
+        if not hasattr(mod, name) and name in sys.modules:
+            setattr(mod, name, sys.modules[name])
     return mod
 
 
@@ -254,7 +370,7 @@ def load_tool_module(module_basename: str, *, common_overrides: dict | None = No
     install_common_stub(common_overrides)
     fullname = f"ida_pro_mcp.ida_mcp.tools.{module_basename}"
     path = TOOLS_ROOT / f"{module_basename}.py"
-    return _load_module(fullname, path)
+    return _bind_ida_sdk_names(_load_module(fullname, path))
 
 
 def load_tool_submodule(module_relpath: str, *, common_overrides: dict | None = None):
@@ -264,7 +380,7 @@ def load_tool_submodule(module_relpath: str, *, common_overrides: dict | None = 
     path = TOOLS_ROOT / rel
     path = path / "__init__.py" if path.is_dir() else path.with_suffix(".py")
     fullname = f"ida_pro_mcp.ida_mcp.tools.{module_relpath}"
-    return _load_module(fullname, path)
+    return _bind_ida_sdk_names(_load_module(fullname, path))
 
 
 def load_package_module(module_relpath: str):

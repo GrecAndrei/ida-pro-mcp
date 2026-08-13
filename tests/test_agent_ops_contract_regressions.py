@@ -56,7 +56,7 @@ def test_set_segment_attrs_maps_to_segments_set_attr():
     _, backend_args = op.to_backend_call(arguments)
     assert backend_args == {
         "action": "set_attr",
-        "start": "0x40000000",
+        "address": "0x40000000",
         "attr": "perm",
         "value": "rwx",
         "_risk_ack": True,
@@ -66,25 +66,25 @@ def test_set_segment_attrs_maps_to_segments_set_attr():
     assert "sclass" not in op.input_schema["properties"]
 
 
-def test_list_types_maps_limit_to_count():
+def test_list_types_keeps_public_limit_name():
     op = get_agent_operation("ida_list_types")
     _, backend_args = op.to_backend_call({"kind": "struct", "limit": 5})
     assert backend_args["action"] == "list"
-    assert backend_args["count"] == 5
-    assert "limit" not in backend_args
+    assert backend_args["limit"] == 5
+    assert "count" not in backend_args
 
 
-def test_list_sigs_maps_query_to_name():
+def test_list_sigs_keeps_public_query_name():
     op = get_agent_operation("ida_list_sigs")
     _, backend_args = op.to_backend_call({"query": "arm"})
     assert backend_args["action"] == "list_sigs"
-    assert backend_args["name"] == "arm"
-    assert "query" not in backend_args
-    # name is admitted by the misc schema.
+    assert backend_args["query"] == "arm"
+    assert "name" not in backend_args
+    # name remains admitted by the misc schema for legacy callers.
     assert "name" in TOOL_ARG_SCHEMAS["misc"]
 
 
-def test_apply_type_maps_var_name_to_name():
+def test_apply_type_keeps_public_var_name():
     op = get_agent_operation("ida_apply_type")
     arguments = {
         "address": "0x401000", "type_str": "int", "kind": "local",
@@ -92,8 +92,9 @@ def test_apply_type_maps_var_name_to_name():
     }
     _, backend_args = op.to_backend_call(arguments)
     assert backend_args["kind"] == "local"
-    assert backend_args["name"] == "v1"
-    assert "var_name" not in backend_args
+    assert backend_args["var_name"] == "v1"
+    assert backend_args["address"] == "0x401000"
+    assert "name" not in backend_args
 
 
 def test_calc_bitops_drops_duplicate_op_param():

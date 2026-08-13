@@ -29,6 +29,7 @@ import os
 import re
 import sqlite3
 import threading
+import time
 from typing import Any
 
 from ..config import _bounded_int, _coerce_bool
@@ -235,6 +236,10 @@ class ServerBlackboardMixin(
 
     def _handle_blackboard_inner(self, args: dict) -> dict:
         """Dict-driven blackboard dispatch so it works without IDA runtime."""
+        args = dict(args)
+        # Public ida_* ops send `address`; host handlers historically read `addr`.
+        if not str(args.get("addr") or "").strip() and args.get("address") is not None:
+            args["addr"] = args.get("address")
         policy_state = self._bb_policy_bump()
         phase_state = self._phase_state()
         action = str(args.get("action") or "list").strip().lower()
@@ -436,14 +441,19 @@ class ServerBlackboardMixin(
         if not addr or not hasattr(self, "_execute_tool"):
             return {"ok": False, "reason": "no_addr_or_runtime"}
         pulls = []
+        # Neighborhood probes only. Do not call search.find here: unified find
+        # is a whole-program scan (and a LONG_RUNNING_ACTION). Nested inside
+        # write_finding it blocked the IDA RPC thread for minutes and timed
+        # out the outer tools/call.
         probes = [
             ("graph", {"action": "xref_graph", "addr": addr, "depth": 2, "max_items": 8}),
             ("code", {"action": "callers", "addr": addr, "limit": 8}),
             ("code", {"action": "callees", "addr": addr, "limit": 8}),
-            ("code", {"action": "strings_in_func", "addr": addr, "limit": 8}),
-            ("search", {"action": "find", "query": addr, "limit": 5}),
         ]
+        deadline = time.monotonic() + 2.0
         for tool, targs in probes:
+            if time.monotonic() >= deadline:
+                break
             try:
                 res = self._execute_tool(tool, targs)
                 pulls.append(
@@ -457,28 +467,32 @@ class ServerBlackboardMixin(
             except Exception as exc:
                 pulls.append({"tool": tool, "args": targs, "ok": False, "error": str(exc)})
         embedding_neighbors = []
-        try:
-            query = (source_text or "").strip() or addr
-            sims = store.semantic_search(
-                query=query,
-                top_k=5,
-                threshold=0.35,
-                include_resolved=True,
-                include_contradicted=False,
-            )
-            if isinstance(sims, list):
-                for s in sims[:5]:
-                    embedding_neighbors.append(
-                        {
-                            "entry_id": s.get("id"),
-                            "addr": s.get("addr"),
-                            "title": s.get("title"),
-                            "category": s.get("category"),
-                            "confidence": s.get("confidence"),
-                        }
-                    )
-        except Exception:
-            embedding_neighbors = []
+        embed_off = str(os.environ.get("IDA_MCP_EMBED_DISABLED", "") or "").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+        if not embed_off:
+            try:
+                query = (source_text or "").strip() or addr
+                sims = store.semantic_search(
+                    query=query,
+                    top_k=5,
+                    threshold=0.35,
+                    include_resolved=True,
+                    include_contradicted=False,
+                )
+                if isinstance(sims, list):
+                    for s in sims[:5]:
+                        embedding_neighbors.append(
+                            {
+                                "entry_id": s.get("id"),
+                                "addr": s.get("addr"),
+                                "title": s.get("title"),
+                                "category": s.get("category"),
+                                "confidence": s.get("confidence"),
+                            }
+                        )
+            except Exception:
+                embedding_neighbors = []
         items = []
         for p in pulls:
             items.append(

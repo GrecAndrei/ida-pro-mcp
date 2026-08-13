@@ -14,8 +14,8 @@ from ..policy import PolicyDecision, evaluate_policy
 from ..schemas import TOOLS, _resolve_tool_alias
 from .postprocess import (
     apply_post_processing,
-    extract_post_process_params,
     has_post_process,
+    prepare_args_for_postprocess,
 )
 from .rate_limit import is_rate_limit_exempt
 from .server_response import truncate_response
@@ -32,6 +32,7 @@ _NON_ARG_ANNOTATION_KEYS = {
     "priority_index",
     "priority_mode",
     "output_key",
+    "_precomputed_error",
 }
 
 # D5: tools that never take the single-list-RPC fast path. They are either
@@ -144,6 +145,8 @@ class ServerWorkflowBatchMixin:
             name, call_args, normalize_err = self._normalize_batch_call(call, idx)
             if normalize_err or not name:
                 return None
+            if isinstance(call, dict) and call.get("_precomputed_error") is not None:
+                return None
             resolved_name = _resolve_tool_alias(name)
             if resolved_name == "batch" or resolved_name not in TOOLS:
                 return None
@@ -241,7 +244,7 @@ class ServerWorkflowBatchMixin:
         recv_timeout = None
         for idx, name, resolved_name, cleaned_args, opts in entries:
             rpc_args = dict(cleaned_args)
-            rpc_args, pp = extract_post_process_params(rpc_args)
+            rpc_args, pp = prepare_args_for_postprocess(resolved_name, rpc_args)
             tc = {
                 "no_truncate": _coerce_bool(
                     rpc_args.pop("no_truncate", None), False
@@ -599,7 +602,10 @@ class ServerWorkflowBatchMixin:
             res: dict | Any = None
             step_args: dict = {}
             elapsed_ms = 0
-            if normalize_err:
+            pre_err = call.get("_precomputed_error") if isinstance(call, dict) else None
+            if pre_err is not None:
+                res = pre_err
+            elif normalize_err:
                 res = normalize_err
             elif not name:
                 res = make_error(

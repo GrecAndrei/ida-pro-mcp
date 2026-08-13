@@ -21,19 +21,31 @@ import json
 import os
 import time
 
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    Annotated,
+    Any,
+    Literal,
+    MCPError,
+    Optional,
+    compile_smart_pattern,
+    handle_error,
+    ida_funcs,
+    ida_hexrays,
+    idaapi,
+    idaread,
+    idautils,
+    idc,
+    make_error,
+    os,
+    public_arg,
+    run_action,
+    tool,
+    validate_addr,
+    validate_range
+)
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
-try:
-    from .. import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from .. import compat as _compat
 
 import re
 from typing import Any
@@ -45,10 +57,7 @@ try:
 except ImportError:
     from host.intelligence.embeddings import build_decomp_document as _build_decomp_document  # type: ignore[import-not-found]
 
-try:
-    from .code_helpers import _build_function_structure_summary
-except ImportError:
-    from code_helpers import _build_function_structure_summary  # type: ignore[import-not-found]
+from .code_helpers import _build_function_structure_summary
 
 def _build_fast_signature(fea: int, func=None) -> str:
     """Build a fast signature string from disassembly + metadata (no decompile).
@@ -255,13 +264,7 @@ def _invalidate_tool_cache() -> None:
     # via a different path (e.g. a hard-coded ida_pro_mcp.ida_mcp.cache) would
     # yield a second module instance with its own TOOL_CACHE, and invalidation
     # would silently no-op against the cache the search tool actually reads.
-    try:
-        from ida_pro_mcp.ida_mcp.sync import _tool_cache
-    except ImportError:
-        try:
-            from ida_mcp.sync import _tool_cache  # type: ignore[import-not-found]
-        except ImportError:
-            from sync import _tool_cache  # type: ignore[import-not-found]
+    from ..sync import _tool_cache
     _cache = _tool_cache()
     if _cache is not None:
         _cache.invalidate_all()
@@ -317,6 +320,12 @@ def intelligence(
                           examined in one call (mark_examined=true).
     """
     try:
+        # Public MCP names stay on the wire; accept them beside legacy aliases.
+        addr = public_arg(kwargs, 'address', addr)
+        if kwargs.get('quality') is not None and kwargs.get('mode') is None:
+            kwargs['mode'] = kwargs['quality']
+        if kwargs.get('cursor') is not None and kwargs.get('start_after') is None:
+            kwargs['start_after'] = kwargs['cursor']
         try:
             from ida_pro_mcp.services import (
                 BehaviorClassifier,

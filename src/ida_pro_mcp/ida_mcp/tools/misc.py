@@ -1,7 +1,46 @@
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    Annotated,
+    Any,
+    Literal,
+    MCPError,
+    Optional,
+    handle_error,
+    idaapi,
+    idawrite,
+    idc,
+    io,
+    make_error,
+    os,
+    public_arg,
+    require_arg,
+    require_one_of,
+    run_action,
+    sys,
+    tool,
+    validate_path_safe
+)
+
+_SIG_PATH_CACHE = None
+
+
+def _sig_paths() -> tuple[str, ...]:
+    """Cached recursive listing of ``<idadir>/sig/**/*.sig``.
+
+    IDA ships thousands of FLIRT files; globbing them on every list/load
+    call is wasted work on the IDA main thread.
+    """
+    global _SIG_PATH_CACHE
+    import glob
+    sig_dir = os.path.join(idaapi.idadir(""), "sig")
+    try:
+        mtime = os.path.getmtime(sig_dir)
+    except OSError:
+        mtime = -1.0
+    if _SIG_PATH_CACHE and _SIG_PATH_CACHE[0] == sig_dir and _SIG_PATH_CACHE[1] == mtime:
+        return _SIG_PATH_CACHE[2]
+    paths = tuple(sorted(glob.glob(os.path.join(sig_dir, "**", "*.sig"), recursive=True)))
+    _SIG_PATH_CACHE = (sig_dir, mtime, paths)
+    return paths
 
 
 def read_file_impl(path: str, encoding: Optional[str] = None) -> dict:
@@ -89,6 +128,7 @@ def misc(
     verbose: Annotated[Optional[bool], "Include per-runtime details for health action."] = None,
     module: Annotated[Optional[str], "Module to reload (for reload action, e.g. 'funcs')"] = None,
     modules: Annotated[Optional[str], "Comma-separated module list to reload (for reload action, e.g. 'funcs,search')"] = None,
+    **kwargs,
 ) -> Any:
     """
     Miscellaneous utility tools for IDA.
@@ -110,6 +150,8 @@ def misc(
       (comma-separated, e.g. 'funcs,search'). Use 'all' to reload every module
       in the tools package.
     """
+    # Public MCP names stay on the wire; accept them beside legacy aliases.
+    name = public_arg(kwargs, 'query', name)
     if action == "python":
         # Support both 'expr' and 'code' for backward compatibility
         err = require_one_of(expr=expr, code=code)
@@ -143,6 +185,21 @@ def misc(
         if err:
             return err
         try:
+            requested = str(name).strip()
+            requested_stem = (
+                requested[:-4] if requested.lower().endswith(".sig") else requested
+            )
+            available = {
+                os.path.splitext(os.path.basename(path))[0]
+                for path in _sig_paths()
+            }
+            if requested_stem not in available and requested not in available:
+                return make_error(
+                    MCPError.NOT_FOUND,
+                    f"Signature {requested!r} not found",
+                    hint="Use ida_list_sigs to see available signature files.",
+                    details={"name": requested},
+                )
             import ida_libfuncs
             import idc
             # Plan and apply signature. The signature-planning API moved
@@ -154,10 +211,10 @@ def misc(
             # signature is queued for auto-analysis.
             planned = False
             if hasattr(ida_libfuncs, "plan_to_apply_ldes"):
-                ida_libfuncs.plan_to_apply_ldes(name)
+                ida_libfuncs.plan_to_apply_ldes(requested_stem)
                 planned = True
             elif hasattr(idc, "plan_to_apply_idasgn"):
-                idc.plan_to_apply_idasgn(name)
+                idc.plan_to_apply_idasgn(requested_stem)
                 planned = True
             if not planned:
                 return make_error(
@@ -171,25 +228,22 @@ def misc(
             applied = False
             try:
                 if hasattr(ida_libfuncs, "apply_ldes"):
-                    ida_libfuncs.apply_ldes(name)
+                    ida_libfuncs.apply_ldes(requested_stem)
                     applied = True
                 elif hasattr(ida_libfuncs, "apply_idasgn"):
-                    ida_libfuncs.apply_idasgn(name)
+                    ida_libfuncs.apply_idasgn(requested_stem)
                     applied = True
             except Exception:
                 pass
-            return {"ok": True, "name": name, "applied": applied,
+            return {"ok": True, "name": requested_stem, "applied": applied,
                     "note": "Signature applied immediately" if applied else "Signature queued for auto-analysis. Run analysis(reanalyze) to apply."}
         except Exception as e:
             return handle_error(e, context="load_sig")
     if action == "list_sigs":
         try:
-            import glob
-            import os
-            sig_dir = os.path.join(idaapi.idadir(""), "sig")
             pattern = (name or "").lower()
             sigs = []
-            for path in sorted(glob.glob(os.path.join(sig_dir, "**", "*.sig"), recursive=True)):
+            for path in _sig_paths():
                 basename = os.path.splitext(os.path.basename(path))[0]
                 if not pattern or pattern in basename.lower():
                     sigs.append({"name": basename, "path": path})
@@ -206,13 +260,7 @@ def misc(
         # different import path would yield a second module instance with its
         # own TOOL_CACHE, so ida_mcp_cache_stats would describe a cache the
         # readers don't use.
-        try:
-            from ida_pro_mcp.ida_mcp.sync import _tool_cache
-        except ImportError:
-            try:
-                from ida_mcp.sync import _tool_cache  # type: ignore[import-not-found]
-            except ImportError:
-                from sync import _tool_cache  # type: ignore[import-not-found]
+        from ..sync import _tool_cache
         _cache = _tool_cache()
         if _cache is not None:
             return {"ok": True, **_cache.stats()}
@@ -428,6 +476,26 @@ def _reload_tools(names):
 
 _MAX_SCRIPT_LENGTH = 50000
 
+# IDA's Python console preloads these; scripts expect them without an import.
+_PYTHON_PRELOAD = (
+    "idaapi", "idc", "idautils",
+    "ida_bytes", "ida_funcs", "ida_name", "ida_segment", "ida_nalt",
+    "ida_typeinf", "ida_hexrays", "ida_kernwin", "ida_ua", "ida_xref",
+)
+
+
+def _python_exec_namespace():
+    """Copy of this module's globals plus the usual IDA Python names."""
+    ns = globals().copy()
+    for name in _PYTHON_PRELOAD:
+        if name in ns:
+            continue
+        try:
+            ns[name] = __import__(name)
+        except ImportError:
+            continue
+    return ns
+
 
 @idawrite
 def execute_python(script: str):
@@ -446,7 +514,7 @@ def execute_python(script: str):
     sys.stderr = output
 
     # Use a copy of module globals to prevent pollution of live namespace
-    _safe_globals = globals().copy()
+    _safe_globals = _python_exec_namespace()
 
     try:
         # Multi-line or compound statements should go straight to exec.

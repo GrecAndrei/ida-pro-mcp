@@ -411,3 +411,24 @@ def test_router_forwards_data_value_endian_word_size_timeout():
     # data_value is pattern-optional (value may arrive via the value kwarg).
     assert captured["range_start"] is None
     assert captured["range_end"] is None
+
+
+def test_router_data_value_ascii_uses_string_scan():
+    router = _module("search", os=os)
+    captured = {}
+
+    def fake_data_value(*_a, **_kw):
+        captured["pointer"] = True
+        return {"ok": True}
+
+    def fake_string(pattern, *_a, **_kw):
+        captured["string"] = pattern
+        return {"ok": True, "results": pattern}
+
+    router.search_data_value = fake_data_value
+    router.search_string = fake_string
+
+    r = router.search(action="data_value", value="AGENT_SURFACE_STRING_001", limit=10)
+    assert r["ok"] is True
+    assert captured.get("string") == "AGENT_SURFACE_STRING_001"
+    assert "pointer" not in captured

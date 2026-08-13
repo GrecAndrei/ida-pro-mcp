@@ -45,10 +45,24 @@ import ctypes
 import os
 import time
 
-try:
-    from ._common import *  # noqa: F403
-except ImportError:
-    from _common import *  # noqa: F403  type: ignore[import-not-found]
+from ._common import (
+    Annotated,
+    Any,
+    Literal,
+    MCPError,
+    Optional,
+    get_arch,
+    handle_error,
+    idaread,
+    idawrite,
+    is_arm_family,
+    is_mips_family,
+    is_x86_family,
+    make_error,
+    os,
+    tool,
+    validate_addr
+)
 
 try:
     from .governance_engine import evaluate_operation  # noqa: F401
@@ -524,8 +538,25 @@ def _suspend_if_needed(timeout_sec: float = 10.0) -> bool:
 # Action handlers
 # ---------------------------------------------------------------------------
 def _action_info():
+    # Do not auto-select a backend here. load_debugger("linux"|"gdb"|"bochs")
+    # from a headless idat can hang the IDA main thread, and even a successful
+    # load poisons a shared analysis session. start/backend still auto-select.
     if not _BACKEND:
-        _select_backend()
+        return {
+            "ok": True,
+            "action": "info",
+            "backend": _backend_str(),
+            "backend_reason": _BACKEND_REASON or "no backend loaded",
+            "backend_attempts": dict(_BACKEND_ATTEMPTS),
+            "backend_candidates": list(_BACKEND_CANDIDATES),
+            "why_chosen": _BACKEND_REASON or "no backend loaded",
+            "process_state": _state_name(),
+            "process_running": False,
+            "current_ip": None,
+            "registers": {},
+            "registers_available": False,
+            "arch": _arch_name(),
+        }
     regs, avail = _read_all_registers()
     return {
         "ok": True,

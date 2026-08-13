@@ -366,6 +366,10 @@ READ_ONLY_ACTIONS = {
     ("emulate", "state"),
     ("emulate", "get_reg"),
     ("emulate", "read_mem"),
+    # Background index job control: status is a poll, cancel stops a host
+    # job. Neither mutates the IDB.
+    ("background", "status"),
+    ("background", "cancel"),
 }
 
 
@@ -466,7 +470,24 @@ def truthy(value: Any) -> bool:
     return _coerce_bool(value, default=False)
 
 
-def classify_tool_action(tool: Any, action: Any) -> RiskTier:
+def ack_from_args(args: Any) -> bool:
+    """True when the caller acknowledged risk on the public or host-only key."""
+    if not isinstance(args, dict):
+        return False
+    return (
+        truthy(args.get("risk_ack"))
+        or truthy(args.get("_risk_ack"))
+        or truthy(args.get("_guardrail_ack"))
+    )
+
+
+def classify_legacy_pair(tool: Any, action: Any) -> RiskTier:
+    """Classify a backend (tool, action) pair from the hand-written sets.
+
+    Public ``ida_*`` operations overlay this via :func:`classify_tool_action`.
+    Keep this function free of ``agent_operations`` imports so that module can
+    stamp ``risk_tier`` at import time without a cycle.
+    """
     tool_name = normalize_name(tool)
     action_name = normalize_name(action)
     pair = (tool_name, action_name)
@@ -492,6 +513,21 @@ def classify_tool_action(tool: Any, action: Any) -> RiskTier:
     if tool_name in READ_ONLY_TOOLS:
         return RiskTier.READ
     return RiskTier.UNKNOWN
+
+
+def classify_tool_action(tool: Any, action: Any) -> RiskTier:
+    """Classify a backend pair, preferring the public operation's ``risk_tier``."""
+    tool_name = normalize_name(tool)
+    action_name = normalize_name(action)
+    try:
+        from .agent_operations import backend_risk_tier
+
+        public = backend_risk_tier(tool_name, action_name)
+        if public is not None:
+            return public
+    except Exception:
+        pass
+    return classify_legacy_pair(tool_name, action_name)
 
 
 def purpose_flags(purpose: Any) -> tuple[str, ...]:

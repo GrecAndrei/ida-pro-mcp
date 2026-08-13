@@ -1926,7 +1926,7 @@ Example:
 
 ## `ida_comment`
 
-Add or replace a comment at an address in the IDB.
+Add, replace, or clear a comment at an address in the IDB.
 
 Input schema:
 ```json
@@ -1939,7 +1939,8 @@ Input schema:
     },
     "comment": {
       "type": "string",
-      "description": "Comment text."
+      "minLength": 0,
+      "description": "Comment text. An empty string clears the comment."
     },
     "risk_ack": {
       "type": "boolean",
@@ -3296,7 +3297,7 @@ Example:
 
 ## `ida_python`
 
-Execute a Python expression or script in the active IDA process. When several agents share one MCP connection, pass idb=<session_id> to target a specific session instead of the shared active one.
+Execute a Python expression or script in the active IDA process; idaapi, idc, and idautils are in scope. When several agents share one MCP connection, pass idb=<session_id> to target a specific session instead of the shared active one.
 
 Input schema:
 ```json

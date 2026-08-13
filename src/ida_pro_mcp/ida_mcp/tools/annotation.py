@@ -1,47 +1,41 @@
 import re
 
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    Annotated,
+    Literal,
+    MCPError,
+    Optional,
+    handle_error,
+    ida_lines,
+    ida_nalt,
+    ida_typeinf,
+    idaapi,
+    idautils,
+    idawrite,
+    idc,
+    make_error,
+    os,
+    parse_address,
+    public_arg,
+    run_action,
+    tool,
+    validate_addr,
+    validate_path_safe
+)
 
-try:
-    from .governance_engine import evaluate_operation
-except ImportError:
-    from governance_engine import evaluate_operation  # type: ignore[import-not-found]
+from .governance_engine import evaluate_operation
 
-try:
-    from .. import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from .. import compat as _compat
 
 # ============================================================================
 # ANNOTATION - Intelligent Bulk Annotation for LLMs
 # ============================================================================
 
-try:
-    from ..support._api_categories import (
-        API_TO_TAG as _API_TO_TAG,
-    )
-    from ..support._api_categories import (
-        DANGEROUS_APIS as _DANGEROUS_APIS,
-    )
-    from ..support._api_categories import (
-        MAGIC_CONSTANTS as _MAGIC_CONSTANTS,
-    )
-except ImportError:
-    from support._api_categories import (
-        API_TO_TAG as _API_TO_TAG,
-    )
-    from support._api_categories import (
-        DANGEROUS_APIS as _DANGEROUS_APIS,
-    )  # type: ignore[import-not-found]
-    from support._api_categories import (
-        MAGIC_CONSTANTS as _MAGIC_CONSTANTS,
-    )
+from ..support._api_categories import (
+    API_TO_TAG as _API_TO_TAG,
+    DANGEROUS_APIS as _DANGEROUS_APIS,
+    MAGIC_CONSTANTS as _MAGIC_CONSTANTS,
+)
 
 # DANGEROUS_APIS keys are mixed-case (VirtualAlloc, ShellExecuteA, ...) while
 # IDA-imported callee names can arrive lowercased or mangled, so match
@@ -349,6 +343,7 @@ def annotation(
     path: Annotated[Optional[str], "File path for import/export"] = None,
     fmt: Annotated[Optional[str], "Comment format: plain|markdown|structured (alias: format)"] = None,
     value: Annotated[Optional[str], "Proposed comment text to validate (for validate action)"] = None,
+    **kwargs,
 ) -> dict:
     """
     Intelligent bulk annotation tool optimized for LLMs.
@@ -433,6 +428,8 @@ def annotation(
         Returns: {total_functions, functions_commented, coverage_pct, inline_comments, avg_comments_per_func}
     """
     try:
+        # Public MCP names stay on the wire; accept them beside legacy aliases.
+        addr = public_arg(kwargs, 'address', addr)
         # ----------------------------------------------------------------
         # ACTION: auto_comment
         # ----------------------------------------------------------------

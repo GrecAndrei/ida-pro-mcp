@@ -41,7 +41,14 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 from ida_pro_mcp.host.agent_operations import AGENT_OPERATIONS  # noqa: E402
-from tests.integration.test_agent_surface_live import LiveMCPClient, _fixture_source, _ida_dir  # noqa: E402
+from tests.integration.test_agent_surface_live import (  # noqa: E402
+    LiveMCPClient,
+    _fixture_source,
+    _ida_dir,
+    live_call_timeout,
+    seed_function_addrs,
+    DEFAULT_LIVE_PYTEST_TIMEOUT,
+)
 
 LIVE_FLAG = "IDA_MCP_LIVE_TEST"
 pytestmark = [
@@ -50,7 +57,7 @@ pytestmark = [
         os.environ.get(LIVE_FLAG) != "1",
         reason=f"set {LIVE_FLAG}=1 to run tests against a licensed IDA installation",
     ),
-    pytest.mark.timeout(900),
+    pytest.mark.timeout(DEFAULT_LIVE_PYTEST_TIMEOUT),
 ]
 
 # Operations whose catalog example is stateful/environmental and may answer
@@ -74,7 +81,7 @@ GRACEFUL: dict[str, str | None] = {
     "ida_enum_member_add": "TYPE_ERROR",         # status_t not declared here
     "ida_enum_member_rename": "TYPE_ERROR",
     "ida_enum_member_revalue": "TYPE_ERROR",
-    "ida_apply_sig": None,                       # sig availability varies
+    "ida_apply_sig": "NOT_FOUND",                 # catalog remaps to a missing stem
     "ida_r2_status": None,                       # r2 sidecar may be absent
     "ida_r2_bininfo": None,
     "ida_r2_load_hints": None,
@@ -131,6 +138,7 @@ class CatalogContext:
         self.session_id = session_id or ""
         self.main_addr: str = "main"
         self.sub_addr: str | None = None
+        self.functions: dict[str, str] = {}
 
     def call(self, name: str, arguments: dict):
         return self.client.call(name, arguments)
@@ -145,7 +153,7 @@ def catalog_ctx(tmp_path_factory: pytest.TempPathFactory):
         ida_dir=_ida_dir(),
         runtime_dir=runtime_dir,
         response_mode="full",
-        timeout=int(os.environ.get("IDA_MCP_LIVE_CALL_TIMEOUT", "180")),
+        timeout=live_call_timeout(),
     )
     client.start()
     try:
@@ -153,17 +161,13 @@ def catalog_ctx(tmp_path_factory: pytest.TempPathFactory):
         if not isinstance(opened, dict) or opened.get("error") is True:
             raise AssertionError(f"ida_open_binary failed: {opened}")
         ctx = CatalogContext(client, opened.get("session_id"))
-        payload = client.call("ida_list_functions", {"limit": 100})
-        text = payload.get("functions") if isinstance(payload, dict) else ""
-        for line in str(text).splitlines():
-            m = re.match(r"(0x[0-9a-fA-F]+)\s+\S+\s+\S+\s+(\S+)", line)
-            if not m:
-                continue
-            addr, name = m.group(1), m.group(2)
-            if name == "main":
-                ctx.main_addr = addr
-            elif ctx.sub_addr is None and name not in (".init_proc", "_start", ".puts"):
+        ctx.functions = seed_function_addrs(client)
+        if "main" in ctx.functions:
+            ctx.main_addr = ctx.functions["main"]
+        for name, addr in ctx.functions.items():
+            if name not in ("main", ".init_proc", "_start", ".puts") and ctx.sub_addr is None:
                 ctx.sub_addr = addr
+                break
         yield ctx
     finally:
         with __import__("contextlib").suppress(Exception):
@@ -210,6 +214,10 @@ def _map_arguments(op_name: str, args: dict, ctx: CatalogContext) -> dict:
     if op_name == "ida_search_data_value":
         out["start"] = "0x400000"
         out["end"] = "0x405000"
+    if op_name == "ida_auto_wait":
+        out["timeout_ms"] = 1000
+    if op_name == "ida_apply_sig":
+        out["name"] = "__ida_mcp_missing_sig__"
     if op_name in ("ida_session_state", "ida_session_status"):
         out["idb"] = ctx.session_id
     if op_name == "ida_session_get":
@@ -239,7 +247,10 @@ def _map_arguments(op_name: str, args: dict, ctx: CatalogContext) -> dict:
             out["size"] = 8
     if op_name == "ida_change_function":
         out["address"] = ctx.main_addr
-        out["end"] = hex(int(ctx.main_addr, 16) + 0x80)
+        try:
+            out["end"] = hex(int(ctx.main_addr, 16) + 0x80)
+        except ValueError:
+            out["end"] = ctx.main_addr
     if op_name == "ida_rename_local":
         out["address"] = ctx.main_addr
     if op_name == "ida_mark_dangerous":

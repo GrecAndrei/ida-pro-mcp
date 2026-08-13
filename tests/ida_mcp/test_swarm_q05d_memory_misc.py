@@ -354,6 +354,12 @@ class TestMiscFileAndExecGuards(unittest.TestCase):
         self.assertIs(res["ok"], True)
         self.assertEqual(res["result"], 2)
 
+    def test_python_namespace_includes_idautils(self):
+        import idautils
+        res = self.misc.misc(action="python", expr="idautils")
+        self.assertIs(res["ok"], True, res)
+        self.assertIs(res["result"], idautils)
+
 
 # ---------------------------------------------------------------------------
 # symbols load_dwarf error envelope

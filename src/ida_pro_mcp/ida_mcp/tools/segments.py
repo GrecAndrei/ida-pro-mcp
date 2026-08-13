@@ -9,19 +9,31 @@ Actions: list, info, add, delete, set_attr, set_perms, move,
 import math
 from collections import Counter
 
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    Annotated,
+    Counter,
+    Literal,
+    MCPError,
+    Optional,
+    Union,
+    handle_error,
+    ida_bytes,
+    ida_funcs,
+    ida_nalt,
+    ida_segment,
+    idaapi,
+    idautils,
+    idawrite,
+    idc,
+    make_error,
+    math,
+    public_arg,
+    tool,
+    validate_addr
+)
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
-try:
-    from .. import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from .. import compat as _compat
 
 # _common does not re-export parse_address_safe (not in its __all__); import it
 # here so add/delete/move can accept unmapped destination addresses. Tried in
@@ -424,6 +436,8 @@ def segments(
         Returns: {segment, reg, ranges: [{reg, value, sr_type, start, end}], count}
     """
     try:
+        # Public MCP names stay on the wire; accept them beside legacy aliases.
+        start = public_arg(kwargs, 'address', start)
         # Normalize common direct-call aliases even before the MCP server's
         # argument mapper runs. This keeps the tool usable in unit tests and
         # from ad-hoc IDAPython calls.

@@ -33,7 +33,7 @@ def test_find_translates_to_the_legacy_backend_without_losing_its_required_query
     assert not operation.validate({"query": "recv", "limit": 5})
     backend_tool, backend_args = operation.to_backend_call({"query": "recv", "limit": 5})
     assert backend_tool == "search"
-    assert backend_args == {"action": "find", "pattern": "recv", "limit": 5}
+    assert backend_args == {"action": "find", "query": "recv", "limit": 5}
     assert operation.validate({"limit": 5})
     assert operation.validate({"query": "recv", "pattern": "wrong field"})
 
@@ -54,9 +54,9 @@ def test_semantic_search_translates_address_scope_and_score_controls():
         {
             "action": "nl",
             "query": "packet decoder",
-            "addr": "0x4000",
+            "address": "0x4000",
             "radius": 1024,
-            "semantic_min_score": 0.35,
+            "min_score": 0.35,
             "limit": 12,
         },
     )
@@ -67,7 +67,7 @@ def test_function_listing_uses_the_legacy_funcs_backend_behind_a_public_operatio
     assert operation is not None
     backend_tool, backend_args = operation.to_backend_call({"query": "recv", "limit": 5})
     assert backend_tool == "funcs"
-    assert backend_args == {"action": "list", "query": "recv", "count": 5}
+    assert backend_args == {"action": "list", "query": "recv", "limit": 5}
 
 
 def test_function_create_and_change_translate_to_mutating_funcs_actions():
@@ -81,7 +81,7 @@ def test_function_create_and_change_translate_to_mutating_funcs_actions():
     assert create_tool == "funcs"
     assert create_args == {
         "action": "create",
-        "addr": "0x401000",
+        "address": "0x401000",
         "end": "0x401080",
         "name": "handler",
         "_risk_ack": True,
@@ -93,7 +93,7 @@ def test_function_create_and_change_translate_to_mutating_funcs_actions():
     assert change_tool == "funcs"
     assert change_args == {
         "action": "change",
-        "addr": "0x401000",
+        "address": "0x401000",
         "end": "0x401090",
         "_risk_ack": True,
     }
@@ -142,8 +142,68 @@ def test_public_batch_translates_nested_ida_operations_and_rejects_invalid_neste
     translated, error = translate_public_batch_arguments(
         {"calls": [{"name": "ida_find", "arguments": {}}]}
     )
+    assert error is None
+    assert translated is not None
+    assert translated["calls"][0]["_precomputed_error"]["code"] == "INVALID_ARGS"
+    assert translated["calls"][0]["_precomputed_error"]["details"]["batch_index"] == 0
+
+
+def test_public_batch_continue_on_error_keeps_later_calls_after_invalid_step():
+    translated, error = translate_public_batch_arguments(
+        {
+            "calls": [
+                {"name": "ida_decompile", "arguments": {}},
+                {"name": "ida_calc_eval", "arguments": {"expr": "2+2"}},
+            ],
+            "continue_on_error": True,
+        }
+    )
+    assert error is None
+    assert translated is not None
+    assert translated["calls"][0]["_precomputed_error"]["code"] == "INVALID_ARGS"
+    assert translated["calls"][1] == {
+        "name": "calc",
+        "arguments": {"action": "eval", "expr": "2+2"},
+    }
+
+
+def test_public_batch_continue_on_error_executes_later_call(monkeypatch):
+    server = IDAMCPServer()
+    seen: list[tuple[str, dict]] = []
+
+    def fake_execute(tool_name, args):
+        seen.append((tool_name, dict(args)))
+        if tool_name == "calc":
+            return {"ok": True, "value": 4}
+        return {"ok": True}
+
+    monkeypatch.setattr(server, "_execute_tool", fake_execute)
+    monkeypatch.setattr(server, "_try_batch_fast_path", lambda *a, **k: None)
+    translated, error = translate_public_batch_arguments(
+        {
+            "calls": [
+                {"name": "ida_decompile", "arguments": {}},
+                {"name": "ida_calc_eval", "arguments": {"expr": "2+2"}},
+            ],
+            "continue_on_error": True,
+        }
+    )
+    assert error is None
+    result = server._handle_batch(translated)
+    assert result["summary"]["errors"] == 1
+    assert len(result["results"]) == 2
+    assert result["results"][0]["result"]["error"] is True
+    assert result["results"][1]["result"]["value"] == 4
+    assert seen == [("calc", {"action": "eval", "expr": "2+2"})]
+
+
+def test_public_batch_rejects_legacy_names_on_agent_surface():
+    translated, error = translate_public_batch_arguments(
+        {"calls": [{"name": "search", "arguments": {"action": "find", "query": "main"}}]},
+        agent_surface=True,
+    )
     assert translated is None
-    assert error["code"] == "INVALID_ARGS"
+    assert error["code"] == "TOOL_NOT_FOUND"
     assert error["details"]["batch_index"] == 0
 
 
@@ -288,10 +348,10 @@ def test_full_function_indexing_has_an_explicit_resumable_contract():
     assert backend_args == {
         "action": "index_fast",
         "_background": True,
-        "mode": "full",
+        "quality": "full",
         "_index_total_limit": 500,
-        "start_after": "0x401000",
-        "addr": "0x402000",
+        "cursor": "0x401000",
+        "address": "0x402000",
         "radius": 4096,
         "_index_slice_size": 8,
     }
@@ -519,11 +579,19 @@ def test_default_tools_list_exposes_agent_operations_with_required_operands(monk
     assert tools["ida_decompile"]["inputSchema"]["required"] == ["address"]
     assert tools["ida_rename"]["inputSchema"]["required"] == ["address", "name", "risk_ack"]
     assert tools["ida_comment"]["inputSchema"]["required"] == ["address", "comment", "risk_ack"]
+    assert tools["ida_comment"]["inputSchema"]["properties"]["comment"]["minLength"] == 0
     assert tools["ida_create_function"]["inputSchema"]["required"] == ["address", "risk_ack"]
     assert tools["ida_change_function"]["inputSchema"]["required"] == ["address", "end", "risk_ack"]
     assert tools["ida_python"]["inputSchema"]["required"] == ["code", "risk_ack"]
     assert "ida_session_health" in tools
     assert tools["ida_session_health"]["inputSchema"]["properties"]["verbose"]["type"] == "boolean"
+
+
+def test_ida_comment_accepts_empty_string_to_clear():
+    operation = get_agent_operation("ida_comment")
+    assert operation is not None
+    assert operation.validate({"address": "0x401000", "comment": "", "risk_ack": True}) is None
+    assert operation.validate({"address": "", "comment": "x", "risk_ack": True}) is not None
 
 
 def test_help_is_callable_through_the_public_mcp_protocol():
@@ -606,7 +674,7 @@ def test_read_bytes_routes_to_data_backend():
     assert op.backend_action == "read_bytes"
     _, args = op.to_backend_call({"address": "0x1000", "size": 64})
     assert args["action"] == "read_bytes"
-    assert args["addr"] == "0x1000"
+    assert args["address"] == "0x1000"
     assert args["size"] == 64
 
 
@@ -616,7 +684,7 @@ def test_patch_bytes_routes_to_modify_backend():
     assert op.backend_action == "patch_bytes"
     _, args = op.to_backend_call({"address": "0x1000", "hex_bytes": "9090", "risk_ack": True})
     assert args["action"] == "patch_bytes"
-    assert args["addr"] == "0x1000"
+    assert args["address"] == "0x1000"
 
 
 def test_rename_local_routes_to_modify_backend():
@@ -625,7 +693,7 @@ def test_rename_local_routes_to_modify_backend():
     assert op.backend_action == "rename_local"
     _, args = op.to_backend_call({"address": "0x1000", "var_name": "v3", "new_name": "size", "risk_ack": True})
     assert args["action"] == "rename_local"
-    assert args["addr"] == "0x1000"
+    assert args["address"] == "0x1000"
     assert args["var_name"] == "v3"
     assert args["new_name"] == "size"
 
@@ -636,8 +704,8 @@ def test_callgraph_routes_to_graph_backend():
     assert op.backend_action == "callgraph"
     _, args = op.to_backend_call({"address": "0x1000", "depth": 3, "format": "mermaid", "max_nodes": 500})
     assert args["action"] == "callgraph"
-    assert args["addr"] == "0x1000"
-    assert args["max_items"] == 500
+    assert args["address"] == "0x1000"
+    assert args["max_nodes"] == 500
 
 
 def test_list_segments_routes_to_segments_backend():
@@ -667,4 +735,4 @@ def test_declare_type_routes_to_types_backend():
     assert op.backend_action == "declare"
     _, args = op.to_backend_call({"declaration": "struct foo { int x; };", "risk_ack": True})
     assert args["action"] == "declare"
-    assert args["decl"] == "struct foo { int x; };"
+    assert args["declaration"] == "struct foo { int x; };"

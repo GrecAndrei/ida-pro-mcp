@@ -29,7 +29,15 @@ import unittest
 
 import pytest
 
-pytestmark = pytest.mark.timeout(900)
+LIVE_FLAG = "IDA_MCP_LIVE_TEST"
+pytestmark = [
+    pytest.mark.timeout(180),
+    pytest.mark.live_ida,
+    pytest.mark.skipif(
+        os.environ.get(LIVE_FLAG) != "1",
+        reason=f"set {LIVE_FLAG}=1 to run tests against a licensed IDA installation",
+    ),
+]
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
@@ -211,7 +219,7 @@ def _require_session(client: "MCPIntegrationClient", binary: str | None) -> None
 
 
 def _wait_session_ready(
-    client, session_id: str | None, timeout: float = 240.0
+    client, session_id: str | None, timeout: float = 45.0
 ) -> dict | None:
     """Poll the session's analysis gate until safe mode lifts and analysis
     completes, bounded by *timeout*.
@@ -243,14 +251,14 @@ def _wait_session_ready(
         if state and state.get("safe_mode") is False and state.get("analysis_complete") is True:
             return state
         last = state
-        time.sleep(5)
+        time.sleep(0.5)
     raise AssertionError(
         "IDA session never left safe mode / completed analysis "
         f"within {timeout:.0f}s (last state: {last!r})"
     )
 
 
-def _wait_vulnerable_hits(client, timeout: float = 240.0) -> dict | None:
+def _wait_vulnerable_hits(client, timeout: float = 30.0) -> dict | None:
     """Poll the vulnerable scope until it returns hits (analysis settles).
 
     The watchdog's analysis verdict is unreliable for tiny fixture binaries
@@ -267,14 +275,14 @@ def _wait_vulnerable_hits(client, timeout: float = 240.0) -> dict | None:
         if data and data.get("ok") and (data.get("items") or (data.get("results") or "").strip()):
             return data
         last = data
-        time.sleep(5)
+        time.sleep(0.5)
     return last
 
 
 class MCPIntegrationClient:
     """JSON-RPC client for integration testing against live IDA MCP."""
 
-    def __init__(self, timeout: int = 120):
+    def __init__(self, timeout: int = 45):
         self.proc = None
         self.stdout_queue = queue.Queue()
         self.stderr_queue = queue.Queue()
@@ -287,6 +295,7 @@ class MCPIntegrationClient:
         env = os.environ.copy()
         # Structured results make assertions exact instead of text-scraping.
         env["IDA_MCP_STRUCTURED_CONTENT"] = "1"
+        env.setdefault("IDA_MCP_TOOL_SURFACE", "legacy")
         if "IDA_DIR" not in env:
             idat = _find_idat()
             if idat:

@@ -1,22 +1,33 @@
 
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    Annotated,
+    Literal,
+    MCPError,
+    Optional,
+    _inf_procname,
+    handle_error,
+    ida_bytes,
+    ida_funcs,
+    ida_hexrays,
+    ida_lines,
+    ida_nalt,
+    ida_name,
+    ida_segment,
+    ida_typeinf,
+    idaapi,
+    idautils,
+    idawrite,
+    idc,
+    make_error,
+    public_arg,
+    tool,
+    validate_addr
+)
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
-try:
-    from .. import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from .. import compat as _compat
 
-try:
-    from .governance_engine import evaluate_operation
-except ImportError:
-    from governance_engine import evaluate_operation  # type: ignore[import-not-found]
+from .governance_engine import evaluate_operation
 
 import hashlib
 
@@ -199,14 +210,18 @@ def modify(
       renames. Set to False to bypass (not recommended).
     """
     try:
+        # Public MCP names stay on the wire; accept them beside legacy aliases.
+        addr = public_arg(kwargs, 'address', addr)
+        if kwargs.get('type') is not None and kwargs.get('item_type') is None:
+            kwargs['item_type'] = kwargs['type']
         # Support multiple parameter names for compatibility
         if not value:
             if action == "rename" and name:
                 value = name
-            elif action == "comment" and text:
+            elif action == "comment" and text is not None:
                 value = text
-            elif action == "comment" and kwargs.get("comment"):
-                value = kwargs["comment"]
+            elif action == "comment" and "comment" in kwargs:
+                value = kwargs.get("comment")
             elif action == "set_type" and type_str:
                 value = type_str
             elif action == "patch_asm" and asm:
@@ -216,16 +231,19 @@ def modify(
             elif action == "rename_local" and kwargs.get("new_name"):
                 value = kwargs["new_name"]
 
-        if not value:
+        if value is None or (value == "" and action != "comment"):
             # patch_bytes via nop-only, rename_local, the data-authoring
             # primitives, and the undo pair carry their own args; their
-            # branches validate the specifics.
+            # branches validate the specifics. comment="" clears the comment.
             value_optional = (
                 (action == "patch_bytes" and kwargs.get("nop"))
                 or action in ("create_data", "create_strlit", "undo_begin", "undo_end")
+                or (action == "comment" and value == "")
             )
             if not value_optional:
                 return make_error(MCPError.INVALID_ARGS, f"value parameter required (or use {action}-specific alias: name/text/type_str/asm)")
+        if action == "comment" and value is None:
+            value = ""
 
         # undo_begin/undo_end bracket an edit batch and take no address.
         if action in ("undo_begin", "undo_end"):

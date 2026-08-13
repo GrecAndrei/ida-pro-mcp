@@ -3,32 +3,30 @@
 import heapq
 import re
 
-try:
-    from .._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from .._common import (
+    MCPError,
+    compile_smart_pattern,
+    ida_bytes,
+    ida_funcs,
+    ida_lines,
+    idaapi,
+    idautils,
+    idc,
+    looks_like_address,
+    make_error,
+    public_arg,
+    run_action,
+    validate_addr
+)
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
-try:
-    from ... import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from ... import compat as _compat
 
-try:
-    from ...support.semantic_matching import (
-        DEFAULT_RESCORE_TOP_N,
-        semantic_score_cheap,
-        semantic_scores,
-    )
-except ImportError:
-    from support.semantic_matching import (  # type: ignore[import-not-found]
-        DEFAULT_RESCORE_TOP_N,
-        semantic_score_cheap,
-        semantic_scores,
-    )
+from ...support.semantic_matching import (
+    DEFAULT_RESCORE_TOP_N,
+    semantic_score_cheap,
+    semantic_scores,
+)
 
 from .core import (
     _FIND_INSTRUCTION_CAP,

@@ -1,17 +1,43 @@
 
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    Annotated,
+    CALL_MNEMONICS,
+    Literal,
+    MCPError,
+    Optional,
+    SYSCALL_MNEMONICS,
+    TERMINATOR_MNEMONICS,
+    UNCONDITIONAL_JUMP_MNEMONICS,
+    _inf_filetype_id,
+    compile_smart_pattern,
+    get_arch,
+    get_stack_pointer_names,
+    handle_error,
+    hex_ea,
+    hex_size,
+    ida_bytes,
+    ida_funcs,
+    ida_lines,
+    idaapi,
+    idaread,
+    idautils,
+    idc,
+    is_arm_family,
+    is_mips_family,
+    is_ppc_family,
+    is_return_mnemonic,
+    is_riscv_family,
+    is_sparc_family,
+    is_x86_family,
+    make_error,
+    public_arg,
+    run_action,
+    tool,
+    validate_addr
+)
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
-try:
-    from .. import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from .. import compat as _compat
 
 from collections import OrderedDict
 from functools import partial
@@ -20,20 +46,10 @@ from functools import partial
 # classifier for jalr/c.jr/c.jalr); import it directly so gadgets never keeps a
 # divergent jalr parser.  `is_return_mnemonic` (from _common) already routes the
 # return side of every RISC-V register-indirect branch through the same helper.
-try:
-    from ..support.arch_utils import (
+from ..support.arch_utils import (
         _riscv_operand_parts,
         _riscv_reg_name,
     )
-except ImportError:
-    try:
-        from support.arch_utils import (  # type: ignore[import-not-found]
-            _riscv_operand_parts,
-            _riscv_reg_name,
-        )
-    except ImportError:
-        _riscv_operand_parts = None  # type: ignore[assignment]
-        _riscv_reg_name = None  # type: ignore[assignment]
 
 # ============================================================================
 # GADGETS - ROP/JOP/COP Gadget & Exploit Primitive Discovery
@@ -1086,6 +1102,7 @@ def gadgets(
     query: Annotated[Optional[str], "Filter gadgets by mnemonic pattern (regex/glob/substring/semantic auto-detected)"] = None,
     raw: Annotated[bool, "Force a byte-level linear sweep: raw-decode from every offset in the exec region even when IDA has disassembled heads (auto-enabled when the region has no defined instruction heads)"] = False,
     auto_blackboard: Annotated[bool, "Store mitigation/exploit findings in the blackboard (opt-in; default keeps read actions pure)"] = False,
+    **kwargs,
 ) -> dict:
     """
     LLM-optimized ROP/JOP/COP gadget and exploit primitive discovery.
@@ -1112,6 +1129,8 @@ def gadgets(
     Each gadget: {addr, insns, gadget}
     """
     try:
+        # Public MCP names stay on the wire; accept them beside legacy aliases.
+        addr = public_arg(kwargs, 'address', addr)
         if action == "shellcode_space":
             regions = _find_shellcode_space(addr, limit, max_insns, query)
             return {

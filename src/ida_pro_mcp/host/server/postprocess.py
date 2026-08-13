@@ -25,6 +25,15 @@ PP_KEYS = frozenset({
     "pick", "field", "next_token",
 })
 
+# PP key names that are native tool arguments for some backends. Host
+# pagination still uses grep/head/tail/pick; these keys stay on the call.
+# `code.limit` is an instruction/result cap (disasm, decompile_all), not a
+# host page size — stealing it made ida_disassemble(limit=4) return the
+# whole function.
+PP_NATIVE_KEYS_BY_TOOL: dict[str, frozenset[str]] = {
+    "code": frozenset({"limit"}),
+}
+
 # Preferred fields for auto-detecting the "list" to operate on in a response.
 _PREFERRED_LIST_FIELDS = (
     "items", "results", "matches", "functions", "findings", "usages",
@@ -33,15 +42,39 @@ _PREFERRED_LIST_FIELDS = (
 )
 
 
-def extract_post_process_params(args: dict) -> tuple[dict, dict]:
+def pp_keep_keys_for_tool(tool_name: str, args: dict | None = None) -> frozenset[str]:
+    """PP keys that must remain native arguments for *tool_name*."""
+    if tool_name == "truncation":
+        return PP_KEYS
+    if tool_name == "types" and (args or {}).get("action") in ("struct_member_add",):
+        return PP_KEYS
+    return PP_NATIVE_KEYS_BY_TOOL.get(tool_name, frozenset())
+
+
+def prepare_args_for_postprocess(tool_name: str, args: dict) -> tuple[dict, dict]:
+    """Copy colliding native caps, then split PP keys from tool args."""
+    tool_args = dict(args)
+    if tool_name == "code" and "limit" in tool_args and tool_args.get("max_items") is None:
+        tool_args["max_items"] = tool_args["limit"]
+    keep = pp_keep_keys_for_tool(tool_name, tool_args)
+    return extract_post_process_params(tool_args, keep=keep)
+
+
+def extract_post_process_params(
+    args: dict, *, keep: frozenset[str] | set[str] | None = None
+) -> tuple[dict, dict]:
     """Split *args* into ``(tool_args, pp_params)``.
 
     Removes post-processing keys from ``tool_args`` so they are not sent
-    to IDA.
+    to IDA. Keys in *keep* stay on the tool call (native arguments that
+    share a name with a PP parameter).
     """
     tool_args = dict(args)
     pp_params = {}
+    reserved = keep or frozenset()
     for key in PP_KEYS:
+        if key in reserved:
+            continue
         if key in tool_args:
             pp_params[key] = tool_args.pop(key)
     return tool_args, pp_params

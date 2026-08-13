@@ -1,9 +1,32 @@
 import contextlib
 
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    Annotated,
+    ERROR_HINTS,
+    Literal,
+    MCPError,
+    Optional,
+    TAINT_SOURCES,
+    compile_smart_pattern,
+    handle_error,
+    hex_ea,
+    ida_funcs,
+    ida_lines,
+    ida_nalt,
+    ida_name,
+    ida_typeinf,
+    idaapi,
+    idaread,
+    idautils,
+    idc,
+    is_riscv_family,
+    make_error,
+    normalize_list_input,
+    public_arg,
+    run_action,
+    tool,
+    validate_addr
+)
 
 # ida_ua is intentionally not exported by _common.__all__ — import it directly.
 try:
@@ -12,68 +35,36 @@ except Exception:
     ida_ua = None  # type: ignore[assignment]
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
-try:
-    from .. import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from .. import compat as _compat
 
 try:
-    from ida_pro_mcp.ida_mcp.support.arch_utils import detect_riscv_gp as _detect_riscv_gp
-except Exception:
-    try:
-        from arch_utils import detect_riscv_gp as _detect_riscv_gp  # type: ignore[import-not-found]
-    except Exception:
-        _detect_riscv_gp = None  # type: ignore
-
-try:
-    from .code_helpers import *
-    # ``import *`` intentionally omits private helper names. This dispatcher
-    # uses them directly, so import the implementation helpers explicitly.
-    from .code_helpers import (
-        _build_decompile_enrichment,
-        _build_decompiler_dataflow,
-        _build_function_structure_summary,
-        _collect_compact_callees,
-        _collect_compact_callers,
-        _collect_function_string_entries,
-        _collect_function_strings,
-        _compute_cfg_semantics,
-        _decompile_with_diagnostics,
-        _detect_firmware_signals,
-        _disasm_range,
-        _disasm_range_structured,
-        _disasm_window,
-        _get_next_func,
-        _get_prev_func,
-        _run_custom_detector,
-        _semantic_pseudocode_summary,
-        _trace_argument_origin,
-    )
+    from ..support.arch_utils import detect_riscv_gp as _detect_riscv_gp
 except ImportError:
-    from code_helpers import *  # type: ignore[import-not-found]
-    from code_helpers import (  # type: ignore[import-not-found]
-        _build_decompile_enrichment,
-        _build_decompiler_dataflow,
-        _build_function_structure_summary,
-        _collect_compact_callees,
-        _collect_compact_callers,
-        _collect_function_string_entries,
-        _collect_function_strings,
-        _compute_cfg_semantics,
-        _decompile_with_diagnostics,
-        _detect_firmware_signals,
-        _disasm_range,
-        _disasm_range_structured,
-        _disasm_window,
-        _get_next_func,
-        _get_prev_func,
-        _run_custom_detector,
-        _semantic_pseudocode_summary,
-        _trace_argument_origin,
-    )
+    _detect_riscv_gp = None  # type: ignore
+
+from .code_helpers import *
+# ``import *`` intentionally omits private helper names. This dispatcher
+# uses them directly, so import the implementation helpers explicitly.
+from .code_helpers import (
+    _build_decompile_enrichment,
+    _build_decompiler_dataflow,
+    _build_function_structure_summary,
+    _collect_compact_callees,
+    _collect_compact_callers,
+    _collect_function_string_entries,
+    _collect_function_strings,
+    _compute_cfg_semantics,
+    _decompile_with_diagnostics,
+    _detect_firmware_signals,
+    _disasm_range,
+    _disasm_range_structured,
+    _disasm_window,
+    _get_next_func,
+    _get_prev_func,
+    _run_custom_detector,
+    _semantic_pseudocode_summary,
+    _trace_argument_origin,
+)
 
 def _decompile_error_entry(addr, dec_err):
     """Normalize a per-address decompile failure into the host error envelope.
@@ -304,6 +295,13 @@ def code(
         Example: code(action="detect", rule_type="api_chain", apis=["recv","memcpy"], strict_order=true)
     """
     try:
+        # Public MCP names stay on the wire; accept them beside legacy aliases.
+        addrs = public_arg(kwargs, 'address', addrs)
+        addr = public_arg(kwargs, 'address', addr)
+        if addr and not addrs:
+            addrs = addr
+        disasm_style = public_arg(kwargs, 'style', disasm_style)
+        limit = public_arg(kwargs, 'limit', limit)
         # decompile_all doesn't need addrs — it uses a name filter.
         # Named params offset/mode are forwarded by the host schema when present;
         # also tolerate them arriving via kwargs (direct/RPC calls).

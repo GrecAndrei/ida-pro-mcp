@@ -3,19 +3,36 @@ from __future__ import annotations
 
 import os
 
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    Annotated,
+    Literal,
+    MCPError,
+    Optional,
+    _inf_is_64bit,
+    _inf_is_be,
+    compile_smart_pattern,
+    handle_error,
+    ida_bytes,
+    ida_funcs,
+    ida_hexrays,
+    ida_lines,
+    ida_nalt,
+    ida_typeinf,
+    idaapi,
+    idautils,
+    idawrite,
+    idc,
+    make_error,
+    os,
+    parse_address,
+    public_arg,
+    tool,
+    validate_addr,
+    validate_path_safe
+)
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
-try:
-    from .. import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from .. import compat as _compat
 
 # ida_struct is the classic IDA 7/8 struct-editing module (add_struc_member,
 # del_struc_member, set_member_name, set_member_tinfo). IDA 9 merged it into
@@ -28,12 +45,9 @@ except ImportError:
 
 # Ensure utility functions for local var type modification are available
 try:
-    from ida_mcp.utils import my_modifier_t, refresh_decompiler_ctext
-except ImportError:
-    try:
-        from utils import my_modifier_t, refresh_decompiler_ctext  # type: ignore[import-not-found]
-    except ImportError:
-        pass
+    from ..utils import my_modifier_t, refresh_decompiler_ctext
+except Exception:
+    pass
 
 
 def _is_fully_mapped(ea: int, size: int) -> bool:
@@ -165,6 +179,15 @@ def types(
     - til_filter:  Type-name filter for til_export (default '*').
     """
     try:
+        # Public MCP names stay on the wire; accept them beside legacy aliases.
+        addr = public_arg(kwargs, 'address', addr)
+        decl = public_arg(kwargs, 'declaration', decl)
+        name = public_arg(kwargs, 'var_name', name)
+        count = public_arg(kwargs, 'limit', count)
+        if action in ('apply', 'set_prototype', 'parse_decl') and not decl and type_str:
+            decl = type_str
+        if action == 'til_export' and not til_filter:
+            til_filter = name or '*'
         # ====================================================================
         # import_header - Parse C header into the type library
         # ====================================================================

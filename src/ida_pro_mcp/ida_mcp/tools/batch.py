@@ -4,10 +4,18 @@ Reduces round-trips for LLMs that need to perform several operations.
 Supports dependency resolution, result piping, conditional execution, templates, dry-run, and macro DSL.
 """
 
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    Annotated,
+    Any,
+    MCPError,
+    Optional,
+    handle_error,
+    idawrite,
+    make_error,
+    public_arg,
+    run_action,
+    tool
+)
 
 import contextlib
 import importlib

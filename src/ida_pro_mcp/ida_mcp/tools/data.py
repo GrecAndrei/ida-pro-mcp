@@ -1,16 +1,34 @@
 
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    API_CATEGORIES,
+    Annotated,
+    DANGEROUS_APIS,
+    Literal,
+    MCPError,
+    Optional,
+    _inf_filetype_id,
+    compile_smart_pattern,
+    handle_error,
+    hex_ea,
+    hex_size,
+    ida_bytes,
+    ida_funcs,
+    ida_nalt,
+    ida_typeinf,
+    idaapi,
+    idaread,
+    idautils,
+    idc,
+    is_riscv_family,
+    make_error,
+    parse_address,
+    public_arg,
+    resolve_symbol,
+    tool,
+    validate_addr
+)
 
-try:
-    from .. import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from .. import compat as _compat
 
 # Bounded cache of full (filtered-but-unpaginated) walks for the list actions.
 # Pagination then slices offset/count without re-walking idautils.Functions()/
@@ -52,6 +70,76 @@ def _walk_fingerprint():
     except Exception:
         fq = -1
     return (root, fq)
+
+
+def _iter_byte_hits(needle: bytes, *, max_hits: int = 256, max_seg: int = 16 * 1024 * 1024):
+    """Yield EAs of *needle* in mapped segments. IDA's string list is incomplete
+    for packed .rodata tables; a literal query still has to find those bytes.
+    """
+    if not needle:
+        return
+    hits = 0
+    try:
+        segs = list(idautils.Segments())
+    except Exception:
+        return
+    for seg_ea in segs:
+        if hits >= max_hits:
+            return
+        try:
+            start = int(seg_ea)
+            end = int(idc.get_segm_end(seg_ea))
+        except Exception:
+            continue
+        size = end - start
+        if size <= 0:
+            continue
+        blob = ida_bytes.get_bytes(start, min(size, max_seg))
+        if not blob:
+            continue
+        idx = 0
+        while hits < max_hits:
+            pos = blob.find(needle, idx)
+            if pos < 0:
+                break
+            yield start + pos
+            hits += 1
+            idx = pos + 1
+
+
+def _cstring_containing(ea: int, max_back: int = 256, max_len: int = 500) -> tuple[int, str]:
+    """Read the C string that contains *ea*, snapping back to the previous NUL."""
+    start = ea
+    for _ in range(max_back):
+        if start <= 0:
+            break
+        try:
+            prev = ida_bytes.get_byte(start - 1)
+        except Exception:
+            break
+        if prev == 0 or prev < 9 or (13 < prev < 32):
+            break
+        start -= 1
+    raw = ida_bytes.get_bytes(start, max_len) or b""
+    zero = raw.find(b"\x00")
+    if zero >= 0:
+        raw = raw[:zero]
+    try:
+        return start, raw.decode("utf-8", errors="replace")
+    except Exception:
+        return start, raw.decode("latin-1", errors="replace")
+
+
+def _literal_query_bytes(query: str) -> bytes | None:
+    """UTF-8 bytes of a literal list-strings query, or None if glob/regex-like."""
+    if not query or not (4 <= len(query) <= 256):
+        return None
+    if any(ch in query for ch in "*?[\\") or query.startswith("/"):
+        return None
+    try:
+        return query.encode("utf-8")
+    except Exception:
+        return query.encode("latin-1", errors="replace")
 
 
 # ============================================================================
@@ -130,6 +218,10 @@ def data(
         Returns: {ok, addr, size, hex, dump}
     """
     try:
+        # Public MCP names stay on the wire; accept them beside legacy aliases.
+        count = public_arg(kwargs, 'limit', count)
+        if kwargs.get('address') is not None and kwargs.get('addr') is None:
+            kwargs['addr'] = kwargs['address']
         if action == "functions":
             _key = ("functions", query, min_size, named_only, min_xrefs, _walk_fingerprint())
             walk = _walk_cache_get(_key)
@@ -409,6 +501,19 @@ def data(
                                         walk.append((sc.ea, content))
                                 except Exception:
                                     continue
+                needle = _literal_query_bytes(query or "")
+                if needle:
+                    seen = {ea for ea, _ in walk}
+                    for hit in _iter_byte_hits(needle):
+                        if hit in seen:
+                            continue
+                        start, content = _cstring_containing(hit)
+                        if start in seen:
+                            continue
+                        if content and _accept(start, content):
+                            walk.append((start, content))
+                            seen.add(start)
+                    walk.sort(key=lambda item: item[0])
                 _walk_cache_put(_key, walk)
 
             # Slice the cached full Strings() walk; xref counts are recomputed

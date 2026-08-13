@@ -20,10 +20,23 @@ import re
 from collections import defaultdict, deque
 from typing import Optional
 
-try:
-    from .._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from .._common import (
+    DANGEROUS_SINKS,
+    MCPError,
+    Optional,
+    TAINT_SOURCES,
+    compile_smart_pattern,
+    ida_hexrays,
+    ida_nalt,
+    ida_typeinf,
+    idaapi,
+    idautils,
+    idc,
+    make_error,
+    os,
+    public_arg,
+    run_action
+)
 
 from .core import (
     CALL_XREF_TYPES,
@@ -33,13 +46,7 @@ from .core import (
 from .advanced import _coerce_ea
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
-try:
-    from ... import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from ... import compat as _compat
 # ============================================================================
 # Set arithmetic on function addresses (the "address algebra")
 # ============================================================================
@@ -852,10 +859,7 @@ def _outlier_rows_from_ida(metric: str) -> list[tuple[int, str, int]]:
 # ============================================================================
 
 # Import canonical taint registry (single source of truth)
-try:
-    from ...support.taint_registry import TAINT_SOURCES, DANGEROUS_SINKS
-except ImportError:
-    from support.taint_registry import TAINT_SOURCES, DANGEROUS_SINKS  # type: ignore[import-not-found]
+from ...support.taint_registry import TAINT_SOURCES, DANGEROUS_SINKS
 
 _TAINT_SOURCE_NAMES = TAINT_SOURCES
 _DANGEROUS_APIS = DANGEROUS_SINKS
@@ -1026,7 +1030,7 @@ def search_analyze(
         # Blackboard notes
         blackboard = []
         try:
-            from blackboard import BlackboardStore  # type: ignore
+            from ..blackboard import BlackboardStore
             store = BlackboardStore()
             entries = store.list(addr=hex(fea), limit=5, include_resolved=False)
             for e in entries:

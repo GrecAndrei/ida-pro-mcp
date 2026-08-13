@@ -23,6 +23,7 @@ from ..config import (
 from ..errors import MCPError, is_error_result, make_error
 from ..policy import (
     PolicyDecision,
+    ack_from_args,
     build_audit_record,
     evaluate_policy,
     normalize_mode,
@@ -39,8 +40,8 @@ from ..schemas import (
 from .postprocess import (
     PP_KEYS,
     apply_post_processing,
-    extract_post_process_params,
     has_post_process,
+    prepare_args_for_postprocess,
 )
 from .rate_limit import is_rate_limit_exempt
 from .rpc_args import prepare_rpc_args
@@ -1262,10 +1263,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
                 base_args.get("action"),
                 mode=self._resolve_policy_mode(),
                 purpose=base_args.get("_purpose") or pp_params.get("_purpose"),
-                ack=_coerce_bool(pp_params.get("_risk_ack"), False)
-                or _coerce_bool(pp_params.get("_guardrail_ack"), False)
-                or _coerce_bool(base_args.get("_risk_ack"), False)
-                or _coerce_bool(base_args.get("_guardrail_ack"), False),
+                ack=ack_from_args(pp_params) or ack_from_args(base_args),
             )
             if policy_result.decision == PolicyDecision.BLOCK:
                 return make_error(
@@ -1294,9 +1292,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
         # preflight) so a risky write cannot slip through on page 2 via token
         # replay. Policy was re-evaluated above with the recovered acks;
         # call_tool below re-checks safe mode and ownership.
-        _replay_ack = _coerce_bool(base_args.get("_risk_ack"), False) or _coerce_bool(
-            base_args.get("_guardrail_ack"), False
-        )
+        _replay_ack = ack_from_args(base_args)
         _gr_err = self._guardrail_strict_gate(tool_name, base_args)
         if _gr_err is not None:
             return _gr_err
@@ -1712,19 +1708,9 @@ class ServerDispatchMixin(ServerClientStateMixin):
 
             # ---- Post-processing filter extraction ----
             # Extract PP params before they reach IDA or policy checks.
-            # Skip PP extraction for the truncation tool — it has its own
-            # offset/count params that conflict with PP's offset/limit.
-            # Also skip tools where offset/limit are SEMANTIC arguments, not
-            # pagination: types:struct_member_add uses `offset` as the member
-            # byte offset (-1 appends); stripping it silently appends at 0.
-            _pp_exempt = tool_name == "truncation" or (
-                tool_name == "types"
-                and args.get("action") in ("struct_member_add",)
-            )
-            if _pp_exempt:
-                self._pending_pp = {}
-            else:
-                args, self._pending_pp = extract_post_process_params(args)
+            # Native collisions (code.limit, types.struct_member_add offset,
+            # truncation offset/count) stay on the tool call.
+            args, self._pending_pp = prepare_args_for_postprocess(tool_name, args)
 
             # ---- D3: forward the page-slice to natively-paging tools ----
             # When the PP is a *pure* page-slice (offset + limit/head, no
@@ -1851,7 +1837,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
             # need a captured value. (Bug: LLM passed _risk_ack=true on
             # funcs.create in prove phase and still hit "prove phase
             # requires evidence cards" gate.)
-            _risk_ack_passed = bool(_coerce_bool(args.get("_risk_ack"), False)) or _coerce_bool(args.get("_guardrail_ack"), False)
+            _risk_ack_passed = ack_from_args(args)
 
             # ---- Deterministic policy preflight ----
             # Runs for every tool, including blackboard/background: the policy
@@ -1866,8 +1852,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     args.get("action"),
                     mode=self._resolve_policy_mode(),
                     purpose=args.get("_purpose"),
-                    ack=_coerce_bool(args.get("_risk_ack"), False)
-                    or _coerce_bool(args.get("_guardrail_ack"), False),
+                    ack=ack_from_args(args),
                 )
                 policy_audit = build_audit_record(policy_result, session_id=_gate_sid)
                 policy_details = policy_result.to_dict()
@@ -1914,6 +1899,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     )
             args.pop("_purpose", None)
             args.pop("_risk_ack", None)
+            args.pop("risk_ack", None)
 
             # ---- Safe mode gate (analysis still running) ----
             # While a session's IDA auto-analysis is still completing, block

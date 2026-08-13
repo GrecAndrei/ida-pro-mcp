@@ -6,8 +6,8 @@ engine:
 
   - Every new ``ida_*`` operation dispatches to a backend ``(tool, action)``
     that is actually registered in ``tool_registry._TOOL_ACTIONS``.
-  - ``to_backend_call()`` translates public args (address→addr, type→item_type,
-    risk_ack→_risk_ack) so the host dispatch receives the legacy shape.
+  - ``to_backend_call()`` keeps public arg names on the wire (address, type,
+    query) and maps only host-only keys (risk_ack→_risk_ack).
   - ``prepare_rpc_args`` (the pure arg filter) admits every translated backend
     arg for the newly-schema'd tools (modify/types/annotation/r2/firmware) and
     rejects unknown keys — the previously-open tools are now closed.
@@ -37,7 +37,8 @@ from ida_pro_mcp.host.policy import (
     evaluate_policy,
 )
 from ida_pro_mcp.host.schemas import classify_tool_category
-from ida_pro_mcp.host.schemas_data import ADVERTISED_TOOLS, TOOL_ARG_SCHEMAS
+from ida_pro_mcp.host.schemas import TOOL_ARG_SCHEMAS
+from ida_pro_mcp.host.schemas_data import ADVERTISED_TOOLS
 from ida_pro_mcp.host.server.rpc_args import prepare_rpc_args
 from ida_pro_mcp.host.server.tool_registry import tool_actions
 
@@ -184,8 +185,8 @@ class TestBackendTranslation(unittest.TestCase):
         )
         self.assertEqual(tool, "modify")
         self.assertEqual(args["action"], "create_data")
-        self.assertEqual(args["addr"], "0x1234")
-        self.assertEqual(args["item_type"], "dword")
+        self.assertEqual(args["address"], "0x1234")
+        self.assertEqual(args["type"], "dword")
         self.assertEqual(args["count"], 4)
         self.assertIs(args["_risk_ack"], True)
         self.assertNotIn("risk_ack", args)
@@ -203,7 +204,7 @@ class TestBackendTranslation(unittest.TestCase):
         )
         self.assertEqual(tool, "r2")
         self.assertEqual(args["action"], "disassemble_hypothesis")
-        self.assertEqual(args["addr"], "0x1000")
+        self.assertEqual(args["address"], "0x1000")
 
     def test_til_export_maps_name_filter(self):
         tool, args = _OPERATIONS_BY_NAME["ida_til_export"].to_backend_call(
@@ -212,7 +213,7 @@ class TestBackendTranslation(unittest.TestCase):
         self.assertEqual(tool, "types")
         self.assertEqual(args["action"], "til_export")
         self.assertEqual(args["path"], "/tmp/x.h")
-        self.assertEqual(args["til_filter"], "*")
+        self.assertEqual(args["name"], "*")
 
     def test_struct_member_add_maps_member_edits(self):
         tool, args = _OPERATIONS_BY_NAME["ida_struct_member_add"].to_backend_call(

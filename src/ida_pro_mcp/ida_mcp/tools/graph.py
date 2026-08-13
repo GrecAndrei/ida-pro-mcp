@@ -1,17 +1,23 @@
 
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    Annotated,
+    Literal,
+    MCPError,
+    Optional,
+    handle_error,
+    ida_bytes,
+    idaapi,
+    idaread,
+    idautils,
+    idc,
+    make_error,
+    public_arg,
+    tool,
+    validate_addr
+)
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
-try:
-    from .. import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from .. import compat as _compat
 
 
 
@@ -246,6 +252,9 @@ def graph(
     - mermaid: Mermaid.js flowchart syntax (best for LLMs and rendering)
     """
     try:
+        # Public MCP names stay on the wire; accept them beside legacy aliases.
+        addr = public_arg(kwargs, 'address', addr)
+        max_items = public_arg(kwargs, 'max_nodes', max_items)
         # Normalize: if action is a format/direction alias, remap to callgraph with that format/direction
         _FORMAT_ALIASES = {"mermaid", "dot", "json"}
         _DIR_ALIASES = {"down", "up", "both"}

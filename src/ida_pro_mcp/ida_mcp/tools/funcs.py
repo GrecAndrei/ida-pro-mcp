@@ -1,52 +1,55 @@
 
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    Annotated,
+    Any,
+    CONDITIONAL_BRANCH_MNEMONICS,
+    Literal,
+    MCPError,
+    Optional,
+    UNCONDITIONAL_JUMP_MNEMONICS,
+    _inf_filetype_id,
+    _inf_procname,
+    get_stack_frame_variables_internal,
+    handle_error,
+    hex_ea,
+    ida_bytes,
+    ida_funcs,
+    ida_hexrays,
+    ida_nalt,
+    ida_name,
+    ida_typeinf,
+    idaapi,
+    idautils,
+    idc,
+    is_call_mnemonic,
+    is_return_mnemonic,
+    is_riscv_family,
+    make_error,
+    public_arg,
+    run_action,
+    tool,
+    validate_addr
+)
 import contextlib
 import functools
 import hashlib
 
-try:
-    from ida_pro_mcp.ida_mcp.sync import _tool_cache, sync_wrapper
-except ImportError:
-    from sync import _tool_cache, sync_wrapper  # type: ignore[import-not-found]
+from ..sync import _tool_cache, sync_wrapper
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
-try:
-    from .. import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from .. import compat as _compat
 
 # Arch-aware classification for metrics and create-failure hints.  Re-imported
 # directly (not via _common) so the isolated unit-test harness exercises the
 # real classifier sets even though the _common stub omits them.
-try:
-    from ida_pro_mcp.ida_mcp.support.arch_utils import (
+from ..support.arch_utils import (
         UNCONDITIONAL_JUMP_MNEMONICS,
         CONDITIONAL_BRANCH_MNEMONICS,
         is_call_mnemonic,
         is_return_mnemonic,
         is_riscv_family,
     )
-except ImportError:
-    try:
-        from arch_utils import (  # type: ignore[import-not-found]
-            UNCONDITIONAL_JUMP_MNEMONICS,
-            CONDITIONAL_BRANCH_MNEMONICS,
-            is_call_mnemonic,
-            is_return_mnemonic,
-            is_riscv_family,
-        )
-    except ImportError:
-        UNCONDITIONAL_JUMP_MNEMONICS = frozenset()
-        CONDITIONAL_BRANCH_MNEMONICS = frozenset()
-        is_call_mnemonic = lambda m, *a, **k: False  # noqa: E731
-        is_return_mnemonic = lambda m, *a, **k: False  # noqa: E731
-        is_riscv_family = lambda *a, **k: False  # noqa: E731
+
 
 # ============================================================================
 # 10. FUNCS - Function management
@@ -862,6 +865,9 @@ def funcs(
     - find_similar: Find functions with similar bytecode patterns to the function at `addr`.
       Returns ranked list with similarity scores.
     """
+    # Public MCP names stay on the wire; accept them beside legacy aliases.
+    addr = public_arg(kwargs, 'address', addr)
+    count = public_arg(kwargs, 'limit', count)
     if action == "list":
         from ida_pro_mcp.ida_mcp.tools.data import data  # noqa: PLC0415
 

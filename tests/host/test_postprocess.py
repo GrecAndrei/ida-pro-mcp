@@ -36,6 +36,7 @@ from ida_pro_mcp.host.server.postprocess import (  # noqa: E402
     extract_post_process_params,
     has_post_process,
     item_search_text,
+    prepare_args_for_postprocess,
     resolve_list_field,
 )
 
@@ -84,6 +85,21 @@ class TestExtractParams:
         tool_args, pp = extract_post_process_params(args)
         assert "action" in tool_args
         assert all(k in pp for k in PP_KEYS)
+
+    def test_keep_leaves_native_limit_on_tool_args(self):
+        args = {"action": "disasm", "addrs": "0x401000", "limit": 4, "grep": "call"}
+        tool_args, pp = extract_post_process_params(args, keep={"limit"})
+        assert tool_args["limit"] == 4
+        assert "grep" not in tool_args
+        assert pp == {"grep": "call"}
+
+    def test_code_prepare_copies_limit_to_max_items(self):
+        tool_args, pp = prepare_args_for_postprocess(
+            "code", {"action": "disasm", "addrs": "0x401000", "limit": 4, "grep": "call"}
+        )
+        assert tool_args["limit"] == 4
+        assert tool_args["max_items"] == 4
+        assert pp == {"grep": "call"}
 
 
 # ---------------------------------------------------------------------------

@@ -11,15 +11,24 @@ import json
 import os
 import re
 
-try:
-    from .._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from .._common import (
+    Annotated,
+    Literal,
+    MCPError,
+    Optional,
+    handle_error,
+    idaread,
+    looks_like_address,
+    make_error,
+    os,
+    public_arg,
+    run_action,
+    tool,
+    validate_addr,
+    validate_range
+)
 
-try:
-    from ...support.semantic_matching import normalize_action
-except ImportError:
-    from support.semantic_matching import normalize_action  # type: ignore[import-not-found]
+from ...support.semantic_matching import normalize_action
 
 from ...support.query_lang import run_query_lang
 from .advanced import search_constants, search_decompiled, search_structured
@@ -216,11 +225,16 @@ def search(
     - noreach: Functions NOT reachable from any known entrypoint
     """
     try:
-        # Resolve pattern
+        # Resolve pattern. Public ida_search_data_value sends `value`.
         actual_pattern = pattern or query or intent
         if not actual_pattern:
             # Compatibility: data_ref/code_ref callers often send addr/target.
-            compat_target = kwargs.get("addr") or kwargs.get("target") or kwargs.get("ea")
+            compat_target = (
+                kwargs.get("value")
+                or kwargs.get("addr")
+                or kwargs.get("target")
+                or kwargs.get("ea")
+            )
             if compat_target is not None:
                 actual_pattern = str(compat_target)
         try:
@@ -314,67 +328,12 @@ def search(
                 l1_pre_filtered_addrs = _query_insight_by_tags(tags, mode="or")
 
         # Route
-        response = None
-        if action == "bytes":
-            response = search_bytes(actual_pattern, range_start, range_end, include_context, offset, limit, timeout_ms)
-        elif action == "string":
-            response = search_string(actual_pattern, case_sensitive, include_context, offset, limit, timeout_ms, range_start, range_end)
-        elif action == "immediate":
-            response = search_immediate(actual_pattern, range_start, range_end, include_context, offset, limit, timeout_ms)
-        elif action == "name":
-            response = search_name(actual_pattern, case_sensitive, offset, limit)
-        elif action == "insns":
-            response = search_insns(actual_pattern, range_start, range_end, include_context, offset, limit)
-        elif action in ("mnemonic", "instruction"):
-            response = search_analyze(scope="semantic", pattern=actual_pattern, offset=offset, limit=limit, include_items=include_items)
-        elif action == "text":
-            response = search_text(actual_pattern, case_sensitive, range_start, range_end, include_context, offset, limit, timeout_ms)
-        elif action == "operand":
-            response = search_operand(actual_pattern, case_sensitive, range_start, range_end, include_context, offset, limit, timeout_ms)
-        elif action == "comment":
-            response = search_comment(actual_pattern, case_sensitive, range_start, range_end, offset, limit, timeout_ms)
-        elif action == "data_ref":
-            response = search_data_ref(actual_pattern, include_context, offset, limit, semantic_min_score, include_semantic_alternatives)
-        elif action == "code_ref":
-            response = search_code_ref(actual_pattern, include_context, offset, limit, semantic_min_score, include_semantic_alternatives)
-        elif action == "regex":
-            response = search_regex(actual_pattern, case_sensitive, range_start, range_end, include_context, offset, limit, timeout_ms)
-        elif action == "func_by_sig":
-            response = search_func_by_sig(actual_pattern, offset, limit, timeout_ms)
-        elif action == "find":
-            response = search_find(actual_pattern, case_sensitive, range_start, range_end, include_context, include_items, include_breakdown, offset, limit, timeout_ms, kind)
-        elif action == "callers":
-            response = search_callers(actual_pattern, include_context, offset, limit, semantic_min_score, include_semantic_alternatives, include_items)
-        elif action == "callees":
-            response = search_callees(actual_pattern, include_context, offset, limit, semantic_min_score, include_semantic_alternatives, include_items)
-        elif action == "api":
-            response = search_api(actual_pattern, include_context, offset, limit, include_items, include_breakdown)
-        elif action == "vulnerable":
-            response = search_analyze(
-                scope="vulnerable", pattern=actual_pattern,
-                depth=int(kwargs.get("depth", 5)),
-                offset=offset, limit=limit,
-                include_items=include_items,
-            )
-        elif action == "constants":
-            response = search_constants(actual_pattern, range_start, range_end, include_context, offset, limit, include_items, timeout_ms=timeout_ms)
-        elif action == "decompiled":
-            response = search_decompiled(actual_pattern, case_sensitive, range_start, range_end, offset, limit, include_items, timeout_ms=timeout_ms, **kwargs)
-        elif action == "structured":
-            response = search_structured(constraints or {}, actual_pattern, range_start, range_end, include_context, offset, limit, include_items, timeout_ms)
-        elif action == "type":
-            response = search_type(actual_pattern, case_sensitive, offset, limit, include_items)
-        elif action == "export":
-            response = search_export(actual_pattern, case_sensitive, offset, limit, include_items)
-        elif action == "summary":
-            response = search_summary(actual_pattern, case_sensitive, range_start, range_end)
-        elif action == "query_lang":
-            # query_lang uses the 'query' parameter directly, not pattern.
-            # Forward the op-level limit so ida_search_query_lang(limit=N)
-            # resizes the fetch window (run_query_lang caps at its default 1000
-            # otherwise).
-            response = run_query_lang(query or actual_pattern or "", limit=limit)
-        elif action == "nl":
+        actual_pattern = public_arg(kwargs, "query", actual_pattern)
+        semantic_min_score = public_arg(kwargs, "min_score", semantic_min_score)
+        if kwargs.get("address") is not None and kwargs.get("addr") is None:
+            kwargs["addr"] = kwargs["address"]
+
+        def _search_nl():
             mode = str(kwargs.get("mode", "expand"))
             center_ea = None
             raw_center = kwargs.get("addr")
@@ -385,7 +344,7 @@ def search(
                 center_ea, center_error = validate_addr(raw_center, require_func=False)
                 if center_error:
                     return center_error
-            response = _search_nl_impl(
+            return _search_nl_impl(
                 actual_pattern,
                 limit=limit,
                 mode=mode,
@@ -399,18 +358,102 @@ def search(
                 rerank=None if kwargs.get("rerank") is None else bool(kwargs.get("rerank")),
             )
 
-        elif action == "behavior":
-            response = _search_behavior_impl(
+        def _search_path():
+            src = str(kwargs.get("src", actual_pattern or ""))
+            dst = str(kwargs.get("dst", ""))
+            max_depth = int(kwargs.get("max_depth", 12))
+            if not dst:
+                return make_error(MCPError.INVALID_ARGS,
+                                  "path action requires both src and dst",
+                                  hint="Example: search(action='path', pattern='main', dst='WSAStartup')")
+            return search_path(src, dst, max_depth)
+
+        def _search_data_value():
+            target_value = actual_pattern
+            if target_value is None:
+                target_value = kwargs.get("value") or kwargs.get("target")
+            if target_value is None:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    "data_value requires a target value (address or symbol name)",
+                )
+            endian = str(kwargs.get("endian", "both") or "both").lower()
+            endian = {"little": "le", "big": "be"}.get(endian, endian)
+            if isinstance(target_value, int):
+                text = hex(target_value)
+                numeric = True
+            else:
+                text = str(target_value).strip()
+                try:
+                    int(text, 0)
+                    numeric = True
+                except (TypeError, ValueError):
+                    numeric = looks_like_address(text)
+            if not numeric:
+                return search_string(
+                    text,
+                    case_sensitive,
+                    include_context,
+                    offset,
+                    limit,
+                    timeout_ms,
+                    range_start,
+                    range_end,
+                )
+            result = search_data_value(
+                target_value,
+                range_start=range_start,
+                range_end=range_end,
+                endian=endian,
+                word_size=str(kwargs.get("word_size", "auto")),
+                offset=offset,
+                limit=limit,
+                timeout_ms=timeout_ms,
+                region=kwargs.get("region"),
+            )
+            return result
+
+        handlers = {
+            "bytes": lambda: search_bytes(actual_pattern, range_start, range_end, include_context, offset, limit, timeout_ms),
+            "string": lambda: search_string(actual_pattern, case_sensitive, include_context, offset, limit, timeout_ms, range_start, range_end),
+            "immediate": lambda: search_immediate(actual_pattern, range_start, range_end, include_context, offset, limit, timeout_ms),
+            "name": lambda: search_name(actual_pattern, case_sensitive, offset, limit),
+            "insns": lambda: search_insns(actual_pattern, range_start, range_end, include_context, offset, limit),
+            "mnemonic": lambda: search_analyze(scope="semantic", pattern=actual_pattern, offset=offset, limit=limit, include_items=include_items),
+            "instruction": lambda: search_analyze(scope="semantic", pattern=actual_pattern, offset=offset, limit=limit, include_items=include_items),
+            "text": lambda: search_text(actual_pattern, case_sensitive, range_start, range_end, include_context, offset, limit, timeout_ms),
+            "operand": lambda: search_operand(actual_pattern, case_sensitive, range_start, range_end, include_context, offset, limit, timeout_ms),
+            "comment": lambda: search_comment(actual_pattern, case_sensitive, range_start, range_end, offset, limit, timeout_ms),
+            "data_ref": lambda: search_data_ref(actual_pattern, include_context, offset, limit, semantic_min_score, include_semantic_alternatives),
+            "code_ref": lambda: search_code_ref(actual_pattern, include_context, offset, limit, semantic_min_score, include_semantic_alternatives),
+            "regex": lambda: search_regex(actual_pattern, case_sensitive, range_start, range_end, include_context, offset, limit, timeout_ms),
+            "func_by_sig": lambda: search_func_by_sig(actual_pattern, offset, limit, timeout_ms),
+            "find": lambda: search_find(actual_pattern, case_sensitive, range_start, range_end, include_context, include_items, include_breakdown, offset, limit, timeout_ms, kind),
+            "callers": lambda: search_callers(actual_pattern, include_context, offset, limit, semantic_min_score, include_semantic_alternatives, include_items),
+            "callees": lambda: search_callees(actual_pattern, include_context, offset, limit, semantic_min_score, include_semantic_alternatives, include_items),
+            "api": lambda: search_api(actual_pattern, include_context, offset, limit, include_items, include_breakdown),
+            "vulnerable": lambda: search_analyze(
+                scope="vulnerable", pattern=actual_pattern,
+                depth=int(kwargs.get("depth", 5)),
+                offset=offset, limit=limit,
+                include_items=include_items,
+            ),
+            "constants": lambda: search_constants(actual_pattern, range_start, range_end, include_context, offset, limit, include_items, timeout_ms=timeout_ms),
+            "decompiled": lambda: search_decompiled(actual_pattern, case_sensitive, range_start, range_end, offset, limit, include_items, timeout_ms=timeout_ms, **kwargs),
+            "structured": lambda: search_structured(constraints or {}, actual_pattern, range_start, range_end, include_context, offset, limit, include_items, timeout_ms),
+            "type": lambda: search_type(actual_pattern, case_sensitive, offset, limit, include_items),
+            "export": lambda: search_export(actual_pattern, case_sensitive, offset, limit, include_items),
+            "summary": lambda: search_summary(actual_pattern, case_sensitive, range_start, range_end),
+            "query_lang": lambda: run_query_lang(query or actual_pattern or "", limit=limit),
+            "nl": _search_nl,
+            "behavior": lambda: _search_behavior_impl(
                 actual_pattern,
                 limit=limit,
                 timeout_ms=timeout_ms,
                 include_items=include_items,
-            )
-
-        elif action == "bool":
-            response = search_bool(actual_pattern, case_sensitive, offset, limit)
-        elif action == "analyze":
-            response = search_analyze(
+            ),
+            "bool": lambda: search_bool(actual_pattern, case_sensitive, offset, limit),
+            "analyze": lambda: search_analyze(
                 addr=actual_pattern or kwargs.get("addr"),
                 scope=str(kwargs.get("scope", "auto")),
                 metric=str(kwargs.get("metric", "size")),
@@ -423,88 +466,40 @@ def search(
                 limit=limit,
                 include_context=include_context,
                 include_items=include_items,
-            )
-        elif action == "neighborhood":
-            radius = int(kwargs.get("radius", 10))
-            response = search_neighborhood(actual_pattern, radius, offset, limit)
-        elif action == "outlier":
-            metric = str(kwargs.get("metric", "size"))
-            response = search_outlier(metric, int(kwargs.get("top", 50)), offset, limit)
-        elif action == "fingerprint":
-            top_k = int(kwargs.get("top_k", 20))
-            response = search_fingerprint(actual_pattern, top_k, offset, limit)
-        elif action == "path":
-            src = str(kwargs.get("src", actual_pattern or ""))
-            dst = str(kwargs.get("dst", ""))
-            max_depth = int(kwargs.get("max_depth", 12))
-            if not dst:
-                return make_error(MCPError.INVALID_ARGS,
-                                  "path action requires both src and dst",
-                                  hint="Example: search(action='path', pattern='main', dst='WSAStartup')")
-            response = search_path(src, dst, max_depth)
-        elif action == "reach":
-            depth = int(kwargs.get("depth", 5))
-            response = search_reach(actual_pattern, depth, offset, limit)
-        elif action == "noreach":
-            depth = int(kwargs.get("depth", 20))
-            response = search_noreach(depth, offset, limit)
-
-        elif action == "symbol":
-            response = search_symbol(
+            ),
+            "neighborhood": lambda: search_neighborhood(actual_pattern, int(kwargs.get("radius", 10)), offset, limit),
+            "outlier": lambda: search_outlier(str(kwargs.get("metric", "size")), int(kwargs.get("top", 50)), offset, limit),
+            "fingerprint": lambda: search_fingerprint(actual_pattern, int(kwargs.get("top_k", 20)), offset, limit),
+            "path": _search_path,
+            "reach": lambda: search_reach(actual_pattern, int(kwargs.get("depth", 5)), offset, limit),
+            "noreach": lambda: search_noreach(int(kwargs.get("depth", 20)), offset, limit),
+            "symbol": lambda: search_symbol(
                 actual_pattern,
                 include_alternatives=kwargs.get("include_alternatives", True),
                 offset=offset,
                 limit=limit,
-            )
-        elif action == "symbol_info":
-            response = search_symbol_info(
+            ),
+            "symbol_info": lambda: search_symbol_info(
                 actual_pattern or "",
                 include_xrefs=kwargs.get("include_xrefs", False),
-            )
-        elif action == "demangle":
-            response = search_demangle(
-                actual_pattern or "",
-                limit=limit,
-                offset=offset,
-            )
-        elif action == "xrefs_to_string":
-            response = search_xrefs_to_string(
+            ),
+            "demangle": lambda: search_demangle(actual_pattern or "", limit=limit, offset=offset),
+            "xrefs_to_string": lambda: search_xrefs_to_string(
                 actual_pattern,
                 include_context=include_context,
                 offset=offset,
                 limit=limit,
                 timeout_ms=timeout_ms,
-            )
+            ),
+            "data_value": _search_data_value,
+        }
 
-        elif action == "data_value":
-            # value may arrive via pattern, the value kwarg, or target.
-            target_value = actual_pattern
-            if target_value is None:
-                target_value = kwargs.get("value") or kwargs.get("target")
-            if target_value is None:
-                return make_error(
-                    MCPError.INVALID_ARGS,
-                    "data_value requires a target value (address or symbol name)",
-                )
-            response = search_data_value(
-                target_value,
-                range_start=range_start,
-                range_end=range_end,
-                endian=str(kwargs.get("endian", "both")),
-                word_size=str(kwargs.get("word_size", "auto")),
-                offset=offset,
-                limit=limit,
-                timeout_ms=timeout_ms,
-                region=kwargs.get("region"),
-            )
-
-        else:
-            return make_error(MCPError.INVALID_ARGS, f"Unknown action: {action}")
+        response = run_action(action, handlers, tool_name="search")
 
         # Inject blackboard context into find/nl/behavior results
         if action in ("find", "nl", "behavior") and isinstance(response, dict):
             try:
-                from blackboard import BlackboardStore  # type: ignore
+                from ..blackboard import BlackboardStore
                 store = BlackboardStore()
                 items = response.get("items", [])
                 if items:

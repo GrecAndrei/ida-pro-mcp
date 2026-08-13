@@ -1,16 +1,30 @@
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    Annotated,
+    Any,
+    Literal,
+    MCPError,
+    _filetype_name,
+    _inf_bitness,
+    _inf_filetype_id,
+    _inf_procname,
+    handle_error,
+    ida_bytes,
+    ida_kernwin,
+    ida_nalt,
+    ida_segment,
+    idaapi,
+    idaread,
+    idautils,
+    idc,
+    make_error,
+    os,
+    public_arg,
+    run_action,
+    tool
+)
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
-try:
-    from .. import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from .. import compat as _compat
 
 import contextlib
 import glob
@@ -40,20 +54,16 @@ except Exception:
 # once at tool-module init (its own module-scope install_hooks()); read_events
 # is the read side of the ring.
 try:
-    from ida_pro_mcp.ida_mcp.support.events import EVENT_RING_MAX, read_events
+    from ..support.events import EVENT_RING_MAX, read_events
 except Exception:
-    try:
-        from support.events import EVENT_RING_MAX, read_events  # type: ignore[import-not-found]
-    except Exception:
-        from .support.events import EVENT_RING_MAX, read_events  # type: ignore[import-not-found]
+    EVENT_RING_MAX = 0
+    def read_events(*_a, **_k):
+        return []
 
 try:
-    from ida_pro_mcp.ida_mcp.support.arch_utils import detect_riscv_gp
+    from ..support.arch_utils import detect_riscv_gp
 except Exception:
-    try:
-        from arch_utils import detect_riscv_gp  # type: ignore[import-not-found]
-    except Exception:
-        detect_riscv_gp = None  # type: ignore
+    detect_riscv_gp = None  # type: ignore
 
 def _get_path(module, names):
     for name in names:

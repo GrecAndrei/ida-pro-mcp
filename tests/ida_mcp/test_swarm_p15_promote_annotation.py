@@ -16,7 +16,7 @@ file is the behavioral half of the promotion:
   - The host ``AgentOperation`` for ``ida_mark_dangerous`` carries the exact
     strict schema (``address`` + ``risk_ack`` required), translates to the
     legacy ``annotation/mark_dangerous`` backend via ``to_backend_call``
-    (``address``→``addr``, ``risk_ack``→``_risk_ack``), is discoverable
+    (``address`` stays ``address``, ``risk_ack``→``_risk_ack``), is discoverable
     through ``ida_help``, and its translated backend call drives the tool
     end-to-end once the host dispatcher pops ``_risk_ack``.
 
@@ -401,7 +401,7 @@ class TestMarkDangerousOpContract(unittest.TestCase):
             args,
             {
                 "action": "mark_dangerous",
-                "addr": "0x401000",
+                "address": "0x401000",
                 "prefix": "[X] ",
                 "limit": 7,
                 "dry_run": False,

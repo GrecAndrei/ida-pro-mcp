@@ -836,6 +836,16 @@ TOOL_ARG_SCHEMAS = {
         "query": {"type": "string"},
         "depth": {"type": "integer"},
     },
+    "graph": {
+        "action": {"type": "string", "enum": TOOL_ACTIONS["graph"]},
+        "addr": {"type": "string", "description": "Hex address string or function name."},
+        "address": {"type": "string", "description": "Public-surface spelling of addr."},
+        "depth": {"type": "integer", "description": "Max traversal depth (default 5)."},
+        "direction": {"type": "string", "enum": ["down", "up", "both"]},
+        "format": {"type": "string", "enum": ["json", "dot", "mermaid"]},
+        "max_items": {"type": "integer", "description": "Max nodes/edges to collect."},
+        "max_nodes": {"type": "integer", "description": "Public-surface spelling of max_items."},
+    },
     "gadgets": {
         "action": {"type": "string", "enum": TOOL_ACTIONS["gadgets"]},
         "addr": {"type": "string", "description": "Hex address string (e.g. \"0x356f8\") or function name. Pass verbatim from search results — no mental math, no decimal conversion."},

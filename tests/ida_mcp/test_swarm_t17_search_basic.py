@@ -126,6 +126,23 @@ def test_search_string_default_without_range_unaffected():
     assert "0x2000" in resp["results"]
 
 
+def test_search_string_finds_literal_not_in_strlist():
+    """Packed .rodata tables are often missing from IDA's string list."""
+    basic = _module("search.basic")
+    basic.idaapi.BADADDR = -1
+    basic.safe_get_strlist_items = lambda: []
+    basic.safe_get_strlit_contents = lambda ea: None
+    basic.idautils.XrefsTo = lambda *a, **k: []
+    basic.compile_smart_pattern = _name_matcher
+    blob = b"xxxxAGENT_SURFACE_STRING_001\x00yyyy"
+    basic.iter_segments = lambda a, b, require_exec=False: [(0x4000, 0x4000 + len(blob))]
+    basic.ida_bytes.get_bytes = lambda ea, n: blob[ea - 0x4000:ea - 0x4000 + n]
+    resp = basic.search_string("AGENT_SURFACE_STRING_001", False, False, 0, 10, 0)
+    assert resp["count"] >= 1, resp
+    assert "AGENT_SURFACE_STRING_001" in resp["results"]
+    assert "0x4004" in resp["results"]
+
+
 # ---------------------------------------------------------------------------
 # search_func_by_sig — keyword word-boundary anchoring
 # ---------------------------------------------------------------------------

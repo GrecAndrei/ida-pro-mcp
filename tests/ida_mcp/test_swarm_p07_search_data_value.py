@@ -14,7 +14,7 @@ IDA):
 - word_size auto/u32/u64 and RISC-V-style IVT/dispatch-table blob
 - is_code_vs_data labeling via item flags
 - region / start+end narrowing
-- symbol-name target resolution
+- exact IDA name target resolution (get_name_ea_simple; no semantic path)
 - timeout-bounded scan convention (timed_out + partial results)
 - router dispatch: action="data_value" forwards value/endian/word_size/timeout
 """
@@ -231,7 +231,8 @@ def test_data_value_start_end_narrows_scan():
 def test_data_value_resolves_symbol_name_target():
     basic = _module()
     _config_basic(basic, _u64_blob())
-    basic.resolve_target = lambda raw, *a, **k: (0x400000, None, {"match": "exact_name"})
+    bad = getattr(basic.idaapi, "BADADDR", -1)
+    basic.idc.get_name_ea_simple = lambda name: 0x400000 if name == "handler_main" else bad
 
     resp = basic.search_data_value("handler_main", word_size="u64", endian="both", timeout_ms=0)
     assert resp["ok"] is True
@@ -241,12 +242,13 @@ def test_data_value_resolves_symbol_name_target():
 def test_data_value_invalid_symbol_target_errors():
     basic = _module()
     _config_basic(basic, _u64_blob())
-    basic.resolve_target = lambda raw, *a, **k: (-1, "Target 'nope' not found", {})
+    bad = getattr(basic.idaapi, "BADADDR", -1)
+    basic.idc.get_name_ea_simple = lambda name: bad
 
     resp = basic.search_data_value("nope", word_size="u64", endian="both", timeout_ms=0)
     assert resp["ok"] is False
     assert resp["code"] == "INVALID_ARGS"
-    assert "Target 'nope' not found" in resp["message"]
+    assert "nope" in resp["message"]
 
 
 # ---------------------------------------------------------------------------

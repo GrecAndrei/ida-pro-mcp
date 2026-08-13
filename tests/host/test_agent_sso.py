@@ -45,6 +45,7 @@ def _tool_call(server: IDAMCPServer, request_id: int, name: str, arguments: dict
 def _make_server(tmp_path, monkeypatch) -> IDAMCPServer:
     monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path / "runtime"))
     monkeypatch.setenv("IDA_MCP_STRUCTURED_CONTENT", "1")
+    monkeypatch.setenv("IDA_MCP_TOOL_SURFACE", "legacy")
     # Pin the realm secret so tests can mint tickets with a known value.
     monkeypatch.setenv("IDA_MCP_SSO_SECRET", "sekret")
     monkeypatch.setattr(IDAMCPServer, "_detect_ida_dir", lambda self: "")

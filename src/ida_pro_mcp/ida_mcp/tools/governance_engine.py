@@ -840,27 +840,28 @@ def redact_pii(text: str) -> str:
 # ============================================================================
 
 try:
-    from ._common import MCPError, idaread, make_error, tool
+    from ._common import MCPError, idaread, make_error, run_action, tool
 except ImportError:
-    try:
-        from _common import MCPError, idaread, make_error, tool  # type: ignore[import-not-found]
-    except ImportError:
-        # Standalone / test mode — tool decorator not available
-        def tool(f):
-            return f  # type: ignore
-        def idaread(f):
-            return f  # type: ignore
-        def make_error(*args, **kwargs):  # type: ignore
-            # Match the standard in-IDA envelope: {"error": True, "code", "message"}.
-            code = args[0] if len(args) > 0 else kwargs.get("code", "UNKNOWN_ERROR")
-            message = args[1] if len(args) > 1 else kwargs.get("message", str(kwargs) or "unknown")
-            return {"error": True, "code": str(code), "message": str(message)}
-        class MCPError:
-            GOVERNANCE_BLOCKED = "GOVERNANCE_BLOCKED"
-            INVALID_ARGS = "INVALID_ARGS"
-            IDA_ERROR = "IDA_ERROR"
-            NOT_FOUND = "NOT_FOUND"
-            UNKNOWN_ERROR = "UNKNOWN_ERROR"
+    def tool(f):
+        return f  # type: ignore
+    def idaread(f):
+        return f  # type: ignore
+    def make_error(*args, **kwargs):  # type: ignore
+        code = args[0] if len(args) > 0 else kwargs.get("code", "UNKNOWN_ERROR")
+        message = args[1] if len(args) > 1 else kwargs.get("message", str(kwargs) or "unknown")
+        return {"error": True, "code": str(code), "message": str(message)}
+    def run_action(action, handlers, *, tool_name=""):  # type: ignore
+        fn = handlers.get(action) if isinstance(handlers, dict) else None
+        if fn is None:
+            return {"error": True, "code": "ACTION_NOT_FOUND", "message": f"Unknown action '{action}'"}
+        return fn()
+    class MCPError:
+        GOVERNANCE_BLOCKED = "GOVERNANCE_BLOCKED"
+        INVALID_ARGS = "INVALID_ARGS"
+        IDA_ERROR = "IDA_ERROR"
+        NOT_FOUND = "NOT_FOUND"
+        UNKNOWN_ERROR = "UNKNOWN_ERROR"
+        ACTION_NOT_FOUND = "ACTION_NOT_FOUND"
 
 
 @tool
@@ -905,10 +906,9 @@ def governance_engine(
     try:
         gov = get_governance()
 
-        if action == "check":
+        def _act_check():
             if not operation_type:
                 return make_error(MCPError.INVALID_ARGS, "operation_type required for check")
-
             addr_int = None
             if addr:
                 try:
@@ -916,7 +916,6 @@ def governance_engine(
                     addr_int = coerce_int(addr)
                 except (ValueError, TypeError):
                     addr_int = None
-
             result = gov.evaluate_operation(
                 operation_type=operation_type,
                 addr=addr_int,
@@ -926,7 +925,7 @@ def governance_engine(
             )
             return {"ok": True, **result}
 
-        elif action == "redact":
+        def _act_redact():
             redacted = redact_pii(proposed_value)
             return {
                 "ok": True,
@@ -934,14 +933,12 @@ def governance_engine(
                 "replacements_made": redacted != proposed_value,
             }
 
-        elif action == "list_rules":
-            return {"ok": True, "rules": gov.list_rules()}
-
-        elif action == "stats":
-            return {"ok": True, **gov.get_stats()}
-
-        else:
-            return make_error(MCPError.INVALID_ARGS, f"Unknown governance action: {action}")
+        return run_action(action, {
+            "check": _act_check,
+            "redact": _act_redact,
+            "list_rules": lambda: {"ok": True, "rules": gov.list_rules()},
+            "stats": lambda: {"ok": True, **gov.get_stats()},
+        }, tool_name="governance")
 
     except Exception as e:
         return make_error(MCPError.IDA_ERROR, str(e))

@@ -32,41 +32,39 @@ Test behavior through stable interfaces, not implementation details.
 
 ## Adding an Agent Operation
 
-1. **`host/agent_operations.py`** — add an `AgentOperation` with strict schema,
-   valid example, concise description, and backend mapping (`backend_tool`,
-   `backend_action`, `argument_map`).
+1. **`host/agent_operations.py`** — add an `AgentOperation` with a strict schema,
+   valid example, concise description, `backend_tool`, and `backend_action`.
+   `risk_tier` is stamped from policy at import. Use `argument_map` only for
+   host-only keys (`risk_ack` → `_risk_ack`, background job controls). Public
+   argument names (`address`, `query`, `limit`, …) stay on the IDA wire.
 
-2. **`host/server/tool_registry.py`** — add the new `backend_action` to
-   `_TOOL_ACTIONS[backend_tool]` so it is a recognized action for that tool.
+2. **IDA-side tool** — implement the action in `ida_mcp/tools/<tool>.py`:
+   - Add the action name to the `Literal[...]` annotation on `action`
+   - Add a handler to the `run_action({...})` table (or an `elif` until that
+     file is converted)
+   - Accept public argument names beside any legacy aliases via `public_arg`
 
-3. **`host/schemas_data.py`** — add any new argument keys the action accepts to
-   `TOOL_ARG_SCHEMAS[backend_tool]`. Unknown keys are rejected before dispatch.
+3. **Tests** — add tests in `tests/`:
+   - `test_agent_operations.py` — schema validity, routing, public names
+   - `test_agent_risk_ack.py` — mutating ops in the risk_ack list
+   - `tests/host/test_policy.py` — correct risk tier for the `(tool, action)` pair
 
-4. **`host/policy.py`** — classify the new action:
-   - Read-only → add `(tool, action)` to `READ_ONLY_ACTIONS`
-   - IDB write → ensure `tool` is in `WRITE_IDB_TOOLS` or `action` is in `WRITE_ACTIONS`
-   - Destructive → add `action` to `DESTRUCTIVE_ACTIONS` or pair to `DESTRUCTIVE_TOOL_ACTIONS`
-   - Failing to classify lands in `UNKNOWN`, which blocks in `assist` mode.
-
-5. **IDA-side tool** — implement the action in `ida_mcp/tools/<tool>.py`:
-   - Add the action name to the `Literal[...]` type annotation on the `action` param
-   - Add the `elif action == "<name>":` branch
-
-6. **Tests** — add tests in `tests/`:
-   - `test_agent_operations.py` — schema validity, routing, argument mapping
-   - `test_agent_risk_ack.py` — mutating ops in the risk_ack list; read-only ops not there
-   - `tests/host/test_policy.py` — correct risk tier for the new `(tool, action)` pair
-
-7. **Generated docs** — run `python scripts/generate_tool_skills.py` to
+4. **Generated docs** — run `python scripts/generate_tool_skills.py` to
    regenerate `docs/TOOLS_REFERENCE.md` and `.agents/skills/ida-pro-mcp/SKILL.md`.
 
-8. **README.md** — update the operations table (add the new op to its group row)
-   and the `N exact-schema operations` count in the intro paragraph.
+5. **README.md** — update the operations table and the
+   `N exact-schema operations` count in the intro paragraph.
 
-9. **Wiki** — update the relevant page in `docs/wiki/tools/` (or create a new
+6. **Wiki** — update the relevant page in `docs/wiki/tools/` (or create a new
    page). Update `docs/wiki/INDEX.md` if a new page was added.
 
-The full test suite enforces steps 7–9: `test_docs_sync.py` will fail if
+The backend action catalog (`tool_actions()`) and `TOOL_ARG_SCHEMAS` public
+names are derived from `AgentOperation`. New backend tools still need an entry
+in `_TOOL_ACTIONS` / `TOOLS` / `TOOL_DESCRIPTIONS`. Policy overlay uses the
+stamped `risk_tier`; classify a brand-new backend pair in `policy.py` if it
+has no public op yet.
+
+The full test suite enforces steps 4–6: `test_docs_sync.py` will fail if
 TOOLS_REFERENCE, SKILL.md, the README table, or the README count are stale.
 
 ## Adding a Legacy Backend Tool

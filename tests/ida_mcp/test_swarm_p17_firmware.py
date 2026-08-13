@@ -181,6 +181,31 @@ def test_detect_mmio_addr_radius_narrows_window():
     assert resp["scan_window"]["start"] >= hex(_vector_ptr(RISCV_UART_BASE) - 64), resp
 
 
+def test_detect_mmio_does_not_walk_unmapped_holes():
+    """A far-away extra segment must not turn inf min/max into a hole walk.
+
+    Live layout tests add a segment at 0x61000000; scanning every 4 bytes
+    from the ELF image up to that address blocks the IDA RPC thread.
+    """
+    blob, mod = _load_fixture()
+    reads = {"n": 0}
+    orig = mod._read_word_bytes
+
+    def counting(ea, size):
+        reads["n"] += 1
+        return orig(ea, size)
+
+    mod._read_word_bytes = counting
+    # Keep max_ea above the RISC-V fixture base (0x80000000); the live hang
+    # is an ELF at ~0x400000 plus a segment at 0x61000000.
+    sys.modules["ida_ida"].inf_get_max_ea = lambda: LOAD_BASE + 0x21001000
+    resp = mod.firmware(action="detect_mmio")
+    assert resp["ok"] is True, resp
+    assert reads["n"] < 100_000, reads["n"]
+    uart_page = hex(UART_ADDR & ~0xFFF)
+    assert uart_page in [r["base"] for r in resp["ranges"]], resp
+
+
 # ---------------------------------------------------------------------------
 # rtos_scan
 # ---------------------------------------------------------------------------

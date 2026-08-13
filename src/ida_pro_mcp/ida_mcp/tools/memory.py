@@ -1,22 +1,35 @@
 
-try:
-    from ._common import *
-except ImportError:
-    from _common import *  # type: ignore[import-not-found]
+from ._common import (
+    Annotated,
+    Any,
+    Literal,
+    MCPError,
+    Optional,
+    _inf_bitness,
+    _inf_is_be,
+    _inf_min_ea,
+    handle_error,
+    ida_bytes,
+    ida_fixup,
+    ida_nalt,
+    ida_segment,
+    ida_typeinf,
+    idaapi,
+    idaread,
+    idawrite,
+    idc,
+    make_error,
+    parse_address,
+    public_arg,
+    run_action,
+    tool,
+    validate_addr
+)
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
-try:
-    from .. import compat as _compat
-except ImportError:
-    try:
-        from ida_mcp import compat as _compat  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        import compat as _compat  # type: ignore[import-not-found,no-redef]
+from .. import compat as _compat
 
-try:
-    from .governance_engine import evaluate_operation
-except ImportError:
-    from governance_engine import evaluate_operation  # type: ignore[import-not-found]
+from .governance_engine import evaluate_operation
 
 import re
 from collections import Counter
@@ -96,10 +109,7 @@ def _fixup_info(ea):
 # MEMORY - Read/Write/Search/Analyze operations
 # ============================================================================
 
-try:
-    from ._common import shannon_entropy as _shannon_entropy
-except ImportError:
-    from _common import shannon_entropy as _shannon_entropy  # type: ignore[import-not-found]
+from ._common import shannon_entropy as _shannon_entropy
 
 
 def _extract_strings(data, min_len=4):
@@ -227,6 +237,8 @@ def memory(
       pointers supports aligned (bool, default False — also scan at every byte offset, catching
       pointers that are not pointer-size-aligned like packed firmware tables / raw RISC-V blobs).
     """
+    # Public MCP names stay on the wire; accept them beside legacy aliases.
+    addr = public_arg(kwargs, 'address', addr)
     result = _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs)
     return result
 
