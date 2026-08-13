@@ -23,7 +23,6 @@ from ._common import (
     idawrite,
     idc,
     make_error,
-    os,
     parse_address,
     public_arg,
     tool,

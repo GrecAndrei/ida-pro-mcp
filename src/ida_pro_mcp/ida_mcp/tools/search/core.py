@@ -7,7 +7,6 @@ from typing import Optional
 
 from .._common import (
     MAGIC_CONSTANTS,
-    Optional,
     compile_smart_pattern,
     ida_bytes,
     ida_lines,
@@ -16,14 +15,8 @@ from .._common import (
     idautils,
     idc,
     looks_like_address,
-    public_arg,
-    run_action,
     validate_addr
 )
-
-# Use _re throughout to guarantee stdlib re even if a module in the
-# wildcard chain pollutes the local ``re`` binding (e.g. MagicMock in CI).
-re = _re
 
 from ...support.semantic_matching import (  # noqa: F401
     DEFAULT_RESCORE_TOP_N,
@@ -35,6 +28,10 @@ from ...support.semantic_matching import (  # noqa: F401
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
 from ... import compat as _compat
+
+# Use _re throughout to guarantee stdlib re even if a module in the
+# wildcard chain pollutes the local ``re`` binding (e.g. MagicMock in CI).
+re = _re
 # ============================================================================
 # Module-Level Caches
 # ============================================================================

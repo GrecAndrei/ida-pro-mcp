@@ -14,8 +14,6 @@ from .._common import (
     idc,
     looks_like_address,
     make_error,
-    public_arg,
-    run_action,
     validate_addr
 )
 

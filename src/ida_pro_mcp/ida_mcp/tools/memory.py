@@ -21,7 +21,7 @@ from ._common import (
     make_error,
     parse_address,
     public_arg,
-    run_action,
+    shannon_entropy as _shannon_entropy,
     tool,
     validate_addr
 )
@@ -108,9 +108,6 @@ def _fixup_info(ea):
 # ============================================================================
 # MEMORY - Read/Write/Search/Analyze operations
 # ============================================================================
-
-from ._common import shannon_entropy as _shannon_entropy
-
 
 def _extract_strings(data, min_len=4):
     """Extract ASCII and UTF-16 strings from raw bytes."""

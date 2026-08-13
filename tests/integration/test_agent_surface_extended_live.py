@@ -28,12 +28,12 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from ida_pro_mcp.host.agent_operations import AGENT_OPERATIONS  # noqa: E402
 from tests.integration.test_agent_surface_live import (  # noqa: E402
+    DEFAULT_LIVE_PYTEST_TIMEOUT,
     LiveMCPClient,
     _fixture_source,
     _ida_dir,
     live_call_timeout,
     seed_function_addrs,
-    DEFAULT_LIVE_PYTEST_TIMEOUT,
 )
 
 LIVE_FLAG = "IDA_MCP_LIVE_TEST"
@@ -326,7 +326,7 @@ class TestCodeGraphCounts:
             if payload.get("ok") is True:
                 assert "value" in payload or "selector" in payload or "reg" in payload, payload
                 return
-        pytest.fail(f"no segment register readable at main: cs/ds/ss all failed")
+        pytest.fail("no segment register readable at main: cs/ds/ss all failed")
 
 
 # ---------------------------------------------------------------------------

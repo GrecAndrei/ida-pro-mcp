@@ -2,11 +2,9 @@
 from ._common import (
     Annotated,
     Any,
-    CONDITIONAL_BRANCH_MNEMONICS,
     Literal,
     MCPError,
     Optional,
-    UNCONDITIONAL_JUMP_MNEMONICS,
     _inf_filetype_id,
     _inf_procname,
     get_stack_frame_variables_internal,
@@ -21,12 +19,8 @@ from ._common import (
     idaapi,
     idautils,
     idc,
-    is_call_mnemonic,
-    is_return_mnemonic,
-    is_riscv_family,
     make_error,
     public_arg,
-    run_action,
     tool,
     validate_addr
 )

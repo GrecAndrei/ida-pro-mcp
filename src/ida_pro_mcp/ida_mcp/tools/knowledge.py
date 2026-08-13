@@ -4,19 +4,13 @@ import hashlib
 from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from ._common import (
-    Annotated,
-    Any,
-    Literal,
     MCPError,
-    Optional,
     handle_error,
     ida_name,
     idautils,
     idawrite,
     idc,
     make_error,
-    public_arg,
-    run_action,
     tool
 )
 

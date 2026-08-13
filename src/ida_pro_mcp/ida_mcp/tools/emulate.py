@@ -53,13 +53,11 @@ from ._common import (
     Optional,
     get_arch,
     handle_error,
-    idaread,
     idawrite,
     is_arm_family,
     is_mips_family,
     is_x86_family,
     make_error,
-    os,
     tool,
     validate_addr
 )

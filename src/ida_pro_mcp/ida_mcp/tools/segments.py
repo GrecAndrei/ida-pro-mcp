@@ -11,7 +11,6 @@ from collections import Counter
 
 from ._common import (
     Annotated,
-    Counter,
     Literal,
     MCPError,
     Optional,
@@ -26,7 +25,6 @@ from ._common import (
     idawrite,
     idc,
     make_error,
-    math,
     public_arg,
     tool,
     validate_addr

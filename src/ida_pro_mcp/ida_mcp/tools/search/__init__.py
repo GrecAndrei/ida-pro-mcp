@@ -20,7 +20,6 @@ from .._common import (
     idaread,
     looks_like_address,
     make_error,
-    os,
     public_arg,
     run_action,
     tool,

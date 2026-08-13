@@ -21,22 +21,17 @@ from collections import defaultdict, deque
 from typing import Optional
 
 from .._common import (
-    DANGEROUS_SINKS,
     MCPError,
-    Optional,
-    TAINT_SOURCES,
     compile_smart_pattern,
-    ida_hexrays,
     ida_nalt,
-    ida_typeinf,
     idaapi,
     idautils,
     idc,
     make_error,
-    os,
-    public_arg,
-    run_action
+    os
 )
+
+from ...support.taint_registry import TAINT_SOURCES, DANGEROUS_SINKS
 
 from .core import (
     CALL_XREF_TYPES,
@@ -857,9 +852,6 @@ def _outlier_rows_from_ida(metric: str) -> list[tuple[int, str, int]]:
 # ============================================================================
 # search_analyze - unified structural analysis
 # ============================================================================
-
-# Import canonical taint registry (single source of truth)
-from ...support.taint_registry import TAINT_SOURCES, DANGEROUS_SINKS
 
 _TAINT_SOURCE_NAMES = TAINT_SOURCES
 _DANGEROUS_APIS = DANGEROUS_SINKS

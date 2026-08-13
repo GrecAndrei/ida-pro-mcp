@@ -36,8 +36,7 @@ from ida_pro_mcp.host.policy import (
     classify_tool_action,
     evaluate_policy,
 )
-from ida_pro_mcp.host.schemas import classify_tool_category
-from ida_pro_mcp.host.schemas import TOOL_ARG_SCHEMAS
+from ida_pro_mcp.host.schemas import TOOL_ARG_SCHEMAS, classify_tool_category
 from ida_pro_mcp.host.schemas_data import ADVERTISED_TOOLS
 from ida_pro_mcp.host.server.rpc_args import prepare_rpc_args
 from ida_pro_mcp.host.server.tool_registry import tool_actions

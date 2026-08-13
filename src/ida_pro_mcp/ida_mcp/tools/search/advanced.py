@@ -1,5 +1,6 @@
 """SEARCH.ADVANCED - Vulnerable, constants, decompiled, and structured search."""
 
+import re
 import time as _time
 
 from .._common import (
@@ -13,19 +14,10 @@ from .._common import (
     idautils,
     idc,
     make_error,
-    public_arg,
-    run_action,
     validate_addr
 )
 
-# Import re after the wildcard import — the latter may shadow `re` with
-# typing.re (Python 3.12+) which is a deprecated proxy that lacks
-# re.compile().
-import re as _stdlib_re
-
-re = _stdlib_re
-
-from .core import (  # noqa: E402
+from .core import (
     _SEARCH_CACHE,
     SearchTimeout,
     _cache_get,

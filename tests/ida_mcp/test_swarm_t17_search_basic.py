@@ -130,7 +130,7 @@ def test_search_string_finds_literal_not_in_strlist():
     """Packed .rodata tables are often missing from IDA's string list."""
     basic = _module("search.basic")
     basic.idaapi.BADADDR = -1
-    basic.safe_get_strlist_items = lambda: []
+    basic.safe_get_strlist_items = list
     basic.safe_get_strlit_contents = lambda ea: None
     basic.idautils.XrefsTo = lambda *a, **k: []
     basic.compile_smart_pattern = _name_matcher

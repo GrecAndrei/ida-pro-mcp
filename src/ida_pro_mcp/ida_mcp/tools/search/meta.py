@@ -12,9 +12,7 @@ from .._common import (
     ida_typeinf,
     idaapi,
     idautils,
-    idc,
-    public_arg,
-    run_action
+    idc
 )
 
 from ...support.semantic_matching import semantic_score  # noqa: F401

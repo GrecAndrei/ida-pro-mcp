@@ -23,7 +23,6 @@ import time
 
 from ._common import (
     Annotated,
-    Any,
     Literal,
     MCPError,
     Optional,
@@ -36,12 +35,9 @@ from ._common import (
     idautils,
     idc,
     make_error,
-    os,
     public_arg,
-    run_action,
     tool,
-    validate_addr,
-    validate_range
+    validate_addr
 )
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).

@@ -12,7 +12,6 @@ from ._common import (
     hex_ea,
     ida_funcs,
     ida_lines,
-    ida_nalt,
     ida_name,
     ida_typeinf,
     idaapi,
@@ -23,7 +22,6 @@ from ._common import (
     make_error,
     normalize_list_input,
     public_arg,
-    run_action,
     tool,
     validate_addr
 )

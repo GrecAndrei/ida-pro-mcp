@@ -23,9 +23,7 @@ from ._common import (
     is_arm_family,
     is_riscv_family,
     make_error,
-    os,
     public_arg,
-    run_action,
     tool,
     validate_addr
 )

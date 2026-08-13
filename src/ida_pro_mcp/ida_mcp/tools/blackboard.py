@@ -41,9 +41,7 @@ try:
         IDAError,
         MCPError,
         Optional,
-        ida_funcs,
         idaread,
-        idautils,
         idawrite,
         make_error,
         tool

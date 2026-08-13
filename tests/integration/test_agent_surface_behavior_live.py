@@ -30,12 +30,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from tests.integration.test_agent_surface_live import (  # noqa: E402
+    DEFAULT_LIVE_PYTEST_TIMEOUT,
     LiveMCPClient,
     _fixture_source,
     _ida_dir,
     live_call_timeout,
     seed_function_addrs,
-    DEFAULT_LIVE_PYTEST_TIMEOUT,
 )
 
 LIVE_FLAG = "IDA_MCP_LIVE_TEST"

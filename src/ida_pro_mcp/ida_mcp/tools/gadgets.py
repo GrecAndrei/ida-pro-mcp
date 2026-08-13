@@ -31,7 +31,6 @@ from ._common import (
     is_x86_family,
     make_error,
     public_arg,
-    run_action,
     tool,
     validate_addr
 )

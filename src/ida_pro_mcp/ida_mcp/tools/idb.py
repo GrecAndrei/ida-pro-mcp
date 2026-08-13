@@ -17,9 +17,6 @@ from ._common import (
     idautils,
     idc,
     make_error,
-    os,
-    public_arg,
-    run_action,
     tool
 )
 

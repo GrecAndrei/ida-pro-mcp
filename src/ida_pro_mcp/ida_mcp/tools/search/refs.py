@@ -11,9 +11,7 @@ from .._common import (
     ida_typeinf,
     idautils,
     idc,
-    make_error,
-    public_arg,
-    run_action
+    make_error
 )
 
 from .core import (

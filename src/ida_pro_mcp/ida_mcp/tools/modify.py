@@ -9,7 +9,6 @@ from ._common import (
     ida_bytes,
     ida_funcs,
     ida_hexrays,
-    ida_lines,
     ida_nalt,
     ida_name,
     ida_segment,

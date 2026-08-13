@@ -14,10 +14,8 @@ from ._common import (
     idawrite,
     idc,
     make_error,
-    os,
     parse_address,
     public_arg,
-    run_action,
     tool,
     validate_addr,
     validate_path_safe

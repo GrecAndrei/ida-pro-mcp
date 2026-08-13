@@ -26,9 +26,7 @@ from ._common import (
     is_return_mnemonic,
     is_riscv_family,
     is_syscall_mnemonic,
-    make_error,
-    public_arg,
-    run_action
+    make_error
 )
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).

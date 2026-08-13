@@ -14,9 +14,7 @@ from .._common import (
     idautils,
     idc,
     looks_like_address,
-    make_error,
-    public_arg,
-    run_action
+    make_error
 )
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
