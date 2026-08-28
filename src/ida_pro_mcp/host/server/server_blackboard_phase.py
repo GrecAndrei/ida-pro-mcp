@@ -296,9 +296,10 @@ class ServerBlackboardPhaseMixin:
             return False
         tasks = store.list(category="trace_task", include_resolved=True, include_contradicted=True, limit=120)
         for t in tasks:
-            tags = t.get("tags") or []
-            if isinstance(tags, list) and "status:done" in tags:
-                return True
+            # Tags are append-only in the store for compatibility, so an old
+            # status:done tag can survive a later failure.  The task payload is
+            # rewritten on every transition and is the only authoritative
+            # status source here.
             try:
                 payload = json.loads(str(t.get("content") or "{}"))
             except Exception:

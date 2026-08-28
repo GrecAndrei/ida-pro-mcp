@@ -2,6 +2,9 @@
 
 ## Public contract
 
+Repository-wide contribution and maintenance rules live in
+[`AGENTS.md`](../AGENTS.md). This document focuses on implementation details.
+
 `src/ida_pro_mcp/host/agent_operations.py` is the single source of truth for
 the agent-facing MCP interface. Each `AgentOperation` contains:
 
@@ -28,7 +31,7 @@ workflow.
 
 ## Adding an operation
 
-1. Add an `AgentOperation` in `host.agent_operations` with a strict schema,
+1. Add an `AgentOperation` in `src/ida_pro_mcp/host/agent_operations.py` with a strict schema,
    example, backend mapping, and concise description.
 2. Add a behavior-focused contract test for the public schema and mapping.
 3. Run `python scripts/generate_tool_skills.py` to refresh the installed skill

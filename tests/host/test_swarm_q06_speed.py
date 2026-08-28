@@ -296,6 +296,41 @@ def test_fast_path_serves_pure_read_batch_with_one_rpc(tmp_path, monkeypatch):
     assert result["results"][0]["result"]["total"] == 3
 
 
+def test_fast_path_refunds_rate_reservations_before_fallback(tmp_path, monkeypatch):
+    ses = _FakeSession("SID", str(tmp_path / "blob.bin"))
+    server = _server_with_live_runtime([ses])
+
+    class _RateLimiter:
+        def __init__(self):
+            self.checked = []
+            self.refunded = []
+
+        def check(self, tool):
+            self.checked.append(tool)
+            return True, ""
+
+        def refund(self, tool):
+            self.refunded.append(tool)
+
+    limiter = _RateLimiter()
+    server.rate_limiter = limiter
+    monkeypatch.setattr(
+        server,
+        "_send_rpc_with_retry",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ConnectionRefusedError("offline")),
+    )
+
+    assert server._try_batch_fast_path(
+        [
+            {"name": "data", "arguments": {"action": "functions"}},
+            {"name": "data", "arguments": {"action": "strings"}},
+        ],
+        False,
+    ) is None
+    assert limiter.checked == ["data", "data"]
+    assert limiter.refunded == ["data", "data"]
+
+
 def test_fast_path_falls_back_for_write_calls(tmp_path, monkeypatch):
     ses = _FakeSession("SID", str(tmp_path / "blob.bin"))
     server = _server_with_live_runtime([ses])

@@ -12,6 +12,12 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows has no fcntl
+    fcntl = None
 
 from ..config import (
     _RUNTIME_LEASE_RE,
@@ -40,16 +46,46 @@ def _resolve_stale_cleanup_budget() -> float:
 
 STALE_CLEANUP_BUDGET_SECONDS = _resolve_stale_cleanup_budget()
 
+# Lease files are shared by daemon connections and can also be shared by
+# multiple MCP host processes.  A separate lock file remains stable while the
+# lease itself is atomically replaced, so readers/writers cannot interleave a
+# compare-and-remove transaction with a fresh lease publication.
+_RUNTIME_LEASE_IO_LOCK = threading.RLock()
+
+
+@contextmanager
+def _runtime_lease_io_lock(path: str):
+    """Serialize one lease transaction in-process and, on POSIX, across hosts."""
+    with _RUNTIME_LEASE_IO_LOCK:
+        lock_fd = None
+        try:
+            if fcntl is not None:
+                lock_fd = os.open(path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            if lock_fd is not None:
+                with contextlib.suppress(OSError):
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                with contextlib.suppress(OSError):
+                    os.close(lock_fd)
+
 
 class ServerRuntimeLeasesMixin:
     def _runtime_lease_path(self, sid: str) -> str:
             return os.path.join(self._runtime_lease_dir, f"SID_{sid}.lease.json")
 
     def _write_runtime_lease_record(self, path: str, lease: dict) -> None:
-            tmp = path + ".tmp"
+            with _runtime_lease_io_lock(path):
+                self._write_runtime_lease_record_unlocked(path, lease)
+
+    @staticmethod
+    def _write_runtime_lease_record_unlocked(path: str, lease: dict) -> None:
+            tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
             try:
                 with open(tmp, "w", encoding="utf-8") as f:
                     json.dump(lease, f, indent=2)
+                    f.flush()
                 os.replace(tmp, path)
             except Exception:
                 with contextlib.suppress(OSError):
@@ -72,8 +108,9 @@ class ServerRuntimeLeasesMixin:
             self._write_runtime_lease_record(path, lease)
 
     def _remove_runtime_lease(self, sid: str) -> None:
-            with contextlib.suppress(OSError):
-                os.remove(self._runtime_lease_path(sid))
+            path = self._runtime_lease_path(sid)
+            with _runtime_lease_io_lock(path), contextlib.suppress(OSError):
+                os.remove(path)
 
     def _remove_runtime_lease_if_pid_matches(self, sid: str, pid: int | None) -> None:
             """Remove a runtime lease only if it still records this pid.
@@ -87,19 +124,20 @@ class ServerRuntimeLeasesMixin:
             if not pid:
                 return
             path = self._runtime_lease_path(sid)
-            try:
-                with open(path, encoding="utf-8") as f:
-                    lease = json.load(f)
-            except Exception:
-                return
-            try:
-                lease_pid = int(lease.get("pid") or 0)
-            except Exception:
-                lease_pid = 0
-            if lease_pid != pid:
-                return
-            with contextlib.suppress(OSError):
-                os.remove(path)
+            with _runtime_lease_io_lock(path):
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        lease = json.load(f)
+                except Exception:
+                    return
+                try:
+                    lease_pid = int(lease.get("pid") or 0)
+                except Exception:
+                    lease_pid = 0
+                if lease_pid != pid:
+                    return
+                with contextlib.suppress(OSError):
+                    os.remove(path)
 
     def _kill_stale_pid(self, pid: int) -> bool:
             """Best-effort terminate a stale PID.
@@ -643,21 +681,22 @@ class ServerRuntimeLeasesMixin:
             ``updated_at``). Re-reading the file before ``os.remove`` keeps that
             fresh lease intact instead of deleting a live runtime's coverage.
             """
-            try:
-                with open(path, encoding="utf-8") as f:
-                    lease = json.load(f)
-            except Exception:
+            with _runtime_lease_io_lock(path):
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        lease = json.load(f)
+                except Exception:
+                    return False
+                try:
+                    updated = float(lease.get("updated_at") or 0.0)
+                except Exception:
+                    updated = 0.0
+                if updated != expected_updated:
+                    return False
+                with contextlib.suppress(OSError):
+                    os.remove(path)
+                    return True
                 return False
-            try:
-                updated = float(lease.get("updated_at") or 0.0)
-            except Exception:
-                updated = 0.0
-            if updated != expected_updated:
-                return False
-            with contextlib.suppress(OSError):
-                os.remove(path)
-                return True
-            return False
 
     def _rewrite_lease_if_unchanged(self, path: str, lease: dict, expected_updated: float) -> bool:
             """Write a lease update only if it has not been rewritten since read.
@@ -668,19 +707,20 @@ class ServerRuntimeLeasesMixin:
             file before the atomic replace keeps that fresh lease intact instead
             of clobbering a live runtime's ownership record.
             """
-            try:
-                with open(path, encoding="utf-8") as f:
-                    current = json.load(f)
-            except Exception:
-                return False
-            try:
-                updated = float(current.get("updated_at") or 0.0)
-            except Exception:
-                updated = 0.0
-            if updated != expected_updated:
-                return False
-            self._write_runtime_lease_record(path, lease)
-            return True
+            with _runtime_lease_io_lock(path):
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        current = json.load(f)
+                except Exception:
+                    return False
+                try:
+                    updated = float(current.get("updated_at") or 0.0)
+                except Exception:
+                    updated = 0.0
+                if updated != expected_updated:
+                    return False
+                self._write_runtime_lease_record_unlocked(path, lease)
+                return True
 
     def _cleanup_stale_runtime_leases(self) -> None:
             try:
@@ -701,14 +741,14 @@ class ServerRuntimeLeasesMixin:
                     with open(path, encoding="utf-8") as f:
                         lease = json.load(f)
                 except Exception:
-                    with contextlib.suppress(OSError):
+                    with _runtime_lease_io_lock(path), contextlib.suppress(OSError):
                         os.remove(path)
                     continue
                 sid = _normalize_session_id(lease.get("session_id"))
                 sid_from_name = m.group(1)
                 if not sid or sid != sid_from_name:
                     # Malformed/mismatched lease metadata: drop it and do not signal any PID.
-                    with contextlib.suppress(OSError):
+                    with _runtime_lease_io_lock(path), contextlib.suppress(OSError):
                         os.remove(path)
                     continue
                 try:

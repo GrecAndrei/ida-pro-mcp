@@ -124,6 +124,20 @@ class RateLimiter:
             return False, f"global rate limit ({self.global_rate}/s); wait {wait:.1f}s"
         return True, ""
 
+    def refund(self, tool: str) -> None:
+        """Return one reservation made by :meth:`check`.
+
+        Batch fast paths reserve one token per eventual tool call before a
+        single transport attempt. If that attempt declines and falls back to
+        the normal per-call path, the reservations must be returned or the
+        fallback is charged twice for one user request.
+        """
+        with self._lock:
+            bucket = self._tool_buckets.get(str(tool or ""))
+        if bucket is not None:
+            bucket.return_tokens()
+        self._global_bucket.return_tokens()
+
     def stats(self) -> dict[str, any]:
         """Current bucket levels for diagnostics."""
         out = {

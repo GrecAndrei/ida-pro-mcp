@@ -110,6 +110,12 @@ def test_schema_version_and_tables_exist(tmp_path):
         "bb_tasks", "bb_machinery", "findings_embeddings",
     ):
         assert table in names, f"missing table {table}"
+    embedding_cols = {
+        row["name"] for row in conn.execute(
+            "SELECT name FROM pragma_table_info('findings_embeddings')"
+        ).fetchall()
+    }
+    assert {"model", "embedding_dim", "text_hash"} <= embedding_cols
     # bb_tasks / bb_machinery must match blackboard_orchestration.MachineryDB
     # (_machinery_schema) EXACTLY, or its CREATE IF NOT EXISTS is a no-op and
     # its INSERTs fail on missing columns, degrading the machinery to memory.
@@ -414,6 +420,50 @@ def test_embed_enqueue_hook_fires_on_write(tmp_path, monkeypatch):
     assert n == 0
 
 
+def test_upsert_merge_requeues_embedding_for_new_observation(tmp_path, monkeypatch):
+    monkeypatch.setattr(blackboard_store, "_get_embedder", lambda: None)
+    store = BlackboardStore(str(tmp_path / "ws.db"))
+    enqueued: list[tuple[str, str]] = []
+    store.embed_enqueue = lambda entry_id, text: enqueued.append((entry_id, text))
+
+    first = store.upsert_finding("TLS parser", content="reads a header")
+    enqueued.clear()
+    merged = store.upsert_finding("TLS parser", content="reads a header and validates length")
+
+    assert merged["entry_id"] == first["entry_id"]
+    assert enqueued and enqueued[-1][0] == first["entry_id"]
+    assert "validates length" in enqueued[-1][1]
+
+
+def test_update_embed_refreshes_metadata_only_changes(tmp_path, monkeypatch):
+    class _RecordingEmbedder:
+        backend = "test"
+        dim = 2
+
+        def embed_vector(self, text: str, purpose: str = "document"):
+            return [1.0, 0.0]
+
+    monkeypatch.setattr(blackboard_store, "_get_embedder", _RecordingEmbedder)
+    store = BlackboardStore(str(tmp_path / "ws.db"))
+    entry_id = store.write("TLS parser", "reads a header", embed=True)
+    enqueued: list[str] = []
+    store.embed_enqueue = lambda _entry_id, text: enqueued.append(text)
+
+    assert store.update(entry_id, embed=True, tags=["certificate"], evidence=[{"value": "ASN.1"}])
+    assert enqueued and "certificate" in enqueued[-1] and "ASN.1" in enqueued[-1]
+
+
+def test_update_requeues_changed_content_without_blocking_for_embedding(tmp_path, monkeypatch):
+    monkeypatch.setattr(blackboard_store, "_get_embedder", lambda: None)
+    store = BlackboardStore(str(tmp_path / "ws.db"))
+    entry_id = store.write("TLS parser", "reads a header")
+    enqueued: list[str] = []
+    store.embed_enqueue = lambda _entry_id, text: enqueued.append(text)
+
+    assert store.update(entry_id, content="reads and validates a length")
+    assert enqueued and "validates a length" in enqueued[-1]
+
+
 def test_embed_true_computes_synchronously_and_search_reports_semantic(tmp_path, monkeypatch):
     from ida_pro_mcp.host.stores import blackboard_store as bs
 
@@ -450,11 +500,74 @@ def test_semantic_search_falls_back_lexically_when_nothing_passes_threshold(tmp_
     assert results and results[0]["match"] == "lexical"
 
 
+def test_semantic_search_uses_query_prompt_and_structured_document_text(tmp_path, monkeypatch):
+    calls: list[tuple[str, str]] = []
+
+    class _PurposeEmbedder:
+        backend = "test-purpose"
+        dim = 2
+
+        def embed_vector(self, text: str, purpose: str = "document"):
+            calls.append((purpose, text))
+            return [1.0, 0.0]
+
+        def embed_query_vector(self, text: str):
+            calls.append(("query", text))
+            return [1.0, 0.0]
+
+    monkeypatch.setattr(blackboard_store, "_get_embedder", _PurposeEmbedder)
+    store = BlackboardStore(str(tmp_path / "ws.db"))
+    store.write(
+        "TLS certificate parser", "validates an ASN.1 length", category="crypto",
+        tags=["parser"], evidence=[{"type": "decompile", "value": "X509"}], embed=True,
+    )
+    hits = store.semantic_search("certificate", top_k=1, threshold=0.5)
+
+    assert hits[0]["match"] == "semantic"
+    assert any(purpose == "document" and "category: crypto" in text for purpose, text in calls)
+    assert any(purpose == "query" for purpose, _text in calls)
+
+
+def test_semantic_search_rejects_vectors_from_another_model(tmp_path, monkeypatch):
+    monkeypatch.setattr(blackboard_store, "_get_embedder", _KeywordEmbedder)
+    store = BlackboardStore(str(tmp_path / "ws.db"))
+    entry_id = store.write("TLS certificate parser", "validates length", category="crypto", embed=True)
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute("UPDATE findings_embeddings SET model='different-model' WHERE entry_id=?", (entry_id,))
+        conn.commit()
+
+    results = store.semantic_search("certificate", top_k=5, threshold=0.5, category="crypto")
+    assert results and results[0]["match"] == "lexical"
+
+
+def test_lexical_search_scans_findings_beyond_recent_window(tmp_path, monkeypatch):
+    monkeypatch.setattr(blackboard_store, "_get_embedder", lambda: None)
+    store = BlackboardStore(str(tmp_path / "ws.db"))
+    target = store.write("unique archival parser", "old evidence", category="history")
+    for index in range(205):
+        store.write(f"unrelated finding {index}", "no matching terms", category="noise")
+
+    results = store.semantic_search("archival parser", top_k=5)
+    assert results and results[0]["id"] == target
+
+
 def test_embed_enqueue_hook_stays_default_noop(tmp_path):
     store = BlackboardStore(str(tmp_path / "ws.db"))
     # The default hook must be a no-op (never raises, never blocks).
     eid = store.write("plain claim", addr="0x401000")
     store.embed_enqueue(eid, "some text")
+
+
+def test_embedding_enqueue_failure_does_not_fail_durable_write(tmp_path):
+    store = BlackboardStore(str(tmp_path / "ws.db"))
+
+    def fail_enqueue(_entry_id: str, _text: str) -> None:
+        raise RuntimeError("worker unavailable")
+
+    store.embed_enqueue = fail_enqueue
+    entry_id = store.write("durable claim", "must survive worker outage")
+
+    assert store.read(entry_id)["title"] == "durable claim"
 
 
 # ---------------------------------------------------------------------------

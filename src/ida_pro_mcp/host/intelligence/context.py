@@ -24,6 +24,7 @@ from .core import (
     FunctionEmbeddingIndex,
     _extract_signature,
 )
+from .embeddings import _file_mtime_ns
 
 
 def _intel_profile_enabled() -> bool:
@@ -85,6 +86,11 @@ class ContextAssembler:
         self._perf_lock = threading.Lock()
         self._semantic_budget_cache: dict[str, tuple[float, int]] = {}
         self._semantic_budget_lock = threading.Lock()
+        # Decompile enrichment is on the request path and can touch many
+        # functions in quick succession.  Keep its best-effort SQLite writes
+        # bounded just like FunctionEmbeddingIndex.index_async; otherwise a
+        # burst of uncached decompiles creates one daemon thread per function.
+        self._persist_gate = threading.Semaphore(4)
 
     # ── helpers ─────────────────────────────────────────────────────────
 
@@ -112,6 +118,7 @@ class ContextAssembler:
             if idb_path not in self._indexes:
                 db = idb_path + ".embeddings.db"
                 self._indexes[idb_path] = FunctionEmbeddingIndex(db, self._embedder)
+            index = self._indexes[idb_path]
             if len(self._indexes) > self._max_indexes:
                 # Evict least-recently-used indexes, keeping the current one.
                 candidates = sorted(
@@ -121,7 +128,90 @@ class ContextAssembler:
                 for evict in candidates[: (len(self._indexes) - self._max_indexes)]:
                     self._indexes.pop(evict, None)
                     self._idx_last_access.pop(evict, None)
-        return self._indexes[idb_path]
+        # Return the object captured while holding the lock. Another request
+        # may evict this path immediately after unlock; indexing/searching
+        # against the still-valid object is safe, while a second dictionary
+        # lookup here could spuriously raise KeyError.
+        return index
+
+    def _schedule_embedding_persist(
+        self,
+        idx: FunctionEmbeddingIndex,
+        ea: str,
+        name: str,
+        vec: list[float],
+        pseudo_hash: str,
+        signature_text: str,
+        signature_hash: str,
+        document_text: str,
+    ) -> bool:
+        """Persist a request-time embedding without unbounded thread growth.
+
+        The vector is already in the in-memory cache, so dropping a saturated
+        persistence attempt is safe: a later request can retry it.  This is
+        deliberately separate from ``index_async`` because re-embedding here
+        would duplicate the expensive model call that just produced ``vec``.
+        """
+        gate = getattr(self, "_persist_gate", None)
+        if gate is None:
+            # Some focused tests construct this class with ``__new__``.
+            gate = threading.Semaphore(4)
+            self._persist_gate = gate
+        if not gate.acquire(blocking=False):
+            return False
+
+        def _persist() -> None:
+            try:
+                with idx._conn() as conn:
+                    # Never clobber a higher-quality stored embedding: this
+                    # path has no structural metadata, so an upsert must not
+                    # erase rows written by index_many.
+                    row = conn.execute(
+                        "SELECT index_quality FROM func_embeddings WHERE ea=?", (ea,)
+                    ).fetchone()
+                    if row and str(row[0] or "unknown") in ("full", "fast", "fast_fallback"):
+                        return
+                    conn.execute(
+                        """
+                        INSERT INTO func_embeddings
+                           (ea, name, dim, vec_blob, pseudo_hash, indexed_at,
+                            signature_text, signature_hash, document_text)
+                        VALUES(?,?,?,?,?,?,?,?,?)
+                        ON CONFLICT(ea) DO UPDATE SET
+                            name=excluded.name, vec_blob=excluded.vec_blob,
+                            pseudo_hash=excluded.pseudo_hash,
+                            indexed_at=excluded.indexed_at,
+                            signature_text=excluded.signature_text,
+                            signature_hash=excluded.signature_hash,
+                            document_text=excluded.document_text
+                        """,
+                        (
+                            ea, name, len(vec), idx._pack(vec), pseudo_hash,
+                            time.time(), signature_text, signature_hash, document_text,
+                        ),
+                    )
+                    conn.commit()
+                # This writer already updated the index's on-disk state; avoid
+                # making the next similarity query perform a full O(N) reload
+                # just because of our own commit. Do this after closing the
+                # connection because SQLite may update the database/WAL during
+                # close. A later external writer changes the mtime again and
+                # remains observable through db_changed_since_load().
+                with contextlib.suppress(OSError):
+                    idx._db_mtime_ns = _file_mtime_ns(idx._db_path)
+            except Exception:
+                # Request-time enrichment must never fail the primary IDA
+                # operation because an optional cache write was unavailable.
+                pass
+            finally:
+                gate.release()
+
+        try:
+            threading.Thread(target=_persist, daemon=True).start()
+        except Exception:
+            gate.release()
+            return False
+        return True
 
     # ── blackboard retrieval ──────────────────────────────────────────────
 
@@ -845,42 +935,17 @@ class ContextAssembler:
                 if query_vec is None:
                     raise RuntimeError("embedding unavailable")
                 idx = self._get_index(idb_path)
-                # Update cache + persist async
+                # Update cache + persist async.  Keep the exact bounded text
+                # used for embedding so the reranker later sees a real
+                # document instead of only the short lexical signature.
+                document_text = pseudocode[:3000]
                 idx.cache_store(addr, query_vec)
-                blob = idx._pack(query_vec)
                 ph   = idx._phash(pseudocode)
                 sig  = _extract_signature(pseudocode, max_idents=64) or ""
                 sig_hash = hashlib.sha256((sig or pseudocode).encode("utf-8", errors="replace")).hexdigest()[:16]
-                def _persist(ea=addr, name=func_name, b=blob, p=ph, v=query_vec):
-                    try:
-                        with idx._conn() as conn:
-                            # Never clobber a higher-quality stored embedding:
-                            # this path carries no structural metadata, so an
-                            # upsert here would erase full-quality rows (their
-                            # func_size/bb_count/quality fields) written by
-                            # index_many.  Only write when the stored row is
-                            # absent or strictly lower quality.
-                            row = conn.execute(
-                                "SELECT index_quality FROM func_embeddings WHERE ea=?", (ea,)
-                            ).fetchone()
-                            if row and str(row[0] or "unknown") in ("full", "fast", "fast_fallback"):
-                                return
-                            conn.execute(
-                                """INSERT INTO func_embeddings
-                                   (ea, name, dim, vec_blob, pseudo_hash, indexed_at, signature_text, signature_hash)
-                                   VALUES(?,?,?,?,?,?,?,?)
-                                   ON CONFLICT(ea) DO UPDATE SET
-                                        name=excluded.name, vec_blob=excluded.vec_blob,
-                                        pseudo_hash=excluded.pseudo_hash,
-                                        indexed_at=excluded.indexed_at,
-                                        signature_text=excluded.signature_text,
-                                        signature_hash=excluded.signature_hash""",
-                                (ea, name, len(v), b, p, time.time(), sig, sig_hash),
-                            )
-                            conn.commit()
-                    except Exception:
-                        pass
-                threading.Thread(target=_persist, daemon=True).start()
+                self._schedule_embedding_persist(
+                    idx, addr, func_name, query_vec, ph, sig, sig_hash, document_text
+                )
 
                 # Similarity search over the in-memory cache. Only surfaced in
                 # full mode, so skip the cosine scan entirely in compact mode —

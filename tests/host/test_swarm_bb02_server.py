@@ -205,6 +205,19 @@ def test_evidence_gravity_is_bounded_and_persisted(tmp_path):
     assert "search" not in tools_used
 
 
+def test_machinery_get_preserves_falsey_values(tmp_path):
+    server = _make_server(tmp_path)
+    server.current_session = _make_session(tmp_path, "falsey", "SESS-FALSEY")
+    store = server._get_blackboard_store()
+    orch = server._orchestration()
+
+    values = {"false": False, "zero": 0, "empty": "", "list": [], "dict": {}}
+    for key, value in values.items():
+        orch.machinery_set(store, "test", key, value)
+        assert orch.machinery_get(store, "test", key, "missing") == value
+    assert orch.machinery_get(store, "test", "missing", "fallback") == "fallback"
+
+
 def test_write_fires_gravity_only_on_create(tmp_path, monkeypatch):
     server = _make_server(tmp_path)
     server.current_session = _make_session(tmp_path, "wgrav", "SESS-WG")

@@ -2,6 +2,30 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-08-27 — 1.0.0a1 repository cleanup and retrieval foundations
+
+- Centralized the package, MCP handshake, CLI, and benchmark version in
+  `src/ida_pro_mcp/_version.py` using a documented PEP 440 alpha scheme.
+- Moved maintained guides under `docs/guide/`, added a documentation index and
+  versioning guide, and removed the stale radare2 research audit.
+- Replaced checked-in workstation benchmark results and ad hoc runners with
+  `benchmarks/run.py`, covering contract, host, blackboard, retrieval, and
+  opt-in live-IDA scopes with reproducibility metadata.
+- Fixed native llama.cpp retrieval batching to split by total token capacity;
+  long corpus batches no longer abort inside `llama_decode`.
+- Matched native embedding tokenization to llama-server's EOS handling and
+  made F16 KV the default for vector parity; Q8 KV is an explicit
+  memory/speed tradeoff. The HTTP backend now preserves the configured
+  per-slot context instead of being silently clamped by a smaller microbatch.
+- Tuned the default CPU rerank pool from 12 to 8: the bundled 12-query corpus
+  measured recall@1 0.9167 → 1.0, MRR 0.9583 → 1.0, with all 12 rerank scores
+  discriminating, while removing one-third of the cross-encoder passes.
+- Improved blackboard retrieval with query/document embedding purposes,
+  embedding identity and dimension checks, structured document text, full
+  lexical fallback coverage, and explainable hybrid ranking.
+- Removed personal installation paths from tests, smoke tooling, and native
+  build documentation; native builds now require explicit external paths.
+
 ## 2026-08-13 — full-surface live integration suite + 9.3/9.4 API-drift fixes
 
 - **Expanded live integration coverage** — two new opt-in suites
@@ -737,15 +761,14 @@ CI/docs pass. Branch `swarm/agent-blitz`.
 ### Scripts, benchmarks, CI, docs (wave B)
 - Smoke/report scripts hardened (`smoke_core_path`, `smoke_mcp_all_tools`,
   `smoke_mcp_all_actions`, `test_live_ida_crystallize`, occupancy reports);
-  benchmark scripts (`rerank_bench`, `embed_bench`, `native_bench`,
-  `ab_interleave`) fixed; `pyyaml` added to dev deps so `test_ci_workflows` runs
+  benchmark scripts fixed; `pyyaml` added to dev deps so `test_ci_workflows` runs
   on CI; docs content updated (ROADMAP, LIVE_IDA_TESTING, POLICY, wiki tools).
   A proposed CI coverage gate was measured (39% — dominated by IDA-runtime code)
   and deliberately rejected as arbitrary churn.
 
 ### Notes
-- Test suite must run with `--basetemp` on `/home` — the `/tmp` tmpfs fills
-  (`ENOSPC`).
+- Test suites should use a project-local `--basetemp=.pytest_tmp` directory so
+  scratch files do not depend on a particular workstation's filesystem.
 
 ## 2026-08-07 — intelligence control-plane coverage + reranker busy-queue fix
 
@@ -999,9 +1022,8 @@ Native-backend decode is now **batched across sequences** and the models are
   bytes to stream on the bandwidth-bound decode.  Model discovery now prefers
   `Q4_K_M` over `Q8_0` when both exist (`IDA_MCP_Q4=0` to force Q8), and the
   installed state now points the embedder at the Q4 file (backup saved).
-- **`benchmarks/ab_interleave.py`** — interleaved n_seq=1 vs n_seq=N
-  benchmark in one process (two contexts, env flipped between creations) that
-  cancels CPU contention and asserts batched scores == single-seq scores.
+- Benchmarking is now centralized in `benchmarks/run.py`, with explicit scopes
+  and run-time metadata instead of checked-in workstation measurements.
 - Correctness verified under load: batched rerank scores (relevant 0.8909 vs
   noise 0.0005, deterministic) and batched embed vectors (distinct, nonzero
   per document) match the single-sequence path; 126 intelligence tests pass.
@@ -1038,8 +1060,8 @@ files, one `llama_decode` per document instead of per-chunk round trips.
 - **`scripts/build_native_llama.sh`** — builds the trimmed llama.cpp (server /
   UI / tools / mtmd / SSL off, CPU + OpenMP + llamafile on, `-fPIC`) then
   compiles the driver into one self-contained `libmcp_llama.so`.
-- **`benchmarks/native_bench.py`** — A/B native vs HTTP: index throughput,
-  cold start, pool latency, peak RSS, and the same MRR / recall@1 accuracy.
+- Native vs HTTP comparisons run through the portable retrieval pipeline with
+  the backend selected explicitly at invocation time.
 - HTTP backend and its 800+ tests are untouched; tests never set
   `IDA_MCP_NATIVE`, so they keep exercising the HTTP path.
 
@@ -1064,7 +1086,7 @@ Found while working a real session: a background semantic-index job over libgpu_
 - **Rerank memory is bounded by chunking.** llama.cpp sizes its compute buffers for the whole request batch, so a 64-document pool ballooned to ~5.4 GB RSS on a 0.6B model (OOM territory on a 15 GB laptop). `rerank()` now scores documents in chunks (`IDA_MCP_RERANK_CHUNK`, default 8) and merges indices, so peak memory tracks the chunk, not the pool.
 - **Rerank context 8192 → 2048.** The profile's `max_context` (8192) sized the KV cache and physical batch for 8k tokens when every pair under the 6000-char document cap is ≤ ~2100 tokens. `--ctx-size 2048` covers every capped pair while cutting peak memory roughly in half.
 - **Rerank uses `--parallel 2`.** The `--parallel 1` score-collapse build bug was confirmed to be specific to a value of 1 — parallel 2 returns full distinct scores (verified) with lower peak memory than the no-parallel default.
-- The rerank benchmark (`benchmarks/rerank_bench.py`) default pool is now 16 and it logs per-query progress for long runs.
+- The canonical benchmark runner now reports retrieval metrics and runtime metadata without checking machine-specific results into the repository.
 
 ## 2026-08-03 — cross-encoder reranking + function families
 
@@ -1302,7 +1324,7 @@ Honest alpha cut. Not a 1.0.
 ### Breaking / contract
 - **Unknown RPC kwargs now hard-fail** with `MCPError.INVALID_ARGS` instead of being silently stripped before IDA RPC. Tuned calls that previously “worked” with defaults will now error until schemas admit the keys (or callers stop sending them).
 - **Version `1.0.0` → `0.9.0`**, classifier Alpha. Package was not product-mature at 1.0 numbering.
-- **`tools/list` Tier A only** (~17 tools). Full `TOOLS` remain callable by exact name. See `docs/ROADMAP.md`.
+- **`tools/list` Tier A only** (~17 tools). Full `TOOLS` remain callable by exact name. See `docs/guide/roadmap.md`.
 - **Compact action enums** (`ADVERTISED_ACTIONS`) for session/search/intelligence/blackboard/code/funcs/misc in lean/ultra schema mode. Full `TOOL_ACTIONS` still accepted at call time.
 - Removed broken console entry `sideband-capsule` (module did not exist).
 
@@ -1321,7 +1343,7 @@ Honest alpha cut. Not a 1.0.
 ### Tests / docs
 - Restored a **curated** host/integration pin set (policy, RPC retry, phase gates, session reuse, schema admission, embedder fail-open, …). Not a return of the ~84k-line deleted suite.
 - **Historical note:** older changelog lines that claim “1353 tests pass” / paths under `tests/host/…` refer to suites that were largely deleted in `968ae11`. Do not treat those numbers as current CI truth. Current gate is `pytest` on the files present on the tree.
-- QuickStart rewritten to Tier A core path; `docs/ROADMAP.md` added; ghost wiki pages (`static_trace`, `trace`, `vuln_scan`) retargeted; ARCHITECTURE phantoms removed.
+- QuickStart rewritten to Tier A core path; `docs/guide/roadmap.md` added; ghost wiki pages (`static_trace`, `trace`, `vuln_scan`) retargeted; architecture phantoms removed.
 
 ### Host
 - Extended `LONG_RUNNING_ACTIONS` for search full-binary ops and bindiff.
@@ -1404,7 +1426,9 @@ Honest alpha cut. Not a 1.0.
 ### Fixed
 - **`_handle_analysis_wait` host default was `max_wait=300` (5 min)** when the caller passed no argument. The host's polling loop kept running past the caller's per-call budget (e.g. the 120s smoke budget) whenever the loaded binary was actively auto-analyzing. Symptom: every `analysis(action='wait')` call hit the caller's recv timeout, the MCP client retried, and the host's polling never got a chance to return. Now defaults to `max_wait=0` — single round-trip, returns current state immediately. Caller is responsible for passing `max_wait` / `timeout` if they want polling. A local wall-clock cap (`max(max_wait+30s, 30s)`, never above `IDA_MCP_RPC_HARD_WALLCLOCK_SEC`) prevents a wedged IDA round-trip from pinning the MCP client. Per-poll socket `recv_timeout` trimmed 15s→10s. Live verified: full 1193-action smoke sweep now runs in 2m18s (was 3m8s with 1 TIMEOUT) → `OK 425, CLEAN 592, CRASH 0, TIMEOUT 0, OTHER 0, SKIP 176, TOTAL 1193`. New pins: `tests/host/test_analysis_wait_default_nonblocking.py` (5 cases). 1275 tests pass, 94 skipped.
 
-- **Install path was the actual problem** — the opencode MCP install uses `/home/alex/.local/share/ida-pro-mcp/.venv/...` (the installed package copy, not the working tree). Local source changes are inert until `python install.py --only runtime --yes` refreshes the install. Now remembered as a hard rule for every fix: edit + run smoke + reinstall.
+- **Install path was the actual problem** — client configurations use the
+  packaged install tree rather than an arbitrary working checkout. Refresh the
+  runtime after packaging changes with `python install.py --only runtime --yes`.
 
 ## Unreleased — reliability, envelopes, hang-sentinel
 

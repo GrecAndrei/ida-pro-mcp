@@ -5,7 +5,7 @@
 This project is not intended for cheating, piracy, DRM circumvention, unauthorized multiplayer tampering, or analysis of systems without permission.
 
 Workflows below are written against the action-specific `ida_*` operation
-catalog (see `host.agent_operations` and `docs/ROADMAP.md`). Every operation
+catalog (see `host.agent_operations` and `docs/guide/roadmap.md`). Every operation
 named here is part of the current surface; call `ida_help(topic='...')` for
 the exact schema of any of them.
 

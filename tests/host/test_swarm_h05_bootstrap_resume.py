@@ -259,6 +259,8 @@ def test_shutdown_stops_watchers_and_background_spawns(tmp_path, monkeypatch):
     assert not (isinstance(pending, set) and sid in pending)
     watchers = getattr(server, "_analysis_watchers", None)
     assert not (isinstance(watchers, set) and sid in watchers)
+    assert getattr(server, "_analysis_watcher_stop_events", {}) == {}
+    assert getattr(server, "_analysis_watcher_threads", {}) == {}
     assert server._analysis_complete_in_flight == set()
     assert server._background_load_errors == {}
 

@@ -49,10 +49,12 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-# Max (query, doc) pairs scored by the cross-encoder in one search.
-RERANK_POOL_MAX = max(1, _env_int("IDA_MCP_RERANK_POOL", 12))
+# Max (query, doc) pairs scored by the cross-encoder in one search. The
+# 0.6B Qwen3 benchmark reaches 12/12 top-1 on an 8-candidate pool while
+# avoiding the extra CPU forward passes of the old 12-candidate default.
+RERANK_POOL_MAX = max(1, _env_int("IDA_MCP_RERANK_POOL", 8))
 # Per-document character budget handed to the cross-encoder (~260 tokens).
-# Longer docs are what make a 12-pair rerank take minutes on CPU (a 0.6B
+# Longer docs are what make an 8-pair rerank take minutes on CPU (a 0.6B
 # cross-encoder runs at ~15-60 tok/s on an 8-core box); the first ~250
 # tokens of a function's pseudocode carry the decisive signal.
 RERANK_DOC_BUDGET_CHARS = max(256, _env_int("IDA_MCP_RERANK_DOC_BUDGET_CHARS", "800"))

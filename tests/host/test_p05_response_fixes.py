@@ -24,6 +24,8 @@ Covers the confirmed audit findings in the response pipeline:
 
 from __future__ import annotations
 
+import threading
+
 from ida_pro_mcp.host.config import _parse_line_range
 from ida_pro_mcp.host.errors import MCPError
 from ida_pro_mcp.host.response_enrichment import digest_decompiled, patch_addresses
@@ -49,6 +51,40 @@ def _stub_server(**attrs) -> IDAMCPServer:
     for key, value in attrs.items():
         setattr(server, key, value)
     return server
+
+
+def test_runtime_table_helpers_snapshot_concurrent_churn():
+    """Runtime readers must not observe a dict while teardown replaces it."""
+    server = IDAMCPServer.__new__(IDAMCPServer)
+    server.session_runtimes = {}
+    server._runtime_lock = threading.RLock()
+    errors: list[BaseException] = []
+
+    def writer() -> None:
+        try:
+            for i in range(500):
+                with server._runtime_lock:
+                    server.session_runtimes.clear()
+                    server.session_runtimes[f"SID_{i}"] = {"port": i + 1}
+        except BaseException as exc:  # pragma: no cover - assertion below
+            errors.append(exc)
+
+    def reader() -> None:
+        try:
+            for i in range(1_000):
+                server._runtime_record(f"SID_{i}")
+                server._runtime_items_snapshot()
+        except BaseException as exc:  # pragma: no cover - assertion below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=writer)] + [
+        threading.Thread(target=reader) for _ in range(4)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
 
 
 _COMPACT_OPTS = {
@@ -317,6 +353,69 @@ class TestWikiSuggest:
         assert out["ok"] is True, out
         assert "headers" not in out, out
         assert "sections" in out, out
+
+    def test_embed_singleflight_and_no_failed_cache_poison(self, monkeypatch):
+        server = _wiki_stub()
+        server._wiki_embed_cache = {}
+        server._wiki_embed_cache_max = 8
+        started = threading.Event()
+        release = threading.Event()
+        calls = 0
+        calls_lock = threading.Lock()
+
+        class _Embedder:
+            def embed_vector(self, _text):
+                nonlocal calls
+                with calls_lock:
+                    calls += 1
+                started.set()
+                release.wait(timeout=2)
+                return [0.25, 0.75]
+
+        monkeypatch.setattr(
+            "ida_pro_mcp.host.intelligence.core.BgeCodeEmbedder", _Embedder
+        )
+        results = []
+        threads = [
+            threading.Thread(
+                target=lambda: results.append(server._wiki_embed_text("same query")),
+                daemon=True,
+            )
+            for _ in range(8)
+        ]
+        for thread in threads:
+            thread.start()
+        assert started.wait(timeout=2)
+        release.set()
+        for thread in threads:
+            thread.join(timeout=2)
+        assert calls == 1
+        assert results == [[0.25, 0.75]] * 8
+
+        class _Unavailable:
+            def embed_vector(self, _text):
+                return None
+
+        monkeypatch.setattr(
+            "ida_pro_mcp.host.intelligence.core.BgeCodeEmbedder", _Unavailable
+        )
+        assert server._wiki_embed_text("failed query") is None
+        assert "failed query" not in server._wiki_embed_cache
+
+    def test_forced_index_rebuild_publishes_atomic_snapshot(self, tmp_path):
+        server = _wiki_stub()
+        wiki_root = tmp_path / "wiki"
+        wiki_root.mkdir()
+        page = wiki_root / "page.md"
+        page.write_text("# Old\nold body\n", encoding="utf-8")
+        old_snapshot = server._wiki_get_index(str(wiki_root))
+
+        page.write_text("# New\nnew body\n", encoding="utf-8")
+        new_snapshot = server._wiki_get_index(str(wiki_root), force=True)
+
+        assert old_snapshot is not new_snapshot
+        assert old_snapshot["pages"][0]["text"] == "# Old\nold body\n"
+        assert new_snapshot["pages"][0]["text"] == "# New\nnew body\n"
 
 
 # ---------------------------------------------------------------------------

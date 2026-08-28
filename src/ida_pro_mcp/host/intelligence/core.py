@@ -18,6 +18,7 @@ Environment variables:
   IDA_MCP_EMBED_PARALLEL     llama.cpp embedding slots (default: CPU-adaptive, up to 4)
   IDA_MCP_EMBED_CTX          context tokens (default: 2048)
   IDA_MCP_EMBED_IDLE_TIMEOUT seconds to retain an idle embedding server (default: 15)
+  IDA_MCP_EMBED_CACHE        bounded exact-text embedding cache (default: 4096)
   IDA_MCP_DECOMP_DOCUMENT_FRACTION fraction of context used by full-decomp documents (default: 0.20)
   IDA_MCP_DECOMP_DOCUMENT_CHARS explicit full-decomp document character budget
   IDA_MCP_EMBED_DISABLED     set to 1 to disable semantic embeddings
@@ -87,6 +88,7 @@ except ImportError:
 os.makedirs(CACHE_DIR, exist_ok=True)
 _EMBED_LEASE_FILE = os.path.join(CACHE_DIR, "ida-mcp-embed-server-lease.json")
 _MODEL_PATH_CACHE: tuple[str, str] | None = None
+_EMBED_CACHE_INIT_LOCK = threading.Lock()
 
 
 def hash_file(path: str, max_bytes: int | None = None) -> str:
@@ -220,6 +222,18 @@ def _detect_gpu_device(server_bin: str) -> str:
 
 
 EMBEDDER_STATE_FILE = "embedder.json"
+
+
+def _split_env_paths(value: str) -> list[str]:
+    """Split a path-list environment value without breaking Windows drives."""
+    if not value:
+        return []
+    # On Windows, `:` is part of a drive-qualified path and the native path
+    # list separator is `;`. POSIX keeps accepting both forms for compatibility
+    # with existing configs and shell conventions.
+    if os.pathsep == ";":
+        return value.split(";")
+    return re.split(r"[;:]", value)
 
 
 def _read_embedder_state() -> dict:
@@ -399,7 +413,7 @@ def _find_llama_server() -> str:
     # 1) explicit env var (string or list)
     env_val = os.environ.get("IDA_MCP_EMBED_SERVER_BIN", "")
     if env_val:
-        for piece in re.split(r"[;:]", env_val):
+        for piece in _split_env_paths(env_val):
             out = _accept(piece.strip())
             if out:
                 return out
@@ -537,16 +551,28 @@ def _find_model() -> str:
         os.environ.get("IDA_MCP_EMBED_PROFILE") or state.get("profile") or "qwen3-embedding-0.6b"
     ).strip().lower()
     requested_profile = (get_model_profile(requested_profile) or BGE_CODE_V1).key
-    # Quant preference is part of the identity: a Q8 path cached before the
-    # user enables Q4 must not be served.
-    cache_key = f"{requested_profile}:q4={int(_prefer_q4())}"
+    # Discovery inputs are part of the identity: a path cached before the
+    # user switches IDA_MCP_EMBED_MODEL, changes embedder.json, or enables Q4
+    # must not be served. Never reuse a negative result either; installers and
+    # model downloaders commonly create the GGUF after the first probe.
+    cache_key = repr(
+        (
+            requested_profile,
+            _prefer_q4(),
+            os.environ.get("IDA_MCP_EMBED_MODEL", ""),
+            str(state.get("model_path") or ""),
+            str(state.get("profile") or ""),
+        )
+    )
     if _MODEL_PATH_CACHE is not None and _MODEL_PATH_CACHE[0] == cache_key:
-        return _MODEL_PATH_CACHE[1]
+        cached_path = _MODEL_PATH_CACHE[1]
+        if cached_path and os.path.isfile(cached_path):
+            return cached_path
 
     # 1) explicit env var
     env_val = os.environ.get("IDA_MCP_EMBED_MODEL", "")
     if env_val:
-        for piece in re.split(r"[;:]", env_val):
+        for piece in _split_env_paths(env_val):
             cand = piece.strip()
             if not cand:
                 continue
@@ -654,6 +680,27 @@ def _safe_float_env(key: str, default: str) -> float:
         return float(default)
 
 
+def _llama_context_layout(
+    per_sequence_ctx: int,
+    requested_parallel: int,
+    *,
+    max_total_ctx: int = 32768,
+) -> tuple[int, int, int]:
+    """Return ``(slot_ctx, parallel, total_ctx)`` for llama-server.
+
+    llama.cpp divides ``--ctx-size`` across ``--parallel`` slots. Keeping the
+    per-sequence budget as the source of truth prevents the server from
+    silently shrinking a requested context when the two flags disagree.
+    ``batch-size`` and ``ubatch-size`` use the resulting slot size as well.
+    """
+    total_limit = max(1, int(max_total_ctx))
+    slot_ctx = min(total_limit, max(512, int(per_sequence_ctx)))
+    parallel = max(1, int(requested_parallel))
+    if slot_ctx * parallel > total_limit:
+        parallel = max(1, total_limit // slot_ctx)
+    return slot_ctx, parallel, slot_ctx * parallel
+
+
 # Bounded cold-start for block=True anchor classification.  Embedding all
 # ~60 behavior anchors inline costs ~5-8s each on a CPU box (minutes total),
 # which a caller experiences as a hang.  classify() embeds anchors only up to
@@ -694,9 +741,10 @@ EMBED_BATCH_THREADS = _safe_int_env(
 # An array sent to llama.cpp's /embeddings endpoint only runs concurrently
 # when it has multiple sequence slots.  ``--parallel 1`` made our client-side
 # batches effectively serial and could turn a small fast-index commit into a
-# minute-long request.  Slots consume KV cache, so remain conservative.
+# minute-long request. Four slots is a good CPU default for the small local
+# models, while the env var remains an explicit escape hatch for tight boxes.
 EMBED_PARALLEL = max(1, min(4, _safe_int_env(
-    "IDA_MCP_EMBED_PARALLEL", str(max(1, _EMBED_CPU_COUNT // 4))
+    "IDA_MCP_EMBED_PARALLEL", str(max(1, _EMBED_CPU_COUNT // 2))
 )))
 EMBED_REQUEST_TIMEOUT = _safe_float_env("IDA_MCP_EMBED_REQUEST_TIMEOUT", "15.0")
 # A batch contains full decompilations, so it can legitimately take longer
@@ -711,6 +759,10 @@ EMBED_MAX_REQUESTS = _safe_int_env("IDA_MCP_EMBED_MAX_REQUESTS", "512")
 EMBED_MAX_RSS_MB = _safe_int_env("IDA_MCP_EMBED_MAX_RSS_MB", "0")
 EMBED_MAX_RSS_GROWTH_MB = _safe_int_env("IDA_MCP_EMBED_MAX_RSS_GROWTH_MB", "768")
 EMBED_MAX_FAILURES = _safe_int_env("IDA_MCP_EMBED_MAX_FAILURES", "2")
+# Exact embedding results are cheap to retain (a 1024-dimension vector is
+# only a few KB) and repeated semantic queries are common in an agent loop.
+# Keep this bounded; 0 disables the compatibility-path cache.
+EMBED_CACHE_MAX = max(0, _safe_int_env("IDA_MCP_EMBED_CACHE", "4096"))
 # Keep the large CPU model process only while it is useful.  Some llama.cpp
 # builds can retain a busy worker after a cancelled request, so an idle
 # server is both unnecessary memory pressure and a reliability risk.
@@ -982,10 +1034,18 @@ class BgeCodeEmbedder:
                               and not EMBED_DISABLED)
         # Cached anchor embeddings for BehaviorClassifier
         self._anchor_cache: dict[str, list[float]] = {}
+        self._embedding_cache: dict[
+            tuple[int, tuple[str, str, int], str, str], list[float]
+        ] = {}
+        self._embedding_cache_lock = threading.Lock()
+        self._embedding_inflight: dict[
+            tuple[int, tuple[str, str, int], str, str], threading.Event
+        ] = {}
+        self._embedding_cache_generation = 0
         # Full decompilations are much longer than search snippets, so keep
         # the cap CPU-adaptive.  Start at the server's slot count, though: a
         # 1/2/3/4 ramp wastes RPCs without making a batch safer.
-        adaptive_max_batch = max(1, min(4, _EMBED_CPU_COUNT // 4))
+        adaptive_max_batch = max(1, min(4, _EMBED_CPU_COUNT // 2))
         self._max_batch_size = max(
             1,
             min(32, _safe_int_env("IDA_MCP_EMBED_MAX_BATCH", str(adaptive_max_batch))),
@@ -1216,6 +1276,7 @@ class BgeCodeEmbedder:
             if not current or current.get("pid") == lease.get("pid"):
                 os.unlink(_EMBED_LEASE_FILE)
         self._last_recycle_reason = reason
+        self._invalidate_embedding_cache()
         self._ready = False
         if getattr(self, "_proc", None) is not None and getattr(self._proc, "pid", None) == pid:
             # Popen.poll() reaps a terminated direct child.  Without it, a
@@ -1380,16 +1441,21 @@ class BgeCodeEmbedder:
             if not self._use_llama:
                 return False
             self._port = self._pick_port()
+            # Keep EMBED_CTX as the per-slot budget. The shared layout helper
+            # prevents ctx/parallel changes from drifting from reranking.
+            slot_ctx, parallel, total_ctx = _llama_context_layout(
+                EMBED_CTX, min(EMBED_PARALLEL, self._max_batch_size)
+            )
             cmd = [
                 self._server_bin,
                 "--model",    self._model_path,
                 "--embedding",
                 "--port",     str(self._port),
-                "--ctx-size", str(EMBED_CTX),
-                "--batch-size", str(max(EMBED_CTX, 2048)),
-                "--ubatch-size", str(min(max(256, EMBED_CTX // 4), 512)),
+                "--ctx-size", str(total_ctx),
+                "--batch-size", str(slot_ctx),
+                "--ubatch-size", str(slot_ctx),
                 "--pooling", str(getattr(self._profile, "pooling", None) or "mean"),
-                "--parallel", str(min(EMBED_PARALLEL, self._max_batch_size)),
+                "--parallel", str(parallel),
                 "--threads",  str(EMBED_THREADS),
                 "--threads-batch", str(EMBED_BATCH_THREADS),
                 "--n-predict", "0",
@@ -1490,6 +1556,7 @@ class BgeCodeEmbedder:
         if self._gemini is not None:
             self._gemini.stop()
             return
+        self._invalidate_embedding_cache()
         self._cancel_idle_shutdown()
         owned_pid = self._proc.pid if self._owns_proc and self._proc else None
         try:
@@ -1549,6 +1616,37 @@ class BgeCodeEmbedder:
 
     # ── embedding ──────────────────────────────────────────────────────────
 
+    def _embedding_cache_state(self):
+        """Return lazily initialized cache state for lightweight test hosts."""
+        cache = getattr(self, "_embedding_cache", None)
+        lock = getattr(self, "_embedding_cache_lock", None)
+        inflight = getattr(self, "_embedding_inflight", None)
+        if (
+            isinstance(cache, dict)
+            and lock is not None
+            and callable(getattr(lock, "acquire", None))
+            and isinstance(inflight, dict)
+        ):
+            return cache, lock, inflight
+        with _EMBED_CACHE_INIT_LOCK:
+            if not isinstance(getattr(self, "_embedding_cache", None), dict):
+                self._embedding_cache = {}
+            lock = getattr(self, "_embedding_cache_lock", None)
+            if lock is None or not callable(getattr(lock, "acquire", None)):
+                self._embedding_cache_lock = threading.Lock()
+            if not isinstance(getattr(self, "_embedding_inflight", None), dict):
+                self._embedding_inflight = {}
+            if not isinstance(getattr(self, "_embedding_cache_generation", None), int):
+                self._embedding_cache_generation = 0
+            return self._embedding_cache, self._embedding_cache_lock, self._embedding_inflight
+
+    def _invalidate_embedding_cache(self) -> None:
+        """Drop vectors belonging to a retired/replaced HTTP model process."""
+        cache, cache_lock, _inflight = self._embedding_cache_state()
+        with cache_lock:
+            self._embedding_cache_generation += 1
+            cache.clear()
+
     @staticmethod
     def _extract_embedding(item):
         """Extract a plain float list from an embedding response item.
@@ -1604,7 +1702,14 @@ class BgeCodeEmbedder:
                     )
                     return None
                 profile = getattr(self, "_profile", BGE_CODE_V1)
-                formatted = [profile.format_text(text, purpose) for text in texts]
+                # Match the native path's head-first cap after adding the
+                # model prefix/suffix, so both backends tokenize the same
+                # signal and the server does not work on discarded input.
+                max_chars = self.max_input_chars
+                formatted = [
+                    profile.format_text(str(text), purpose)[:max_chars]
+                    for text in texts
+                ]
                 payload: str | list[str] = formatted[0] if len(formatted) == 1 else formatted
                 body = json.dumps({"input": payload, "encoding_format": "float"}).encode()
                 req = urllib.request.Request(
@@ -1623,7 +1728,23 @@ class BgeCodeEmbedder:
                 rows = []
             if len(rows) != len(texts):
                 raise RuntimeError("embedding response count mismatch")
-            if all(isinstance(row, dict) and isinstance(row.get("index"), int) for row in rows):
+            indexed = [
+                row.get("index")
+                for row in rows
+                if isinstance(row, dict) and "index" in row
+            ]
+            if indexed:
+                # A partially indexed or duplicate response is ambiguous:
+                # accepting it silently associates vectors with the wrong
+                # input.  The server's indexed response must be a permutation
+                # of every request position before we reorder it.
+                expected_indices = set(range(len(texts)))
+                if (
+                    len(indexed) != len(rows)
+                    or any(type(index) is not int for index in indexed)
+                    or set(indexed) != expected_indices
+                ):
+                    raise RuntimeError("embedding response indices mismatch")
                 rows = sorted(rows, key=lambda row: row["index"])
             out: list[list[float]] = []
             for row in rows:
@@ -1646,7 +1767,14 @@ class BgeCodeEmbedder:
             # Another valid client owns the single-server queue.  This is a
             # load-shedding event, never evidence that the server is wedged.
             return None
-        except (OSError, ValueError, KeyError, json.JSONDecodeError, RuntimeError) as exc:
+        except (
+            OSError,
+            TypeError,
+            ValueError,
+            KeyError,
+            json.JSONDecodeError,
+            RuntimeError,
+        ) as exc:
             if isinstance(exc, (TimeoutError, socket.timeout)):
                 self._last_batch_timeout = True
                 if in_activation_grace:
@@ -1674,10 +1802,71 @@ class BgeCodeEmbedder:
                 self._schedule_idle_shutdown()
 
     def _llama_embed(self, text: str, purpose: str = "document") -> list[float] | None:
-        rows = self._request_embeddings(
-            [text], purpose=purpose, timeout=EMBED_REQUEST_TIMEOUT
+        # A model path is the identity anchor for the HTTP backend.  Besides
+        # avoiding cache reuse across a model/process replacement, this keeps
+        # lightweight manually constructed test hosts (which have no model
+        # identity at all) on the raw response path.
+        cache_enabled = EMBED_CACHE_MAX > 0 and bool(
+            getattr(self, "_model_path", "")
         )
-        return rows[0] if rows else None
+        if not cache_enabled:
+            rows = self._request_embeddings(
+                [text], purpose=purpose, timeout=EMBED_REQUEST_TIMEOUT
+            )
+            return rows[0] if rows else None
+
+        profile = getattr(self, "_profile", BGE_CODE_V1)
+        model_identity = (
+            os.path.realpath(str(getattr(self, "_model_path", "") or "")),
+            str(getattr(profile, "key", "") or ""),
+            int(getattr(self, "_dimension", 0) or 0),
+        )
+        formatted = profile.format_text(str(text), purpose)[: self.max_input_chars]
+        cache, cache_lock, inflight = self._embedding_cache_state()
+        owner = False
+        wait_event: threading.Event | None = None
+        with cache_lock:
+            key = (
+                int(self._embedding_cache_generation),
+                model_identity,
+                str(purpose),
+                formatted,
+            )
+            cached = cache.get(key)
+            if cached is not None:
+                return list(cached)
+            wait_event = inflight.get(key)
+            if wait_event is None:
+                wait_event = threading.Event()
+                inflight[key] = wait_event
+                owner = True
+        if not owner:
+            if wait_event is not None:
+                wait_event.wait(timeout=max(1.0, float(EMBED_REQUEST_TIMEOUT)))
+            with cache_lock:
+                cached = cache.get(key)
+            return list(cached) if cached is not None else None
+
+        try:
+            rows = self._request_embeddings(
+                [text], purpose=purpose, timeout=EMBED_REQUEST_TIMEOUT
+            )
+            vector = rows[0] if rows else None
+            if vector is not None:
+                with cache_lock:
+                    if int(self._embedding_cache_generation) == key[0]:
+                        if len(cache) >= EMBED_CACHE_MAX:
+                            try:
+                                cache.pop(next(iter(cache)))
+                            except Exception:
+                                cache.clear()
+                        cache[key] = list(vector)
+            return vector
+        finally:
+            with cache_lock:
+                event = inflight.pop(key, None)
+                if event is not None:
+                    event.set()
 
     def _llama_embed_batch(
         self, texts: list[str], purpose: str = "document"

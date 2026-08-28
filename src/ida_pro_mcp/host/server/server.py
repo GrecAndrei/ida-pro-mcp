@@ -468,9 +468,12 @@ class IDAMCPServer(
         }
         self._wiki_cache_ttl = 5.0
         self._wiki_cache_lock = threading.Lock()
+        self._wiki_cache_build_lock = threading.Lock()
         self._wiki_embed_cache: dict[str, list[float]] = {}
+        self._wiki_embed_inflight: dict[str, threading.Event] = {}
         self._wiki_embed_cache_max = 512
         self._tools_list_cache: dict[str, tuple] = {}
+        self._tools_list_cache_lock = threading.RLock()
         self._context_density_optimizer = ContextDensityOptimizer(
             budget_tokens=CONTEXT_DENSITY_DEFAULT_BUDGET,
             compact_threshold=CONTEXT_DENSITY_COMPACT_THRESHOLD,
@@ -572,13 +575,13 @@ class IDAMCPServer(
     def _stop_analysis_completion_watchers(self) -> None:
         """Stop analysis-completion watchers and background runtime spawns.
 
-        The completion watchers (ida-an-<sid>) self-terminate on their next
-        poll once their session leaves _pending_analysis, so clearing the
-        pending markers is the deterministic stop signal. Background runtime
-        spawns (ida-bg-<sid>) observe _shutdown_requested and bail before
-        launching. This runs BEFORE the h02 runtime teardown so a background
-        thread cannot re-spawn an IDA process after _cleanup_all_runtimes has
-        finished killing them. The collections are cleared defensively
+        The completion watchers (ida-an-<sid>) receive an explicit stop event
+        and are joined with a bounded timeout after their bookkeeping is
+        cleared. Background runtime spawns (ida-bg-<sid>) observe
+        _shutdown_requested and bail before launching. This runs BEFORE the
+        h02 runtime teardown so a background thread cannot re-spawn an IDA
+        process after _cleanup_all_runtimes has finished killing them. The
+        collections are cleared defensively
         (getattr + isinstance): safe-mode bookkeeping lives in server_session
         and evolves independently, so a missing/renamed collection is a no-op.
         """
@@ -595,6 +598,25 @@ class IDAMCPServer(
             bg_errors = getattr(self, "_background_load_errors", None)
             if isinstance(bg_errors, dict):
                 bg_errors.clear()
+            stop_events = getattr(self, "_analysis_watcher_stop_events", None)
+            events = list(stop_events.values()) if isinstance(stop_events, dict) else []
+            if isinstance(stop_events, dict):
+                stop_events.clear()
+            watcher_threads = getattr(self, "_analysis_watcher_threads", None)
+            threads = list(watcher_threads.values()) if isinstance(watcher_threads, dict) else []
+            if isinstance(watcher_threads, dict):
+                watcher_threads.clear()
+
+        # Wake and join outside the bookkeeping lock. Watcher finally blocks
+        # reacquire that lock to discard their registration; holding it while
+        # joining would turn shutdown into a deadlock.
+        for event in events:
+            event.set()
+        for thread in threads:
+            if thread is threading.current_thread() or not thread.is_alive():
+                continue
+            with contextlib.suppress(Exception):
+                thread.join(timeout=0.2)
 
     def shutdown(self) -> None:
         """Deterministic shutdown: persist gates, stop watchers, then teardown."""
@@ -605,6 +627,14 @@ class IDAMCPServer(
             self._persist_analysis_gates_on_shutdown()
         with contextlib.suppress(Exception):
             self._stop_analysis_completion_watchers()
+        # Background batch workers are host-owned and must be stopped before
+        # runtime teardown; otherwise queued work can outlive the IDA process
+        # it targets. Running workers receive their cooperative cancel event,
+        # while queued futures are cancelled by BatchManager.shutdown().
+        with contextlib.suppress(Exception):
+            batch_manager = getattr(self, "_batch_mgr", None)
+            if batch_manager is not None:
+                batch_manager.shutdown(wait=False)
         super().shutdown()
 
 
@@ -678,7 +708,12 @@ class IDAMCPServer(
                 # negotiation so its schemas and result formatting are still
                 # compatible.
                 self.vertex_compat = True
-                self._tools_list_cache.clear()
+                cache_lock = getattr(self, "_tools_list_cache_lock", None)
+                if cache_lock is None:
+                    self._tools_list_cache.clear()
+                else:
+                    with cache_lock:
+                        self._tools_list_cache.clear()
             return {
                 "jsonrpc": "2.0",
                 "id": rid,

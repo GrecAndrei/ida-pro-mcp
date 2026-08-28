@@ -207,6 +207,52 @@ class TestBgeCodeEmbedderFailOpen(unittest.TestCase):
         for r in out:
             self.assertTrue(r.ok)
 
+    def test_embed_batch_rejects_ambiguous_response_indices(self):
+        """Duplicate/out-of-range server indices must fail closed."""
+        emb = BgeCodeEmbedder()
+        emb._use_llama = True
+        emb._ready = True
+        emb._port = 9
+        emb._dimension = 2
+
+        response = mock.MagicMock()
+        response.read.return_value = (
+            b'{"data":['
+            b'{"index":1,"embedding":[0.0,1.0]},'
+            b'{"index":1,"embedding":[1.0,0.0]}]}'
+        )
+        response.__enter__.return_value = response
+        response.__exit__.return_value = False
+        with mock.patch(
+            "ida_pro_mcp.host.intelligence.core.urllib.request.urlopen",
+            return_value=response,
+        ):
+            out = emb.embed_batch(["first", "second"])
+
+        self.assertEqual(len(out), 2)
+        self.assertTrue(all(not item.ok and item.vector is None for item in out))
+
+    def test_embed_batch_handles_non_list_response_data(self):
+        """Malformed JSON payloads return per-item failures instead of raising."""
+        emb = BgeCodeEmbedder()
+        emb._use_llama = True
+        emb._ready = True
+        emb._port = 9
+        emb._dimension = 2
+
+        response = mock.MagicMock()
+        response.read.return_value = b'{"data":42}'
+        response.__enter__.return_value = response
+        response.__exit__.return_value = False
+        with mock.patch(
+            "ida_pro_mcp.host.intelligence.core.urllib.request.urlopen",
+            return_value=response,
+        ):
+            out = emb.embed_batch(["first", "second"])
+
+        self.assertEqual(len(out), 2)
+        self.assertTrue(all(not item.ok for item in out))
+
 
 if __name__ == "__main__":
     unittest.main()

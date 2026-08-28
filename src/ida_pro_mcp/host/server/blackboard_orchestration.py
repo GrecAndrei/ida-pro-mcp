@@ -49,6 +49,7 @@ NS_CRAWLER = "crawler"
 #: Task types recorded in ``bb_tasks``.
 TASK_TRACE = "trace"
 TASK_CRAWLER = "crawler"
+_MACHINERY_BUSY_TIMEOUT_MS = 30_000
 
 
 def _machinery_schema(conn: sqlite3.Connection) -> None:
@@ -95,13 +96,16 @@ class MachineryDB:
     def __init__(self, db_path: str, memory_cache: dict):
         self.db_path = db_path
         self._memory_cache = memory_cache
-        self._usable: bool | None = None
+        self._usable: bool | None = bool(str(db_path or "").strip())
 
     # -- connection ---------------------------------------------------------
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(
+            self.db_path, timeout=float(_MACHINERY_BUSY_TIMEOUT_MS) / 1000.0
+        )
         conn.row_factory = sqlite3.Row
+        conn.execute(f"PRAGMA busy_timeout={_MACHINERY_BUSY_TIMEOUT_MS}")
         conn.execute("PRAGMA journal_mode=WAL")
         return conn
 
@@ -260,6 +264,7 @@ class TaskPool:
         with self._lock:
             self._futures[str(task_id)] = future
         future.add_done_callback(self._forget)
+        return True
 
     def _forget(self, future) -> None:
         with self._lock:
@@ -275,9 +280,13 @@ class TaskPool:
     def drain(self, timeout: float = 15.0) -> None:
         with self._lock:
             futures = list(self._futures.values())
+        deadline = time.monotonic() + max(0.0, float(timeout))
         for future in futures:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             with contextlib.suppress(Exception):
-                future.result(timeout=timeout)
+                future.result(timeout=remaining)
 
     def shutdown(self) -> None:
         with contextlib.suppress(RuntimeError):
@@ -300,23 +309,25 @@ class _CrawlerRuntime:
         return bool(self._thread and self._thread.is_alive())
 
     def start(self, loop_fn: Callable[[], None]) -> None:
-        if self.is_running():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(
-            target=loop_fn, daemon=True, name="bb-crawler"
-        )
-        self._thread.start()
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                return
+            self._stop.clear()
+            self._thread = threading.Thread(
+                target=loop_fn, daemon=True, name="bb-crawler"
+            )
+            self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
 
-    def mark_visited(self, addr: str) -> None:
+    def mark_visited(self, addr: str) -> bool:
         with self._lock:
             if addr in self._visited:
-                return
+                return False
             self._visited.add(addr)
             self._visited_count += 1
+            return True
 
     def visited_count(self) -> int:
         return int(self._visited_count)
@@ -338,10 +349,15 @@ class BlackboardOrchestrator:
         self._crawler = _CrawlerRuntime()
         self._machinery_cache: dict = {}
         self._machinery: dict[str, MachineryDB] = {}
+        self._shutdown = False
+        self._trace_submit_lock = threading.Lock()
 
     # -- lifecycle ----------------------------------------------------------
 
     def shutdown(self) -> None:
+        if self._shutdown:
+            return
+        self._shutdown = True
         self._crawler.stop()
         self._pool.shutdown()
 
@@ -367,7 +383,8 @@ class BlackboardOrchestrator:
         return inst
 
     def machinery_get(self, store, namespace: str, key: str, default=None):
-        return self._machinery_for(store).get(namespace, key) or default
+        value = self._machinery_for(store).get(namespace, key)
+        return default if value is None else value
 
     def machinery_set(self, store, namespace: str, key: str, value: Any) -> None:
         self._machinery_for(store).set(namespace, key, value)
@@ -451,17 +468,55 @@ class BlackboardOrchestrator:
         pending = pending[: max(1, int(limit or 3))]
         task_ids: list[str] = []
         db_path = str(getattr(store, "db_path", "") or "").strip()
+        machinery = self._machinery_for(store)
         for entry_id, entry, payload in pending:
             if not entry_id:
                 continue
-            task_ids.append(entry_id)
-            self._machinery_for(store).update_task(entry_id, "running", payload)
-            self._pool.submit(
-                entry_id,
-                lambda eid=entry_id, e=entry, p=payload: self._run_one_trace(
-                    db_path, eid, e, p
-                ),
-            )
+            # Claim against the visible payload before queueing.  The worker
+            # runs asynchronously, so merely updating bb_tasks here leaves a
+            # window where a second MCP request can observe the original
+            # pending finding and enqueue the same trace again.
+            with self._trace_submit_lock:
+                current = entry
+                current_payload = payload
+                with contextlib.suppress(Exception):
+                    reread = store.read(entry_id)
+                    if reread:
+                        current = reread
+                        current_payload = json.loads(str(reread.get("content") or "{}"))
+                if not isinstance(current_payload, dict):
+                    current_payload = {}
+                if str(current_payload.get("status") or "").strip().lower() != "pending":
+                    continue
+                running_payload = dict(current_payload)
+                running_payload["status"] = "running"
+                try:
+                    self._mixin._set_task_status(
+                        store, current, "running", running_payload
+                    )
+                except Exception:
+                    # Do not queue work that cannot be durably claimed.
+                    continue
+                machinery.update_task(entry_id, "running", running_payload)
+                queued = self._pool.submit(
+                    entry_id,
+                    lambda eid=entry_id, e=current, p=running_payload: self._run_one_trace(
+                        db_path, eid, e, p, fallback_store=store
+                    ),
+                )
+            if queued:
+                task_ids.append(entry_id)
+                continue
+            failed_payload = dict(running_payload or {})
+            failed_payload.update({
+                "status": "failed",
+                "error": "trace worker pool is unavailable",
+            })
+            with contextlib.suppress(Exception):
+                self._mixin._set_task_status(
+                    store, entry, "failed", failed_payload
+                )
+            machinery.update_task(entry_id, "failed", failed_payload)
         return {
             "ok": True,
             "enqueued": len(task_ids),
@@ -469,9 +524,30 @@ class BlackboardOrchestrator:
             "status": "running",
         }
 
-    def _run_one_trace(self, db_path: str, entry_id: str, entry: dict, payload: dict) -> None:
-        store = self._open_store(db_path) or self._mixin._get_blackboard_store()
+    def _run_one_trace(
+        self,
+        db_path: str,
+        entry_id: str,
+        entry: dict,
+        payload: dict,
+        fallback_store=None,
+    ) -> None:
+        store = self._open_store(db_path) or fallback_store or self._mixin._get_blackboard_store()
         if store is None:
+            failed_payload = dict(payload or {})
+            failed_payload.update({
+                "status": "failed",
+                "error": "blackboard store is unavailable",
+                "result": {"ok": False, "error": "blackboard store is unavailable"},
+            })
+            # There is no visible findings store to update, but a valid DB
+            # path still lets us close the durable machinery task instead of
+            # leaving it permanently in running state.
+            if db_path:
+                with contextlib.suppress(Exception):
+                    MachineryDB(db_path, self._machinery_cache).update_task(
+                        entry_id, "failed", failed_payload
+                    )
             return
         try:
             self._mixin._set_task_status(store, entry, "running", payload)
@@ -482,9 +558,22 @@ class BlackboardOrchestrator:
             payload["result"] = result
             self._mixin._set_task_status(store, entry, status, payload)
             self._machinery_for(store).update_task(entry_id, status, payload)
-        except Exception:
+        except Exception as exc:
+            error = str(exc) or exc.__class__.__name__
+            failed_payload = dict(payload or {})
+            failed_payload.update({
+                "status": "failed",
+                "error": error,
+                "result": {"ok": False, "error": error},
+            })
             with contextlib.suppress(Exception):
-                self._machinery_for(store).update_task(entry_id, "failed", payload)
+                self._mixin._set_task_status(
+                    store, entry, "failed", failed_payload
+                )
+            with contextlib.suppress(Exception):
+                self._machinery_for(store).update_task(
+                    entry_id, "failed", failed_payload
+                )
 
     def trace_status_rows(self, store, status: str, limit: int) -> list[dict[str, Any]]:
         """Read trace task summaries from the store's trace_task entries."""
@@ -612,7 +701,8 @@ class BlackboardOrchestrator:
             break
         if not addr:
             return None
-        self._crawler.mark_visited(addr)
+        if not self._crawler.mark_visited(addr):
+            return None
         probe = self._crawler._probe or self.default_probe
         probe_result = probe(addr) if probe else self.default_probe(addr)
         if not isinstance(probe_result, dict):

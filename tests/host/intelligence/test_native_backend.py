@@ -2,7 +2,8 @@
 
 These run without the real libmcp_llama.so — they exercise the ctypes
 binding against a fake library and the graceful-degradation paths.  The live
-library is exercised by benchmarks/native_bench.py and the integration check.
+library is exercised by the ``benchmarks/run.py --scope retrieval`` pipeline
+and the integration check.
 
 The fake library implements the same C ABI the driver exposes:
   mcp_embed_new/free/dim/encode, mcp_rerank_new/free/score.
@@ -12,6 +13,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import threading
 
 import pytest
 
@@ -151,12 +153,109 @@ def test_embed_vector_shape_and_determinism(monkeypatch):
     assert emb.embed_vector("world") != vec  # different input, different vec
 
 
+def test_embed_cache_is_scoped_to_native_handle_generation(monkeypatch):
+    """A stop/reopen or handle replacement must not serve old-model vectors."""
+    emb = NativeEmbedder()
+    calls = 0
+    original_encode = _FakeLib.mcp_embed_encode
+
+    def counted_encode(lib, *args):
+        nonlocal calls
+        calls += 1
+        return original_encode(lib, *args)
+
+    monkeypatch.setattr(_FakeLib, "mcp_embed_encode", counted_encode)
+    first = emb.embed_vector("same input")
+    assert first is not None
+    assert calls == 1
+
+    # Model the generation change that accompanies stop/reopen while keeping
+    # the old cache row in place. The generation-keyed lookup must miss it.
+    with emb._lock:
+        emb._generation += 1
+    second = emb.embed_vector("same input")
+    assert second is not None
+    assert calls == 2
+
+
 def test_embed_batch_returns_per_item_results(monkeypatch):
     emb = NativeEmbedder()
     results = emb.embed_batch(["a", "b", "c"])
     assert len(results) == 3
     assert all(r.ok and r.vector and len(r.vector) == 4 for r in results)
     assert results[0].backend == "native-llama"
+
+
+def test_embed_batch_deduplicates_inflight_duplicate_inputs(monkeypatch):
+    """Duplicate texts in one batch must consume one native inference."""
+    emb = NativeEmbedder()
+    calls = 0
+    original_encode = _FakeLib.mcp_embed_encode
+
+    def counted_encode(lib, *args):
+        nonlocal calls
+        calls += 1
+        return original_encode(lib, *args)
+
+    monkeypatch.setattr(_FakeLib, "mcp_embed_encode", counted_encode)
+    results = emb.embed_batch(["same", "same", "other", "same"])
+
+    assert calls == 1
+    assert all(result.ok for result in results)
+    assert results[0].vector == results[1].vector == results[3].vector
+    assert results[0].vector != results[2].vector
+
+
+def test_embed_revalidates_handle_after_preparation_race(monkeypatch):
+    """A stop during formatting must not call the native ABI with a stale handle."""
+    emb = NativeEmbedder()
+    original_format = emb._format
+
+    def stop_during_format(text: str, purpose: str) -> str:
+        formatted = original_format(text, purpose)
+        emb.stop()
+        return formatted
+
+    monkeypatch.setattr(emb, "_format", stop_during_format)
+    result = emb.embed("race")
+    assert not result.ok
+    assert result.vector is None
+
+
+def test_concurrent_native_ensure_ready_opens_one_context(monkeypatch):
+    """Concurrent first-use must not allocate duplicate native contexts."""
+    emb = NativeEmbedder()
+    emb.stop()
+    rr = NativeReranker()
+    rr.stop()
+    counts = {"embed": 0, "rerank": 0}
+    count_lock = threading.Lock()
+    embed_new = _FakeLib.mcp_embed_new
+    rerank_new = _FakeLib.mcp_rerank_new
+
+    def counted_embed_new(lib, *args):
+        with count_lock:
+            counts["embed"] += 1
+        return embed_new(lib, *args)
+
+    def counted_rerank_new(lib, *args):
+        with count_lock:
+            counts["rerank"] += 1
+        return rerank_new(lib, *args)
+
+    monkeypatch.setattr(_FakeLib, "mcp_embed_new", counted_embed_new)
+    monkeypatch.setattr(_FakeLib, "mcp_rerank_new", counted_rerank_new)
+    threads = [
+        threading.Thread(target=lambda: (emb.ensure_ready(), rr.ensure_ready()))
+        for _ in range(12)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert counts == {"embed": 1, "rerank": 1}
 
 
 def test_embed_unavailable_when_lib_missing(monkeypatch):
@@ -220,6 +319,33 @@ def test_embedding_format_identifies_native_executor(monkeypatch):
     assert emb.embedding_format == emb.embedding_format
 
 
+def test_pinned_resets_release_discovered_handle(monkeypatch, tmp_path):
+    embed_model = tmp_path / "pinned-embed.gguf"
+    embed_model.write_bytes(b"pinned")
+    rerank_model = tmp_path / "pinned-rerank.gguf"
+    rerank_model.write_bytes(b"pinned")
+    freed_embed: list[int] = []
+    freed_rerank: list[int] = []
+    monkeypatch.setattr(native._NativeLib, "_instance", None, raising=False)
+    monkeypatch.setattr(native, "_find_model", lambda: str(embed_model))
+    monkeypatch.setattr(native, "_find_rerank_model", lambda: str(rerank_model))
+
+    def record_embed_free(_lib: _FakeLib, handle: int) -> None:
+        freed_embed.append(handle)
+
+    def record_rerank_free(_lib: _FakeLib, handle: int) -> None:
+        freed_rerank.append(handle)
+
+    monkeypatch.setattr(_FakeLib, "mcp_embed_free", record_embed_free)
+    monkeypatch.setattr(_FakeLib, "mcp_rerank_free", record_rerank_free)
+
+    NativeEmbedder.reset(str(embed_model))
+    NativeReranker.reset(str(rerank_model))
+
+    assert freed_embed == [1]
+    assert freed_rerank == [2]
+
+
 def test_rerank_scores_sorted_and_indexed(monkeypatch):
     rr = NativeReranker()
     assert rr.ensure_ready()
@@ -229,6 +355,58 @@ def test_rerank_scores_sorted_and_indexed(monkeypatch):
     assert scores == sorted(scores, reverse=True)
     assert {s["index"] for s in scored} == {0, 1, 2, 3}
     assert scored[0]["score"] == 4.0  # fake returns n - i for position i
+
+
+def test_rerank_exact_pool_cache_avoids_repeat_inference(monkeypatch):
+    rr = NativeReranker()
+    calls = 0
+    original_score = _FakeLib.mcp_rerank_score
+
+    def counted_score(lib, *args):
+        nonlocal calls
+        calls += 1
+        return original_score(lib, *args)
+
+    monkeypatch.setattr(_FakeLib, "mcp_rerank_score", counted_score)
+    first = rr.rerank("same query", ["doc a", "doc b"])
+    second = rr.rerank("same query", ["doc a", "doc b"])
+
+    assert first == second
+    assert calls == 1
+
+
+def test_rerank_cache_key_separates_embedded_delimiters(monkeypatch):
+    rr = NativeReranker()
+    calls = 0
+
+    def score_by_input(lib, handle, query, docs, n, out):
+        nonlocal calls
+        calls += 1
+        # Make a collision visible if the cache ever treats these distinct
+        # query/document boundaries as the same input.
+        for i in range(n):
+            out[i] = float(sum(query or b"")) + float(i)
+        return 0
+
+    monkeypatch.setattr(_FakeLib, "mcp_rerank_score", score_by_input)
+    first = rr.rerank("a\x00b", ["c"])
+    second = rr.rerank("a", ["b\x00c"])
+
+    assert first is not None and second is not None
+    assert first != second
+    assert calls == 2
+
+
+def test_rerank_revalidates_handle_after_preparation_race(monkeypatch):
+    """A stop while building the C string array must invalidate the score call."""
+    rr = NativeReranker()
+
+    class _StopOnEncode(str):
+        def encode(self, *args, **kwargs):
+            rr.stop()
+            return super().encode(*args, **kwargs)
+
+    assert rr._score("query", [_StopOnEncode("doc")]) is None
 
 
 def test_rerank_none_when_unavailable(monkeypatch):
@@ -275,6 +453,19 @@ def test_bootstrap_enables_and_disables(monkeypatch):
     report = native.bootstrap_native_backend()
     assert report["enabled"] is False
     assert report["reason"].startswith("backend pinned")
+
+
+def test_native_bootstrap_does_not_steal_http_fallback_without_models(monkeypatch):
+    """A present shared library alone must not opt the host out of HTTP."""
+    monkeypatch.setenv("IDA_MCP_BACKEND", "")
+    monkeypatch.delenv("IDA_MCP_NATIVE", raising=False)
+    monkeypatch.setattr(native, "_find_model", lambda: "")
+    monkeypatch.setattr(native, "_find_rerank_model", lambda: "")
+
+    assert native.native_embedder_available() is False
+    assert native.native_reranker_available() is False
+    report = native.bootstrap_native_backend()
+    assert report["enabled"] is False
 
     # Lib missing → not enabled.
     monkeypatch.setenv("IDA_MCP_BACKEND", "")

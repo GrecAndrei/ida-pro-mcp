@@ -531,7 +531,7 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
                 opts.rerank_disabled = True
         ui.info(
             "Rerank tuning knobs (optional env vars): IDA_MCP_RERANK_POOL "
-            "(recall pool, default 12), IDA_MCP_RERANK_DOC_BUDGET_CHARS "
+            "(recall pool, default 8), IDA_MCP_RERANK_DOC_BUDGET_CHARS "
             "(per-document budget, default 800), IDA_MCP_RERANK_CTX "
             "(per-pair context, default 1024)."
         )

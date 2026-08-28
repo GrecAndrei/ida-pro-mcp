@@ -1,10 +1,9 @@
 # Build libmcp_llama.so — the in-process retrieval backend.
 #
 # Links against a trimmed llama.cpp build (scripts/build_native_llama.sh).
-# Point LLAMA_CPP_BUILD at that build tree, or let it default to
-# /tmp/llama.cpp/build-mcp.  Example:
+# Point LLAMA_CPP_BUILD at that build tree. Example:
 #
-#   cmake -S src/ida_pro_mcp/native -B build/native -DLLAMA_CPP_BUILD=/tmp/llama.cpp/build-mcp
+#   cmake -S src/ida_pro_mcp/native -B build/native -DLLAMA_CPP_BUILD=/path/to/llama.cpp/build-mcp
 #   cmake --build build/native
 #
 # The output libmcp_llama.so is a single self-contained shared object (the
@@ -18,8 +17,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-if(NOT DEFINED LLAMA_CPP_BUILD)
-    set(LLAMA_CPP_BUILD "/tmp/llama.cpp/build-mcp")
+if(NOT DEFINED LLAMA_CPP_BUILD OR LLAMA_CPP_BUILD STREQUAL "")
+    message(FATAL_ERROR "Set -DLLAMA_CPP_BUILD=/path/to/llama.cpp/build-mcp")
 endif()
 
 # Headers live in the llama.cpp source tree.

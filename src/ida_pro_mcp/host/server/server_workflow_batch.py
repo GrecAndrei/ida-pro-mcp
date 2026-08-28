@@ -211,7 +211,7 @@ class ServerWorkflowBatchMixin:
         if len(entries) < 2:
             return None
 
-        runtime = self.session_runtimes.get(target_session.session_id)
+        runtime = self._runtime_record(target_session.session_id)
         if not isinstance(runtime, dict):
             return None
         port = runtime.get("port")
@@ -228,13 +228,19 @@ class ServerWorkflowBatchMixin:
         # every eligibility check passed, so a fallback never double-consumes
         # (a denial here falls back and the loop returns the canonical
         # RATE_LIMIT envelope).
+        reserved_tools: list[str] = []
         for _idx, _name, _resolved, _cleaned, _opts in entries:
             _action = str(_cleaned.get("action", "") or "")
             if is_rate_limit_exempt(_resolved, _action):
                 continue
             allowed, _reason = self.rate_limiter.check(_resolved)
             if not allowed:
+                refund = getattr(self.rate_limiter, "refund", None)
+                if callable(refund):
+                    for tool in reserved_tools:
+                        refund(tool)
                 return None
+            reserved_tools.append(_resolved)
 
         # Build one list-shaped payload. Mirror _execute_tool_inner's pre-RPC
         # steps per call: strip PP keys and truncation controls so they never
@@ -276,8 +282,12 @@ class ServerWorkflowBatchMixin:
                 rpc_items, port, auth_token=auth_token, recv_timeout=recv_timeout
             )
         except Exception:
-            # Nothing was consumed here beyond rate-limit tokens; fall back to
-            # the per-call loop which returns precise per-call errors.
+            # The normal per-call loop will check rate limits again. Return the
+            # reservations made above so a fallback is not charged twice.
+            refund = getattr(self.rate_limiter, "refund", None)
+            if callable(refund):
+                for tool in reserved_tools:
+                    refund(tool)
             return None
 
         if not isinstance(rpc_res, list) or len(rpc_res) != len(rpc_items):

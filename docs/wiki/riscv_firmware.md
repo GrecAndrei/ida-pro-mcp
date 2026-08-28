@@ -254,7 +254,7 @@ them off-alignment and `load_base` would not resolve.
 
 ### Assembly source
 
-The authoritative source is stored at build time in `/tmp/rvbuild/riscv_blob.S`
+The authoritative source is stored at build time in `<build-dir>/riscv_blob.S`
 (not committed — the committed artifact is the `.bin`).  Full listing:
 
 ```asm

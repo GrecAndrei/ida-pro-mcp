@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 
 from ida_pro_mcp.host.server.server_multi_session import (
     ServerMultiSessionMixin,
@@ -293,3 +294,41 @@ def test_group_link_returns_error_when_group_removed_mid_flight(tmp_path):
     server._dispatch = dispatch
     result = server._handle_multi_session("group_link", {"group_id": "g1"})
     assert result["error"] is True
+
+
+def test_group_link_does_not_hold_group_lock_during_ida_rpc(tmp_path):
+    """Status/list operations remain responsive while links are being built."""
+    server = _FakeMultiServer()
+    group = SessionGroup("g1", "test")
+    group.session_ids = ["A1B2C3D4", "E5F6A7B8"]
+    server._session_groups["g1"] = group
+    imports_started = threading.Event()
+    release_imports = threading.Event()
+
+    def dispatch(session_id, tool, tool_args):
+        if tool == "symbols":
+            return {"ok": True, "exports": [{"name": "foo", "ea": "0x1000"}]}
+        imports_started.set()
+        release_imports.wait(timeout=10)
+        return {"ok": True, "imports": [{"name": "foo"}]}
+
+    server._dispatch = dispatch
+    result: dict = {}
+    worker = threading.Thread(
+        target=lambda: result.update(
+            server._handle_multi_session("group_link", {"group_id": "g1"})
+        )
+    )
+    worker.start()
+    assert imports_started.wait(timeout=10)
+
+    started = time.monotonic()
+    status = server._ms_status({})
+    elapsed = time.monotonic() - started
+    release_imports.set()
+    worker.join(timeout=10)
+
+    assert status["ok"] is True
+    assert elapsed < 1.0
+    assert not worker.is_alive()
+    assert result.get("ok") is True

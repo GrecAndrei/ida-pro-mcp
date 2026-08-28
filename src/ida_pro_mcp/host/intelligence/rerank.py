@@ -30,9 +30,8 @@ Configuration (env, with the ``rerank`` section of the install
   IDA_MCP_RERANK_CHUNK      documents per /rerank request (default: 8) — llama
                             .cpp sizes buffers for the whole request, so chunk
                             to bound peak memory on large pools
-  (server always runs with --parallel 2: build 99111b1 collapses /rerank to
-   one identical score per document when --parallel is 1, and 2 is the lowest
-   safe slot count that keeps scores distinct while cutting peak memory)
+  IDA_MCP_RERANK_PARALLEL   slots (default: 2; build 99111b1 needs at least 2
+                            for distinct rerank scores)
   IDA_MCP_RERANK_DOC_CHARS  per-document truncation for the /rerank payload
   IDA_MCP_RERANK_GPU        1/true to offload to a detected Vulkan device
   IDA_MCP_RERANK_START_TIMEOUT    health-poll deadline for a cold server start
@@ -51,9 +50,9 @@ from __future__ import annotations
 import atexit
 import contextlib
 import glob
+import hashlib
 import json
 import os
-import re
 import socket
 import subprocess
 import threading
@@ -70,6 +69,7 @@ from .core import (
     _find_llama_server,
     _install_root,
     _InterProcessLock,
+    _llama_context_layout,
     _pid_alive,
     _process_command,
     _process_rss_bytes,
@@ -78,6 +78,7 @@ from .core import (
     _safe_float_env,
     _safe_int_env,
     _select_state_path,
+    _split_env_paths,
     model_fingerprint,
     server_fingerprint,
 )
@@ -108,6 +109,12 @@ RERANK_BATCH_THREADS = _safe_int_env(
 # bounded while the pool size stays large; the request lock already serializes
 # clients so the extra round-trips are safe.
 RERANK_CHUNK_SIZE = max(1, _safe_int_env("IDA_MCP_RERANK_CHUNK", "8"))
+# Two slots is the safe default for the larger cross-encoder; raise this when
+# the machine has the memory headroom.
+# llama.cpp build 99111b1 returns collapsed/identical scores for /rerank with
+# one slot. Preserve the minimum viable quality even when an operator sets a
+# too-low environment value; higher values remain capped for memory safety.
+RERANK_PARALLEL = max(2, min(4, _safe_int_env("IDA_MCP_RERANK_PARALLEL", "2")))
 RERANK_DOC_CHARS = _safe_int_env("IDA_MCP_RERANK_DOC_CHARS", "6000")
 RERANK_REQUEST_TIMEOUT = _safe_float_env("IDA_MCP_RERANK_TIMEOUT", "30.0")
 RERANK_BATCH_REQUEST_TIMEOUT = _safe_float_env("IDA_MCP_RERANK_BATCH_TIMEOUT", "120.0")
@@ -130,8 +137,24 @@ RERANK_MAX_FAILURES = _safe_int_env("IDA_MCP_RERANK_MAX_FAILURES", "2")
 RERANK_IDLE_TIMEOUT = max(0.0, _safe_float_env("IDA_MCP_RERANK_IDLE_TIMEOUT", "15.0"))
 # Default recall pool the semantic search hands to the reranker.
 RERANK_MAX_CANDIDATES = max(8, _safe_int_env("IDA_MCP_RERANK_MAX_CANDIDATES", "64"))
+# Cache exact (query, chunk) scores. Keys contain only a digest, so large
+# pseudocode documents do not remain resident in the host; values are just a
+# handful of float/index pairs. Set to 0 to disable if model output is
+# intentionally nondeterministic.
+RERANK_CACHE_MAX = max(0, _safe_int_env("IDA_MCP_RERANK_CACHE", "128"))
 
 _TRUE = ("1", "true", "yes", "on")
+
+
+def _rerank_cache_key(query: str, documents: list[str]) -> str:
+    """Hash one exact rerank chunk without delimiter ambiguities."""
+    digest = hashlib.sha256()
+    digest.update(len(documents).to_bytes(8, "big"))
+    for value in (query, *documents):
+        encoded = value.encode("utf-8", errors="replace")
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+    return digest.hexdigest()
 
 
 def _rerank_enabled() -> bool:
@@ -141,7 +164,22 @@ def _rerank_enabled() -> bool:
     forced = os.environ.get("IDA_MCP_RERANK_ENABLED", "").strip().lower()
     if forced in _TRUE:
         return True
-    # Default: on when a model is installed.  Discovery stays lazy so an
+    # The installer persists the component-level choice in embedder.json.
+    # Environment flags remain the explicit operator override; otherwise
+    # honor the state file before falling back to the historical default.
+    try:
+        configured = _read_rerank_state().get("enabled")
+    except Exception:
+        configured = None
+    if isinstance(configured, bool):
+        return configured
+    if configured is not None:
+        configured_text = str(configured).strip().lower()
+        if configured_text in _TRUE:
+            return True
+        if configured_text in ("0", "false", "no", "off"):
+            return False
+    # Default: on when a model is installed. Discovery stays lazy so an
     # absent model just leaves the reranker inert (status reports it).
     return True
 
@@ -183,7 +221,7 @@ def _find_rerank_model() -> str:
     # 1) explicit env var
     env_val = os.environ.get("IDA_MCP_RERANK_MODEL", "")
     if env_val:
-        for piece in re.split(r"[;:]", env_val):
+        for piece in _split_env_paths(env_val):
             piece = piece.strip()
             if not piece:
                 continue
@@ -411,6 +449,9 @@ class Reranker:
         self._idle_lock = threading.Lock()
         self._idle_timer: threading.Timer | None = None
         self._idle_generation = 0
+        self._score_cache: dict[str, list[dict[str, Any]]] = {}
+        self._score_cache_lock = threading.Lock()
+        self._score_inflight: dict[str, threading.Event] = {}
         # Default ctx is 1024 — the standard cap for reranker models
         # (bge-reranker / qwen3-reranker) and the same default the native
         # backend uses.  A rerank pair is the query plus a bounded document
@@ -730,25 +771,28 @@ class Reranker:
             if not self._use_llama:
                 return False
             self._port = self._pick_port()
+            # Keep the rerank context as the per-pair budget. The shared
+            # layout helper keeps this in lockstep with the embedder.
+            slot_ctx, parallel, total_ctx = _llama_context_layout(
+                self._ctx, RERANK_PARALLEL
+            )
             cmd = [
                 self._server_bin,
                 "--model", self._model_path,
                 "--rerank",
                 "--port", str(self._port),
-                "--ctx-size", str(self._ctx),
-                "--batch-size", str(max(self._ctx, 2048)),
+                "--ctx-size", str(total_ctx),
+                "--batch-size", str(slot_ctx),
                 # The physical batch must be >= the largest (query+doc) pair.
                 # The embedder's ubatch=512 works for many short snippets but a
                 # rerank pair is a full decompilation (~700-2000 tokens), and
                 # llama.cpp errors with HTTP 500 "input too large" when ubatch
                 # is smaller.  Use ctx so any pair fits; docs are capped at
                 # RERANK_DOC_CHARS so the KV/compute cost stays bounded.
-                "--ubatch-size", str(self._ctx),
+                "--ubatch-size", str(slot_ctx),
                 # --parallel 1 collapses /rerank to one identical score per
-                # document on build 99111b1 (why it was removed), but parallel 2
-                # returns full distinct scores and uses less peak memory, so we
-                # can have concurrency without the bug.
-                "--parallel", "2",
+                # document on build 99111b1, so keep at least two slots.
+                "--parallel", str(parallel),
                 "--threads", str(RERANK_THREADS),
                 "--threads-batch", str(RERANK_BATCH_THREADS),
                 "--n-predict", "0",
@@ -973,8 +1017,10 @@ class Reranker:
                     continue
                 out.append({"index": index, "score": score})
             out.sort(key=lambda x: x["score"], reverse=True)
-            if len(out) != len(documents):
-                raise RuntimeError("rerank response count mismatch")
+            indices = [item["index"] for item in out]
+            expected_indices = set(range(len(documents)))
+            if len(out) != len(documents) or set(indices) != expected_indices:
+                raise RuntimeError("rerank response indices mismatch")
             self._consecutive_rpc_failures = 0
             self._record_success_and_maybe_recycle()
             return out
@@ -996,6 +1042,56 @@ class Reranker:
             if self._ready:
                 self._schedule_idle_shutdown()
 
+    def _request_rerank_cached(
+        self, query: str, documents: list[str], *, timeout: float
+    ) -> list[dict[str, Any]] | None:
+        """Reuse exact HTTP rerank chunks and collapse concurrent duplicates."""
+        if not documents:
+            return []
+        if RERANK_CACHE_MAX <= 0:
+            return self._request_rerank(query, documents, timeout=timeout)
+
+        # _request_rerank applies this same cap before sending the payload;
+        # key the effective input so long-document spelling differences past
+        # the model boundary do not create useless duplicate requests.
+        capped = [self._truncate_doc(str(doc), RERANK_DOC_CHARS) for doc in documents]
+        cache_key = _rerank_cache_key(str(query), capped)
+        owner = False
+        wait_event: threading.Event | None = None
+        with self._score_cache_lock:
+            cached = self._score_cache.get(cache_key)
+            if cached is not None:
+                return [dict(item) for item in cached]
+            wait_event = self._score_inflight.get(cache_key)
+            if wait_event is None:
+                wait_event = threading.Event()
+                self._score_inflight[cache_key] = wait_event
+                owner = True
+        if not owner:
+            if wait_event is not None:
+                wait_event.wait(timeout=max(1.0, float(timeout)))
+            with self._score_cache_lock:
+                cached = self._score_cache.get(cache_key)
+            return [dict(item) for item in cached] if cached is not None else None
+
+        try:
+            scored = self._request_rerank(query, documents, timeout=timeout)
+            if scored is not None:
+                snapshot = [dict(item) for item in scored]
+                with self._score_cache_lock:
+                    if len(self._score_cache) >= RERANK_CACHE_MAX:
+                        try:
+                            self._score_cache.pop(next(iter(self._score_cache)))
+                        except Exception:
+                            self._score_cache.clear()
+                    self._score_cache[cache_key] = snapshot
+            return scored
+        finally:
+            with self._score_cache_lock:
+                event = self._score_inflight.pop(cache_key, None)
+                if event is not None:
+                    event.set()
+
     def rerank(
         self,
         query: str,
@@ -1014,6 +1110,8 @@ class Reranker:
         never a hard gate.  An expired deadline is checked before each chunk so
         a CPU-bound pool still yields back to the caller's search budget.
         """
+        if not documents:
+            return []
         # Auto-recover: a recycled server (RSS ceiling after many pools, idle
         # shutdown, a mid-request timeout) leaves _ready=False.  Restart once
         # so reranking keeps working across a long session instead of silently
@@ -1039,7 +1137,7 @@ class Reranker:
             if deadline is not None and time.monotonic() >= deadline:
                 return None
             part = documents[start:start + chunk]
-            scored = self._request_rerank(
+            scored = self._request_rerank_cached(
                 query,
                 part,
                 timeout=RERANK_REQUEST_TIMEOUT,

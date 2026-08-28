@@ -28,6 +28,13 @@ def test_available_cpu_count_respects_process_affinity(monkeypatch):
     assert core._available_cpu_count() == 3
 
 
+def test_llama_context_layout_preserves_slots_and_caps_total_context():
+    assert core._llama_context_layout(2048, 3) == (2048, 3, 6144)
+    assert core._llama_context_layout(4096, 16) == (4096, 8, 32768)
+    assert core._llama_context_layout(0, 0) == (512, 1, 512)
+    assert core._llama_context_layout(4096, 4, max_total_ctx=2048) == (2048, 1, 2048)
+
+
 def test_decomp_document_budget_adapts_to_model_context(monkeypatch):
     old = _reset_singleton()
     monkeypatch.setattr(core, "EMBED_CTX", 4096)
@@ -83,6 +90,43 @@ def test_embedder_repeated_text_is_deterministic(monkeypatch):
         # Both should be unavailable (no model) and structurally equal
         assert a.ok == b.ok
         assert a.vector == b.vector
+    finally:
+        _restore_singleton(old)
+
+
+def test_http_embedder_caches_exact_single_query(monkeypatch):
+    old = _reset_singleton()
+    monkeypatch.setattr("ida_pro_mcp.host.intelligence.core._find_llama_server", lambda: "")
+    monkeypatch.setattr("ida_pro_mcp.host.intelligence.core._find_model", lambda: "")
+    try:
+        emb = BgeCodeEmbedder()
+        emb._use_llama = True
+        emb._ready = True
+        emb._dimension = 2
+        emb._model_path = "cache-test-model.gguf"
+        calls = 0
+
+        def fake_request(texts, *, purpose, timeout):
+            nonlocal calls
+            calls += 1
+            return [[0.6, 0.8]] if emb.dim == 2 else [[1.0, 0.0, 0.0]]
+
+        monkeypatch.setattr(emb, "_request_embeddings", fake_request)
+        assert emb.embed_vector("repeat me") == [0.6, 0.8]
+        assert emb.embed_vector("repeat me") == [0.6, 0.8]
+        assert calls == 1
+
+        emb._dimension = 3
+        assert emb.embed_vector("repeat me") == [1.0, 0.0, 0.0]
+        assert calls == 2
+
+        emb._dimension = 2
+        assert emb.embed_vector("repeat me") == [0.6, 0.8]
+        assert calls == 2
+
+        emb._invalidate_embedding_cache()
+        assert emb.embed_vector("repeat me") == [0.6, 0.8]
+        assert calls == 3
     finally:
         _restore_singleton(old)
 
@@ -202,5 +246,8 @@ def test_server_uses_batch_threads_without_raising_query_threads(monkeypatch, tm
         assert command[command.index("--threads") + 1] == "4"
         assert command[command.index("--threads-batch") + 1] == "8"
         assert command[command.index("--parallel") + 1] == "3"
+        assert command[command.index("--ctx-size") + 1] == "6144"
+        assert command[command.index("--batch-size") + 1] == "2048"
+        assert command[command.index("--ubatch-size") + 1] == "2048"
     finally:
         _restore_singleton(old)

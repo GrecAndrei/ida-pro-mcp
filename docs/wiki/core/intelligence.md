@@ -51,7 +51,7 @@ the list is only "nearby", not "correct". Stage 2 is a **cross-encoder
 reranker**: it concatenates the query with each recalled candidate's full
 document and scores the pair with cross-attention. It cannot run over the
 whole binary (every pair is a fresh forward pass), so it only re-scores the
-recalled pool — bounded by `IDA_MCP_RERANK_POOL` (default 12) with each
+recalled pool — bounded by `IDA_MCP_RERANK_POOL` (default 8) with each
 document truncated to `IDA_MCP_RERANK_DOC_BUDGET_CHARS` (default 800 chars,
 ~250 tokens) — and the returned list is ordered by rerank score.  The caps
 exist because the cross-encoder costs seconds per pair on CPU: an unbounded
@@ -145,11 +145,12 @@ setup without opening IDA.
 
 ### In-process native backend (`libmcp_llama.so`)
 
-When `libmcp_llama.so` is present, the embedder and reranker can run **in
+When `libmcp_llama.so` and the matching model are present, the embedder and reranker can run **in
 process** via `ctypes` instead of shelling out to two full `llama-server` HTTP
 subprocesses.  `BgeCodeEmbedder()` and `Reranker()` transparently resolve to
-`NativeEmbedder` / `NativeReranker` when the host bootstrap enables it; the
-HTTP path remains the fallback when the library is absent.  `ida_reranker_status`
+`NativeEmbedder` / `NativeReranker` when the host bootstrap enables it; each
+component independently falls back to HTTP when its model is absent.
+`ida_reranker_status`
 reports `backend: native-llama` when active.
 
 - **Build** (`scripts/build_native_llama.sh`): a trimmed llama.cpp (server /
@@ -157,19 +158,23 @@ reports `backend: native-llama` when active.
   minimal C-ABI driver (`src/ida_pro_mcp/native/mcp_llama.cpp`) → one
   self-contained `libmcp_llama.so`.
 - **Selection**: `IDA_MCP_BACKEND=native` pins native; `=http` forces HTTP;
-  otherwise the host sets `IDA_MCP_NATIVE=1` at startup when the lib is found.
+  otherwise the host sets `IDA_MCP_NATIVE=1` at startup when the library and
+  at least one matching retrieval model are found.
 - **Wins**: no subprocess startup, no HTTP/JSON, no per-request graph
   allocation (RSS plateaus — the 5 GiB floor and recycle machinery are
   bypassed), no chunk-of-8 round trips, all CPU threads during a batch.
   Rerank scores and embed vectors match the HTTP path (verified to float
   noise).
-- **Batched decode**: `encode_batched` packs up to `n_seq_max` (16) sequences
+- **Batched decode**: `encode_batched` packs up to `n_seq_max` (4 by default) sequences
   into one `llama_decode` with distinct `seq_id`s (each its own KV stream,
   KV cleared once per batch), so short documents share a ubatch instead of
-  streaming the weights once each.  The KV cache is `Q8_0`-quantized to fit a
-  16 × 2048-token batch in ~0.5 GiB.  Over-long sequences are truncated
-  head-first (query + document prefix preserved).  `MCP_NSEQ=<1..64>` env
-  overrides the batch width for diagnostics.  The context passed by the
+  streaming the weights once each. Native uses a 512-token physical
+  microbatch by default (larger values are available through
+  `IDA_MCP_NATIVE_UBATCH` and should be benchmarked per machine). Native
+  defaults to F16 KV for parity with llama-server; `IDA_MCP_NATIVE_KV=q8` is
+  the lower-memory speed mode. Over-long sequences are truncated
+  head-first (query + document prefix preserved).  `IDA_MCP_NATIVE_SEQUENCES=<1..64>` env
+  overrides the batch width (`MCP_NSEQ` remains a compatibility alias).  The context passed by the
   Python side (`IDA_MCP_EMBED_CTX` / `IDA_MCP_RERANK_CTX`) is the
   **per-sequence** token budget — the total KV spans `n_ctx_seq × n_seq_max`.
   (An earlier interpretation divided the caller's value by `n_seq_max`,

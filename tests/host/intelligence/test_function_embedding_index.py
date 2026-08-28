@@ -46,6 +46,14 @@ class _PrefixFailureEmbedder:
         ]
 
 
+class _RaisingEmbedder:
+    backend = "test"
+    dim = 3
+
+    def embed_vector(self, text: str):
+        raise RuntimeError("synthetic embedding failure")
+
+
 class _KeywordEmbedder:
     """Deterministic test embedder: text containing a keyword maps to a fixed
     unit vector, so similarity relationships are fully controllable."""
@@ -151,6 +159,17 @@ def test_index_many_returns_retry_boundary_after_partial_failure(tmp_path):
     assert index.size == 2
 
 
+def test_index_many_counts_fallback_embedder_exception_as_failure(tmp_path):
+    index = FunctionEmbeddingIndex(
+        str(tmp_path / "sample.embeddings.db"), _RaisingEmbedder()
+    )
+
+    result = index.index_many([("0x401000", "broken", "broken", None)])
+
+    assert result == {"indexed": 0, "failed": 1, "resume_after_ea": None}
+    assert index.size == 0
+
+
 def test_fast_refresh_does_not_downgrade_an_existing_full_decomp_vector(tmp_path):
     db_path = str(tmp_path / "sample.embeddings.db")
     index = FunctionEmbeddingIndex(db_path, _BatchEmbedder())
@@ -191,6 +210,21 @@ def test_lexical_search_normalizes_behavior_verbs_and_print_apis(tmp_path):
 
     assert matches[0]["name"] == "fixture_entry"
     assert {"print", "puts", "agent", "surface", "marker"}.intersection(matches[0]["matched_tokens"])
+
+
+def test_lexical_prefilter_uses_token_boundaries_before_candidate_limit(tmp_path):
+    index = FunctionEmbeddingIndex(str(tmp_path / "sample.embeddings.db"), _BatchEmbedder())
+    rows = [
+        (f"0x{i * 0x10:x}", f"strcpy_{i}", "strcpy unrelated work", None)
+        for i in range(2000)
+    ]
+    rows.append(("0x900000", "cpy_target", "cpy target behavior", None))
+    assert index.index_many(rows)["indexed"] == len(rows)
+
+    matches = index.search_text("cpy", top_k=5)
+
+    assert matches
+    assert matches[0]["name"] == "cpy_target"
 
 
 def test_semantic_candidates_are_filtered_by_address_range_before_limit(tmp_path):

@@ -38,6 +38,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      LLAMA_CPP_ROOT: ${{ runner.temp }}/llama.cpp
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -53,20 +55,20 @@ jobs:
 
       - name: Clone llama.cpp (pinned)
         run: |
-          git clone --depth 1 https://github.com/ggml-org/llama.cpp /tmp/llama.cpp
-          git -C /tmp/llama.cpp fetch --depth 1 origin "$LLAMA_CPP_COMMIT"
-          git -C /tmp/llama.cpp checkout "$LLAMA_CPP_COMMIT"
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp "$LLAMA_CPP_ROOT"
+          git -C "$LLAMA_CPP_ROOT" fetch --depth 1 origin "$LLAMA_CPP_COMMIT"
+          git -C "$LLAMA_CPP_ROOT" checkout "$LLAMA_CPP_COMMIT"
 
       - name: Build trimmed library + quantizer
         run: |
-          JOBS="$(nproc)" LLAMA_CPP_SRC=/tmp/llama.cpp \
+          JOBS="$(nproc)" LLAMA_CPP_SRC="$LLAMA_CPP_ROOT" \
             ./scripts/build_native_llama.sh
 
       - name: Smoke-test libmcp_llama.so loads
         run: |
           python - <<'PY'
           import ctypes, glob, sys
-          candidates = glob.glob('/tmp/llama.cpp/build-mcp/libmcp_llama.so') \
+          candidates = glob.glob('${{ runner.temp }}/llama.cpp/build-mcp/libmcp_llama.so') \
               + glob.glob('src/ida_pro_mcp/native/build/libmcp_llama.so')
           assert candidates, 'libmcp_llama.so not produced'
           lib = ctypes.CDLL(candidates[0])
@@ -81,12 +83,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -x /tmp/llama.cpp/build-mcp/mcp_quantize
+          test -x "$LLAMA_CPP_ROOT/build-mcp/mcp_quantize"
           # mcp_quantize prints usage and exits 2 when invoked with no args.
           # Asserting that exact exit code is what catches a freshly built
           # binary that crashes or segfaults at startup — a bare pipeline to
           # `head` always reports success regardless of the real status.
-          if out="$(/tmp/llama.cpp/build-mcp/mcp_quantize 2>&1)"; then
+          if out="$("$LLAMA_CPP_ROOT/build-mcp/mcp_quantize" 2>&1)"; then
             rc=0
           else
             rc=$?

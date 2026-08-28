@@ -44,6 +44,7 @@ def _make_assembler(**attrs) -> ContextAssembler:
     obj._perf_lock = threading.Lock()
     obj._semantic_budget_cache = {}
     obj._semantic_budget_lock = threading.Lock()
+    obj._persist_gate = threading.Semaphore(4)
     obj._max_indexes = 4
     obj._idx_last_access = {}
     obj._session_last_seen = {}
@@ -161,12 +162,53 @@ class TestAssemble:
         for _ in range(50):
             with idx._conn() as conn:
                 row = conn.execute(
-                    "SELECT name FROM func_embeddings WHERE ea=?", ("0x1000",)
+                    "SELECT name, document_text FROM func_embeddings WHERE ea=?", ("0x1000",)
                 ).fetchone()
             if row is not None:
                 break
             time.sleep(0.02)
         assert row is not None and row[0] == "sub_1000"
+        assert row[1].startswith("void target(void)")
+
+    def test_request_persist_restamps_freshness_after_own_commit(self, tmp_path):
+        obj = _make_assembler(embedder=_FakeEmbedder())
+        idx = obj._get_index(str(tmp_path / "fresh.idb"))
+        assert obj._schedule_embedding_persist(
+            idx, "0x1000", "target", [1.0, 0.0, 0.0, 0.0],
+            "hash", "void target(void)", "sig-hash", "void target(void) { return; }",
+        ) is True
+
+        for _ in range(50):
+            with idx._conn() as conn:
+                row = conn.execute(
+                    "SELECT document_text FROM func_embeddings WHERE ea=?", ("0x1000",)
+                ).fetchone()
+            if row is not None and not idx.db_changed_since_load():
+                break
+            time.sleep(0.02)
+        assert row is not None
+        assert idx.db_changed_since_load() is False
+
+    def test_request_persist_skips_when_gate_is_saturated(self, tmp_path, monkeypatch):
+        obj = _make_assembler(
+            embedder=_FakeEmbedder(),
+            _persist_gate=threading.Semaphore(0),
+        )
+        idx = obj._get_index(str(tmp_path / "fake.idb"))
+
+        class _UnexpectedThread:
+            def __init__(self, *args, **kwargs):
+                raise AssertionError("saturated persistence must not spawn a thread")
+
+        monkeypatch.setattr(context_mod.threading, "Thread", _UnexpectedThread)
+        assert obj._schedule_embedding_persist(
+            idx, "0x1000", "target", [1.0, 0.0, 0.0, 0.0],
+            "hash", "void target(void)", "sig-hash", "void target(void) { return; }",
+        ) is False
+        with idx._conn() as conn:
+            assert conn.execute(
+                "SELECT 1 FROM func_embeddings WHERE ea=?", ("0x1000",)
+            ).fetchone() is None
 
     def test_search_enrichment_and_next_targets(self, tmp_path):
         idb = str(tmp_path / "fake.idb")

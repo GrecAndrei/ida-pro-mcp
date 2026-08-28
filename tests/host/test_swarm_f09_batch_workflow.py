@@ -58,6 +58,37 @@ def _workflow_execute(tool, args, seen):
     return {"ok": True, "tool": tool}
 
 
+def test_batch_manager_lazy_initialization_is_singleton_under_race(tmp_path, monkeypatch):
+    server = _make_server(tmp_path, monkeypatch)
+    created = []
+    real_manager = sb_module.BatchManager
+
+    def factory(*args, **kwargs):
+        manager = real_manager(*args, **kwargs)
+        created.append(manager)
+        return manager
+
+    monkeypatch.setattr(sb_module, "BatchManager", factory)
+    barrier = threading.Barrier(16)
+    results = []
+
+    def worker():
+        barrier.wait()
+        results.append(server._batch_manager)
+
+    threads = [threading.Thread(target=worker) for _ in range(16)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    try:
+        assert len(created) == 1
+        assert len({id(manager) for manager in results}) == 1
+    finally:
+        server.shutdown()
+
+
 # ---------------------------------------------------------------------------
 # security/high — background(submit) ownership
 # ---------------------------------------------------------------------------

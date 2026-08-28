@@ -3,7 +3,7 @@
 
 Examples:
   python scripts/run_live_agent_surface.py --ida-dir /opt/ida
-  python scripts/run_live_agent_surface.py --ida-dir /opt/ida --binary /tmp/fixture.exe
+  python scripts/run_live_agent_surface.py --ida-dir /opt/ida --binary /path/to/fixture
 """
 
 from __future__ import annotations

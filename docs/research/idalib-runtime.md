@@ -50,7 +50,7 @@ bundling with IDA Home, database flush on exit, and revived
 `gen_disasm_text` — the pieces that previously made idalib unsuitable.
 Should the runtime become idalib-in-process?
 
-## Verified facts (from ~/ida-pro-9.4/idalib)
+## Verified facts (from an IDA 9.4 idalib installation)
 
 - `idalib/python/idapro-0.0.9-py3-none-any.whl` ships the `idapro`
   package. Loading it: `import idapro` must be the **first import** in the

@@ -19,8 +19,8 @@
 // graph allocation.  Each handle owns one llama_context split into n_seq_max
 // per-sequence KV streams; sequences are decoded in greedy batches (one
 // llama_decode per batch, distinct seq_ids) against a compute graph allocated
-// once and reused.  The KV cache is q8_0-quantized so a batch of 16 x 2048
-// tokens fits in ~0.5 GiB.
+// once and reused. The default F16 KV cache preserves parity with
+// llama-server; an opt-in Q8 mode reduces memory for constrained hosts.
 
 #include <cstdint>
 #include <cstdlib>
@@ -76,13 +76,15 @@ struct mcp_llama_common {
     int            n_ctx = 2048;        // total KV cells
     int            n_ctx_seq = 2048;    // per-sequence token budget
     int            n_seq_max = 1;       // max sequences in one decode
+    int            n_batch = 2048;      // logical max tokens per llama_decode
+    int            n_ubatch = 512;      // physical tokens per graph execution
+    bool           quantized_kv = false;
 
-    // Decode batch capacity.  We default to 16 sequences; each gets its own
-    // KV stream (kv_unified=false), so n_ctx = n_ctx_seq * n_seq_max.  The KV
-    // cache is quantized (q8_0) to halve the ~28 KiB/token a 0.6B Qwen3 model
-    // would otherwise need in f16, letting a batch of 16 x 2048-token
-    // sequences fit in ~0.5 GiB.
-    static constexpr int   kSeqMaxDefault = 16;
+    // Decode batch capacity.  We default to 4 sequences; each gets its own
+    // KV stream (kv_unified=false), so n_ctx = n_ctx_seq * n_seq_max. Four
+    // streams avoid the large idle KV reservation of the old 16-stream
+    // default while retaining enough parallelism for indexing.
+    static constexpr int   kSeqMaxDefault = 4;
     static constexpr int   kCtxSeqDefault = 2048;
 
     bool load(const char * model_path, int threads, int ctx_size) {
@@ -100,10 +102,13 @@ struct mcp_llama_common {
         // every prompt at ctx_size/16 tokens — 128 for the 2048 default —
         // truncating embedding documents and rerank pairs to a fraction of
         // their intended signal.
-        // MCP_NSEQ overrides the batch width (diagnostic / tuning knob).
+        // IDA_MCP_NATIVE_SEQUENCES overrides the batch width; MCP_NSEQ is a
+        // compatibility alias for older installs.
         n_seq_max = kSeqMaxDefault;
-        if (const char * e = getenv("MCP_NSEQ")) {
-            const int v = atoi(e);
+        const char * sequence_env = getenv("IDA_MCP_NATIVE_SEQUENCES");
+        if (!sequence_env || !*sequence_env) sequence_env = getenv("MCP_NSEQ");
+        if (sequence_env) {
+            const int v = atoi(sequence_env);
             if (v >= 1 && v <= 64) n_seq_max = v;
         }
         n_ctx_seq = ctx_size > 0 ? ctx_size : train_ctx;
@@ -111,18 +116,38 @@ struct mcp_llama_common {
         if (n_ctx_seq < 64) n_ctx_seq = 64;          // never starve a sequence
         if (n_ctx_seq > kCtxSeqDefault) n_ctx_seq = kCtxSeqDefault;
         n_ctx = n_ctx_seq * n_seq_max;
+        // llama_decode rejects a batch larger than cparams.n_batch. Use the
+        // total capacity of the sequence streams (capped at 8192 to avoid a
+        // giant output/allocator reservation for diagnostic n_seq values),
+        // so a rerank pool can actually use all four streams instead of
+        // degenerating into one full sequence per decode.
+        n_batch = std::min(n_ctx_seq * n_seq_max, 8192);
+        n_batch = std::max(512, n_batch);
+        n_ubatch = std::min(n_batch, 512);
+        if (const char * e = getenv("IDA_MCP_NATIVE_UBATCH")) {
+            const int v = atoi(e);
+            if (v >= 64) n_ubatch = std::min(n_batch, v);
+        }
+        // F16 KV is the llama-server default and preserves embedding parity.
+        // Q8 KV is a deliberate speed/memory tradeoff for constrained hosts.
+        quantized_kv = false;
+        if (const char * e = getenv("IDA_MCP_NATIVE_KV")) {
+            quantized_kv = std::strcmp(e, "q8") == 0 || std::strcmp(e, "1") == 0;
+        }
 
         llama_context_params cparams = llama_context_default_params();
         cparams.n_ctx = static_cast<uint32_t>(n_ctx);
         cparams.n_seq_max = static_cast<uint32_t>(n_seq_max);
+        cparams.n_batch = static_cast<uint32_t>(n_batch);
+        cparams.n_ubatch = static_cast<uint32_t>(n_ubatch);
         cparams.n_threads = n_threads;
         cparams.n_threads_batch = n_threads;
-        // Quantized KV halves the per-token KV footprint, the binding
-        // constraint for batching many sequences into one decode on a
-        // memory-tight box.  Scores are stable: KV quantization only rounds
-        // the cache, the classifier head reads the pooled hidden state.
-        cparams.type_k = GGML_TYPE_Q8_0;
-        cparams.type_v = GGML_TYPE_Q8_0;
+        // Q8 KV halves the per-token footprint for memory-tight boxes, but
+        // F16 is the default so native embeddings match llama-server.
+        if (quantized_kv) {
+            cparams.type_k = GGML_TYPE_Q8_0;
+            cparams.type_v = GGML_TYPE_Q8_0;
+        }
         // Must be set at context creation (not just llama_set_embeddings):
         // the server does the same and the graph/KV setup differs when it's
         // known up front.  Without it, encoding a Qwen3 embedding model
@@ -276,15 +301,19 @@ static int encode_batched(mcp_llama_common & h,
         return MCP_OK;
     };
 
+    int32_t batch_tokens = 0;
     for (int idx : order) {
         const int32_t len = static_cast<int32_t>(capped[static_cast<size_t>(idx)].size());
         if (!batch.empty() &&
             (static_cast<int>(batch.size()) >= h.n_seq_max ||
-             len > h.n_ctx_seq)) {
+             len > h.n_ctx_seq ||
+             batch_tokens + len > h.n_batch)) {
             const int rc = flush_batch();
             if (rc != MCP_OK) return rc;
+            batch_tokens = 0;
         }
         batch.push_back(idx);
+        batch_tokens += len;
     }
     return flush_batch();
 }
@@ -371,8 +400,11 @@ MCP_EXPORT int mcp_embed_encode(mcp_embed_handle * h,
     std::vector<std::vector<llama_token>> seqs(static_cast<size_t>(n));
     for (int i = 0; i < n; ++i) {
         if (!texts[i]) return MCP_ERR_INPUT;
-        int rc = mcp_tokenize(vocab, texts[i], seqs[static_cast<size_t>(i)],
-                              llama_vocab_get_add_bos(vocab));
+        // Match llama-server's /embeddings path, which tokenizes with
+        // add_special=true. For Qwen3 this appends the model-configured EOS
+        // token even though add_bos is false; omitting it changes LAST-pool
+        // embeddings and makes native retrieval disagree with HTTP.
+        int rc = mcp_tokenize(vocab, texts[i], seqs[static_cast<size_t>(i)], true);
         if (rc != MCP_OK) return rc;
         if (seqs[static_cast<size_t>(i)].empty()) return MCP_ERR_TOKENIZE;
     }

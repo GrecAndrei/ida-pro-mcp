@@ -10,9 +10,13 @@ from ida_pro_mcp.host.agent_operations import list_agent_operations, render_agen
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Meta-docs that describe the product surface and must not name operations or
-# tools that no longer exist. CONTRIBUTING.md / USE_CASES.md / ARCHITECTURE.md
-# are hand-edited prose (unlike the generated TOOLS_REFERENCE / SKILL.md).
-META_DOCS = ("CONTRIBUTING.md", "USE_CASES.md", "ARCHITECTURE.md")
+# tools that no longer exist. These are hand-edited prose (unlike the
+# generated TOOLS_REFERENCE / SKILL.md).
+META_DOCS = (
+    "CONTRIBUTING.md",
+    "docs/guide/use-cases.md",
+    "docs/guide/architecture.md",
+)
 
 # Legacy tool-surface identifiers that have been removed or never existed.
 # Prose must not name them as current tools. (agent/query/summarize are
@@ -23,7 +27,7 @@ DEAD_TOOL_NAMES = ("firmware_view", "binary_info", "data_ops", "packer")
 def _meta_doc_texts():
     for name in META_DOCS:
         path = REPO_ROOT / name
-        assert path.is_file(), f"meta-doc {name} missing from repo root"
+        assert path.is_file(), f"meta-doc {name} missing"
         yield name, path.read_text(encoding="utf-8")
 
 
@@ -141,7 +145,7 @@ def test_contributing_recommends_real_pytest_entrypoints():
     unittest modules that were removed."""
     text = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
     assert "pytest" in text
-    assert "--basetemp=/home/alex/.tmp/pytest" in text
+    assert "--basetemp=.pytest_tmp" in text
     assert "python -m unittest" not in text
     for stale in ("test_host_wiki_and_hardening", "test_linux_support", "test_session_features"):
         assert stale not in text, f"CONTRIBUTING.md still references removed module {stale}"
@@ -150,7 +154,7 @@ def test_contributing_recommends_real_pytest_entrypoints():
 def test_arch_surface_policy_matches_current_tiering():
     """ARCHITECTURE must describe the default agent catalog and scope the
     Tier A/B/C model to the legacy surface."""
-    text = (REPO_ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    text = (REPO_ROOT / "docs/guide/architecture.md").read_text(encoding="utf-8")
     section = text.split("## Product surface policy", 1)[1].split("## ", 1)[0]
     # Default surface is the full ida_* catalog, not a hidden Tier A subset.
     assert "list_agent_operations" in section

@@ -28,8 +28,8 @@ layout:
     (wm_now snapshots, quest log, phase/policy state, evidence snapshots).
 ``findings_embeddings``
     A side table written out-of-band. No CRUD RPC ever blocks on it: the write
-    path only calls the ``embed_enqueue`` hook (a no-op by default) unless
-    ``embed=True`` is requested explicitly.
+    and update paths call the ``embed_enqueue`` hook (a no-op by default);
+    ``embed=True`` additionally computes and stores a vector synchronously.
 
 Design notes that are easy to get wrong and are therefore load-bearing:
 
@@ -54,6 +54,7 @@ import builtins
 import contextlib
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -66,6 +67,8 @@ from contextlib import contextmanager
 from typing import Any, Callable
 
 from ..intelligence.helpers import batch_cosine_similarity, pack_floats, unpack_floats
+
+logger = logging.getLogger(__name__)
 
 KINDS = frozenset({"finding", "hypothesis", "question", "task", "decision", "examined"})
 #: 'proposed' is written by the crawler / trace / proposal machinery and must be
@@ -103,7 +106,7 @@ _MARKER_RE = re.compile(r"\[mcp:([0-9a-f-]{4,})\]")
 AUTO_NAME_PREFIXES = ("sub_", "j_", "loc_", "nullsub_", "unknown_libname_")
 
 #: Current schema version. Migrations are keyed by the user_version they land on.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 #: SQLite busy timeout in milliseconds. Writes use BEGIN IMMEDIATE and wait here
 #: rather than failing with SQLITE_BUSY when several clients touch one workspace.
 _DB_BUSY_TIMEOUT_MS = 30_000
@@ -484,10 +487,29 @@ def _migrate_0002_split_findings(conn: sqlite3.Connection) -> None:
     _create_blackboard_compat_view(conn)
 
 
+def _migrate_0003_embedding_metadata(conn: sqlite3.Connection) -> None:
+    """Record the vector space used by each stored embedding.
+
+    Older rows have no model identity and remain readable as legacy vectors,
+    but new writes must carry both identity and dimension so a changed model
+    cannot silently rank against incompatible vectors.
+    """
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(findings_embeddings)")}
+    if "embedding_dim" not in columns:
+        conn.execute("ALTER TABLE findings_embeddings ADD COLUMN embedding_dim INTEGER NOT NULL DEFAULT 0")
+    if "text_hash" not in columns:
+        conn.execute("ALTER TABLE findings_embeddings ADD COLUMN text_hash TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        "UPDATE findings_embeddings SET embedding_dim = length(vector) / 4 "
+        "WHERE embedding_dim = 0 AND vector IS NOT NULL"
+    )
+
+
 #: Ordered by the user_version each migration lands on.
 _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     1: _migrate_0001_initial_schema,
     2: _migrate_0002_split_findings,
+    3: _migrate_0003_embedding_metadata,
 }
 
 
@@ -530,12 +552,11 @@ class BlackboardStore:
         # Set by the coverage strategy so callers can be honest when the
         # function inventory is empty or no live IDA session is available.
         self.last_coverage_note: str = ""
-        # Out-of-band embedding enqueue hook. The write path calls this with
+        # Out-of-band embedding enqueue hook. The write/update paths call this with
         # (entry_id, text) after every insert/update; by default it is a no-op
         # so no CRUD RPC ever blocks on embedding. The host may replace it
         # with a function that enqueues into a background embedding worker.
-        # Passing embed=True to write()/update() bypasses the hook and embeds
-        # synchronously.
+        # Passing embed=True to write()/update() also embeds synchronously.
         self.embed_enqueue: Callable[[str, str], None] = lambda entry_id, text: None
         try:
             parent = os.path.dirname(self.db_path) or "."
@@ -618,26 +639,108 @@ class BlackboardStore:
     def _get_embedder(self):
         return _get_embedder()
 
+    @staticmethod
+    def _embedding_identity(embedder: Any, dimension: int = 0) -> str:
+        """Return a stable identity for the current embedding vector space."""
+        backend = getattr(embedder, "backend", "unknown")
+        if callable(backend):
+            backend = backend()
+        fmt = getattr(embedder, "embedding_format", "")
+        if callable(fmt):
+            fmt = fmt()
+        parts = [str(backend or "unknown")]
+        if fmt:
+            parts.append(str(fmt))
+        # Prompt format alone does not identify a local vector space: two
+        # different GGUF files can share a profile, dimension, and prefixes.
+        # Include file identity without hashing the whole model on every
+        # blackboard query. A replacement at the same path changes size or
+        # mtime and therefore cannot silently reuse old vectors.
+        model_path = getattr(embedder, "_model_path", "") or getattr(embedder, "model_path", "")
+        if model_path:
+            try:
+                stat = os.stat(os.fspath(model_path))
+                parts.append(
+                    f"model:{os.path.realpath(os.fspath(model_path))}:"
+                    f"{int(stat.st_size)}:{int(stat.st_mtime_ns)}"
+                )
+            except (OSError, TypeError, ValueError):
+                parts.append(f"model:{model_path}")
+        if dimension:
+            parts.append(str(dimension))
+        return "|".join(parts)
+
+    @staticmethod
+    def _embedding_text(
+        title: str,
+        content: str,
+        category: str = "",
+        tags: Any = None,
+        evidence: Any = None,
+    ) -> str:
+        """Build the canonical document text used for blackboard retrieval."""
+        tag_values = tags if isinstance(tags, builtins.list) else []
+        evidence_values = evidence if isinstance(evidence, builtins.list) else []
+        evidence_text = " ".join(
+            " ".join(str(value) for value in item.values())
+            for item in evidence_values
+            if isinstance(item, dict)
+        )
+        return (
+            f"title: {title} category: {category} tags: {' '.join(map(str, tag_values))} "
+            f"content: {content} evidence: {evidence_text}"
+        ).strip()
+
     def _embed_text(self, text: str) -> bytes | None:
         embedder = self._get_embedder()
         if embedder is None:
             return None
         try:
-            vec = embedder.embed_vector(text)
+            document_fn = getattr(embedder, "embed_document_vector", None)
+            if callable(document_fn):
+                vec = document_fn(text)
+            else:
+                document_fn = getattr(embedder, "embed_document", None)
+                if callable(document_fn):
+                    result = document_fn(text)
+                    vec = getattr(result, "vector", result)
+                else:
+                    try:
+                        vec = embedder.embed_vector(text, purpose="document")
+                    except TypeError:
+                        vec = embedder.embed_vector(text)
             if vec is None:
                 return None
             return pack_floats(vec)
         except Exception:
             return None
 
-    def _store_embedding(self, entry_id: str, blob: bytes) -> None:
+    def _enqueue_embedding(self, entry_id: str, text: str) -> None:
+        """Best-effort handoff to the asynchronous embedding worker.
+
+        The finding is already durable when this hook runs. A worker outage
+        must therefore not turn a successful CRUD operation into an error or
+        make callers retry and create duplicate observations.
+        """
+        try:
+            self.embed_enqueue(entry_id, text)
+        except Exception:
+            logger.exception("blackboard embedding enqueue failed for %s", entry_id)
+
+    def _store_embedding(self, entry_id: str, blob: bytes, text: str = "") -> None:
         """Upsert one entry's vector into the embeddings side table."""
+        dimension = len(blob) // 4
+        embedder = self._get_embedder()
+        model = self._embedding_identity(embedder, dimension) if embedder is not None else ""
+        text_hash = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:16] if text else ""
         with self._tx() as conn:
             conn.execute(
-                "INSERT INTO findings_embeddings(entry_id, vector, model, created_at, updated_at) "
-                "VALUES (?,?,?,?,?) "
-                "ON CONFLICT(entry_id) DO UPDATE SET vector=excluded.vector, updated_at=excluded.updated_at",
-                (entry_id, sqlite3.Binary(blob), "", time.time(), time.time()),
+                "INSERT INTO findings_embeddings "
+                "(entry_id, vector, model, embedding_dim, text_hash, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?) "
+                "ON CONFLICT(entry_id) DO UPDATE SET vector=excluded.vector, model=excluded.model, "
+                "embedding_dim=excluded.embedding_dim, text_hash=excluded.text_hash, updated_at=excluded.updated_at",
+                (entry_id, sqlite3.Binary(blob), model, dimension, text_hash, time.time(), time.time()),
             )
 
     def _row_to_dict(self, row) -> dict:
@@ -659,6 +762,8 @@ class BlackboardStore:
         if not d.get("rejected_reason"):
             d["rejected_reason"] = ""
         d.pop("_vec", None)
+        d.pop("_embedding_model", None)
+        d.pop("_embedding_dim", None)
         d.pop("vector", None)
         return d
 
@@ -873,7 +978,8 @@ class BlackboardStore:
         now = time.time()
         # Embedding runs before the write transaction so a slow embedder never
         # holds the workspace write lock.
-        vector_blob = self._embed_text(f"{title} {content}".strip()) if embed else None
+        embedding_text = self._embedding_text(title, content, category, tags, evidence)
+        vector_blob = self._embed_text(embedding_text) if embed else None
         if not source_type:
             source_type = source
         with self._tx() as conn:
@@ -898,8 +1004,8 @@ class BlackboardStore:
                 ),
             )
         if vector_blob:
-            self._store_embedding(entry_id, vector_blob)
-        self.embed_enqueue(entry_id, f"{title} {content}".strip())
+            self._store_embedding(entry_id, vector_blob, embedding_text)
+        self._enqueue_embedding(entry_id, embedding_text)
         self._record_event(entry_id, "created", {"kind": kind, "status": status})
         return entry_id
 
@@ -1042,6 +1148,14 @@ class BlackboardStore:
                     str(current["id"]),
                 ),
             )
+        merged_embedding_text = self._embedding_text(
+            current.get("title", title),
+            merged_content,
+            current.get("category", category),
+            merged_tags,
+            merged_evidence,
+        )
+        self._enqueue_embedding(str(current["id"]), merged_embedding_text)
         self._record_event(str(current["id"]), "observation_merged", {"source": source})
         refreshed = self.read(str(current["id"])) or current
         return {
@@ -1488,94 +1602,169 @@ class BlackboardStore:
         include_resolved: bool = True,
         include_contradicted: bool = False,
     ) -> builtins.list[dict]:
-        """Vector search over the embeddings side table, falling back to keywords.
+        """Hybrid vector/keyword search over investigation memory.
 
-        The fallback is not a silent downgrade: entries returned lexically
-        carry a ``similarity`` derived from term overlap and a ``match``
-        field naming which path produced them.
+        Query and document prompts are kept distinct when the embedder
+        supports them. Stored vectors are only compared within the same
+        embedding identity and dimension; legacy rows without identity remain
+        eligible when their dimensions match. Keyword retrieval scans all
+        eligible findings, so recent rows cannot hide older relevant evidence.
         """
+        top_k = max(1, int(top_k or 1))
+        q = " ".join(str(query or "").lower().split())
+        terms = set(re.findall(r"[a-z0-9_]{2,}", q))
+        conn = self._conn()
 
-        def lexical_search() -> builtins.list[dict]:
-            q = query.lower()
-            terms = {term for term in q.split() if len(term) > 1}
-            conn = self._conn()
-            rows = conn.execute(
-                "SELECT * FROM findings ORDER BY updated_at DESC LIMIT 200"
+        def _filtered_findings() -> builtins.list[sqlite3.Row]:
+            conditions: builtins.list[str] = []
+            params: builtins.list[Any] = []
+            if category:
+                conditions.append("category = ?")
+                params.append(category)
+            if not include_resolved:
+                conditions.append("status != 'resolved'")
+            if not include_contradicted:
+                conditions.append("status != 'rejected'")
+            where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+            return conn.execute(
+                f"SELECT * FROM findings {where} ORDER BY updated_at DESC", params
             ).fetchall()
-            results = []
-            for row in rows:
+
+        def _lexical_candidates() -> builtins.list[dict]:
+            candidates: builtins.list[dict] = []
+            for row in _filtered_findings():
                 d = self._row_to_dict(row)
-                if not include_resolved and d.get("resolved"):
+                title = str(d.get("title") or "").lower()
+                content = str(d.get("content") or "").lower()
+                tags = " ".join(map(str, d.get("tags") or [])).lower()
+                evidence = " ".join(
+                    " ".join(str(value) for value in item.values()).lower()
+                    for item in (d.get("evidence") or [])
+                    if isinstance(item, dict)
+                )
+                searchable = " ".join((title, content, str(d.get("category") or ""), tags, evidence))
+                matched = {term for term in terms if term in searchable}
+                phrase = bool(q and q in searchable)
+                if not phrase and not matched:
                     continue
-                if not include_contradicted and d.get("contradicted"):
-                    continue
-                if category and d.get("category") != category:
-                    continue
-                text = f"{d.get('title','')} {d.get('content','')}".lower()
-                matched = sum(1 for term in terms if term in text)
-                if q in text or (terms and matched):
-                    d["similarity"] = 1.0 if q in text else round(matched / len(terms), 4)
-                    d["match"] = "lexical"
-                    results.append(d)
-            results.sort(key=lambda item: (item["similarity"], item.get("updated_at", 0)), reverse=True)
-            return results[:top_k]
+                similarity = 1.0 if phrase else (len(matched) / len(terms) if terms else 0.0)
+                d["similarity"] = round(similarity, 4)
+                d["lexical_similarity"] = round(similarity, 4)
+                d["match"] = "lexical"
+                d["rank_reason"] = (
+                    "exact phrase in finding text" if phrase
+                    else f"matched {len(matched)}/{len(terms)} query terms"
+                )
+                # Similarity is the primary signal; title/tag hits are useful
+                # tie-breakers without changing the public similarity value.
+                d["_lexical_priority"] = (
+                    (2 if phrase else 0)
+                    + sum(2 for term in matched if term in title)
+                    + sum(1 for term in matched if term in tags)
+                    + sum(1 for term in matched if term in str(d.get("category") or "").lower())
+                )
+                candidates.append(d)
+            candidates.sort(
+                key=lambda item: (
+                    item["similarity"], item["_lexical_priority"],
+                    item.get("confidence", 0.0), item.get("updated_at", 0.0),
+                ),
+                reverse=True,
+            )
+            return candidates
+
+        lexical = _lexical_candidates()
+        lexical_by_id = {str(item["id"]): item for item in lexical}
 
         try:
             embedder = self._get_embedder()
             if embedder is None:
-                return lexical_search()
-            q_vec = embedder.embed_vector(query)
+                return lexical[:top_k]
+            query_fn = getattr(embedder, "embed_query_vector", None)
+            if callable(query_fn):
+                q_vec = query_fn(query)
+            else:
+                try:
+                    q_vec = embedder.embed_vector(query, purpose="query")
+                except TypeError:
+                    q_vec = embedder.embed_vector(query)
             if q_vec is None:
                 raise RuntimeError("embedding unavailable")
         except Exception:
-            return lexical_search()
+            return lexical[:top_k]
 
-        conditions = ["fe.vector IS NOT NULL"]
-        params: builtins.list[Any] = []
-        if category:
-            conditions.append("f.category = ?")
-            params.append(category)
-        if not include_resolved:
-            conditions.append("f.status != 'resolved'")
-        if not include_contradicted:
-            conditions.append("f.status != 'rejected'")
-        where = "WHERE " + " AND ".join(conditions)
-
-        conn = self._conn()
+        q_dim = len(q_vec)
+        model = self._embedding_identity(embedder, q_dim)
         rows = conn.execute(
-            f"SELECT f.*, fe.vector AS _vec FROM findings f "
-            f"JOIN findings_embeddings fe ON fe.entry_id = f.id {where}",
-            params,
+            "SELECT f.*, fe.vector AS _vec, fe.model AS _embedding_model, "
+            "fe.embedding_dim AS _embedding_dim "
+            "FROM findings f JOIN findings_embeddings fe ON fe.entry_id = f.id "
+            "ORDER BY f.updated_at DESC"
         ).fetchall()
-
         pairs: list[tuple[sqlite3.Row, list[float]]] = []
         for row in rows:
+            finding = dict(row)
+            if category and finding.get("category") != category:
+                continue
+            if not include_resolved and finding.get("status") == "resolved":
+                continue
+            if not include_contradicted and finding.get("status") == "rejected":
+                continue
             blob = row["_vec"]
             if not blob:
                 continue
             try:
-                vec = unpack_floats(blob)
+                vector = unpack_floats(blob)
             except Exception:
                 continue
-            pairs.append((row, vec))
+            stored_dim = int(finding.get("_embedding_dim") or len(vector))
+            stored_model = str(finding.get("_embedding_model") or "")
+            if stored_dim != q_dim or (stored_model and stored_model != model):
+                continue
+            pairs.append((row, vector))
+
         if not pairs:
-            return lexical_search()
+            return lexical[:top_k]
 
+        semantic_by_id: dict[str, dict] = {}
         sims = batch_cosine_similarity(q_vec, [vec for _, vec in pairs])
-        scored = []
-        for sim, (row, _vec) in zip(sims, pairs, strict=True):
-            if sim >= threshold:
-                d = self._row_to_dict(row)
-                d["similarity"] = round(sim, 4)
-                d["match"] = "semantic"
-                scored.append(d)
+        for sim, (row, _vector) in zip(sims, pairs, strict=True):
+            if sim < threshold:
+                continue
+            d = self._row_to_dict(row)
+            lexical_item = lexical_by_id.get(str(d["id"]))
+            lexical_similarity = float((lexical_item or {}).get("similarity") or 0.0)
+            d["similarity"] = round(sim, 4)
+            d["lexical_similarity"] = round(lexical_similarity, 4)
+            d["score"] = round(max(0.0, min(1.0, 0.7 * max(0.0, sim) + 0.3 * lexical_similarity)), 4)
+            d["match"] = "semantic"
+            d["rank_reason"] = f"semantic cosine {sim:.3f}"
+            semantic_by_id[str(d["id"])] = d
 
-        if not scored:
-            return lexical_search()
-        scored.sort(key=lambda x: x["similarity"], reverse=True)
+        if not semantic_by_id:
+            return lexical[:top_k]
+
+        scored = builtins.list(semantic_by_id.values())
+        # A lexical-only hit is valuable when it has no vector yet; include it
+        # in a hybrid result set rather than dropping newly written evidence.
+        for item in lexical:
+            if str(item["id"]) in semantic_by_id:
+                continue
+            item["score"] = round(0.3 * float(item["similarity"]), 4)
+            item["match"] = "hybrid"
+            item["rank_reason"] = f"lexical fallback ({item['rank_reason']})"
+            scored.append(item)
+        scored.sort(
+            key=lambda item: (
+                item.get("score", 0.0), item.get("similarity", 0.0),
+                item.get("confidence", 0.0), item.get("updated_at", 0.0),
+            ),
+            reverse=True,
+        )
         scored = scored[:top_k]
+
         # Attach the derived conflicts_with field for the returned entries.
-        ids = [str(s["id"]) for s in scored]
+        ids = [str(item["id"]) for item in scored]
         if ids:
             placeholders = ",".join("?" for _ in ids)
             link_rows = conn.execute(
@@ -1584,12 +1773,14 @@ class BlackboardStore:
                 (*ids, *ids),
             ).fetchall()
             cmap: dict[str, set[str]] = {}
-            for lr in link_rows:
-                a, b = str(lr["entry_a"]), str(lr["entry_b"])
+            for link in link_rows:
+                a, b = str(link["entry_a"]), str(link["entry_b"])
                 cmap.setdefault(a, set()).add(b)
                 cmap.setdefault(b, set()).add(a)
-            for s in scored:
-                s["conflicts_with"] = sorted(cmap.get(str(s["id"]), set()))
+            for item in scored:
+                item["conflicts_with"] = sorted(cmap.get(str(item["id"]), set()))
+        for item in scored:
+            item.pop("_lexical_priority", None)
         return scored
 
     # ------------------------------------------------------------------
@@ -1674,12 +1865,21 @@ class BlackboardStore:
             )
             ok = cur.rowcount > 0
 
-        if embed and ("title" in updates or "content" in updates):
-            text = f"{updates.get('title', current.get('title', ''))} {updates.get('content', current.get('content', ''))}".strip()
-            blob = self._embed_text(text)
-            if blob:
-                self._store_embedding(entry_id, blob)
-            self.embed_enqueue(entry_id, text)
+        embedding_changed = {"title", "content", "category", "tags", "evidence"}.intersection(updates)
+        if embedding_changed:
+            refreshed = self.read(entry_id) or current
+            text = self._embedding_text(
+                refreshed.get("title", ""),
+                refreshed.get("content", ""),
+                refreshed.get("category", ""),
+                refreshed.get("tags", []),
+                refreshed.get("evidence", []),
+            )
+            if embed:
+                blob = self._embed_text(text)
+                if blob:
+                    self._store_embedding(entry_id, blob, text)
+            self._enqueue_embedding(entry_id, text)
         if ok:
             self._record_event(
                 entry_id, "updated",

@@ -6,7 +6,7 @@ Target release: IDA 9.4 (build 9.4.260714, July 14 2026)
 ## Sources of truth
 
 - Release notes: `docs.hex-rays.com/release-notes/9_4` (local PDF copy in
-  `~/Downloads/docs.hex-rays.com-IDA 94 Hex-Rays Docs.pdf`)
+  `<ida-docs>/docs.hex-rays.com-IDA 94 Hex-Rays Docs.pdf`)
 - SDK: `https://github.com/HexRaysSA/ida-sdk` cloned at `~/ida-sdk`,
   HEAD == `IDA_SDK_VERSION 940`, tag `v9.4.0-release`. The full `include/`,
   `module/`, `ldr/`, `plugins/`, `idalib/` trees are now public.
@@ -18,7 +18,7 @@ Target release: IDA 9.4 (build 9.4.260714, July 14 2026)
 
 ## Environment
 
-- `~/ida-pro-9.4` and `~/ida-pro-9.3` installed side by side.
+- IDA 9.4 and 9.3 installed side by side.
 - Installer discovery verified on 9.4: `detect_ida_installs()` reports
   `IDA 9.4.260714.951e98a4 pro (x64)` — version parsing works unchanged.
 
@@ -297,7 +297,7 @@ collapse to direct calls and the module is deleted.
   constructors and local variables named `func`).
 - **`get_first_seg`/`get_next_seg` caveat.** The task premise stated these were
   not deprecated, but they DO appear in the authoritative list
-  (`/tmp/ida94_deprecated.txt` lines 37/56) and the 9.4 stub keeps them with
+  (`<scratch>/ida94_deprecated.txt` lines 37/56) and the 9.4 stub keeps them with
   EA replacements `get_first_segment_ea()`/`get_next_segment_ea(ea)`.
   **Follow-up landed (2026-08-11):** compat gained `get_first_segment_ea()` /
   `get_next_segment_ea(ea)` wrappers (BADADDR→None normalized) and

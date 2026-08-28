@@ -16,7 +16,7 @@ import time
 
 import pytest
 
-from ida_pro_mcp.host.intelligence import rerank as rerank_mod, rerank_profiles
+from ida_pro_mcp.host.intelligence import core as core_mod, rerank as rerank_mod, rerank_profiles
 
 
 def _reset_singleton():
@@ -58,6 +58,9 @@ def _stub_reranker(**attrs) -> rerank_mod.Reranker:
     obj._idle_lock = threading.Lock()
     obj._idle_timer = None
     obj._idle_generation = 0
+    obj._score_cache = {}
+    obj._score_cache_lock = threading.Lock()
+    obj._score_inflight = {}
     obj._ctx = 1024
     for key, value in attrs.items():
         setattr(obj, key if key.startswith("_") else f"_{key}", value)
@@ -105,6 +108,16 @@ class _FakeResp:
 # ---------------------------------------------------------------------------
 
 class TestModuleHelpers:
+    def test_split_env_paths_preserves_windows_drive_letters(self, monkeypatch):
+        monkeypatch.setattr(core_mod.os, "pathsep", ";")
+        assert core_mod._split_env_paths(r"C:\Models\embed.gguf;D:\Models\fallback.gguf") == [
+            r"C:\Models\embed.gguf",
+            r"D:\Models\fallback.gguf",
+        ]
+
+    def test_rerank_parallel_keeps_quality_floor(self):
+        assert rerank_mod.RERANK_PARALLEL >= 2
+
     def test_rerank_enabled_toggles(self, monkeypatch):
         monkeypatch.delenv("IDA_MCP_RERANK_DISABLED", raising=False)
         monkeypatch.delenv("IDA_MCP_RERANK_ENABLED", raising=False)
@@ -130,6 +143,18 @@ class TestModuleHelpers:
         assert rerank_mod._read_rerank_state() == {
             "model_path": "/x/model.gguf", "profile": "qwen3",
         }
+
+    def test_rerank_state_enabled_is_honored_after_env_overrides(self, monkeypatch):
+        monkeypatch.delenv("IDA_MCP_RERANK_DISABLED", raising=False)
+        monkeypatch.delenv("IDA_MCP_RERANK_ENABLED", raising=False)
+        monkeypatch.setattr(rerank_mod, "_read_rerank_state", lambda: {"enabled": False})
+        assert rerank_mod._rerank_enabled() is False
+
+        monkeypatch.setenv("IDA_MCP_RERANK_ENABLED", "1")
+        assert rerank_mod._rerank_enabled() is True
+
+        monkeypatch.setenv("IDA_MCP_RERANK_DISABLED", "1")
+        assert rerank_mod._rerank_enabled() is False
 
     def test_read_rerank_state_ignores_non_dict(self, monkeypatch):
         monkeypatch.setattr(rerank_mod, "_read_embedder_state", lambda: {"rerank": "nope"})
@@ -648,6 +673,10 @@ class TestStartServer:
         assert "--model" in proc.cmd and str(model) in proc.cmd
         assert "--parallel" in proc.cmd
         assert "--device" in proc.cmd
+        assert proc.cmd[proc.cmd.index("--ctx-size") + 1] == "2048"
+        assert proc.cmd[proc.cmd.index("--batch-size") + 1] == "1024"
+        assert proc.cmd[proc.cmd.index("--ubatch-size") + 1] == "1024"
+        assert proc.cmd[proc.cmd.index("--parallel") + 1] == "2"
         lease = json.loads(lease_file.read_text())
         assert lease["pid"] == 777
         assert lease["port"] == 9999
@@ -772,6 +801,21 @@ class TestRequestRerank:
         )
         assert obj._request_rerank("q", ["a", "b"], timeout=2.0) is None
 
+    def test_duplicate_or_out_of_range_indices_return_none(self, tmp_path, monkeypatch):
+        obj = self._ready(monkeypatch, str(tmp_path / "lease.json"))
+        monkeypatch.setattr(
+            rerank_mod.urllib.request,
+            "urlopen",
+            lambda req, timeout=2.0: _FakeResp(json.dumps({
+                "results": [
+                    {"index": 0, "relevance_score": 0.9},
+                    {"index": 0, "relevance_score": 0.1},
+                ]
+            }).encode()),
+        )
+        assert obj._request_rerank("q", ["a", "b"], timeout=2.0) is None
+        assert obj._consecutive_rpc_failures == 1
+
     def test_timeout_retires_lease_outside_grace(self, tmp_path, monkeypatch):
         obj = self._ready(monkeypatch, str(tmp_path / "lease.json"))
         obj._server_started_at = (
@@ -839,6 +883,11 @@ class TestRequestRerank:
 
 
 class TestRerankPublic:
+    def test_empty_documents_return_without_starting_model(self, monkeypatch):
+        obj = _stub_reranker(use_llama=True)
+        monkeypatch.setattr(obj, "ensure_ready", lambda: (_ for _ in ()).throw(AssertionError("must not start")))
+        assert obj.rerank("q", []) == []
+
     def test_returns_none_when_disabled_and_not_ready(self):
         obj = _stub_reranker(use_llama=False)
         assert obj.rerank("q", ["a"]) is None
@@ -874,6 +923,55 @@ class TestRerankPublic:
         )
         out = obj.rerank("q", ["a", "b"], top_k=1)
         assert out == [{"index": 1, "score": 0.9}]
+
+    def test_exact_http_chunk_cache_avoids_repeat_request(self, monkeypatch):
+        obj = _stub_reranker(ready=True)
+        calls = 0
+
+        def request(query, part, timeout=None):
+            nonlocal calls
+            calls += 1
+            return [{"index": i, "score": float(len(part) - i)} for i in range(len(part))]
+
+        monkeypatch.setattr(obj, "_request_rerank", request)
+        first = obj.rerank("q", ["a", "b"])
+        second = obj.rerank("q", ["a", "b"])
+
+        assert first == second
+        assert calls == 1
+
+    def test_concurrent_identical_http_chunks_share_one_request(self, monkeypatch):
+        obj = _stub_reranker(ready=True)
+        entered = threading.Event()
+        release = threading.Event()
+        calls = 0
+        results: list = []
+
+        def request(query, part, timeout=None):
+            nonlocal calls
+            calls += 1
+            entered.set()
+            assert release.wait(timeout=2.0)
+            return [{"index": 0, "score": 0.75}]
+
+        monkeypatch.setattr(obj, "_request_rerank", request)
+
+        first = threading.Thread(
+            target=lambda: results.append(obj.rerank("q", ["a"]))
+        )
+        first.start()
+        assert entered.wait(timeout=2.0)
+        second = threading.Thread(
+            target=lambda: results.append(obj.rerank("q", ["a"]))
+        )
+        second.start()
+        release.set()
+        first.join(timeout=3.0)
+        second.join(timeout=3.0)
+
+        assert not first.is_alive() and not second.is_alive()
+        assert results == [[{"index": 0, "score": 0.75}]] * 2
+        assert calls == 1
 
     def test_chunk_failure_returns_none(self, monkeypatch):
         obj = _stub_reranker(ready=True)

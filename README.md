@@ -10,7 +10,7 @@ conclusions survive across turns instead of living in a context window.
 It runs deterministic IDA SDK calls. There is no LLM service behind it, and
 nothing about your binary leaves the machine.
 
-> **Alpha (0.9.x).** The agent interface is still moving. Pin a commit if you
+> **Alpha (1.0.0a1).** The agent interface is still moving. Pin a commit if you
 > depend on it.
 
 ---
@@ -77,7 +77,7 @@ emerging from an opaque blended score.
 **Mutations are gated, and the gate is yours.** Anything that writes to the IDB
 requires an explicit `risk_ack`. Policy strictness comes from the operator, via
 `IDA_MCP_POLICY_MODE` or `~/.config/ida-pro-mcp/policy.json`; a session can tighten
-it but never relax it. See [SAFETY_MODEL.md](SAFETY_MODEL.md).
+it but never relax it. See [the safety model](docs/guide/safety-model.md).
 
 **Concurrent sessions stay separated.** Each MCP connection owns the sessions it
 opened. Another client cannot drive, switch to, or kill a session it did not open,
@@ -115,11 +115,11 @@ get the much faster in-process native backend instead, build it once against a
 llama.cpp checkout:
 
 ```bash
-# clone llama.cpp once
-git clone https://github.com/ggml-org/llama.cpp /tmp/llama.cpp
+# clone llama.cpp once, wherever you keep external source checkouts
+git clone https://github.com/ggml-org/llama.cpp /path/to/llama.cpp
 
 # build the trimmed library + quantizer, then install into the layout
-LLAMA_CPP_SRC=/tmp/llama.cpp \
+LLAMA_CPP_SRC=/path/to/llama.cpp \
 INSTALL_BIN="$HOME/.local/share/ida-pro-mcp/bin" \
   ./scripts/build_native_llama.sh
 ```
@@ -130,8 +130,9 @@ vision, or GPU backends) and the C-ABI driver into one self-contained
 The install root is `~/.local/share/ida-pro-mcp` (Linux), `%LOCALAPPDATA%\ida-pro-mcp`
 (Windows), or wherever `IDA_PRO_MCP_HOME` points.
 
-The server auto-enables the native backend when the library is present; HTTP
-remains the fallback. `IDA_MCP_BACKEND=native` pins it explicitly.
+The server auto-enables native per retrieval component when the library and
+matching model are present; HTTP remains the fallback for anything missing.
+`IDA_MCP_BACKEND=native` pins it explicitly.
 
 ---
 
@@ -230,21 +231,24 @@ backends with the same public contract:
   (`--embedding` and `--rerank`), with the lifecycle, recycling, and chunking
   machinery described under HTTP knobs below.
 
-Selection: the server sets `IDA_MCP_NATIVE=1` at startup when `libmcp_llama.so`
-is found and no backend is pinned. `IDA_MCP_BACKEND=native|http` overrides
-either way.
+Selection: the server sets `IDA_MCP_NATIVE=1` at startup when the native
+library and at least one matching retrieval model are found and no backend is
+pinned. Each embedder/reranker still checks its own model before taking the
+native route. `IDA_MCP_BACKEND=native|http` overrides either way.
 
 ### Why the native path is faster
 
 - **Batched decode.** Instead of one sequence per `llama_decode` (KV cache
-  cleared, weights streamed, per call), `encode_batched` packs up to 16
-  sequences into one decode with distinct `seq_id`s, each with its own KV
-  stream, clearing the KV once per batch. The decode graph runs over fixed
-  512-token ubatch slices, so several short documents packed into one decode
-  fill the slice — the weights stream once for a full batch instead of once per
+  cleared, weights streamed, per call), `encode_batched` packs up to 4 by
+  default into one decode with distinct `seq_id`s, each with its own KV
+  stream, clearing the KV once per batch. The decode graph runs over a physical
+  512-token microbatch by default, so several documents packed into one decode
+  fill the graph — the weights stream once for a full batch instead of once per
   document. That is the dominant cost for a bandwidth-bound 0.6B model.
-- **Quantized KV cache.** `Q8_0` KV halves the ~28 KiB/token a 0.6B Qwen3 needs
-  in f16, so a 16 × 2048-token batch fits in ~0.5 GiB.
+- **KV cache.** Native uses F16 KV by default to match llama-server vectors;
+  `IDA_MCP_NATIVE_KV=q8` halves the ~28 KiB/token footprint when memory is the
+  constraint, with a small quality tradeoff. `IDA_MCP_NATIVE_SEQUENCES` tunes
+  the width.
 - **Q4_K_M weights.** `mcp_quantize` (built alongside the library) converts any
   Q8_0 GGUF to Q4_K_M — ~1.6× fewer weight bytes to stream. Model discovery
   prefers `Q4_K_M` over `Q8_0` when both are installed (`IDA_MCP_Q4=0` forces
@@ -252,8 +256,8 @@ either way.
 
 ```bash
 # convert your Q8_0 model to Q4_K_M for the fast path
-mcp_quantize ~/Downloads/qwen3-embedding-0.6b-q8_0.gguf ~/Downloads/qwen3-embedding-0.6b-Q4_K_M.gguf Q4_K_M
-mcp_quantize ~/Downloads/qwen3-reranker-0.6b-q8_0.gguf  ~/Downloads/qwen3-reranker-0.6b-Q4_K_M.gguf  Q4_K_M
+mcp_quantize /path/to/qwen3-embedding-0.6b-q8_0.gguf /path/to/qwen3-embedding-0.6b-Q4_K_M.gguf Q4_K_M
+mcp_quantize /path/to/qwen3-reranker-0.6b-q8_0.gguf  /path/to/qwen3-reranker-0.6b-Q4_K_M.gguf  Q4_K_M
 ```
 
 ### Model profiles
@@ -306,12 +310,15 @@ partial index is preserved if a batch fails.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `IDA_MCP_BACKEND` | auto | `native` pins the in-process backend; `http`/`llama` forces the subprocess path |
-| `IDA_MCP_NATIVE` | set at startup | `1` when the library is found and the backend is unpinned |
+| `IDA_MCP_NATIVE` | set at startup | `1` when the library and at least one matching model are found and the backend is unpinned |
 | `IDA_MCP_NATIVE_LIB` | auto-detect | explicit path to `libmcp_llama.so` |
 | `IDA_MCP_NATIVE_CTX` | `2048` | per-sequence context (max tokens a doc can occupy) |
-| `IDA_MCP_NATIVE_THREADS` | CPU count | threads for the decode |
+| `IDA_MCP_NATIVE_THREADS` | half available CPUs (capped at 16) | threads for the decode; explicit values override |
+| `IDA_MCP_NATIVE_UBATCH` | `512` | physical tokens per native graph execution; benchmark `1024`/`2048` on larger machines |
+| `IDA_MCP_NATIVE_KV` | `f16` | native KV precision; set `q8` for lower memory/faster inference with a small quality tradeoff |
 | `IDA_MCP_NATIVE_DOC_CHARS` | `6000` | rerank document cap in chars (truncated head-first) |
-| `MCP_NSEQ` | `16` | max sequences packed per `llama_decode` batch (`1`–`64`) |
+| `IDA_MCP_NATIVE_SEQUENCES` | `4` | max sequences packed per `llama_decode` batch (`1`–`64`); `MCP_NSEQ` remains an alias |
+| `IDA_MCP_NATIVE_RERANK_CACHE` | `128` | bounded exact-query rerank score cache; `0` disables it |
 | `IDA_MCP_Q4` | `1` | prefer `Q4_K_M` over `Q8_0` when both are installed; `0` forces Q8 |
 
 ### HTTP backend knobs
@@ -333,28 +340,26 @@ differential growth checks that only recycle on real leaks).
 | `IDA_MCP_EMBED_GPU` | `0` | `1` offloads to a GPU backend (CPU is forced otherwise) |
 | `IDA_MCP_EMBED_MAX_RSS_MB` | adaptive | RSS recycle limit; `0` derives one from model size |
 | `IDA_MCP_EMBED_IDLE_TIMEOUT` | `15` | Seconds to keep the server after its last request; `0` disables |
+| `IDA_MCP_EMBED_CACHE` | `4096` | Bounded exact-text embedding cache; `0` disables |
 | `IDA_MCP_RERANK_PROFILE` | `qwen3-reranker-0.6b` | Selects the rerank model profile |
 | `IDA_MCP_RERANK_MODEL` | auto-detect | Path to the rerank GGUF |
 | `IDA_MCP_RERANK_DOC_CHARS` | `6000` | Document cap per rerank pair |
 | `IDA_MCP_RERANK_DOC_BUDGET_CHARS` | `800` | Per-document budget passed to the reranker from search |
-| `IDA_MCP_RERANK_POOL` | `12` | Recalled pool capped before cross-encoder re-scoring |
+| `IDA_MCP_RERANK_POOL` | `8` | Recalled pool capped before cross-encoder re-scoring; benchmarked 12/12 top-1 on the bundled corpus |
 | `IDA_MCP_RERANK_CHUNK` | `8` | Documents scored per request, so peak memory tracks the chunk not the pool |
 | `IDA_MCP_RERANK_CTX` | `1024` | Per-pair rerank context size (query + document) |
+| `IDA_MCP_RERANK_CACHE` | `128` | Bounded exact-chunk score cache; `0` disables it |
 
 The full set of knobs for both backends lives in
 [docs/wiki/core/intelligence.md](docs/wiki/core/intelligence.md).
 
-### Measured performance (honest numbers)
+### Benchmarking
 
-On a real corpus (an IDA database, i7-8665U, CPU-only), the native backend
-measured: **cold-start first embed ~1.8 s vs 10–25 s** for the HTTP server,
-**indexing ~1.5× faster**, and **peak RSS ~1.9 GiB vs 3.5+ GiB** (no subprocess,
-no per-request graph allocation). Rerank latency is **model-bound and equal**
-across backends (~7.7 s per 16-doc pool on the 0.6B model); scores and vectors
-match the HTTP path to float noise. Batched decode + Q4_K_M weights are expected
-to push indexing to roughly 3–4× and rerank to roughly 1.5–3× — the clean A/B
-numbers are captured by `benchmarks/ab_interleave.py` (interleaves single-seq vs
-batched in one process, so CPU contention cancels).
+Performance and retrieval quality are measured at run time against the selected
+corpus, model, backend, and machine. Use the portable pipelines in
+[`benchmarks/README.md`](benchmarks/README.md); they emit JSON and Markdown
+reports with the inputs and environment recorded, so one workstation's numbers
+are not presented as product guarantees.
 
 ### Cloud embeddings (Gemini, opt-in)
 
@@ -420,8 +425,8 @@ the installed skill, and `docs/TOOLS_REFERENCE.md` are all generated from it. Ch
 an operation, then regenerate — CI checks for drift.
 
 Live IDA integration tests need a local IDA install and a target binary; they skip
-otherwise. See [AGENTS.md](AGENTS.md) for conventions and
-[ARCHITECTURE.md](ARCHITECTURE.md) for the layout.
+otherwise. See [CONTRIBUTING.md](CONTRIBUTING.md) for conventions and
+[the architecture guide](docs/guide/architecture.md) for the layout.
 
 ---
 

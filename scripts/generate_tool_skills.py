@@ -56,10 +56,13 @@ def _readme_content() -> str:
 is installed with the skill, so its guidance remains available outside this
 checkout.
 
+The repository instructions live in `AGENTS.md`. This generated skill only
+contains the agent-facing MCP workflow and operation reference.
+
 Regenerate after changing `src/ida_pro_mcp/host/agent_operations.py`:
 
-```bash
-python3 scripts/generate_tool_skills.py
+```text
+python scripts/generate_tool_skills.py
 ```
 '''
 

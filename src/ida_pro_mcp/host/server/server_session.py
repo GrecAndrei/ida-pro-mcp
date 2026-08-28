@@ -575,7 +575,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
 
     def _session_is_running(self, sid: str) -> bool:
         """True when the session has a live IDA runtime process."""
-        runtime = self.session_runtimes.get(sid)
+        runtime = self._runtime_record(sid)
         return bool(
             runtime and runtime.get("process") and runtime["process"].poll() is None
         )
@@ -632,7 +632,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         callers can attach analysis_complete/analysis_functions when known.
         """
         sid = session.session_id
-        runtime = self.session_runtimes.get(sid)
+        runtime = self._runtime_record(sid)
         if not (runtime and self._runtime_alive(runtime)):
             return {}
         port = runtime.get("port")
@@ -677,7 +677,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             0.05, float(getattr(self, "safe_mode_poll_seconds", SAFE_MODE_POLL_SECONDS))
         )
         while time.time() < deadline:
-            runtime = self.session_runtimes.get(sid)
+            runtime = self._runtime_record(sid)
             if not (runtime and self._runtime_alive(runtime)):
                 return {}  # nothing live to confirm; the watcher owns the gate
             state = self._open_analysis_state(session)
@@ -938,13 +938,21 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
 
     def _safe_mode_active(self, sid: str) -> bool:
         """True while *sid*'s IDA auto-analysis is still completing."""
-        pending = getattr(self, "_pending_analysis", None)
-        return isinstance(pending, set) and sid in pending
+        with self._analysis_state_lock():
+            pending = getattr(self, "_pending_analysis", None)
+            return isinstance(pending, set) and sid in pending
 
     def _analysis_is_complete(self, sid: str) -> bool:
         """True when a live runtime confirmed *sid*'s analysis completed."""
-        complete = getattr(self, "_analysis_complete_sessions", None)
-        return isinstance(complete, set) and sid in complete
+        with self._analysis_state_lock():
+            complete = getattr(self, "_analysis_complete_sessions", None)
+            return isinstance(complete, set) and sid in complete
+
+    def _session_reload_active(self, sid: str) -> bool:
+        """Whether a rebuild/reload currently owns the session gate."""
+        with self._analysis_state_lock():
+            reloading = getattr(self, "_reloading_sessions", None)
+            return isinstance(reloading, set) and sid in reloading
 
     def _session_is_closing(self, sid: str) -> bool:
         """True while a close/teardown is in flight for *sid*.
@@ -955,8 +963,13 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         the delete completes). The analysis gate reads it to refuse a completion
         transition for a session being torn down (D1-F11/D3-F4).
         """
-        flags = getattr(self, "_session_teardown", None)
-        return isinstance(flags, set) and sid in flags
+        runtime_lock = getattr(self, "_runtime_lock", None)
+        if runtime_lock is None:
+            flags = getattr(self, "_session_teardown", None)
+            return isinstance(flags, set) and sid in flags
+        with runtime_lock:
+            flags = getattr(self, "_session_teardown", None)
+            return isinstance(flags, set) and sid in flags
 
     def _persist_analysis_gate(self, session, state: str) -> None:
         """Best-effort persist of the analysis gate into session metadata.
@@ -1086,6 +1099,8 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         (close/delete/shutdown) can stop it promptly instead of waiting for its
         next poll to notice the session left ``_pending_analysis`` (h02 h09).
         """
+        if getattr(self, "_shutdown_requested", False):
+            return
         with self._analysis_state_lock():
             watchers = getattr(self, "_analysis_watchers", None)
             if not isinstance(watchers, set):
@@ -1186,7 +1201,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 )
                 if session is None:
                     return  # session deleted/closed
-                runtime = self.session_runtimes.get(sid)
+                runtime = self._runtime_record(sid)
                 alive = bool(runtime and self._runtime_alive(runtime))
                 if alive:
                     saw_runtime = True
@@ -1371,10 +1386,9 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         if not self._safe_mode_active(sid):
             return
         # A rebuild/recovery reload owns the gate while it is in flight.
-        reloading = getattr(self, "_reloading_sessions", None)
-        if isinstance(reloading, set) and sid in reloading:
+        if self._session_reload_active(sid):
             return
-        runtime = self.session_runtimes.get(sid)
+        runtime = self._runtime_record(sid)
         if not (runtime and self._runtime_alive(runtime)):
             return
         port = runtime.get("port")
@@ -1792,7 +1806,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         ownership_error = self._ensure_client_owns_session(session)
         if ownership_error:
             return ownership_error
-        runtime = self.session_runtimes.get(sid)
+        runtime = self._runtime_record(sid)
         is_running = bool(
             runtime
             and runtime.get("process")
@@ -1840,7 +1854,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             # analysis_options) through list would defeat the isolation model.
             if not self._client_owns_session(sid) and self._session_is_busy(sid):
                 continue
-            runtime = self.session_runtimes.get(sid)
+            runtime = self._runtime_record(sid)
             d["is_running"] = bool(
                 runtime
                 and runtime.get("process")
@@ -1942,7 +1956,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             self._trigger_session_diff(old_idb, new_idb)
 
         # Decide if we need to spawn/replace the IDA runtime for this session.
-        runtime = self.session_runtimes.get(sid) if hasattr(self, "session_runtimes") else None
+        runtime = self._runtime_record(sid)
         runtime_alive = bool(runtime) and bool(self._runtime_alive(runtime))
         should_spawn = (
             reopen or not runtime_alive
@@ -1958,7 +1972,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             try:
                 start_res = self._start_server(session)
                 if isinstance(start_res, dict) and "error" not in start_res:
-                    runtime = self.session_runtimes.get(sid)
+                    runtime = self._runtime_record(sid)
                     runtime_alive = bool(runtime) and bool(self._runtime_alive(runtime))
                     # Block until the IDB is on disk so callers don't need to
                     # poll or manually trigger analysis.
@@ -1966,7 +1980,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                         idb_path = getattr(session, "idb_path", None)
                         if idb_path and not os.path.isfile(idb_path):
                             self._wait_for_idb(session, timeout=120.0)
-                            runtime = self.session_runtimes.get(sid)
+                            runtime = self._runtime_record(sid)
                             runtime_alive = bool(runtime) and bool(self._runtime_alive(runtime))
                 else:
                     # Surface the failure but keep the switch logically valid.
@@ -2020,7 +2034,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         if not hasattr(self, "_start_server") or not hasattr(self, "session_runtimes"):
             return None
         sid = session.session_id
-        runtime = self.session_runtimes.get(sid)
+        runtime = self._runtime_record(sid)
         if runtime and self._runtime_alive(runtime):
             # Runtime is alive — just make sure the IDB is on disk. A wait that
             # fails (runtime died or the IDB never landed) is a real spawn
@@ -2049,7 +2063,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             result = dict(start_res)
             result.setdefault("session_id", sid)
             return result
-        runtime = self.session_runtimes.get(sid)
+        runtime = self._runtime_record(sid)
         if runtime and self._runtime_alive(runtime):
             if not self._wait_for_idb(session, timeout=timeout):
                 return make_error(
@@ -2137,7 +2151,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                         pass
                 return True
             time.sleep(0.5)
-            runtime = self.session_runtimes.get(session.session_id) if hasattr(self, "session_runtimes") else None
+            runtime = self._runtime_record(session.session_id)
             if runtime and not self._runtime_alive(runtime):
                 return False
         return bool(_find_idb())
@@ -2551,7 +2565,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             return target_error
         if not session:
             return make_error(MCPError.SESSION_REQUIRED, "No active session.")
-        runtime = self.session_runtimes.get(session.session_id) if hasattr(self, "session_runtimes") else None
+        runtime = self._runtime_record(session.session_id)
         if not isinstance(runtime, dict):
             return make_error(MCPError.IDA_ERROR, "No runtime record for the target session.")
         try:
@@ -2595,7 +2609,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         if self.current_session:
             fresh_session = self.session_mgr.get_session(self.current_session.session_id) or self.current_session
             result = fresh_session.to_dict()
-            runtime = self.session_runtimes.get(fresh_session.session_id)
+            runtime = self._runtime_record(fresh_session.session_id)
             result["is_running"] = bool(
                 runtime
                 and runtime.get("process")
@@ -2735,7 +2749,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         owned_err = self._require_owned_session_id(sid)
         if owned_err:
             return owned_err
-        runtime = self.session_runtimes.get(sid)
+        runtime = self._runtime_record(sid)
         if not isinstance(runtime, dict):
             return make_error(
                 MCPError.SESSION_NOT_FOUND,
@@ -2820,11 +2834,12 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
         # IDA_BUSY gate blocks racing tool calls and status confirmations are
         # suppressed (the fresh spawn re-enters pending on its own). The marker
         # is cleared in `finally` on every exit path, including failures.
-        reloading = getattr(self, "_reloading_sessions", None)
-        if not isinstance(reloading, set):
-            self._reloading_sessions = set()
-            reloading = self._reloading_sessions
-        reloading.add(sid)
+        with self._analysis_state_lock():
+            reloading = getattr(self, "_reloading_sessions", None)
+            if not isinstance(reloading, set):
+                self._reloading_sessions = set()
+                reloading = self._reloading_sessions
+            reloading.add(sid)
         try:
             self._cleanup_runtime(sid)
             if os.path.exists(session.idb_path):
@@ -2874,7 +2889,8 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 "current_options": start_res.get("current_options"),
             }
         finally:
-            reloading.discard(sid)
+            with self._analysis_state_lock():
+                reloading.discard(sid)
 
     def _session_action_update(self, args: dict) -> dict:
         sid, sid_err = self._resolve_session_id(args)
@@ -3012,7 +3028,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
                 continue
             if last_used_epoch >= cutoff_epoch:
                 continue
-            runtime = self.session_runtimes.get(sid)
+            runtime = self._runtime_record(sid)
             if runtime and self._runtime_alive(runtime):
                 continue
             with contextlib.suppress(Exception):
@@ -3152,11 +3168,7 @@ class ServerSessionMixin(ServerSessionBootstrapMixin, ServerClientStateMixin):
             # Only kill live sessions + their runtimes. Skipping the no-
             # runtime path here avoids racing with cleanup_stale, which is
             # the canonical owner of stale-metadata pruning.
-            has_runtime = (
-                hasattr(self, "session_runtimes")
-                and isinstance(self.session_runtimes, dict)
-                and sid in self.session_runtimes
-            )
+            has_runtime = self._runtime_record(sid) is not None
             if not has_runtime:
                 skipped_sids.append(sid)
                 continue

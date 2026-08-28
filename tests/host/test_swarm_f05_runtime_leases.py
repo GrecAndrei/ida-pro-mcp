@@ -146,6 +146,32 @@ def test_heartbeat_does_not_clobber_fresh_lease_on_removal(tmp_path, monkeypatch
     assert (tmp_path / f"SID_{TMP_SID}.lease.json").exists()
 
 
+def test_concurrent_lease_writes_keep_json_valid_and_leave_no_shared_tmp(tmp_path):
+    """Same-session heartbeat writers must not interleave their temp file."""
+    runtime = _LeaseRuntime(tmp_path)
+    errors: list[Exception] = []
+
+    def writer(index: int) -> None:
+        try:
+            runtime._write_runtime_lease(
+                TMP_SID,
+                {"process": _Proc(50000 + index, None), "port": 12000 + index},
+            )
+        except Exception as exc:  # pragma: no cover - defensive assertion path
+            errors.append(exc)
+
+    threads = [threading.Thread(target=writer, args=(i,)) for i in range(24)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert not errors
+    lease_path = tmp_path / f"SID_{TMP_SID}.lease.json"
+    assert json.loads(lease_path.read_text(encoding="utf-8"))["session_id"] == TMP_SID
+    assert not list(tmp_path.glob(f"{lease_path.name}.*.tmp"))
+
+
 def test_heartbeat_survives_raised_exception_in_body(tmp_path, monkeypatch):
     """A single raised exception (e.g. int(None) for a pid-less process) must
     not kill the daemon heartbeat thread; later sids still get their leases."""

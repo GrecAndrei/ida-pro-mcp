@@ -73,6 +73,59 @@ def _owned_session(server: IDAMCPServer, binary: str = "/samples/alpha.bin"):
     return session
 
 
+def test_client_state_contextvar_initialization_is_singleton_under_race(tmp_path, monkeypatch):
+    server = _make_server(tmp_path, monkeypatch)
+    server._client_request_state_var = None
+    barrier = threading.Barrier(16)
+    results = []
+
+    def worker():
+        barrier.wait()
+        results.append(server._state_var())
+
+    threads = [threading.Thread(target=worker) for _ in range(16)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    try:
+        assert len({id(var) for var in results}) == 1
+    finally:
+        server.shutdown()
+
+
+def test_client_connection_registry_keeps_all_concurrent_connections(tmp_path, monkeypatch):
+    """Concurrent socket opens must not replace the shared live set."""
+    server = _make_server(tmp_path, monkeypatch)
+    start = threading.Barrier(24)
+    ready = threading.Barrier(25)  # 24 workers plus the coordinator below
+    hold = threading.Barrier(25)  # inspect the registry before teardown starts
+    connection_ids: list[str] = []
+
+    def worker() -> None:
+        start.wait()
+        token = server._begin_client_connection()
+        connection_ids.append(server._client_request_state().connection_id)
+        ready.wait()
+        hold.wait()
+        server._end_client_connection(token)
+
+    threads = [threading.Thread(target=worker) for _ in range(24)]
+    for thread in threads:
+        thread.start()
+    ready.wait(timeout=10)
+    try:
+        assert len(connection_ids) == 24
+        assert len(set(connection_ids)) == 24
+        assert set(connection_ids) == server._live_connections
+    finally:
+        hold.wait(timeout=10)
+        for thread in threads:
+            thread.join(timeout=10)
+        server.shutdown()
+
+
 # ---------------------------------------------------------------------------
 # server_semantic: ownership guard + envelope + path coverage
 # ---------------------------------------------------------------------------

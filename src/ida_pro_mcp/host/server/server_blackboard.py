@@ -64,6 +64,7 @@ from .server_blackboard_phase import ServerBlackboardPhaseMixin
 from .server_blackboard_trace import ServerBlackboardTraceMixin
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_ORCHESTRATION_INIT_LOCK = threading.Lock()
 
 #: Lane name → store category for the working-set lanes.
 _LANE_CATEGORY = {
@@ -176,12 +177,34 @@ class ServerBlackboardMixin(
     # Trace methods are in ServerBlackboardTraceMixin (server_blackboard_trace.py)
     # IDB-publish methods are in ServerBlackboardIdbMixin (server_blackboard_idb.py)
 
+    def shutdown(self) -> None:
+        """Stop blackboard-owned background work before the next MRO stage.
+
+        ``IDAMCPServer.shutdown`` delegates through the mixin MRO.  The
+        orchestrator owns both the crawler thread and the trace executor, so
+        it must be closed as part of host teardown rather than left for the
+        interpreter's global executor hook.
+        """
+        orch = getattr(self, "_bb_orchestrator", None)
+        if orch is not None:
+            with contextlib.suppress(Exception):
+                orch.shutdown()
+        next_shutdown = getattr(super(), "shutdown", None)
+        if callable(next_shutdown):
+            next_shutdown()
+
     def _orchestration(self) -> BlackboardOrchestrator:
         """Return the lazily-created orchestration layer for this host."""
         orch = getattr(self, "_bb_orchestrator", None)
         if orch is None:
-            orch = BlackboardOrchestrator(self)
-            self._bb_orchestrator = orch
+            # Blackboards are callable from concurrent MCP request threads;
+            # double-checked initialization keeps one crawler and one trace
+            # pool per host instead of silently splitting task state.
+            with _ORCHESTRATION_INIT_LOCK:
+                orch = getattr(self, "_bb_orchestrator", None)
+                if orch is None:
+                    orch = BlackboardOrchestrator(self)
+                    self._bb_orchestrator = orch
         return orch
 
     def _bb_dispatch_gate(self, action, args, store, phase_state, policy_state) -> dict | None:
@@ -1792,7 +1815,13 @@ class ServerBlackboardMixin(
             return make_error(MCPError.INVALID_ARGS, "trace_ingest requires text or entry_id")
         depth = _bounded_int(args.get("depth", 2), 2, min_value=1, max_value=6)
         limit = _bounded_int(args.get("limit", 8), 8, min_value=1, max_value=50)
-        task_id = self._create_trace_task(store, source_entry_id, source_text, depth=depth, limit=limit)
+        task_id = self._orchestration().enqueue_trace_task(
+            store,
+            source_entry_id=source_entry_id,
+            source_text=source_text,
+            depth=depth,
+            limit=limit,
+        )
         return {
             "ok": True,
             "trace_task_id": task_id,
@@ -2192,4 +2221,3 @@ class ServerBlackboardMixin(
 
     def _bb_action_reject(self, args, store, phase_state, policy_state) -> dict:
         return self._bb_action_proposal_reject(args, store, phase_state, policy_state)
-

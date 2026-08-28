@@ -50,6 +50,9 @@ install-report.json
 
 # Testing/CI artifacts
 .pytest_cache/
+.tmp/
+.pytest_tmp/
+benchmark-results/
 .ruff_cache/
 .coverage
 htmlcov/

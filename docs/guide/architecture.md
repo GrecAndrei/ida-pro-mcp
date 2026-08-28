@@ -80,7 +80,7 @@ Entry point for MCP clients: `python -u -m ida_pro_mcp.host.server` (stdio JSON-
 
 ## Product surface policy
 
-See `docs/ROADMAP.md`. The default surface (`tool_surface == "agent"`)
+See `docs/guide/roadmap.md`. The default surface (`tool_surface == "agent"`)
 advertises the full `ida_*` operation catalog in `tools/list`, built from
 `list_agent_operations()`; a fresh agent sees every operation with its own
 exact schema, so there is no hidden default subset.

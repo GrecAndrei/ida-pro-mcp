@@ -213,6 +213,23 @@ def test_start_server_refuses_other_thread_auto_restart(tmp_path, monkeypatch):
     assert res.get("recoverable") is True
 
 
+def test_start_server_refuses_spawn_after_host_shutdown(tmp_path, monkeypatch):
+    """A queued request must not resurrect an IDA runtime during shutdown."""
+    host = _Host(tmp_path)
+    session = host._make_session(tmp_path)
+    host._shutdown_requested = True
+    launched = []
+    monkeypatch.setattr(
+        host, "_start_server_inner", lambda s: launched.append(s) or {"ok": True}
+    )
+
+    result = host._start_server(session)
+
+    assert result["error"] is True
+    assert result["code"] == MCPError.IDA_BUSY
+    assert launched == []
+
+
 def test_start_server_allows_same_thread_relaunch(tmp_path, monkeypatch):
     """F04 finding 3: a deliberate restart (safe-mode reload, retry after a
     failed apply, re-open of a just-closed path) is allowed once the close has

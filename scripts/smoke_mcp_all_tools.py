@@ -34,9 +34,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-# Machine install paths. Override with IDA_MCP_VENV_PY / IDADIR so the scripts
-# stay runnable on other boxes; the defaults match this dev machine.
-VENV_PY = os.environ.get("IDA_MCP_VENV_PY", "/home/alex/.local/share/ida-pro-mcp/.venv/bin/python")
+# Resolve tools from the environment or the current interpreter. The smoke
+# harness must not encode one developer's install layout.
+VENV_PY = os.environ.get("IDA_MCP_VENV_PY") or sys.executable
 HOST_MODULE = "ida_pro_mcp.host.server"
 DEFAULT_TIMEOUT = 120
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -49,9 +49,6 @@ DEFAULT_BINARY: str | None = None
 # disables. IDA_MCP_RESPONSE_ENRICH intentionally unset (default off) so
 # responses stay lean (and consistent with the enrichment-gating fix).
 BASE_ENV = {
-    "IDADIR": "/home/alex/ida-pro-9.3",
-    "IDA_MCP_EMBED_MODEL": "/home/alex/Downloads/bge-code-v1-q8_0.gguf",
-    "IDA_MCP_EMBED_SERVER_BIN": "/home/alex/.local/share/ida-pro-mcp/bin/llama-server",
     "IDA_MCP_DISABLE_STUCK_DETECTION": "1",
     "IDA_MCP_DISABLE_RATE_LIMIT": "1",
     "IDA_MCP_RESPONSE_MODE": "compact",
@@ -60,6 +57,9 @@ BASE_ENV = {
     "IDA_MCP_COMPACT_MAX_STRING": "200",
     "IDA_MCP_COMPACT_CHAR_BUDGET": "8000",
 }
+for _key in ("IDADIR", "IDA_DIR", "IDA_MCP_IDAT", "IDA_MCP_EMBED_MODEL", "IDA_MCP_EMBED_SERVER_BIN"):
+    if os.environ.get(_key):
+        BASE_ENV[_key] = os.environ[_key]
 
 # Placeholders substituted at runtime:
 #   __ADDR__  first function start_ea   __ADDR2__ second   __IDB__ session idb path
@@ -374,8 +374,16 @@ def main() -> int:
     if not os.path.isfile(args_cli.binary):
         print(f"FATAL: binary not found: {args_cli.binary}", file=sys.stderr)
         return 2
-    if not os.path.isfile(os.path.join(BASE_ENV["IDADIR"], "idat")):
-        print(f"FATAL: idat not found in IDADIR={BASE_ENV['IDADIR']}", file=sys.stderr)
+    ida_root = BASE_ENV.get("IDADIR") or BASE_ENV.get("IDA_DIR")
+    idat = BASE_ENV.get("IDA_MCP_IDAT")
+    if not idat and ida_root:
+        idat = next(
+            (os.path.join(ida_root, name) for name in ("idat64", "idat")
+             if os.path.isfile(os.path.join(ida_root, name))),
+            None,
+        )
+    if not idat or not os.path.isfile(idat):
+        print("FATAL: configure IDADIR/IDA_DIR or IDA_MCP_IDAT for a real IDA install", file=sys.stderr)
         return 2
 
     only = set(args_cli.only.split(",")) if args_cli.only else None

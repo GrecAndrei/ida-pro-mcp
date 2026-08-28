@@ -132,8 +132,15 @@ class BatchManager:
             task.state = "pending"
             self._tasks[task.task_id] = task
             self._trim_history()
-            future = self._executor.submit(self._run_task, task, run_fn)
-        task._future = future
+            try:
+                future = self._executor.submit(self._run_task, task, run_fn)
+            except Exception:
+                self._tasks.pop(task.task_id, None)
+                raise
+            # Keep publication under the same lock as task insertion. A fast
+            # worker or shutdown() must never observe a pending task with no
+            # future and leave it uncancelled.
+            task._future = future
         return task.task_id
 
     def _run_task(self, task: BatchTask, run_fn: Callable[[BatchTask], Any] | None) -> None:
@@ -232,6 +239,7 @@ class BatchManager:
                 # The worker never picked the task up: it is genuinely cancelled.
                 task.state = "cancelled"
                 task.finished_at = time.time()
+                self._maybe_park_idle_executor()
         if not queued_aborted and task._future is not None:
             # A running task cannot be interrupted; cooperative workers abort on
             # the next cancel check. Give them a short grace window so the
@@ -283,10 +291,16 @@ class BatchManager:
             if self._shutdown:
                 return
             self._shutdown = True
+            for task in self._tasks.values():
+                if task.state in ("pending", "running"):
+                    task._cancel_event.set()
+                    if task.state == "pending" and task._future is not None and task._future.cancel():
+                        task.state = "cancelled"
+                        task.finished_at = time.time()
             executor = self._executor
             self._executor = None
         if executor is not None:
-            executor.shutdown(wait=wait)
+            executor.shutdown(wait=wait, cancel_futures=True)
         # D10: flush a still-dirty state so the last transition is never lost
         # when the process exits (shutdown is registered via atexit).
         with self._persist_lock:

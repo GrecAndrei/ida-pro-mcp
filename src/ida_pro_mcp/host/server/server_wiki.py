@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shlex
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -88,23 +89,56 @@ class ServerWikiMixin:
         if not txt:
             return None
         key = txt[:2048].lower()
-        cached = self._wiki_embed_cache.get(key)
-        if cached is not None:
-            return cached
+        with self._wiki_cache_lock:
+            cached = self._wiki_embed_cache.get(key)
+            if cached is not None:
+                return list(cached)
+            inflight = getattr(self, "_wiki_embed_inflight", None)
+            if not isinstance(inflight, dict):
+                inflight = {}
+                self._wiki_embed_inflight = inflight
+            done = inflight.get(key)
+            owner = done is None
+            if owner:
+                done = threading.Event()
+                inflight[key] = done
+
+        if not owner:
+            # Share one expensive model call among concurrent wiki requests.
+            # A timeout prevents a wedged backend from wedging every waiter;
+            # the in-flight marker remains until the owner finishes, avoiding
+            # a second model call while the first one is still running.
+            done.wait(timeout=120.0)
+            with self._wiki_cache_lock:
+                cached = self._wiki_embed_cache.get(key)
+                return list(cached) if cached is not None else None
+
+        vec: list[float] | None = None
         try:
             from ..intelligence.core import BgeCodeEmbedder
             embedder = BgeCodeEmbedder()
             vec = embedder.embed_vector(key)
         except Exception:
-            return None
-        with self._wiki_cache_lock:
-            if len(self._wiki_embed_cache) >= self._wiki_embed_cache_max:
-                # simple FIFO-ish eviction
-                try:
-                    self._wiki_embed_cache.pop(next(iter(self._wiki_embed_cache)))
-                except Exception:
-                    self._wiki_embed_cache.clear()
-            self._wiki_embed_cache[key] = vec
+            vec = None
+        finally:
+            with self._wiki_cache_lock:
+                # Do not poison the cache with a miss: the native/cloud
+                # backend may become available later in the same host life.
+                if vec is not None:
+                    cached = self._wiki_embed_cache.get(key)
+                    if cached is None:
+                        if len(self._wiki_embed_cache) >= self._wiki_embed_cache_max:
+                            try:
+                                self._wiki_embed_cache.pop(
+                                    next(iter(self._wiki_embed_cache))
+                                )
+                            except Exception:
+                                self._wiki_embed_cache.clear()
+                        self._wiki_embed_cache[key] = list(vec)
+                inflight.pop(key, None)
+                done.set()
+                cached = self._wiki_embed_cache.get(key)
+                vec = list(cached) if cached is not None else None
         return vec
 
     def _wiki_expand_semantic_terms(self, query_tokens: list[str]) -> set[str]:
@@ -175,8 +209,8 @@ class ServerWikiMixin:
 
     def _wiki_get_index(self, wiki_root: str, force: bool = False) -> dict:
         now = time.time()
-        cache = self._wiki_cache
         with self._wiki_cache_lock:
+            cache = self._wiki_cache
             if (
                 not force
                 and cache.get("root") == wiki_root
@@ -184,71 +218,91 @@ class ServerWikiMixin:
             ):
                 return cache
 
-        topics: dict[str, list[str]] = {}
-        pages: list[dict] = []
-        if wiki_root and os.path.isdir(wiki_root):
-            for root, _, files in os.walk(wiki_root):
-                rel_dir = os.path.relpath(root, wiki_root)
-                category = "root" if rel_dir == "." else rel_dir.replace(os.sep, "/")
-                for filename in sorted(files):
-                    if not filename.endswith(".md"):
-                        continue
-                    full_path = os.path.join(root, filename)
-                    try:
-                        with open(
-                            full_path, encoding="utf-8", errors="ignore"
-                        ) as f:
-                            text = f.read()
-                    except OSError:
-                        continue
-                    page_name = filename[:-3]
-                    topic = (
-                        page_name if category == "root" else f"{category}/{page_name}"
-                    )
-                    lines = text.splitlines()
-                    headers = self._wiki_parse_headers([line + "\n" for line in lines])
-                    title = headers[0]["text"] if headers else page_name
-                    header_text = " ".join(h["text"] for h in headers).lower()
-                    topics.setdefault(category, []).append(page_name)
-                    text_to_tokenize = f"{topic} {title} {header_text} {text[:4000]}"
-                    raw_tokens = self._wiki_tokenize(text_to_tokenize)
-                    pages.append(
-                        {
-                            "topic": topic,
-                            "topic_lower": topic.lower(),
-                            "topic_basename": page_name.lower(),
-                            "category": category,
-                            "title": title,
-                            "title_lower": title.lower(),
-                            "headers": headers,
-                            "header_text_lower": header_text,
-                            "path": full_path,
-                            "text": text,
-                            "text_lower": text.lower(),
-                            "line_count": len(lines),
-                            "tokens": set(raw_tokens),
-                            "stemmed_tokens": {
-                                self._wiki_stem_token(t) for t in raw_tokens
-                            },
-                            "semantic_title_text": f"{topic} {title} {header_text}".strip(),
-                            "semantic_body_text": text[:4000],
-                        }
-                    )
-
-        for category in list(topics.keys()):
-            topics[category] = sorted(set(topics[category]))
-        pages.sort(key=lambda p: p["topic"])
-
+        # Only one request scans the wiki on a cold/expired cache. The second
+        # check below lets waiters use the completed snapshot without parsing
+        # every markdown file again.
         with self._wiki_cache_lock:
-            cache.update(
-                {
-                    "root": wiki_root,
-                    "expires": now + self._wiki_cache_ttl,
-                    "topics": topics,
-                    "pages": pages,
-                }
-            )
-        return cache
+            build_lock = getattr(self, "_wiki_cache_build_lock", None)
+            if build_lock is None:
+                build_lock = threading.Lock()
+                self._wiki_cache_build_lock = build_lock
+        with build_lock:
+            now = time.time()
+            with self._wiki_cache_lock:
+                cache = self._wiki_cache
+                if (
+                    not force
+                    and cache.get("root") == wiki_root
+                    and now < float(cache.get("expires", 0.0))
+                ):
+                    return cache
+
+            topics: dict[str, list[str]] = {}
+            pages: list[dict] = []
+            if wiki_root and os.path.isdir(wiki_root):
+                for root, _, files in os.walk(wiki_root):
+                    rel_dir = os.path.relpath(root, wiki_root)
+                    category = "root" if rel_dir == "." else rel_dir.replace(os.sep, "/")
+                    for filename in sorted(files):
+                        if not filename.endswith(".md"):
+                            continue
+                        full_path = os.path.join(root, filename)
+                        try:
+                            with open(
+                                full_path, encoding="utf-8", errors="ignore"
+                            ) as f:
+                                text = f.read()
+                        except OSError:
+                            continue
+                        page_name = filename[:-3]
+                        topic = (
+                            page_name if category == "root" else f"{category}/{page_name}"
+                        )
+                        lines = text.splitlines()
+                        headers = self._wiki_parse_headers([line + "\n" for line in lines])
+                        title = headers[0]["text"] if headers else page_name
+                        header_text = " ".join(h["text"] for h in headers).lower()
+                        topics.setdefault(category, []).append(page_name)
+                        text_to_tokenize = f"{topic} {title} {header_text} {text[:4000]}"
+                        raw_tokens = self._wiki_tokenize(text_to_tokenize)
+                        pages.append(
+                            {
+                                "topic": topic,
+                                "topic_lower": topic.lower(),
+                                "topic_basename": page_name.lower(),
+                                "category": category,
+                                "title": title,
+                                "title_lower": title.lower(),
+                                "headers": headers,
+                                "header_text_lower": header_text,
+                                "path": full_path,
+                                "text": text,
+                                "text_lower": text.lower(),
+                                "line_count": len(lines),
+                                "tokens": set(raw_tokens),
+                                "stemmed_tokens": {
+                                    self._wiki_stem_token(t) for t in raw_tokens
+                                },
+                                "semantic_title_text": f"{topic} {title} {header_text}".strip(),
+                                "semantic_body_text": text[:4000],
+                            }
+                        )
+
+            for category in list(topics.keys()):
+                topics[category] = sorted(set(topics[category]))
+            pages.sort(key=lambda p: p["topic"])
+
+            snapshot = {
+                "root": wiki_root,
+                "expires": time.time() + self._wiki_cache_ttl,
+                "topics": topics,
+                "pages": pages,
+            }
+            # Swap the whole object. Existing readers retain a complete,
+            # immutable-by-convention snapshot while a rebuild is published.
+            with self._wiki_cache_lock:
+                self._wiki_cache = snapshot
+                return snapshot
 
     def _wiki_normalize_topic(
         self, topic_name: Any

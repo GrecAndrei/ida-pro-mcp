@@ -12,6 +12,7 @@ import json
 import os
 import threading
 import uuid
+from copy import deepcopy
 from typing import Any
 
 from ..config import log_rpc
@@ -35,8 +36,11 @@ class SessionGroup:
             "name": self.name,
             "session_ids": list(self.session_ids),
             "link_count": len(self.links),
-            "links": self.links,
-            "metadata": self.metadata,
+            # Return an isolated snapshot. Persistence serializes after
+            # releasing the group lock, and callers may retain/inspect the
+            # response while another connection mutates the live group.
+            "links": deepcopy(self.links),
+            "metadata": deepcopy(self.metadata),
         }
 
     @classmethod
@@ -70,6 +74,7 @@ class ServerMultiSessionMixin:
     """
 
     _session_groups: dict[str, SessionGroup]
+    _multi_session_init_lock = threading.Lock()
 
     def _init_multi_session(self) -> None:
         """Initialize multi-session state. Call from server __init__.
@@ -84,11 +89,14 @@ class ServerMultiSessionMixin:
         rehydrated here (first init only) so ``group_id`` references survive a
         host restart (D3-F9).
         """
-        first_init = not hasattr(self, "_session_groups")
-        if first_init:
-            self._session_groups = {}
-        if not hasattr(self, "_session_groups_lock"):
-            self._session_groups_lock = threading.RLock()
+        with self._multi_session_init_lock:
+            first_init = not isinstance(getattr(self, "_session_groups", None), dict)
+            if first_init:
+                self._session_groups = {}
+            if getattr(self, "_session_groups_lock", None) is None:
+                self._session_groups_lock = threading.RLock()
+            if getattr(self, "_groups_persist_lock", None) is None:
+                self._groups_persist_lock = threading.Lock()
         if first_init:
             self._load_groups_from_disk()
 
@@ -135,19 +143,25 @@ class ServerMultiSessionMixin:
         path = self._groups_path()
         if not path:
             return
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            # Pid-scoped tmp so concurrent hosts sharing one cache never write
-            # into each other's temp file; os.replace is atomic.
-            tmp = f"{path}.{os.getpid()}.tmp"
-            with self._session_groups_lock:
-                payload = [g.to_dict() for g in self._session_groups.values()]
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=2)
-                f.flush()
-            os.replace(tmp, path)
-        except Exception as e:
-            log_rpc(f"Failed to persist session groups to {path}: {e}")
+        self._init_multi_session()
+        # Serialize the snapshot through os.replace as one transaction. If a
+        # second mutation snapshots while the first writer is still replacing
+        # the file, an older snapshot can otherwise win the race and erase the
+        # newer group's update.
+        with self._groups_persist_lock:
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                # Pid-scoped tmp so concurrent hosts sharing one cache never
+                # write into each other's temp file; os.replace is atomic.
+                tmp = f"{path}.{os.getpid()}.tmp"
+                with self._session_groups_lock:
+                    payload = [g.to_dict() for g in self._session_groups.values()]
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, indent=2)
+                    f.flush()
+                os.replace(tmp, path)
+            except Exception as e:
+                log_rpc(f"Failed to persist session groups to {path}: {e}")
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -156,7 +170,8 @@ class ServerMultiSessionMixin:
     def _get_group(self, group_id: str) -> SessionGroup | None:
         """Look up a group by ID."""
         self._init_multi_session()
-        return self._session_groups.get(group_id)
+        with self._session_groups_lock:
+            return self._session_groups.get(group_id)
 
     def _require_group(self, args: dict) -> tuple[SessionGroup | None, dict | None]:
         """Extract and validate group_id from args. Returns (group, error)."""
@@ -291,7 +306,9 @@ class ServerMultiSessionMixin:
 
             self._session_groups[group_id] = group
         self._persist_groups()
-        return {"ok": True, "group": group.to_dict()}
+        with self._session_groups_lock:
+            snapshot = group.to_dict()
+        return {"ok": True, "group": snapshot}
 
     def _ms_group_list(self, args: dict) -> dict:
         """List all session groups."""
@@ -309,12 +326,20 @@ class ServerMultiSessionMixin:
         if err:
             return err
 
-        # Gather exports from all sessions
+        # Snapshot membership under the lock, then perform the potentially
+        # slow IDA RPCs without holding it.  A link build can involve many
+        # sessions; keeping the lock across those calls previously blocked
+        # unrelated group_list/status/remove requests for the whole build.
+        with self._session_groups_lock:
+            group_id = group.group_id
+            session_ids = list(group.session_ids)
+
+        # Gather exports from all sessions.
         # exports_map: symbol_name -> {sid, ea}
         exports_map: dict[str, dict[str, str]] = {}
         export_errors: list[dict[str, str]] = []
 
-        for sid in group.session_ids:
+        for sid in session_ids:
             result = self._dispatch_to_session(sid, "symbols", {"action": "exports"})
             if isinstance(result, dict) and result.get("error"):
                 export_errors.append({"session_id": sid, "error": str(result.get("message", ""))})
@@ -332,19 +357,52 @@ class ServerMultiSessionMixin:
                     if name not in exports_map:
                         exports_map[name] = {"provider_sid": sid, "export_ea": ea}
 
-        # Gather imports from all sessions and match against exports
-        links_built = 0
+        # Gather imports from all sessions and match against exports.  Keep
+        # the result local until every RPC completes so readers never observe
+        # a half-built link table.
         import_errors: list[dict[str, str]] = []
+        imports_by_sid: dict[str, list[Any]] = {}
+        for sid in session_ids:
+            result = self._dispatch_to_session(sid, "imports_deep", {"action": "resolve"})
+            if isinstance(result, dict) and result.get("error"):
+                import_errors.append({"session_id": sid, "error": str(result.get("message", ""))})
+                continue
+            imports: Any = []
+            if isinstance(result, dict):
+                imports = result.get("imports") or result.get("entries") or result.get("symbols") or []
+            imports_by_sid[sid] = imports if isinstance(imports, list) else []
 
-        # group.links is mutated below; hold the group lock so a concurrent
-        # cross_resolve/status/cross_decompile reading the link table never
-        # observes a half-built entry or mutates mid-iteration.
+        built_links: dict[str, dict[str, Any]] = {}
+        links_built = 0
+        for sid, imports in imports_by_sid.items():
+            for imp in imports:
+                if not isinstance(imp, dict):
+                    continue
+                name = str(imp.get("name") or "").strip()
+                if not name:
+                    continue
+                # Match against known exports (skip self-references).
+                provider = exports_map.get(name)
+                if not provider or provider["provider_sid"] == sid:
+                    continue
+                link = built_links.setdefault(
+                    name,
+                    {
+                        "provider_sid": provider["provider_sid"],
+                        "export_ea": provider["export_ea"],
+                        "importer_sids": [],
+                    },
+                )
+                if sid not in link["importer_sids"]:
+                    link["importer_sids"].append(sid)
+                    links_built += 1
+
+        # Commit only after all RPCs finish. Re-resolve under the lock because
+        # a concurrent remove+recreate may have replaced the original object;
+        # writing to that stale object would otherwise lose the update. If
+        # membership changed, reject the stale result rather than linking a
+        # different set of binaries under the new group definition.
         with self._session_groups_lock:
-            # Re-resolve under the lock: a concurrent group_remove +
-            # group_create with the same id may have replaced the object we
-            # captured above, and writing links into the stale object would be
-            # a lost update (the live group would keep zero links).
-            group_id = group.group_id
             group = self._session_groups.get(group_id)
             if group is None:
                 return make_error(
@@ -352,33 +410,14 @@ class ServerMultiSessionMixin:
                     f"Session group '{group_id}' not found",
                     hint="The group was removed while linking; re-create it and retry.",
                 )
-            for sid in group.session_ids:
-                result = self._dispatch_to_session(sid, "imports_deep", {"action": "resolve"})
-                if isinstance(result, dict) and result.get("error"):
-                    import_errors.append({"session_id": sid, "error": str(result.get("message", ""))})
-                    continue
-                imports = []
-                if isinstance(result, dict):
-                    imports = result.get("imports") or result.get("entries") or result.get("symbols") or []
-                for imp in imports:
-                    if not isinstance(imp, dict):
-                        continue
-                    name = str(imp.get("name") or "").strip()
-                    if not name:
-                        continue
-                    # Match against known exports (skip self-references)
-                    provider = exports_map.get(name)
-                    if provider and provider["provider_sid"] != sid:
-                        if name not in group.links:
-                            group.links[name] = {
-                                "provider_sid": provider["provider_sid"],
-                                "export_ea": provider["export_ea"],
-                                "importer_sids": [],
-                            }
-                        link = group.links[name]
-                        if sid not in link["importer_sids"]:
-                            link["importer_sids"].append(sid)
-                            links_built += 1
+            if list(group.session_ids) != session_ids:
+                return make_error(
+                    MCPError.CONFLICT,
+                    f"Session group '{group_id}' changed while linking",
+                    hint="Retry group_link against the current group membership.",
+                )
+            group.links = built_links
+            total_links = len(group.links)
 
         # Persist the freshly-built link table so cross-session resolution
         # survives a restart without a rebuild.
@@ -387,7 +426,7 @@ class ServerMultiSessionMixin:
             "ok": True,
             "group_id": group.group_id,
             "links_built": links_built,
-            "total_links": len(group.links),
+            "total_links": total_links,
             "exports_available": len(exports_map),
             "export_errors": export_errors if export_errors else None,
             "import_errors": import_errors if import_errors else None,
@@ -423,6 +462,7 @@ class ServerMultiSessionMixin:
                         link = ldata
                         symbol = lname
                         break
+            link = deepcopy(link) if isinstance(link, dict) else None
 
         if link is None:
             return make_error(
@@ -479,6 +519,7 @@ class ServerMultiSessionMixin:
                         if lname.lower() == symbol.lower():
                             link = ldata
                             break
+                link = deepcopy(link) if isinstance(link, dict) else None
             if link is None:
                 return make_error(
                     MCPError.NOT_FOUND,
@@ -530,6 +571,7 @@ class ServerMultiSessionMixin:
                         link = ldata
                         symbol = lname
                         break
+            link = deepcopy(link) if isinstance(link, dict) else None
 
         if link is None:
             return make_error(
@@ -615,12 +657,14 @@ class ServerMultiSessionMixin:
                     "export_ea": link["export_ea"],
                     "importer_count": len(link.get("importer_sids", [])),
                 })
+            group_snapshot = group.to_dict()
+            total_exports_linked = len(group.links)
 
         return {
             "ok": True,
-            "group": group.to_dict(),
+            "group": group_snapshot,
             "providers": providers,
             "importers": importers,
             "sample_links": sample_links,
-            "total_exports_linked": len(group.links),
+            "total_exports_linked": total_exports_linked,
         }

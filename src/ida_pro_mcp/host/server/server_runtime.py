@@ -51,6 +51,10 @@ _LARGE_IDB_CHECKPOINT_THRESHOLD = 256 * 1024 * 1024
 # real deadline, so a hung runtime is never blocked on for longer than this.
 _SHUTDOWN_SAVE_RPC_CAP = 60.0
 
+# Focused mixin hosts may omit IDAMCPServer.__init__, so protect lazy runtime
+# lock creation too.  The normal server path creates the lock eagerly.
+_RUNTIME_STATE_LOCK_INIT = threading.Lock()
+
 
 def _resolve_max_rpc_bytes() -> int:
     try:
@@ -173,6 +177,53 @@ def _kill_process_tree(proc: subprocess.Popen, grace_seconds: float = 2.0) -> No
 
 
 class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
+    def _runtime_state_lock(self) -> threading.RLock:
+        """Return the lock protecting the in-process runtime table.
+
+        Keep this small compatibility implementation on the runtime mixin as
+        well as the client-state mixin: focused hosts often compose runtime
+        and response helpers without constructing the full server class.
+        """
+        lock = getattr(self, "_runtime_lock", None)
+        if lock is None:
+            with _RUNTIME_STATE_LOCK_INIT:
+                lock = getattr(self, "_runtime_lock", None)
+                if lock is None:
+                    lock = threading.RLock()
+                    self._runtime_lock = lock
+        return lock
+
+    def _runtime_record(self, session_id: Any) -> dict[str, Any] | None:
+        """Read one runtime record without racing table mutation."""
+        with self._runtime_state_lock():
+            runtimes = getattr(self, "session_runtimes", None)
+            if not isinstance(runtimes, dict):
+                return None
+            record = runtimes.get(str(session_id))
+            return record if isinstance(record, dict) else None
+
+    def _runtime_items_snapshot(self) -> list[tuple[str, dict[str, Any]]]:
+        """Return a stable runtime-table snapshot for work outside the lock."""
+        with self._runtime_state_lock():
+            runtimes = getattr(self, "session_runtimes", None)
+            if not isinstance(runtimes, dict):
+                return []
+            return [
+                (str(session_id), record)
+                for session_id, record in runtimes.items()
+                if isinstance(record, dict)
+            ]
+
+    def _runtime_update(self, session_id: Any, **updates: Any) -> bool:
+        """Atomically update fields on an existing runtime record."""
+        with self._runtime_state_lock():
+            runtimes = getattr(self, "session_runtimes", None)
+            record = runtimes.get(str(session_id)) if isinstance(runtimes, dict) else None
+            if not isinstance(record, dict):
+                return False
+            record.update(updates)
+            return True
+
     def _runtime_owner_path(self, sid: str) -> str:
             return os.path.join(self._runtime_lease_dir, f"SID_{sid}.owner.json")
 
@@ -956,7 +1007,12 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                 sid = self.current_session.session_id
             if not sid:
                 return
-            self._session_last_activity[sid] = time.time()
+            runtime_lock = getattr(self, "_runtime_lock", None)
+            if runtime_lock is None:
+                self._session_last_activity[sid] = time.time()
+            else:
+                with runtime_lock:
+                    self._session_last_activity[sid] = time.time()
 
             action = call_args.get("action")
             if not isinstance(action, str):
@@ -1341,6 +1397,14 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             unconditionally once teardown completes (``_end_session_teardown``),
             so a later re-open of the same path is never blocked.
             """
+            runtime_lock = getattr(self, "_runtime_lock", None)
+            if runtime_lock is None:
+                self._begin_session_teardown_unlocked(sid)
+            else:
+                with runtime_lock:
+                    self._begin_session_teardown_unlocked(sid)
+
+    def _begin_session_teardown_unlocked(self, sid: str) -> None:
             flags = getattr(self, "_session_teardown", None)
             if not isinstance(flags, set):
                 self._session_teardown = set()
@@ -1349,6 +1413,14 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
 
     def _end_session_teardown(self, sid: str) -> None:
             """Clear the close-in-progress flag for *sid* (idempotent)."""
+            runtime_lock = getattr(self, "_runtime_lock", None)
+            if runtime_lock is None:
+                self._end_session_teardown_unlocked(sid)
+            else:
+                with runtime_lock:
+                    self._end_session_teardown_unlocked(sid)
+
+    def _end_session_teardown_unlocked(self, sid: str) -> None:
             flags = getattr(self, "_session_teardown", None)
             if isinstance(flags, set):
                 flags.discard(sid)
@@ -1375,6 +1447,13 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             is_closing = getattr(self, "_session_is_closing", None)
             if callable(is_closing):
                 return bool(is_closing(sid))
+            runtime_lock = getattr(self, "_runtime_lock", None)
+            if runtime_lock is None:
+                return self._session_teardown_active_unlocked(sid)
+            with runtime_lock:
+                return self._session_teardown_active_unlocked(sid)
+
+    def _session_teardown_active_unlocked(self, sid: str) -> bool:
             flags = getattr(self, "_session_teardown", None)
             return isinstance(flags, set) and sid in flags
 
@@ -1948,12 +2027,9 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             killer never signals a process that belongs to a currently-served
             session (its cmdline legitimately carries the session IDB path)."""
             live: set[int] = set()
-            runtimes = getattr(self, "session_runtimes", None)
-            if not isinstance(runtimes, dict):
-                return live
-            for runtime in runtimes.values():
-                if not isinstance(runtime, dict):
-                    continue
+            snapshot = getattr(self, "_runtime_items_snapshot", None)
+            runtimes = snapshot() if callable(snapshot) else []
+            for _sid, runtime in runtimes:
                 proc = runtime.get("process")
                 try:
                     if proc is not None and proc.poll() is None:
@@ -2151,17 +2227,28 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             # Per-session mutex: prevent two concurrent callers from both
             # seeing runtime-dead and launching duplicate IDA processes.
             sid = session.session_id
+            if getattr(self, "_shutdown_requested", False):
+                return make_error(
+                    MCPError.IDA_BUSY,
+                    "The MCP host is shutting down; refusing to start IDA.",
+                    recoverable=True,
+                    hint="Retry after creating a new MCP host connection.",
+                    details={"session_id": sid},
+                )
             with self._runtime_lock:
                 if not hasattr(self, "_session_startup_locks"):
                     self._session_startup_locks = {}
                 if sid not in self._session_startup_locks:
                     import threading as _threading
-                    self._session_startup_locks[sid] = _threading.Lock()
+                    # Reentrant because recovery paths can call
+                    # _cleanup_runtime from inside _start_server's lifecycle
+                    # section; a plain Lock would deadlock the owning thread.
+                    self._session_startup_locks[sid] = _threading.RLock()
             startup_lock = self._session_startup_locks[sid]
             with startup_lock:
                 # Re-check after acquiring — a concurrent caller may have
                 # already started the runtime while we were waiting.
-                if self._runtime_alive(self.session_runtimes.get(sid)):
+                if self._runtime_alive(self._runtime_record(sid)):
                     return {"ok": True, "idb_path": session.idb_path, "_already_running": True}
                 # A session close/delete is in flight for this sid (the
                 # close-in-progress flag). _start_server refuses ONLY while
@@ -2819,7 +2906,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     details=details,
                 )
 
-            runtime = self.session_runtimes.get(session.session_id)
+            runtime = self._runtime_record(session.session_id)
             if runtime:
                 try:
                     apply_res = self._apply_session_options(session, runtime)
@@ -3062,7 +3149,8 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             session_id = str(getattr(session, "session_id", "") or "").strip()
             if not session_id:
                 return
-            self._session_last_activity[session_id] = time.time()
+            with self._runtime_lock:
+                self._session_last_activity[session_id] = time.time()
             self._update_session_indexing_metadata(
                 session_id,
                 indexing_mode="none",
@@ -3101,6 +3189,24 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             ).start()
 
     def _cleanup_runtime(self, sid):
+            # Disconnect, shutdown, and crash-recovery paths can converge on
+            # the same SID. Serialize the complete teardown with the same
+            # per-session lifecycle lock used by _start_server so a second
+            # caller cannot send a duplicate shutdown, kill a newly started
+            # replacement, or release ownership behind the first caller.
+            with self._runtime_lock:
+                locks = getattr(self, "_session_startup_locks", None)
+                if not isinstance(locks, dict):
+                    locks = {}
+                    self._session_startup_locks = locks
+                lifecycle_lock = locks.get(sid)
+                if lifecycle_lock is None:
+                    lifecycle_lock = threading.RLock()
+                    locks[sid] = lifecycle_lock
+            with lifecycle_lock:
+                self._cleanup_runtime_locked(sid)
+
+    def _cleanup_runtime_locked(self, sid):
             # Stop host-side helpers for this session BEFORE tearing down the
             # process tree: the analysis-completion watcher (ida-an-<sid>), the
             # per-session analysis watchdog, and the periodic checkpoint saver
@@ -3110,8 +3216,9 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
             if callable(stop_watcher):
                 stop_watcher(sid, join_timeout=0.2)
             self._stop_analysis_checkpoint_timer(sid, join_timeout=0.2)
-            self._session_last_activity.pop(sid, None)
-            self._session_inflight_calls.pop(sid, None)
+            with self._runtime_lock:
+                self._session_last_activity.pop(sid, None)
+                self._session_inflight_calls.pop(sid, None)
             # The per-session startup lock is deliberately NOT popped here:
             # _start_server grabs it by reference and a concurrent caller may
             # still hold it, so removing it would let two threads acquire

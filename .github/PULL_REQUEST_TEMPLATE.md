@@ -10,6 +10,7 @@
 - [ ] `python scripts/check_schema_integrity.py` passes
 - [ ] `pytest -q` passes locally (live-IDA tests may skip)
 - [ ] Generated docs/skills up to date (`python scripts/generate_tool_skills.py`)
+- [ ] Relevant benchmark scope passes (`python benchmarks/run.py --scope ...`)
 
 ## Notes for reviewers
 

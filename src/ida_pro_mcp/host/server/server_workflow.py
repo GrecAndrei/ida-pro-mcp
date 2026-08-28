@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import threading
 
 from ..agent_operations import list_agent_operations
 from ..config import (
@@ -25,6 +26,21 @@ from ..schemas import (
     sanitize_schema_for_vertex,
 )
 from .server_workflow_batch import ServerWorkflowBatchMixin
+
+_TOOLS_CACHE_INIT_LOCK = threading.Lock()
+
+
+def _tools_cache_lock(server):
+    """Return the per-server catalog lock, tolerating lightweight test hosts."""
+    lock = getattr(server, "_tools_list_cache_lock", None)
+    if lock is not None:
+        return lock
+    with _TOOLS_CACHE_INIT_LOCK:
+        lock = getattr(server, "_tools_list_cache_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            server._tools_list_cache_lock = lock
+    return lock
 
 
 def _compose_call_key(name: str, args_obj: dict) -> tuple[str, str, str]:
@@ -1000,7 +1016,8 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
         """
         if getattr(self, "tool_surface", "agent") == "agent":
             cache_key = ("agent", bool(getattr(self, "vertex_compat", False)))
-            cached = self._tools_list_cache.get(cache_key)
+            with _tools_cache_lock(self):
+                cached = self._tools_list_cache.get(cache_key)
             if cached and cached[0] == cache_key:
                 return cached[1]
 
@@ -1017,11 +1034,13 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                         "category": operation.category,
                     }
                 )
-            self._tools_list_cache[cache_key] = (cache_key, catalog)
+            with _tools_cache_lock(self):
+                self._tools_list_cache[cache_key] = (cache_key, catalog)
             return catalog
 
         cache_key = (mode, bool(getattr(self, "vertex_compat", False)))
-        cached = self._tools_list_cache.get(cache_key)
+        with _tools_cache_lock(self):
+            cached = self._tools_list_cache.get(cache_key)
         if cached and cached[0] == cache_key:
             return cached[1]
 
@@ -1057,5 +1076,6 @@ class ServerWorkflowMixin(ServerWorkflowBatchMixin):
                 }
             )
 
-        self._tools_list_cache[cache_key] = (cache_key, catalog)
+        with _tools_cache_lock(self):
+            self._tools_list_cache[cache_key] = (cache_key, catalog)
         return catalog

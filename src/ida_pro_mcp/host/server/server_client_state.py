@@ -31,6 +31,20 @@ from ..errors import MCPError, make_error
 # Guards lazy initialisation of the per-server SSO realm store (the daemon
 # serves several connection threads, and ``sso_activate`` is one-shot).
 _SSO_REALM_INIT_LOCK = threading.Lock()
+# ContextVar identity must be shared by every request on a server. Without a
+# guard, concurrent first requests could each publish a different ContextVar
+# and split connection ownership state across threads.
+_CLIENT_STATE_VAR_INIT_LOCK = threading.Lock()
+# The daemon updates the live-connection and sticky-owner registries from
+# several transport threads.  Keep lazy creation and compound updates
+# serialized; a plain set/dict is not enough when two sockets open or close
+# at the same time.
+_CLIENT_REGISTRY_INIT_LOCK = threading.Lock()
+# The runtime table is normally created during server initialisation, before
+# any request thread exists.  Keep a lazy-init guard as well because a number
+# of focused mixin tests construct the object without running the full server
+# constructor.
+_RUNTIME_LOCK_INIT_LOCK = threading.Lock()
 
 
 def mint_agent_ticket(
@@ -89,13 +103,69 @@ class _ClientRequestState:
 class ServerClientStateMixin:
     """Connection-scoped session state and the ownership guard built on it."""
 
+    def _runtime_state_lock(self) -> threading.RLock:
+        """Return the lock protecting the in-process runtime table."""
+        lock = getattr(self, "_runtime_lock", None)
+        if lock is None:
+            with _RUNTIME_LOCK_INIT_LOCK:
+                lock = getattr(self, "_runtime_lock", None)
+                if lock is None:
+                    lock = threading.RLock()
+                    self._runtime_lock = lock
+        return lock
+
+    def _runtime_record(self, session_id: Any) -> dict[str, Any] | None:
+        """Read one runtime record without racing table mutation."""
+        with self._runtime_state_lock():
+            runtimes = getattr(self, "session_runtimes", None)
+            if not isinstance(runtimes, dict):
+                return None
+            record = runtimes.get(str(session_id))
+            return record if isinstance(record, dict) else None
+
+    def _runtime_items_snapshot(self) -> list[tuple[str, dict[str, Any]]]:
+        """Return a stable runtime-table snapshot for work outside the lock."""
+        with self._runtime_state_lock():
+            runtimes = getattr(self, "session_runtimes", None)
+            if not isinstance(runtimes, dict):
+                return []
+            return [
+                (str(session_id), record)
+                for session_id, record in runtimes.items()
+                if isinstance(record, dict)
+            ]
+
+    def _runtime_update(self, session_id: Any, **updates: Any) -> bool:
+        """Atomically update fields on an existing runtime record."""
+        with self._runtime_state_lock():
+            runtimes = getattr(self, "session_runtimes", None)
+            record = runtimes.get(str(session_id)) if isinstance(runtimes, dict) else None
+            if not isinstance(record, dict):
+                return False
+            record.update(updates)
+            return True
+
+    def _client_registry_lock(self) -> threading.RLock:
+        """Return the per-server lock for live connections and owners."""
+        lock = getattr(self, "_client_registry_lock_instance", None)
+        if lock is None:
+            with _CLIENT_REGISTRY_INIT_LOCK:
+                lock = getattr(self, "_client_registry_lock_instance", None)
+                if lock is None:
+                    lock = threading.RLock()
+                    self._client_registry_lock_instance = lock
+        return lock
+
     def _state_var(self) -> contextvars.ContextVar:
         var = getattr(self, "_client_request_state_var", None)
         if var is None:
-            var = contextvars.ContextVar(
-                "ida_mcp_client_request_state", default=None
-            )
-            self._client_request_state_var = var
+            with _CLIENT_STATE_VAR_INIT_LOCK:
+                var = getattr(self, "_client_request_state_var", None)
+                if var is None:
+                    var = contextvars.ContextVar(
+                        "ida_mcp_client_request_state", default=None
+                    )
+                    self._client_request_state_var = var
         return var
 
     def _client_request_state(self) -> _ClientRequestState:
@@ -115,11 +185,12 @@ class ServerClientStateMixin:
         # Track the connection as live so the sticky-ownership guard
         # (``_ensure_client_owns_session``) can tell a still-connected owner
         # from a disconnected one when deciding whether a session is adoptable.
-        live = getattr(self, "_live_connections", None)
-        if not isinstance(live, set):
-            live = set()
-            self._live_connections = live
-        live.add(state.connection_id)
+        with self._client_registry_lock():
+            live = getattr(self, "_live_connections", None)
+            if not isinstance(live, set):
+                live = set()
+                self._live_connections = live
+            live.add(state.connection_id)
         return self._state_var().set(state)
 
     def _end_client_connection(self, token: contextvars.Token) -> None:
@@ -157,9 +228,10 @@ class ServerClientStateMixin:
             # connection registry so sessions it recorded as owned become
             # adoptable by a restarted client (sticky ownership only holds
             # while the owner is actually connected).
-            live = getattr(self, "_live_connections", None)
-            if isinstance(live, set):
-                live.discard(state.connection_id)
+            with self._client_registry_lock():
+                live = getattr(self, "_live_connections", None)
+                if isinstance(live, set):
+                    live.discard(state.connection_id)
             # Drop this connection's agents from the shared realm registry.
             realm = getattr(self, "_sso_realm_store", None)
             if isinstance(realm, dict) and isinstance(state.agents_logged_in, set):
@@ -229,11 +301,12 @@ class ServerClientStateMixin:
         session) does not SIGKILL the sibling's live runtime on disconnect.
         """
         state = self._client_request_state()
-        owner = getattr(self, "_session_current_owner", None)
-        if owner is None:
-            owner = {}
-            self._session_current_owner = owner
-        owner[str(sid)] = str(state.connection_id)
+        with self._client_registry_lock():
+            owner = getattr(self, "_session_current_owner", None)
+            if not isinstance(owner, dict):
+                owner = {}
+                self._session_current_owner = owner
+            owner[str(sid)] = str(state.connection_id)
 
     def _connection_is_current_owner(self, state: Any, sid: str) -> bool:
         """Whether this connection may tear down ``sid``'s runtime.
@@ -243,13 +316,14 @@ class ServerClientStateMixin:
         False only when a *different* connection adopted the session — tearing
         that down would kill the sibling's live runtime and lose its IDB state.
         """
-        owner = getattr(self, "_session_current_owner", None)
-        if not isinstance(owner, dict):
-            return True
-        recorded = owner.get(str(sid))
-        if recorded is None:
-            return True
-        return recorded == str(getattr(state, "connection_id", ""))
+        with self._client_registry_lock():
+            owner = getattr(self, "_session_current_owner", None)
+            if not isinstance(owner, dict):
+                return True
+            recorded = owner.get(str(sid))
+            if recorded is None:
+                return True
+            return recorded == str(getattr(state, "connection_id", ""))
 
     def _connection_is_explicit_owner(self, state: Any, sid: str) -> bool:
         """Whether *this* connection is the explicitly recorded owner of *sid*.
@@ -258,20 +332,22 @@ class ServerClientStateMixin:
         fallback — used to decide who may abort a mid-spawn runtime, where an
         unattributed session must not be torn down by a bystander.
         """
-        owner = getattr(self, "_session_current_owner", None)
-        if not isinstance(owner, dict):
-            return False
-        recorded = owner.get(str(sid))
-        return recorded is not None and recorded == str(
-            getattr(state, "connection_id", "")
-        )
+        with self._client_registry_lock():
+            owner = getattr(self, "_session_current_owner", None)
+            if not isinstance(owner, dict):
+                return False
+            recorded = owner.get(str(sid))
+            return recorded is not None and recorded == str(
+                getattr(state, "connection_id", "")
+            )
 
     def _connection_is_live(self, connection_id: Any) -> bool:
         """Whether a connection with the given id is still connected."""
-        live = getattr(self, "_live_connections", None)
-        if not isinstance(live, set):
-            return False
-        return str(connection_id) in live
+        with self._client_registry_lock():
+            live = getattr(self, "_live_connections", None)
+            if not isinstance(live, set):
+                return False
+            return str(connection_id) in live
 
     def _runtime_spawn_in_flight(self, sid: str) -> bool:
         """Whether *sid*'s runtime is mid-spawn (ownership claimed, no live runtime).
@@ -282,8 +358,7 @@ class ServerClientStateMixin:
         freshly-claimed owner file and tombstone the session, aborting the
         sibling's launch.
         """
-        runtimes = getattr(self, "session_runtimes", None) or {}
-        rec = runtimes.get(str(sid))
+        rec = self._runtime_record(sid)
         alive = getattr(self, "_runtime_alive", None)
         if rec is not None and callable(alive):
             try:
@@ -324,13 +399,15 @@ class ServerClientStateMixin:
         sibling, even when its runtime has died — ownership survives a runtime
         death until the owning connection actually disconnects.
         """
-        owner = getattr(self, "_session_current_owner", None)
-        if not isinstance(owner, dict):
-            return False
-        recorded = owner.get(str(sid))
-        if recorded is None or recorded == str(getattr(state, "connection_id", "")):
-            return False
-        return self._connection_is_live(recorded)
+        with self._client_registry_lock():
+            owner = getattr(self, "_session_current_owner", None)
+            if not isinstance(owner, dict):
+                return False
+            recorded = owner.get(str(sid))
+            if recorded is None or recorded == str(getattr(state, "connection_id", "")):
+                return False
+            live = getattr(self, "_live_connections", None)
+            return isinstance(live, set) and str(recorded) in live
 
     def _session_is_busy(self, session_id: str) -> bool:
         """Whether another live owner is actively running the session's IDA.
@@ -367,21 +444,19 @@ class ServerClientStateMixin:
             "lease_age_seconds": None,
             "lease_updated_at": None,
         }
-        runtime = getattr(self, "session_runtimes", None) or {}
-        if isinstance(runtime, dict):
-            rec = runtime.get(str(session_id))
-            alive = getattr(self, "_runtime_alive", None)
-            if rec is not None and callable(alive) and alive(rec):
-                report["locked"] = True
-                report["holder"] = "this-host-runtime"
-                proc = rec.get("process")
-                report["idat_pid"] = getattr(proc, "pid", None) if proc is not None else None
-                report["owner_id"] = str(
-                    getattr(self, "_runtime_owner_id", None) or "this-host"
-                )
-                report["owner_pid"] = os.getpid()
-                report["owner_alive"] = True
-                return report
+        rec = self._runtime_record(session_id)
+        alive = getattr(self, "_runtime_alive", None)
+        if rec is not None and callable(alive) and alive(rec):
+            report["locked"] = True
+            report["holder"] = "this-host-runtime"
+            proc = rec.get("process")
+            report["idat_pid"] = getattr(proc, "pid", None) if proc is not None else None
+            report["owner_id"] = str(
+                getattr(self, "_runtime_owner_id", None) or "this-host"
+            )
+            report["owner_pid"] = os.getpid()
+            report["owner_alive"] = True
+            return report
         lease_path: str | None = None
         get_lease = getattr(self, "_runtime_lease_path", None)
         if callable(get_lease):

@@ -1,6 +1,6 @@
 """Meta-doc staleness regression (paper section 10.2 item 12).
 
-CONTRIBUTING.md / USE_CASES.md / ARCHITECTURE.md are hand-edited prose and
+CONTRIBUTING.md / docs/guide/use-cases.md / docs/guide/architecture.md are hand-edited prose and
 drifted from the current surface (removed unittest modules, a stale Tier A
 claim, and no coverage of the raw-blob/RISC-V path).  This pins the rebuilt
 behavior:
@@ -8,10 +8,10 @@ behavior:
 - the meta-docs contain no ``ida_*`` operation or legacy tool name that is
   absent from the current surface;
 - CONTRIBUTING.md points at real pytest entrypoints (per-dir layouts,
-  ``--basetemp=/home/alex/.tmp/pytest``);
-- ARCHITECTURE.md scopes the Tier A/B/C model to the legacy surface and
+  ``--basetemp=.pytest_tmp``);
+- docs/guide/architecture.md scopes the Tier A/B/C model to the legacy surface and
   describes the default agent catalog;
-- USE_CASES.md documents the opaque raw-blob / RISC-V path with real
+- docs/guide/use-cases.md documents the opaque raw-blob / RISC-V path with real
   operations (fw shaping + r2 sidecar + raw value scan + GP sreg fix);
 - the local Claude Code allow-list names only tools that exist in ``TOOLS``.
 
@@ -34,7 +34,11 @@ from ida_pro_mcp.host.schemas_data import TOOLS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-META_DOCS = ("CONTRIBUTING.md", "USE_CASES.md", "ARCHITECTURE.md")
+META_DOCS = (
+    "CONTRIBUTING.md",
+    "docs/guide/use-cases.md",
+    "docs/guide/architecture.md",
+)
 
 # Legacy tool-surface identifiers that have been removed or never existed.
 # (agent/query/summarize are deliberately excluded: they are ordinary English
@@ -44,7 +48,7 @@ DEAD_TOOL_NAMES = ("firmware_view", "binary_info", "data_ops", "packer")
 
 def _doc_text(name: str) -> str:
     path = REPO_ROOT / name
-    assert path.is_file(), f"meta-doc {name} missing from repo root"
+    assert path.is_file(), f"meta-doc {name} missing"
     return path.read_text(encoding="utf-8")
 
 
@@ -94,7 +98,7 @@ def test_contributing_points_at_pytest_not_removed_unittest_modules():
     test_linux_support, test_session_features)."""
     text = _doc_text("CONTRIBUTING.md")
     assert "pytest" in text
-    assert "--basetemp=/home/alex/.tmp/pytest" in text
+    assert "--basetemp=.pytest_tmp" in text
     assert "python -m unittest" not in text
     for stale in (
         "test_host_wiki_and_hardening",
@@ -107,7 +111,7 @@ def test_contributing_points_at_pytest_not_removed_unittest_modules():
 def test_arch_tiering_is_scoped_to_legacy_surface():
     """ARCHITECTURE must describe the default agent catalog and scope the
     Tier A/B/C model to the legacy surface."""
-    text = _doc_text("ARCHITECTURE.md")
+    text = _doc_text("docs/guide/architecture.md")
     section = text.split("## Product surface policy", 1)[1].split("## ", 1)[0]
     assert "list_agent_operations" in section
     assert "no hidden default subset" in section
@@ -122,7 +126,7 @@ def test_use_cases_document_opaque_raw_blob_riscv_path():
     no IDA xrefs, so the doc must route through the raw path — fw shaping,
     the default-off r2 sidecar, a raw pointer-word/value scan, and the RISC-V
     GP segment-register fix — using only real operation names."""
-    text = _doc_text("USE_CASES.md")
+    text = _doc_text("docs/guide/use-cases.md")
     names = _operation_names()
 
     def require(tokens):

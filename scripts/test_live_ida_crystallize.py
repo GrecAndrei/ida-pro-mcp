@@ -34,23 +34,8 @@ class MCPTestClient:
 
     def start(self) -> bool:
         env = os.environ.copy()
-        # Fallback to scanning common default paths if IDA_DIR is not set in environment
-        if "IDA_DIR" not in env:
-            common_paths = [
-                os.path.expanduser("~/ida-pro-9.3"),
-                os.path.expanduser("~/ida-pro-9.2"),
-                "/opt/ida-pro-9.3",
-                "/opt/ida-pro-9.2",
-                "/usr/local/ida-pro",
-                "/Applications/IDA Pro 9.3/Contents/MacOS",
-                "/Applications/IDA Pro 9.2/Contents/MacOS",
-            ]
-            # Only pin IDA_DIR to an install that actually exists; otherwise
-            # leave it unset and let the server auto-detect IDA.
-            for path in common_paths:
-                if os.path.isdir(path):
-                    env["IDA_DIR"] = path
-                    break
+        # Respect explicit runtime configuration; otherwise let the server's
+        # installer/runtime discovery select IDA.
         env["IDA_MCP_STARTUP_TIMEOUT"] = str(self.timeout)
 
         # Start the real MCP server

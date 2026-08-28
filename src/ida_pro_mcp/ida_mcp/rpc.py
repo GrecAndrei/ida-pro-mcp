@@ -2,10 +2,15 @@ from collections.abc import Callable
 
 try:
     from .zeromcp import McpHttpRequestHandler, McpRpcRegistry, McpServer, McpToolError
+    from .. import __version__
 except ImportError:  # flat sys.path layout used when IDA loads the plugin by file
     from zeromcp import McpHttpRequestHandler, McpRpcRegistry, McpServer, McpToolError
+    try:
+        from _version import __version__
+    except ImportError:
+        __version__ = "unknown"
 
-MCP_SERVER = McpServer("ida-pro-mcp")
+MCP_SERVER = McpServer("ida-pro-mcp", version=__version__)
 MCP_UNSAFE: set[str] = set()
 TESTS: dict[str, tuple[Callable, str]] = {}
 

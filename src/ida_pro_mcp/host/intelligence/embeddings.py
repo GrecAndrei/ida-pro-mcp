@@ -445,6 +445,7 @@ class FunctionEmbeddingIndex:
         self._embedder = embedder
         self._cache: dict[str, list[float]] = {}  # ea_hex -> embedding
         self._cache_lock = threading.Lock()
+        self._cache_refresh_lock = threading.Lock()
         self._db_mtime_ns = 0
         # Bounded fire-and-forget queue: cap concurrent background index
         # threads so a large index_async burst cannot spawn unbounded threads.
@@ -456,6 +457,7 @@ class FunctionEmbeddingIndex:
         # indexed_at); re-derived only when the corpus changes.  Avoids the
         # per-query full-corpus IDF pass that search_text used to run.
         self._idf_cache: tuple[tuple[int, float], dict[str, float]] | None = None
+        self._search_state_lock = threading.RLock()
 
         try:
             from ..config import CACHE_DIR
@@ -840,33 +842,41 @@ class FunctionEmbeddingIndex:
         search ranks against stale vectors.  The DB mtime is recorded so
         callers can cheaply detect a rebuild by another code path.
         """
-        try:
+        # Avoid duplicate O(N) reads when several search workers notice the
+        # same external write at once. The lock is held only for the refresh,
+        # never for ordinary cache reads or cosine ranking.
+        with self._cache_refresh_lock:
+            loaded: dict[str, list[float]] = {}
+            try:
+                with closing(self._conn()) as conn:
+                    for row in conn.execute("SELECT ea, vec_blob FROM func_embeddings"):
+                        ea, blob = row
+                        try:
+                            vec = _unpack_floats(blob)
+                        except Exception:
+                            # A single unreadable row (e.g. a blob written by another
+                            # host/generation with a different embedding layout) must
+                            # not abort the whole reload after the cache was cleared:
+                            # skip it so the rest of the index still serves, and
+                            # surface the row instead of failing silently.
+                            logger.warning(
+                                "skipping unreadable embedding row ea=%r in %s",
+                                ea, self._db_path,
+                            )
+                            continue
+                        loaded[ea] = vec
+            except Exception:
+                logger.warning(
+                    "failed to reload embedding cache from %s (index will be empty)",
+                    self._db_path,
+                )
+                loaded = {}
+            # Swap atomically so concurrent searches see either the old complete
+            # snapshot or the new complete snapshot, never the transient empty or
+            # partially populated cache produced by an in-place reload.
             with self._cache_lock:
-                self._cache.clear()
-            with closing(self._conn()) as conn:
-                for row in conn.execute("SELECT ea, vec_blob FROM func_embeddings"):
-                    ea, blob = row
-                    try:
-                        vec = _unpack_floats(blob)
-                    except Exception:
-                        # A single unreadable row (e.g. a blob written by another
-                        # host/generation with a different embedding layout) must
-                        # not abort the whole reload after the cache was cleared:
-                        # skip it so the rest of the index still serves, and
-                        # surface the row instead of failing silently.
-                        logger.warning(
-                            "skipping unreadable embedding row ea=%r in %s",
-                            ea, self._db_path,
-                        )
-                        continue
-                    with self._cache_lock:
-                        self._cache[ea] = vec
-        except Exception:
-            logger.warning(
-                "failed to reload embedding cache from %s (index will be empty)",
-                self._db_path,
-            )
-        self._db_mtime_ns = _file_mtime_ns(self._db_path)
+                self._cache = loaded
+                self._db_mtime_ns = _file_mtime_ns(self._db_path)
 
     def db_changed_since_load(self) -> bool:
         """True when the on-disk index was rewritten after the last cache load.
@@ -875,7 +885,35 @@ class FunctionEmbeddingIndex:
         index rebuild (fast -> decompile quality) must not keep serving
         vectors from the previous index generation.
         """
-        return self._db_mtime_ns != _file_mtime_ns(self._db_path)
+        with self._cache_lock:
+            loaded_mtime = self._db_mtime_ns
+        return loaded_mtime != _file_mtime_ns(self._db_path)
+
+    def _search_idf(self, conn: sqlite3.Connection) -> dict[str, float]:
+        """Return a coherent, per-index lexical IDF snapshot.
+
+        Backfill and cache replacement are both one-time shared state. Keep
+        them under one lock so concurrent searches cannot each write the
+        migration columns or publish competing IDF dictionaries.
+        """
+        with self._search_state_lock:
+            if not self._search_backfill_done:
+                self._backfill_search_columns(conn)
+                self._search_backfill_done = True
+
+            stamp = conn.execute(
+                "SELECT COUNT(*), COALESCE(MAX(indexed_at), 0.0) FROM func_embeddings"
+            ).fetchone()
+            cache_stamp = (stamp[0], float(stamp[1]))
+            if self._idf_cache is None or self._idf_cache[0] != cache_stamp:
+                docs: list[set[str]] = []
+                for (tokens_blob,) in conn.execute(
+                    "SELECT search_tokens FROM func_embeddings "
+                    "WHERE search_tokens IS NOT NULL AND search_tokens != ''"
+                ):
+                    docs.append(set(str(tokens_blob).split()))
+                self._idf_cache = (cache_stamp, _idf_scores(docs))
+            return self._idf_cache[1]
 
     def refresh_from_disk(self) -> int:
         """Observe rows written or copied by another process and return size."""
@@ -1042,7 +1080,18 @@ class FunctionEmbeddingIndex:
         except Exception:
             embedded = None
         if not isinstance(embedded, list) or len(embedded) != len(prepared):
-            embedded = [getattr(self._embedder, "embed_vector", lambda _text: None)(entry["pseudocode"]) for entry in prepared]
+            embed_one = getattr(self._embedder, "embed_vector", None)
+
+            def _safe_embed(text: str):
+                if not callable(embed_one):
+                    return None
+                try:
+                    return embed_one(text)
+                except Exception as exc:
+                    logger.warning("embedding failed during index_many: %s", exc)
+                    return None
+
+            embedded = [_safe_embed(entry["pseudocode"]) for entry in prepared]
 
         ready: list[tuple[dict[str, Any], list[float]]] = []
         failed_eas: set[str] = set()
@@ -1298,24 +1347,7 @@ class FunctionEmbeddingIndex:
 
         try:
             with closing(self._conn()) as conn:
-                if not self._search_backfill_done:
-                    self._backfill_search_columns(conn)
-                    self._search_backfill_done = True
-
-                # Corpus stamp for the cached IDF: any build that adds, removes,
-                # or re-indexes a row changes either the row count or the newest
-                # indexed_at, so the stamp is a cheap proxy for "index changed".
-                stamp = conn.execute(
-                    "SELECT COUNT(*), COALESCE(MAX(indexed_at), 0.0) FROM func_embeddings"
-                ).fetchone()
-                if self._idf_cache is None or self._idf_cache[0] != (stamp[0], float(stamp[1])):
-                    docs: list[set[str]] = []
-                    for (tokens_blob,) in conn.execute(
-                        "SELECT search_tokens FROM func_embeddings WHERE search_tokens IS NOT NULL AND search_tokens != ''"
-                    ):
-                        docs.append(set(str(tokens_blob).split()))
-                    self._idf_cache = ((stamp[0], float(stamp[1])), _idf_scores(docs))
-                idf = self._idf_cache[1]
+                idf = self._search_idf(conn)
 
                 clauses: list[str] = ["1=1"]
                 params: list[Any] = []
@@ -1337,12 +1369,24 @@ class FunctionEmbeddingIndex:
                 # in-Python scoring could reach via token overlap or prefix.
                 recall_clauses: list[str] = []
                 if recall_tokens:
-                    recall_clauses.extend("search_tokens LIKE ?" for _ in recall_tokens)
-                    params.extend(f"%{t}%" for t in recall_tokens)
+                    # search_tokens is a space-delimited token column. Match
+                    # from a token boundary, allowing an intentional prefix
+                    # match such as `gpio` -> `gpio2` but not `%cpy%` ->
+                    # `strcpy`; the latter can fill the LIMIT before real
+                    # matches are evaluated in Python.
+                    recall_clauses.extend(
+                        "(' ' || search_tokens || ' ') LIKE ?" for _ in recall_tokens
+                    )
+                    params.extend(f"% {t}%" for t in recall_tokens)
                 if q_norm:
                     esc = q_norm.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-                    recall_clauses.append("(name || ' ' || signature_text) LIKE ? ESCAPE '\\'")
-                    params.append(f"%{esc}%")
+                    # A single-token query is already covered by the
+                    # boundary-aware search_tokens clause. Keeping the raw
+                    # substring fallback for it would turn `cpy` into a hit
+                    # for `strcpy` and defeat the candidate-limit guard.
+                    if len(q_tokens) != 1:
+                        recall_clauses.append("(name || ' ' || signature_text) LIKE ? ESCAPE '\\'")
+                        params.append(f"%{esc}%")
                 if recall_clauses:
                     clauses.append(f"({' OR '.join(recall_clauses)})")
 
@@ -1638,19 +1682,32 @@ class FunctionEmbeddingIndex:
 
         # Optional API filter (checks signature_text for API names)
         if constraints.get("apis"):
-            apis = constraints["apis"] if isinstance(constraints["apis"], list) else [constraints["apis"]]
-            filtered = []
-            for r in rows:
-                # Check if any requested API appears in the function's signature
+            raw_apis = constraints["apis"] if isinstance(constraints["apis"], list) else [constraints["apis"]]
+            apis = [str(api).strip().lower() for api in raw_apis if str(api).strip()]
+            if not apis:
+                rows = []
+            elif rows:
+                # Fetch all signatures in one read transaction. The previous
+                # implementation opened one SQLite connection per candidate,
+                # turning an API-filtered query over a large index into O(N)
+                # connection setup and disk work.
                 try:
+                    eas = [r["ea"] for r in rows]
+                    placeholders = ",".join("?" * len(eas))
                     with closing(self._conn()) as conn:
-                        sig_row = conn.execute("SELECT signature_text FROM func_embeddings WHERE ea=?", (r["ea"],)).fetchone()
-                        sig = str(sig_row[0] or "") if sig_row else ""
-                        if any(api.lower() in sig.lower() for api in apis):
-                            filtered.append(r)
+                        signatures = {
+                            str(ea): str(signature or "").lower()
+                            for ea, signature in conn.execute(
+                                f"SELECT ea, signature_text FROM func_embeddings WHERE ea IN ({placeholders})",
+                                eas,
+                            )
+                        }
+                    rows = [
+                        row for row in rows
+                        if any(api in signatures.get(row["ea"], "") for api in apis)
+                    ]
                 except Exception:
-                    pass
-            rows = filtered
+                    rows = []
 
         # Optional semantic ranking
         if query:

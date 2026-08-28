@@ -19,9 +19,12 @@ blackboard tool surface:
 from __future__ import annotations
 
 import json
+import threading
 from types import SimpleNamespace
 
 from ida_pro_mcp.host.errors import MCPError
+from ida_pro_mcp.host.server import blackboard_orchestration, server_blackboard as server_blackboard_module
+from ida_pro_mcp.host.server.blackboard_orchestration import TaskPool
 from ida_pro_mcp.host.server.server_blackboard import ServerBlackboardMixin
 from ida_pro_mcp.host.stores.blackboard_store import BlackboardStore
 
@@ -79,6 +82,53 @@ def _write_proposal(store, status="proposed"):
         source="test",
         source_type="proposal",
     )
+
+
+def test_server_shutdown_closes_blackboard_orchestration():
+    calls = []
+
+    class _Orchestrator:
+        def shutdown(self):
+            calls.append("orchestrator")
+
+    class _Base:
+        def shutdown(self):
+            calls.append("next-mro-stage")
+
+    class _Server(ServerBlackboardMixin, _Base):
+        pass
+
+    server = object.__new__(_Server)
+    server._bb_orchestrator = _Orchestrator()
+    ServerBlackboardMixin.shutdown(server)
+
+    assert calls == ["orchestrator", "next-mro-stage"]
+
+
+def test_orchestration_lazy_initialization_is_singleton_under_race(monkeypatch):
+    server = object.__new__(ServerBlackboardMixin)
+    created = []
+
+    class _Orchestrator:
+        def __init__(self, _server):
+            created.append(self)
+
+    monkeypatch.setattr(server_blackboard_module, "BlackboardOrchestrator", _Orchestrator)
+    barrier = threading.Barrier(16)
+    results = []
+
+    def worker():
+        barrier.wait()
+        results.append(server._orchestration())
+
+    threads = [threading.Thread(target=worker) for _ in range(16)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(created) == 1
+    assert len({id(orch) for orch in results}) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +203,28 @@ def test_trace_run_does_not_rerun_completed_tasks(tmp_path):
     assert run_two["enqueued"] == 0
 
 
+def test_trace_run_claims_pending_task_before_worker_starts(tmp_path):
+    server, store = _server_with_workspace(tmp_path)
+    ingested = server._handle_blackboard(
+        {"action": "trace_ingest", "text": "inspect 0x401000"}
+    )
+    entry_id = ingested["trace_task_id"]
+    orchestration = server._orchestration()
+
+    class _QueueOnly:
+        def submit(self, _task_id, _fn):
+            return True
+
+    orchestration._pool = _QueueOnly()
+    first = orchestration.run_pending_trace_tasks(store, 1)
+    second = orchestration.run_pending_trace_tasks(store, 1)
+
+    assert first["enqueued"] == 1
+    assert second["enqueued"] == 0
+    payload = json.loads(store.read(entry_id)["content"])
+    assert payload["status"] == "running"
+
+
 def test_trace_status_reads_payload_status_not_accumulated_tags(tmp_path):
     server, store = _server_with_workspace(tmp_path)
     server._handle_blackboard({"action": "trace_ingest", "text": "inspect 0x401000"})
@@ -166,6 +238,104 @@ def test_trace_status_reads_payload_status_not_accumulated_tags(tmp_path):
     all_tasks = server._handle_blackboard({"action": "trace_status"})
     assert all_tasks["count"] == 1
     assert all_tasks["tasks"][0]["status"] == "done"
+
+
+def test_trace_ingest_persists_machinery_task(tmp_path):
+    server, store = _server_with_workspace(tmp_path)
+    ingested = server._handle_blackboard(
+        {"action": "trace_ingest", "text": "inspect 0x401000"}
+    )
+    task_id = ingested["trace_task_id"]
+
+    task = server._orchestration()._machinery_for(store).task(task_id)
+
+    assert task is not None
+    assert task["task_type"] == "trace"
+    assert task["status"] == "pending"
+    assert task["payload"]["entities"]["addrs"] == ["0x401000"]
+
+
+def test_trace_worker_exception_marks_entry_failed(tmp_path):
+    server, store = _server_with_workspace(tmp_path)
+    ingested = server._handle_blackboard(
+        {"action": "trace_ingest", "text": "inspect 0x401000"}
+    )
+    entry_id = ingested["trace_task_id"]
+    entry = store.read(entry_id)
+
+    def fail_trace(*_args, **_kwargs):
+        raise RuntimeError("synthetic trace failure")
+
+    server._run_trace_task = fail_trace
+    server._orchestration()._run_one_trace(
+        str(store.db_path), entry_id, entry, {"status": "pending"}
+    )
+
+    failed = store.read(entry_id)
+    payload = json.loads(failed["content"])
+    assert payload["status"] == "failed"
+    assert payload["result"]["ok"] is False
+    assert "synthetic trace failure" in payload["error"]
+
+
+def test_trace_worker_store_failure_does_not_leave_entry_running(tmp_path, monkeypatch):
+    server, store = _server_with_workspace(tmp_path)
+    ingested = server._handle_blackboard(
+        {"action": "trace_ingest", "text": "inspect 0x401000"}
+    )
+    entry_id = ingested["trace_task_id"]
+    entry = store.read(entry_id)
+    orchestration = server._orchestration()
+    monkeypatch.setattr(orchestration, "_open_store", lambda _db_path: None)
+    monkeypatch.setattr(server, "_get_blackboard_store", lambda: None)
+
+    orchestration._run_one_trace(
+        str(store.db_path), entry_id, entry, {"status": "running"}
+    )
+
+    task = orchestration._machinery_for(store).task(entry_id)
+    assert task is not None
+    assert task["status"] == "failed"
+    assert task["payload"]["result"]["ok"] is False
+    assert "store is unavailable" in task["payload"]["error"]
+
+
+def test_trace_pool_shutdown_does_not_strand_running_entry(tmp_path):
+    server, store = _server_with_workspace(tmp_path)
+    ingested = server._handle_blackboard(
+        {"action": "trace_ingest", "text": "inspect 0x401000"}
+    )
+    entry_id = ingested["trace_task_id"]
+    orchestration = server._orchestration()
+    orchestration.shutdown()
+
+    result = orchestration.run_pending_trace_tasks(store, 1)
+
+    assert result["enqueued"] == 0
+    failed = store.read(entry_id)
+    payload = json.loads(failed["content"])
+    assert payload["status"] == "failed"
+    assert payload["error"] == "trace worker pool is unavailable"
+
+
+def test_trace_pool_drain_timeout_is_a_total_budget(monkeypatch):
+    pool = object.__new__(TaskPool)
+    pool._lock = threading.Lock()
+    calls = []
+
+    class _Future:
+        def result(self, timeout):
+            calls.append(timeout)
+
+    pool._futures = {"one": _Future(), "two": _Future()}
+    clock = iter((100.0, 100.0, 100.08))
+    monkeypatch.setattr(blackboard_orchestration.time, "monotonic", lambda: next(clock))
+
+    pool.drain(timeout=0.1)
+
+    assert len(calls) == 2
+    assert abs(calls[0] - 0.1) < 1e-9
+    assert abs(calls[1] - 0.02) < 1e-9
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +416,31 @@ def test_phase_prove_receipts_see_lane_now_decision_cards(tmp_path):
     )
     assert card["ok"] is True
     assert server._phase_has_prove_receipts(store) is True
+
+
+def test_phase_receipts_ignore_stale_done_tag_after_task_failure(tmp_path):
+    server, store = _server_with_workspace(tmp_path)
+    task_id = store.write(
+        title="trace task formerly done",
+        content=json.dumps({"status": "done", "entities": {}}),
+        category="trace_task",
+        tags=["trace_task", "status:done"],
+    )
+    server._handle_blackboard(
+        {
+            "action": "decision_card",
+            "lane": "lane_now",
+            "claim": "the failed trace is not proof",
+            "evidence_for": ["code:smart_decompile"],
+        }
+    )
+    entry = store.read(task_id)
+    server._set_task_status(store, entry, "failed", {"status": "done"})
+
+    failed = store.read(task_id)
+    assert "status:done" in failed["tags"]  # compatibility tags are append-only
+    assert json.loads(failed["content"])["status"] == "failed"
+    assert server._phase_has_prove_receipts(store) is False
 
 
 def test_scout_proposal_ops_route_through_prove_when_no_receipts(tmp_path):

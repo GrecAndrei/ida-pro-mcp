@@ -22,12 +22,14 @@ def _resolve_ida_python_path() -> str | None:
     env = os.environ.get("IDA_PYTHON_PATH")
     if env and Path(env).is_dir():
         return env
-    candidates = [
-        "/home/grec-alexander/ida-pro-9.3/python",
-        "/home/grec-alexander/ida-pro-9.2/python",
-        os.path.expanduser("~/ida-pro-9.3/python"),
-        os.path.expanduser("~/ida-pro-9.2/python"),
-    ]
+    candidates = []
+    configured_root = os.environ.get("IDA_ROOT")
+    if configured_root:
+        candidates.append(os.path.join(configured_root, "python"))
+    candidates.extend(
+        os.path.expanduser(path)
+        for path in ("~/ida-pro-9.4/python", "~/ida-pro-9.3/python", "~/ida-pro-9.2/python")
+    )
     for c in candidates:
         if Path(c).is_dir():
             return c

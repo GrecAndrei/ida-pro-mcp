@@ -37,16 +37,20 @@ from openai import OpenAI
 
 BASE_URL = "https://opencode.ai/zen/go/v1"
 
-AZURE_BASE_URL = "https://alexpopescu-resource.services.ai.azure.com/openai/v1"
-OPENCODE_AUTH_PATH = Path.home() / ".local" / "share" / "opencode" / "auth.json"
+AZURE_BASE_URL = os.environ.get("AZURE_OPENAI_BASE_URL", "")
+EVAL_BASE_URL = os.environ.get("EVAL_BASE_URL", BASE_URL)
+EVAL_API_SOURCE = "azure" if AZURE_BASE_URL else "opencode"
+OPENCODE_AUTH_PATH = Path(
+    os.environ.get("OPENCODE_AUTH_PATH", str(Path.home() / ".local" / "share" / "opencode" / "auth.json"))
+)
 
 MODELS = [
     {
         "id":          "gpt-5.4-mini",
         "label":       "GPT-5.4 Mini (Non-Strict)",
         "extra":       {"reasoning_effort": "high"},
-        "base_url":    AZURE_BASE_URL,
-        "api_key_source": "azure",
+        "base_url":    AZURE_BASE_URL or EVAL_BASE_URL,
+        "api_key_source": EVAL_API_SOURCE,
         "use_max_completion_tokens": True,
         "tool_budget": 100,
         "max_turns":   70,
@@ -56,8 +60,8 @@ MODELS = [
         "id":          "gpt-5.4-mini",
         "label":       "GPT-5.4 Mini (Strict)",
         "extra":       {"reasoning_effort": "high"},
-        "base_url":    AZURE_BASE_URL,
-        "api_key_source": "azure",
+        "base_url":    AZURE_BASE_URL or EVAL_BASE_URL,
+        "api_key_source": EVAL_API_SOURCE,
         "use_max_completion_tokens": True,
         "tool_budget": 100,
         "max_turns":   70,

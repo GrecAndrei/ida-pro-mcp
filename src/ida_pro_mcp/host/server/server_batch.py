@@ -643,9 +643,17 @@ class BackgroundMixin(ServerClientStateMixin):
 
     @property
     def _batch_manager(self) -> BatchManager:
-        if not hasattr(self, "_batch_mgr"):
-            self._batch_mgr = BatchManager()
-        return self._batch_mgr
+        manager = getattr(self, "_batch_mgr", None)
+        if manager is None:
+            # The first background request can arrive concurrently with
+            # another request on the same host. Double-checked initialization
+            # keeps both callers on one task map and one executor.
+            with _LAZY_STATE_LOCK:
+                manager = getattr(self, "_batch_mgr", None)
+                if manager is None:
+                    manager = BatchManager()
+                    self._batch_mgr = manager
+        return manager
 
     def _handle_background(self, args: dict) -> dict:
         action = str(args.get("action") or "list").strip().lower()

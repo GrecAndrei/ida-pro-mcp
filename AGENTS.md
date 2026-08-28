@@ -1,156 +1,202 @@
-# AGENTS.md
+# Repository instructions
 
-## Project
+These instructions apply to the whole `ida-pro-mcp` repository. Keep them
+short, current, and operational: if a rule is not useful while changing the
+tree, remove it.
 
-IDA Pro MCP — JSON-RPC stdio server exposing IDA Pro RE capabilities to LLMs.
+## What this project is
 
-The default agent surface is action-specific `ida_*` MCP operations. The old
-`tool(action=...)` API is a compatibility backend, not the public contract.
+`ida-pro-mcp` is an MCP server for deterministic IDA Pro analysis. The public
+agent interface is the exact-schema `ida_*` catalog. The older
+`tool(action=...)` interface remains as a compatibility backend and is not the
+source of truth for new agent features.
 
-## Testing
+The host runs outside IDA and talks to an IDA-side runtime over a local bridge.
+The IDA-side code calls the IDA SDK. Optional local embedding and reranking are
+machine-learning helpers; there is no hidden LLM service in the analysis path.
 
-Test behavior through stable interfaces, not implementation details.
+## Repository map
 
-**Rules:**
-- Mock at the network/process boundary (`urllib.request.urlopen`, `subprocess.Popen`), not internals
-- Assert on inputs/outputs — if someone changes the algorithm but the output stays correct, the test should still pass
-- When behavior intentionally changes, the test SHOULD fail — update both together in the same commit
-- No test registry ceremony. Tests don't need magic headers or hash tracking.
+```text
+src/ida_pro_mcp/
+  host/                 MCP server, schemas, policy, sessions, intelligence
+  ida_mcp/              IDA-side tools and compatibility dispatcher
+  installer/            installer, runtime discovery, client configuration
+  native/               optional in-process llama.cpp C++ driver
+  _version.py           single package version identifier
+docs/
+  guide/                maintained architecture, safety, use-case, release docs
+  wiki/                 hand-authored documentation read by the wiki tool
+  reference/            background reference material
+  research/             dated technical notes, not current product policy
+benchmarks/run.py       canonical benchmark entry point
+tests/                  host, contract, IDA-side fake, and opt-in live tests
+.agents/skills/         generated agent skill and operation reference
+```
 
-**Anti-patterns:**
-- Asserting on private variable names, internal data structures, or file hashes → breaks on refactors
-- Testing that "the function was called" instead of "the result is correct"
-- Coarse bindings (hash of entire file) → false positives on unrelated changes
+Important source-of-truth files:
 
-**What to test:**
-- Host-side logic that doesn't require IDA (embeddings, server management, response parsing)
-- Schema/dispatch integrity (no missing handlers, no duplicate tools)
-- Docs sync (every tool documented, no removed tools in docs)
+- `src/ida_pro_mcp/host/agent_operations.py` — public operation schemas,
+  examples, mappings, descriptions, and generated help content.
+- `src/ida_pro_mcp/host/schemas_data.py` and
+  `src/ida_pro_mcp/host/server/tool_registry.py` — legacy backend catalog.
+- `src/ida_pro_mcp/host/server/server_dispatch.py` — host routing, policy,
+  session checks, and response handling.
+- `src/ida_pro_mcp/ida_mcp/tools/` — deterministic IDA-side implementations.
+- `src/ida_pro_mcp/host/stores/blackboard_store.py` — durable investigation
+  memory, migrations, embedding metadata, and retrieval.
 
-**What not to test:**
-- IDA-side tools that need a live IDA session (these are validated via MCP integration)
+## Working rules
 
-## Adding an Agent Operation
+- Preserve unrelated user changes. Inspect the worktree before editing.
+- Prefer small, behavior-focused changes and explicit errors with actionable
+  hints.
+- Keep public schemas stable where possible; make additive changes before
+  removing fields or aliases.
+- Do not add personal paths, local model paths, checked-in machine output, or
+  implicit dependencies on a particular IDA installation.
+- Use `Path`, environment variables, CLI arguments, or temporary directories
+  for machine-specific resources. External build inputs must be explicit.
+- Do not hand-edit generated operation references or skill files.
+- Do not claim live-IDA behavior from fake tests. Mark live tests opt-in and
+  report the IDA version, runtime, backend, and model when it matters.
+- IDB mutations require the existing policy and risk-acknowledgement flow.
+  Never weaken a guard to make a test or example pass.
 
-1. **`host/agent_operations.py`** — add an `AgentOperation` with a strict schema,
-   valid example, concise description, `backend_tool`, and `backend_action`.
-   `risk_tier` is stamped from policy at import. Use `argument_map` only for
-   host-only keys (`risk_ack` → `_risk_ack`, background job controls). Public
-   argument names (`address`, `query`, `limit`, …) stay on the IDA wire.
+## Normal development loop
 
-2. **IDA-side tool** — implement the action in `ida_mcp/tools/<tool>.py`:
-   - Add the action name to the `Literal[...]` annotation on `action`
-   - Add a handler to the `run_action({...})` table (or an `elif` until that
-     file is converted)
-   - Accept public argument names beside any legacy aliases via `public_arg`
+From the repository root:
 
-3. **Tests** — add tests in `tests/`:
-   - `test_agent_operations.py` — schema validity, routing, public names
-   - `test_agent_risk_ack.py` — mutating ops in the risk_ack list
-   - `tests/host/test_policy.py` — correct risk tier for the `(tool, action)` pair
+```bash
+python -m pip install -e .
+ruff check .
+python scripts/check_schema_integrity.py
+python scripts/generate_tool_skills.py
+pytest -q --basetemp=.pytest_tmp
+```
 
-4. **Generated docs** — run `python scripts/generate_tool_skills.py` to
-   regenerate `docs/TOOLS_REFERENCE.md` and `.agents/skills/ida-pro-mcp/SKILL.md`.
+The `pythonpath = ["src"]` pytest setting makes the checkout win over an
+unrelated installed copy. Live IDA tests are excluded by their opt-in marker;
+run them separately only with a licensed installation.
 
-5. **README.md** — update the operations table and the
-   `N exact-schema operations` count in the intro paragraph.
+The canonical benchmark runner has independent scopes:
 
-6. **Wiki** — update the relevant page in `docs/wiki/tools/` (or create a new
-   page). Update `docs/wiki/INDEX.md` if a new page was added.
+```bash
+python benchmarks/run.py --scope contract host blackboard
+python benchmarks/run.py --scope retrieval \
+  --corpus /path/to/functions.json --queries /path/to/queries.json \
+  --backend native
+python benchmarks/run.py --scope ida --ida-dir /path/to/ida \
+  --binary /path/to/sample
+```
 
-The backend action catalog (`tool_actions()`) and `TOOL_ARG_SCHEMAS` public
-names are derived from `AgentOperation`. New backend tools still need an entry
-in `_TOOL_ACTIONS` / `TOOLS` / `TOOL_DESCRIPTIONS`. Policy overlay uses the
-stamped `risk_tier`; classify a brand-new backend pair in `policy.py` if it
-has no public op yet.
+Results belong outside source control. The runner records version, commit,
+runtime, backend, and input hashes in its JSON report.
 
-The full test suite enforces steps 4–6: `test_docs_sync.py` will fail if
-TOOLS_REFERENCE, SKILL.md, the README table, or the README count are stale.
+## Changing the public agent surface
 
-## Adding a Legacy Backend Tool
+1. Add or update an `AgentOperation` in
+   `src/ida_pro_mcp/host/agent_operations.py`. Use a strict object schema, a
+   valid example, a concise description, and an existing backend mapping.
+2. Implement or update the mapped action in `src/ida_pro_mcp/ida_mcp/tools/`.
+   Keep public names (`address`, `query`, `limit`) distinct from legacy aliases
+   unless compatibility requires both.
+3. Add behavior tests for schema admission, routing, policy tier, and the
+   meaningful result. Test outputs and boundaries, not private call counts.
+4. Regenerate the references:
 
-1. Create `ida_mcp/tools/<name>.py` with `@tool` function
-2. Add to `_TOOL_ACTIONS` in `host/server/tool_registry.py`
-3. Add to `TOOLS` in `host/schemas_data.py`
-4. Add description to `TOOL_DESCRIPTIONS`
-5. Add to `ida_mcp/tools/__init__.py::__all__`
-6. If host-side only: add `tool_name == "<name>"` branch in `server_dispatch.py`
-7. Add tests for any host-side logic (embeddings, config parsing, etc.)
+   ```bash
+   python scripts/generate_tool_skills.py
+   ```
 
-## Installer Touchpoints
+   This updates `docs/TOOLS_REFERENCE.md`,
+   `.agents/skills/ida-pro-mcp/SKILL.md`, and its operations reference.
+5. Update the README operation summary only when the public count or workflow
+   changes. Update the relevant hand-authored wiki page if user guidance
+   changes.
+6. Run schema checks, generated-doc tests, and the affected test scope.
 
-The installer (`installer/main.py`) has an interactive wizard that configures
-the server for users. When you add something that has a user-facing setup step,
-check whether the wizard needs updating.
+Do not create a new broad action enum for a new agent capability. The public
+catalog is exact-operation based; the legacy action catalog exists for old
+clients.
 
-**Things that require installer changes:**
+## Changing the legacy backend
 
-- **New env var that controls a feature** — add it to the wizard or at minimum
-  emit an `ui.info()` line so users know it exists. Env vars silently ignored
-  are invisible to users who ran the installer.
+Only change the legacy surface when compatibility requires it. Keep the
+following aligned:
 
-- **New model or backend** — both the embed model and the reranker must be
-  surfaced in the interactive wizard. The wizard must prompt for each model;
-  auto-detect it via a `find_*` helper in `installer/runtime.py`; offer a
-  managed download; and write the path into `embedder.json` via
-  `write_embedder_state`. Two models are needed for full semantic search:
-  an embedding model and a reranker (cross-encoder). Don't add one without the
-  other — a missing reranker silently degrades search quality.
+- action implementation in `src/ida_pro_mcp/ida_mcp/tools/`;
+- `_TOOL_ACTIONS` in `host/server/tool_registry.py`;
+- `TOOLS`, descriptions, and argument schemas in `host/schemas_data.py`;
+- `ida_mcp/tools/__init__.py` exports and module map;
+- policy classification and host dispatch where applicable; and
+- focused tests plus generated references if the public catalog is affected.
 
-- **New backend binary** (like `llama-server` or `libmcp_llama.so`) — add
-  detection in `installer/runtime.py`, show the user whether it was found, and
-  explain what to do if it wasn't (build command, download URL, etc.). The
-  wizard is the user's only visibility into which backend will run.
+The compatibility surface is selected with `IDA_MCP_TOOL_SURFACE=legacy`.
+Never remove a legacy action without checking repository references and
+documenting the compatibility impact.
 
-- **New MCP client config env var** — add it to `build_stdio_config()` in
-  `installer/clients.py` so it gets written to Claude Desktop, Cursor, VS Code,
-  etc. Vars not written to the client config block are silently absent at
-  runtime.
+## Blackboard and retrieval rules
 
-**What the installer does NOT need:**
+- Blackboard schema changes require an idempotent migration and a regression
+  test. Never rewrite or silently discard existing claims.
+- A finding is durable evidence, not a cache. Preserve conflicts, lifecycle
+  status, provenance, anchors, and audit events.
+- Stored vectors must retain embedding identity and dimension. Never compare
+  incompatible vector spaces; use the explicit lexical fallback when semantic
+  retrieval is unavailable.
+- Use query-purpose embeddings for queries and document-purpose embeddings for
+  findings when the backend supports them.
+- Retrieval changes need deterministic fixture coverage for recall/ranking,
+  lexical fallback, filters, stale/conflicting claims, and model mismatch.
+- Explain ranking decisions in returned metadata where practical; do not hide
+  a backend downgrade behind a semantic-looking score.
 
-- New `AgentOperation` fields that are pure schema additions — no user action
-  required.
-- Changes to response enrichment or analysis heuristics — runtime-only.
-- New IDA-side tool actions — no install step needed.
+## Installer, runtime, and native changes
 
-**Wizard sections in order** (for orientation when adding to the right place):
-1. Runtime source (snapshot/pypi/local)
-2. CLI shim
-3. Skills mode
-4. Embedding backend choice + native lib detection + model auto-detect/download
-5. **Reranker model** auto-detect/download ← right after embed, both are required
-6. Rollback preference
-7. Policy gates
+When adding an environment variable, model, runtime, client setting, or binary:
 
-## Removing a Tool or Operation
+- update discovery and validation in `src/ida_pro_mcp/installer/`;
+- expose the setting in generated client configuration or installer output;
+- document defaults and explicit paths without using personal directories;
+- add graceful missing-dependency behavior and tests; and
+- for native changes, run the relevant fake ABI tests and a real build when
+  the external llama.cpp checkout is available.
 
-1. `grep -rn '"<name>"' src/ docs/ tests/ .agents/ --include="*.py" --include="*.md"`
-2. Delete/remove from: tool file, `_TOOL_ACTIONS`, `TOOL_ARG_SCHEMAS`, `TOOL_DESCRIPTIONS`,
-   `agent_operations.py`, `policy.py` (READ_ONLY_ACTIONS / WRITE_IDB_TOOLS), tests
-3. Run `python scripts/generate_tool_skills.py` and update README + wiki
+Native builds require caller-supplied `LLAMA_CPP_SRC`/
+`LLAMA_CPP_BUILD` paths. Do not vendor a checkout or assume a model exists.
 
-## Key Files
+## Documentation and versioning
 
-| File | Purpose |
-|------|---------|
-| `host/agent_operations.py` | Public `ida_*` schemas, examples, mappings, help/docs source |
-| `host/server/tool_registry.py` | Legacy backend `_TOOL_ACTIONS` dict |
-| `host/schemas_data.py` | Legacy backend `TOOLS`, descriptions, RPC argument admission |
-| `host/server/server_dispatch.py` | Tool routing and handlers |
-| `ida_mcp/tools/__init__.py` | `__all__` list, `_TOOL_MODULE_MAP` |
+- Maintained guides live in `docs/guide/`; the documentation map is
+  `docs/index.md`.
+- The wiki is runtime-loaded and must remain under `docs/wiki/` unless the
+  loader is changed in the same change.
+- Generated operation docs come from `agent_operations.py`; run the generator
+  after schema or description changes.
+- The package, MCP handshake, CLI, and benchmark version come from
+  `src/ida_pro_mcp/_version.py`. Follow `docs/guide/versioning.md` and update
+  `CHANGELOG.md` for release-facing changes.
+- Research notes are historical context. Do not use them as current behavior
+  or copy their old counts, paths, benchmarks, or compatibility claims into
+  active documentation.
 
-## Invariants
+## Test design
 
-- Every tool in `TOOLS` has entry in `_TOOL_ACTIONS`
-- Every tool has description in `TOOL_DESCRIPTIONS`
-- Every public operation has a strict schema and an example that validates
-- Generated skill/docs match `agent_operations.py`
+Test through stable interfaces. Mock at process/network boundaries such as
+`subprocess.Popen` and `urllib.request.urlopen`; avoid asserting private
+implementation names or incidental call order. For IDA-side logic, use the
+existing fake SDK harness. For real IDA behavior, use `tests/integration/` and
+the documented opt-in live runner.
 
-## Conventions
+Required checks depend on the change:
 
-- No marketing jargon in descriptions
-- Public operation descriptions: one clear sentence; do not expose action enums
-- Legacy descriptions: one sentence + "Actions: a, b, c"
-- `@tool` decorator on IDA-side functions, `@idaread` for read-only
-- Wrapper actions (grep/pick/head/tail/next/stats) are dynamic — don't list in `_TOOL_ACTIONS`
+- schemas/operations/docs: generator, schema integrity, docs sync;
+- host/runtime/stores: focused host tests plus the full non-live suite;
+- IDA-side tools: focused fake-IDB tests plus the full non-live suite;
+- retrieval: blackboard benchmark and, when available, corpus retrieval scope;
+- native: fake ABI tests and a caller-configured native build;
+- live behavior: explicit live integration scope with environment metadata.
+
+Before handoff, report what ran, what was skipped, and any external runtime
+that was unavailable. Do not include generated benchmark reports in commits.

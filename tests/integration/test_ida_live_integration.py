@@ -53,8 +53,9 @@ def _find_idat() -> str | None:
         os.environ.get("IDA_DIR"),
         os.environ.get("IDADIR"),
         os.environ.get("IDA_MCP_LIVE_IDADIR"),
-        "/home/grec-alexander/ida-pro-9.3",
+        os.path.expanduser("~/ida-pro-9.4"),
         os.path.expanduser("~/ida-pro-9.3"),
+        os.path.expanduser("~/ida-pro-9.2"),
     ):
         if not path:
             continue

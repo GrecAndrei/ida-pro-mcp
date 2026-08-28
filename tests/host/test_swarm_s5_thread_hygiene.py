@@ -138,6 +138,28 @@ def test_submit_after_idle_park_recreates_bounded_pool():
         mgr.shutdown()
 
 
+def test_shutdown_cancels_queued_tasks_and_publishes_futures_safely():
+    mgr = BatchManager(max_workers=1)
+    started = threading.Event()
+    release = threading.Event()
+    try:
+        def _slow(task):
+            started.set()
+            release.wait(timeout=5)
+            return {"ok": True}
+
+        running = mgr.submit("tool_call", {}, run_fn=_slow)
+        queued = mgr.submit("tool_call", {}, run_fn=lambda task: {"ok": True})
+        assert started.wait(timeout=5)
+
+        mgr.shutdown(wait=False)
+        assert mgr.status(queued)[0]["state"] == "cancelled"
+        assert mgr.status(running)[0]["state"] == "running"
+    finally:
+        release.set()
+        mgr.shutdown()
+
+
 def test_concurrent_burst_reclaims_threads_after_drain():
     """A burst that uses all max_workers concurrently must not leave workers
     behind once the queue drains (exercises parking under real concurrency)."""

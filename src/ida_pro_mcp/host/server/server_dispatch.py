@@ -374,8 +374,8 @@ class ServerDispatchMixin(ServerClientStateMixin):
             # (reload-on-completion was removed in the lifecycle revamp: the
             # completing runtime IS the serving runtime); calls would race the
             # restart.
-            _reloading = getattr(self, "_reloading_sessions", None)
-            if isinstance(_reloading, set) and _sid in _reloading:
+            reload_active = getattr(self, "_session_reload_active", None)
+            if callable(reload_active) and reload_active(_sid):
                 return make_error(
                     MCPError.IDA_BUSY,
                     "Session is being rebuilt/reloaded; retry in a moment.",
@@ -384,7 +384,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     details={"session_id": _sid},
                 )
 
-            runtime = self.session_runtimes.get(session.session_id)
+            runtime = self._runtime_record(session.session_id)
             if not self._runtime_alive(runtime):
                 log_rpc(
                     f"Session start/restart needed: {session.session_id} -> {session.idb_path}"
@@ -392,7 +392,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
                 start_res = self._start_server(session)
                 if "error" in start_res:
                     return start_res
-                runtime = self.session_runtimes.get(session.session_id)
+                runtime = self._runtime_record(session.session_id)
             if not isinstance(runtime, dict):
                 return make_error(
                     MCPError.IDA_CRASHED,
@@ -736,9 +736,11 @@ class ServerDispatchMixin(ServerClientStateMixin):
             with self._runtime_lock:
                 runtime_items = list(self.session_runtimes.items())
             tracked = len(runtime_items)
-            inflight = getattr(self, "_session_inflight_calls", None)
-            if not isinstance(inflight, dict):
-                inflight = {}
+            with self._runtime_lock:
+                inflight = getattr(self, "_session_inflight_calls", None)
+                inflight_snapshot = (
+                    dict(inflight) if isinstance(inflight, dict) else {}
+                )
             queued_total = 0
             for sid, runtime in runtime_items:
                 alive = self._runtime_alive(runtime)
@@ -753,10 +755,10 @@ class ServerDispatchMixin(ServerClientStateMixin):
                             "session_id": sid,
                             "alive": alive,
                             "port": runtime_port,
-                            "rpc_queued": int(inflight.get(sid, 0) or 0),
+                            "rpc_queued": int(inflight_snapshot.get(sid, 0) or 0),
                         }
                     )
-                queued_total += int(inflight.get(sid, 0) or 0)
+                queued_total += int(inflight_snapshot.get(sid, 0) or 0)
 
             action_counts = {
                 str(tool): len(list(actions or []))
@@ -1031,7 +1033,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     "plugin_run requires a live IDA session; none is active.",
                     hint="Open a session first with ida_open_binary(binary_path='...').",
                 )
-            runtime = self.session_runtimes.get(target.session_id)
+            runtime = self._runtime_record(target.session_id)
             if not self._runtime_alive(runtime):
                 return make_error(
                     MCPError.IDA_CRASHED,

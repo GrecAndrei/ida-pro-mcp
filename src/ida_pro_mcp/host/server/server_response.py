@@ -605,11 +605,10 @@ class ServerResponseMixin(ServerResponseCompactMixin):
             return None
 
         # 1. Check runtime cache
-        if hasattr(self, "session_runtimes") and isinstance(self.session_runtimes, dict):
-            runtime = self.session_runtimes.get(session_id)
-            if isinstance(runtime, dict) and "imagebase" in runtime:
-                cached = runtime["imagebase"]
-                return int(cached) if isinstance(cached, (int, str)) and str(cached) else None
+        runtime = self._runtime_record(session_id)
+        if isinstance(runtime, dict) and "imagebase" in runtime:
+            cached = runtime["imagebase"]
+            return int(cached) if isinstance(cached, (int, str)) and str(cached) else None
 
         # 2. Check the target session's recorded options (any session, not
         #    just the current one — the caller may enrich for another session).
@@ -628,9 +627,8 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                     pass
 
         # 3. Query the target IDA Pro RPC server
-        if hasattr(self, "session_runtimes") and isinstance(self.session_runtimes, dict):
-            runtime = self.session_runtimes.get(session_id)
-            if isinstance(runtime, dict) and "port" in runtime:
+        runtime = self._runtime_record(session_id)
+        if isinstance(runtime, dict) and "port" in runtime:
                 port = runtime.get("port")
                 auth_token = runtime.get("auth_token")
                 if isinstance(port, int) and port > 0 and hasattr(self, "_send_rpc_raw"):
@@ -646,21 +644,21 @@ class ServerResponseMixin(ServerResponseCompactMixin):
                             if img_base_str:
                                 try:
                                     val = int(str(img_base_str), 16)
-                                    runtime["imagebase"] = val
+                                    self._runtime_update(session_id, imagebase=val)
                                     return val
                                 except (ValueError, TypeError):
                                     pass
                         # The meta probe returned but yielded no usable base:
                         # cache the miss so the response path does not re-fire
                         # this synchronous RPC on every code-rendering call.
-                        runtime["imagebase"] = None
+                        self._runtime_update(session_id, imagebase=None)
                     except Exception:
                         # Timeout / RPC error on the meta probe: negative-cache
                         # it too, otherwise every decompile/disasm pays a hidden
                         # 1s round-trip for the life of the runtime. A runtime
                         # restart replaces this dict, so a later-known base is
                         # still discoverable.
-                        runtime["imagebase"] = None
+                        self._runtime_update(session_id, imagebase=None)
 
         return None
 

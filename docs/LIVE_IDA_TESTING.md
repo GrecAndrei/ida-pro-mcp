@@ -25,12 +25,12 @@ budget because embedding/decompile work is actually slow.
 A healthy catalog + behavior + extended run on the tiny fixture should finish
 in a few minutes. If it is still going after ~10 minutes, an RPC is hung.
 
-## Suites (~365 tests, idalib 9.3 + 9.4)
+## Suites (~368 tests, IDA 9.2+; idat and idalib where supported)
 
 | Suite | Tests | What it proves |
 | --- | --- | --- |
 | `test_agent_surface_live.py` | 8 | Session lifecycle, indexing (incl. the full background decompile index), semantic search, and continuation tokens. The original live suite. |
-| `test_agent_surface_catalog_live.py` | 101 | One test per operation in `AGENT_OPERATIONS`: every `ida_*` op must answer correctly with its documented example, or fail with a *coded* error (never a protocol error, never an exception). Pins graceful expectations where the environment makes them deterministic (e.g. `GOVERNANCE_BLOCKED` for the hard-blocked `ida_patch_bytes`, `TRUNCATION_TOKEN_INVALID` for a bogus token). |
+| `test_agent_surface_catalog_live.py` | 104 | One test per operation in `AGENT_OPERATIONS`: every `ida_*` op must answer correctly with its documented example, or fail with a *coded* error (never a protocol error, never an exception). Pins graceful expectations where the environment makes them deterministic (e.g. `GOVERNANCE_BLOCKED` for the hard-blocked `ida_patch_bytes`, `TRUNCATION_TOKEN_INVALID` for a bogus token). |
 | `test_agent_surface_behavior_live.py` | 66 | Deep behavior: exact decompile/disassembly shapes, calc semantics, type round-trips (declare/get/struct/enum/TIL export-import), findings lifecycle, mutation→verify→restore round-trips, undo transactions, snapshots, batch bindings/chaining, the r2 sidecar, firmware heuristics, and the python tool. |
 | `test_agent_surface_extended_live.py` | 170 | Extra live coverage on a shared session: discovery filters/pagination, public-contract edges (legacy names rejected, `address` not `addr`, missing `risk_ack`), query language, calc, findings, layout edits behind snapshots, batch public names, python/idc, firmware carve, session/type/search edges, and a dedicated emulate start/step/stop session. |
 | `test_ida_live_integration.py` | 20 | Legacy `tool(action=...)` surface (server spawned with `IDA_MCP_TOOL_SURFACE=legacy`): custom detectors, search analyze scopes, emulate lifecycle. |

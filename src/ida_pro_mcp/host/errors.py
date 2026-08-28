@@ -61,6 +61,7 @@ class MCPError:
     SIZE_LIMIT_EXCEEDED = "SIZE_LIMIT_EXCEEDED"
     RATE_LIMIT = "RATE_LIMIT"
     STUCK_LOOP = "STUCK_LOOP"
+    CONFLICT = "CONFLICT"
     # Experimental feature gated behind an opt-in environment flag.
     FEATURE_DISABLED = "FEATURE_DISABLED"
     # Optional radare2/Rizin subprocess engine (Architecture A, Phase 1)
@@ -107,6 +108,7 @@ _ERROR_CATEGORIES: dict[str, str] = {
     MCPError.SIZE_LIMIT_EXCEEDED: ErrorCategory.USER,
     MCPError.RATE_LIMIT: ErrorCategory.RUNTIME,
     MCPError.STUCK_LOOP: ErrorCategory.RUNTIME,
+    MCPError.CONFLICT: ErrorCategory.RUNTIME,
     MCPError.FEATURE_DISABLED: ErrorCategory.USER,
     MCPError.R2_ENGINE_START_FAILED: ErrorCategory.RUNTIME,
     MCPError.R2_TIMEOUT: ErrorCategory.RUNTIME,
@@ -148,6 +150,7 @@ _HOST_ERROR_HINTS = {
     MCPError.SIZE_LIMIT_EXCEEDED: "The requested size exceeds the limit. Use a smaller range or pagination.",
     MCPError.RATE_LIMIT: "Rate limit exceeded. Reduce call frequency or wait a moment before retrying.",
     MCPError.STUCK_LOOP: "Repeated identical analysis steps detected. Change approach before continuing.",
+    MCPError.CONFLICT: "The underlying session state changed during the operation. Retry against the current state.",
     MCPError.FEATURE_DISABLED: "This experimental feature is disabled by default. Set the documented environment flag to enable it.",
     MCPError.R2_ENGINE_START_FAILED: "The radare2/Rizin engine failed to start. Verify the binary is installed and executable, then retry.",
     MCPError.R2_TIMEOUT: "The r2 engine subprocess exceeded its wall-clock cap. Increase IDA_MCP_R2_TIMEOUT_SEC or reduce the request size.",

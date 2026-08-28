@@ -84,7 +84,7 @@ TOOLS = [
 
 # Tier A — default tools/list surface for agents. Everything else stays callable
 # by exact name (backward compatible) but is hidden from tools/list.
-# See docs/ROADMAP.md for Tier B/C policy.
+# See docs/guide/roadmap.md for Tier B/C policy.
 ADVERTISED_TOOLS = [
     "session",
     "analysis",

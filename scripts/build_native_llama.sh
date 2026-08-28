@@ -9,19 +9,26 @@
 # Usage:
 #   LLAMA_CPP_SRC=/path/to/llama.cpp ./scripts/build_native_llama.sh [build_dir]
 #   INSTALL_BIN=... ./scripts/build_native_llama.sh   # copy libmcp_llama.so here
-# Defaults: source=/tmp/llama.cpp, build=/tmp/llama.cpp/build-mcp
+# The source checkout and optional install directory must be supplied by the caller.
 set -euo pipefail
 
-SRC="${LLAMA_CPP_SRC:-/tmp/llama.cpp}"
+SRC="${LLAMA_CPP_SRC:-}"
 # The driver (mcp_llama.cpp) targets this exact llama.cpp commit.  The CI
 # native-build workflow pins the same hash and verifies this default stays
 # in sync — bump both together when the driver needs a newer llama.cpp.
 LLAMA_CPP_COMMIT="${LLAMA_CPP_COMMIT:-99111b19ce482f081e92ec6c6cdbe6a4c815c515}"
-BUILD="${1:-${SRC}/build-mcp}"
+BUILD="${1:-}"
 JOBS="${JOBS:-$(nproc)}"
 INSTALL_BIN="${INSTALL_BIN:-}"
 DRIVER="${DRIVER:-$(cd "$(dirname "$0")/../src/ida_pro_mcp/native" && pwd)}"
 
+if [ -z "$SRC" ]; then
+    echo "set LLAMA_CPP_SRC to a llama.cpp checkout" >&2
+    exit 2
+fi
+if [ -z "$BUILD" ]; then
+    BUILD="${SRC}/build-mcp"
+fi
 if [ ! -d "$SRC" ]; then
     echo "llama.cpp source not found at $SRC (set LLAMA_CPP_SRC)" >&2
     exit 1

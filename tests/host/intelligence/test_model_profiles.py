@@ -93,6 +93,31 @@ def test_selected_profile_does_not_reuse_an_incompatible_persisted_model(monkeyp
     assert core._find_model() == ""
 
 
+def test_model_discovery_cache_tracks_env_changes_and_new_files(monkeypatch, tmp_path):
+    first = tmp_path / "first.gguf"
+    second = tmp_path / "second.gguf"
+    first.write_bytes(b"first")
+    monkeypatch.setattr(core, "_MODEL_PATH_CACHE", None)
+    monkeypatch.setattr(core, "_read_embedder_state", dict)
+    monkeypatch.setattr(core.glob, "glob", lambda _pattern: [])
+
+    monkeypatch.setenv("IDA_MCP_EMBED_MODEL", str(first))
+    assert core._find_model() == str(first)
+
+    # The explicit path is part of the cache identity, so a runtime model
+    # switch cannot accidentally keep serving the first model.
+    second.write_bytes(b"second")
+    monkeypatch.setenv("IDA_MCP_EMBED_MODEL", str(second))
+    assert core._find_model() == str(second)
+
+    # A first probe before download must not permanently cache "not found".
+    missing = tmp_path / "arrived-later.gguf"
+    monkeypatch.setenv("IDA_MCP_EMBED_MODEL", str(missing))
+    assert core._find_model() == ""
+    missing.write_bytes(b"downloaded")
+    assert core._find_model() == str(missing)
+
+
 def test_zembed_sends_query_and_document_prompts_to_the_embedding_server(monkeypatch, tmp_path):
     embedder = object.__new__(BgeCodeEmbedder)
     embedder._port = 43123
