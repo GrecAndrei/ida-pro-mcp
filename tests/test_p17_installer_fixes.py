@@ -199,6 +199,14 @@ def test_legacy_antigravity_wrapper_does_not_leave_plugin_on_config_failure(tmp_
     assert not (path.parent / "plugin.json").exists()
 
 
+def test_legacy_server_config_selects_local_backend_explicitly(tmp_path):
+    import install
+
+    config = install.get_mcp_server_config(tmp_path)
+
+    assert config["env"]["IDA_MCP_EMBED_BACKEND"] == "local"
+
+
 def test_configure_clients_writes_vscode_copilot_under_servers(tmp_path, monkeypatch):
     """VS Code Copilot and Copilot CLI must be configured under top-level
     "servers" (their schema), not "mcpServers".  The client ida-pro-mcp is
