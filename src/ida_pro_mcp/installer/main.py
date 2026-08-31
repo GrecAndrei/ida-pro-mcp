@@ -470,17 +470,20 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
             ui.info("The server will use a llama-server subprocess (HTTP). "
                     "For faster startup and lower RAM, build the native library after install: "
                     "  bash scripts/build_native_llama.sh")
-    if opts.embed_backend != "gemini" and auto_embed_model:
-        ui.ok(f"Detected embedding model: {auto_embed_model}")
+    selected_embed_model = opts.embed_model_path or auto_embed_model
+    if opts.embed_backend != "gemini" and selected_embed_model:
+        if not opts.embed_model_path:
+            ui.ok(f"Detected embedding model: {auto_embed_model}")
         # Honor an explicit --no-embed-auto: the prompt default reflects the
         # current flag so a bare Enter cannot silently flip an opt-out back on.
         opts.embed_auto = _prompt_yes_no("Enable semantic embedding model for MCP clients?", default=opts.embed_auto)
         if opts.embed_auto:
-            opts.embed_model_path = auto_embed_model
-            if auto_embed_server:
+            if not opts.embed_model_path:
+                opts.embed_model_path = auto_embed_model
+            if auto_embed_server and not opts.embed_server_bin:
                 ui.ok(f"Detected llama-server: {auto_embed_server}")
                 opts.embed_server_bin = auto_embed_server
-            else:
+            elif not auto_embed_server and not opts.embed_server_bin:
                 ui.warn("llama-server not found.")
                 opts.install_llama_server = _prompt_yes_no(
                     "Download and install llama-server automatically?",
@@ -537,10 +540,13 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
             )
         ]
         auto_rerank_model = find_rerank_model(opts.install_root or get_install_root(), opts.rerank_profile)
-        if auto_rerank_model:
-            ui.ok(f"Detected reranker: {auto_rerank_model}")
+        selected_rerank_model = opts.rerank_model_path or auto_rerank_model
+        if selected_rerank_model:
+            if not opts.rerank_model_path:
+                ui.ok(f"Detected reranker: {auto_rerank_model}")
             if _prompt_yes_no("Enable reranker for improved semantic search precision?", default=True):
-                opts.rerank_model_path = auto_rerank_model
+                if not opts.rerank_model_path:
+                    opts.rerank_model_path = auto_rerank_model
             else:
                 # An explicit 'No' must stick: remember the opt-out and don't
                 # let the default profile leak into state / client env.

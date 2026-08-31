@@ -437,6 +437,38 @@ def test_wizard_gemini_still_requires_a_local_reranker_choice(tmp_path, monkeypa
     assert out.rerank_disabled is True
 
 
+def test_wizard_preserves_explicit_runtime_paths_over_discovery(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    explicit_model = tmp_path / "explicit-model.gguf"
+    explicit_model.write_bytes(b"explicit")
+    explicit_server = tmp_path / "explicit-server"
+    explicit_server.write_bytes(b"explicit")
+    explicit_reranker = tmp_path / "explicit-reranker.gguf"
+    explicit_reranker.write_bytes(b"explicit")
+    opts = InstallerOptions(
+        interactive=True,
+        embed_auto=True,
+        embed_model_path=str(explicit_model),
+        embed_server_bin=str(explicit_server),
+        rerank_model_path=str(explicit_reranker),
+    )
+    monkeypatch.setattr(main_mod, "find_embed_model", lambda *a, **k: str(tmp_path / "auto-model.gguf"))
+    monkeypatch.setattr(main_mod, "find_llama_server_bin", lambda *a, **k: str(tmp_path / "auto-server"))
+    monkeypatch.setattr(main_mod, "find_rerank_model", lambda *a, **k: str(tmp_path / "auto-reranker.gguf"))
+    monkeypatch.setattr(main_mod, "_prompt_yes_no", lambda _question, default: default)
+    monkeypatch.setattr(main_mod, "_prompt_choice", lambda _question, _choices, default: default)
+    monkeypatch.setattr(main_mod, "_prompt_text", lambda _question, default="": default)
+    monkeypatch.setattr(main_mod, "_prompt_secret", lambda _question: "")
+
+    out = main_mod._run_interactive_wizard(opts, main_mod.UI())
+
+    assert out.embed_model_path == str(explicit_model)
+    assert out.embed_server_bin == str(explicit_server)
+    assert out.rerank_model_path == str(explicit_reranker)
+
+
 def test_noninteractive_gemini_install_persists_detected_reranker(tmp_path, monkeypatch):
     from ida_pro_mcp.host.intelligence import core as intel_core
     from ida_pro_mcp.installer import main as main_mod
