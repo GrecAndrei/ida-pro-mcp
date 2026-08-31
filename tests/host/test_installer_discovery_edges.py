@@ -152,3 +152,29 @@ def test_install_state_rejects_malformed_selected_records(tmp_path):
     ):
         state_path.write_text(__import__("json").dumps(payload), encoding="utf-8")
         assert discovery.read_install_state(tmp_path) is None
+
+
+def test_install_state_rejects_symlinked_root_and_state_file(tmp_path):
+    install = IdaInstall(
+        tmp_path / "ida",
+        (9, 3),
+        "260421.be7de18d",
+        None,
+        "x64",
+        "pro",
+        "explicit",
+    )
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    redirected_root = tmp_path / "install-link"
+    redirected_root.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlinked installer state path"):
+        discovery.write_install_state(redirected_root, install)
+    assert not (outside / discovery.STATE_FILE).exists()
+
+    state_root = tmp_path / "state"
+    state_root.mkdir()
+    redirected_state = state_root / discovery.STATE_FILE
+    redirected_state.symlink_to(outside / "selected.json")
+    assert discovery.read_install_state(state_root) is None

@@ -19,7 +19,7 @@ from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from .common import atomic_write_text
+from .common import atomic_write_text, reject_symlink_path
 
 VERSION_TUPLE = tuple[int, int, int]
 # IDA build version: e.g. 9.3.260421.be7de18d  (major.minor.YYMMDD.shorthash)
@@ -501,6 +501,7 @@ def detect_ida_installs() -> list[IdaInstall]:
 def write_install_state(install_root: Path, install: IdaInstall) -> Path:
     """Persist the selected install to <install_root>/ida-install.json."""
     state_path = install_root / STATE_FILE
+    reject_symlink_path(state_path, "installer state path")
     payload = {
         "selected": install.to_dict(),
         "selected_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
@@ -512,6 +513,10 @@ def write_install_state(install_root: Path, install: IdaInstall) -> Path:
 def read_install_state(install_root: Path) -> IdaInstall | None:
     """Read back the last installer-selected IDA install, or None."""
     state_path = install_root / STATE_FILE
+    try:
+        reject_symlink_path(state_path, "installer state path")
+    except RuntimeError:
+        return None
     if not state_path.is_file():
         return None
     try:
