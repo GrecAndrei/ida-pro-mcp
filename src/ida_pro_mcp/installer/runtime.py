@@ -184,11 +184,12 @@ def _copy_file_atomically(
 
 
 def get_install_root() -> Path:
-    override = os.environ.get("IDA_PRO_MCP_HOME")
+    override = os.environ.get("IDA_PRO_MCP_HOME", "").strip()
     if override:
         return Path(override).expanduser()
     if sys.platform == "win32":
-        base = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
+        local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+        base = Path(local_appdata or str(Path.home() / "AppData" / "Local"))
         return base / "ida-pro-mcp"
     return Path.home() / ".local" / "share" / "ida-pro-mcp"
 
@@ -660,14 +661,20 @@ def find_llama_server_bin(install_root: Path) -> str:
         install_root.parent,
     ]
     if sys.platform == "win32":
+        local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+        program_files = os.environ.get("ProgramFiles", "").strip() or r"C:\Program Files"
+        program_files_x86 = os.environ.get("ProgramFiles(x86)", "").strip() or r"C:\Program Files (x86)"
         roots.extend([
             home / "scoop" / "apps" / "llama.cpp" / "current",
             home / "scoop" / "apps" / "llama.cpp" / "current" / "bin",
-            Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "llama.cpp" / "bin",
-            Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "llama.cpp" / "bin",
-            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "llama.cpp" / "bin",
-            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "llama.cpp",
+            Path(program_files) / "llama.cpp" / "bin",
+            Path(program_files_x86) / "llama.cpp" / "bin",
         ])
+        if local_appdata:
+            roots.extend([
+                Path(local_appdata) / "Programs" / "llama.cpp" / "bin",
+                Path(local_appdata) / "Programs" / "llama.cpp",
+            ])
     else:
         roots.extend([
             home / ".local" / "bin",

@@ -250,6 +250,27 @@ def test_find_helpers_use_state_from_explicit_install_root(tmp_path, monkeypatch
     assert find_llama_server_bin(target_root) == str(target_server)
 
 
+def test_blank_platform_overrides_do_not_create_relative_installer_paths(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import runtime
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("IDA_PRO_MCP_HOME", "   ")
+    monkeypatch.setenv("LOCALAPPDATA", "   ")
+
+    monkeypatch.setattr(runtime.sys, "platform", "win32")
+    assert runtime.get_install_root() == home / "AppData" / "Local" / "ida-pro-mcp"
+
+    monkeypatch.chdir(tmp_path)
+    relative_candidate = tmp_path / "Programs" / "llama.cpp" / "bin" / "llama-server"
+    relative_candidate.parent.mkdir(parents=True)
+    relative_candidate.write_bytes(b"server")
+    relative_candidate.chmod(0o755)
+    monkeypatch.setattr(runtime.shutil, "which", lambda _name: None)
+    assert runtime.find_llama_server_bin(tmp_path / "missing-install") == ""
+
+
 def test_find_llama_server_ignores_non_executable_environment_override(tmp_path, monkeypatch):
     from ida_pro_mcp.host.intelligence import core
     from ida_pro_mcp.installer.runtime import find_llama_server_bin
