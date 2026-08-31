@@ -8,6 +8,7 @@ Two scopes:
 """
 from __future__ import annotations
 
+import math
 import os
 import threading
 import time
@@ -15,13 +16,26 @@ import time
 from ..config import RATE_LIMIT_BURST, RATE_LIMIT_GLOBAL, RATE_LIMIT_PER_TOOL
 
 
+def _validate_bucket_config(rate: float, burst: int) -> tuple[float, int]:
+    """Normalize and validate the numeric parameters shared by token buckets."""
+    rate_value = float(rate)
+    burst_value = int(burst)
+    # Zero rate is a supported hard-block mode and positive infinity is used
+    # by the explicit rate-limit-disable switch. NaN and negative values,
+    # however, make token accounting undefined or misleading.
+    if math.isnan(rate_value) or rate_value < 0:
+        raise ValueError("rate must be a non-negative number")
+    if burst_value < 1:
+        raise ValueError("burst must be positive")
+    return rate_value, burst_value
+
+
 class TokenBucket:
     """Thread-safe token bucket."""
 
     def __init__(self, rate: float, burst: int):
-        self.rate = float(rate)      # tokens per second
-        self.burst = int(burst)      # max tokens
-        self.tokens = float(burst)   # current tokens
+        self.rate, self.burst = _validate_bucket_config(rate, burst)
+        self.tokens = float(self.burst)   # current tokens
         self.last_update = time.monotonic()
         self._lock = threading.Lock()
 
@@ -90,6 +104,12 @@ class RateLimiter:
                 global_rate if global_rate is not None else RATE_LIMIT_GLOBAL
             )
             self.burst = burst if burst is not None else RATE_LIMIT_BURST
+        # Validate both rates now so a malformed per-tool override cannot
+        # survive construction and fail only on the first request.
+        self.per_tool_rate, self.burst = _validate_bucket_config(
+            self.per_tool_rate, self.burst
+        )
+        self.global_rate, _ = _validate_bucket_config(self.global_rate, self.burst)
         self._tool_buckets: dict[str, TokenBucket] = {}
         self._global_bucket = TokenBucket(self.global_rate, self.burst)
         self._lock = threading.Lock()

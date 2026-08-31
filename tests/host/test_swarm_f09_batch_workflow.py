@@ -19,6 +19,9 @@ Covers the audit findings:
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -392,6 +395,21 @@ def test_semantic_index_lazy_state_uses_single_lock(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # resource_leak/low — background.wait timeout cap
 # ---------------------------------------------------------------------------
+
+
+def test_bg_wait_max_env_is_safe_for_invalid_values():
+    """A malformed timeout override must not stop the host from importing."""
+    code = (
+        "from ida_pro_mcp.host.server.server_batch "
+        "import _BG_WAIT_MAX_SECONDS; print(_BG_WAIT_MAX_SECONDS)"
+    )
+    for raw, expected in (("oops", 3600.0), ("inf", 3600.0), ("nan", 3600.0), ("-5", 1.0)):
+        env = dict(os.environ, IDA_MCP_BG_WAIT_MAX_SECONDS=raw)
+        proc = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, env=env
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert float(proc.stdout) == expected
 
 
 def test_bg_wait_caps_unbounded_and_huge_timeouts(tmp_path, monkeypatch):

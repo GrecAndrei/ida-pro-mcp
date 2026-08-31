@@ -2,6 +2,7 @@ import copy
 import functools
 import inspect
 import logging
+import math
 import os
 import queue
 import threading
@@ -72,9 +73,10 @@ _SYNC_TIMEOUT_ENV = "IDA_MCP_SYNC_TIMEOUT"
 
 def _sync_timeout() -> float:
     try:
-        return max(1.0, float(os.environ.get(_SYNC_TIMEOUT_ENV, "30")))
-    except ValueError:
+        timeout = float(os.environ.get(_SYNC_TIMEOUT_ENV, "30"))
+    except (TypeError, ValueError):
         return 30.0
+    return max(1.0, timeout) if math.isfinite(timeout) else 30.0
 
 
 # Bypass-synchronization knob. Originally a module-level constant, but a

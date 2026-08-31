@@ -6,6 +6,7 @@ Uses non-blocking sockets for connection handling, but tool execution remains sy
 import hmac
 import inspect
 import json
+import math
 import os
 import queue
 import re
@@ -598,9 +599,18 @@ def _recv_exact(conn, length):
         data.extend(chunk)
     return bytes(data)
 
+def _resolve_port():
+    """Return a valid loopback listener port, falling back on bad env input."""
+    try:
+        port = int(os.environ.get("IDA_MCP_PORT", "13337"))
+    except (TypeError, ValueError):
+        return 13337
+    return port if 0 <= port <= 65535 else 13337
+
+
 def run_server():
     global _BOUND_PORT
-    port = int(os.environ.get("IDA_MCP_PORT", 13337))
+    port = _resolve_port()
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_sock.setblocking(False)
@@ -985,6 +995,17 @@ def _apply_pre_analysis_options():
         log_ev(f"Pre-analysis warnings: {', '.join(warnings_list)}")
 
 
+def _startup_analysis_timeout():
+    """Read the bounded startup-analysis budget without accepting NaN or infinity."""
+    try:
+        timeout = float(os.environ.get("IDA_MCP_STARTUP_ANALYSIS_TIMEOUT", "120.0"))
+    except (TypeError, ValueError):
+        return 120.0
+    if not math.isfinite(timeout):
+        return 120.0
+    return max(5.0, min(timeout, 600.0))
+
+
 def _bounded_auto_wait(timeout=None):
     """Wait for IDA auto-analysis without blocking forever on unknown-size raw
     blobs.
@@ -997,11 +1018,9 @@ def _bounded_auto_wait(timeout=None):
     the remainder.
     """
     if timeout is None:
-        try:
-            timeout = float(os.environ.get("IDA_MCP_STARTUP_ANALYSIS_TIMEOUT", "120.0"))
-        except ValueError:
-            timeout = 120.0
-    timeout = max(5.0, min(timeout, 600.0))
+        timeout = _startup_analysis_timeout()
+    else:
+        timeout = max(5.0, min(timeout, 600.0))
     try:
         import ida_auto as _ida_auto
     except ImportError:

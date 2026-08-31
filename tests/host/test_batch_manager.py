@@ -1,11 +1,29 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 import threading
 import time
 
 import pytest
 
 from ida_pro_mcp.services import BatchManager, BatchTask
+
+
+def test_batch_worker_env_is_safe_for_invalid_values():
+    """Invalid worker-count overrides must not prevent the host from starting."""
+    code = (
+        "from ida_pro_mcp.host.batch_manager import BatchManager; "
+        "print(BatchManager()._max_workers)"
+    )
+    for raw, expected in (("oops", 4), ("-1", 1), ("0", 1)):
+        env = dict(os.environ, IDA_MCP_BATCH_MAX_WORKERS=raw)
+        proc = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, env=env
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert int(proc.stdout) == expected
 
 
 def test_submit_and_status():

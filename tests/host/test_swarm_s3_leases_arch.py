@@ -36,6 +36,21 @@ from ida_pro_mcp.host.server.server_runtime_leases import ServerRuntimeLeasesMix
 TMP_SID = "A1B2C3D4"
 
 
+def test_stale_lease_cleanup_budget_rejects_invalid_float_env_values():
+    """A bad startup cleanup budget must never make lease recovery unbounded."""
+    code = (
+        "from ida_pro_mcp.host.server.server_runtime_leases "
+        "import _resolve_stale_cleanup_budget; print(_resolve_stale_cleanup_budget())"
+    )
+    for raw, expected in (("oops", 10.0), ("inf", 10.0), ("nan", 10.0), ("-5", 1.0)):
+        env = dict(os.environ, IDA_MCP_STALE_LEASE_CLEANUP_BUDGET=raw)
+        proc = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, env=env
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert float(proc.stdout) == expected
+
+
 class _Proc:
     def __init__(self, pid, poll_result=None):
         self.pid = pid

@@ -24,6 +24,7 @@ from ..config import (
     PROCESS_TERMINATION_TIMEOUT_SECONDS,
     RUNTIME_LEASE_HEARTBEAT_SECONDS,
     RUNTIME_LEASE_TTL,
+    _env_float,
     _normalize_session_id,
     log_rpc,
 )
@@ -37,11 +38,9 @@ def _resolve_stale_cleanup_budget() -> float:
     from serving its first request. The budget defers remaining kills to the
     next startup instead.
     """
-    try:
-        budget = float(os.environ.get("IDA_MCP_STALE_LEASE_CLEANUP_BUDGET", "10"))
-    except (TypeError, ValueError):
-        budget = 10.0
-    return max(1.0, budget)
+    return _env_float(
+        "IDA_MCP_STALE_LEASE_CLEANUP_BUDGET", 10.0, min_value=1.0
+    )
 
 
 STALE_CLEANUP_BUDGET_SECONDS = _resolve_stale_cleanup_budget()

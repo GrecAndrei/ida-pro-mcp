@@ -77,7 +77,14 @@ def pack_floats(vec: Sequence[float]) -> bytes:
 
 
 def unpack_floats(blob: bytes) -> list[float]:
-    """Inverse of :func:`pack_floats`."""
+    """Inverse of :func:`pack_floats`.
+
+    A float32 blob must be an exact multiple of four bytes.  Reject trailing
+    bytes rather than silently dropping them, so callers can treat a corrupt
+    persisted vector as unreadable instead of ranking with a truncated one.
+    """
+    if len(blob) % 4:
+        raise ValueError("float32 blob size must be a multiple of 4 bytes")
     n = len(blob) // 4
     return list(struct.unpack(f"{n}f", blob))
 

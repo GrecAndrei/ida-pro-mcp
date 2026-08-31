@@ -88,9 +88,10 @@ def _int_env(name: str, default: int) -> int:
 
 def _float_env(name: str, default: float) -> float:
     try:
-        return float(os.environ.get(name, "") or default)
+        value = float(os.environ.get(name, "") or default)
     except (TypeError, ValueError):
         return float(default)
+    return value if math.isfinite(value) else float(default)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:

@@ -295,6 +295,21 @@ def test_query_prefix_applied_via_profile(monkeypatch):
     assert emb._format("search me", purpose="document") == "search me"
 
 
+def test_native_decomp_budget_ignores_malformed_env_values(monkeypatch):
+    """Malformed optional tuning values must not break status reporting."""
+    monkeypatch.setenv("IDA_MCP_DECOMP_DOCUMENT_CHARS", "not-an-int")
+    monkeypatch.setenv("IDA_MCP_DECOMP_DOCUMENT_FRACTION", "not-a-float")
+
+    embedder = NativeEmbedder()
+
+    assert embedder.decomp_document_chars == native.decomp_document_char_budget(
+        embedder.max_input_chars,
+        explicit_chars=0,
+        fraction=0.20,
+    )
+    assert embedder.status()["decomp_document_chars"] == embedder.decomp_document_chars
+
+
 def test_embedding_format_identifies_native_executor(monkeypatch):
     from ida_pro_mcp.host.intelligence import model_profiles
 

@@ -12,6 +12,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
 CACHE_PY = REPO / "src" / "ida_pro_mcp" / "ida_mcp" / "cache.py"
 
@@ -90,6 +92,13 @@ def test_cache_ttl_expiry_evicts_old_entry():
     assert cache.get("code", {"x": 1}) is None
 
 
+def test_cache_rejects_non_positive_capacity():
+    cache_type = _fresh_cache().__class__
+    for capacity in (0, -1):
+        with pytest.raises(ValueError, match="max_entries must be positive"):
+            cache_type(max_entries=capacity)
+
+
 def test_cache_capacity_lru_eviction():
     """Once max_entries is reached, the least-recently-used entry gets
     evicted on the next put.
@@ -103,6 +112,19 @@ def test_cache_capacity_lru_eviction():
     assert cache.get("tool", {"k": "b"}) is None
     assert cache.get("tool", {"k": "a"}) == 1
     assert cache.get("tool", {"k": "c"}) == 3
+
+
+def test_cache_refresh_at_capacity_preserves_other_entries():
+    """Refreshing a cached key must not evict a different entry when full."""
+    cache = _fresh_cache().__class__(max_entries=2, ttl_seconds=300)
+    cache.put("tool", {"k": "a"}, "old")
+    cache.put("tool", {"k": "b"}, "other")
+
+    cache.put("tool", {"k": "a"}, "new")
+
+    assert cache.get("tool", {"k": "a"}) == "new"
+    assert cache.get("tool", {"k": "b"}) == "other"
+    assert cache.stats()["entries"] == 2
 
 
 def test_cache_hit_rate_stat():

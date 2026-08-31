@@ -447,8 +447,8 @@ class NativeEmbedder:
     def decomp_document_chars(self) -> int:
         return decomp_document_char_budget(
             self.max_input_chars,
-            explicit_chars=int(os.environ.get("IDA_MCP_DECOMP_DOCUMENT_CHARS", "0") or 0),
-            fraction=float(os.environ.get("IDA_MCP_DECOMP_DOCUMENT_FRACTION", "0.20") or 0.20),
+            explicit_chars=_safe_int_env("IDA_MCP_DECOMP_DOCUMENT_CHARS", "0"),
+            fraction=_safe_float_env("IDA_MCP_DECOMP_DOCUMENT_FRACTION", "0.20"),
         )
 
     def status(self, probe: bool = False, deep_hash: bool = False) -> dict:

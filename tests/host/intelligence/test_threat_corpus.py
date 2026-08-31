@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 
 import pytest
 
@@ -82,6 +84,21 @@ def _sample_corpus() -> ThreatCorpus:
         },
         built_at="2026-01-01T00:00:00Z",
     )
+
+
+def test_threat_corpus_download_timeout_env_is_safe():
+    """A malformed corpus-download timeout must not break host import."""
+    code = (
+        "from ida_pro_mcp.host.intelligence.threat_corpus "
+        "import _DOWNLOAD_TIMEOUT; print(_DOWNLOAD_TIMEOUT)"
+    )
+    for raw, expected in (("oops", 120), ("-1", 1), ("0", 1)):
+        env = dict(os.environ, IDA_MCP_DOWNLOAD_TIMEOUT=raw)
+        proc = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, env=env
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert int(proc.stdout) == expected
 
 
 @pytest.fixture

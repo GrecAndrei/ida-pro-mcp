@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import contextlib
+import os
+import subprocess
+import sys
 import urllib.error
 from pathlib import Path
 from unittest import mock
@@ -21,6 +24,28 @@ def _restore_singleton(old):
         with contextlib.suppress(Exception):
             inst.stop()
     BgeCodeEmbedder._instance = old
+
+
+def test_embedder_float_env_rejects_non_finite_values():
+    """Bad numeric overrides must not create unbounded embedder timeouts."""
+    code = (
+        "from ida_pro_mcp.host.intelligence import core; "
+        "print(core.EMBED_REQUEST_TIMEOUT, core.EMBED_CHARS_PER_TOKEN, "
+        "core.DECOMP_DOCUMENT_FRACTION, core.ANCHOR_EMBED_BUDGET_SEC)"
+    )
+    for raw in ("nan", "inf", "-inf"):
+        env = dict(
+            os.environ,
+            IDA_MCP_EMBED_REQUEST_TIMEOUT=raw,
+            IDA_MCP_EMBED_CHARS_PER_TOKEN=raw,
+            IDA_MCP_DECOMP_DOCUMENT_FRACTION=raw,
+            IDA_MCP_ANCHOR_EMBED_BUDGET_SEC=raw,
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, env=env
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert [float(value) for value in proc.stdout.split()] == [15.0, 3.0, 0.2, 20.0]
 
 
 def test_available_cpu_count_respects_process_affinity(monkeypatch):

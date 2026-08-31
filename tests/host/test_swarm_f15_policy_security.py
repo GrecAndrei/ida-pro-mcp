@@ -153,6 +153,17 @@ def test_config_negative_rate_limit_clamped_to_zero():
     assert values[2] == 1.0  # burst clamped to >= 1
 
 
+def test_config_non_finite_float_env_vars_fall_back_to_defaults():
+    out = _run_config_subprocess(
+        {
+            "IDA_MCP_RATE_LIMIT_PER_TOOL": "inf",
+            "IDA_MCP_RATE_LIMIT_GLOBAL": "nan",
+        }
+    )
+    values = [float(v) for v in out.split()]
+    assert values[:2] == [10.0, 30.0]
+
+
 def test_config_heartbeat_clamped_below_ttl():
     # heartbeat 90 with TTL 20: clamp to TTL - 1 = 19.
     out = _run_config_subprocess(
@@ -184,7 +195,12 @@ def test_config_heartbeat_clamped_below_ttl():
 
 
 def test_config_env_helpers_parse_and_clamp(monkeypatch):
-    from ida_pro_mcp.host.config import _env_float, _env_int
+    from ida_pro_mcp.host.config import _coerce_bool, _env_float, _env_int
+
+    assert _coerce_bool("true") is True
+    assert _coerce_bool("off", default=True) is False
+    assert _coerce_bool("not-a-bool", default=True) is True
+    assert _coerce_bool("not-a-bool", default=False) is False
 
     monkeypatch.delenv("IDA_MCP_TEST_INT", raising=False)
     assert _env_int("IDA_MCP_TEST_INT", 7) == 7

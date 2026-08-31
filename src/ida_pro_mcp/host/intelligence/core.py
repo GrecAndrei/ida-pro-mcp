@@ -675,9 +675,10 @@ def _safe_int_env(key: str, default: str) -> int:
 
 def _safe_float_env(key: str, default: str) -> float:
     try:
-        return float(os.environ.get(key, default))
+        value = float(os.environ.get(key, default))
     except (ValueError, TypeError):
         return float(default)
+    return value if math.isfinite(value) else float(default)
 
 
 def _llama_context_layout(

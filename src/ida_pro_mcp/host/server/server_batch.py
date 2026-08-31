@@ -10,6 +10,7 @@ import time
 from typing import Any
 
 from ..batch_manager import BatchManager
+from ..config import _env_float
 from ..errors import MCPError, is_error_result, make_error
 from ..policy import PolicyDecision, ack_from_args, evaluate_policy
 from .server_client_state import ServerClientStateMixin, _ClientRequestState
@@ -34,8 +35,8 @@ _LAZY_STATE_LOCK = threading.RLock()
 # behind a stuck worker (cancel() cannot free a running pool slot either).
 # Cap the effective wait so a stuck task degrades to a status poll instead.
 # Override with IDA_MCP_BG_WAIT_MAX_SECONDS.
-_BG_WAIT_MAX_SECONDS = max(
-    1.0, float(os.environ.get("IDA_MCP_BG_WAIT_MAX_SECONDS", "3600"))
+_BG_WAIT_MAX_SECONDS = _env_float(
+    "IDA_MCP_BG_WAIT_MAX_SECONDS", 3600.0, min_value=1.0
 )
 
 

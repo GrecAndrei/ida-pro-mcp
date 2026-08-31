@@ -39,7 +39,7 @@ from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from typing import Any
 
-from ..config import CACHE_DIR
+from ..config import CACHE_DIR, _env_int
 
 # ── Auto-download configuration ──────────────────────────────────────────────
 
@@ -67,7 +67,7 @@ _YARA_URL = os.environ.get(
 )
 _YARA_SUBPATH = "signature-base-master/yara"
 
-_DOWNLOAD_TIMEOUT = int(os.environ.get("IDA_MCP_DOWNLOAD_TIMEOUT", "120"))
+_DOWNLOAD_TIMEOUT = _env_int("IDA_MCP_DOWNLOAD_TIMEOUT", 120, min_value=1)
 _MAX_DOWNLOAD_BYTES = 256 * 1024 * 1024  # 256 MB
 
 __all__ = [

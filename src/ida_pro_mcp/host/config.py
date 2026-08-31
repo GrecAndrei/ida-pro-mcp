@@ -3,6 +3,7 @@
 Host configuration: runtime directories, environment parsing, logging.
 """
 import contextlib
+import math
 import os
 import re
 import shutil
@@ -49,13 +50,15 @@ def _env_float(
     min_value: float | None = None,
     max_value: float | None = None,
 ) -> float:
-    """Read a float env var, falling back to ``default`` on missing/invalid input."""
+    """Read a finite float env var, falling back to ``default`` on invalid input."""
     raw = os.environ.get(name)
     if raw is None:
         return default
     try:
         value = float(raw)
     except (ValueError, TypeError):
+        return default
+    if not math.isfinite(value):
         return default
     if min_value is not None:
         value = max(min_value, value)
@@ -65,12 +68,17 @@ def _env_float(
 
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:
+    """Parse common boolean spellings without letting malformed input override ``default``."""
     if value is None:
         return default
     if isinstance(value, bool):
         return value
     s = str(value).strip().lower()
-    return s in {"1", "true", "yes", "on", "y", "enabled"}
+    if s in {"1", "true", "yes", "on", "y", "enabled"}:
+        return True
+    if s in {"0", "false", "no", "off", "n", "disabled"}:
+        return False
+    return default
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -409,8 +417,8 @@ WIKI_SEMANTIC_GROUPS: tuple[tuple[str, ...], ...] = (
 
 # Ranking/inference policy
 # Default is embedding-first to avoid brittle keyword/threshold heuristics.
-EMBEDDING_FIRST_MODE = str(os.environ.get("IDA_MCP_EMBEDDING_FIRST_MODE", "true")).strip().lower() in {"1", "true", "yes", "on", "enabled"}
-ALLOW_HEURISTIC_FALLBACKS = str(os.environ.get("IDA_MCP_ALLOW_HEURISTIC_FALLBACKS", "false")).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+EMBEDDING_FIRST_MODE = _env_bool("IDA_MCP_EMBEDDING_FIRST_MODE", True)
+ALLOW_HEURISTIC_FALLBACKS = _env_bool("IDA_MCP_ALLOW_HEURISTIC_FALLBACKS", False)
 
 
 _log_file_handle = None

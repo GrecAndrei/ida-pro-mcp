@@ -541,6 +541,26 @@ def server_script_module(tmp_path, monkeypatch):
     return mod
 
 
+def test_server_script_env_values_fall_back_to_safe_listener_and_analysis_defaults(
+    server_script_module, monkeypatch
+):
+    mod = server_script_module
+
+    for raw in ("not-a-port", "-1", "65536"):
+        monkeypatch.setenv("IDA_MCP_PORT", raw)
+        assert mod._resolve_port() == 13337
+    monkeypatch.setenv("IDA_MCP_PORT", "0")
+    assert mod._resolve_port() == 0
+
+    for raw in ("not-a-timeout", "nan", "inf", "-inf"):
+        monkeypatch.setenv("IDA_MCP_STARTUP_ANALYSIS_TIMEOUT", raw)
+        assert mod._startup_analysis_timeout() == 120.0
+    monkeypatch.setenv("IDA_MCP_STARTUP_ANALYSIS_TIMEOUT", "2")
+    assert mod._startup_analysis_timeout() == 5.0
+    monkeypatch.setenv("IDA_MCP_STARTUP_ANALYSIS_TIMEOUT", "900")
+    assert mod._startup_analysis_timeout() == 600.0
+
+
 def test_load_tools_restores_stdlib_types(server_script_module, tmp_path, monkeypatch):
     mod = server_script_module
     tools_dir = tmp_path / "tools"

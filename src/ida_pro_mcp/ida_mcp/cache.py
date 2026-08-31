@@ -139,6 +139,8 @@ class ToolResultCache:
             max_entries: Maximum number of cached results.
             ttl_seconds: Time-to-live for each cache entry in seconds.
         """
+        if max_entries <= 0:
+            raise ValueError("max_entries must be positive")
         self._cache: OrderedDict[str, tuple[float, int, Any, frozenset[int]]] = OrderedDict()
         self._max_entries = max_entries
         self._ttl = ttl_seconds
@@ -196,14 +198,21 @@ class ToolResultCache:
             return (result, age) if with_age else result
 
     def put(self, tool_name: str, kwargs: dict, result: Any) -> None:
-        """Store a result in the cache."""
+        """Store a result in the cache, refreshing an existing entry in place."""
         key = self._make_key(tool_name, kwargs)
         fingerprint = extract_addresses(kwargs)
+        entry = (time.time(), self._write_generation, result, fingerprint)
         with self._lock:
-            # Evict oldest if at capacity
+            # A refresh must not evict an unrelated LRU entry when the cache
+            # is full. Updating also makes this key most recently used.
+            if key in self._cache:
+                self._cache[key] = entry
+                self._cache.move_to_end(key)
+                return
+            # Evict oldest if at capacity.
             while len(self._cache) >= self._max_entries:
                 self._cache.popitem(last=False)
-            self._cache[key] = (time.time(), self._write_generation, result, fingerprint)
+            self._cache[key] = entry
 
     def invalidate_for_write(self, kwargs: dict) -> None:
         """Invalidate cache entries affected by one write operation.

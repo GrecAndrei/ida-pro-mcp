@@ -413,6 +413,9 @@ def test_sync_timeout_env_knob(monkeypatch):
     assert sync._sync_timeout() == 1.0  # floored at 1s
     monkeypatch.setenv("IDA_MCP_SYNC_TIMEOUT", "abc")
     assert sync._sync_timeout() == 30.0  # invalid -> default
+    for raw in ("nan", "inf", "-inf"):
+        monkeypatch.setenv("IDA_MCP_SYNC_TIMEOUT", raw)
+        assert sync._sync_timeout() == 30.0  # non-finite -> default
     monkeypatch.delenv("IDA_MCP_SYNC_TIMEOUT")
     assert sync._sync_timeout() == 30.0
 

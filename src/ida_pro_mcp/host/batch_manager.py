@@ -12,10 +12,11 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
+from .config import _env_int
 from .errors import MCPError, make_error
 
 _MAX_TASK_HISTORY = 1000
-_DEFAULT_MAX_WORKERS = int(os.environ.get("IDA_MCP_BATCH_MAX_WORKERS", "4"))
+_DEFAULT_MAX_WORKERS = _env_int("IDA_MCP_BATCH_MAX_WORKERS", 4, min_value=1)
 # Base directory for per-instance task persistence. Each BatchManager writes
 # only its own file (tasks-<instance>.json), so concurrent connections/processes
 # never clobber each other's persisted task state.

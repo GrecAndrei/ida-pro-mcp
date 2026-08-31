@@ -307,6 +307,25 @@ def test_http_401_returns_unavailable(monkeypatch):
     assert res.vector is None
 
 
+def test_gemini_timeout_env_rejects_non_finite_values(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("IDA_MCP_GEMINI_TIMEOUT", "inf")
+    monkeypatch.setenv("IDA_MCP_GEMINI_BATCH_TIMEOUT", "nan")
+    timeouts = []
+    post = _post_side_effect(dim=768)
+
+    def _capture(url, headers, json, timeout):
+        timeouts.append(timeout)
+        return post(url, headers, json, timeout)
+
+    backend = GeminiEmbedBackend()
+    with mock.patch("ida_pro_mcp.host.intelligence.gemini.requests.post", side_effect=_capture):
+        assert backend.embed("single").ok is True
+        assert all(result.ok for result in backend.embed_batch(["one", "two"]))
+
+    assert timeouts == [30.0, 120.0]
+
+
 def test_retries_transient_errors(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setenv("IDA_MCP_GEMINI_RETRIES", "2")

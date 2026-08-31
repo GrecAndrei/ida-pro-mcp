@@ -18,6 +18,8 @@ from ida_pro_mcp.host.intelligence.helpers import (
     batch_cosine_similarity,
     cosine_similarity,
     decomp_document_char_budget,
+    pack_floats,
+    unpack_floats,
 )
 
 
@@ -85,6 +87,16 @@ class TestBatchCosineSimilarity:
         sims = batch_cosine_similarity((0.6, 0.8), [(1.0, 0.0), [0.0, 1.0]])
         assert sims[0] == pytest.approx(0.6, abs=1e-12)
         assert sims[1] == pytest.approx(0.8, abs=1e-12)
+
+
+class TestFloatPacking:
+    def test_round_trip_preserves_float32_values(self):
+        values = [1.25, -2.5, 0.0]
+        assert unpack_floats(pack_floats(values)) == values
+
+    def test_rejects_corrupt_trailing_bytes(self):
+        with pytest.raises(ValueError, match="multiple of 4"):
+            unpack_floats(pack_floats([1.0]) + bytes([0]))
 
 
 class TestDecompDocumentCharBudget:
