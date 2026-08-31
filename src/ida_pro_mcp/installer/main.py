@@ -825,6 +825,11 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         action="store_true",
         help="allow llama-server downloads when GitHub omits its SHA-256 digest (unsafe; prefer verified assets)",
     )
+    parser.add_argument(
+        "--verify-corpus",
+        action="store_true",
+        help="require IDA_MCP_BRON_CORPUS_SHA256_* hashes for every threat-corpus source",
+    )
     parser.add_argument("--no-embed-auto", action="store_true", help="disable automatic embedder/server discovery")
     parser.add_argument("--skills-mode", choices=["agent", "none"], default="agent", help="Codex skill installation mode")
     parser.add_argument("--install-skills", action="store_true", default=True, help="install auto-generated skills for Claude Code / OpenCode (default: on)")
@@ -915,6 +920,7 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         ida_runtime=args.ida_runtime or "idat",
         ida_binary_path=args.ida_binary_path,
         allow_unverified_downloads=args.allow_unverified_downloads,
+        verify_bron_corpus=args.verify_corpus,
     )
     if opts.setup_embedder:
         opts.embed_auto = True
@@ -1073,7 +1079,17 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
             ui.info("Downloading threat corpus and crypto signatures")
             try:
                 from .bron_corpus import download_bron_corpus
-                corpus_status = download_bron_corpus(force=False)
+                strict_corpus = opts.verify_bron_corpus or os.environ.get(
+                    "IDA_MCP_BRON_CORPUS_VERIFY", ""
+                ).lower() in {"1", "true", "yes", "on"}
+                if strict_corpus:
+                    ui.info(
+                        "Strict corpus verification enabled; every downloaded source "
+                        "must have its IDA_MCP_BRON_CORPUS_SHA256_* hash configured."
+                    )
+                corpus_status = download_bron_corpus(
+                    force=False, force_verify=opts.verify_bron_corpus
+                )
                 built = corpus_status.get("built", False)
                 counts = corpus_status.get("counts", {})
                 total = sum(counts.values()) if counts else 0

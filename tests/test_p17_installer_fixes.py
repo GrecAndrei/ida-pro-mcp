@@ -283,6 +283,7 @@ def test_parse_args_preserves_kill_scope_and_unverified_download_opt_in():
     )
     assert opts.ida_binary_path == "/opt/ida/idat64"
     assert opts.allow_unverified_downloads is True
+    assert parse_args(["--verify-corpus"]).verify_bron_corpus is True
 
 
 def test_build_stdio_config_records_r2_bin(tmp_path):

@@ -421,6 +421,41 @@ def test_run_install_with_r2_records_env_into_client_config(tmp_path, monkeypatc
     assert captured["server_cfg"]["env"].get("IDA_MCP_R2_BIN") == fake_rz
 
 
+def test_run_install_passes_explicit_corpus_verification_to_downloader(tmp_path, monkeypatch):
+    import importlib
+
+    bron_corpus = importlib.import_module("ida_pro_mcp.installer.bron_corpus")
+    main_mod = importlib.import_module("ida_pro_mcp.installer.main")
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    install_root = tmp_path / "install-root"
+    install_root.mkdir()
+    fake_python = install_root / "python"
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        main_mod,
+        "setup_runtime_environment",
+        lambda **_kwargs: fake_python,
+    )
+
+    def _download(**kwargs):
+        captured.update(kwargs)
+        return {"built": False, "reason": "test", "downloads": {}}
+
+    monkeypatch.setattr(bron_corpus, "download_bron_corpus", _download)
+    opts = InstallerOptions(
+        interactive=False,
+        only={"runtime"},
+        install_root=install_root,
+        source_root=tmp_path,
+        verify_bron_corpus=True,
+    )
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 0
+    assert captured == {"force": False, "force_verify": True}
+
+
 # ---------------------------------------------------------------------------
 # python_environment_kind — IDA 9.4 uv/conda/homebrew interpreter awareness
 # ---------------------------------------------------------------------------

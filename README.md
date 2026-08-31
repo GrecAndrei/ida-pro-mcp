@@ -305,6 +305,14 @@ release asset only when GitHub supplies its digest; an older release without
 one is refused. `--allow-unverified-downloads` is available only as an
 explicit, unsafe compatibility escape hatch.
 
+The optional threat corpus uses a moving set of upstream sources. Normal
+installs record each downloaded source checksum and reject unexpected changes
+when reusing the cache. For strict first-download verification, provide one
+`IDA_MCP_BRON_CORPUS_SHA256_<SOURCE>` variable per source and run
+`python install.py --verify-corpus` (or set `IDA_MCP_BRON_CORPUS_VERIFY=1`).
+The source keys are `CWE`, `ATTACK_ENTERPRISE`, `ATTACK_ICS`, `ATTACK_MOBILE`,
+`SIGNATURE_BASE`, and `FINDCRYPT`.
+
 The embed model starts only for explicit indexing, semantic search, or anchor
 refresh; the reranker starts only for the rerank stage of semantic search.
 Ordinary tool calls never spin them up. Indexing is interruptible and resumable:
