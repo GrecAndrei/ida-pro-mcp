@@ -148,8 +148,15 @@ def _validate_https_host(url: str, host: str, *, path_prefix: str = "") -> None:
         raise RuntimeError(f"Refusing untrusted download URL: {url}")
 
 
-def _copy_file_atomically(source: Path, destination: Path) -> None:
-    """Copy a regular file without exposing a partially-copied destination."""
+def _copy_file_atomically(
+    source: Path, destination: Path, *, overwrite: bool = True
+) -> None:
+    """Copy a regular file without exposing a partial destination.
+
+    With ``overwrite=False`` the final hard-link step is atomic and refuses an
+    existing destination, which lets callers implement a real no-clobber
+    policy even if another process creates the file after a preflight check.
+    """
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
     try:
@@ -161,8 +168,13 @@ def _copy_file_atomically(source: Path, destination: Path) -> None:
                 shutil.copyfileobj(input_file, output, length=_DOWNLOAD_CHUNK_BYTES)
             output.flush()
             os.fsync(output.fileno())
-        os.replace(temporary, destination)
-        temporary = None
+        if overwrite:
+            os.replace(temporary, destination)
+            temporary = None
+        else:
+            os.link(temporary, destination, follow_symlinks=False)
+            temporary.unlink()
+            temporary = None
     finally:
         if temporary is not None:
             with contextlib.suppress(OSError):
@@ -747,7 +759,10 @@ def stage_sigs(
     else:
         candidates = sorted(list(source.rglob("*.sig")) + list(source.rglob("*.sig.gz")))
 
-    sig_root = sig_dir.expanduser().resolve()
+    requested_sig_root = sig_dir.expanduser()
+    if requested_sig_root.is_symlink():
+        raise RuntimeError(f"Refusing symlinked IDA signature directory: {requested_sig_root}")
+    sig_root = requested_sig_root.resolve()
     staged: list[str] = []
     skipped: list[str] = []
     for cand in candidates:
@@ -768,12 +783,25 @@ def stage_sigs(
             dest.resolve().relative_to(sig_root)
         except ValueError as exc:
             raise RuntimeError(f"signature destination escapes IDA sig directory: {dest}") from exc
+        current = sig_root
+        for part in dest.relative_to(sig_root).parts:
+            current /= part
+            if current.is_symlink():
+                raise RuntimeError(f"Refusing symlinked signature destination: {current}")
         if dest.exists():
             skipped.append(str(dest))
             continue
         staged.append(str(dest))
         if not dry_run:
-            _copy_file_atomically(cand, dest)
+            try:
+                _copy_file_atomically(cand, dest, overwrite=False)
+            except FileExistsError:
+                # A bundled signature (or another installer) appeared after
+                # the preflight check. Preserve it and report the same result
+                # as the non-racing path.
+                staged.pop()
+                skipped.append(str(dest))
+                continue
             report.add_modified(dest)
 
     return SigsManifest(

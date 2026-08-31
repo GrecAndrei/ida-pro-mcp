@@ -237,6 +237,24 @@ def test_stage_sigs_missing_source_raises(tmp_path):
         stage_sigs(missing, tmp_path / "sig", dry_run=False, report=InstallReport())
 
 
+def test_stage_sigs_refuses_symlinked_destination_root(tmp_path):
+    from ida_pro_mcp.installer.common import InstallReport
+    from ida_pro_mcp.installer.runtime import stage_sigs
+
+    sig_file = tmp_path / "riscv64.sig"
+    sig_file.write_bytes(b"signature")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sig_dir = tmp_path / "ida-pro-9.3" / "sig"
+    sig_dir.parent.mkdir()
+    sig_dir.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlinked IDA signature directory"):
+        stage_sigs(sig_file, sig_dir, dry_run=False, report=InstallReport())
+
+    assert not (outside / sig_file.name).exists()
+
+
 def test_stage_sigs_empty_pack_returns_zero_count(tmp_path):
     from ida_pro_mcp.installer.common import InstallReport
     from ida_pro_mcp.installer.runtime import stage_sigs
