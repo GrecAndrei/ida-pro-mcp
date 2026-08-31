@@ -250,6 +250,18 @@ def test_installer_error_log_rejects_non_regular_target(tmp_path):
         main._write_install_error_log(log_path, "traceback")
 
 
+def test_client_map_falls_back_when_checkout_config_is_not_a_file(tmp_path):
+    from ida_pro_mcp.installer.clients import load_client_map
+
+    source_root = tmp_path / "checkout"
+    source_root.mkdir()
+    (source_root / "client_configs.json").mkdir()
+
+    client_map = load_client_map(source_root)
+
+    assert "Codex" in client_map
+
+
 def test_run_install_rejects_symlinked_install_root_without_writing_through_it(tmp_path):
     from ida_pro_mcp.installer import main
     from ida_pro_mcp.installer.common import InstallerOptions

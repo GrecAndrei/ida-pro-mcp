@@ -45,7 +45,7 @@ def load_client_map(source_root: Path) -> dict:
         Path(__file__).resolve().parent / "client_configs.json",
     ]
     for config_path in candidates:
-        if config_path.exists():
+        if config_path.is_file():
             data = json.loads(config_path.read_text(encoding="utf-8"))
             return data.get("clients", {})
     return {}
