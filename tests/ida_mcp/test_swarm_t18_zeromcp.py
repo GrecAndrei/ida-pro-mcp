@@ -91,6 +91,9 @@ def _load_mcp_http():
         def do_POST(self):
             self.parent_post_called = True
 
+        def do_GET(self):
+            self.parent_get_called = True
+
     rpc_stub.McpHttpRequestHandler = _ParentMcpHttpRequestHandler
     rpc_stub.McpRpcRegistry = type("McpRpcRegistry", (), {})
     rpc_stub.McpToolError = type("McpToolError", (Exception,), {})
@@ -338,3 +341,20 @@ def test_unrestricted_policy_explicitly_allows_cross_origin_mcp_post():
     cls.do_POST(h)
 
     assert h.parent_post_called is True
+
+
+def test_sse_subscription_rejects_cross_origin_before_opening_stream():
+    mod, _ = _load_mcp_http()
+    cls = mod.IdaMcpHttpRequestHandler
+    h = object.__new__(cls)
+    h.headers = {"Origin": "http://evil.example"}
+    h.mcp_server = mod.MCP_SERVER
+    h.path = "/sse"
+    h.sent = []
+    h.send_error = lambda code, msg, explain=None: h.sent.append(("error", code, msg))
+    h._local_endpoints = lambda: ("127.0.0.1:13337", "localhost:13337", "[::1]:13337")
+
+    cls.do_GET(h)
+
+    assert any(item[0] == "error" and item[1] == 403 for item in h.sent)
+    assert not getattr(h, "parent_get_called", False)

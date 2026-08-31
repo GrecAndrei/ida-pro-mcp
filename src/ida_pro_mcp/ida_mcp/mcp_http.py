@@ -161,10 +161,16 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
 
     def do_GET(self):
         """Handles GET requests."""
-        if urlparse(self.path).path == "/config.html":
+        path = urlparse(self.path).path
+        if path == "/config.html":
             if not self._check_host():
                 return
             self._handle_config_get()
+        elif path == "/sse" and not self._check_origin():
+            # SSE subscriptions expose a live session endpoint and consume a
+            # handler thread. Keep cross-origin pages from opening one unless
+            # unrestricted access was explicitly selected.
+            return
         else:
             super().do_GET()
 
