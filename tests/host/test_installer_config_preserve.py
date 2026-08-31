@@ -45,6 +45,10 @@ class TestStripJsoncComments(unittest.TestCase):
         out = _strip_jsonc_comments('{"a": [1, 2, 3,], "b": {"c": 1,},}')
         self.assertEqual(out, '{"a": [1, 2, 3], "b": {"c": 1}}')
 
+    def test_unterminated_block_comment_is_rejected(self):
+        with self.assertRaises(ValueError):
+            _strip_jsonc_comments('{"a": 1} /* never closed')
+
     def test_slash_inside_string_preserved(self):
         out = _strip_jsonc_comments('{"url": "https://example.com/x"}')
         self.assertIn('https://example.com/x', out)
@@ -202,6 +206,22 @@ class TestUpdateJsonConfigPreservesUserData(unittest.TestCase):
         self.assertEqual(len(report.errors), 1)
         self.assertIn("Could not parse", report.errors[0])
         # modified_files must NOT include this path.
+        self.assertNotIn(str(p), report.modified_files)
+
+    def test_unterminated_comment_left_untouched(self):
+        p = self.tmp / "unterminated-comment.json"
+        original = '{"theme": "dark"} /* comment never closes\n'
+        p.write_text(original)
+        report = self._make_report()
+
+        ok = update_json_config(
+            p, "ida-pro-mcp", {"command": "y"}, report, dry_run=False
+        )
+
+        self.assertFalse(ok)
+        self.assertEqual(p.read_text(), original)
+        self.assertEqual(len(report.errors), 1)
+        self.assertIn("unterminated block comment", report.errors[0])
         self.assertNotIn(str(p), report.modified_files)
 
     def test_wrong_server_container_type_left_untouched(self):

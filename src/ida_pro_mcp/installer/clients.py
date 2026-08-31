@@ -158,6 +158,8 @@ def _strip_jsonc_comments(text: str) -> str:
             i += 2
             while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
                 i += 1
+            if i + 1 >= n:
+                raise ValueError("unterminated block comment")
             i += 2
             continue
         out.append(ch)
@@ -208,7 +210,7 @@ def _load_json_config(path: Path, *, allow_comments: bool = True) -> dict:
                 "fix the syntax or remove the file before retrying."
             )
         return config
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, ValueError) as exc:
         raise ConfigParseError(
             f"Could not parse {path} as JSON or JSONC: {exc}. "
             "Fix the syntax or remove the file before retrying."
