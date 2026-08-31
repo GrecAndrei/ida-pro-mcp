@@ -21,6 +21,11 @@ class EmbeddingModelProfile:
     license: str = ""
     download_url: str = ""
     download_filename: str = ""
+    # Managed downloads are pinned to an immutable Hub revision and checked
+    # against the LFS SHA-256 before they become visible to the host.
+    download_revision: str = ""
+    download_sha256: str = ""
+    download_size: int = 0
     opt_in: bool = False
 
     def format_text(self, text: str, purpose: str = "document") -> str:
@@ -56,6 +61,9 @@ QWEN3_EMBEDDING_0_6B = EmbeddingModelProfile(
         "Qwen3-Embedding-0.6B-Q8_0.gguf"
     ),
     download_filename="Qwen3-Embedding-0.6B-Q8_0.gguf",
+    download_revision="370f27d7550e0def9b39c1f16d3fbaa13aa67728",
+    download_sha256="06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439",
+    download_size=639150592,
 )
 
 ZEMBED_1 = EmbeddingModelProfile(
@@ -72,6 +80,9 @@ ZEMBED_1 = EmbeddingModelProfile(
         "zembed-1-Q4_K_M.gguf"
     ),
     download_filename="zembed-1-Q4_K_M.gguf",
+    download_revision="c1fed1b47f407fdf5ceb25d6919ac7e5237151c9",
+    download_sha256="3098f7963ca0563e8b39a55ee09a53697e57e49be5b9082892739bf24e075836",
+    download_size=2497280960,
     opt_in=True,
 )
 

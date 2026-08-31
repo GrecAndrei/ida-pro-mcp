@@ -299,6 +299,12 @@ python install.py --rerank-profile qwen3-reranker-0.6b --rerank-model /path/to/r
 python install.py --embedder-doctor
 ```
 
+Managed model downloads use immutable Hugging Face revisions and pinned
+SHA-256 digests. The llama-server installer selects a compatible GitHub
+release asset only when GitHub supplies its digest; an older release without
+one is refused. `--allow-unverified-downloads` is available only as an
+explicit, unsafe compatibility escape hatch.
+
 The embed model starts only for explicit indexing, semantic search, or anchor
 refresh; the reranker starts only for the rerank stage of semantic search.
 Ordinary tool calls never spin them up. Indexing is interruptible and resumable:

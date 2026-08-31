@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import re
 import shutil
-from datetime import UTC, datetime
+import uuid
 from pathlib import Path
 
-from .common import InstallReport
+from .common import InstallReport, atomic_write_bytes, atomic_write_text
 
 # Canonical legacy server identifiers that should be migrated/replaced with
 # the current canonical MCP server name.
@@ -27,35 +26,12 @@ def _atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> Non
     (audit §6.4).  The tmp file lives in the same directory so the rename
     stays on one filesystem.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
-    try:
-        with open(tmp, "w", encoding=encoding) as f:
-            f.write(content)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        # Best-effort cleanup of stragglers; never mask the original error.
-        with contextlib.suppress(OSError):
-            tmp.unlink()
-        raise
+    atomic_write_text(path, content, encoding)
 
 
 def _atomic_write_bytes(path: Path, content: bytes) -> None:
     """Atomically replace `path` with `content` (binary)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
-    try:
-        with open(tmp, "wb") as f:
-            f.write(content)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            tmp.unlink()
-        raise
+    atomic_write_bytes(path, content)
 
 
 def load_client_map(source_root: Path) -> dict:
@@ -71,10 +47,13 @@ def load_client_map(source_root: Path) -> dict:
 
 
 def backup_file(path: Path, report: InstallReport, dry_run: bool) -> Path | None:
-    if not path.exists():
+    if not path.exists() and not path.is_symlink():
+        if not dry_run:
+            report.add_created(path)
         return None
-    stamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
-    backup = path.with_suffix(path.suffix + f".bak.{stamp}")
+    # Two client updates can happen inside the same second. A UUID keeps
+    # those rollback points independent instead of overwriting one another.
+    backup = path.with_suffix(path.suffix + f".bak.{uuid.uuid4().hex}")
     if not dry_run:
         backup.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, backup)
@@ -112,6 +91,11 @@ def _prune_legacy_entries(container: dict, server_name: str) -> None:
 
 
 def _prepare_config_path(path: Path, report: InstallReport, dry_run: bool) -> None:
+    if path.is_symlink():
+        raise ConfigParseError(
+            f"Refusing to replace symlinked client config {path}; "
+            "update its target explicitly and re-run the installer."
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     backup_file(path, report, dry_run)
 
@@ -423,3 +407,7 @@ def rollback_from_backups(report: InstallReport) -> None:
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(backup, target)
+    for value in reversed(report.created_files):
+        target = Path(value)
+        if target.is_file() or target.is_symlink():
+            target.unlink()

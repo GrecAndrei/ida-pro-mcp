@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -12,10 +14,12 @@ import tarfile
 import tempfile
 import time
 import urllib.request
+import uuid
 import zipfile
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
+from urllib.parse import quote, urlsplit
 
-from .common import InstallReport, SigsManifest
+from .common import InstallReport, SigsManifest, atomic_write_text
 
 _log = logging.getLogger(__name__)
 
@@ -26,6 +30,143 @@ _log = logging.getLogger(__name__)
 # leaves comfortable headroom while still bounding worst-case damage.
 MAX_DOWNLOAD_SIZE = 2 * 1024 * 1024 * 1024  # 2 GiB
 _DOWNLOAD_CHUNK_BYTES = 1 * 1024 * 1024  # 1 MiB
+_MODEL_MAX_DOWNLOAD_SIZE = 8 * 1024**3
+_MAX_EXTRACTED_ARCHIVE_SIZE = 8 * 1024**3
+_TRUE_ENV = {"1", "true", "yes", "on"}
+
+
+def _sha256_file(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(_DOWNLOAD_CHUNK_BYTES), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _normalise_sha256(value: object) -> str:
+    """Return a validated SHA-256 hex digest, or an empty string."""
+    text = str(value or "").strip().lower()
+    if text.startswith("sha256:"):
+        text = text[7:]
+    return text if re.fullmatch(r"[0-9a-f]{64}", text) else ""
+
+
+def _download_to_file(
+    request: urllib.request.Request,
+    destination: Path,
+    *,
+    timeout: float,
+    max_bytes: int,
+    label: str,
+    expected_sha256: str = "",
+    expected_size: int = 0,
+) -> tuple[int, str]:
+    """Stream a response to a same-directory temporary file and verify it."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    raw_expected_sha256 = str(expected_sha256 or "").strip()
+    expected_sha256 = _normalise_sha256(raw_expected_sha256)
+    if raw_expected_sha256 and not expected_sha256:
+        raise RuntimeError(f"{label} has an invalid expected SHA-256")
+    temporary: Path | None = None
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            declared_raw = response.headers.get("Content-Length")
+            declared = 0
+            if declared_raw:
+                try:
+                    declared = int(declared_raw)
+                except (TypeError, ValueError):
+                    declared = 0
+            declared = max(declared, 0)
+            if declared > max_bytes:
+                raise RuntimeError(
+                    f"{label} download exceeds the 8 GiB safety limit"
+                    if max_bytes == _MODEL_MAX_DOWNLOAD_SIZE
+                    else f"Refusing download: Content-Length={declared} exceeds MAX_DOWNLOAD_SIZE={max_bytes} bytes"
+                )
+            if expected_size and declared and declared != expected_size:
+                raise RuntimeError(
+                    f"{label} size mismatch: server declared {declared} bytes, expected {expected_size}"
+                )
+            with tempfile.NamedTemporaryFile(
+                delete=False, dir=str(destination.parent), prefix=f".{destination.name}.", suffix=".part"
+            ) as output:
+                temporary = Path(output.name)
+                digest = hashlib.sha256()
+                total = 0
+                while True:
+                    chunk = response.read(_DOWNLOAD_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise RuntimeError(
+                            f"{label} download exceeds the 8 GiB safety limit"
+                            if max_bytes == _MODEL_MAX_DOWNLOAD_SIZE
+                            else f"Refusing download: stream exceeded MAX_DOWNLOAD_SIZE={max_bytes} bytes"
+                        )
+                    digest.update(chunk)
+                    output.write(chunk)
+                if total <= 0:
+                    raise RuntimeError(f"{label} download was empty")
+                if expected_size and total != expected_size:
+                    raise RuntimeError(
+                        f"{label} size mismatch: received {total} bytes, expected {expected_size}"
+                    )
+                actual_sha256 = digest.hexdigest()
+                if expected_sha256 and actual_sha256 != expected_sha256:
+                    raise RuntimeError(
+                        f"{label} SHA-256 mismatch: expected={expected_sha256} actual={actual_sha256}"
+                    )
+                output.flush()
+                os.fsync(output.fileno())
+        os.replace(temporary, destination)
+        temporary = None
+        return total, actual_sha256
+    except Exception:
+        if temporary is not None:
+            with contextlib.suppress(OSError):
+                temporary.unlink()
+        raise
+
+
+def _profile_download_url(profile: object) -> str:
+    url = str(getattr(profile, "download_url", "") or "")
+    revision = str(getattr(profile, "download_revision", "") or "").strip()
+    if not revision or not re.fullmatch(r"[0-9a-f]{40}", revision):
+        return ""
+    if "/resolve/main/" not in url:
+        return ""
+    return url.replace("/resolve/main/", f"/resolve/{revision}/", 1)
+
+
+def _validate_https_host(url: str, host: str, *, path_prefix: str = "") -> None:
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or parsed.hostname != host:
+        raise RuntimeError(f"Refusing untrusted download URL: {url}")
+    if path_prefix and not parsed.path.startswith(path_prefix):
+        raise RuntimeError(f"Refusing untrusted download URL: {url}")
+
+
+def _copy_file_atomically(source: Path, destination: Path) -> None:
+    """Copy a regular file without exposing a partially-copied destination."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            delete=False, dir=str(destination.parent), prefix=f".{destination.name}.", suffix=".part"
+        ) as output:
+            temporary = Path(output.name)
+            with open(source, "rb") as input_file:
+                shutil.copyfileobj(input_file, output, length=_DOWNLOAD_CHUNK_BYTES)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, destination)
+        temporary = None
+    finally:
+        if temporary is not None:
+            with contextlib.suppress(OSError):
+                temporary.unlink()
 
 
 def get_install_root() -> Path:
@@ -167,8 +308,9 @@ def kill_ida_processes(binary_path: str | Path | None = None) -> None:
                         ["taskkill", "/F", "/PID", pid], capture_output=True
                     )
                 return
-            # WMIC unavailable — fall through to unfiltered behavior with a
-            # narrower image-name match (still scoped to ida*/idat* only).
+            # WMIC unavailable or denied: fail closed. An explicit binary
+            # scope must never degrade into killing every IDA process.
+            return
         for name in ["idat.exe", "idat64.exe", "ida.exe", "ida64.exe"]:
             subprocess.run(["taskkill", "/F", "/IM", name], capture_output=True)
         return
@@ -205,7 +347,9 @@ def kill_ida_processes(binary_path: str | Path | None = None) -> None:
             for pid in pids:
                 subprocess.run(["kill", "-KILL", pid], capture_output=True)
             return
-        # pgrep -af missing — fall through to image-name-only kill.
+        # pgrep -af missing or denied: fail closed. An explicit binary scope
+        # must never degrade into killing every IDA process.
+        return
 
     for name in ["idat", "idat64", "ida", "ida64"]:
         subprocess.run(["pkill", "-x", name], capture_output=True)
@@ -361,38 +505,37 @@ def download_embed_model(install_root: Path, profile: str) -> str:
         raise RuntimeError(
             f"Profile {selected.key} has no managed download; provide --embed-model"
         )
+    url = _profile_download_url(selected)
+    expected_sha256 = _normalise_sha256(selected.download_sha256)
+    if not url or not expected_sha256 or not selected.download_size:
+        raise RuntimeError(
+            f"Profile {selected.key} is missing a pinned download digest; provide --embed-model"
+        )
+    _validate_https_host(url, "huggingface.co")
     model_dir = install_root / "models"
     model_dir.mkdir(parents=True, exist_ok=True)
     destination = model_dir / selected.download_filename
+    if destination.is_symlink():
+        raise RuntimeError(f"Refusing managed model path symlink: {destination}")
     if destination.is_file() and destination.stat().st_size > 0:
-        return str(destination)
-    partial = destination.with_suffix(destination.suffix + ".part")
+        if (
+            destination.stat().st_size == selected.download_size
+            and _sha256_file(str(destination)) == expected_sha256
+        ):
+            return str(destination)
     request = urllib.request.Request(
-        selected.download_url,
+        url,
         headers={"User-Agent": "ida-pro-mcp-installer"},
     )
-    max_bytes = 8 * 1024**3
-    written = 0
-    try:
-        with urllib.request.urlopen(request, timeout=300) as response, open(partial, "wb") as output:
-            content_length = int(response.headers.get("Content-Length") or 0)
-            if content_length > max_bytes:
-                raise RuntimeError("Embedding model download exceeds the 8 GiB safety limit")
-            while True:
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                written += len(chunk)
-                if written > max_bytes:
-                    raise RuntimeError("Embedding model download exceeds the 8 GiB safety limit")
-                output.write(chunk)
-        if written <= 0:
-            raise RuntimeError("Embedding model download was empty")
-        os.replace(partial, destination)
-    except Exception:
-        with contextlib.suppress(OSError):
-            partial.unlink()
-        raise
+    _download_to_file(
+        request,
+        destination,
+        timeout=300,
+        max_bytes=_MODEL_MAX_DOWNLOAD_SIZE,
+        label="Embedding model",
+        expected_sha256=expected_sha256,
+        expected_size=selected.download_size,
+    )
     return str(destination)
 
 
@@ -412,38 +555,37 @@ def download_rerank_model(install_root: Path, profile: str) -> str:
         raise RuntimeError(
             f"Profile {selected.key} has no managed download; provide --rerank-model"
         )
+    url = _profile_download_url(selected)
+    expected_sha256 = _normalise_sha256(selected.download_sha256)
+    if not url or not expected_sha256 or not selected.download_size:
+        raise RuntimeError(
+            f"Profile {selected.key} is missing a pinned download digest; provide --rerank-model"
+        )
+    _validate_https_host(url, "huggingface.co")
     model_dir = install_root / "models"
     model_dir.mkdir(parents=True, exist_ok=True)
     destination = model_dir / selected.download_filename
+    if destination.is_symlink():
+        raise RuntimeError(f"Refusing managed model path symlink: {destination}")
     if destination.is_file() and destination.stat().st_size > 0:
-        return str(destination)
-    partial = destination.with_suffix(destination.suffix + ".part")
+        if (
+            destination.stat().st_size == selected.download_size
+            and _sha256_file(str(destination)) == expected_sha256
+        ):
+            return str(destination)
     request = urllib.request.Request(
-        selected.download_url,
+        url,
         headers={"User-Agent": "ida-pro-mcp-installer"},
     )
-    max_bytes = 8 * 1024**3
-    written = 0
-    try:
-        with urllib.request.urlopen(request, timeout=300) as response, open(partial, "wb") as output:
-            content_length = int(response.headers.get("Content-Length") or 0)
-            if content_length > max_bytes:
-                raise RuntimeError("Rerank model download exceeds the 8 GiB safety limit")
-            while True:
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                written += len(chunk)
-                if written > max_bytes:
-                    raise RuntimeError("Rerank model download exceeds the 8 GiB safety limit")
-                output.write(chunk)
-        if written <= 0:
-            raise RuntimeError("Rerank model download was empty")
-        os.replace(partial, destination)
-    except Exception:
-        with contextlib.suppress(OSError):
-            partial.unlink()
-        raise
+    _download_to_file(
+        request,
+        destination,
+        timeout=300,
+        max_bytes=_MODEL_MAX_DOWNLOAD_SIZE,
+        label="Rerank model",
+        expected_sha256=expected_sha256,
+        expected_size=selected.download_size,
+    )
     return str(destination)
 
 
@@ -605,9 +747,13 @@ def stage_sigs(
     else:
         candidates = sorted(list(source.rglob("*.sig")) + list(source.rglob("*.sig.gz")))
 
+    sig_root = sig_dir.expanduser().resolve()
     staged: list[str] = []
     skipped: list[str] = []
     for cand in candidates:
+        if cand.is_symlink() or not cand.is_file():
+            report.add_warning(f"Skipping non-regular signature file: {cand}")
+            continue
         try:
             rel = cand.relative_to(source)
         except ValueError:
@@ -617,14 +763,17 @@ def stage_sigs(
             # cand == source (a bare .sig file): relative_to yields Path('.'),
             # which would copy the file onto sig_dir itself.
             rel = Path(cand.name)
-        dest = sig_dir / rel
+        dest = sig_root / rel
+        try:
+            dest.resolve().relative_to(sig_root)
+        except ValueError as exc:
+            raise RuntimeError(f"signature destination escapes IDA sig directory: {dest}") from exc
         if dest.exists():
             skipped.append(str(dest))
             continue
         staged.append(str(dest))
         if not dry_run:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(cand, dest)
+            _copy_file_atomically(cand, dest)
             report.add_modified(dest)
 
     return SigsManifest(
@@ -682,7 +831,9 @@ def _extract_archive(archive: Path, out_dir: Path) -> None:
     catching attacks that exploit case-folding or symlinks created
     during extraction.
     """
+    out_dir.mkdir(parents=True, exist_ok=True)
     extract_root = out_dir.resolve()
+    extracted_bytes = 0
 
     def _safe_target(member_name: str) -> Path:
         if not member_name:
@@ -690,12 +841,19 @@ def _extract_archive(archive: Path, out_dir: Path) -> None:
         # Reject absolute paths and parent-dir traversal eagerly so the
         # error message is precise; the resolve() check below is the
         # final authority.
-        candidate = Path(member_name)
-        if candidate.is_absolute() or ".." in candidate.parts:
+        normalized = member_name.replace("\\", "/")
+        candidate = Path(normalized)
+        windows_candidate = PureWindowsPath(normalized)
+        if (
+            candidate.is_absolute()
+            or windows_candidate.is_absolute()
+            or bool(windows_candidate.drive)
+            or ".." in candidate.parts
+        ):
             raise RuntimeError(
                 f"refusing to extract {member_name!r} from {archive.name}: absolute or traversal path"
             )
-        target = (out_dir / member_name).resolve()
+        target = (out_dir / normalized).resolve()
         try:
             target.relative_to(extract_root)
         except ValueError as exc:
@@ -704,29 +862,80 @@ def _extract_archive(archive: Path, out_dir: Path) -> None:
             ) from exc
         return target
 
+    def _copy_member(source, target: Path, declared_size: int) -> None:
+        nonlocal extracted_bytes
+        if declared_size < 0 or extracted_bytes + declared_size > _MAX_EXTRACTED_ARCHIVE_SIZE:
+            raise RuntimeError(
+                f"refusing archive extraction over {_MAX_EXTRACTED_ARCHIVE_SIZE} bytes"
+            )
+        copied = 0
+        with open(target, "wb") as destination:
+            while True:
+                chunk = source.read(_DOWNLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                copied += len(chunk)
+                if extracted_bytes + copied > _MAX_EXTRACTED_ARCHIVE_SIZE:
+                    raise RuntimeError(
+                        f"refusing archive extraction over {_MAX_EXTRACTED_ARCHIVE_SIZE} bytes"
+                    )
+                destination.write(chunk)
+        extracted_bytes += copied
+
     if archive.name.endswith(".zip"):
         with zipfile.ZipFile(archive) as zf:
             for info in zf.infolist():
-                _safe_target(info.filename)
-            zf.extractall(out_dir)
+                target = _safe_target(info.filename)
+                mode = (info.external_attr >> 16) & 0o170000
+                if mode == stat.S_IFLNK:
+                    raise RuntimeError(
+                        f"refusing symlink member {info.filename!r} from {archive.name}"
+                    )
+                if info.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                if mode not in (0, stat.S_IFREG):
+                    raise RuntimeError(
+                        f"refusing special archive member {info.filename!r} from {archive.name}"
+                    )
+                if target.is_symlink():
+                    raise RuntimeError(
+                        f"refusing to overwrite symlink {info.filename!r} in {archive.name}"
+                    )
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if info.file_size > _MAX_EXTRACTED_ARCHIVE_SIZE:
+                    raise RuntimeError(
+                        f"refusing archive extraction over {_MAX_EXTRACTED_ARCHIVE_SIZE} bytes"
+                    )
+                with zf.open(info) as source:
+                    _copy_member(source, target, info.file_size)
         return
     if archive.name.endswith(".tar.gz") or archive.name.endswith(".tgz"):
         with tarfile.open(archive, "r:gz") as tf:
             for member in tf.getmembers():
-                _safe_target(member.name)
-                # Tar can also carry symlinks/hardlinks whose targets
-                # escape the root even if `member.name` itself is safe.
-                link = member.linkname or ""
-                if link:
-                    link_path = (out_dir / member.name).parent / link
-                    try:
-                        link_resolved = link_path.resolve()
-                        link_resolved.relative_to(extract_root)
-                    except (OSError, ValueError) as exc:
-                        raise RuntimeError(
-                            f"refusing tar member {member.name!r} with link target outside extract root"
-                        ) from exc
-            tf.extractall(out_dir)
+                target = _safe_target(member.name)
+                if member.isdir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                # Do not extract links or special files. Even a link whose
+                # target is inside the root can change the meaning of a later
+                # member and turn a safe archive into a write primitive.
+                if not member.isfile():
+                    raise RuntimeError(
+                        f"refusing non-regular tar member {member.name!r} from {archive.name}"
+                    )
+                if target.is_symlink():
+                    raise RuntimeError(
+                        f"refusing to overwrite symlink {member.name!r} in {archive.name}"
+                    )
+                extracted = tf.extractfile(member)
+                if extracted is None:
+                    raise RuntimeError(f"could not read tar member {member.name!r}")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    _copy_member(extracted, target, member.size)
+                finally:
+                    extracted.close()
         return
     raise RuntimeError(f"Unsupported archive format: {archive.name}")
 
@@ -736,43 +945,96 @@ def download_and_install_llama_server(
     *,
     dry_run: bool,
     report: InstallReport,
+    allow_unverified: bool | None = None,
 ) -> str:
-    """Download latest llama.cpp release archive and install llama-server locally."""
+    """Download a verified llama.cpp release archive and install llama-server."""
     binary_name = "llama-server.exe" if sys.platform == "win32" else "llama-server"
     target_dir = install_root / "bin"
     target_path = target_dir / binary_name
+    if target_path.is_symlink():
+        raise RuntimeError(f"Refusing managed llama-server path symlink: {target_path}")
     if target_path.exists() and os.access(target_path, os.X_OK):
         return str(target_path)
     if dry_run:
         report.add_step("llama_server", "dry-run", f"would install to {target_path}")
         return str(target_path)
 
-    api_url = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
+    if allow_unverified is None:
+        allow_unverified = os.environ.get("IDA_MCP_ALLOW_UNVERIFIED_DOWNLOADS", "").lower() in _TRUE_ENV
+    release_tag = os.environ.get("IDA_MCP_LLAMA_RELEASE", "").strip()
+    if release_tag:
+        api_url = (
+            "https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/"
+            f"{quote(release_tag, safe='')}"
+        )
+    else:
+        # GitHub's /releases/latest can be a lightweight marker release with
+        # no binaries. Scan the ordered release list instead and pick the
+        # newest compatible asset.
+        api_url = "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=20"
     req = urllib.request.Request(
         api_url,
         headers={"Accept": "application/vnd.github+json", "User-Agent": "ida-pro-mcp-installer"},
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         payload = json.loads(resp.read().decode("utf-8", errors="replace"))
-    assets = payload.get("assets") or []
-    if not isinstance(assets, list) or not assets:
-        raise RuntimeError("No release assets found for llama.cpp latest release")
+    releases = [payload] if isinstance(payload, dict) else payload
+    if not isinstance(releases, list) or not releases:
+        raise RuntimeError("No release metadata found for llama.cpp")
 
     os_hints, arch_hints = _platform_asset_hints()
     best_asset = None
     best_score = -10_000
-    for asset in assets:
-        if not isinstance(asset, dict):
+    saw_unverified_match = False
+    for release in releases:
+        if not isinstance(release, dict) or release.get("draft"):
             continue
-        name = str(asset.get("name") or "")
-        url = str(asset.get("browser_download_url") or "")
-        if not name or not url:
+        assets = release.get("assets") or []
+        if not isinstance(assets, list):
             continue
-        score = _score_release_asset(name, os_hints, arch_hints)
-        if score > best_score:
-            best_score = score
-            best_asset = {"name": name, "url": url}
+        for asset in assets:
+            if not isinstance(asset, dict):
+                continue
+            name = str(asset.get("name") or "")
+            url = str(asset.get("browser_download_url") or "")
+            if not name or not url:
+                continue
+            if (
+                name in {".", ".."}
+                or "/" in name
+                or "\\" in name
+                or Path(name).name != name
+            ):
+                raise RuntimeError(f"Refusing unsafe llama.cpp asset name: {name!r}")
+            score = _score_release_asset(name, os_hints, arch_hints)
+            if score < 4:
+                continue
+            _validate_https_host(
+                url,
+                "github.com",
+                path_prefix="/ggml-org/llama.cpp/releases/download/",
+            )
+            digest = _normalise_sha256(asset.get("digest"))
+            if not digest:
+                saw_unverified_match = True
+                if not allow_unverified:
+                    continue
+            if score > best_score:
+                best_score = score
+                best_asset = {
+                    "name": name,
+                    "url": url,
+                    "sha256": digest,
+                    "release": str(release.get("tag_name") or "unknown"),
+                    "size": int(asset.get("size") or 0),
+                }
     if not best_asset or best_score < 4:
+        if saw_unverified_match and not allow_unverified:
+            raise RuntimeError(
+                "A compatible llama.cpp asset was found without a GitHub SHA-256 digest; "
+                "refusing unverified installation. Set IDA_MCP_ALLOW_UNVERIFIED_DOWNLOADS=1 "
+                "only if you accept that risk."
+            )
         raise RuntimeError(
             f"Unable to resolve a suitable llama-server release asset for platform={sys.platform}, arch hints={arch_hints}"
         )
@@ -789,55 +1051,51 @@ def download_and_install_llama_server(
             best_asset["url"],
             headers={"User-Agent": "ida-pro-mcp-installer"},
         )
-        with urllib.request.urlopen(req_asset, timeout=120) as resp:
-            # Honor Content-Length when present; reject before reading
-            # the body if the server promises more than we'll accept.
-            declared_len_raw = resp.headers.get("Content-Length")
-            if declared_len_raw:
-                try:
-                    declared_len = int(declared_len_raw)
-                except ValueError:
-                    declared_len = -1
-                if declared_len > MAX_DOWNLOAD_SIZE:
-                    raise RuntimeError(
-                        f"Refusing download: Content-Length={declared_len} exceeds "
-                        f"MAX_DOWNLOAD_SIZE={MAX_DOWNLOAD_SIZE} bytes"
-                    )
-            tmp = tempfile.NamedTemporaryFile(
-                delete=False, dir=str(td), prefix=".dl-", suffix=".part"
-            )
-            tmp_path = Path(tmp.name)
-            total = 0
-            try:
-                while True:
-                    chunk = resp.read(_DOWNLOAD_CHUNK_BYTES)
-                    if not chunk:
-                        break
-                    total += len(chunk)
-                    if total > MAX_DOWNLOAD_SIZE:
-                        raise RuntimeError(
-                            f"Refusing download: stream exceeded MAX_DOWNLOAD_SIZE="
-                            f"{MAX_DOWNLOAD_SIZE} bytes (read {total} so far)"
-                        )
-                    tmp.write(chunk)
-                tmp.flush()
-                os.fsync(tmp.fileno())
-            finally:
-                tmp.close()
-            os.replace(tmp_path, canonical_archive)
+        _download_to_file(
+            req_asset,
+            canonical_archive,
+            timeout=120,
+            max_bytes=MAX_DOWNLOAD_SIZE,
+            label="llama-server archive",
+            expected_sha256=best_asset["sha256"],
+            expected_size=best_asset["size"],
+        )
         archive_path = canonical_archive
         _extract_archive(archive_path, extract_dir)
         found = list(extract_dir.rglob(binary_name))
+        found = [path for path in found if path.is_file() and not path.is_symlink()]
         if not found:
             raise RuntimeError(f"Downloaded asset did not contain {binary_name}: {best_asset['name']}")
         src_bin = found[0]
         target_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src_bin, target_path)
-        if sys.platform != "win32":
-            target_path.chmod(0o755)
+        temporary_target: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                delete=False, dir=str(target_dir), prefix=f".{binary_name}.", suffix=".part"
+            ) as output:
+                temporary_target = Path(output.name)
+                with open(src_bin, "rb") as source:
+                    shutil.copyfileobj(source, output, length=_DOWNLOAD_CHUNK_BYTES)
+                output.flush()
+                os.fsync(output.fileno())
+            if sys.platform != "win32":
+                temporary_target.chmod(0o755)
+            os.replace(temporary_target, target_path)
+            temporary_target = None
+        finally:
+            if temporary_target is not None:
+                with contextlib.suppress(OSError):
+                    temporary_target.unlink()
 
-    report.add_step("llama_server", "ok", f"installed {target_path.name} from {best_asset['name']}")
+    verification = "verified" if best_asset["sha256"] else "UNVERIFIED"
+    report.add_step(
+        "llama_server",
+        "ok",
+        f"installed {target_path.name} from {best_asset['name']} ({verification})",
+    )
     report.metadata["llama_server_asset"] = best_asset["name"]
+    report.metadata["llama_server_release"] = best_asset["release"]
+    report.metadata["llama_server_sha256"] = best_asset["sha256"]
     report.metadata["llama_server_bin"] = str(target_path)
     return str(target_path)
 
@@ -963,9 +1221,9 @@ def _snapshot_source(
     if dry_run:
         report.add_step("snapshot", "dry-run", f"would copy {source_root} -> {target}")
         return target
-    if target.exists():
-        shutil.rmtree(target)
     target.parent.mkdir(parents=True, exist_ok=True)
+    staging_root = Path(tempfile.mkdtemp(prefix=f".{target.name}.staging-", dir=str(target.parent)))
+    staged = staging_root / target.name
     pattern_ignore = shutil.ignore_patterns(
         ".git", "__pycache__", "*.pyc", ".venv", "venv", "env", "dist", "build",
         "node_modules", "*.egg-info", ".pytest_cache", ".ruff_cache",
@@ -986,7 +1244,22 @@ def _snapshot_source(
                 ignored.add(name)
         return ignored
 
-    shutil.copytree(source_root, target, ignore=ignore, ignore_dangling_symlinks=True)
+    try:
+        shutil.copytree(source_root, staged, ignore=ignore, ignore_dangling_symlinks=True)
+        backup: Path | None = None
+        if target.exists() or target.is_symlink():
+            backup = target.parent / f".{target.name}.backup-{os.getpid()}-{uuid.uuid4().hex}"
+            os.replace(target, backup)
+        try:
+            os.replace(staged, target)
+        except BaseException:
+            if backup is not None and not (target.exists() or target.is_symlink()):
+                os.replace(backup, target)
+            raise
+        if backup is not None:
+            shutil.rmtree(backup, ignore_errors=True)
+    finally:
+        shutil.rmtree(staging_root, ignore_errors=True)
     report.add_modified(target)
     report.add_step("snapshot", "ok", str(target))
     siblings = sorted(
@@ -1019,8 +1292,7 @@ def _write_dev_pth(venv_dir: Path, source_root: Path, dry_run: bool, report: Ins
     if dry_run:
         report.add_step("dev_pth", "dry-run", f"would write {pth_path} -> {src_path}")
         return pth_path
-    pth_path.parent.mkdir(parents=True, exist_ok=True)
-    pth_path.write_text(f"{src_path}\n", encoding="utf-8")
+    atomic_write_text(pth_path, f"{src_path}\n")
     report.add_modified(pth_path)
     report.add_step("dev_pth", "ok", f"{pth_path} -> {src_path}")
 

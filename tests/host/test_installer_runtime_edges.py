@@ -6,10 +6,12 @@ boundaries.  No real download, IDA install, or external tool is required.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import tarfile
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -38,11 +40,32 @@ class _Response:
         return self._body
 
 
+def _profile_with_test_digest(monkeypatch, module_name: str, key: str, body: bytes):
+    module = __import__(module_name, fromlist=["MODEL_PROFILES"])
+    profiles = (
+        module.MODEL_PROFILES
+        if hasattr(module, "MODEL_PROFILES")
+        else module.RERANK_MODEL_PROFILES
+    )
+    profile = profiles[key]
+    patched = replace(
+        profile,
+        download_sha256=hashlib.sha256(body).hexdigest(),
+        download_size=len(body),
+    )
+    monkeypatch.setitem(profiles, key, patched)
+    return patched
+
+
 def test_download_embed_model_reuses_existing_nonempty_file(tmp_path, monkeypatch):
-    from ida_pro_mcp.host.intelligence.model_profiles import get_model_profile
     from ida_pro_mcp.installer.runtime import download_embed_model
 
-    selected = get_model_profile("zembed-1")
+    selected = _profile_with_test_digest(
+        monkeypatch,
+        "ida_pro_mcp.host.intelligence.model_profiles",
+        "zembed-1",
+        b"already-installed",
+    )
     assert selected is not None
     destination = tmp_path / "models" / selected.download_filename
     destination.parent.mkdir()
@@ -106,12 +129,15 @@ def test_download_embed_model_rejects_empty_body_and_cleans_partial(tmp_path, mo
 
 
 def test_download_rerank_model_streams_to_install_root(tmp_path, monkeypatch):
-    from ida_pro_mcp.host.intelligence.rerank_profiles import get_rerank_model_profile
     from ida_pro_mcp.installer.runtime import download_rerank_model
 
-    selected = get_rerank_model_profile("qwen3-reranker-0.6b")
-    assert selected is not None
     body = b"reranker-gguf"
+    selected = _profile_with_test_digest(
+        monkeypatch,
+        "ida_pro_mcp.host.intelligence.rerank_profiles",
+        "qwen3-reranker-0.6b",
+        body,
+    )
     monkeypatch.setattr(
         "ida_pro_mcp.installer.runtime.urllib.request.urlopen",
         lambda *_args, **_kwargs: _Response(body, headers={"Content-Length": str(len(body))}),
@@ -234,7 +260,7 @@ def test_archive_extraction_rejects_tar_link_outside_root(tmp_path):
         link.linkname = "../../outside"
         archive.addfile(link)
 
-    with pytest.raises(RuntimeError, match="link target outside extract root"):
+    with pytest.raises(RuntimeError, match="non-regular tar member"):
         _extract_archive(malicious, tmp_path / "tar-out")
 
 
@@ -245,21 +271,26 @@ def test_download_llama_server_uses_selected_asset_and_writes_binary(tmp_path, m
     archive_bytes = io.BytesIO()
     with zipfile.ZipFile(archive_bytes, "w") as archive:
         archive.writestr("llama-bin/llama-server", b"server-binary")
+    archive_body = archive_bytes.getvalue()
+    archive_sha256 = hashlib.sha256(archive_body).hexdigest()
     release = {
         "assets": [
             {
                 "name": "llama-b123-bin-ubuntu-x64.zip",
-                "browser_download_url": "https://example.test/llama.zip",
+                "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b123/llama-b123-bin-ubuntu-x64.zip",
+                "digest": f"sha256:{archive_sha256}",
+                "size": len(archive_body),
             },
             {
                 "name": "llama-b123-bin-win-cuda.zip",
-                "browser_download_url": "https://example.test/win.zip",
+                "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b123/llama-b123-bin-win-cuda.zip",
+                "digest": f"sha256:{'0' * 64}",
             },
         ]
     }
     responses = iter([
         _Response(json.dumps(release).encode()),
-        _Response(archive_bytes.getvalue(), headers={"Content-Length": str(archive_bytes.tell())}),
+        _Response(archive_body, headers={"Content-Length": str(len(archive_body))}),
     ])
     monkeypatch.setattr(
         "ida_pro_mcp.installer.runtime.urllib.request.urlopen",

@@ -19,6 +19,8 @@ from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from .common import atomic_write_text
+
 VERSION_TUPLE = tuple[int, int, int]
 # IDA build version: e.g. 9.3.260421.be7de18d  (major.minor.YYMMDD.shorthash)
 _BUILD_VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d{6})\.([0-9a-f]{6,8})")
@@ -499,12 +501,11 @@ def detect_ida_installs() -> list[IdaInstall]:
 def write_install_state(install_root: Path, install: IdaInstall) -> Path:
     """Persist the selected install to <install_root>/ida-install.json."""
     state_path = install_root / STATE_FILE
-    state_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "selected": install.to_dict(),
         "selected_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
     }
-    state_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    atomic_write_text(state_path, json.dumps(payload, indent=2))
     return state_path
 
 

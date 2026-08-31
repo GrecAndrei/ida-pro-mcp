@@ -4,15 +4,19 @@ import argparse
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import sys
+import tempfile
 import traceback
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .clients import configure_clients, rollback_from_backups
-from .common import InstallerOptions, InstallReport, find_ida_sig_dir
+from .clients import backup_file, configure_clients, rollback_from_backups
+from .common import InstallerOptions, InstallReport, atomic_write_text, find_ida_sig_dir
 from .discovery import (
+    STATE_FILE,
     IdaInstall,
     detect_ida_installs,
     read_install_state,
@@ -526,7 +530,21 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
                 f"Download managed {opts.rerank_profile} reranker model (~300 MB)?",
                 default=True,
             ):
-                opts.download_rerank_model = True
+                from ida_pro_mcp.host.intelligence.rerank_profiles import get_rerank_model_profile
+
+                selected_rerank = get_rerank_model_profile(opts.rerank_profile)
+                if selected_rerank is not None and selected_rerank.opt_in:
+                    if _prompt_yes_no(
+                        f"I accept the {selected_rerank.license} license for {selected_rerank.display_name}",
+                        default=False,
+                    ):
+                        opts.download_rerank_model = True
+                        opts.accept_model_license = True
+                    else:
+                        ui.warn("Reranker download skipped because its license was not accepted.")
+                        opts.rerank_disabled = True
+                else:
+                    opts.download_rerank_model = True
             else:
                 opts.rerank_disabled = True
         ui.info(
@@ -605,12 +623,12 @@ def install_bashrc_cli(install_root: Path, dry_run: bool, report: InstallReport)
     block = "\n".join(
         [
             block_start,
-            f'export IDA_PRO_MCP_HOME="{install_root}"',
+            f"export IDA_PRO_MCP_HOME={shlex.quote(str(install_root))}",
             'case ":$PATH:" in',
             '  *":$IDA_PRO_MCP_HOME/.venv/bin:"*) ;;',
             '  *) export PATH="$IDA_PRO_MCP_HOME/.venv/bin:$PATH" ;;',
             'esac',
-            f'export IDA_PRO_MCP_CLI="{venv_bin / "ida-pro-mcp-cli"}"',
+            f"export IDA_MCP_CLI={shlex.quote(str(venv_bin / 'ida-pro-mcp-cli'))}",
             block_end,
             "",
         ]
@@ -625,25 +643,49 @@ def install_bashrc_cli(install_root: Path, dry_run: bool, report: InstallReport)
         updated = existing.rstrip("\n") + ("\n" if existing.strip() else "") + block
     if not dry_run:
         bashrc.parent.mkdir(parents=True, exist_ok=True)
-        bashrc.write_text(updated, encoding="utf-8")
+        atomic_write_text(bashrc, updated)
     report.add_modified(bashrc)
 
 
 def _replace_with_symlink_or_copy(src: Path, dst: Path) -> str:
-    if dst.exists() or dst.is_symlink():
-        if dst.is_dir() and not dst.is_symlink():
-            shutil.rmtree(dst)
-        else:
-            dst.unlink()
+    if not src.exists() and not src.is_symlink():
+        raise FileNotFoundError(src)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(tempfile.mkdtemp(prefix=f".{dst.name}.staging-", dir=str(dst.parent)))
+    staged = staging_dir / dst.name
     try:
-        os.symlink(src, dst, target_is_directory=src.is_dir())
-        return "linked"
-    except OSError:
-        if src.is_dir():
-            shutil.copytree(src, dst, ignore_dangling_symlinks=True)
-        else:
-            shutil.copy2(src, dst)
-        return "copied"
+        try:
+            os.rmdir(staging_dir)
+            os.symlink(src, staged, target_is_directory=src.is_dir())
+            mode = "linked"
+        except OSError:
+            # Recreate the staging directory if symlinks are unavailable
+            # (notably Windows without developer mode).
+            staging_dir.mkdir(parents=True, exist_ok=True)
+            if src.is_dir():
+                shutil.copytree(src, staged, ignore_dangling_symlinks=True)
+            else:
+                shutil.copy2(src, staged)
+            mode = "copied"
+
+        backup: Path | None = None
+        if dst.exists() or dst.is_symlink():
+            backup = dst.parent / f".{dst.name}.backup-{os.getpid()}-{uuid.uuid4().hex}"
+            os.replace(dst, backup)
+        try:
+            os.replace(staged, dst)
+        except BaseException:
+            if backup is not None and not (dst.exists() or dst.is_symlink()):
+                os.replace(backup, dst)
+            raise
+        if backup is not None:
+            if backup.is_dir() and not backup.is_symlink():
+                shutil.rmtree(backup)
+            else:
+                backup.unlink()
+        return mode
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
 
 
 def _install_claude_opencode_skills(report: InstallReport, dry_run: bool, ui: UI) -> None:
@@ -690,8 +732,18 @@ def install_codex_skills(source_root: Path, mode: str, report: InstallReport, dr
     codex_skills.mkdir(parents=True, exist_ok=True)
     for src in selected:
         dst = codex_skills / src.name
-        _replace_with_symlink_or_copy(src, dst)
-        report.add_modified(dst)
+        if dst.is_dir() and not dst.is_symlink():
+            # Preserve user-added references/files in an existing skill
+            # directory; only refresh the two files managed by this project.
+            from .skills import install_skills
+
+            written = install_skills([codex_skills], dry_run=False)
+            for paths in written.values():
+                for path in paths:
+                    report.add_modified(path)
+        else:
+            _replace_with_symlink_or_copy(src, dst)
+            report.add_modified(dst)
     report.add_step("skills", "ok", f"installed {len(selected)} skills")
 
 
@@ -767,6 +819,11 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         "--install-llama-server",
         action="store_true",
         help="download and install llama-server automatically when embed model is enabled/found",
+    )
+    parser.add_argument(
+        "--allow-unverified-downloads",
+        action="store_true",
+        help="allow llama-server downloads when GitHub omits its SHA-256 digest (unsafe; prefer verified assets)",
     )
     parser.add_argument("--no-embed-auto", action="store_true", help="disable automatic embedder/server discovery")
     parser.add_argument("--skills-mode", choices=["agent", "none"], default="agent", help="Codex skill installation mode")
@@ -856,6 +913,8 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         with_r2=args.with_r2,
         sigs_dir=args.sigs,
         ida_runtime=args.ida_runtime or "idat",
+        ida_binary_path=args.ida_binary_path,
+        allow_unverified_downloads=args.allow_unverified_downloads,
     )
     if opts.setup_embedder:
         opts.embed_auto = True
@@ -876,9 +935,6 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
     opts.ida_dir = args.ida_dir
     opts.ida_version = args.ida_version
     opts.no_ida_prompt = args.no_ida_prompt
-    # Dynamic attr (audit §6.2): scopes --kill-ida to a binary path so
-    # we don't terminate a user's unrelated IDA on a different binary.
-    opts.ida_binary_path = args.ida_binary_path  # type: ignore[attr-defined]
     return opts
 
 
@@ -954,13 +1010,16 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
             report.metadata["ida_install"] = chosen_install.to_dict()
             report.metadata["ida_version"] = chosen_install.full_version_str
             _warn_ida_python_compat(chosen_install, report, ui)
-            if not opts.dry_run:
-                try:
-                    write_install_state(install_root, chosen_install)
-                except OSError as exc:
-                    ui.warn(f"Could not write ida-install.json: {exc}")
 
         opts = _run_interactive_wizard(opts, ui)
+        if chosen_install is not None and not opts.dry_run:
+            state_path = install_root / STATE_FILE
+            backup_file(state_path, report, dry_run=False)
+            try:
+                write_install_state(install_root, chosen_install)
+                report.add_modified(state_path)
+            except OSError as exc:
+                ui.warn(f"Could not write ida-install.json: {exc}")
         ui.info("Starting installer")
         ui.info(f"Install root: {install_root}")
         embed_model = ""
@@ -1190,6 +1249,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                         install_root=install_root,
                         dry_run=opts.dry_run,
                         report=report,
+                        allow_unverified=opts.allow_unverified_downloads or None,
                     )
                 if embed_model:
                     ui.ok("Embedding model configured for MCP clients")
@@ -1206,6 +1266,11 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                     selected_rerank = get_rerank_model_profile(opts.rerank_profile)
                     if selected_rerank is None:
                         raise RuntimeError(f"Unknown rerank profile: {opts.rerank_profile}")
+                    if selected_rerank.opt_in and not opts.accept_model_license:
+                        raise RuntimeError(
+                            f"{selected_rerank.display_name} is {selected_rerank.license}; "
+                            "rerun with --accept-model-license to download it"
+                        )
                     if opts.dry_run:
                         ui.info(f"Would download {selected_rerank.display_name} rerank model")
                         report.add_step("rerank_model", "dry-run", selected_rerank.key)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import io
+from dataclasses import replace
 from types import SimpleNamespace
 
 from ida_pro_mcp.installer.common import InstallReport
@@ -37,9 +39,18 @@ def test_managed_zembed_download_is_bounded_and_written_to_the_install_root(monk
         def __exit__(self, *_args):
             return False
 
+    from ida_pro_mcp.host.intelligence import model_profiles
+
+    body = b"GGUF-model!"
+    profile = model_profiles.MODEL_PROFILES["zembed-1"]
+    monkeypatch.setitem(
+        model_profiles.MODEL_PROFILES,
+        "zembed-1",
+        replace(profile, download_sha256=hashlib.sha256(body).hexdigest(), download_size=len(body)),
+    )
     monkeypatch.setattr(
         "ida_pro_mcp.installer.runtime.urllib.request.urlopen",
-        lambda _request, timeout: Response(b"GGUF-model!"),
+        lambda _request, timeout: Response(body),
     )
 
     downloaded = download_embed_model(tmp_path, "zembed-1")

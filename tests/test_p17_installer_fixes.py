@@ -270,6 +270,21 @@ def test_parse_args_with_r2_and_sigs_flags():
     assert parse_args([]).sigs_dir == ""
 
 
+def test_parse_args_preserves_kill_scope_and_unverified_download_opt_in():
+    from ida_pro_mcp.installer.main import parse_args
+
+    opts = parse_args(
+        [
+            "--kill-ida",
+            "--ida-binary-path",
+            "/opt/ida/idat64",
+            "--allow-unverified-downloads",
+        ]
+    )
+    assert opts.ida_binary_path == "/opt/ida/idat64"
+    assert opts.allow_unverified_downloads is True
+
+
 def test_build_stdio_config_records_r2_bin(tmp_path):
     """WO-INST: --with-r2 records the resolved engine as IDA_MCP_R2_BIN."""
     from ida_pro_mcp.installer.runtime import build_stdio_config
@@ -684,4 +699,3 @@ def test_snapshot_source_ignores_sockets_and_temp_dirs(tmp_path):
 
     s1.close()
     s2.close()
-

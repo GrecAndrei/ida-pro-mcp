@@ -41,6 +41,11 @@ class RerankModelProfile:
     license: str = ""
     download_url: str = ""
     download_filename: str = ""
+    # Managed downloads are pinned to an immutable Hub revision and checked
+    # against the LFS SHA-256 before they become visible to the host.
+    download_revision: str = ""
+    download_sha256: str = ""
+    download_size: int = 0
     opt_in: bool = False
 
 
@@ -56,6 +61,9 @@ QWEN3_RERANKER_0_6B = RerankModelProfile(
         "qwen3-reranker-0.6b-q8_0.gguf"
     ),
     download_filename="qwen3-reranker-0.6b-q8_0.gguf",
+    download_revision="a02f48bb4f057028298c21fa033da2b30d7742d5",
+    download_sha256="22c9979ce4fbcdc5acdc310c6641c32797eff1aa980b8f7a2db8a8ea23429a48",
+    download_size=639153184,
 )
 
 BGE_RERANKER_V2_GEMMA = RerankModelProfile(
@@ -77,6 +85,9 @@ BGE_RERANKER_V2_GEMMA = RerankModelProfile(
         "bge-reranker-v2-gemma.Q4_K_M.gguf"
     ),
     download_filename="bge-reranker-v2-gemma.Q4_K_M.gguf",
+    download_revision="49b479f79e181f8ac1ddefddb3074ff3143b0570",
+    download_sha256="ca597319b44ddcb1b063fe159fe472aaa431dc95ff97818ee5d63313cd5341d4",
+    download_size=1630263040,
 )
 
 QWEN3_RERANKER_4B = RerankModelProfile(
@@ -91,6 +102,9 @@ QWEN3_RERANKER_4B = RerankModelProfile(
         "Qwen3-Reranker-4B-Q4_K_M.gguf"
     ),
     download_filename="Qwen3-Reranker-4B-Q4_K_M.gguf",
+    download_revision="d73f4345c67a01c733567e53976d03d21586362d",
+    download_sha256="70996092c3d39d4bd5cfbb9722f7ced33e5c8dffc403a1a77e10afafd4ead37c",
+    download_size=2496717280,
 )
 
 BGE_RERANKER_V2_M3 = RerankModelProfile(
@@ -105,6 +119,9 @@ BGE_RERANKER_V2_M3 = RerankModelProfile(
         "bge-reranker-v2-m3-q8_0.gguf"
     ),
     download_filename="bge-reranker-v2-m3-q8_0.gguf",
+    download_revision="fdac51aaf4d4cf7ec1415568a9044a1f8b139e26",
+    download_sha256="a43c7c9b11a4c1517e5bf95151960e1621d1b72f7a493364b01e386cf1aaa1d3",
+    download_size=635676416,
     opt_in=True,
 )
 

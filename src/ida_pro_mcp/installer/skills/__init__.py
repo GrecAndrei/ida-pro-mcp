@@ -9,6 +9,7 @@ from ida_pro_mcp.host.agent_operations import (
     render_agent_operations_markdown,
     render_agent_skill_markdown,
 )
+from ida_pro_mcp.installer.common import atomic_write_text
 
 SKILL_NAME = "ida-pro-mcp"
 
@@ -27,8 +28,8 @@ def install_skills(
         reference_file = skill_dir / "references" / "operations.md"
         if not dry_run:
             reference_file.parent.mkdir(parents=True, exist_ok=True)
-            skill_file.write_text(render_agent_skill_markdown(), encoding="utf-8")
-            reference_file.write_text(render_agent_operations_markdown(), encoding="utf-8")
+            atomic_write_text(skill_file, render_agent_skill_markdown())
+            atomic_write_text(reference_file, render_agent_operations_markdown())
         # Report both files so callers count (and back up / roll back) the
         # reference document too, not just SKILL.md.
         written[SKILL_NAME].append(skill_file)

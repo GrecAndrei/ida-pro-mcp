@@ -9,8 +9,8 @@ Downloads the raw data sources needed to build the threat corpus:
 All sources are SHA-256 verifiable. If the env var
 ``IDA_MCP_BRON_CORPUS_VERIFY=1`` is set, downloads are verified against
 ``IDA_MCP_BRON_CORPUS_SHA256_*`` env vars (one per source). Otherwise the
-computed SHA is reported and persisted to ``<sources_dir>/.sha256.json``
-so the corpus cache can detect upstream changes.
+computed SHA is reported and persisted to ``<sources_dir>/.sha256.json``;
+subsequent cache reads reject unexpected changes.
 
 The downloader is intentionally minimal — no subcommands, no UI prompts.
 It is meant to be invoked from the installer or directly via
@@ -23,13 +23,13 @@ import contextlib
 import hashlib
 import json
 import os
-import shutil
 import tarfile
 import tempfile
 import time
 import urllib.error
 import urllib.request
 import zipfile
+from pathlib import Path
 from typing import Any
 
 from ..findcrypt import (
@@ -42,6 +42,7 @@ from ..host.intelligence.threat_corpus import (
     build_corpus_from_sources,
     save_corpus,
 )
+from .common import atomic_write_text
 
 __all__ = [
     "download_bron_corpus",
@@ -51,6 +52,7 @@ __all__ = [
 
 
 _MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024
+_MAX_EXTRACTED_BYTES = 1 * 1024**3
 _DOWNLOAD_CHUNK_BYTES = 64 * 1024
 _DOWNLOAD_TIMEOUT = 180
 _DEFAULT_USER_AGENT = "ida-pro-mcp-installer/bron-corpus"
@@ -108,7 +110,12 @@ def _expected_sha256(source_key: str) -> str | None:
     return val or None
 
 
-def _download_to_file(url: str, dst_path: str) -> dict[str, Any]:
+def _download_to_file(
+    url: str,
+    dst_path: str,
+    *,
+    expected_sha256: str | None = None,
+) -> dict[str, Any]:
     os.makedirs(os.path.dirname(dst_path), exist_ok=True)
     req = urllib.request.Request(
         url,
@@ -119,6 +126,7 @@ def _download_to_file(url: str, dst_path: str) -> dict[str, Any]:
     ) as tmp:
         tmp_path = tmp.name
         total = 0
+        digest = hashlib.sha256()
         try:
             with urllib.request.urlopen(req, timeout=_DOWNLOAD_TIMEOUT) as resp:
                 declared = resp.headers.get("Content-Length")
@@ -140,7 +148,13 @@ def _download_to_file(url: str, dst_path: str) -> dict[str, Any]:
                         raise RuntimeError(
                             f"Refusing download: stream exceeded max {_MAX_DOWNLOAD_BYTES}"
                         )
+                    digest.update(block)
                     tmp.write(block)
+                actual = digest.hexdigest()
+                if expected_sha256 and actual != expected_sha256:
+                    raise RuntimeError(
+                        f"SHA-256 mismatch: expected={expected_sha256} actual={actual}"
+                    )
         except Exception:
             with contextlib.suppress(OSError):
                 os.remove(tmp_path)
@@ -154,11 +168,54 @@ def _download_to_file(url: str, dst_path: str) -> dict[str, Any]:
     return {"bytes": total, "path": dst_path}
 
 
+def _copy_extracted(source, destination, *, already_written: int, declared_size: int) -> int:
+    """Copy an archive member with a decompression-bomb size cap."""
+    if declared_size < 0 or already_written + declared_size > _MAX_EXTRACTED_BYTES:
+        raise RuntimeError(
+            f"Refusing archive extraction over {_MAX_EXTRACTED_BYTES} bytes"
+        )
+    copied = 0
+    while True:
+        block = source.read(_DOWNLOAD_CHUNK_BYTES)
+        if not block:
+            break
+        copied += len(block)
+        if already_written + copied > _MAX_EXTRACTED_BYTES:
+            raise RuntimeError(
+                f"Refusing archive extraction over {_MAX_EXTRACTED_BYTES} bytes"
+            )
+        destination.write(block)
+    return copied
+
+
+def _read_sha_manifest(sources_dir: str) -> dict[str, Any]:
+    path = os.path.join(sources_dir, ".sha256.json")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    sources = payload.get("sources") if isinstance(payload, dict) else None
+    return sources if isinstance(sources, dict) else {}
+
+
 def _verify_or_report(
-    source_key: str, path: str, *, force_verify: bool
+    source_key: str,
+    path: str,
+    *,
+    force_verify: bool,
+    sources_dir: str,
+    check_manifest: bool = True,
 ) -> dict[str, Any]:
     actual = _sha256_file(path)
     expected = _expected_sha256(source_key)
+    previous = _read_sha_manifest(sources_dir).get(source_key)
+    recorded = previous.get("sha256") if isinstance(previous, dict) else ""
+    if recorded and recorded != actual and check_manifest and not force_verify:
+        raise RuntimeError(
+            f"cached {source_key} changed since its last verified manifest; "
+            "re-download it explicitly with --force"
+        )
     out: dict[str, Any] = {"path": path, "sha256": actual, "bytes": os.path.getsize(path)}
     if expected:
         if expected != actual:
@@ -167,10 +224,8 @@ def _verify_or_report(
             )
         out["verified"] = True
     elif force_verify:
-        out["verified"] = False
-        out["warning"] = (
-            f"no expected SHA-256 in IDA_MCP_BRON_CORPUS_SHA256_{source_key.upper()}; "
-            f"computed {actual}"
+        raise RuntimeError(
+            f"no expected SHA-256 in IDA_MCP_BRON_CORPUS_SHA256_{source_key.upper()}"
         )
     else:
         out["verified"] = False
@@ -184,9 +239,12 @@ def _unpack_cwe_zip(zip_path: str, dst_dir: str) -> str:
         if not xml_members:
             raise RuntimeError(f"No .xml found in CWE archive: {zip_path}")
         member = xml_members[0]
+        info = zf.getinfo(member)
+        if not info.is_dir() and info.file_size > _MAX_EXTRACTED_BYTES:
+            raise RuntimeError(f"Refusing archive extraction over {_MAX_EXTRACTED_BYTES} bytes")
         target = os.path.join(dst_dir, os.path.basename(member))
         with zf.open(member) as src, open(target, "wb") as out:
-            shutil.copyfileobj(src, out)
+            _copy_extracted(src, out, already_written=0, declared_size=info.file_size)
     return target
 
 
@@ -199,10 +257,17 @@ def _unpack_signature_base_tar(tar_path: str, dst_dir: str) -> str:
         yara_members = [m for m in members if m.name.endswith((".yar", ".yara"))]
         if not yara_members:
             raise RuntimeError(f"No .yar/.yara members in {tar_path}")
+        extracted_bytes = 0
         for m in yara_members:
             base = os.path.basename(m.name)
             if not base:
                 continue
+            if not m.isfile():
+                raise RuntimeError(f"Refusing non-regular YARA archive member: {m.name}")
+            if m.size < 0 or extracted_bytes + m.size > _MAX_EXTRACTED_BYTES:
+                raise RuntimeError(
+                    f"Refusing archive extraction over {_MAX_EXTRACTED_BYTES} bytes"
+                )
             target_path = os.path.join(yara_dst, base)
             if len(target_path) > 4096:
                 continue
@@ -211,7 +276,12 @@ def _unpack_signature_base_tar(tar_path: str, dst_dir: str) -> str:
                 continue
             try:
                 with open(target_path, "wb") as out:
-                    shutil.copyfileobj(extracted, out, length=_DOWNLOAD_CHUNK_BYTES)
+                    extracted_bytes += _copy_extracted(
+                        extracted,
+                        out,
+                        already_written=extracted_bytes,
+                        declared_size=m.size,
+                    )
             finally:
                 extracted.close()
     return yara_dst
@@ -228,13 +298,26 @@ def download_source(
         raise KeyError(f"unknown source: {source_key}")
     spec = BRON_SOURCES[source_key]
     dst = os.path.join(sources_dir, spec["filename"])
+    expected = _expected_sha256(source_key)
+    if force_verify and not expected:
+        raise RuntimeError(
+            f"no expected SHA-256 in IDA_MCP_BRON_CORPUS_SHA256_{source_key.upper()}"
+        )
     if os.path.isfile(dst) and not force:
-        return _verify_or_report(source_key, dst, force_verify=force_verify)
+        return _verify_or_report(
+            source_key, dst, force_verify=force_verify, sources_dir=sources_dir
+        )
     try:
-        _download_to_file(spec["url"], dst)
+        _download_to_file(spec["url"], dst, expected_sha256=expected)
     except (urllib.error.URLError, OSError) as e:
         raise RuntimeError(f"download failed for {source_key}: {e}") from e
-    return _verify_or_report(source_key, dst, force_verify=force_verify)
+    return _verify_or_report(
+        source_key,
+        dst,
+        force_verify=force_verify,
+        sources_dir=sources_dir,
+        check_manifest=False,
+    )
 
 
 def _materialize_cwe_xml(sources_dir: str) -> str:
@@ -271,10 +354,7 @@ def _record_sha_manifest(sources_dir: str, results: dict[str, dict[str, Any]]) -
         "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "sources": {k: {"path": v["path"], "sha256": v["sha256"], "bytes": v["bytes"]} for k, v in results.items()},
     }
-    tmp = manifest_path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2)
-    os.replace(tmp, manifest_path)
+    atomic_write_text(Path(manifest_path), json.dumps(manifest, indent=2))
     return manifest_path
 
 
@@ -299,6 +379,7 @@ def download_bron_corpus(
     """
     sources_dir = sources_dir or default_sources_dir()
     os.makedirs(sources_dir, exist_ok=True)
+    force_verify = force_verify or os.environ.get("IDA_MCP_BRON_CORPUS_VERIFY", "").lower() in {"1", "true", "yes", "on"}
     selected = [k for k in BRON_SOURCES if not only or k in only]
     results: dict[str, dict[str, Any]] = {}
     for source_key in selected:
@@ -383,7 +464,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--force-verify",
         action="store_true",
-        help="require IDA_MCP_BRON_CORPUS_SHA256_* env vars; warn if missing",
+        help="require IDA_MCP_BRON_CORPUS_SHA256_* env vars and reject mismatches",
     )
     args = parser.parse_args(argv)
     sources_dir = args.sources_dir or default_sources_dir()
