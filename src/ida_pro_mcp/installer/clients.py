@@ -312,8 +312,7 @@ def update_json_config(
     # "servers" top-level key instead of the classic "mcpServers", and expect
     # local servers to declare "type": "stdio".  Writing under the wrong key
     # makes the server silently invisible to the client.
-    existing_container = config.get(top_level_key)
-    if existing_container is not None and not isinstance(existing_container, dict):
+    if top_level_key in config and not isinstance(config[top_level_key], dict):
         report.add_error(
             f"Could not update {path}: top-level {top_level_key!r} must be an object. "
             "Fix the syntax or remove the key before retrying."
@@ -338,8 +337,7 @@ def update_opencode_config(path: Path, server_name: str, server_cfg: dict, repor
         report.add_error(str(exc))
         return False
     config.setdefault("$schema", "https://opencode.ai/config.json")
-    existing_mcp = config.get("mcp")
-    if existing_mcp is not None and not isinstance(existing_mcp, dict):
+    if "mcp" in config and not isinstance(config["mcp"], dict):
         report.add_error(
             f"Could not update {path}: top-level 'mcp' must be an object. "
             "Fix the syntax or remove the key before retrying."
@@ -381,8 +379,7 @@ def update_toml_config(path: Path, server_name: str, server_cfg: dict, report: I
                 "Fix the syntax or remove the file before retrying."
             )
             return False
-    existing_servers = config.get("mcp_servers")
-    if existing_servers is not None and not isinstance(existing_servers, dict):
+    if "mcp_servers" in config and not isinstance(config["mcp_servers"], dict):
         report.add_error(
             f"Could not update {path}: top-level 'mcp_servers' must be a table. "
             "Fix the syntax or remove the key before retrying."

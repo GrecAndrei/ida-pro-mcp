@@ -205,20 +205,21 @@ class TestUpdateJsonConfigPreservesUserData(unittest.TestCase):
         self.assertNotIn(str(p), report.modified_files)
 
     def test_wrong_server_container_type_left_untouched(self):
-        p = self.tmp / "wrong-container.json"
-        original = '{"theme": "dark", "mcpServers": []}\n'
-        p.write_text(original)
-        report = self._make_report()
+        for value in ("[]", "null"):
+            p = self.tmp / f"wrong-container-{value[:2]}.json"
+            original = f'{{"theme": "dark", "mcpServers": {value}}}\n'
+            p.write_text(original)
+            report = self._make_report()
 
-        ok = update_json_config(
-            p, "ida-pro-mcp", {"command": "y"}, report, dry_run=False
-        )
+            ok = update_json_config(
+                p, "ida-pro-mcp", {"command": "y"}, report, dry_run=False
+            )
 
-        self.assertFalse(ok)
-        self.assertEqual(p.read_text(), original)
-        self.assertEqual(len(report.errors), 1)
-        self.assertIn("must be an object", report.errors[0])
-        self.assertNotIn(str(p), report.modified_files)
+            self.assertFalse(ok)
+            self.assertEqual(p.read_text(), original)
+            self.assertEqual(len(report.errors), 1)
+            self.assertIn("must be an object", report.errors[0])
+            self.assertNotIn(str(p), report.modified_files)
 
 
 class TestUpdateTomlConfigPreservesUserData(unittest.TestCase):
