@@ -7,7 +7,12 @@ import shutil
 import uuid
 from pathlib import Path
 
-from .common import InstallReport, atomic_write_bytes, atomic_write_text
+from .common import (
+    InstallReport,
+    atomic_write_bytes,
+    atomic_write_text,
+    reject_symlink_path,
+)
 
 # Canonical legacy server identifiers that should be migrated/replaced with
 # the current canonical MCP server name.
@@ -47,6 +52,7 @@ def load_client_map(source_root: Path) -> dict:
 
 
 def backup_file(path: Path, report: InstallReport, dry_run: bool) -> Path | None:
+    reject_symlink_path(path, "client config path")
     if not path.exists() and not path.is_symlink():
         if not dry_run:
             report.add_created(path)
@@ -91,11 +97,13 @@ def _prune_legacy_entries(container: dict, server_name: str) -> None:
 
 
 def _prepare_config_path(path: Path, report: InstallReport, dry_run: bool) -> None:
-    if path.is_symlink():
+    try:
+        reject_symlink_path(path, "client config path")
+    except RuntimeError as exc:
         raise ConfigParseError(
             f"Refusing to replace symlinked client config {path}; "
             "update its target explicitly and re-run the installer."
-        )
+        ) from exc
     path.parent.mkdir(parents=True, exist_ok=True)
     backup_file(path, report, dry_run)
 
@@ -165,7 +173,13 @@ def _load_json_config(path: Path, *, allow_comments: bool = True) -> dict:
     if not content.strip():
         return {}
     try:
-        return json.loads(content)
+        config = json.loads(content)
+        if not isinstance(config, dict):
+            raise ConfigParseError(
+                f"{path} must contain a top-level JSON object; "
+                "fix the syntax or remove the file before retrying."
+            )
+        return config
     except json.JSONDecodeError:
         pass
     if not allow_comments:
@@ -174,7 +188,13 @@ def _load_json_config(path: Path, *, allow_comments: bool = True) -> dict:
             "fix the syntax or remove the file before retrying."
         )
     try:
-        return json.loads(_strip_jsonc_comments(content))
+        config = json.loads(_strip_jsonc_comments(content))
+        if not isinstance(config, dict):
+            raise ConfigParseError(
+                f"{path} must contain a top-level JSON object; "
+                "fix the syntax or remove the file before retrying."
+            )
+        return config
     except json.JSONDecodeError as exc:
         raise ConfigParseError(
             f"Could not parse {path} as JSON or JSONC: {exc}. "
@@ -292,6 +312,13 @@ def update_json_config(
     # "servers" top-level key instead of the classic "mcpServers", and expect
     # local servers to declare "type": "stdio".  Writing under the wrong key
     # makes the server silently invisible to the client.
+    existing_container = config.get(top_level_key)
+    if existing_container is not None and not isinstance(existing_container, dict):
+        report.add_error(
+            f"Could not update {path}: top-level {top_level_key!r} must be an object. "
+            "Fix the syntax or remove the key before retrying."
+        )
+        return False
     config.setdefault(top_level_key, {})
     entry = dict(server_cfg)
     if server_type:
@@ -311,6 +338,13 @@ def update_opencode_config(path: Path, server_name: str, server_cfg: dict, repor
         report.add_error(str(exc))
         return False
     config.setdefault("$schema", "https://opencode.ai/config.json")
+    existing_mcp = config.get("mcp")
+    if existing_mcp is not None and not isinstance(existing_mcp, dict):
+        report.add_error(
+            f"Could not update {path}: top-level 'mcp' must be an object. "
+            "Fix the syntax or remove the key before retrying."
+        )
+        return False
     config.setdefault("mcp", {})
     opencode_entry = {
         "type": "local",
@@ -347,6 +381,13 @@ def update_toml_config(path: Path, server_name: str, server_cfg: dict, report: I
                 "Fix the syntax or remove the file before retrying."
             )
             return False
+    existing_servers = config.get("mcp_servers")
+    if existing_servers is not None and not isinstance(existing_servers, dict):
+        report.add_error(
+            f"Could not update {path}: top-level 'mcp_servers' must be a table. "
+            "Fix the syntax or remove the key before retrying."
+        )
+        return False
     config.setdefault("mcp_servers", {})
     _upsert_server_entry(config["mcp_servers"], server_name, server_cfg)
     if not dry_run:
@@ -403,10 +444,16 @@ def rollback_from_backups(report: InstallReport) -> None:
     for item in reversed(report.backups):
         target = Path(item["target"])
         backup = Path(item["backup"])
+        reject_symlink_path(target, "rollback target")
+        reject_symlink_path(backup, "rollback backup")
         if not backup.exists():
             continue
+        if not backup.is_file():
+            raise RuntimeError(f"Rollback backup is not a regular file: {backup}")
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(backup, target)
+        # Atomic replacement never follows a target symlink if a concurrent
+        # process swaps the config after the preflight check.
+        atomic_write_bytes(target, backup.read_bytes())
     for value in reversed(report.created_files):
         target = Path(value)
         if target.is_file() or target.is_symlink():

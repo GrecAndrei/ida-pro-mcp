@@ -108,6 +108,13 @@ class TestLoadJsonConfig(unittest.TestCase):
         self.assertIn("Could not parse", str(ctx.exception))
         self.assertIn("Fix the syntax", str(ctx.exception))
 
+    def test_scalar_top_level_is_rejected(self):
+        p = self.tmp / "scalar.json"
+        p.write_text("[]")
+        with self.assertRaises(ConfigParseError) as ctx:
+            _load_json_config(p)
+        self.assertIn("top-level JSON object", str(ctx.exception))
+
 
 class TestUpdateJsonConfigPreservesUserData(unittest.TestCase):
     """The original bug: installer wiped user config when JSONC syntax was present."""
@@ -195,6 +202,22 @@ class TestUpdateJsonConfigPreservesUserData(unittest.TestCase):
         self.assertEqual(len(report.errors), 1)
         self.assertIn("Could not parse", report.errors[0])
         # modified_files must NOT include this path.
+        self.assertNotIn(str(p), report.modified_files)
+
+    def test_wrong_server_container_type_left_untouched(self):
+        p = self.tmp / "wrong-container.json"
+        original = '{"theme": "dark", "mcpServers": []}\n'
+        p.write_text(original)
+        report = self._make_report()
+
+        ok = update_json_config(
+            p, "ida-pro-mcp", {"command": "y"}, report, dry_run=False
+        )
+
+        self.assertFalse(ok)
+        self.assertEqual(p.read_text(), original)
+        self.assertEqual(len(report.errors), 1)
+        self.assertIn("must be an object", report.errors[0])
         self.assertNotIn(str(p), report.modified_files)
 
 

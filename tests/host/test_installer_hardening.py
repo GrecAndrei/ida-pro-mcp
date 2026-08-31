@@ -202,6 +202,27 @@ def test_client_config_symlink_is_not_replaced(tmp_path):
     assert json.loads(target.read_text(encoding="utf-8")) == {"keep": True}
 
 
+def test_client_config_symlinked_parent_is_not_created_or_replaced(tmp_path):
+    from ida_pro_mcp.installer import clients
+    from ida_pro_mcp.installer.common import InstallReport
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    redirected_parent = tmp_path / "config-parent"
+    redirected_parent.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(clients.ConfigParseError, match="symlinked client config"):
+        clients.update_json_config(
+            redirected_parent / "settings.json",
+            "ida-pro-mcp",
+            {"command": "/x/python"},
+            InstallReport(),
+            dry_run=False,
+        )
+
+    assert not (outside / "settings.json").exists()
+
+
 def test_run_install_rejects_symlinked_install_root_without_writing_through_it(tmp_path):
     from ida_pro_mcp.installer import main
     from ida_pro_mcp.installer.common import InstallerOptions
@@ -220,6 +241,26 @@ def test_run_install_rejects_symlinked_install_root_without_writing_through_it(t
     assert main.run_install(opts, main.UI()) == 1
     assert not (outside / "install-report.json").exists()
     assert not (outside / "install-error.log").exists()
+
+
+def test_rollback_does_not_follow_a_replaced_config_symlink(tmp_path):
+    from ida_pro_mcp.installer import clients
+    from ida_pro_mcp.installer.common import InstallReport
+
+    target = tmp_path / "settings.json"
+    target.write_text('{"old": true}', encoding="utf-8")
+    report = InstallReport()
+    assert clients.backup_file(target, report, dry_run=False) is not None
+
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"must": "remain"}', encoding="utf-8")
+    target.unlink()
+    target.symlink_to(outside)
+
+    with pytest.raises(RuntimeError, match="symlinked rollback target"):
+        clients.rollback_from_backups(report)
+
+    assert outside.read_text(encoding="utf-8") == '{"must": "remain"}'
 
 
 def test_bashrc_shim_shell_quotes_user_controlled_paths(tmp_path, monkeypatch):
