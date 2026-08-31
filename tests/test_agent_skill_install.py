@@ -46,6 +46,17 @@ def test_packaged_installer_generates_codex_skill_without_repository_tree(
     assert not report.warnings
 
 
+def test_empty_codex_home_uses_the_default_home_directory(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("CODEX_HOME", "")
+
+    install_codex_skills(tmp_path / "packaged-source", "agent", InstallReport(), dry_run=False)
+
+    assert (home / ".codex" / "skills" / "ida-pro-mcp" / "SKILL.md").is_file()
+
+
 def test_portable_installer_writes_the_skill_and_reference_together(tmp_path):
     written = install_skills([tmp_path])
 

@@ -151,6 +151,21 @@ def test_dry_run_client_config_does_not_create_parent_directories(tmp_path):
     assert str(path) in report.modified_files
 
 
+def test_empty_client_path_environment_overrides_use_platform_defaults(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import clients
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", "")
+    monkeypatch.setenv("APPDATA", "")
+
+    paths = clients.get_config_paths(Path(__file__).resolve().parents[1])
+
+    assert paths["VS Code"] == home / ".config" / "Code" / "User" / "globalStorage" / "github.copilot" / "mcp.json"
+    assert paths["Claude Desktop"] == home / ".config" / "Claude" / "claude_desktop_config.json"
+
+
 def test_legacy_copilot_wrapper_preserves_unparseable_config(tmp_path):
     import install
 

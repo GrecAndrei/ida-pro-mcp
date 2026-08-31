@@ -755,9 +755,8 @@ def install_codex_skills(source_root: Path, mode: str, report: InstallReport, dr
         # operation registry so a packaged install is still useful to Codex.
         from .skills import install_skills
 
-        codex_skills = Path(
-            os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))
-        ).expanduser() / "skills"
+        codex_home = os.environ.get("CODEX_HOME", "").strip() or str(Path.home() / ".codex")
+        codex_skills = Path(codex_home).expanduser() / "skills"
         written = install_skills([codex_skills], dry_run=dry_run)
         count = sum(len(paths) for paths in written.values())
         for paths in written.values():

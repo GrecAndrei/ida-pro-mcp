@@ -260,8 +260,13 @@ def _toml_dump_simple(data: dict) -> str:
 
 def get_config_paths(source_root: Path) -> dict[str, Path]:
     home = Path.home()
-    appdata = Path(os.environ.get("APPDATA", str(home / "AppData" / "Roaming")))
-    xdg_config = Path(os.environ.get("XDG_CONFIG_HOME", str(home / ".config")))
+    appdata = Path(
+        os.environ.get("APPDATA", "").strip()
+        or str(home / "AppData" / "Roaming")
+    )
+    xdg_config = Path(
+        os.environ.get("XDG_CONFIG_HOME", "").strip() or str(home / ".config")
+    )
     is_windows = os.name == "nt"
     raw = load_client_map(source_root)
 
