@@ -1385,6 +1385,19 @@ def _snapshot_source(
     the working checkout never leak into a running install. Older snapshots
     are pruned; only the newest is kept.
     """
+    try:
+        source_resolved = source_root.resolve()
+        install_resolved = install_root.resolve()
+        nested_install = install_resolved.relative_to(source_resolved)
+    except ValueError:
+        nested_install = None
+    except OSError as exc:
+        raise RuntimeError(f"Could not resolve snapshot paths: {exc}") from exc
+    if nested_install is not None and not nested_install.parts:
+        raise RuntimeError(
+            "runtime snapshot requires --install-root to be outside the source checkout"
+        )
+
     stamp = time.strftime("%Y%m%d-%H%M")
     target = install_root / f"runtime-src-{stamp}"
     reject_symlink_path(target, "runtime snapshot path")
@@ -1414,6 +1427,14 @@ def _snapshot_source(
                     stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)
                 ):
                     ignored.add(name)
+                elif nested_install is not None:
+                    candidate_relative = Path(path).resolve().relative_to(source_resolved)
+                    if (
+                        candidate_relative.parts
+                        and nested_install.parts
+                        and candidate_relative.parts[0] == nested_install.parts[0]
+                    ):
+                        ignored.add(name)
             except OSError:
                 ignored.add(name)
         return ignored

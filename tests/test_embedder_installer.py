@@ -276,6 +276,32 @@ def test_snapshot_install_copies_the_checkout_and_installs_from_it(monkeypatch, 
     assert any(command[-2:] == ["install", str(snapshot)] for command in commands)
 
 
+def test_snapshot_install_excludes_nested_install_root(tmp_path):
+    from ida_pro_mcp.installer.runtime import _snapshot_source
+
+    source = tmp_path / "repo"
+    source.mkdir()
+    (source / "pyproject.toml").write_text("[project]\nname = 'x'\n", encoding="utf-8")
+    install_root = source / ".ida-pro-mcp"
+    install_root.mkdir()
+    (install_root / "keep-out.txt").write_text("managed", encoding="utf-8")
+
+    snapshot = _snapshot_source(source, install_root, False, InstallReport())
+
+    assert (snapshot / "pyproject.toml").is_file()
+    assert not (snapshot / ".ida-pro-mcp").exists()
+
+
+def test_snapshot_install_rejects_source_as_install_root(tmp_path):
+    from ida_pro_mcp.installer.runtime import _snapshot_source
+
+    source = tmp_path / "repo"
+    source.mkdir()
+
+    with pytest.raises(RuntimeError, match="outside the source checkout"):
+        _snapshot_source(source, source, False, InstallReport())
+
+
 def test_auto_runtime_install_uses_snapshot_for_a_checkout(monkeypatch, tmp_path):
     install_root = tmp_path / "install"
     venv_python = install_root / ".venv" / "bin" / "python"
