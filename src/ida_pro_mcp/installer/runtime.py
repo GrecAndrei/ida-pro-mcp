@@ -676,18 +676,109 @@ def find_llama_server_bin(install_root: Path) -> str:
     return ""
 
 
-def find_rerank_model(install_root: Path, profile: str = "qwen3-reranker-0.6b") -> str:
-    """Locate an already-installed rerank GGUF, mirroring the host's _find_rerank_model logic."""
+def find_rerank_model(install_root: Path, profile: str = "") -> str:
+    """Locate an installed reranker matching the requested profile.
+
+    The host intentionally falls back to another known reranker when the
+    requested family is unavailable.  That is useful at runtime, but wrong
+    for the installer wizard: a user selecting the 4B or BGE profile must not
+    be told that a different model was found and then have that model pinned
+    into client configuration.
+    """
     env_val = os.environ.get("IDA_MCP_RERANK_MODEL", "").strip()
     if env_val and Path(env_val).is_file():
         return env_val
+
+    from ida_pro_mcp.host.intelligence.rerank_profiles import (
+        get_rerank_model_profile,
+        profile_from_rerank_model,
+    )
+
+    state: dict = {}
     try:
-        from ida_pro_mcp.host.intelligence.rerank import _find_rerank_model
-        result = _find_rerank_model()
-        if result:
-            return result
+        from ida_pro_mcp.host.intelligence.rerank import (
+            _read_rerank_state,
+            _select_state_path,
+        )
+
+        state = _read_rerank_state()
+        manual = _select_state_path(state.get("model_path"))
+        requested_name = str(
+            profile
+            or os.environ.get("IDA_MCP_RERANK_PROFILE")
+            or state.get("profile")
+            or "qwen3-reranker-0.6b"
+        ).strip()
+        selected = get_rerank_model_profile(requested_name)
+        if selected is None:
+            selected = get_rerank_model_profile("qwen3-reranker-0.6b")
+        if manual and selected is not None:
+            if profile_from_rerank_model(manual).key == selected.key:
+                return manual
     except Exception:
         pass
+
+    requested_name = str(
+        profile
+        or os.environ.get("IDA_MCP_RERANK_PROFILE")
+        or state.get("profile")
+        or "qwen3-reranker-0.6b"
+    ).strip()
+    selected = get_rerank_model_profile(requested_name)
+    if selected is None:
+        selected = get_rerank_model_profile("qwen3-reranker-0.6b")
+    if selected is None or not selected.filename_patterns:
+        return ""
+
+    home = Path.home()
+    cwd = Path.cwd()
+    bases: list[Path] = [
+        install_root,
+        install_root / "models",
+        install_root.parent,
+        home / ".cache" / "ida-pro-mcp" / "models",
+        home / "models",
+        home / "Downloads",
+        home / "Downloads" / "ida-pro-mcp",
+        home / "Documents",
+        home / "Documents" / "ida-pro-mcp",
+        cwd,
+        cwd / "models",
+    ]
+    extra = os.environ.get("IDA_MCP_RERANK_SEARCH_PATHS", "").strip()
+    if extra:
+        sep = ";" if sys.platform == "win32" else ":"
+        bases.extend(
+            Path(entry.strip()).expanduser()
+            for entry in extra.split(sep)
+            if entry.strip()
+        )
+
+    seen: set[Path] = set()
+    for base in bases:
+        try:
+            resolved_base = base.resolve()
+        except OSError:
+            continue
+        if resolved_base in seen or not resolved_base.is_dir():
+            continue
+        seen.add(resolved_base)
+        for pattern in selected.filename_patterns:
+            for candidate in sorted(resolved_base.glob(pattern)):
+                if candidate.is_file():
+                    return str(candidate)
+
+    hf_root = home / ".cache" / "huggingface" / "hub"
+    if hf_root.is_dir():
+        for pattern in selected.filename_patterns:
+            for candidate in hf_root.glob(f"models--*/snapshots/*/{pattern}"):
+                if candidate.is_file():
+                    return str(candidate)
+
+    for pattern in selected.filename_patterns:
+        for candidate in install_root.rglob(pattern):
+            if candidate.is_file():
+                return str(candidate)
     return ""
 
 

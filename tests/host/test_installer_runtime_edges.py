@@ -187,6 +187,22 @@ def test_find_model_and_server_honor_valid_environment_overrides(tmp_path, monke
     assert find_llama_server_bin(tmp_path) == str(server)
 
 
+def test_find_rerank_model_does_not_fallback_to_a_different_selected_profile(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer.runtime import find_rerank_model
+
+    monkeypatch.delenv("IDA_MCP_RERANK_MODEL", raising=False)
+    monkeypatch.delenv("IDA_MCP_RERANK_PROFILE", raising=False)
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / "qwen3-reranker-0.6b-q8_0.gguf").write_bytes(b"wrong-profile")
+
+    assert find_rerank_model(tmp_path, "qwen3-reranker-4b") == ""
+
+    selected = models / "Qwen3-Reranker-4B-Q4_K_M.gguf"
+    selected.write_bytes(b"selected-profile")
+    assert find_rerank_model(tmp_path, "qwen3-reranker-4b") == str(selected)
+
+
 def test_find_embed_model_searches_selected_profile_under_models(tmp_path, monkeypatch):
     from ida_pro_mcp.installer.runtime import find_embed_model
 
