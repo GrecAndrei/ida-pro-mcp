@@ -623,11 +623,10 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
             )
         else:
             ui.ok(f"idapro package found: {idalib_py}")
-            ok, detail = activate_idalib(ida_dir)
-            if ok:
-                ui.ok(f"idalib activated for {ida_dir} — IDA_MCP_RUNTIME=idalib will be written to client configs.")
-            else:
-                ui.warn(f"idalib activation failed ({detail}); sessions will fail until activation succeeds.")
+            ui.info(
+                "idalib activation will run after you confirm the installation, "
+                "because it changes IDA's global active runtime."
+            )
 
     opts.rollback_on_fail = _prompt_yes_no(
         "Rollback backed-up config files on failure?",
@@ -647,6 +646,21 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
 
     if not _prompt_yes_no("Proceed with installation now?", default=True):
         raise RuntimeError("Installation cancelled by user.")
+    if opts.ida_runtime == "idalib":
+        chosen_install = getattr(opts, "_ida_install", None)
+        ida_dir = str(chosen_install.path) if chosen_install is not None else ""
+        if find_idalib_python_dir(ida_dir):
+            ok, detail = activate_idalib(ida_dir)
+            if ok:
+                ui.ok(
+                    f"idalib activated for {ida_dir} — "
+                    "IDA_MCP_RUNTIME=idalib will be written to client configs."
+                )
+            else:
+                ui.warn(
+                    f"idalib activation failed ({detail}); sessions will fail "
+                    "until activation succeeds."
+                )
     return opts
 
 

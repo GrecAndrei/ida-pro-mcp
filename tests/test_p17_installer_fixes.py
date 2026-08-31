@@ -821,6 +821,40 @@ def test_embedder_doctor_rejects_symlinked_install_root(tmp_path):
     assert not (outside / "embedder.json").exists()
 
 
+def test_wizard_does_not_activate_idalib_before_install_confirmation(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    opts = InstallerOptions(
+        interactive=True,
+        ida_runtime="idalib",
+        install_root=tmp_path / "install",
+    )
+    activation_calls: list[str] = []
+    monkeypatch.setattr(main_mod, "find_embed_model", lambda *a, **k: "")
+    monkeypatch.setattr(main_mod, "find_llama_server_bin", lambda *a, **k: "")
+    monkeypatch.setattr(main_mod, "find_idalib_python_dir", lambda _path: "/fake/idalib/python")
+    monkeypatch.setattr(
+        main_mod,
+        "activate_idalib",
+        lambda path: (activation_calls.append(path) or (True, "activated")),
+    )
+    monkeypatch.setattr(main_mod, "_prompt_choice", lambda _q, _choices, default: default)
+    monkeypatch.setattr(main_mod, "_prompt_text", lambda _q, default="": default)
+    monkeypatch.setattr(main_mod, "_prompt_secret", lambda _q: "")
+    monkeypatch.setattr(main_mod, "_prompt_model_path", lambda _profile: "")
+    monkeypatch.setattr(
+        main_mod,
+        "_prompt_yes_no",
+        lambda question, default: False if "Proceed with installation" in question else default,
+    )
+
+    with pytest.raises(RuntimeError, match="Installation cancelled"):
+        main_mod._run_interactive_wizard(opts, main_mod.UI())
+
+    assert activation_calls == []
+
+
 def test_wizard_rerank_decline_persists_rerank_disabled(tmp_path, monkeypatch):
     """Declining the reranker in the wizard must set rerank_disabled so the
     default profile cannot leak into state / client env."""
