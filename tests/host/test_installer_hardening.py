@@ -304,6 +304,23 @@ def test_corpus_cached_symlink_is_refused_without_following_it(tmp_path):
     assert outside.read_bytes() == b"must remain untouched"
 
 
+def test_corpus_source_directory_rejects_symlinked_parent(tmp_path):
+    from ida_pro_mcp.installer import bron_corpus
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    redirected_parent = tmp_path / "cache-parent"
+    redirected_parent.symlink_to(outside, target_is_directory=True)
+    sources_dir = redirected_parent / "threat-corpus"
+
+    with pytest.raises(RuntimeError, match="symlinked corpus source directory"):
+        bron_corpus.download_bron_corpus(
+            sources_dir=str(sources_dir), only=["cwe"]
+        )
+
+    assert not (outside / "threat-corpus").exists()
+
+
 def test_cwe_extraction_does_not_follow_existing_target_symlink(tmp_path):
     from ida_pro_mcp.installer import bron_corpus
 
@@ -404,7 +421,21 @@ def test_corpus_force_refresh_updates_manifest_after_upstream_change(tmp_path, m
     destination = tmp_path / "cwe-test.zip"
     destination.write_bytes(old)
     (tmp_path / ".sha256.json").write_text(
-        json.dumps({"sources": {"cwe": {"path": str(destination), "sha256": hashlib.sha256(old).hexdigest()}}}),
+        json.dumps(
+            {
+                "sources": {
+                    "cwe": {
+                        "path": str(destination),
+                        "sha256": hashlib.sha256(old).hexdigest(),
+                    },
+                    "attack_ics": {
+                        "path": str(tmp_path / "ics.json"),
+                        "sha256": "old-ics-digest",
+                        "bytes": 7,
+                    },
+                }
+            }
+        ),
         encoding="utf-8",
     )
     monkeypatch.setattr(
@@ -419,3 +450,8 @@ def test_corpus_force_refresh_updates_manifest_after_upstream_change(tmp_path, m
     assert result["built"] is False
     manifest = json.loads((tmp_path / ".sha256.json").read_text(encoding="utf-8"))
     assert manifest["sources"]["cwe"]["sha256"] == hashlib.sha256(new).hexdigest()
+    assert manifest["sources"]["attack_ics"] == {
+        "path": str(tmp_path / "ics.json"),
+        "sha256": "old-ics-digest",
+        "bytes": 7,
+    }

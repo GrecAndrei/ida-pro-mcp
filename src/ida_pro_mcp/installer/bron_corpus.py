@@ -44,7 +44,7 @@ from ..host.intelligence.threat_corpus import (
     build_corpus_from_sources,
     save_corpus,
 )
-from .common import atomic_write_text
+from .common import atomic_write_text, reject_symlink_path
 
 __all__ = [
     "download_bron_corpus",
@@ -63,8 +63,7 @@ _DEFAULT_USER_AGENT = "ida-pro-mcp-installer/bron-corpus"
 def _reject_symlink(path: str | Path, description: str) -> Path:
     """Reject a cache path that would make the installer follow a link."""
     candidate = Path(path)
-    if candidate.is_symlink():
-        raise RuntimeError(f"Refusing symlinked {description}: {candidate}")
+    reject_symlink_path(candidate, description)
     return candidate
 
 
@@ -167,7 +166,7 @@ def _download_to_file(
         headers={"User-Agent": _DEFAULT_USER_AGENT, "Accept": "*/*"},
     )
     with tempfile.NamedTemporaryFile(
-        delete=False, dir=os.path.dirname(dst_path), prefix=".dl-", suffix=".part"
+        delete=False, dir=str(destination.parent), prefix=".dl-", suffix=".part"
     ) as tmp:
         tmp_path = tmp.name
         total = 0
@@ -426,9 +425,18 @@ def _materialize_findcrypt(sources_dir: str) -> str:
 
 def _record_sha_manifest(sources_dir: str, results: dict[str, dict[str, Any]]) -> str:
     manifest_path = os.path.join(sources_dir, ".sha256.json")
+    _reject_symlink(manifest_path, "corpus checksum manifest")
+    existing = _read_sha_manifest(sources_dir)
+    merged = dict(existing)
+    merged.update(
+        {
+            k: {"path": v["path"], "sha256": v["sha256"], "bytes": v["bytes"]}
+            for k, v in results.items()
+        }
+    )
     manifest = {
         "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "sources": {k: {"path": v["path"], "sha256": v["sha256"], "bytes": v["bytes"]} for k, v in results.items()},
+        "sources": merged,
     }
     atomic_write_text(Path(manifest_path), json.dumps(manifest, indent=2))
     return manifest_path
@@ -454,7 +462,7 @@ def download_bron_corpus(
     files); returns ``status["built"] is False`` if no sources are usable.
     """
     sources_dir = sources_dir or default_sources_dir()
-    os.makedirs(sources_dir, exist_ok=True)
+    _ensure_directory(sources_dir, "corpus source directory")
     force_verify = force_verify or os.environ.get("IDA_MCP_BRON_CORPUS_VERIFY", "").lower() in {"1", "true", "yes", "on"}
     selected = [k for k in BRON_SOURCES if not only or k in only]
     results: dict[str, dict[str, Any]] = {}
