@@ -1668,7 +1668,12 @@ def build_stdio_config(
         env["IDA_MCP_RERANK_DISABLED"] = "1"
     elif rerank_profile:
         env["IDA_MCP_RERANK_PROFILE"] = rerank_profile
-    if str(embed_backend or "").lower() == "gemini":
+    backend_key = str(embed_backend or "").strip().lower()
+    if backend_key == "local":
+        # Explicitly selecting local mode must override a stale
+        # embedder.json that may still say backend=gemini.
+        env["IDA_MCP_EMBED_BACKEND"] = "local"
+    elif backend_key == "gemini":
         env["IDA_MCP_EMBED_BACKEND"] = "gemini"
         if gemini_vertex:
             env["IDA_MCP_GEMINI_VERTEX"] = "1"

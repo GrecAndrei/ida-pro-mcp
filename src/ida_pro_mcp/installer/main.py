@@ -129,6 +129,11 @@ def run_embedder_doctor(opts: InstallerOptions, ui: UI) -> int:
         os.environ["IDA_PRO_MCP_HOME"] = str(install_root)
         if gemini_mode:
             os.environ["IDA_MCP_EMBED_BACKEND"] = "gemini"
+        else:
+            # A previous Gemini install may have backend=gemini in the state
+            # file. Explicitly force this doctor invocation to inspect the
+            # requested local backend instead of inheriting that state.
+            os.environ["IDA_MCP_EMBED_BACKEND"] = "local"
         if embed_server:
             os.environ["IDA_MCP_EMBED_SERVER_BIN"] = embed_server
         if embed_model:
@@ -1543,6 +1548,7 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                     embed_model=embed_model,
                     embed_server_bin=embed_server,
                     embed_profile=opts.embed_profile,
+                    embed_backend="local",
                     rerank_model=rerank_model,
                     rerank_profile=opts.rerank_profile,
                     ida_install=getattr(opts, "_ida_install", None),
