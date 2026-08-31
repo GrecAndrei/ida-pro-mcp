@@ -331,6 +331,27 @@ def test_corpus_publish_failure_preserves_existing_source(tmp_path, monkeypatch)
     assert not list(tmp_path.glob(".dl-*.part"))
 
 
+def test_corpus_empty_download_preserves_existing_source(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import bron_corpus
+
+    spec = dict(bron_corpus.BRON_SOURCES["cwe"])
+    spec["filename"] = "cwe-empty.zip"
+    monkeypatch.setitem(bron_corpus.BRON_SOURCES, "cwe", spec)
+    destination = tmp_path / spec["filename"]
+    destination.write_bytes(b"previous-corpus")
+    monkeypatch.setattr(
+        bron_corpus.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _Response(b""),
+    )
+
+    with pytest.raises(RuntimeError, match="download was empty"):
+        bron_corpus.download_source("cwe", str(tmp_path), force=True)
+
+    assert destination.read_bytes() == b"previous-corpus"
+    assert not list(tmp_path.glob(".dl-*.part"))
+
+
 def test_corpus_cached_symlink_is_refused_without_following_it(tmp_path):
     from ida_pro_mcp.installer import bron_corpus
 

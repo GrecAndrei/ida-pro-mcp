@@ -194,6 +194,8 @@ def _download_to_file(
                         )
                     digest.update(block)
                     tmp.write(block)
+                if total <= 0:
+                    raise RuntimeError(f"{url} download was empty")
                 actual = digest.hexdigest()
                 if expected_sha256 and actual != expected_sha256:
                     raise RuntimeError(
