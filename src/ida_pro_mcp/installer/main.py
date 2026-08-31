@@ -25,6 +25,7 @@ from .common import (
     InstallReport,
     atomic_write_text,
     find_ida_sig_dir,
+    installer_lock,
     reject_symlink_path,
 )
 from .discovery import (
@@ -1019,6 +1020,17 @@ def _warn_ida_python_compat(chosen_install, report, ui) -> None:
 
 
 def run_install(opts: InstallerOptions, ui: UI) -> int:
+    """Run one installer transaction under the per-root process lock."""
+    install_root = opts.install_root or get_install_root()
+    try:
+        with installer_lock(install_root):
+            return _run_install_unlocked(opts, ui)
+    except RuntimeError as exc:
+        ui.err(f"Could not start installer: {exc}")
+        return 1
+
+
+def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
     report = InstallReport()
     install_root = opts.install_root or get_install_root()
     source_root = opts.source_root or Path.cwd()

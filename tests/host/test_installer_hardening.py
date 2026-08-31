@@ -243,6 +243,25 @@ def test_run_install_rejects_symlinked_install_root_without_writing_through_it(t
     assert not (outside / "install-error.log").exists()
 
 
+def test_installer_lock_serializes_same_install_root(tmp_path):
+    from ida_pro_mcp.installer.common import installer_lock
+
+    install_root = tmp_path / "install"
+
+    def _second_run() -> None:
+        with installer_lock(install_root):
+            pass
+
+    with installer_lock(install_root), pytest.raises(
+        RuntimeError, match="Another installer is already running"
+    ):
+        _second_run()
+
+    with installer_lock(install_root):
+        pass
+    assert (install_root / ".install.lock").is_file()
+
+
 def test_install_report_rejects_symlinked_destination_parent(tmp_path):
     from ida_pro_mcp.installer.common import InstallReport
 
