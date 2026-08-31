@@ -1283,7 +1283,11 @@ def _snapshot_source(
             path = os.path.join(folder, name)
             try:
                 st = os.lstat(path)
-                if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode) or stat.S_ISLNK(st.st_mode)):
+                # Do not follow checkout symlinks into arbitrary directories
+                # or copy linked secrets into the managed runtime snapshot.
+                if stat.S_ISLNK(st.st_mode) or not (
+                    stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)
+                ):
                     ignored.add(name)
             except OSError:
                 ignored.add(name)

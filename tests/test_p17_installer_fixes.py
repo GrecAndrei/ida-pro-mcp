@@ -700,3 +700,25 @@ def test_snapshot_source_ignores_sockets_and_temp_dirs(tmp_path):
 
     s1.close()
     s2.close()
+
+
+def test_snapshot_source_does_not_follow_checkout_symlinks(tmp_path):
+    from ida_pro_mcp.installer.common import InstallReport
+    from ida_pro_mcp.installer.runtime import _snapshot_source
+
+    source_root = tmp_path / "src_root"
+    source_root.mkdir()
+    (source_root / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("do not copy", encoding="utf-8")
+    (source_root / "linked-secrets").symlink_to(outside, target_is_directory=True)
+
+    target = _snapshot_source(
+        source_root,
+        tmp_path / "install_root",
+        dry_run=False,
+        report=InstallReport(),
+    )
+
+    assert not (target / "linked-secrets").exists()
