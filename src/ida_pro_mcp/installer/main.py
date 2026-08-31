@@ -1088,7 +1088,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                         "must have its IDA_MCP_BRON_CORPUS_SHA256_* hash configured."
                     )
                 corpus_status = download_bron_corpus(
-                    force=False, force_verify=opts.verify_bron_corpus
+                    force=False, force_verify=strict_corpus
                 )
                 built = corpus_status.get("built", False)
                 counts = corpus_status.get("counts", {})
