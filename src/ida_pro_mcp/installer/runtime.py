@@ -62,6 +62,7 @@ def _download_to_file(
     expected_size: int = 0,
 ) -> tuple[int, str]:
     """Stream a response to a same-directory temporary file and verify it."""
+    reject_symlink_path(destination, f"{label} destination")
     destination.parent.mkdir(parents=True, exist_ok=True)
     raw_expected_sha256 = str(expected_sha256 or "").strip()
     expected_sha256 = _normalise_sha256(raw_expected_sha256)
@@ -157,6 +158,7 @@ def _copy_file_atomically(
     existing destination, which lets callers implement a real no-clobber
     policy even if another process creates the file after a preflight check.
     """
+    reject_symlink_path(destination, "file copy destination")
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
     try:
@@ -604,9 +606,17 @@ def download_rerank_model(install_root: Path, profile: str) -> str:
 
 
 def find_llama_server_bin(install_root: Path) -> str:
+    def _is_executable(p: Path) -> bool:
+        if not p.is_file():
+            return False
+        if sys.platform == "win32":
+            low = str(p).lower()
+            return low.endswith((".exe", ".bat", ".cmd"))
+        return os.access(str(p), os.X_OK)
+
     env_val = os.environ.get("IDA_MCP_EMBED_SERVER_BIN", "").strip()
-    if env_val and Path(env_val).is_file():
-        return env_val
+    if env_val and _is_executable(Path(env_val).expanduser()):
+        return str(Path(env_val).expanduser())
 
     # Manual override via embedder.json (mirrors host discovery).
     try:
@@ -615,18 +625,10 @@ def find_llama_server_bin(install_root: Path) -> str:
             _select_state_path,
         )
         manual = _select_state_path(_read_embedder_state().get("server_bin"))
-        if manual:
+        if manual and _is_executable(Path(manual)):
             return manual
     except Exception:
         pass
-
-    def _is_executable(p: Path) -> bool:
-        if not p.is_file():
-            return False
-        if sys.platform == "win32":
-            low = str(p).lower()
-            return low.endswith((".exe", ".bat", ".cmd"))
-        return os.access(str(p), os.X_OK)
 
     binary_names = ("llama-server.exe", "llama-server") if sys.platform == "win32" else (
         "llama-server", "llama-server.exe",
@@ -951,6 +953,8 @@ def _extract_archive(archive: Path, out_dir: Path) -> None:
     catching attacks that exploit case-folding or symlinks created
     during extraction.
     """
+    reject_symlink_path(archive, "archive path")
+    reject_symlink_path(out_dir, "archive extraction path")
     out_dir.mkdir(parents=True, exist_ok=True)
     extract_root = out_dir.resolve()
     extracted_bytes = 0
@@ -1412,8 +1416,17 @@ def _write_dev_pth(venv_dir: Path, source_root: Path, dry_run: bool, report: Ins
         [str(python_exe), "-c", "import site; print(site.getsitepackages()[0])"],
         timeout=15,
     )
-    site_packages = Path(result.stdout.strip())
+    raw_site_packages = result.stdout.strip()
+    if not raw_site_packages or "\n" in raw_site_packages or "\r" in raw_site_packages:
+        raise RuntimeError("venv did not report a usable site-packages directory")
+    site_packages = Path(raw_site_packages).expanduser()
+    if not site_packages.is_absolute():
+        raise RuntimeError(f"venv reported a relative site-packages directory: {site_packages}")
+    reject_symlink_path(site_packages, "venv site-packages path")
+    if not site_packages.is_dir():
+        raise RuntimeError(f"venv site-packages directory does not exist: {site_packages}")
     pth_path = site_packages / "ida_pro_mcp_dev.pth"
+    reject_symlink_path(pth_path, "development source pointer")
     src_path = source_root / "src"
     if dry_run:
         report.add_step("dev_pth", "dry-run", f"would write {pth_path} -> {src_path}")
@@ -1424,10 +1437,12 @@ def _write_dev_pth(venv_dir: Path, source_root: Path, dry_run: bool, report: Ins
 
     # Remove any stale pip-installed copy so the .pth source takes precedence
     stale_pkg_dir = site_packages / "ida_pro_mcp"
+    reject_symlink_path(stale_pkg_dir, "stale runtime package path")
     if stale_pkg_dir.is_dir():
         shutil.rmtree(stale_pkg_dir)
         report.add_step("dev_pth", "cleanup", f"removed stale {stale_pkg_dir}")
     for p in site_packages.glob("ida_pro_mcp-*.dist-info"):
+        reject_symlink_path(p, "stale runtime metadata path")
         if p.is_dir():
             shutil.rmtree(p)
             report.add_step("dev_pth", "cleanup", f"removed stale {p}")
@@ -1447,7 +1462,17 @@ def _remove_dev_pth(venv_dir: Path, report: InstallReport) -> None:
         [str(python_exe), "-c", "import site; print(site.getsitepackages()[0])"],
         timeout=15,
     )
-    pth_path = Path(result.stdout.strip()) / "ida_pro_mcp_dev.pth"
+    raw_site_packages = result.stdout.strip()
+    if not raw_site_packages or "\n" in raw_site_packages or "\r" in raw_site_packages:
+        raise RuntimeError("venv did not report a usable site-packages directory")
+    site_packages = Path(raw_site_packages).expanduser()
+    if not site_packages.is_absolute():
+        raise RuntimeError(f"venv reported a relative site-packages directory: {site_packages}")
+    reject_symlink_path(site_packages, "venv site-packages path")
+    if not site_packages.is_dir():
+        raise RuntimeError(f"venv site-packages directory does not exist: {site_packages}")
+    pth_path = site_packages / "ida_pro_mcp_dev.pth"
+    reject_symlink_path(pth_path, "development source pointer")
     if pth_path.is_file():
         pth_path.unlink()
         report.add_modified(pth_path)

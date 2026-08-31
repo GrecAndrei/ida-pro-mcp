@@ -53,3 +53,18 @@ def test_portable_installer_rejects_symlinked_skill_destination(tmp_path):
         install_skills([target])
 
     assert not (outside / "SKILL.md").exists()
+
+
+def test_portable_installer_rejects_symlinked_skill_reference_directory(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    target = tmp_path / "skills"
+    target.mkdir()
+    skill_dir = target / "ida-pro-mcp"
+    skill_dir.mkdir()
+    (skill_dir / "references").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlinked skill reference installation path"):
+        install_skills([target])
+
+    assert not (outside / "operations.md").exists()

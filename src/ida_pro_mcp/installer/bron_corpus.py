@@ -257,6 +257,11 @@ def _verify_or_report(
     sources_dir: str,
     check_manifest: bool = True,
 ) -> dict[str, Any]:
+    size = os.path.getsize(path)
+    if size <= 0:
+        raise RuntimeError(
+            f"cached {source_key} source is empty; re-download it explicitly with --force"
+        )
     actual = _sha256_file(path)
     expected = _expected_sha256(source_key)
     previous = _read_sha_manifest(sources_dir).get(source_key)
@@ -266,7 +271,7 @@ def _verify_or_report(
             f"cached {source_key} changed since its last verified manifest; "
             "re-download it explicitly with --force"
         )
-    out: dict[str, Any] = {"path": path, "sha256": actual, "bytes": os.path.getsize(path)}
+    out: dict[str, Any] = {"path": path, "sha256": actual, "bytes": size}
     if expected:
         if expected != actual:
             raise RuntimeError(
@@ -482,6 +487,15 @@ def download_bron_corpus(
             "downloads": results,
             "reason": "all source downloads failed",
         }
+    if force_verify:
+        failed = [key for key, value in results.items() if "error" in value]
+        if failed:
+            return {
+                "built": False,
+                "sources_dir": sources_dir,
+                "downloads": results,
+                "reason": "strict verification failed for: " + ", ".join(failed),
+            }
     _record_sha_manifest(sources_dir, {k: v for k, v in results.items() if "error" not in v})
     cwe_path: str | None = None
     attack_paths: list[str] = []

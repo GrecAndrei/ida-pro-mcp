@@ -397,6 +397,42 @@ def test_corpus_cached_symlink_is_refused_without_following_it(tmp_path):
     assert outside.read_bytes() == b"must remain untouched"
 
 
+def test_empty_cached_corpus_source_requires_a_refresh(tmp_path):
+    from ida_pro_mcp.installer import bron_corpus
+
+    cached = tmp_path / bron_corpus.BRON_SOURCES["cwe"]["filename"]
+    cached.touch()
+
+    with pytest.raises(RuntimeError, match="cached cwe source is empty"):
+        bron_corpus.download_source("cwe", str(tmp_path))
+
+
+def test_strict_corpus_mode_does_not_build_from_partial_verified_sources(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import bron_corpus
+
+    monkeypatch.setattr(
+        bron_corpus,
+        "BRON_SOURCES",
+        {
+            "cwe": {"filename": "cwe.zip"},
+            "attack_ics": {"filename": "ics.json"},
+        },
+    )
+
+    def _download(key, _directory, **_kwargs):
+        if key == "attack_ics":
+            raise RuntimeError("missing expected SHA-256")
+        return {"path": str(tmp_path / "cwe.zip")}
+
+    monkeypatch.setattr(bron_corpus, "download_source", _download)
+    result = bron_corpus.download_bron_corpus(
+        sources_dir=str(tmp_path), force_verify=True
+    )
+
+    assert result["built"] is False
+    assert "strict verification failed" in result["reason"]
+
+
 def test_corpus_source_directory_rejects_symlinked_parent(tmp_path):
     from ida_pro_mcp.installer import bron_corpus
 

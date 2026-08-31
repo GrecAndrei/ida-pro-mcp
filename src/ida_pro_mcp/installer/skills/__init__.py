@@ -27,6 +27,7 @@ def install_skills(
         skill_file = skill_dir / "SKILL.md"
         reference_file = skill_dir / "references" / "operations.md"
         reject_symlink_path(skill_file, "skill installation path")
+        reject_symlink_path(reference_file, "skill reference installation path")
         if not dry_run:
             reference_file.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_text(skill_file, render_agent_skill_markdown())

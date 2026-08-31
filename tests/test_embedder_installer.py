@@ -209,6 +209,21 @@ def test_normal_runtime_install_removes_an_old_live_source_pointer(monkeypatch, 
     assert any(command[-2:] == ["install", "ida-pro-mcp"] for command in commands)
 
 
+def test_dev_runtime_rejects_unusable_site_packages_output(monkeypatch, tmp_path):
+    from ida_pro_mcp.installer.runtime import _write_dev_pth
+
+    venv_python = tmp_path / ".venv" / "bin" / "python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.touch()
+    monkeypatch.setattr(
+        "ida_pro_mcp.installer.runtime.run_checked",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout=""),
+    )
+
+    with pytest.raises(RuntimeError, match="usable site-packages"):
+        _write_dev_pth(venv_python.parent.parent, tmp_path, False, InstallReport())
+
+
 def test_auto_runtime_source_resolves_to_snapshot_for_a_checkout(tmp_path):
     checkout = tmp_path / "repo"
     checkout.mkdir()

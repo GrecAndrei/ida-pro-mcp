@@ -178,6 +178,7 @@ def test_find_model_and_server_honor_valid_environment_overrides(tmp_path, monke
     server = tmp_path / "llama-server"
     for path in (embed, rerank, server):
         path.write_bytes(b"x")
+    server.chmod(0o755)
     monkeypatch.setenv("IDA_MCP_EMBED_MODEL", str(embed))
     monkeypatch.setenv("IDA_MCP_RERANK_MODEL", str(rerank))
     monkeypatch.setenv("IDA_MCP_EMBED_SERVER_BIN", str(server))
@@ -185,6 +186,22 @@ def test_find_model_and_server_honor_valid_environment_overrides(tmp_path, monke
     assert find_embed_model(tmp_path, "zembed-1") == str(embed)
     assert find_rerank_model(tmp_path) == str(rerank)
     assert find_llama_server_bin(tmp_path) == str(server)
+
+
+def test_find_llama_server_ignores_non_executable_environment_override(tmp_path, monkeypatch):
+    from ida_pro_mcp.host.intelligence import core
+    from ida_pro_mcp.installer.runtime import find_llama_server_bin
+
+    monkeypatch.setenv("IDA_MCP_EMBED_SERVER_BIN", str(tmp_path / "not-executable"))
+    monkeypatch.setattr(core, "_read_embedder_state", dict)
+    monkeypatch.setattr(core, "_select_state_path", lambda _value: "")
+    candidate = tmp_path / "bin" / "llama-server"
+    candidate.parent.mkdir()
+    candidate.write_bytes(b"server")
+    candidate.chmod(0o755)
+    monkeypatch.setattr("ida_pro_mcp.installer.runtime.shutil.which", lambda _name: None)
+
+    assert find_llama_server_bin(tmp_path) == str(candidate)
 
 
 def test_find_rerank_model_does_not_fallback_to_a_different_selected_profile(tmp_path, monkeypatch):
