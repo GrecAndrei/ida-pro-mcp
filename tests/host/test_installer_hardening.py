@@ -292,6 +292,23 @@ def test_bashrc_shim_shell_quotes_user_controlled_paths(tmp_path, monkeypatch):
     assert "$(touch SHOULD_NOT_RUN)" in content
 
 
+def test_bashrc_shim_rejects_symlinked_config(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main
+    from ida_pro_mcp.installer.common import InstallReport
+
+    home = tmp_path / "home"
+    home.mkdir()
+    outside = tmp_path / "outside.bashrc"
+    outside.write_text("# preserve", encoding="utf-8")
+    (home / ".bashrc").symlink_to(outside)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+    with pytest.raises(RuntimeError, match="symlinked bashrc path"):
+        main.install_bashrc_cli(tmp_path / "install", dry_run=False, report=InstallReport())
+
+    assert outside.read_text(encoding="utf-8") == "# preserve"
+
+
 def test_corpus_hash_mismatch_never_replaces_existing_source(tmp_path, monkeypatch):
     from ida_pro_mcp.installer import bron_corpus
 

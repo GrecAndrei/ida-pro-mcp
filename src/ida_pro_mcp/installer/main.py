@@ -627,6 +627,7 @@ def install_bashrc_cli(install_root: Path, dry_run: bool, report: InstallReport)
         report.add_warning("bashrc shim skipped on Windows")
         return
     bashrc = Path.home() / ".bashrc"
+    reject_symlink_path(bashrc, "bashrc path")
     block_start = "# >>> ida-pro-mcp >>>"
     block_end = "# <<< ida-pro-mcp <<<"
     venv_bin = install_root / ".venv" / "bin"
