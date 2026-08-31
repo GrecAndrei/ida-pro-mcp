@@ -29,7 +29,9 @@ class _Response:
 
 
 def _patch_model(monkeypatch, body: bytes):
-    from ida_pro_mcp.host.intelligence import model_profiles
+    import importlib
+
+    model_profiles = importlib.import_module("ida_pro_mcp.host.intelligence.model_profiles")
 
     profile = model_profiles.MODEL_PROFILES["zembed-1"]
     patched = replace(
@@ -37,7 +39,9 @@ def _patch_model(monkeypatch, body: bytes):
         download_sha256=hashlib.sha256(body).hexdigest(),
         download_size=len(body),
     )
-    monkeypatch.setitem(model_profiles.MODEL_PROFILES, "zembed-1", patched)
+    profiles = dict(model_profiles.MODEL_PROFILES)
+    profiles["zembed-1"] = patched
+    monkeypatch.setattr(model_profiles, "MODEL_PROFILES", profiles)
     return patched
 
 
@@ -235,6 +239,59 @@ def test_corpus_hash_mismatch_never_replaces_existing_source(tmp_path, monkeypat
         bron_corpus.download_source("cwe", str(tmp_path), force=True)
     assert destination.read_bytes() == b"previous-corpus"
     assert not list(tmp_path.glob("*.part"))
+
+
+def test_corpus_cached_symlink_is_refused_without_following_it(tmp_path):
+    from ida_pro_mcp.installer import bron_corpus
+
+    outside = tmp_path / "outside.zip"
+    outside.write_bytes(b"must remain untouched")
+    cached = tmp_path / bron_corpus.BRON_SOURCES["cwe"]["filename"]
+    cached.symlink_to(outside)
+
+    with pytest.raises(RuntimeError, match="symlinked cached corpus source"):
+        bron_corpus.download_source("cwe", str(tmp_path))
+
+    assert outside.read_bytes() == b"must remain untouched"
+
+
+def test_cwe_extraction_does_not_follow_existing_target_symlink(tmp_path):
+    from ida_pro_mcp.installer import bron_corpus
+
+    archive = tmp_path / "cwe.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("nested/cwe.xml", b"<cwe />")
+    output = tmp_path / "cwe"
+    output.mkdir()
+    outside = tmp_path / "outside.xml"
+    outside.write_bytes(b"must remain untouched")
+    (output / "cwe.xml").symlink_to(outside)
+
+    with pytest.raises(RuntimeError, match="symlinked CWE extraction target"):
+        bron_corpus._unpack_cwe_zip(str(archive), str(output))
+
+    assert outside.read_bytes() == b"must remain untouched"
+
+
+def test_signature_extraction_does_not_follow_existing_directory_symlink(tmp_path):
+    from ida_pro_mcp.installer import bron_corpus
+
+    archive = tmp_path / "signature-base.tar.gz"
+    with tarfile.open(archive, "w:gz") as tf:
+        content = b"rule test { condition: true }"
+        member = tarfile.TarInfo("signature-base/rules/test.yar")
+        member.size = len(content)
+        tf.addfile(member, io.BytesIO(content))
+    output = tmp_path / "signature-base"
+    output.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (output / "yara").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlinked YARA extraction directory"):
+        bron_corpus._unpack_signature_base_tar(str(archive), str(output))
+
+    assert not (outside / "test.yar").exists()
 
 
 def test_corpus_verify_env_is_strict_when_expected_hash_is_missing(tmp_path, monkeypatch):

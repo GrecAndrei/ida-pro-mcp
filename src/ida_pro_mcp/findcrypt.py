@@ -23,6 +23,18 @@ _MAX_RULE_BYTES = 2_000_000
 _MAX_TOTAL_RULE_BYTES = 64 * 1024 * 1024
 
 
+def _reject_symlink_component(root: str, path: str) -> None:
+    """Reject existing links between an extraction root and a target."""
+    relative = os.path.relpath(path, root)
+    current = root
+    for part in relative.split(os.sep):
+        if part in {"", "."}:
+            continue
+        current = os.path.join(current, part)
+        if os.path.islink(current):
+            raise RuntimeError(f"Symlink in FindCrypt extraction path: {current}")
+
+
 def findcrypt_rules_dir(cache_dir: str | None = None) -> str | None:
     """Return the first downloaded FindCrypt rule directory, if available."""
     if cache_dir is None:
@@ -46,6 +58,8 @@ def findcrypt_rules_dir(cache_dir: str | None = None) -> str | None:
 
 def extract_findcrypt_rules(zip_path: str, dst_dir: str) -> str:
     """Safely extract bounded YARA rule files from a FindCrypt ZIP archive."""
+    if os.path.islink(dst_dir):
+        raise RuntimeError(f"Refusing symlinked FindCrypt extraction directory: {dst_dir}")
     root = os.path.realpath(dst_dir)
     os.makedirs(root, exist_ok=True)
     extracted = 0
@@ -70,7 +84,9 @@ def extract_findcrypt_rules(zip_path: str, dst_dir: str) -> str:
             if total_bytes > _MAX_TOTAL_RULE_BYTES:
                 raise RuntimeError("FindCrypt rules exceed extraction size limit")
 
-            target = os.path.realpath(os.path.join(root, *parts))
+            requested_target = os.path.join(root, *parts)
+            _reject_symlink_component(root, requested_target)
+            target = os.path.realpath(requested_target)
             if os.path.commonpath((root, target)) != root:
                 raise RuntimeError(f"Unsafe path in FindCrypt archive: {member.filename}")
             os.makedirs(os.path.dirname(target), exist_ok=True)

@@ -52,6 +52,22 @@ def test_safe_extract_rejects_path_traversal(tmp_path: Path):
     assert not (tmp_path / "outside.yar").exists()
 
 
+def test_safe_extract_rejects_existing_symlink_path(tmp_path: Path):
+    archive = tmp_path / "symlinked-target.zip"
+    _write_zip(archive, {"rules/outside.yar": b"rule bad { condition: true }"})
+
+    output = tmp_path / "rules"
+    output.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (output / "rules").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="Symlink in FindCrypt extraction path"):
+        findcrypt.extract_findcrypt_rules(str(archive), str(output))
+
+    assert not (outside / "outside.yar").exists()
+
+
 def test_cache_discovery_supports_both_download_paths(tmp_path: Path):
     for relative in (
         "corpus_sources/findcrypt/repo/rules",

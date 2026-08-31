@@ -58,6 +58,22 @@ _DOWNLOAD_TIMEOUT = 180
 _DEFAULT_USER_AGENT = "ida-pro-mcp-installer/bron-corpus"
 
 
+def _reject_symlink(path: str | Path, description: str) -> Path:
+    """Reject a cache path that would make the installer follow a link."""
+    candidate = Path(path)
+    if candidate.is_symlink():
+        raise RuntimeError(f"Refusing symlinked {description}: {candidate}")
+    return candidate
+
+
+def _ensure_directory(path: str | Path, description: str) -> Path:
+    candidate = _reject_symlink(path, description)
+    candidate.mkdir(parents=True, exist_ok=True)
+    if not candidate.is_dir():
+        raise RuntimeError(f"{description.capitalize()} is not a directory: {candidate}")
+    return candidate
+
+
 def default_sources_dir() -> str:
     return os.path.join(CACHE_DIR, "threat_corpus_sources")
 
@@ -116,7 +132,8 @@ def _download_to_file(
     *,
     expected_sha256: str | None = None,
 ) -> dict[str, Any]:
-    os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+    destination = _reject_symlink(dst_path, "download destination")
+    _ensure_directory(destination.parent, "download directory")
     req = urllib.request.Request(
         url,
         headers={"User-Agent": _DEFAULT_USER_AGENT, "Accept": "*/*"},
@@ -160,12 +177,12 @@ def _download_to_file(
                 os.remove(tmp_path)
             raise
     try:
-        os.replace(tmp_path, dst_path)
+        os.replace(tmp_path, destination)
     except OSError:
-        if os.path.exists(dst_path):
-            os.remove(dst_path)
-        os.rename(tmp_path, dst_path)
-    return {"bytes": total, "path": dst_path}
+        if destination.exists() or destination.is_symlink():
+            destination.unlink()
+        os.rename(tmp_path, destination)
+    return {"bytes": total, "path": str(destination)}
 
 
 def _copy_extracted(source, destination, *, already_written: int, declared_size: int) -> int:
@@ -189,7 +206,9 @@ def _copy_extracted(source, destination, *, already_written: int, declared_size:
 
 
 def _read_sha_manifest(sources_dir: str) -> dict[str, Any]:
-    path = os.path.join(sources_dir, ".sha256.json")
+    path = _reject_symlink(
+        Path(sources_dir) / ".sha256.json", "corpus checksum manifest"
+    )
     try:
         with open(path, encoding="utf-8") as handle:
             payload = json.load(handle)
@@ -233,7 +252,8 @@ def _verify_or_report(
 
 
 def _unpack_cwe_zip(zip_path: str, dst_dir: str) -> str:
-    os.makedirs(dst_dir, exist_ok=True)
+    _reject_symlink(zip_path, "CWE archive")
+    destination_dir = _ensure_directory(dst_dir, "CWE extraction directory")
     with zipfile.ZipFile(zip_path) as zf:
         xml_members = [n for n in zf.namelist() if n.lower().endswith(".xml")]
         if not xml_members:
@@ -242,16 +262,20 @@ def _unpack_cwe_zip(zip_path: str, dst_dir: str) -> str:
         info = zf.getinfo(member)
         if not info.is_dir() and info.file_size > _MAX_EXTRACTED_BYTES:
             raise RuntimeError(f"Refusing archive extraction over {_MAX_EXTRACTED_BYTES} bytes")
-        target = os.path.join(dst_dir, os.path.basename(member))
+        target = _reject_symlink(
+            destination_dir / os.path.basename(member), "CWE extraction target"
+        )
+        if target.exists() and not target.is_file():
+            raise RuntimeError(f"CWE extraction target is not a regular file: {target}")
         with zf.open(member) as src, open(target, "wb") as out:
             _copy_extracted(src, out, already_written=0, declared_size=info.file_size)
-    return target
+    return str(target)
 
 
 def _unpack_signature_base_tar(tar_path: str, dst_dir: str) -> str:
-    os.makedirs(dst_dir, exist_ok=True)
-    yara_dst = os.path.join(dst_dir, "yara")
-    os.makedirs(yara_dst, exist_ok=True)
+    _reject_symlink(tar_path, "signature-base archive")
+    destination_dir = _ensure_directory(dst_dir, "signature-base extraction directory")
+    yara_dst = _ensure_directory(destination_dir / "yara", "YARA extraction directory")
     with tarfile.open(tar_path, "r:gz") as tf:
         members = tf.getmembers()
         yara_members = [m for m in members if m.name.endswith((".yar", ".yara"))]
@@ -268,8 +292,14 @@ def _unpack_signature_base_tar(tar_path: str, dst_dir: str) -> str:
                 raise RuntimeError(
                     f"Refusing archive extraction over {_MAX_EXTRACTED_BYTES} bytes"
                 )
-            target_path = os.path.join(yara_dst, base)
-            if len(target_path) > 4096:
+            target_path = _reject_symlink(
+                yara_dst / base, "YARA extraction target"
+            )
+            if target_path.exists() and not target_path.is_file():
+                raise RuntimeError(
+                    f"YARA extraction target is not a regular file: {target_path}"
+                )
+            if len(str(target_path)) > 4096:
                 continue
             extracted = tf.extractfile(m)
             if extracted is None:
@@ -284,7 +314,7 @@ def _unpack_signature_base_tar(tar_path: str, dst_dir: str) -> str:
                     )
             finally:
                 extracted.close()
-    return yara_dst
+    return str(yara_dst)
 
 
 def download_source(
@@ -297,7 +327,9 @@ def download_source(
     if source_key not in BRON_SOURCES:
         raise KeyError(f"unknown source: {source_key}")
     spec = BRON_SOURCES[source_key]
+    _ensure_directory(sources_dir, "corpus source directory")
     dst = os.path.join(sources_dir, spec["filename"])
+    _reject_symlink(dst, "cached corpus source")
     expected = _expected_sha256(source_key)
     if force_verify and not expected:
         raise RuntimeError(
@@ -322,6 +354,7 @@ def download_source(
 
 def _materialize_cwe_xml(sources_dir: str) -> str:
     zip_path = os.path.join(sources_dir, BRON_SOURCES["cwe"]["filename"])
+    _reject_symlink(zip_path, "CWE archive")
     if not os.path.isfile(zip_path):
         raise FileNotFoundError(f"missing CWE archive: {zip_path}")
     unpack_dir = os.path.join(sources_dir, "cwe")
@@ -330,6 +363,7 @@ def _materialize_cwe_xml(sources_dir: str) -> str:
 
 def _materialize_signature_base(sources_dir: str) -> str:
     tar_path = os.path.join(sources_dir, BRON_SOURCES["signature_base"]["filename"])
+    _reject_symlink(tar_path, "signature-base archive")
     if not os.path.isfile(tar_path):
         raise FileNotFoundError(f"missing signature-base archive: {tar_path}")
     unpack_dir = os.path.join(sources_dir, "signature-base")
@@ -342,6 +376,7 @@ def _unpack_findcrypt_zip(zip_path: str, dst_dir: str) -> str:
 
 def _materialize_findcrypt(sources_dir: str) -> str:
     zip_path = os.path.join(sources_dir, BRON_SOURCES["findcrypt"]["filename"])
+    _reject_symlink(zip_path, "FindCrypt archive")
     if not os.path.isfile(zip_path):
         raise FileNotFoundError(f"missing findcrypt archive: {zip_path}")
     unpack_dir = os.path.join(sources_dir, "findcrypt")
