@@ -286,6 +286,21 @@ def test_parse_args_preserves_kill_scope_and_unverified_download_opt_in():
     assert parse_args(["--verify-corpus"]).verify_bron_corpus is True
 
 
+def test_prompt_secret_uses_hidden_terminal_input(monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+
+    captured: dict[str, str] = {}
+
+    def _getpass(prompt):
+        captured["prompt"] = prompt
+        return " secret-value "
+
+    monkeypatch.setattr(main_mod.getpass, "getpass", _getpass)
+
+    assert main_mod._prompt_secret("Gemini API key") == "secret-value"
+    assert captured == {"prompt": "Gemini API key: "}
+
+
 def test_build_stdio_config_records_r2_bin(tmp_path):
     """WO-INST: --with-r2 records the resolved engine as IDA_MCP_R2_BIN."""
     from ida_pro_mcp.installer.runtime import build_stdio_config
