@@ -68,6 +68,44 @@ def test_safe_extract_rejects_existing_symlink_path(tmp_path: Path):
     assert not (outside / "outside.yar").exists()
 
 
+def test_refresh_replaces_stale_rule_files(tmp_path: Path):
+    first = tmp_path / "first.zip"
+    _write_zip(first, {"findcrypt/rules/old.yar": b"rule old { condition: true }"})
+    output = tmp_path / "rules"
+    findcrypt.extract_findcrypt_rules(str(first), str(output))
+
+    second = tmp_path / "second.zip"
+    _write_zip(second, {"findcrypt/rules/new.yar": b"rule new { condition: true }"})
+    result = findcrypt.extract_findcrypt_rules(str(second), str(output))
+
+    assert result == os.path.realpath(output)
+    assert (output / "findcrypt/rules/new.yar").read_bytes() == b"rule new { condition: true }"
+    assert not (output / "findcrypt/rules/old.yar").exists()
+
+
+def test_failed_refresh_preserves_previous_rule_files(tmp_path: Path):
+    first = tmp_path / "first.zip"
+    _write_zip(first, {"findcrypt/rules/old.yar": b"rule old { condition: true }"})
+    output = tmp_path / "rules"
+    findcrypt.extract_findcrypt_rules(str(first), str(output))
+
+    second = tmp_path / "invalid.zip"
+    _write_zip(
+        second,
+        {
+            "findcrypt/rules/new.yar": b"rule new { condition: true }",
+            "../outside.yar": b"rule bad { condition: true }",
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="Unsafe path"):
+        findcrypt.extract_findcrypt_rules(str(second), str(output))
+
+    assert (output / "findcrypt/rules/old.yar").read_bytes() == b"rule old { condition: true }"
+    assert not (output / "findcrypt/rules/new.yar").exists()
+    assert not list(tmp_path.glob(".rules.staging-*"))
+
+
 def test_cache_discovery_supports_both_download_paths(tmp_path: Path):
     for relative in (
         "corpus_sources/findcrypt/repo/rules",
