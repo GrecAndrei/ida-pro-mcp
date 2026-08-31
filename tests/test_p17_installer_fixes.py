@@ -151,6 +151,22 @@ def test_dry_run_client_config_does_not_create_parent_directories(tmp_path):
     assert str(path) in report.modified_files
 
 
+def test_legacy_copilot_wrapper_preserves_unparseable_config(tmp_path):
+    import install
+
+    path = tmp_path / "copilot" / "mcp.json"
+    path.parent.mkdir()
+    original = '{"keep": [}\n'
+    path.write_text(original, encoding="utf-8")
+
+    assert install._update_copilot_config(
+        path,
+        "ida-pro-mcp",
+        {"command": "/x/python", "args": [], "env": {}},
+    ) is False
+    assert path.read_text(encoding="utf-8") == original
+
+
 def test_configure_clients_writes_vscode_copilot_under_servers(tmp_path, monkeypatch):
     """VS Code Copilot and Copilot CLI must be configured under top-level
     "servers" (their schema), not "mcpServers".  The client ida-pro-mcp is

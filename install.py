@@ -21,7 +21,6 @@ def _bootstrap_import_path() -> None:
 _bootstrap_import_path()
 
 from ida_pro_mcp.installer.clients import (  # noqa: E402
-    LEGACY_SERVER_NAMES,
     get_config_paths,
     update_json_config as _update_json_config,
     update_opencode_config as _update_opencode_config,
@@ -154,9 +153,13 @@ def _write_antigravity_plugin(
     """Write Antigravity CLI plugin.json if missing, then delegate to JSON updater."""
     try:
         plugin_json = config_path.parent / "plugin.json"
+        from ida_pro_mcp.installer.common import atomic_write_text, reject_symlink_path
+
+        reject_symlink_path(plugin_json, "Antigravity plugin path")
         plugin_json.parent.mkdir(parents=True, exist_ok=True)
         if not plugin_json.exists():
-            plugin_json.write_text(
+            atomic_write_text(
+                plugin_json,
                 json.dumps({"name": server_name}, indent=2), encoding="utf-8"
             )
         return _delegate_json_config(config_path, server_name, server_cfg, InstallReport())
@@ -170,33 +173,19 @@ def _update_copilot_config(
     server_name: str,
     server_cfg: dict[str, Any],
 ) -> bool:
-    """Write Copilot CLI config in its legacy format."""
+    """Write Copilot CLI config in its legacy format through the safe updater."""
     try:
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        if config_path.exists():
-            try:
-                config = json.loads(config_path.read_text(encoding="utf-8"))
-            except Exception:
-                config = {}
-        else:
-            config = {}
-        config.pop("servers", None)
-        mcp_servers = config.setdefault("mcpServers", {})
-        for legacy in list(mcp_servers.keys()):
-            if legacy != server_name and (
-                legacy in LEGACY_SERVER_NAMES
-                or "ida-pro-mcp" in str(mcp_servers.get(legacy, {})).lower()
-            ):
-                mcp_servers.pop(legacy, None)
-        mcp_servers[server_name] = {
-            "type": "local",
-            "command": server_cfg["command"],
-            "args": server_cfg.get("args", []),
-            "env": server_cfg.get("env", {}),
-            "tools": ["*"],
-        }
-        config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
-        return True
+        legacy_cfg = dict(server_cfg)
+        legacy_cfg["tools"] = ["*"]
+        return _update_json_config(
+            path=config_path,
+            server_name=server_name,
+            server_cfg=legacy_cfg,
+            report=InstallReport(),
+            dry_run=False,
+            top_level_key="mcpServers",
+            server_type="local",
+        )
     except Exception:
         _log.exception("Copilot CLI config update failed")
         return False
