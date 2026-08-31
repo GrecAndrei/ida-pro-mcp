@@ -547,6 +547,31 @@ def test_noninteractive_install_persists_absolute_runtime_paths(tmp_path, monkey
     assert captured["env"]["IDA_MCP_RERANK_MODEL"] == str(reranker)
 
 
+def test_noninteractive_install_normalizes_relative_install_root(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    monkeypatch.chdir(tmp_path)
+    opts = InstallerOptions(
+        interactive=False,
+        only={"clients"},
+        install_root=Path("install"),
+        embed_auto=False,
+    )
+    monkeypatch.setattr(main_mod, "detect_ida_installs", list)
+    captured: dict = {}
+
+    def _configure(**kwargs):
+        captured["env"] = kwargs["server_cfg"]["env"]
+        return []
+
+    monkeypatch.setattr(main_mod, "configure_clients", _configure)
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 0
+    assert opts.install_root == tmp_path / "install"
+    assert captured["env"]["IDA_PRO_MCP_HOME"] == str(tmp_path / "install")
+
+
 def test_embedder_doctor_honors_custom_root_and_gemini_overrides(tmp_path, monkeypatch):
     from ida_pro_mcp.host.intelligence import core as intel_core
     from ida_pro_mcp.installer import main as main_mod

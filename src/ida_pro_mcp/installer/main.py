@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import getpass
-import hashlib
 import json
 import os
 import shlex
@@ -78,19 +77,13 @@ class UI:
         print(f"{self.c_err}[err]{self.c_reset} {msg}")
 
 
-def _sha256_file(path: str) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        while True:
-            chunk = f.read(1024 * 1024)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
+def _absolute_path(path: Path | str) -> Path:
+    """Expand a user path without resolving symlinks or requiring existence."""
+    return Path(os.path.abspath(os.path.expanduser(os.fspath(path))))
 
 
 def run_embedder_doctor(opts: InstallerOptions, ui: UI) -> int:
-    install_root = opts.install_root or get_install_root()
+    install_root = _absolute_path(opts.install_root or get_install_root())
     gemini_mode = opts.embed_backend == "gemini"
     profile = "" if gemini_mode else opts.embed_profile
     embed_model = "" if gemini_mode else (opts.embed_model_path or (
@@ -664,9 +657,10 @@ def install_bashrc_cli(install_root: Path, dry_run: bool, report: InstallReport)
         ]
     )
     existing = bashrc.read_text(encoding="utf-8") if bashrc.exists() else ""
-    if block_start in existing and block_end in existing:
-        start = existing.index(block_start)
-        end = existing.index(block_end) + len(block_end)
+    start = existing.find(block_start)
+    end_marker = existing.find(block_end, start + len(block_start)) if start >= 0 else -1
+    if start >= 0 and end_marker >= 0:
+        end = end_marker + len(block_end)
         newline = existing.find("\n", end)
         updated = existing[:start] + block + ("" if newline == -1 else existing[newline + 1 :])
     else:
@@ -1142,8 +1136,10 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
 
 def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
     report = InstallReport()
-    install_root = opts.install_root or get_install_root()
-    source_root = opts.source_root or Path.cwd()
+    install_root = _absolute_path(opts.install_root or get_install_root())
+    source_root = _absolute_path(opts.source_root or Path.cwd())
+    opts.install_root = install_root
+    opts.source_root = source_root
     report.metadata.update({"install_root": str(install_root), "source_root": str(source_root)})
 
     try:

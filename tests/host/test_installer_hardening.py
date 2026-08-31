@@ -344,6 +344,26 @@ def test_bashrc_shim_rejects_symlinked_config(tmp_path, monkeypatch):
     assert outside.read_text(encoding="utf-8") == "# preserve"
 
 
+def test_bashrc_shim_does_not_corrupt_malformed_markers(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main
+    from ida_pro_mcp.installer.common import InstallReport
+
+    home = tmp_path / "home"
+    home.mkdir()
+    bashrc = home / ".bashrc"
+    bashrc.write_text(
+        "# <<< ida-pro-mcp <<<\nkeep this\n# >>> ida-pro-mcp >>>\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+    main.install_bashrc_cli(tmp_path / "install", dry_run=False, report=InstallReport())
+    content = bashrc.read_text(encoding="utf-8")
+    assert "# <<< ida-pro-mcp <<<\nkeep this\n# >>> ida-pro-mcp >>>" in content
+    assert content.count("# >>> ida-pro-mcp >>>") == 2
+    assert content.count("# <<< ida-pro-mcp <<<") == 2
+
+
 def test_corpus_hash_mismatch_never_replaces_existing_source(tmp_path, monkeypatch):
     from ida_pro_mcp.installer import bron_corpus
 
