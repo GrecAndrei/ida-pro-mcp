@@ -1521,13 +1521,13 @@ def setup_runtime_environment(
 
     resolved_source = choose_runtime_source(runtime_source, source_root)
 
-    if runtime_source == "local":
+    if resolved_source == "local":
         _write_dev_pth(venv_dir, source_root, dry_run, report)
         report.metadata["runtime_source"] = "local-dev"
         report.metadata["runtime_package"] = f"pth:{source_root / 'src'}"
     else:
         _remove_dev_pth(venv_dir, report)
-        if runtime_source == "snapshot":
+        if resolved_source == "snapshot":
             package_spec = str(_snapshot_source(source_root, install_root, dry_run, report))
             report.metadata["runtime_source"] = "snapshot"
         else:

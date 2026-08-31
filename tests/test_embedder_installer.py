@@ -276,6 +276,46 @@ def test_snapshot_install_copies_the_checkout_and_installs_from_it(monkeypatch, 
     assert any(command[-2:] == ["install", str(snapshot)] for command in commands)
 
 
+def test_auto_runtime_install_uses_snapshot_for_a_checkout(monkeypatch, tmp_path):
+    install_root = tmp_path / "install"
+    venv_python = install_root / ".venv" / "bin" / "python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.touch()
+    site_packages = tmp_path / "site-packages"
+    site_packages.mkdir()
+    commands = []
+
+    source = tmp_path / "repo"
+    source.mkdir()
+    (source / "pyproject.toml").write_text("[project]\nname = 'x'\n", encoding="utf-8")
+    (source / "src").mkdir()
+    (source / "src" / "ida_pro_mcp").mkdir()
+    (source / "src" / "ida_pro_mcp" / "__init__.py").write_text("# pkg\n", encoding="utf-8")
+
+    def fake_run_checked(command, **_kwargs):
+        commands.append(command)
+        if command[-1] == "import site; print(site.getsitepackages()[0])":
+            return SimpleNamespace(stdout=f"{site_packages}\n")
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr("ida_pro_mcp.installer.runtime._probe_venv", lambda _python: True)
+    monkeypatch.setattr("ida_pro_mcp.installer.runtime.run_checked", fake_run_checked)
+
+    report = InstallReport()
+    setup_runtime_environment(
+        install_root=install_root,
+        source_root=source,
+        runtime_source="auto",
+        dry_run=False,
+        report=report,
+    )
+
+    snapshots = list(install_root.glob("runtime-src-*"))
+    assert len(snapshots) == 1
+    assert any(command[-2:] == ["install", str(snapshots[0])] for command in commands)
+    assert report.metadata["runtime_source"] == "snapshot"
+
+
 def test_snapshot_install_prunes_older_snapshots(monkeypatch, tmp_path):
     install_root = tmp_path / "install"
     install_root.mkdir(parents=True)
