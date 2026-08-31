@@ -186,7 +186,7 @@ def _copy_file_atomically(
 def get_install_root() -> Path:
     override = os.environ.get("IDA_PRO_MCP_HOME", "").strip()
     if override:
-        return Path(override).expanduser()
+        return Path(os.path.expandvars(os.path.expanduser(override)))
     if sys.platform == "win32":
         local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
         base = Path(local_appdata or str(Path.home() / "AppData" / "Local"))
@@ -402,6 +402,11 @@ def _read_installer_embedder_state(install_root: Path) -> dict:
     return state if isinstance(state, dict) else {}
 
 
+def _expand_configured_path(value: str) -> Path:
+    """Expand shell-style user/environment references in configured paths."""
+    return Path(os.path.expandvars(os.path.expanduser(str(value).strip())))
+
+
 def find_embed_model(install_root: Path, profile: str = "") -> str:
     """Locate a supported GGUF embedding model on disk.
 
@@ -416,8 +421,9 @@ def find_embed_model(install_root: Path, profile: str = "") -> str:
     """
     # 1. Explicit env override.
     env_val = os.environ.get("IDA_MCP_EMBED_MODEL", "").strip()
-    if env_val and Path(env_val).is_file():
-        return env_val
+    env_path = _expand_configured_path(env_val) if env_val else None
+    if env_path is not None and env_path.is_file():
+        return str(env_path)
 
     # 2. embedder.json (persistent state from a previous install/doctor run).
     state = _read_installer_embedder_state(install_root)
@@ -483,7 +489,7 @@ def find_embed_model(install_root: Path, profile: str = "") -> str:
         for entry in extra.split(sep):
             entry = entry.strip()
             if entry:
-                bases.append(Path(entry).expanduser())
+                bases.append(_expand_configured_path(entry))
 
     searched: list[str] = []
     seen: set[Path] = set()
@@ -635,8 +641,9 @@ def find_llama_server_bin(install_root: Path) -> str:
         return os.access(str(p), os.X_OK)
 
     env_val = os.environ.get("IDA_MCP_EMBED_SERVER_BIN", "").strip()
-    if env_val and _is_executable(Path(env_val).expanduser()):
-        return str(Path(env_val).expanduser())
+    env_path = _expand_configured_path(env_val) if env_val else None
+    if env_path is not None and _is_executable(env_path):
+        return str(env_path)
 
     # Manual override via the target install's embedder.json.
     try:
@@ -715,8 +722,9 @@ def find_rerank_model(install_root: Path, profile: str = "") -> str:
     into client configuration.
     """
     env_val = os.environ.get("IDA_MCP_RERANK_MODEL", "").strip()
-    if env_val and Path(env_val).is_file():
-        return env_val
+    env_path = _expand_configured_path(env_val) if env_val else None
+    if env_path is not None and env_path.is_file():
+        return str(env_path)
 
     from ida_pro_mcp.host.intelligence.rerank_profiles import (
         get_rerank_model_profile,
@@ -781,7 +789,7 @@ def find_rerank_model(install_root: Path, profile: str = "") -> str:
     if extra:
         sep = ";" if sys.platform == "win32" else ":"
         bases.extend(
-            Path(entry.strip()).expanduser()
+            _expand_configured_path(entry)
             for entry in extra.split(sep)
             if entry.strip()
         )

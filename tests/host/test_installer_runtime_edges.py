@@ -188,6 +188,26 @@ def test_find_model_and_server_honor_valid_environment_overrides(tmp_path, monke
     assert find_llama_server_bin(tmp_path) == str(server)
 
 
+def test_find_environment_overrides_expand_user_and_environment_paths(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer.runtime import find_embed_model, find_llama_server_bin, find_rerank_model
+
+    model = tmp_path / "embed.gguf"
+    rerank = tmp_path / "rerank.gguf"
+    server = tmp_path / "llama-server"
+    model.write_bytes(b"embed")
+    rerank.write_bytes(b"rerank")
+    server.write_bytes(b"server")
+    server.chmod(0o755)
+    monkeypatch.setenv("INSTALLER_TEST_ROOT", str(tmp_path))
+    monkeypatch.setenv("IDA_MCP_EMBED_MODEL", "$INSTALLER_TEST_ROOT/embed.gguf")
+    monkeypatch.setenv("IDA_MCP_RERANK_MODEL", "$INSTALLER_TEST_ROOT/rerank.gguf")
+    monkeypatch.setenv("IDA_MCP_EMBED_SERVER_BIN", "$INSTALLER_TEST_ROOT/llama-server")
+
+    assert find_embed_model(tmp_path / "missing", "qwen3-embedding-0.6b") == str(model)
+    assert find_rerank_model(tmp_path / "missing") == str(rerank)
+    assert find_llama_server_bin(tmp_path / "missing") == str(server)
+
+
 def test_find_helpers_use_state_from_explicit_install_root(tmp_path, monkeypatch):
     """A custom install must not inherit state from the default install."""
     from ida_pro_mcp.installer.runtime import (
