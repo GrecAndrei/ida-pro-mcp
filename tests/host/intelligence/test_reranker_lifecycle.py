@@ -203,6 +203,18 @@ class TestModuleHelpers:
         )
         assert rerank_mod._find_rerank_model() == str(model)
 
+    def test_find_rerank_model_state_override_accepts_custom_filename(self, tmp_path, monkeypatch):
+        model = tmp_path / "my-reranker.gguf"
+        model.write_bytes(b"m")
+        monkeypatch.delenv("IDA_MCP_RERANK_MODEL", raising=False)
+        monkeypatch.setattr(
+            rerank_mod,
+            "_read_rerank_state",
+            lambda: {"model_path": str(model), "profile": "qwen3-reranker-0.6b"},
+        )
+
+        assert rerank_mod._find_rerank_model() == str(model)
+
     def test_find_rerank_model_hf_cache(self, tmp_path, monkeypatch):
         home = tmp_path / "home"
         hf_file = home / ".cache" / "huggingface" / "hub" / "models--ggml-org--Qwen3-Reranker-0.6B-Q8_0-GGUF" / "snapshots" / "abc" / "Qwen3-Reranker-0.6B-q8_0.gguf"

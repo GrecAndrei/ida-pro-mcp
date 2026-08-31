@@ -303,6 +303,29 @@ def test_find_rerank_model_does_not_fallback_to_a_different_selected_profile(tmp
     assert find_rerank_model(tmp_path, "qwen3-reranker-4b") == str(selected)
 
 
+def test_find_rerank_model_honors_custom_filename_from_target_state(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer.runtime import find_rerank_model
+
+    model = tmp_path / "models" / "my-reranker.gguf"
+    model.parent.mkdir()
+    model.write_bytes(b"custom-reranker")
+    (tmp_path / "embedder.json").write_text(
+        json.dumps(
+            {
+                "rerank": {
+                    "profile": "qwen3-reranker-0.6b",
+                    "model_path": str(model),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("IDA_MCP_RERANK_MODEL", raising=False)
+    monkeypatch.delenv("IDA_MCP_RERANK_PROFILE", raising=False)
+
+    assert find_rerank_model(tmp_path, "qwen3-reranker-0.6b") == str(model)
+
+
 def test_find_embed_model_searches_selected_profile_under_models(tmp_path, monkeypatch):
     from ida_pro_mcp.installer.runtime import find_embed_model
 

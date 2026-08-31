@@ -742,7 +742,10 @@ def find_rerank_model(install_root: Path, profile: str = "") -> str:
         if selected is None:
             selected = get_rerank_model_profile("qwen3-reranker-0.6b")
         if manual and selected is not None:
-            if profile_from_rerank_model(manual).key == selected.key:
+            state_profile = get_rerank_model_profile(state.get("profile"))
+            if state_profile is not None and state_profile.key == selected.key:
+                return manual
+            if not state.get("profile") and profile_from_rerank_model(manual).key == selected.key:
                 return manual
     except Exception:
         pass

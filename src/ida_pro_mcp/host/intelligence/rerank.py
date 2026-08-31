@@ -235,12 +235,16 @@ def _find_rerank_model() -> str:
     # 2) state file manual override
     manual = _select_state_path(state.get("model_path"))
     state_profile = str(state.get("profile") or "").strip().lower()
-    if manual and (
-        not state_profile
-        or (get_rerank_model_profile(state_profile) or get_rerank_model_profile("qwen3-reranker-0.6b")).key
-        == profile_from_rerank_model(manual).key
-    ):
-        return manual
+    state_profile_obj = get_rerank_model_profile(state_profile)
+    if manual:
+        # An installer-saved profile is authoritative even when the user
+        # chose a custom filename. Without that metadata, retain the legacy
+        # filename/GGUF inference guard so a stale state path cannot silently
+        # activate a different model family.
+        if state_profile_obj is not None and state_profile_obj.key == requested_profile:
+            return manual
+        if not state_profile and profile_from_rerank_model(manual).key == requested_profile:
+            return manual
 
     home = str(Path.home())
     install_root = _install_root()
