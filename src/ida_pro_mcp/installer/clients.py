@@ -104,7 +104,8 @@ def _prepare_config_path(path: Path, report: InstallReport, dry_run: bool) -> No
             f"Refusing to replace symlinked client config {path}; "
             "update its target explicitly and re-run the installer."
         ) from exc
-    path.parent.mkdir(parents=True, exist_ok=True)
+    if not dry_run:
+        path.parent.mkdir(parents=True, exist_ok=True)
     backup_file(path, report, dry_run)
 
 

@@ -259,6 +259,26 @@ def test_run_install_handles_non_directory_install_root(tmp_path):
     assert main.run_install(opts, main.UI()) == 1
 
 
+def test_run_install_dry_run_does_not_create_installer_lock(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    install_root = tmp_path / "install"
+    opts = InstallerOptions(
+        dry_run=True,
+        interactive=False,
+        only={"clients"},
+        install_root=install_root,
+        source_root=tmp_path,
+    )
+    monkeypatch.setattr(main, "detect_ida_installs", list)
+    monkeypatch.setattr(main, "configure_clients", lambda **_kwargs: [])
+
+    assert main.run_install(opts, main.UI()) == 0
+    assert not (install_root / ".install.lock").exists()
+    assert (install_root / "install-report.json").is_file()
+
+
 def test_installer_lock_serializes_same_install_root(tmp_path):
     from ida_pro_mcp.installer.common import installer_lock
 

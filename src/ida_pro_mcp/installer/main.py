@@ -775,7 +775,11 @@ def install_codex_skills(source_root: Path, mode: str, report: InstallReport, dr
 
 def parse_args(argv: list[str] | None = None) -> InstallerOptions:
     parser = argparse.ArgumentParser(description="IDA Pro MCP installer")
-    parser.add_argument("--dry-run", action="store_true", help="print planned actions without mutating files")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print planned actions without changing managed files (writes an install report)",
+    )
     parser.add_argument("--yes", action="store_true", help="non-interactive mode")
     parser.add_argument("--interactive", action="store_true", help="force interactive wizard mode")
     parser.add_argument("--no-interactive", action="store_true", help="disable interactive wizard mode")
@@ -1126,6 +1130,11 @@ def _warn_ida_python_compat(chosen_install, report, ui) -> None:
 def run_install(opts: InstallerOptions, ui: UI) -> int:
     """Run one installer transaction under the per-root process lock."""
     install_root = opts.install_root or get_install_root()
+    if opts.dry_run:
+        # A dry run is a read-only plan except for the deliberate report file;
+        # acquiring the normal lock would create .install.lock and the root
+        # directory before any work has been performed.
+        return _run_install_unlocked(opts, ui)
     try:
         with installer_lock(install_root):
             return _run_install_unlocked(opts, ui)
