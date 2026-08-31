@@ -209,6 +209,25 @@ def test_normal_runtime_install_removes_an_old_live_source_pointer(monkeypatch, 
     assert any(command[-2:] == ["install", "ida-pro-mcp"] for command in commands)
 
 
+def test_normal_runtime_install_rejects_non_regular_live_source_pointer(monkeypatch, tmp_path):
+    from ida_pro_mcp.installer.runtime import _remove_dev_pth
+
+    venv_dir = tmp_path / ".venv"
+    venv_python = venv_dir / "bin" / "python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.touch()
+    site_packages = tmp_path / "site-packages"
+    site_packages.mkdir()
+    (site_packages / "ida_pro_mcp_dev.pth").mkdir()
+    monkeypatch.setattr(
+        "ida_pro_mcp.installer.runtime.run_checked",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout=f"{site_packages}\n"),
+    )
+
+    with pytest.raises(RuntimeError, match="not a regular file"):
+        _remove_dev_pth(venv_dir, InstallReport())
+
+
 def test_dev_runtime_rejects_unusable_site_packages_output(monkeypatch, tmp_path):
     from ida_pro_mcp.installer.runtime import _write_dev_pth
 

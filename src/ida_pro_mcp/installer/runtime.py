@@ -1538,6 +1538,8 @@ def _remove_dev_pth(venv_dir: Path, report: InstallReport) -> None:
         raise RuntimeError(f"venv site-packages directory does not exist: {site_packages}")
     pth_path = site_packages / "ida_pro_mcp_dev.pth"
     reject_symlink_path(pth_path, "development source pointer")
+    if pth_path.exists() and not pth_path.is_file():
+        raise RuntimeError(f"development source pointer is not a regular file: {pth_path}")
     if pth_path.is_file():
         pth_path.unlink()
         report.add_modified(pth_path)
