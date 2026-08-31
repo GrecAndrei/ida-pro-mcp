@@ -243,6 +243,22 @@ def test_run_install_rejects_symlinked_install_root_without_writing_through_it(t
     assert not (outside / "install-error.log").exists()
 
 
+def test_run_install_handles_non_directory_install_root(tmp_path):
+    from ida_pro_mcp.installer import main
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    install_root = tmp_path / "install"
+    install_root.write_text("not a directory", encoding="utf-8")
+    opts = InstallerOptions(
+        interactive=False,
+        only={"shell"},
+        install_root=install_root,
+        source_root=tmp_path,
+    )
+
+    assert main.run_install(opts, main.UI()) == 1
+
+
 def test_installer_lock_serializes_same_install_root(tmp_path):
     from ida_pro_mcp.installer.common import installer_lock
 

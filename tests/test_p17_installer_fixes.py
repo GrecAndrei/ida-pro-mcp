@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 import textwrap
 import types as _stdlib_types
@@ -354,6 +355,253 @@ def test_wizard_embed_prompt_default_honors_no_embed_auto(tmp_path, monkeypatch)
 
     out = main_mod._run_interactive_wizard(opts, main_mod.UI())
     assert out.embed_auto is False
+
+
+def test_wizard_gemini_still_requires_a_local_reranker_choice(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    opts = InstallerOptions(interactive=True, embed_backend="gemini")
+    monkeypatch.setattr(main_mod, "find_embed_model", lambda *a, **k: "")
+    monkeypatch.setattr(main_mod, "find_llama_server_bin", lambda *a, **k: "")
+    monkeypatch.setattr(main_mod, "find_rerank_model", lambda *a, **k: "")
+
+    def _choice(question, choices, default):
+        if question == "Embedding backend":
+            return "gemini-embedding-2 (cloud, requires API key)"
+        return default
+
+    monkeypatch.setattr(main_mod, "_prompt_choice", _choice)
+    monkeypatch.setattr(
+        main_mod,
+        "_prompt_yes_no",
+        lambda question, default: False if "reranker" in question.lower() else default,
+    )
+    monkeypatch.setattr(main_mod, "_prompt_secret", lambda _question: "")
+    monkeypatch.setattr(main_mod, "_prompt_text", lambda _question, default="": default)
+
+    out = main_mod._run_interactive_wizard(opts, main_mod.UI())
+
+    assert out.embed_backend == "gemini"
+    assert out.rerank_disabled is True
+
+
+def test_noninteractive_gemini_install_persists_detected_reranker(tmp_path, monkeypatch):
+    from ida_pro_mcp.host.intelligence import core as intel_core
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    install_root = tmp_path / "install"
+    rerank_model = tmp_path / "reranker.gguf"
+    rerank_model.write_bytes(b"reranker")
+    opts = InstallerOptions(
+        interactive=False,
+        only={"clients"},
+        install_root=install_root,
+        embed_backend="gemini",
+        rerank_profile="qwen3-reranker-0.6b",
+    )
+    monkeypatch.setattr(main_mod, "detect_ida_installs", list)
+    monkeypatch.setattr(main_mod, "find_rerank_model", lambda *a, **k: str(rerank_model))
+    monkeypatch.setattr(main_mod, "get_config_paths", lambda _root: {"fake": tmp_path / "fake.json"})
+    captured: dict = {}
+
+    def _configure(**kwargs):
+        captured["server_cfg"] = kwargs["server_cfg"]
+        return ["fake"]
+
+    monkeypatch.setattr(main_mod, "configure_clients", _configure)
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 0
+    assert captured["server_cfg"]["env"]["IDA_MCP_RERANK_MODEL"] == str(rerank_model)
+    state = json.loads((install_root / "embedder.json").read_text(encoding="utf-8"))
+    assert state["rerank"] == {
+        "profile": "qwen3-reranker-0.6b",
+        "model_path": str(rerank_model.resolve()),
+    }
+
+
+def test_noninteractive_gemini_install_disables_missing_reranker(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    opts = InstallerOptions(
+        interactive=False,
+        only={"clients"},
+        install_root=tmp_path / "install",
+        embed_backend="gemini",
+    )
+    monkeypatch.setattr(main_mod, "detect_ida_installs", list)
+    monkeypatch.setattr(main_mod, "find_rerank_model", lambda *a, **k: "")
+    monkeypatch.setattr(main_mod, "get_config_paths", lambda _root: {"fake": tmp_path / "fake.json"})
+    captured: dict = {}
+
+    def _configure(**kwargs):
+        captured["server_cfg"] = kwargs["server_cfg"]
+        return ["fake"]
+
+    monkeypatch.setattr(main_mod, "configure_clients", _configure)
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 0
+    env = captured["server_cfg"]["env"]
+    assert env["IDA_MCP_RERANK_DISABLED"] == "1"
+    assert "IDA_MCP_RERANK_PROFILE" not in env
+
+
+def test_noninteractive_rerank_download_is_honored_without_local_embedding(
+    tmp_path, monkeypatch
+):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    rerank_model = tmp_path / "downloaded-reranker.gguf"
+    rerank_model.write_bytes(b"reranker")
+    opts = InstallerOptions(
+        interactive=False,
+        only={"clients"},
+        install_root=tmp_path / "install",
+        embed_auto=False,
+        download_rerank_model=True,
+        accept_model_license=True,
+    )
+    monkeypatch.setattr(main_mod, "detect_ida_installs", list)
+    monkeypatch.setattr(main_mod, "find_rerank_model", lambda *a, **k: "")
+    downloaded: dict[str, str] = {}
+
+    def _download(root, profile):
+        downloaded["root"] = str(root)
+        downloaded["profile"] = profile
+        return str(rerank_model)
+
+    monkeypatch.setattr(main_mod, "download_rerank_model", _download)
+    monkeypatch.setattr(main_mod, "get_config_paths", lambda _root: {})
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 0
+    assert downloaded == {
+        "root": str(tmp_path / "install"),
+        "profile": "qwen3-reranker-0.6b",
+    }
+
+
+@pytest.mark.parametrize("option_name", [
+    "embed_model_path",
+    "embed_server_bin",
+    "rerank_model_path",
+])
+def test_noninteractive_install_rejects_missing_explicit_runtime_paths(
+    tmp_path, monkeypatch, option_name
+):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    opts = InstallerOptions(
+        interactive=False,
+        only={"clients"},
+        install_root=tmp_path / "install",
+        embed_auto=False,
+    )
+    setattr(opts, option_name, str(tmp_path / f"missing-{option_name}"))
+    monkeypatch.setattr(main_mod, "detect_ida_installs", list)
+    monkeypatch.setattr(
+        main_mod,
+        "configure_clients",
+        lambda **_kwargs: pytest.fail("invalid runtime path reached client configuration"),
+    )
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 1
+
+
+def test_noninteractive_install_persists_absolute_runtime_paths(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"embedding")
+    reranker = tmp_path / "reranker.gguf"
+    reranker.write_bytes(b"reranker")
+    server = tmp_path / "llama-server"
+    server.write_bytes(b"#!/bin/sh\n")
+    server.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+    opts = InstallerOptions(
+        interactive=False,
+        only={"clients"},
+        install_root=tmp_path / "install",
+        embed_auto=False,
+        embed_model_path="model.gguf",
+        embed_server_bin="llama-server",
+        rerank_model_path="reranker.gguf",
+    )
+    monkeypatch.setattr(main_mod, "detect_ida_installs", list)
+    captured: dict = {}
+
+    def _configure(**kwargs):
+        captured["env"] = kwargs["server_cfg"]["env"]
+        return []
+
+    monkeypatch.setattr(main_mod, "configure_clients", _configure)
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 0
+    assert captured["env"]["IDA_MCP_EMBED_MODEL"] == str(model)
+    assert captured["env"]["IDA_MCP_EMBED_SERVER_BIN"] == str(server)
+    assert captured["env"]["IDA_MCP_RERANK_MODEL"] == str(reranker)
+
+
+def test_embedder_doctor_honors_custom_root_and_gemini_overrides(tmp_path, monkeypatch):
+    from ida_pro_mcp.host.intelligence import core as intel_core
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    observed: dict[str, str] = {}
+
+    class _FakeEmbedder:
+        _instance = object()
+
+        def __init__(self):
+            for name in (
+                "IDA_PRO_MCP_HOME",
+                "IDA_MCP_EMBED_BACKEND",
+                "IDA_MCP_GEMINI_MODEL",
+                "IDA_MCP_GEMINI_DIM",
+                "IDA_MCP_GEMINI_VERTEX",
+                "GEMINI_API_KEY",
+                "GOOGLE_CLOUD_PROJECT",
+                "VERTEX_AI_LOCATION",
+            ):
+                observed[name] = os.environ.get(name, "")
+
+        def status(self, *, probe, deep_hash):
+            assert probe is True
+            assert deep_hash is False
+            return {"ready": True, "backend": "gemini"}
+
+        def embed_vector(self, _text):
+            return [0.1, 0.2]
+
+    monkeypatch.setattr(intel_core, "BgeCodeEmbedder", _FakeEmbedder)
+    opts = InstallerOptions(
+        embedder_doctor=True,
+        install_root=tmp_path / "custom-install",
+        embed_backend="gemini",
+        gemini_access="vertex",
+        gemini_api_key="doctor-key",
+        gemini_model="gemini-test",
+        gemini_dim=321,
+        gemini_vertex_project="doctor-project",
+        gemini_vertex_location="europe-west4",
+    )
+
+    assert main_mod.run_embedder_doctor(opts, main_mod.UI()) == 0
+    assert observed == {
+        "IDA_PRO_MCP_HOME": str(tmp_path / "custom-install"),
+        "IDA_MCP_EMBED_BACKEND": "gemini",
+        "IDA_MCP_GEMINI_MODEL": "gemini-test",
+        "IDA_MCP_GEMINI_DIM": "321",
+        "IDA_MCP_GEMINI_VERTEX": "1",
+        "GEMINI_API_KEY": "doctor-key",
+        "GOOGLE_CLOUD_PROJECT": "doctor-project",
+        "VERTEX_AI_LOCATION": "europe-west4",
+    }
 
 
 def test_wizard_rerank_decline_persists_rerank_disabled(tmp_path, monkeypatch):
