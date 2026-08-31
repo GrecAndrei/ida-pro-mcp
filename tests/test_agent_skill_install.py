@@ -31,6 +31,21 @@ def test_agent_skill_install_contains_the_reference_tree(monkeypatch, tmp_path):
     assert not report.warnings
 
 
+def test_packaged_installer_generates_codex_skill_without_repository_tree(
+    monkeypatch, tmp_path
+):
+    codex_home = tmp_path / "codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    report = InstallReport()
+    install_codex_skills(tmp_path / "packaged-source", "agent", report, dry_run=False)
+
+    installed = codex_home / "skills" / "ida-pro-mcp"
+    assert (installed / "SKILL.md").is_file()
+    assert (installed / "references" / "operations.md").is_file()
+    assert not report.warnings
+
+
 def test_portable_installer_writes_the_skill_and_reference_together(tmp_path):
     written = install_skills([tmp_path])
 

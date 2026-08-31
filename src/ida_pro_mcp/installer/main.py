@@ -748,12 +748,27 @@ def install_codex_skills(source_root: Path, mode: str, report: InstallReport, dr
         report.add_step("skills", "skipped", "skills mode set to none")
         return
     source_root_skills = source_root / ".agents" / "skills"
-    if not source_root_skills.exists():
-        report.add_warning("skills source not found; skipping")
-        return
     agent_skill = source_root_skills / "ida-pro-mcp"
     if not (agent_skill / "SKILL.md").exists():
-        report.add_warning("agent skill source not found; regenerate skills before installing")
+        # PyPI wheels intentionally contain the runtime package, not the
+        # repository's .agents tree.  Generate the same skill content from the
+        # operation registry so a packaged install is still useful to Codex.
+        from .skills import install_skills
+
+        codex_skills = Path(
+            os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))
+        ).expanduser() / "skills"
+        written = install_skills([codex_skills], dry_run=dry_run)
+        count = sum(len(paths) for paths in written.values())
+        for paths in written.values():
+            for path in paths:
+                report.add_modified(path)
+        action = "would generate" if dry_run else "generated"
+        report.add_step(
+            "skills",
+            "dry-run" if dry_run else "ok",
+            f"{action} {count} files to {codex_skills / 'ida-pro-mcp'}",
+        )
         return
     selected = [agent_skill]
     codex_skills = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser() / "skills"
