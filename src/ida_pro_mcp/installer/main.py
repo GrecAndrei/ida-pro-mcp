@@ -1078,6 +1078,17 @@ def _report_client_configuration(
     ui.warn(f"Client configuration incomplete: {detail}")
 
 
+def _write_install_error_log(log_path: Path, traceback_text: str) -> None:
+    """Append a traceback without opening an unexpected filesystem object."""
+    reject_symlink_path(log_path, "installer error log path")
+    if log_path.exists() and not log_path.is_file():
+        raise RuntimeError(f"Refusing non-regular installer error log path: {log_path}")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(UTC).isoformat()
+    with open(log_path, "a", encoding="utf-8") as logf:
+        logf.write(f"\n=== {timestamp} run_install crashed ===\n{traceback_text}\n")
+
+
 def _normalise_runtime_path(
     value: str,
     label: str,
@@ -1662,13 +1673,7 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
         log_root = opts.install_root or get_install_root()
         log_path = log_root / "install-error.log"
         try:
-            reject_symlink_path(log_path, "installer error log path")
-            log_root.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.now(UTC).isoformat()
-            with open(log_path, "a", encoding="utf-8") as logf:
-                logf.write(
-                    f"\n=== {timestamp} run_install crashed ===\n{tb_text}\n"
-                )
+            _write_install_error_log(log_path, tb_text)
             ui.err(f"Full traceback: {log_path}")
         except (OSError, RuntimeError) as log_exc:
             ui.err(f"Could not write {log_path}: {log_exc}")

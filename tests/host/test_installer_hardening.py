@@ -240,6 +240,16 @@ def test_client_config_rejects_non_regular_target(tmp_path):
         )
 
 
+def test_installer_error_log_rejects_non_regular_target(tmp_path):
+    from ida_pro_mcp.installer import main
+
+    log_path = tmp_path / "install-error.log"
+    log_path.mkdir()
+
+    with pytest.raises(RuntimeError, match="non-regular installer error log path"):
+        main._write_install_error_log(log_path, "traceback")
+
+
 def test_run_install_rejects_symlinked_install_root_without_writing_through_it(tmp_path):
     from ida_pro_mcp.installer import main
     from ida_pro_mcp.installer.common import InstallerOptions
