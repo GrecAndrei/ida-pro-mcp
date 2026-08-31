@@ -179,6 +179,27 @@ def test_blank_client_path_environment_overrides_use_platform_defaults(tmp_path,
     assert paths["OpenCode"] == home / ".config" / "opencode" / "opencode.json"
 
 
+def test_client_path_selection_skips_non_file_placeholder_for_fallback(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import clients
+
+    home = tmp_path / "home"
+    xdg = tmp_path / "config"
+    home.mkdir()
+    xdg.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+
+    preferred = xdg / "copilot" / "mcp-config.json"
+    preferred.mkdir(parents=True)
+    fallback = home / ".copilot" / "mcp-config.json"
+    fallback.parent.mkdir(parents=True)
+    fallback.write_text("{}", encoding="utf-8")
+
+    paths = clients.get_config_paths(Path(__file__).resolve().parents[1])
+
+    assert paths["Copilot CLI"] == fallback
+
+
 def test_legacy_copilot_wrapper_preserves_unparseable_config(tmp_path):
     import install
 

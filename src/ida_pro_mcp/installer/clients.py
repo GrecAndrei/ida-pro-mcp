@@ -299,7 +299,11 @@ def get_config_paths(source_root: Path) -> dict[str, Path]:
             continue
         candidates = [resolve(p) for p in paths]
         if pick_existing:
-            existing = next((p for p in candidates if p.exists()), None)
+            # A directory (or other placeholder) at the preferred location
+            # must not mask a usable fallback. Keep symlinks in the selection
+            # so the updater can reject them explicitly instead of silently
+            # switching to another target.
+            existing = next((p for p in candidates if p.is_file() or p.is_symlink()), None)
             out[name] = existing or candidates[0]
         else:
             out[name] = candidates[0]
