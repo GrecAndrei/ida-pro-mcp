@@ -14,7 +14,12 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .clients import backup_file, configure_clients, rollback_from_backups
+from .clients import (
+    backup_file,
+    configure_clients,
+    get_config_paths,
+    rollback_from_backups,
+)
 from .common import (
     InstallerOptions,
     InstallReport,
@@ -955,6 +960,29 @@ def _phase_enabled(opts: InstallerOptions, name: str) -> bool:
     return not opts.only or name in opts.only
 
 
+def _report_client_configuration(
+    source_root: Path,
+    configured: list[str],
+    report: InstallReport,
+    ui: UI,
+) -> None:
+    """Report partial client setup instead of presenting it as success."""
+    expected = len(get_config_paths(source_root))
+    actual = len(configured)
+    if actual == expected:
+        report.add_step("clients", "ok", f"configured {actual} clients")
+        ui.ok(f"Configured {actual} clients")
+        return
+
+    detail = f"configured {actual}/{expected} clients"
+    report.add_warning(
+        f"Client configuration was incomplete: {detail}. "
+        "Review installer warnings and fix the affected client config files."
+    )
+    report.add_step("clients", "warn", detail)
+    ui.warn(f"Client configuration incomplete: {detail}")
+
+
 def _warn_ida_python_compat(chosen_install, report, ui) -> None:
     """Surface IDA 9.4's IDAPython uv/conda/homebrew interpreter warning.
 
@@ -1236,8 +1264,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                     dry_run=opts.dry_run,
                 )
                 report.metadata["configured_clients"] = configured
-                report.add_step("clients", "ok", f"configured {len(configured)} clients")
-                ui.ok(f"Configured {len(configured)} clients")
+                _report_client_configuration(source_root, configured, report, ui)
             else:
                 embed_model = opts.embed_model_path
                 embed_server = opts.embed_server_bin
@@ -1346,8 +1373,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                     dry_run=opts.dry_run,
                 )
                 report.metadata["configured_clients"] = configured
-                report.add_step("clients", "ok", f"configured {len(configured)} clients")
-                ui.ok(f"Configured {len(configured)} clients")
+                _report_client_configuration(source_root, configured, report, ui)
         else:
             report.add_step("clients", "skipped", "filtered by --only")
 

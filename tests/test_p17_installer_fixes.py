@@ -168,6 +168,29 @@ def test_configure_clients_writes_vscode_copilot_under_servers(tmp_path, monkeyp
     assert copilot_data["servers"]["ida-pro-mcp"]["type"] == "stdio"
 
 
+def test_client_configuration_summary_reports_partial_setup(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallReport
+
+    monkeypatch.setattr(
+        main_mod,
+        "get_config_paths",
+        lambda _source_root: {"first": tmp_path / "first", "second": tmp_path / "second"},
+    )
+    report = InstallReport()
+
+    main_mod._report_client_configuration(
+        tmp_path, ["first"], report, main_mod.UI()
+    )
+
+    assert report.steps[-1] == {
+        "name": "clients",
+        "status": "warn",
+        "detail": "configured 1/2 clients",
+    }
+    assert "configured 1/2 clients" in report.warnings[-1]
+
+
 # ---------------------------------------------------------------------------
 # installer.runtime: env the spawned server inherits
 # ---------------------------------------------------------------------------
