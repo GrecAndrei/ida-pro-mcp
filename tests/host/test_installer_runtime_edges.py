@@ -114,6 +114,17 @@ def test_download_embed_model_rejects_declared_oversize_before_reading(tmp_path,
     assert response._read is False
 
 
+def test_download_embed_model_rejects_symlinked_models_directory(tmp_path):
+    from ida_pro_mcp.installer.runtime import download_embed_model
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (tmp_path / "models").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlinked managed model path"):
+        download_embed_model(tmp_path, "zembed-1")
+
+
 def test_download_embed_model_rejects_empty_body_and_cleans_partial(tmp_path, monkeypatch):
     from ida_pro_mcp.installer.runtime import download_embed_model
 
@@ -231,6 +242,26 @@ def test_run_checked_converts_timeout_to_runtime_error(monkeypatch):
         run_checked(["hung"], timeout=2)
 
 
+def test_setup_runtime_rejects_symlinked_venv_path(tmp_path):
+    from ida_pro_mcp.installer.common import InstallReport
+    from ida_pro_mcp.installer.runtime import setup_runtime_environment
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    install_root = tmp_path / "install"
+    install_root.mkdir()
+    (install_root / ".venv").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlinked runtime environment path"):
+        setup_runtime_environment(
+            install_root,
+            tmp_path,
+            "snapshot",
+            dry_run=True,
+            report=InstallReport(),
+        )
+
+
 def test_archive_extraction_accepts_safe_zip_and_rejects_zip_slip(tmp_path):
     from ida_pro_mcp.installer.runtime import _extract_archive
 
@@ -325,6 +356,18 @@ def test_download_llama_server_dry_run_and_existing_binary_skip_network(tmp_path
         lambda *_args, **_kwargs: pytest.fail("existing server must not be downloaded"),
     )
     assert download_and_install_llama_server(tmp_path, dry_run=False, report=InstallReport()) == str(target)
+
+
+def test_download_llama_server_rejects_symlinked_bin_directory(tmp_path):
+    from ida_pro_mcp.installer.common import InstallReport
+    from ida_pro_mcp.installer.runtime import download_and_install_llama_server
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (tmp_path / "bin").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlinked managed llama-server path"):
+        download_and_install_llama_server(tmp_path, dry_run=True, report=InstallReport())
 
 
 def test_download_llama_server_rejects_missing_or_unsuitable_assets(tmp_path, monkeypatch):
