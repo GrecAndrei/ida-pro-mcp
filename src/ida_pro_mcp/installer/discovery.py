@@ -518,6 +518,8 @@ def read_install_state(install_root: Path) -> IdaInstall | None:
         data = json.loads(state_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+    if not isinstance(data, dict):
+        return None
     sel = data.get("selected")
     if not isinstance(sel, dict):
         return None

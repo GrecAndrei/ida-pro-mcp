@@ -144,6 +144,8 @@ def test_selection_rejects_bad_explicit_directory_and_out_of_range_default(tmp_p
 def test_install_state_rejects_malformed_selected_records(tmp_path):
     state_path = tmp_path / discovery.STATE_FILE
     for payload in (
+        [],
+        "not an object",
         {"selected": []},
         {"selected": {"path": str(tmp_path)}},
         {"selected": {"path": str(tmp_path), "version": ["not", "ints"]}},
