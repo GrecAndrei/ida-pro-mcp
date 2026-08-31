@@ -1596,6 +1596,7 @@ def build_stdio_config(
     gemini_api_key: str = "",
     gemini_vertex_project: str = "",
     gemini_vertex_location: str = "",
+    gemini_vertex: bool = False,
     ida_install: object | None = None,
     disable_policy: bool = False,
     rerank_disabled: bool = False,
@@ -1611,9 +1612,12 @@ def build_stdio_config(
 
     ``embed_backend == "gemini"`` selects the opt-in cloud embedder: the
     client env carries ``IDA_MCP_EMBED_BACKEND=gemini`` plus the chosen
-    credential (AI Studio API key or Vertex project/location).  The API key
-    is written into the generated client config only when the user provided
-    it; the server also honours the process environment if it is unset here.
+    credential (AI Studio API key or Vertex project/location).  When
+    ``gemini_vertex`` is true, the explicit Vertex choice is carried in the
+    environment even if the project is incomplete, so an ambient AI Studio
+    key cannot silently select the wrong route.  The API key is written into
+    the generated client config only when the user provided it; the server
+    also honours the process environment if it is unset here.
     """
     idadir = ""
     if ida_install is not None:
@@ -1666,6 +1670,8 @@ def build_stdio_config(
         env["IDA_MCP_RERANK_PROFILE"] = rerank_profile
     if str(embed_backend or "").lower() == "gemini":
         env["IDA_MCP_EMBED_BACKEND"] = "gemini"
+        if gemini_vertex:
+            env["IDA_MCP_GEMINI_VERTEX"] = "1"
         if gemini_api_key:
             env["GEMINI_API_KEY"] = gemini_api_key
         if gemini_vertex_project:

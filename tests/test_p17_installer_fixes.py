@@ -255,6 +255,18 @@ def test_build_stdio_config_emits_install_root(tmp_path):
     assert cfg["env"]["IDA_PRO_MCP_HOME"] == str(tmp_path)
 
 
+def test_build_stdio_config_preserves_explicit_gemini_vertex_choice(tmp_path):
+    from ida_pro_mcp.installer.runtime import build_stdio_config
+
+    cfg = build_stdio_config(
+        tmp_path / "python",
+        tmp_path,
+        embed_backend="gemini",
+        gemini_vertex=True,
+    )
+    assert cfg["env"]["IDA_MCP_GEMINI_VERTEX"] == "1"
+
+
 def test_build_stdio_config_rerank_disabled_wins_over_profile(tmp_path):
     from ida_pro_mcp.installer.runtime import build_stdio_config
 

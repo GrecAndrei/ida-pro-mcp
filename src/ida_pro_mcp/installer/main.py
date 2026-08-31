@@ -1436,6 +1436,7 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                     gemini_api_key=opts.gemini_api_key,
                     gemini_vertex_project=opts.gemini_vertex_project,
                     gemini_vertex_location=opts.gemini_vertex_location,
+                    gemini_vertex=opts.gemini_access == "vertex",
                     ida_install=getattr(opts, "_ida_install", None),
                     disable_policy=opts.disable_policy,
                     rerank_disabled=opts.rerank_disabled,
