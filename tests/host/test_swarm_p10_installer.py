@@ -581,6 +581,18 @@ def test_find_idalib_python_dir_missing(tmp_path):
     assert find_idalib_python_dir(str(install)) == ""
 
 
+def test_find_idalib_python_dir_rejects_symlinked_python_tree(tmp_path):
+    from ida_pro_mcp.installer.runtime import find_idalib_python_dir
+
+    install = tmp_path / "ida-pro-9.4"
+    external = tmp_path / "external-python"
+    (external / "idapro").mkdir(parents=True)
+    (install / "idalib").mkdir(parents=True)
+    (install / "idalib" / "python").symlink_to(external, target_is_directory=True)
+
+    assert find_idalib_python_dir(str(install)) == ""
+
+
 def test_activate_idalib_runs_activator(tmp_path, monkeypatch):
     import ida_pro_mcp.installer.runtime as runtime_mod
 
@@ -603,6 +615,27 @@ def test_activate_idalib_runs_activator(tmp_path, monkeypatch):
     ok, detail = runtime_mod.activate_idalib(str(install))
     assert ok is True
     assert calls and calls[0][-2:] == ["-d", str(install)]
+
+
+def test_activate_idalib_rejects_symlinked_activation_script(tmp_path, monkeypatch):
+    import ida_pro_mcp.installer.runtime as runtime_mod
+
+    install = tmp_path / "ida-pro-9.4"
+    python_dir = install / "idalib" / "python"
+    (python_dir / "idapro").mkdir(parents=True)
+    external = tmp_path / "activate.py"
+    external.write_text("exit 0\n")
+    (python_dir / "py-activate-idalib.py").symlink_to(external)
+    monkeypatch.setattr(
+        runtime_mod.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("symlinked activator must not execute"),
+    )
+
+    ok, detail = runtime_mod.activate_idalib(str(install))
+
+    assert ok is False
+    assert "symlinked" in detail
 
 
 def test_activate_idalib_reports_failure(tmp_path, monkeypatch):

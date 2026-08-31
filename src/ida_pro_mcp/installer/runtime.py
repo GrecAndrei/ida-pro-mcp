@@ -1621,9 +1621,15 @@ def find_idalib_python_dir(ida_dir: str) -> str:
     """
     if not ida_dir:
         return ""
-    candidate = os.path.join(ida_dir, "idalib", "python")
-    if os.path.isdir(os.path.join(candidate, "idapro")):
-        return candidate
+    candidate = Path(ida_dir) / "idalib" / "python"
+    try:
+        reject_symlink_path(candidate, "idalib Python path")
+        idapro_path = candidate / "idapro"
+        reject_symlink_path(idapro_path, "idalib package path")
+    except RuntimeError:
+        return ""
+    if idapro_path.is_dir():
+        return str(candidate)
     return ""
 
 
@@ -1634,9 +1640,16 @@ def activate_idalib(ida_dir: str) -> tuple[bool, str]:
     exists and exits 0.  Activation records the install idalib loads
     ``libidalib.so`` from; one install is active at a time.
     """
-    py = os.path.join(find_idalib_python_dir(ida_dir), "py-activate-idalib.py")
-    if not os.path.isfile(py):
+    python_dir = find_idalib_python_dir(ida_dir)
+    py_path = Path(python_dir) / "py-activate-idalib.py" if python_dir else Path()
+    try:
+        if python_dir:
+            reject_symlink_path(py_path, "idalib activation script path")
+    except RuntimeError as exc:
+        return False, str(exc)
+    if not py_path.is_file():
         return False, f"no py-activate-idalib.py under {ida_dir}"
+    py = str(py_path)
     try:
         result = subprocess.run(
             [sys.executable, py, "-d", ida_dir],
