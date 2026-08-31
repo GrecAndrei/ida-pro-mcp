@@ -89,6 +89,7 @@ def installer_lock(install_root: Path):
 
 def _atomic_write(path: Path, payload: bytes) -> None:
     """Replace *path* atomically, keeping partial writes out of user files."""
+    reject_symlink_path(path, "atomic write path")
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         mode = stat.S_IMODE(path.stat().st_mode)

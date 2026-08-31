@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import pytest
 
 from ida_pro_mcp.installer.common import InstallReport
@@ -68,3 +71,31 @@ def test_portable_installer_rejects_symlinked_skill_reference_directory(tmp_path
         install_skills([target])
 
     assert not (outside / "operations.md").exists()
+
+
+def test_skill_refresh_preserves_user_files_and_publishes_as_one_directory(tmp_path, monkeypatch):
+    skill_dir = tmp_path / "ida-pro-mcp"
+    references = skill_dir / "references"
+    references.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("old skill", encoding="utf-8")
+    (references / "operations.md").write_text("old reference", encoding="utf-8")
+    (skill_dir / "user-notes.md").write_text("keep me", encoding="utf-8")
+
+    real_replace = os.replace
+    failed = False
+
+    def _fail_publish(source, target):
+        nonlocal failed
+        if Path(target) == skill_dir and not failed:
+            failed = True
+            raise OSError("publish failed")
+        return real_replace(source, target)
+
+    monkeypatch.setattr("ida_pro_mcp.installer.skills.os.replace", _fail_publish)
+
+    with pytest.raises(OSError, match="publish failed"):
+        install_skills([tmp_path])
+
+    assert (skill_dir / "SKILL.md").read_text(encoding="utf-8") == "old skill"
+    assert (references / "operations.md").read_text(encoding="utf-8") == "old reference"
+    assert (skill_dir / "user-notes.md").read_text(encoding="utf-8") == "keep me"
