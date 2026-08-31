@@ -240,6 +240,10 @@ def _read_sha_manifest(sources_dir: str) -> dict[str, Any]:
     path = _reject_symlink(
         Path(sources_dir) / ".sha256.json", "corpus checksum manifest"
     )
+    # Do not open arbitrary filesystem objects from a cache directory.  In
+    # particular, opening a FIFO would block the installer indefinitely.
+    if path.exists() and not path.is_file():
+        return {}
     try:
         with open(path, encoding="utf-8") as handle:
             payload = json.load(handle)

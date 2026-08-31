@@ -512,6 +512,14 @@ def test_empty_cached_corpus_source_requires_a_refresh(tmp_path):
         bron_corpus.download_source("cwe", str(tmp_path))
 
 
+def test_corpus_manifest_ignores_non_regular_cache_objects(tmp_path):
+    from ida_pro_mcp.installer import bron_corpus
+
+    (tmp_path / ".sha256.json").mkdir()
+
+    assert bron_corpus._read_sha_manifest(str(tmp_path)) == {}
+
+
 def test_strict_corpus_mode_does_not_build_from_partial_verified_sources(tmp_path, monkeypatch):
     from ida_pro_mcp.installer import bron_corpus
 
