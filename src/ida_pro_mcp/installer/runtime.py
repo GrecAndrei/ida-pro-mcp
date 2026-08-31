@@ -380,6 +380,27 @@ def choose_runtime_source(runtime_source: str, source_root: Path) -> str:
     return "pypi"
 
 
+def _read_installer_embedder_state(install_root: Path) -> dict:
+    """Read embedder state from the install root being configured.
+
+    The host-side state reader intentionally follows the process environment
+    because it is used by a running server.  Installer discovery receives an
+    explicit ``install_root`` instead, so consulting that process-global state
+    would let a custom install inherit another install's model or server.
+    Keep this read local to the target root and treat malformed state as absent
+    so filesystem discovery can still proceed.
+    """
+    state_path = Path(install_root) / "embedder.json"
+    try:
+        reject_symlink_path(state_path, "installer embedder state path")
+        if not state_path.is_file():
+            return {}
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, RuntimeError, json.JSONDecodeError, TypeError, ValueError):
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
 def find_embed_model(install_root: Path, profile: str = "") -> str:
     """Locate a supported GGUF embedding model on disk.
 
@@ -398,13 +419,11 @@ def find_embed_model(install_root: Path, profile: str = "") -> str:
         return env_val
 
     # 2. embedder.json (persistent state from a previous install/doctor run).
-    state: dict = {}
+    state = _read_installer_embedder_state(install_root)
     try:
         from ida_pro_mcp.host.intelligence.core import (
-            _read_embedder_state,
             _select_state_path,
         )
-        state = _read_embedder_state()
         manual = _select_state_path(state.get("model_path"))
         state_profile = str(state.get("profile") or "").strip().lower()
         requested_from_env = str(profile or os.environ.get("IDA_MCP_EMBED_PROFILE") or "").strip().lower()
@@ -618,13 +637,14 @@ def find_llama_server_bin(install_root: Path) -> str:
     if env_val and _is_executable(Path(env_val).expanduser()):
         return str(Path(env_val).expanduser())
 
-    # Manual override via embedder.json (mirrors host discovery).
+    # Manual override via the target install's embedder.json.
     try:
         from ida_pro_mcp.host.intelligence.core import (
-            _read_embedder_state,
             _select_state_path,
         )
-        manual = _select_state_path(_read_embedder_state().get("server_bin"))
+        manual = _select_state_path(
+            _read_installer_embedder_state(install_root).get("server_bin")
+        )
         if manual and _is_executable(Path(manual)):
             return manual
     except Exception:
@@ -696,14 +716,14 @@ def find_rerank_model(install_root: Path, profile: str = "") -> str:
         profile_from_rerank_model,
     )
 
-    state: dict = {}
+    state = _read_installer_embedder_state(install_root)
     try:
         from ida_pro_mcp.host.intelligence.rerank import (
-            _read_rerank_state,
             _select_state_path,
         )
 
-        state = _read_rerank_state()
+        nested_state = state.get("rerank")
+        state = nested_state if isinstance(nested_state, dict) else {}
         manual = _select_state_path(state.get("model_path"))
         requested_name = str(
             profile

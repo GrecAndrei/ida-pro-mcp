@@ -188,6 +188,68 @@ def test_find_model_and_server_honor_valid_environment_overrides(tmp_path, monke
     assert find_llama_server_bin(tmp_path) == str(server)
 
 
+def test_find_helpers_use_state_from_explicit_install_root(tmp_path, monkeypatch):
+    """A custom install must not inherit state from the default install."""
+    from ida_pro_mcp.installer.runtime import (
+        find_embed_model,
+        find_llama_server_bin,
+        find_rerank_model,
+    )
+
+    target_root = tmp_path / "target-install"
+    foreign_root = tmp_path / "foreign-install"
+    target_root.mkdir()
+    foreign_root.mkdir()
+
+    target_embed = target_root / "qwen3-embedding-0.6b-q4_k_m.gguf"
+    foreign_embed = foreign_root / "qwen3-embedding-0.6b-q4_k_m.gguf"
+    target_rerank = target_root / "qwen3-reranker-0.6b-q4_k_m.gguf"
+    foreign_rerank = foreign_root / "qwen3-reranker-0.6b-q4_k_m.gguf"
+    target_server = target_root / "target-llama-server"
+    foreign_server = foreign_root / "foreign-llama-server"
+    for path in (target_embed, foreign_embed, target_rerank, foreign_rerank):
+        path.write_bytes(b"model")
+    for path in (target_server, foreign_server):
+        path.write_bytes(b"server")
+        path.chmod(0o755)
+
+    target_state = {
+        "profile": "qwen3-embedding-0.6b",
+        "model_path": str(target_embed),
+        "server_bin": str(target_server),
+        "rerank": {
+            "profile": "qwen3-reranker-0.6b",
+            "model_path": str(target_rerank),
+        },
+    }
+    foreign_state = {
+        "profile": "qwen3-embedding-0.6b",
+        "model_path": str(foreign_embed),
+        "server_bin": str(foreign_server),
+        "rerank": {
+            "profile": "qwen3-reranker-0.6b",
+            "model_path": str(foreign_rerank),
+        },
+    }
+    (target_root / "embedder.json").write_text(json.dumps(target_state), encoding="utf-8")
+    (foreign_root / "embedder.json").write_text(json.dumps(foreign_state), encoding="utf-8")
+
+    monkeypatch.setenv("IDA_PRO_MCP_HOME", str(foreign_root))
+    for name in (
+        "IDA_MCP_EMBED_MODEL",
+        "IDA_MCP_RERANK_MODEL",
+        "IDA_MCP_EMBED_SERVER_BIN",
+        "IDA_MCP_EMBED_PROFILE",
+        "IDA_MCP_RERANK_PROFILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr("ida_pro_mcp.installer.runtime.shutil.which", lambda _name: None)
+
+    assert find_embed_model(target_root, "qwen3-embedding-0.6b") == str(target_embed)
+    assert find_rerank_model(target_root, "qwen3-reranker-0.6b") == str(target_rerank)
+    assert find_llama_server_bin(target_root) == str(target_server)
+
+
 def test_find_llama_server_ignores_non_executable_environment_override(tmp_path, monkeypatch):
     from ida_pro_mcp.host.intelligence import core
     from ida_pro_mcp.installer.runtime import find_llama_server_bin
