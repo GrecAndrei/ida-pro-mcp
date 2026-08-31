@@ -243,6 +243,20 @@ def test_run_install_rejects_symlinked_install_root_without_writing_through_it(t
     assert not (outside / "install-error.log").exists()
 
 
+def test_install_report_rejects_symlinked_destination_parent(tmp_path):
+    from ida_pro_mcp.installer.common import InstallReport
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    redirected_parent = tmp_path / "report-parent"
+    redirected_parent.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlinked installer report path"):
+        InstallReport().write(redirected_parent / "install-report.json")
+
+    assert not (outside / "install-report.json").exists()
+
+
 def test_rollback_does_not_follow_a_replaced_config_symlink(tmp_path):
     from ida_pro_mcp.installer import clients
     from ida_pro_mcp.installer.common import InstallReport

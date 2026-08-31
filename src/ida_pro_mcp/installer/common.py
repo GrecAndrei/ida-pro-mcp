@@ -163,6 +163,7 @@ class InstallReport:
         self.finished_at = datetime.now(UTC).isoformat()
 
     def write(self, path: Path) -> None:
+        reject_symlink_path(path, "installer report path")
         payload = {
             "started_at": self.started_at,
             "finished_at": self.finished_at,
