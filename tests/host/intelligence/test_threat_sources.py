@@ -284,6 +284,17 @@ class TestFindCryptSource:
         assert names["second_rule"]["display_name"] == "second_rule"
         assert all(e["source"] == "findcrypt-yara" for e in entries)
 
+    def test_ignores_symlinked_rule_files_and_directories(self, tmp_path):
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "outside.yar").write_text(YARA_RULE, encoding="utf-8")
+        (rules_dir / "linked.yar").symlink_to(outside / "outside.yar")
+        (rules_dir / "linked-dir").symlink_to(outside, target_is_directory=True)
+
+        assert FindCryptSource().parse(str(rules_dir)) == []
+
 
 class TestYaraSources:
     def test_yara_source_finds_signature_base_subdir(self, tmp_path):

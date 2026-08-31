@@ -73,10 +73,16 @@ class FindCryptSource(SourceParser):
         search_yara_strings).
         """
         yara_files: list[str] = []
-        for root, _dirs, files in os.walk(data_dir):
+        for root, dirs, files in os.walk(data_dir):
+            dirs[:] = sorted(
+                name for name in dirs
+                if not os.path.islink(os.path.join(root, name))
+            )
             for fname in files:
                 if fname.endswith((".yar", ".yara", ".rules")):
-                    yara_files.append(os.path.join(root, fname))
+                    path = os.path.join(root, fname)
+                    if not os.path.islink(path):
+                        yara_files.append(path)
 
         entries: list[dict[str, Any]] = []
         seen_rules: set[str] = set()

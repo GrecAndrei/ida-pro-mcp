@@ -84,6 +84,18 @@ def test_cache_discovery_supports_both_download_paths(tmp_path: Path):
                 shutil.rmtree(child)
 
 
+def test_cache_discovery_ignores_symlinked_rule_files_and_directories(tmp_path: Path):
+    cache = tmp_path / "threat_corpus_sources" / "findcrypt"
+    cache.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "outside.yar").write_text("rule outside { condition: true }")
+    (cache / "linked-rule.yar").symlink_to(outside / "outside.yar")
+    (cache / "linked-dir").symlink_to(outside, target_is_directory=True)
+
+    assert findcrypt.findcrypt_rules_dir(str(tmp_path)) is None
+
+
 def test_host_scanner_adds_findcrypt_rules_without_loading_ida(tmp_path: Path):
     primary = tmp_path / "primary"
     primary.mkdir()

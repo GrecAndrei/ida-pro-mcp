@@ -138,11 +138,17 @@ def _iter_rule_files(rules_dir: str) -> list[tuple[str, str]]:
     for scan_dir in dirs_to_scan:
         if not os.path.isdir(scan_dir):
             continue
-        for root_dir, _dirs, files in os.walk(scan_dir):
+        for root_dir, dirs, files in os.walk(scan_dir):
+            dirs[:] = sorted(
+                name for name in dirs
+                if not os.path.islink(os.path.join(root_dir, name))
+            )
             for fname in sorted(files):
                 if not (fname.endswith((".yar", ".yara", ".rules"))):
                     continue
                 full = os.path.join(root_dir, fname)
+                if os.path.islink(full):
+                    continue
                 try:
                     if os.path.getsize(full) > 2_000_000:
                         continue

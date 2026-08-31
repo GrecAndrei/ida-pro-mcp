@@ -50,8 +50,15 @@ def findcrypt_rules_dir(cache_dir: str | None = None) -> str | None:
         if not os.path.isdir(source_dir):
             continue
         for root, dirs, files in os.walk(source_dir):
-            dirs.sort()
-            if any(name.lower().endswith(_RULE_SUFFIXES) for name in files):
+            dirs[:] = sorted(
+                name for name in dirs
+                if not os.path.islink(os.path.join(root, name))
+            )
+            if any(
+                name.lower().endswith(_RULE_SUFFIXES)
+                and not os.path.islink(os.path.join(root, name))
+                for name in files
+            ):
                 return root
     return None
 
