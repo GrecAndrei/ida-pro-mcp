@@ -101,6 +101,17 @@ def test_from_env_accepts_directory_or_binary_and_ignores_missing(monkeypatch, t
     assert values == [install.resolve(), install.resolve()]
 
 
+def test_from_env_ignores_blank_values_and_expands_environment_paths(monkeypatch, tmp_path):
+    install = tmp_path / "ida"
+    install.mkdir()
+    monkeypatch.setenv("IDA_DISCOVERY_ROOT", str(tmp_path))
+    monkeypatch.setenv("IDADIR", "$IDA_DISCOVERY_ROOT/ida")
+    monkeypatch.setenv("IDA_DIR", "   ")
+    monkeypatch.setenv("IDA_MCP_IDAT", "")
+
+    assert list(discovery._from_env()) == [install.resolve()]
+
+
 def test_from_path_returns_parent_of_first_available_binary(monkeypatch, tmp_path):
     install = tmp_path / "ida"
     install.mkdir()

@@ -45,6 +45,11 @@ def parse_version(s: str) -> tuple[int, ...]:
 STATE_FILE = "ida-install.json"
 
 
+def _expand_configured_path(value: str) -> Path:
+    """Expand user/environment references from installer path settings."""
+    return Path(os.path.expandvars(os.path.expanduser(str(value).strip())))
+
+
 def _safe_roots() -> list[Path]:
     """Filesystem roots a discovered IDA install is allowed to resolve into.
 
@@ -63,16 +68,16 @@ def _safe_roots() -> list[Path]:
         roots.append(Path("/usr"))
     else:
         for env in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "LOCALAPPDATA"):
-            v = os.environ.get(env)
+            v = os.environ.get(env, "").strip()
             if v:
-                roots.append(Path(v))
+                roots.append(_expand_configured_path(v))
     # Always allow the temp / staging dirs used by tests.  These do not
     # widen the production attack surface because production never
     # resolves a candidate to /tmp during a real install.
     for env in ("TMPDIR", "TEMP", "TMP"):
-        v = os.environ.get(env)
+        v = os.environ.get(env, "").strip()
         if v:
-            roots.append(Path(v))
+            roots.append(_expand_configured_path(v))
     cleaned: list[Path] = []
     for r in roots:
         try:
@@ -409,10 +414,10 @@ def _scan_system_dirs() -> Iterable[Path]:
     else:
         # Windows: Program Files / Program Files (x86)
         for env in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
-            base = os.environ.get(env)
+            base = os.environ.get(env, "").strip()
             if not base:
                 continue
-            bp = Path(base)
+            bp = _expand_configured_path(base)
             if not bp.is_dir():
                 continue
             for p in bp.iterdir():
@@ -441,10 +446,10 @@ def _from_path() -> Iterable[Path]:
 
 def _from_env() -> Iterable[Path]:
     for env_name in ("IDADIR", "IDA_DIR", "IDA_MCP_IDAT"):
-        val = os.environ.get(env_name)
+        val = os.environ.get(env_name, "").strip()
         if not val:
             continue
-        p = Path(val).expanduser()
+        p = _expand_configured_path(val)
         try:
             resolved = p.resolve()
         except OSError:
