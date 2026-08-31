@@ -19,7 +19,7 @@ import zipfile
 from pathlib import Path, PureWindowsPath
 from urllib.parse import quote, urlsplit
 
-from .common import InstallReport, SigsManifest, atomic_write_text
+from .common import InstallReport, SigsManifest, atomic_write_text, reject_symlink_path
 
 _log = logging.getLogger(__name__)
 
@@ -179,19 +179,6 @@ def _copy_file_atomically(
         if temporary is not None:
             with contextlib.suppress(OSError):
                 temporary.unlink()
-
-
-def _reject_symlink_path(path: Path, description: str) -> None:
-    """Reject a managed path or any existing parent that is a symlink."""
-    current = path.expanduser()
-    if not current.is_absolute():
-        current = Path(os.path.abspath(current))
-    while True:
-        if current.is_symlink():
-            raise RuntimeError(f"Refusing symlinked {description}: {current}")
-        if current.parent == current:
-            return
-        current = current.parent
 
 
 def get_install_root() -> Path:
@@ -538,7 +525,7 @@ def download_embed_model(install_root: Path, profile: str) -> str:
         )
     _validate_https_host(url, "huggingface.co")
     model_dir = install_root / "models"
-    _reject_symlink_path(model_dir, "managed model path")
+    reject_symlink_path(model_dir, "managed model path")
     model_dir.mkdir(parents=True, exist_ok=True)
     destination = model_dir / selected.download_filename
     if destination.is_symlink():
@@ -589,7 +576,7 @@ def download_rerank_model(install_root: Path, profile: str) -> str:
         )
     _validate_https_host(url, "huggingface.co")
     model_dir = install_root / "models"
-    _reject_symlink_path(model_dir, "managed model path")
+    reject_symlink_path(model_dir, "managed model path")
     model_dir.mkdir(parents=True, exist_ok=True)
     destination = model_dir / selected.download_filename
     if destination.is_symlink():
@@ -994,7 +981,7 @@ def download_and_install_llama_server(
     binary_name = "llama-server.exe" if sys.platform == "win32" else "llama-server"
     target_dir = install_root / "bin"
     target_path = target_dir / binary_name
-    _reject_symlink_path(target_dir, "managed llama-server path")
+    reject_symlink_path(target_dir, "managed llama-server path")
     if target_path.is_symlink():
         raise RuntimeError(f"Refusing managed llama-server path symlink: {target_path}")
     if target_path.exists() and os.access(target_path, os.X_OK):
@@ -1262,7 +1249,7 @@ def _snapshot_source(
     """
     stamp = time.strftime("%Y%m%d-%H%M")
     target = install_root / f"runtime-src-{stamp}"
-    _reject_symlink_path(target, "runtime snapshot path")
+    reject_symlink_path(target, "runtime snapshot path")
     if dry_run:
         report.add_step("snapshot", "dry-run", f"would copy {source_root} -> {target}")
         return target
@@ -1385,7 +1372,7 @@ def setup_runtime_environment(
     report: InstallReport,
 ) -> Path:
     venv_dir = install_root / ".venv"
-    _reject_symlink_path(venv_dir, "runtime environment path")
+    reject_symlink_path(venv_dir, "runtime environment path")
     python_exe = _venv_python_exe(venv_dir)
     if dry_run:
         report.metadata["venv_python"] = str(python_exe)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from ida_pro_mcp.installer.common import InstallReport
 from ida_pro_mcp.installer.main import install_codex_skills
 from ida_pro_mcp.installer.skills import install_skills
@@ -38,3 +40,16 @@ def test_portable_installer_writes_the_skill_and_reference_together(tmp_path):
     ]
     assert (installed / "SKILL.md").is_file()
     assert (installed / "references" / "operations.md").is_file()
+
+
+def test_portable_installer_rejects_symlinked_skill_destination(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    target = tmp_path / "skills"
+    target.mkdir()
+    (target / "ida-pro-mcp").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlinked skill installation path"):
+        install_skills([target])
+
+    assert not (outside / "SKILL.md").exists()

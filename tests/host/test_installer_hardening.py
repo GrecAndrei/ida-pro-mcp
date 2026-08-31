@@ -202,6 +202,26 @@ def test_client_config_symlink_is_not_replaced(tmp_path):
     assert json.loads(target.read_text(encoding="utf-8")) == {"keep": True}
 
 
+def test_run_install_rejects_symlinked_install_root_without_writing_through_it(tmp_path):
+    from ida_pro_mcp.installer import main
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    install_root = tmp_path / "install"
+    install_root.symlink_to(outside, target_is_directory=True)
+    opts = InstallerOptions(
+        interactive=False,
+        only={"shell"},
+        install_root=install_root,
+        source_root=tmp_path,
+    )
+
+    assert main.run_install(opts, main.UI()) == 1
+    assert not (outside / "install-report.json").exists()
+    assert not (outside / "install-error.log").exists()
+
+
 def test_bashrc_shim_shell_quotes_user_controlled_paths(tmp_path, monkeypatch):
     from ida_pro_mcp.installer import main
     from ida_pro_mcp.installer.common import InstallReport

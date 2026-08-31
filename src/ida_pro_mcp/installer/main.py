@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import hashlib
 import json
 import os
@@ -14,7 +15,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .clients import backup_file, configure_clients, rollback_from_backups
-from .common import InstallerOptions, InstallReport, atomic_write_text, find_ida_sig_dir
+from .common import (
+    InstallerOptions,
+    InstallReport,
+    atomic_write_text,
+    find_ida_sig_dir,
+    reject_symlink_path,
+)
 from .discovery import (
     STATE_FILE,
     IdaInstall,
@@ -210,10 +217,8 @@ def _prompt_text(question: str, default: str = "") -> str:
 
 
 def _prompt_secret(question: str) -> str:
-    """Ask for a secret (API key). Terminal echo is left as-is; the value is
-    only ever persisted into the MCP client config env block on explicit
-    consent."""
-    return input(f"{question}: ").strip()
+    """Ask for a secret without echoing it into the terminal or command log."""
+    return getpass.getpass(f"{question}: ").strip()
 
 
 def _prompt_model_path(profile: str) -> str:
@@ -650,6 +655,7 @@ def install_bashrc_cli(install_root: Path, dry_run: bool, report: InstallReport)
 def _replace_with_symlink_or_copy(src: Path, dst: Path) -> str:
     if not src.exists() and not src.is_symlink():
         raise FileNotFoundError(src)
+    reject_symlink_path(dst, "skill destination")
     dst.parent.mkdir(parents=True, exist_ok=True)
     staging_dir = Path(tempfile.mkdtemp(prefix=f".{dst.name}.staging-", dir=str(dst.parent)))
     staged = staging_dir / dst.name
@@ -726,6 +732,7 @@ def install_codex_skills(source_root: Path, mode: str, report: InstallReport, dr
         return
     selected = [agent_skill]
     codex_skills = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser() / "skills"
+    reject_symlink_path(codex_skills / selected[0].name / "SKILL.md", "skill installation path")
     if dry_run:
         report.add_step("skills", "dry-run", f"would install {len(selected)} entries to {codex_skills}")
         return
@@ -989,6 +996,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
     report.metadata.update({"install_root": str(install_root), "source_root": str(source_root)})
 
     try:
+        reject_symlink_path(install_root, "installer root")
         # Resolve IDA only when a later phase actually needs it or the user
         # explicitly asked for an IDA override. Client configuration and
         # signature staging both need a concrete install, but runtime/skills/
@@ -1366,6 +1374,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
 
         report.finalize(True)
         report_path = install_root / "install-report.json"
+        reject_symlink_path(report_path, "installer report path")
         report.write(report_path)
 
     except Exception as exc:
@@ -1382,6 +1391,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
         log_root = opts.install_root or get_install_root()
         log_path = log_root / "install-error.log"
         try:
+            reject_symlink_path(log_path, "installer error log path")
             log_root.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now(UTC).isoformat()
             with open(log_path, "a", encoding="utf-8") as logf:
@@ -1389,7 +1399,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                     f"\n=== {timestamp} run_install crashed ===\n{tb_text}\n"
                 )
             ui.err(f"Full traceback: {log_path}")
-        except OSError as log_exc:
+        except (OSError, RuntimeError) as log_exc:
             ui.err(f"Could not write {log_path}: {log_exc}")
         if opts.rollback_on_fail:
             try:
@@ -1402,6 +1412,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
         report.finalize(False)
         report_path = (opts.install_root or get_install_root()) / "install-report.json"
         try:
+            reject_symlink_path(report_path, "installer report path")
             report.write(report_path)
             ui.warn(f"Failure report written to {report_path}")
         except Exception:

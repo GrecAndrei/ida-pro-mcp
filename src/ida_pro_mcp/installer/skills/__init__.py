@@ -9,7 +9,7 @@ from ida_pro_mcp.host.agent_operations import (
     render_agent_operations_markdown,
     render_agent_skill_markdown,
 )
-from ida_pro_mcp.installer.common import atomic_write_text
+from ida_pro_mcp.installer.common import atomic_write_text, reject_symlink_path
 
 SKILL_NAME = "ida-pro-mcp"
 
@@ -26,6 +26,7 @@ def install_skills(
         skill_dir = target_dir / SKILL_NAME
         skill_file = skill_dir / "SKILL.md"
         reference_file = skill_dir / "references" / "operations.md"
+        reject_symlink_path(skill_file, "skill installation path")
         if not dry_run:
             reference_file.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_text(skill_file, render_agent_skill_markdown())
