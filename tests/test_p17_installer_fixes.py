@@ -207,6 +207,16 @@ def test_legacy_server_config_selects_local_backend_explicitly(tmp_path):
     assert config["env"]["IDA_MCP_EMBED_BACKEND"] == "local"
 
 
+def test_legacy_server_config_normalizes_relative_install_path(tmp_path, monkeypatch):
+    import install
+
+    monkeypatch.chdir(tmp_path)
+    config = install.get_mcp_server_config(Path("install"))
+
+    assert config["command"] == str(tmp_path / "install" / ".venv" / "bin" / "python")
+    assert config["env"]["IDA_PRO_MCP_HOME"] == str(tmp_path / "install")
+
+
 def test_configure_clients_writes_vscode_copilot_under_servers(tmp_path, monkeypatch):
     """VS Code Copilot and Copilot CLI must be configured under top-level
     "servers" (their schema), not "mcpServers".  The client ida-pro-mcp is

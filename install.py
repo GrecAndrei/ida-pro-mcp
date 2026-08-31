@@ -56,8 +56,14 @@ _VERTEX_COMPAT_CLIENTS: frozenset[str] = frozenset({
 })
 
 
+def _absolute_install_path(path: Path | str) -> Path:
+    """Expand a compatibility API install path without requiring existence."""
+    return Path(os.path.abspath(os.path.expanduser(os.fspath(path))))
+
+
 def _resolve_venv_python(install_root: Path) -> Path:
     """Return the Python executable path inside a project venv."""
+    install_root = _absolute_install_path(install_root)
     return install_root / ".venv" / (
         "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
     )
@@ -90,6 +96,7 @@ def get_mcp_server_config(
     enabled when *global_vertex_compat* is set or *client_name* is in the
     known vertex-compat set.
     """
+    install_path = _absolute_install_path(install_path)
     python_exe = _resolve_venv_python(install_path)
     # This compatibility API is the legacy local-backend surface. Explicitly
     # select local mode so an old caller cannot inherit backend=gemini from a
