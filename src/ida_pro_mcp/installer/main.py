@@ -775,7 +775,8 @@ def install_codex_skills(source_root: Path, mode: str, report: InstallReport, dr
         )
         return
     selected = [agent_skill]
-    codex_skills = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser() / "skills"
+    codex_home = os.environ.get("CODEX_HOME", "").strip() or str(Path.home() / ".codex")
+    codex_skills = Path(codex_home).expanduser() / "skills"
     reject_symlink_path(codex_skills / selected[0].name / "SKILL.md", "skill installation path")
     if dry_run:
         report.add_step("skills", "dry-run", f"would install {len(selected)} entries to {codex_skills}")

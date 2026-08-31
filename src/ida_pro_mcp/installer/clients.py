@@ -283,8 +283,9 @@ def get_config_paths(source_root: Path) -> dict[str, Path]:
         paths = meta.get("paths", [])
         env_override = meta.get("env_override")
         pick_existing = bool(meta.get("pick_existing", False))
-        if env_override and os.environ.get(env_override):
-            out[name] = Path(os.environ[env_override]).expanduser()
+        override_value = os.environ.get(env_override, "").strip() if env_override else ""
+        if override_value:
+            out[name] = Path(override_value).expanduser()
             continue
         if isinstance(paths, dict):
             out[name] = resolve(paths.get("windows" if is_windows else "unix", ""))

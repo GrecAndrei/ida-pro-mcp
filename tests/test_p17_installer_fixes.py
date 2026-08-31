@@ -166,6 +166,19 @@ def test_empty_client_path_environment_overrides_use_platform_defaults(tmp_path,
     assert paths["Claude Desktop"] == home / ".config" / "Claude" / "claude_desktop_config.json"
 
 
+def test_blank_client_path_environment_overrides_use_platform_defaults(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import clients
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("OPENCODE_CONFIG", "   ")
+
+    paths = clients.get_config_paths(Path(__file__).resolve().parents[1])
+
+    assert paths["OpenCode"] == home / ".config" / "opencode" / "opencode.json"
+
+
 def test_legacy_copilot_wrapper_preserves_unparseable_config(tmp_path):
     import install
 
