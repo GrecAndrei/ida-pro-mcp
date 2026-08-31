@@ -79,7 +79,7 @@ class UI:
 
 def _absolute_path(path: Path | str) -> Path:
     """Expand a user path without resolving symlinks or requiring existence."""
-    return Path(os.path.abspath(os.path.expanduser(os.fspath(path))))
+    return Path(os.path.abspath(os.path.expandvars(os.path.expanduser(os.fspath(path)))))
 
 
 def run_embedder_doctor(opts: InstallerOptions, ui: UI) -> int:
@@ -253,7 +253,7 @@ def _prompt_model_path(profile: str) -> str:
         ans = input("Model path (or press Enter to skip): ").strip().strip("\"'")
         if not ans:
             return ""
-        p = Path(ans).expanduser()
+        p = Path(os.path.expandvars(os.path.expanduser(ans)))
         if p.is_file():
             return str(p)
         print(f"File not found: {ans}. Check the path and try again.")
@@ -292,7 +292,7 @@ def _resolve_ida_install(opts: InstallerOptions, ui: UI) -> IdaInstall:
     if opts.ida_dir or opts.ida_version:
         chosen = select_ida_install(
             installs,
-            explicit_dir=Path(opts.ida_dir).expanduser() if opts.ida_dir else None,
+            explicit_dir=_absolute_path(opts.ida_dir) if opts.ida_dir else None,
             explicit_version=opts.ida_version or None,
         )
         ui.ok(f"Selected IDA install (override): {chosen.display}")
@@ -812,7 +812,7 @@ def install_codex_skills(source_root: Path, mode: str, report: InstallReport, dr
         from .skills import install_skills
 
         codex_home = os.environ.get("CODEX_HOME", "").strip() or str(Path.home() / ".codex")
-        codex_skills = Path(codex_home).expanduser() / "skills"
+        codex_skills = _absolute_path(codex_home) / "skills"
         written = install_skills([codex_skills], dry_run=dry_run)
         count = sum(len(paths) for paths in written.values())
         for paths in written.values():
@@ -827,7 +827,7 @@ def install_codex_skills(source_root: Path, mode: str, report: InstallReport, dr
         return
     selected = [agent_skill]
     codex_home = os.environ.get("CODEX_HOME", "").strip() or str(Path.home() / ".codex")
-    codex_skills = Path(codex_home).expanduser() / "skills"
+    codex_skills = _absolute_path(codex_home) / "skills"
     reject_symlink_path(codex_skills / selected[0].name / "SKILL.md", "skill installation path")
     if dry_run:
         report.add_step("skills", "dry-run", f"would install {len(selected)} entries to {codex_skills}")
@@ -1103,7 +1103,7 @@ def _normalise_runtime_path(
     Explicit paths are always checked; dry-run-only paths returned by planned
     downloads may be absent until the real install runs.
     """
-    candidate = Path(value).expanduser()
+    candidate = Path(os.path.expandvars(os.path.expanduser(value)))
     if not candidate.is_absolute():
         candidate = Path.cwd() / candidate
     try:
@@ -1415,7 +1415,7 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
         # .sig pack".  A staged RISC-V pack then shows up under ida_list_sigs
         # and can be applied per-IDB via ida_apply_sig.
         if opts.sigs_dir:
-            sig_source = Path(opts.sigs_dir).expanduser()
+            sig_source = _absolute_path(opts.sigs_dir)
             if chosen_install is None:
                 ui.warn("--sigs requires an IDA install; skipping signature staging")
                 report.add_step("sigs", "failed", "no IDA install to derive <IDADIR>/sig from")

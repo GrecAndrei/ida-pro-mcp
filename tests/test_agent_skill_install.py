@@ -68,6 +68,15 @@ def test_blank_codex_home_uses_the_default_home_directory(monkeypatch, tmp_path)
     assert (home / ".codex" / "skills" / "ida-pro-mcp" / "SKILL.md").is_file()
 
 
+def test_codex_home_expands_environment_path(monkeypatch, tmp_path):
+    monkeypatch.setenv("CODEX_SKILL_ROOT", str(tmp_path))
+    monkeypatch.setenv("CODEX_HOME", "$CODEX_SKILL_ROOT/codex")
+
+    install_codex_skills(tmp_path / "packaged-source", "agent", InstallReport(), dry_run=False)
+
+    assert (tmp_path / "codex" / "skills" / "ida-pro-mcp" / "SKILL.md").is_file()
+
+
 def test_portable_installer_writes_the_skill_and_reference_together(tmp_path):
     written = install_skills([tmp_path])
 

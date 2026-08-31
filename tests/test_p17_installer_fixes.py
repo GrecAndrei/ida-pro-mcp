@@ -179,6 +179,17 @@ def test_blank_client_path_environment_overrides_use_platform_defaults(tmp_path,
     assert paths["OpenCode"] == home / ".config" / "opencode" / "opencode.json"
 
 
+def test_client_path_environment_overrides_expand_environment_paths(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import clients
+
+    monkeypatch.setenv("CLIENT_CONFIG_ROOT", str(tmp_path))
+    monkeypatch.setenv("OPENCODE_CONFIG", "$CLIENT_CONFIG_ROOT/opencode.json")
+
+    paths = clients.get_config_paths(Path(__file__).resolve().parents[1])
+
+    assert paths["OpenCode"] == tmp_path / "opencode.json"
+
+
 def test_client_path_selection_skips_non_file_placeholder_for_fallback(tmp_path, monkeypatch):
     from ida_pro_mcp.installer import clients
 

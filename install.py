@@ -77,7 +77,13 @@ def get_mcp_config_paths() -> dict[str, Path]:
     """
     cfg = get_config_paths(_SOURCE_ROOT)
     home = Path.home()
-    xdg = Path(os.environ.get("XDG_CONFIG_HOME", "").strip() or str(home / ".config"))
+    xdg = Path(
+        os.path.expandvars(
+            os.path.expanduser(
+                os.environ.get("XDG_CONFIG_HOME", "").strip() or str(home / ".config")
+            )
+        )
+    )
     # Copilot always lives under ~/.copilot regardless of XDG.
     cfg["Copilot CLI"] = home / ".copilot" / "mcp-config.json"
     cfg["OpenCode"] = xdg / "opencode" / "opencode.json"

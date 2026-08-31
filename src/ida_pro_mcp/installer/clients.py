@@ -23,6 +23,11 @@ LEGACY_SERVER_NAMES = (
 )
 
 
+def _expand_configured_path(value: str) -> Path:
+    """Expand user/environment references from client path settings."""
+    return Path(os.path.expandvars(os.path.expanduser(str(value).strip())))
+
+
 def _atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:
     """Atomically replace `path` with `content` via tmp file + os.replace.
 
@@ -267,11 +272,11 @@ def _toml_dump_simple(data: dict) -> str:
 
 def get_config_paths(source_root: Path) -> dict[str, Path]:
     home = Path.home()
-    appdata = Path(
+    appdata = _expand_configured_path(
         os.environ.get("APPDATA", "").strip()
         or str(home / "AppData" / "Roaming")
     )
-    xdg_config = Path(
+    xdg_config = _expand_configured_path(
         os.environ.get("XDG_CONFIG_HOME", "").strip() or str(home / ".config")
     )
     is_windows = os.name == "nt"
@@ -292,7 +297,7 @@ def get_config_paths(source_root: Path) -> dict[str, Path]:
         pick_existing = bool(meta.get("pick_existing", False))
         override_value = os.environ.get(env_override, "").strip() if env_override else ""
         if override_value:
-            out[name] = Path(override_value).expanduser()
+            out[name] = _expand_configured_path(override_value)
             continue
         if isinstance(paths, dict):
             out[name] = resolve(paths.get("windows" if is_windows else "unix", ""))

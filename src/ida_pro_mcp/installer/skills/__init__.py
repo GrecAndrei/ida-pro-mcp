@@ -100,7 +100,13 @@ def default_skill_dirs() -> list[Path]:
     import os
 
     home = Path.home()
-    xdg = Path(os.environ.get("XDG_CONFIG_HOME", "").strip() or str(home / ".config"))
+    xdg = Path(
+        os.path.expandvars(
+            os.path.expanduser(
+                os.environ.get("XDG_CONFIG_HOME", "").strip() or str(home / ".config")
+            )
+        )
+    )
     return [
         home / ".claude" / "skills",
         xdg / "opencode" / "skills",
