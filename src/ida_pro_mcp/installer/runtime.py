@@ -845,7 +845,7 @@ def stage_sigs(
     if not source.exists():
         raise RuntimeError(f"--sigs source not found: {source}")
     if source.is_file():
-        if source.suffix.lower() in (".sig", ".sig.gz"):
+        if source.name.lower().endswith((".sig", ".sig.gz")):
             candidates = [source]
         else:
             candidates = []
@@ -853,8 +853,7 @@ def stage_sigs(
         candidates = sorted(list(source.rglob("*.sig")) + list(source.rglob("*.sig.gz")))
 
     requested_sig_root = sig_dir.expanduser()
-    if requested_sig_root.is_symlink():
-        raise RuntimeError(f"Refusing symlinked IDA signature directory: {requested_sig_root}")
+    reject_symlink_path(requested_sig_root, "IDA signature directory")
     sig_root = requested_sig_root.resolve()
     staged: list[str] = []
     skipped: list[str] = []
