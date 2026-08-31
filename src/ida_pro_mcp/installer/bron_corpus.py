@@ -23,11 +23,13 @@ import contextlib
 import hashlib
 import json
 import os
+import shutil
 import tarfile
 import tempfile
 import time
 import urllib.error
 import urllib.request
+import uuid
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -72,6 +74,32 @@ def _ensure_directory(path: str | Path, description: str) -> Path:
     if not candidate.is_dir():
         raise RuntimeError(f"{description.capitalize()} is not a directory: {candidate}")
     return candidate
+
+
+def _prepare_extraction_directory(path: str | Path, description: str) -> Path:
+    """Validate an extraction target without destroying its old contents."""
+    candidate = _reject_symlink(path, description)
+    if candidate.exists() and not candidate.is_dir():
+        raise RuntimeError(f"{description.capitalize()} is not a directory: {candidate}")
+    _ensure_directory(candidate.parent, f"{description} parent")
+    return candidate
+
+
+def _replace_extraction_directory(staging: Path, destination: Path) -> None:
+    """Atomically replace a managed extraction directory after validation."""
+    backup: Path | None = None
+    if destination.exists():
+        backup = destination.parent / f".{destination.name}.backup-{uuid.uuid4().hex}"
+        os.replace(destination, backup)
+    try:
+        os.replace(staging, destination)
+    except BaseException:
+        if backup is not None and not destination.exists():
+            os.replace(backup, destination)
+        raise
+    if backup is not None:
+        with contextlib.suppress(OSError):
+            shutil.rmtree(backup)
 
 
 def default_sources_dir() -> str:
@@ -253,68 +281,79 @@ def _verify_or_report(
 
 def _unpack_cwe_zip(zip_path: str, dst_dir: str) -> str:
     _reject_symlink(zip_path, "CWE archive")
-    destination_dir = _ensure_directory(dst_dir, "CWE extraction directory")
+    destination_dir = _prepare_extraction_directory(dst_dir, "CWE extraction directory")
     with zipfile.ZipFile(zip_path) as zf:
         xml_members = [n for n in zf.namelist() if n.lower().endswith(".xml")]
         if not xml_members:
             raise RuntimeError(f"No .xml found in CWE archive: {zip_path}")
         member = xml_members[0]
         info = zf.getinfo(member)
+        if info.is_dir():
+            raise RuntimeError(f"CWE XML member is a directory: {member}")
         if not info.is_dir() and info.file_size > _MAX_EXTRACTED_BYTES:
             raise RuntimeError(f"Refusing archive extraction over {_MAX_EXTRACTED_BYTES} bytes")
-        target = _reject_symlink(
+        final_target = _reject_symlink(
             destination_dir / os.path.basename(member), "CWE extraction target"
         )
-        if target.exists() and not target.is_file():
-            raise RuntimeError(f"CWE extraction target is not a regular file: {target}")
-        with zf.open(member) as src, open(target, "wb") as out:
-            _copy_extracted(src, out, already_written=0, declared_size=info.file_size)
-    return str(target)
+        if final_target.exists() and not final_target.is_file():
+            raise RuntimeError(f"CWE extraction target is not a regular file: {final_target}")
+        staging = Path(tempfile.mkdtemp(prefix=f".{destination_dir.name}.staging-", dir=str(destination_dir.parent)))
+        try:
+            target = staging / final_target.name
+            with zf.open(member) as src, open(target, "wb") as out:
+                _copy_extracted(src, out, already_written=0, declared_size=info.file_size)
+            _replace_extraction_directory(staging, destination_dir)
+            return str(destination_dir / target.name)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
 
 
 def _unpack_signature_base_tar(tar_path: str, dst_dir: str) -> str:
     _reject_symlink(tar_path, "signature-base archive")
-    destination_dir = _ensure_directory(dst_dir, "signature-base extraction directory")
-    yara_dst = _ensure_directory(destination_dir / "yara", "YARA extraction directory")
+    destination_dir = _prepare_extraction_directory(dst_dir, "signature-base extraction directory")
+    existing_yara = destination_dir / "yara"
+    _reject_symlink(existing_yara, "YARA extraction directory")
+    if existing_yara.exists() and not existing_yara.is_dir():
+        raise RuntimeError(f"YARA extraction directory is not a directory: {existing_yara}")
     with tarfile.open(tar_path, "r:gz") as tf:
         members = tf.getmembers()
         yara_members = [m for m in members if m.name.endswith((".yar", ".yara"))]
         if not yara_members:
             raise RuntimeError(f"No .yar/.yara members in {tar_path}")
+        staging = Path(tempfile.mkdtemp(prefix=f".{destination_dir.name}.staging-", dir=str(destination_dir.parent)))
+        yara_dst = _ensure_directory(staging / "yara", "YARA extraction directory")
         extracted_bytes = 0
-        for m in yara_members:
-            base = os.path.basename(m.name)
-            if not base:
-                continue
-            if not m.isfile():
-                raise RuntimeError(f"Refusing non-regular YARA archive member: {m.name}")
-            if m.size < 0 or extracted_bytes + m.size > _MAX_EXTRACTED_BYTES:
-                raise RuntimeError(
-                    f"Refusing archive extraction over {_MAX_EXTRACTED_BYTES} bytes"
-                )
-            target_path = _reject_symlink(
-                yara_dst / base, "YARA extraction target"
-            )
-            if target_path.exists() and not target_path.is_file():
-                raise RuntimeError(
-                    f"YARA extraction target is not a regular file: {target_path}"
-                )
-            if len(str(target_path)) > 4096:
-                continue
-            extracted = tf.extractfile(m)
-            if extracted is None:
-                continue
-            try:
-                with open(target_path, "wb") as out:
-                    extracted_bytes += _copy_extracted(
-                        extracted,
-                        out,
-                        already_written=extracted_bytes,
-                        declared_size=m.size,
+        try:
+            for m in yara_members:
+                base = os.path.basename(m.name)
+                if not base:
+                    continue
+                if not m.isfile():
+                    raise RuntimeError(f"Refusing non-regular YARA archive member: {m.name}")
+                if m.size < 0 or extracted_bytes + m.size > _MAX_EXTRACTED_BYTES:
+                    raise RuntimeError(
+                        f"Refusing archive extraction over {_MAX_EXTRACTED_BYTES} bytes"
                     )
-            finally:
-                extracted.close()
-    return str(yara_dst)
+                target_path = yara_dst / base
+                if len(str(target_path)) > 4096:
+                    continue
+                extracted = tf.extractfile(m)
+                if extracted is None:
+                    continue
+                try:
+                    with open(target_path, "wb") as out:
+                        extracted_bytes += _copy_extracted(
+                            extracted,
+                            out,
+                            already_written=extracted_bytes,
+                            declared_size=m.size,
+                        )
+                finally:
+                    extracted.close()
+            _replace_extraction_directory(staging, destination_dir)
+            return str(destination_dir / "yara")
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
 
 
 def download_source(

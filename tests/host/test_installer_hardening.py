@@ -273,6 +273,24 @@ def test_cwe_extraction_does_not_follow_existing_target_symlink(tmp_path):
     assert outside.read_bytes() == b"must remain untouched"
 
 
+def test_cwe_refresh_replaces_stale_materialized_files(tmp_path):
+    from ida_pro_mcp.installer import bron_corpus
+
+    first = tmp_path / "first.zip"
+    with zipfile.ZipFile(first, "w") as zf:
+        zf.writestr("old.xml", b"<old />")
+    output = tmp_path / "cwe"
+    bron_corpus._unpack_cwe_zip(str(first), str(output))
+
+    second = tmp_path / "second.zip"
+    with zipfile.ZipFile(second, "w") as zf:
+        zf.writestr("new.xml", b"<new />")
+    result = bron_corpus._unpack_cwe_zip(str(second), str(output))
+
+    assert Path(result).read_bytes() == b"<new />"
+    assert not (output / "old.xml").exists()
+
+
 def test_signature_extraction_does_not_follow_existing_directory_symlink(tmp_path):
     from ida_pro_mcp.installer import bron_corpus
 
@@ -292,6 +310,28 @@ def test_signature_extraction_does_not_follow_existing_directory_symlink(tmp_pat
         bron_corpus._unpack_signature_base_tar(str(archive), str(output))
 
     assert not (outside / "test.yar").exists()
+
+
+def test_signature_refresh_replaces_stale_materialized_rules(tmp_path):
+    from ida_pro_mcp.installer import bron_corpus
+
+    def _archive(path: Path, name: str, content: bytes):
+        with tarfile.open(path, "w:gz") as tf:
+            member = tarfile.TarInfo(f"signature-base/rules/{name}")
+            member.size = len(content)
+            tf.addfile(member, io.BytesIO(content))
+
+    first = tmp_path / "first.tar.gz"
+    _archive(first, "old.yar", b"rule old { condition: true }")
+    output = tmp_path / "signature-base"
+    bron_corpus._unpack_signature_base_tar(str(first), str(output))
+
+    second = tmp_path / "second.tar.gz"
+    _archive(second, "new.yar", b"rule new { condition: true }")
+    result = bron_corpus._unpack_signature_base_tar(str(second), str(output))
+
+    assert Path(result, "new.yar").read_bytes() == b"rule new { condition: true }"
+    assert not (output / "yara" / "old.yar").exists()
 
 
 def test_corpus_verify_env_is_strict_when_expected_hash_is_missing(tmp_path, monkeypatch):
