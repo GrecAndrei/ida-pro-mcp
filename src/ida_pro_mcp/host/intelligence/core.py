@@ -50,8 +50,10 @@ import os
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -302,6 +304,18 @@ def _select_state_path(value: Any) -> str:
     return ""
 
 
+def _reject_symlinked_state_path(path: str) -> None:
+    """Reject a state path or existing parent that is a symlink."""
+    current = os.path.abspath(os.path.expanduser(path))
+    while True:
+        if os.path.islink(current):
+            raise RuntimeError(f"Refusing symlinked embedder state path: {current}")
+        parent = os.path.dirname(current)
+        if parent == current:
+            return
+        current = parent
+
+
 def write_embedder_state(
     install_root: str | os.PathLike,
     *,
@@ -334,9 +348,11 @@ def write_embedder_state(
 
     Returns the path of the written file.
     """
-    root = os.fspath(install_root)
+    root = os.path.abspath(os.path.expanduser(os.fspath(install_root)))
+    _reject_symlinked_state_path(root)
     os.makedirs(root, exist_ok=True)
     state_path = os.path.join(root, EMBEDDER_STATE_FILE)
+    _reject_symlinked_state_path(state_path)
     payload: dict[str, Any] = {
         "updated_at": __import__("datetime").datetime.now(
             __import__("datetime").timezone.utc
@@ -368,8 +384,28 @@ def write_embedder_state(
         payload["disabled"] = bool(disabled)
     if rerank is not None:
         payload["rerank"] = {k: v for k, v in rerank.items() if v is not None and v != ""}
-    with open(state_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+    temporary_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            delete=False,
+            dir=root,
+            prefix=".embedder.",
+            suffix=".tmp",
+        ) as handle:
+            temporary_path = handle.name
+            json.dump(payload, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary_path, stat.S_IRUSR | stat.S_IWUSR)
+        os.replace(temporary_path, state_path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(temporary_path)
     return state_path
 
 

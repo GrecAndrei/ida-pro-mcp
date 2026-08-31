@@ -6,6 +6,8 @@ import io
 from dataclasses import replace
 from types import SimpleNamespace
 
+import pytest
+
 from ida_pro_mcp.installer.common import InstallReport
 from ida_pro_mcp.installer.main import parse_args
 from ida_pro_mcp.installer.runtime import (
@@ -128,6 +130,51 @@ def test_client_config_gemini_vertex_without_key_omits_it(tmp_path):
     )
     assert config["env"]["IDA_MCP_EMBED_BACKEND"] == "gemini"
     assert "GEMINI_API_KEY" not in config["env"]
+
+
+def test_embedder_state_rejects_symlinked_install_root(tmp_path):
+    from ida_pro_mcp.host.intelligence.core import write_embedder_state
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    redirected_root = tmp_path / "install-link"
+    redirected_root.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlinked embedder state path"):
+        write_embedder_state(redirected_root, profile="zembed-1")
+
+    assert not (outside / "embedder.json").exists()
+
+
+def test_embedder_state_rejects_target_symlink_and_preserves_target(tmp_path):
+    from ida_pro_mcp.host.intelligence.core import write_embedder_state
+
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"keep": true}', encoding="utf-8")
+    state_path = tmp_path / "embedder.json"
+    state_path.symlink_to(outside)
+
+    with pytest.raises(RuntimeError, match="symlinked embedder state path"):
+        write_embedder_state(tmp_path, profile="zembed-1")
+
+    assert outside.read_text(encoding="utf-8") == '{"keep": true}'
+
+
+def test_embedder_state_publish_failure_preserves_existing_state(tmp_path, monkeypatch):
+    import ida_pro_mcp.host.intelligence.core as core
+
+    state_path = tmp_path / "embedder.json"
+    state_path.write_text('{"keep": true}', encoding="utf-8")
+
+    def _fail_replace(_source, _target):
+        raise OSError("publish failed")
+
+    monkeypatch.setattr(core.os, "replace", _fail_replace)
+    with pytest.raises(OSError, match="publish failed"):
+        core.write_embedder_state(tmp_path, profile="zembed-1")
+
+    assert state_path.read_text(encoding="utf-8") == '{"keep": true}'
+    assert not list(tmp_path.glob(".embedder.*.tmp"))
 
 
 def test_normal_runtime_install_removes_an_old_live_source_pointer(monkeypatch, tmp_path):
