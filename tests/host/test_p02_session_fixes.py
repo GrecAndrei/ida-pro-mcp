@@ -11,6 +11,7 @@ Covers the p02_session fixer pass:
 - restore_snapshot: keeps runtime-critical fields on the live session and
   returns None (not a misleading "snapshot missing") when the session is gone.
 - _save_metadata and friends: pid-scoped temp files (no cross-host corruption).
+- concurrent metadata updates from independent managers always leave valid JSON.
 - server_session: coverage cache parses structured data/items, is session-keyed
   and lock-guarded; search_notes honors ownership; state errors without a
   session; switch with reopen re-enters safe mode; _maybe_resolve_analysis_state
@@ -170,6 +171,56 @@ def test_metadata_save_uses_pid_scoped_tmp(tmp_path):
     assert not os.path.exists(meta_path + ".tmp")
     # The pid-scoped temp is renamed away atomically.
     assert not os.path.exists(f"{meta_path}.{os.getpid()}.tmp")
+
+
+def test_concurrent_metadata_updates_from_independent_managers_stay_valid(tmp_path):
+    """Separate host objects must never expose a partially-written snapshot."""
+    cache = str(tmp_path)
+    first = SessionManager(cache)
+    session = first.create_session("/tmp/x.bin")
+    second = SessionManager(cache)
+    managers = (first, second)
+    errors = []
+    done = threading.Event()
+    start = threading.Barrier(len(managers) + 1)
+    meta_path = first._get_metadata_path(session.session_id)
+
+    def writer(manager, worker):
+        start.wait()
+        for seq in range(30):
+            manager.update_session_metadata(
+                session.session_id,
+                writer=worker,
+                sequence=seq,
+                payload="x" * 4096,
+            )
+
+    def reader():
+        start.wait()
+        while not done.is_set():
+            try:
+                with open(meta_path, encoding="utf-8") as f:
+                    json.load(f)
+            except (json.JSONDecodeError, OSError) as exc:
+                errors.append(type(exc).__name__)
+                return
+
+    reader_thread = threading.Thread(target=reader)
+    writers = [
+        threading.Thread(target=writer, args=(manager, worker))
+        for worker, manager in enumerate(managers)
+    ]
+    reader_thread.start()
+    for thread in writers:
+        thread.start()
+    for thread in writers:
+        thread.join()
+    done.set()
+    reader_thread.join()
+
+    assert errors == []
+    with open(meta_path, encoding="utf-8") as f:
+        assert json.load(f)["session_id"] == session.session_id
 
 
 # ---------------------------------------------------------------------------

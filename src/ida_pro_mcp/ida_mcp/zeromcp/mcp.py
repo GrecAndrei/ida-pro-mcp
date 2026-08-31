@@ -43,6 +43,12 @@ class _McpSseConnection:
         self.wfile: BufferedIOBase = wfile
         self.session_id = str(uuid.uuid4())
         self.alive = True
+        self._write_lock = threading.Lock()
+
+    def close(self) -> None:
+        """Mark the connection closed without racing an in-flight write."""
+        with self._write_lock:
+            self.alive = False
 
     def send_event(self, event_type: str, data):
         """Send an SSE event to the client
@@ -51,28 +57,29 @@ class _McpSseConnection:
             event_type: Type of event (e.g., "endpoint", "message", "ping")
             data: Event data - can be string (sent as-is) or dict (JSON-encoded)
         """
-        if not self.alive:
-            return False
+        with self._write_lock:
+            if not self.alive:
+                return False
 
-        try:
-            # SSE format: "event: type\ndata: content\n\n"
-            if isinstance(data, str):
-                data_str = f"data: {data}\n\n"
-            else:
-                try:
-                    data_str = f"data: {json.dumps(data)}\n\n"
-                except (TypeError, ValueError, OverflowError):
-                    # A non-serializable event payload must not crash the
-                    # connection (or, for a notification stream, take the whole
-                    # server down); emit a crisp error event instead.
-                    data_str = f"data: {json.dumps({'error': True, 'code': 'INTERNAL', 'message': 'event serialization failed'})}\n\n"
-            message = f"event: {event_type}\n{data_str}".encode("utf-8")
-            self.wfile.write(message)
-            self.wfile.flush()  # Ensure data is sent immediately
-            return True
-        except (BrokenPipeError, OSError):
-            self.alive = False
-            return False
+            try:
+                # SSE format: "event: type\ndata: content\n\n"
+                if isinstance(data, str):
+                    data_str = f"data: {data}\n\n"
+                else:
+                    try:
+                        data_str = f"data: {json.dumps(data)}\n\n"
+                    except (TypeError, ValueError, OverflowError):
+                        # A non-serializable event payload must not crash the
+                        # connection (or, for a notification stream, take the whole
+                        # server down); emit a crisp error event instead.
+                        data_str = f"data: {json.dumps({'error': True, 'code': 'INTERNAL', 'message': 'event serialization failed'})}\n\n"
+                message = f"event: {event_type}\n{data_str}".encode("utf-8")
+                self.wfile.write(message)
+                self.wfile.flush()  # Ensure data is sent immediately
+                return True
+            except (BrokenPipeError, OSError):
+                self.alive = False
+                return False
 
 class McpHttpRequestHandler(BaseHTTPRequestHandler):
     server_version = "zeromcp/1.4.0"
@@ -184,7 +191,7 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
     def _handle_sse_get(self):
         # Create SSE connection wrapper
         conn = _McpSseConnection(self.wfile)
-        self.mcp_server._sse_connections[conn.session_id] = conn
+        self.mcp_server._register_sse_connection(conn)
 
         try:
             # Send SSE headers
@@ -209,9 +216,8 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
                 time.sleep(1)
 
         finally:
-            conn.alive = False
-            if conn.session_id in self.mcp_server._sse_connections:
-                del self.mcp_server._sse_connections[conn.session_id]
+            conn.close()
+            self.mcp_server._unregister_sse_connection(conn)
 
     def _handle_sse_post(self, body: bytes):
         query_params = parse_qs(urlparse(self.path).query)
@@ -224,7 +230,7 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         # carrying an unknown or stale session id must never execute a tool
         # (which may mutate the IDB); previously the tool ran and the bogus
         # session was only noticed afterwards, discarding the result.
-        sse_conn = self.mcp_server._sse_connections.get(session_id)
+        sse_conn = self.mcp_server._get_sse_connection(session_id)
         if sse_conn is None or not sse_conn.alive:
             self.send_error(400, f"No active SSE connection found for session {session_id}")
             return
@@ -296,6 +302,7 @@ class McpServer:
         self._server_thread: threading.Thread | None = None
         self._running = False
         self._sse_connections: dict[str, _McpSseConnection] = {}
+        self._sse_lock = threading.RLock()
         self._protocol_version = threading.local()
 
         # Register MCP protocol methods with correct names
@@ -321,6 +328,38 @@ class McpServer:
             setattr(func, "__resource_uri__", uri)
             return self.resources.method(func)
         return decorator
+
+    def _register_sse_connection(self, conn: _McpSseConnection) -> None:
+        with self._sse_lock:
+            self._sse_connections[conn.session_id] = conn
+
+    def _unregister_sse_connection(self, conn: _McpSseConnection) -> None:
+        with self._sse_lock:
+            if self._sse_connections.get(conn.session_id) is conn:
+                del self._sse_connections[conn.session_id]
+
+    def _get_sse_connection(self, session_id: str) -> _McpSseConnection | None:
+        with self._sse_lock:
+            return self._sse_connections.get(session_id)
+
+    def _snapshot_sse_connections(self) -> tuple[_McpSseConnection, ...]:
+        with self._sse_lock:
+            return tuple(self._sse_connections.values())
+
+    def broadcast_sse_event(self, event_type: str, data: Any) -> None:
+        """Best-effort broadcast through a stable, synchronized boundary."""
+        for conn in self._snapshot_sse_connections():
+            try:
+                conn.send_event(event_type, data)
+            except Exception:
+                continue
+
+    def _close_sse_connections(self) -> None:
+        with self._sse_lock:
+            connections = tuple(self._sse_connections.values())
+            self._sse_connections.clear()
+        for conn in connections:
+            conn.close()
 
     def serve(self, host: str, port: int, *, background = True, request_handler = McpHttpRequestHandler):
         if self._running:
@@ -375,10 +414,9 @@ class McpServer:
 
         self._running = False
 
-        # Close all SSE connections
-        for conn in self._sse_connections.values():
-            conn.alive = False
-        self._sse_connections.clear()
+        # Close all SSE connections through the same synchronized boundary
+        # used by connection handlers and event broadcasts.
+        self._close_sse_connections()
 
         # Shutdown the HTTP server
         if self._http_server:

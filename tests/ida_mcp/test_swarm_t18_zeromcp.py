@@ -87,7 +87,11 @@ def _load_mcp_http():
         cors_allowed_origins=None,
     )
     rpc_stub.MCP_UNSAFE = frozenset()
-    rpc_stub.McpHttpRequestHandler = type("McpHttpRequestHandler", (), {})
+    class _ParentMcpHttpRequestHandler:
+        def do_POST(self):
+            self.parent_post_called = True
+
+    rpc_stub.McpHttpRequestHandler = _ParentMcpHttpRequestHandler
     rpc_stub.McpRpcRegistry = type("McpRpcRegistry", (), {})
     rpc_stub.McpToolError = type("McpToolError", (Exception,), {})
     sys.modules["ida_pro_mcp.ida_mcp.rpc"] = rpc_stub
@@ -121,6 +125,7 @@ def _make_config_handler(mod, body=b"", content_type="application/x-www-form-url
     h.end_headers = lambda: h.sent.append(("end",))
     h.mcp_server = mod.MCP_SERVER
     h.update_cors_policy = mod.IdaMcpHttpRequestHandler.update_cors_policy.__get__(h)
+    h._check_origin = mod.IdaMcpHttpRequestHandler._check_origin.__get__(h)
     return h
 
 
@@ -287,3 +292,49 @@ def test_origin_check_rejects_cross_port_localhost_origin():
     # check requires the origin's port to equal the MCP server's own port.
     assert cls._check_origin(h) is False
     assert h.sent["code"] == 403
+
+
+def test_mcp_post_rejects_cross_origin_before_dispatch():
+    mod, _ = _load_mcp_http()
+    cls = mod.IdaMcpHttpRequestHandler
+    h = object.__new__(cls)
+    h.headers = {"Origin": "http://evil.example"}
+    h.mcp_server = mod.MCP_SERVER
+    h.path = "/mcp"
+    h.sent = []
+    h.send_error = lambda code, msg, explain=None: h.sent.append(("error", code, msg))
+    h._local_endpoints = lambda: ("127.0.0.1:13337", "localhost:13337", "[::1]:13337")
+
+    cls.do_POST(h)
+
+    assert any(item[0] == "error" and item[1] == 403 for item in h.sent)
+    assert not getattr(h, "parent_post_called", False)
+
+
+def test_mcp_post_without_origin_remains_available_to_direct_clients():
+    mod, _ = _load_mcp_http()
+    cls = mod.IdaMcpHttpRequestHandler
+    h = object.__new__(cls)
+    h.headers = {}
+    h.mcp_server = mod.MCP_SERVER
+    h.path = "/mcp"
+    h.parent_post_called = False
+
+    cls.do_POST(h)
+
+    assert h.parent_post_called is True
+
+
+def test_unrestricted_policy_explicitly_allows_cross_origin_mcp_post():
+    mod, _ = _load_mcp_http()
+    cls = mod.IdaMcpHttpRequestHandler
+    mod.MCP_SERVER.cors_allowed_origins = "*"
+    h = object.__new__(cls)
+    h.headers = {"Origin": "http://remote.example"}
+    h.mcp_server = mod.MCP_SERVER
+    h.path = "/mcp"
+    h.parent_post_called = False
+
+    cls.do_POST(h)
+
+    assert h.parent_post_called is True

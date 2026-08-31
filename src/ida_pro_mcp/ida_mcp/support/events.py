@@ -9,11 +9,11 @@ init). Each hook:
   serves a stale pre-analysis snapshot;
 - best-effort pushes an SSE notification to any connected MCP SSE client.
 
-The SSE push is deliberately best-effort. The zeromcp server exposes
-per-connection ``send_event()`` but no broadcast/emitter helper, so this
-module lazily resolves the MCP server singleton and iterates its live
-connection registry. When no server is running (or none is reachable) the
-push degrades to a no-op and the event stays record-only in the ring.
+The SSE push is deliberately best-effort. The zeromcp server owns the
+connection registry and exposes a synchronized broadcast boundary; this
+module lazily resolves the MCP server singleton and uses that boundary. When
+no server is running (or none is reachable) the push degrades to a no-op and
+the event stays record-only in the ring.
 
 Every hook body is wrapped in try/except: a recording failure must never
 propagate into IDA's analysis loop.
@@ -139,15 +139,20 @@ def _resolve_mcp_server():
 def _sse_emit(event: dict) -> None:
     """Best-effort push of an analysis event to connected SSE clients.
 
-    The zeromcp server exposes per-connection ``send_event()`` but no broadcast
-    helper, so we iterate its live connection registry directly. Any failure —
-    no server, no connections, a dead socket — is swallowed; the event stays
-    record-only in the ring.
+    Any failure — no server, no connections, a dead socket — is swallowed; the
+    event stays record-only in the ring.
     """
     try:
         server = _resolve_mcp_server()
         if server is None:
             return
+        broadcast = getattr(server, "broadcast_sse_event", None)
+        if callable(broadcast):
+            broadcast("analysis", event)
+            return
+
+        # Compatibility with older injected server stubs. The real server
+        # always takes the synchronized broadcast path above.
         conns = getattr(server, "_sse_connections", None)
         if not isinstance(conns, dict):
             return

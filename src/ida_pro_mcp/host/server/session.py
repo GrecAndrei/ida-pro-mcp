@@ -371,48 +371,70 @@ class SessionManager(SessionSkillsMixin):
             os.makedirs(path, exist_ok=True)
         return path
 
+    def update_session_metadata(self, sid: str, **updates: Any) -> bool:
+        """Apply metadata updates and persist one consistent session snapshot.
+
+        Watchdogs and request handlers can update the same session concurrently.
+        Keeping the read/modify/write under the manager lock prevents a stale
+        snapshot from racing a newer metadata update.
+        """
+        with self._lock:
+            session = self.sessions.get(sid)
+            if session is None:
+                return False
+            current = dict(getattr(session, "metadata", None) or {})
+            if all(current.get(key) == value for key, value in updates.items()):
+                return False
+            current.update(updates)
+            session.metadata = current
+            self._save_metadata(session)
+            return True
+
     def _save_metadata(self, session: Session):
-        path = self._get_metadata_path(session.session_id)
-        # Scope the tmp name by pid so two hosts sharing one durable cache
-        # writing the same session never truncate the same tmp file and
-        # interleave JSON into metadata.json. os.replace is atomic, so each
-        # writer's complete file wins wholesale.
-        tmp = f"{path}.{os.getpid()}.tmp"
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(session.to_dict(), f, indent=2)
-                # Atomic rename, but no fsync: the watchdog and apply-progress
-                # paths call _save_metadata every few seconds, and flushing
-                # to disk on each tick thrashes the disk for zero safety gain
-                # (the rename is already atomic; a lost update only costs a
-                # re-run of the same analysis step).
-                f.flush()
-            os.replace(tmp, path)
-        except OSError as e:
-            if e.errno == errno.ENOSPC:
-                # Distinct, greppable warning: this is a disk-full condition,
-                # not a transient permissions race. The in-memory session state
-                # (analysis_applied / analysis_gate in particular) now diverges
-                # from what is on disk, so a restart would re-run analysis the
-                # caller believes already happened — surface that honestly.
-                log_rpc(
-                    f"[DISK-FULL] session metadata write failed for "
-                    f"{session.session_id} (ENOSPC errno={e.errno}): {e} — "
-                    f"in-memory analysis_applied={session.analysis_applied}, "
-                    f"analysis_gate={session.analysis_gate!r} not persisted"
-                )
-            else:
-                log_rpc(
-                    f"Failed to save session metadata for "
-                    f"{session.session_id}: {e}"
-                )
-            with contextlib.suppress(OSError):
-                os.remove(tmp)
-        except Exception as e:
-            log_rpc(f"Failed to save session metadata for {session.session_id}: {e}")
-            with contextlib.suppress(OSError):
-                os.remove(tmp)
+        # The manager lock protects in-process callers while the unique temp
+        # name protects independent hosts sharing the same durable cache. A
+        # PID-only name is insufficient: watchdogs and request handlers in one
+        # process can still truncate one another's temp file.
+        with self._lock:
+            path = self._get_metadata_path(session.session_id)
+            tmp = (
+                f"{path}.{os.getpid()}.{threading.get_ident()}"
+                f".{uuid.uuid4().hex}.tmp"
+            )
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(session.to_dict(), f, indent=2)
+                    # Atomic rename, but no fsync: the watchdog and
+                    # apply-progress paths call _save_metadata every few
+                    # seconds, and flushing to disk on each tick thrashes the
+                    # disk for zero safety gain.
+                    f.flush()
+                os.replace(tmp, path)
+            except OSError as e:
+                if e.errno == errno.ENOSPC:
+                    # Distinct, greppable warning: this is a disk-full
+                    # condition, not a transient permissions race. The
+                    # in-memory session state (analysis_applied /
+                    # analysis_gate in particular) now diverges from what is
+                    # on disk, so a restart would re-run analysis the caller
+                    # believes already happened — surface that honestly.
+                    log_rpc(
+                        f"[DISK-FULL] session metadata write failed for "
+                        f"{session.session_id} (ENOSPC errno={e.errno}): {e} — "
+                        f"in-memory analysis_applied={session.analysis_applied}, "
+                        f"analysis_gate={session.analysis_gate!r} not persisted"
+                    )
+                else:
+                    log_rpc(
+                        f"Failed to save session metadata for "
+                        f"{session.session_id}: {e}"
+                    )
+            except Exception as e:
+                log_rpc(f"Failed to save session metadata for {session.session_id}: {e}")
+            finally:
+                with contextlib.suppress(OSError):
+                    os.remove(tmp)
 
     def _load_metadata_file(self, meta_path: str) -> Session | None:
         try:

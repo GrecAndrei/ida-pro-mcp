@@ -27,6 +27,7 @@ Coverage:
 import importlib.util
 import json
 import sys
+import threading
 import types
 from pathlib import Path
 
@@ -400,6 +401,38 @@ def test_sse_post_with_valid_session_dispatches_and_sends_event():
     assert fake.wfile.writes == []
     assert len(conn_wfile.writes) == 1
     assert b'"ok"' in conn_wfile.writes[0]
+
+
+def test_sse_registry_can_churn_while_broadcasting_and_closing():
+    """Connection lifecycle and broadcasts share one synchronization boundary."""
+    jr, mcp = _load_pkg()
+    server = mcp.McpServer("test")
+    errors = []
+    stop = threading.Event()
+
+    def churn():
+        try:
+            while not stop.is_set():
+                conn = mcp._McpSseConnection(_FakeWfile())
+                server._register_sse_connection(conn)
+                server.broadcast_sse_event("analysis", {"ok": True})
+                server._unregister_sse_connection(conn)
+                conn.close()
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=churn) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for _ in range(20):
+        server.broadcast_sse_event("analysis", {"ok": True})
+        server._close_sse_connections()
+    stop.set()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    assert server._snapshot_sse_connections() == ()
 
 
 # ---------------------------------------------------------------------------

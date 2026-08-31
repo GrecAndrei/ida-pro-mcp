@@ -145,10 +145,17 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
 
     def do_POST(self):
         """Handles POST requests."""
-        if urlparse(self.path).path == "/config":
+        path = urlparse(self.path).path
+        if path == "/config":
             if not self._check_origin():
                 return
             self._handle_config_post()
+        elif not self._check_origin():
+            # The MCP endpoint can mutate the IDB and the SSE POST endpoint
+            # can route tool calls to a live stream. Apply the same CSRF gate
+            # to both; otherwise a local browser visit could trigger tools
+            # even though the config endpoint is protected.
+            return
         else:
             super().do_POST()
 
@@ -187,6 +194,11 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
         """
         origin = self.headers.get("Origin")
         if origin is None:
+            return True
+        # The configuration page makes unrestricted cross-origin access an
+        # explicit opt-in. Keep that choice meaningful while protecting the
+        # default local/direct policies from browser CSRF.
+        if getattr(getattr(self, "mcp_server", None), "cors_allowed_origins", None) == "*":
             return True
         try:
             parts = urlparse(origin)

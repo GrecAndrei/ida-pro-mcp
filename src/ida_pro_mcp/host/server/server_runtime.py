@@ -1209,21 +1209,36 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
 
     def _update_session_indexing_metadata(self, session_id: str, **updates: Any) -> None:
             try:
+                update = getattr(self.session_mgr, "update_session_metadata", None)
+                if callable(update):
+                    update(session_id, **updates)
+                    return
+
+                # Compatibility for focused mixin hosts and older injected
+                # session stores. The real SessionManager takes the atomic
+                # read/modify/write path above.
                 sess = self.session_mgr.sessions.get(session_id)
                 if not sess:
                     return
                 current = dict(getattr(sess, "metadata", None) or {})
-                changed = any(
-                    current.get(key) != value
-                    for key, value in updates.items()
-                )
-                if not changed:
+                if all(current.get(key) == value for key, value in updates.items()):
                     return
+                current.update(updates)
                 sess.metadata = current
-                sess.metadata.update(updates)
                 self.session_mgr._save_metadata(sess)
             except Exception:
                 pass
+
+    def _persist_session_fields(self, session: Session, **updates: Any) -> None:
+            """Persist runtime-owned fields without saving a stale session copy."""
+            for key, value in updates.items():
+                setattr(session, key, value)
+            update = getattr(self.session_mgr, "update_session", None)
+            if callable(update):
+                update(session.session_id, **updates)
+                return
+            # Compatibility for focused mixin hosts and older injected stores.
+            self.session_mgr._save_metadata(session)
 
     # ------------------------------------------------------------------
     # Analysis-state observability
@@ -2878,8 +2893,7 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
                     },
                 )
 
-            session.analysis_applied = False
-            self.session_mgr._save_metadata(session)
+            self._persist_session_fields(session, analysis_applied=False)
 
             result = self._launch_and_wait(session, server_port)
             if "error" in result and result.get("library_init"):
@@ -3080,7 +3094,9 @@ class ServerRuntimeMixin(ServerRuntimeLeasesMixin):
 
             if opts.get("apply_once", True):
                 session.analysis_applied = True
-            self.session_mgr._save_metadata(session)
+            self._persist_session_fields(
+                session, analysis_applied=session.analysis_applied
+            )
             _progress("verify_architecture", "start")
             current_options = {}
             with contextlib.suppress(Exception):
