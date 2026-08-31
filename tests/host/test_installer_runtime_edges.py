@@ -401,6 +401,17 @@ def test_setup_runtime_rejects_symlinked_venv_path(tmp_path):
         )
 
 
+def test_wipe_venv_removes_non_directory_placeholder_without_retry(tmp_path):
+    from ida_pro_mcp.installer.runtime import _wipe_venv
+
+    placeholder = tmp_path / ".venv"
+    placeholder.write_text("not a virtual environment", encoding="utf-8")
+
+    _wipe_venv(placeholder)
+
+    assert not placeholder.exists()
+
+
 def test_archive_extraction_accepts_safe_zip_and_rejects_zip_slip(tmp_path):
     from ida_pro_mcp.installer.runtime import _extract_archive
 

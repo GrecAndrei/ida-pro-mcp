@@ -1340,6 +1340,12 @@ def _wipe_venv(venv_dir: Path) -> None:
     """
     if not venv_dir.exists():
         return
+    if not venv_dir.is_dir():
+        try:
+            venv_dir.unlink()
+            return
+        except OSError:
+            pass
     deadline = time.time() + 15.0
     while time.time() < deadline:
         try:
@@ -1348,7 +1354,7 @@ def _wipe_venv(venv_dir: Path) -> None:
         except OSError:
             time.sleep(0.5)
     try:
-        backup = venv_dir.with_name(f".venv.stale.{int(time.time())}")
+        backup = venv_dir.with_name(f".venv.stale.{int(time.time())}-{uuid.uuid4().hex}")
         venv_dir.rename(backup)
     except OSError as exc:
         raise RuntimeError(
