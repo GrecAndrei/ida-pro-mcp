@@ -200,6 +200,8 @@ def _download_to_file(
                     raise RuntimeError(
                         f"SHA-256 mismatch: expected={expected_sha256} actual={actual}"
                     )
+                tmp.flush()
+                os.fsync(tmp.fileno())
         except Exception:
             with contextlib.suppress(OSError):
                 os.remove(tmp_path)
@@ -207,9 +209,9 @@ def _download_to_file(
     try:
         os.replace(tmp_path, destination)
     except OSError:
-        if destination.exists() or destination.is_symlink():
-            destination.unlink()
-        os.rename(tmp_path, destination)
+        with contextlib.suppress(OSError):
+            os.remove(tmp_path)
+        raise
     return {"bytes": total, "path": str(destination)}
 
 
