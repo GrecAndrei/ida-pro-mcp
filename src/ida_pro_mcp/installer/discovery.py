@@ -484,14 +484,23 @@ def detect_ida_installs() -> list[IdaInstall]:
     for p in _scan_system_dirs():
         _add(p, "system_scan" if sys.platform != "darwin" else "applications_scan")
 
-    # Sort: version desc, then pro > home > essential > free > unknown, then path
+    # Sort: version/build desc, then pro > home > essential > free > unknown,
+    # then path.  The public version is only major/minor, but IDA can have
+    # multiple builds of the same release installed; automatic selection must
+    # not choose an older build merely because its path sorts first.
     flavor_rank = {"pro": 0, "home": 1, "essential": 2, "free": 3, "unknown": 4}
 
     def _sort_key(i: IdaInstall) -> tuple:
+        build_match = re.match(r"^(\d{6})(?:\.([0-9a-fA-F]+))?", i.build or "")
+        build_date = int(build_match.group(1)) if build_match else -1
+        build_hash = build_match.group(2).lower() if build_match and build_match.group(2) else ""
         return (
             -i.version[0],
             -i.version[1],
+            -build_date,
+            -bool(build_match),
             flavor_rank.get(i.flavor, 9),
+            build_hash,
             str(i.path),
         )
 

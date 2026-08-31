@@ -132,6 +132,30 @@ def test_detect_ida_installs_deduplicates_sources_and_sorts_flavor(monkeypatch, 
     assert [item.source for item in installs] == ["env", "path"]
 
 
+def test_detect_ida_installs_prefers_newer_build_of_same_release(monkeypatch, tmp_path):
+    older = tmp_path / "a-older-build"
+    newer = tmp_path / "z-newer-build"
+    for install, version in (
+        (older, "9.3.250101.aaaaaaaa"),
+        (newer, "9.3.260421.bbbbbbbb"),
+    ):
+        install.mkdir()
+        _binary(install / "idat64", b"wrapper")
+        _binary(install / "ida64", _elf(version))
+
+    monkeypatch.setattr(discovery, "_from_env", lambda: iter([older, newer]))
+    monkeypatch.setattr(discovery, "_from_path", lambda: iter([]))
+    monkeypatch.setattr(discovery, "_scan_home", lambda: iter([]))
+    monkeypatch.setattr(discovery, "_scan_system_dirs", lambda: iter([]))
+
+    installs = discovery.detect_ida_installs()
+
+    assert [item.build for item in installs] == [
+        "260421.bbbbbbbb",
+        "250101.aaaaaaaa",
+    ]
+
+
 def test_selection_rejects_bad_explicit_directory_and_out_of_range_default(tmp_path):
     with pytest.raises(RuntimeError, match="does not contain"):
         select_ida_install([], explicit_dir=tmp_path / "not-an-install")
