@@ -672,6 +672,8 @@ def install_bashrc_cli(install_root: Path, dry_run: bool, report: InstallReport)
             "",
         ]
     )
+    if bashrc.exists() and not bashrc.is_file():
+        raise RuntimeError(f"Refusing non-regular bashrc path: {bashrc}")
     existing = bashrc.read_text(encoding="utf-8") if bashrc.exists() else ""
     start = existing.find(block_start)
     end_marker = existing.find(block_end, start + len(block_start)) if start >= 0 else -1

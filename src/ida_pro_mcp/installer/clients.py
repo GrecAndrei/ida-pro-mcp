@@ -57,6 +57,8 @@ def backup_file(path: Path, report: InstallReport, dry_run: bool) -> Path | None
         if not dry_run:
             report.add_created(path)
         return None
+    if not path.is_file():
+        raise RuntimeError(f"Refusing non-regular client config path: {path}")
     # Two client updates can happen inside the same second. A UUID keeps
     # those rollback points independent instead of overwriting one another.
     backup = path.with_suffix(path.suffix + f".bak.{uuid.uuid4().hex}")
@@ -104,6 +106,11 @@ def _prepare_config_path(path: Path, report: InstallReport, dry_run: bool) -> No
             f"Refusing to replace symlinked client config {path}; "
             "update its target explicitly and re-run the installer."
         ) from exc
+    if path.exists() and not path.is_file():
+        raise ConfigParseError(
+            f"Refusing non-regular client config path {path}; "
+            "choose a regular file or remove the path before retrying."
+        )
     if not dry_run:
         path.parent.mkdir(parents=True, exist_ok=True)
     backup_file(path, report, dry_run)

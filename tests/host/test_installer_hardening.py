@@ -223,6 +223,23 @@ def test_client_config_symlinked_parent_is_not_created_or_replaced(tmp_path):
     assert not (outside / "settings.json").exists()
 
 
+def test_client_config_rejects_non_regular_target(tmp_path):
+    from ida_pro_mcp.installer import clients
+    from ida_pro_mcp.installer.common import InstallReport
+
+    path = tmp_path / "settings.json"
+    path.mkdir()
+
+    with pytest.raises(clients.ConfigParseError, match="non-regular client config path"):
+        clients.update_json_config(
+            path,
+            "ida-pro-mcp",
+            {"command": "/x/python"},
+            InstallReport(),
+            dry_run=False,
+        )
+
+
 def test_run_install_rejects_symlinked_install_root_without_writing_through_it(tmp_path):
     from ida_pro_mcp.installer import main
     from ida_pro_mcp.installer.common import InstallerOptions
@@ -362,6 +379,19 @@ def test_bashrc_shim_rejects_symlinked_config(tmp_path, monkeypatch):
         main.install_bashrc_cli(tmp_path / "install", dry_run=False, report=InstallReport())
 
     assert outside.read_text(encoding="utf-8") == "# preserve"
+
+
+def test_bashrc_shim_rejects_non_regular_config(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main
+    from ida_pro_mcp.installer.common import InstallReport
+
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".bashrc").mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+    with pytest.raises(RuntimeError, match="non-regular bashrc path"):
+        main.install_bashrc_cli(tmp_path / "install", dry_run=False, report=InstallReport())
 
 
 def test_bashrc_shim_does_not_corrupt_malformed_markers(tmp_path, monkeypatch):
