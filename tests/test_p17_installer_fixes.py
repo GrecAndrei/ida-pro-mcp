@@ -167,6 +167,23 @@ def test_legacy_copilot_wrapper_preserves_unparseable_config(tmp_path):
     assert path.read_text(encoding="utf-8") == original
 
 
+def test_legacy_antigravity_wrapper_does_not_leave_plugin_on_config_failure(tmp_path):
+    import install
+
+    path = tmp_path / "antigravity" / "mcp.json"
+    path.parent.mkdir()
+    original = '{"keep": [}\n'
+    path.write_text(original, encoding="utf-8")
+
+    assert install._write_antigravity_plugin(
+        path,
+        "ida-pro-mcp",
+        {"command": "/x/python", "args": [], "env": {}},
+    ) is False
+    assert path.read_text(encoding="utf-8") == original
+    assert not (path.parent / "plugin.json").exists()
+
+
 def test_configure_clients_writes_vscode_copilot_under_servers(tmp_path, monkeypatch):
     """VS Code Copilot and Copilot CLI must be configured under top-level
     "servers" (their schema), not "mcpServers".  The client ida-pro-mcp is

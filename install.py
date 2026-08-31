@@ -157,12 +157,17 @@ def _write_antigravity_plugin(
 
         reject_symlink_path(plugin_json, "Antigravity plugin path")
         plugin_json.parent.mkdir(parents=True, exist_ok=True)
+        created_plugin = False
         if not plugin_json.exists():
             atomic_write_text(
                 plugin_json,
                 json.dumps({"name": server_name}, indent=2), encoding="utf-8"
             )
-        return _delegate_json_config(config_path, server_name, server_cfg, InstallReport())
+            created_plugin = True
+        ok = _delegate_json_config(config_path, server_name, server_cfg, InstallReport())
+        if not ok and created_plugin:
+            plugin_json.unlink()
+        return ok
     except Exception:
         _log.exception("Antigravity plugin config failed")
         return False
