@@ -781,6 +781,25 @@ def test_embedder_doctor_honors_custom_root_and_gemini_overrides(tmp_path, monke
     }
 
 
+def test_embedder_doctor_rejects_symlinked_install_root(tmp_path):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    install_root = tmp_path / "install-link"
+    install_root.symlink_to(outside, target_is_directory=True)
+
+    opts = InstallerOptions(
+        embedder_doctor=True,
+        interactive=False,
+        install_root=install_root,
+    )
+
+    assert main_mod.run_embedder_doctor(opts, main_mod.UI()) == 1
+    assert not (outside / "embedder.json").exists()
+
+
 def test_wizard_rerank_decline_persists_rerank_disabled(tmp_path, monkeypatch):
     """Declining the reranker in the wizard must set rerank_disabled so the
     default profile cannot leak into state / client env."""

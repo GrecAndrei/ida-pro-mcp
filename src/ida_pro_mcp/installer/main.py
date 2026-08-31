@@ -84,6 +84,11 @@ def _absolute_path(path: Path | str) -> Path:
 
 def run_embedder_doctor(opts: InstallerOptions, ui: UI) -> int:
     install_root = _absolute_path(opts.install_root or get_install_root())
+    try:
+        reject_symlink_path(install_root, "installer root")
+    except RuntimeError as exc:
+        ui.err(str(exc))
+        return 1
     gemini_mode = opts.embed_backend == "gemini"
     profile = "" if gemini_mode else opts.embed_profile
     embed_model = "" if gemini_mode else (opts.embed_model_path or (
