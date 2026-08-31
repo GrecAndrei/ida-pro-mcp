@@ -624,7 +624,7 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
         else:
             ui.ok(f"idapro package found: {idalib_py}")
             ui.info(
-                "idalib activation will run after you confirm the installation, "
+                "idalib activation will run after the installation phases complete, "
                 "because it changes IDA's global active runtime."
             )
 
@@ -646,22 +646,52 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
 
     if not _prompt_yes_no("Proceed with installation now?", default=True):
         raise RuntimeError("Installation cancelled by user.")
-    if opts.ida_runtime == "idalib":
-        chosen_install = getattr(opts, "_ida_install", None)
-        ida_dir = str(chosen_install.path) if chosen_install is not None else ""
-        if find_idalib_python_dir(ida_dir):
-            ok, detail = activate_idalib(ida_dir)
-            if ok:
-                ui.ok(
-                    f"idalib activated for {ida_dir} — "
-                    "IDA_MCP_RUNTIME=idalib will be written to client configs."
-                )
-            else:
-                ui.warn(
-                    f"idalib activation failed ({detail}); sessions will fail "
-                    "until activation succeeds."
-                )
     return opts
+
+
+def _activate_idalib_after_install(
+    opts: InstallerOptions,
+    chosen_install: IdaInstall | None,
+    report: InstallReport,
+    ui: UI,
+) -> None:
+    """Activate idalib only after all selected install phases have succeeded."""
+    if opts.ida_runtime != "idalib":
+        return
+    if opts.dry_run:
+        report.add_step("idalib", "dry-run", "would activate after installation")
+        return
+    if chosen_install is None:
+        message = "idalib selected but no IDA install was resolved; activation skipped"
+        report.add_warning(message)
+        ui.warn(message)
+        return
+
+    ida_dir = str(chosen_install.path)
+    if not find_idalib_python_dir(ida_dir):
+        message = (
+            f"idalib selected but no idapro package was found under {ida_dir}/idalib/python; "
+            "activation skipped"
+        )
+        report.add_warning(message)
+        ui.warn(message)
+        return
+
+    ok, detail = activate_idalib(ida_dir)
+    if ok:
+        report.add_step("idalib", "ok", f"activated for {ida_dir}")
+        ui.ok(
+            f"idalib activated for {ida_dir} — "
+            "IDA_MCP_RUNTIME=idalib is ready for MCP clients."
+        )
+    else:
+        message = (
+            f"idalib activation failed ({detail}); sessions will fail "
+            "until activation succeeds."
+        )
+        report.add_warning(message)
+        report.add_step("idalib", "warn", detail)
+        ui.warn(message)
 
 
 def install_bashrc_cli(install_root: Path, dry_run: bool, report: InstallReport) -> None:
@@ -1611,6 +1641,8 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
         else:
             report.add_step("shell", "skipped", "not requested")
 
+        if _phase_enabled(opts, "clients"):
+            _activate_idalib_after_install(opts, chosen_install, report, ui)
         report.finalize(True)
         report_path = install_root / "install-report.json"
         reject_symlink_path(report_path, "installer report path")

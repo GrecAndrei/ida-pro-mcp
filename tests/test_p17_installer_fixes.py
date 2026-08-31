@@ -855,6 +855,46 @@ def test_wizard_does_not_activate_idalib_before_install_confirmation(tmp_path, m
     assert activation_calls == []
 
 
+def test_noninteractive_idalib_install_activates_after_client_configuration(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+    from ida_pro_mcp.installer.discovery import IdaInstall
+
+    ida_dir = tmp_path / "ida"
+    ida_dir.mkdir()
+    selected = IdaInstall(
+        path=ida_dir,
+        version=(9, 4),
+        build="",
+        idat_binary=None,
+        arch="x64",
+        flavor="pro",
+        source="explicit",
+    )
+    opts = InstallerOptions(
+        interactive=False,
+        only={"clients"},
+        install_root=tmp_path / "install",
+        embed_auto=False,
+        ida_runtime="idalib",
+    )
+    events: list[str] = []
+    activation_calls: list[str] = []
+    monkeypatch.setattr(main_mod, "_resolve_ida_install", lambda *_args: selected)
+    monkeypatch.setattr(main_mod, "get_config_paths", lambda _root: {})
+    monkeypatch.setattr(main_mod, "configure_clients", lambda **_kwargs: events.append("configure") or [])
+    monkeypatch.setattr(main_mod, "find_idalib_python_dir", lambda _path: "/fake/idalib/python")
+    monkeypatch.setattr(
+        main_mod,
+        "activate_idalib",
+        lambda path: (activation_calls.append(path) or (events.append("activate") or (True, "activated"))),
+    )
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 0
+    assert events == ["configure", "activate"]
+    assert activation_calls == [str(ida_dir)]
+
+
 def test_wizard_rerank_decline_persists_rerank_disabled(tmp_path, monkeypatch):
     """Declining the reranker in the wizard must set rerank_disabled so the
     default profile cannot leak into state / client env."""
