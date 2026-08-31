@@ -474,6 +474,22 @@ def test_download_llama_server_dry_run_and_existing_binary_skip_network(tmp_path
     assert download_and_install_llama_server(tmp_path, dry_run=False, report=InstallReport()) == str(target)
 
 
+def test_download_llama_server_does_not_treat_directory_as_existing_binary(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer.common import InstallReport
+    from ida_pro_mcp.installer.runtime import download_and_install_llama_server
+
+    target = tmp_path / "bin" / "llama-server"
+    target.mkdir(parents=True)
+    target.chmod(0o755)
+    monkeypatch.setattr(
+        "ida_pro_mcp.installer.runtime.urllib.request.urlopen",
+        lambda *_args, **_kwargs: _Response(json.dumps({"assets": []}).encode()),
+    )
+
+    with pytest.raises(RuntimeError, match="Unable to resolve"):
+        download_and_install_llama_server(tmp_path, dry_run=False, report=InstallReport())
+
+
 def test_download_llama_server_rejects_symlinked_bin_directory(tmp_path):
     from ida_pro_mcp.installer.common import InstallReport
     from ida_pro_mcp.installer.runtime import download_and_install_llama_server

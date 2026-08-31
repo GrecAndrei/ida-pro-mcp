@@ -1105,7 +1105,7 @@ def download_and_install_llama_server(
     reject_symlink_path(target_dir, "managed llama-server path")
     if target_path.is_symlink():
         raise RuntimeError(f"Refusing managed llama-server path symlink: {target_path}")
-    if target_path.exists() and os.access(target_path, os.X_OK):
+    if target_path.is_file() and os.access(target_path, os.X_OK):
         return str(target_path)
     if dry_run:
         report.add_step("llama_server", "dry-run", f"would install to {target_path}")
