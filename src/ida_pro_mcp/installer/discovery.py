@@ -148,9 +148,18 @@ class IdaInstall:
 
     @classmethod
     def from_dict(cls, d: dict) -> IdaInstall:
+        if not isinstance(d, dict):
+            raise ValueError("install state must be an object")
+        raw_version = d["version"]
+        if (
+            not isinstance(raw_version, (list, tuple))
+            or len(raw_version) != 2
+            or any(isinstance(part, bool) or not isinstance(part, int) for part in raw_version)
+        ):
+            raise ValueError("install version must contain two integer components")
         return cls(
             path=Path(d["path"]),
-            version=tuple(d["version"]),
+            version=tuple(raw_version),
             build=d.get("build", ""),
             idat_binary=Path(d["idat_binary"]) if d.get("idat_binary") else None,
             arch=d.get("arch", "unknown"),
@@ -513,7 +522,7 @@ def read_install_state(install_root: Path) -> IdaInstall | None:
         return None
     try:
         return IdaInstall.from_dict(sel)
-    except (KeyError, ValueError):
+    except (KeyError, TypeError, ValueError):
         return None
 
 

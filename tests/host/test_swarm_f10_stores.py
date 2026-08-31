@@ -290,6 +290,119 @@ def test_kg_read_modify_write_methods_still_work(tmp_path):
     assert "0x700000" in periphs
 
 
+def test_kg_system_crud_and_member_lookup(tmp_path):
+    kg = KnowledgeGraph(str(tmp_path / "kg.db"))
+    sid = kg.add_system(
+        "rx pipeline",
+        ["0x401000"],
+        description="packet receive path",
+        entry_points=["0x401000"],
+        tags=["network"],
+        confidence=0.8,
+    )
+
+    system = kg.get_system(sid)
+    assert system["name"] == "rx pipeline"
+    assert system["entry_points"] == ["0x401000"]
+    assert kg.find_system_for_addr("0x401000")["id"] == sid
+    assert kg.find_system_for_addr("0x499000") is None
+    assert kg.add_member_to_system(sid, "0x402000") is True
+    assert kg.add_member_to_system(sid, "0x402000") is True
+    assert kg.get_system(sid)["members"] == ["0x401000", "0x402000"]
+    assert kg.add_member_to_system("missing", "0x403000") is False
+    assert kg.update_system(sid, coverage_pct=75.0, data_structs=["struct-1"]) is True
+    assert kg.get_system(sid)["coverage_pct"] == 75.0
+    assert kg.get_system(sid)["data_structs"] == ["struct-1"]
+    assert kg.update_system(sid, unsupported=True) is False
+    assert kg.update_system("missing", name="nope") is False
+    assert kg.list_systems()[0]["id"] == sid
+
+
+def test_kg_struct_matching_and_state_machine_listing(tmp_path):
+    kg = KnowledgeGraph(str(tmp_path / "kg.db"))
+    first = kg.add_struct(
+        "header",
+        members=[{"offset": 0, "size": 4}, {"offset": 8, "size": 4}],
+    )
+    second = kg.add_struct(
+        "packet",
+        members=[{"offset": 0, "size": 4}, {"offset": 4, "size": 4}],
+        confidence=0.9,
+    )
+
+    assert kg.find_struct_by_offset_pattern([0, 8], threshold=1.0)["id"] == first
+    assert kg.find_struct_by_offset_pattern([0, 8], threshold=1.01) is None
+    assert kg.find_struct_by_offset_pattern([]) is None
+    assert kg.find_struct_by_offset_pattern([99], threshold=0.1) is None
+    assert {row["id"] for row in kg.list_structs()} == {first, second}
+
+    sm_id = kg.add_state_machine(
+        "connection state", "0x500000", states=[{"value": 0, "name": "idle"}]
+    )
+    assert kg.add_transition(sm_id, 0, 1, "0x401000", "packet received") is True
+    sm = kg.get_state_machine(sm_id)
+    assert sm["states"] == [{"value": 0, "name": "idle"}]
+    assert sm["transitions"][0]["trigger_addr"] == "0x401000"
+    assert kg.add_transition("missing", 0, 1, "0x0") is False
+    assert kg.list_state_machines()[0]["id"] == sm_id
+
+
+def test_kg_gap_attack_surface_and_peripheral_lifecycles(tmp_path):
+    kg = KnowledgeGraph(str(tmp_path / "kg.db"))
+    gap_id = kg.add_gap(
+        "key derivation",
+        why="expected in WPA firmware",
+        hints=["PTK", "GTK"],
+        priority=0.9,
+        gap_type="security",
+        binary_type="wifi_firmware",
+    )
+    assert kg.add_gap_candidate(gap_id, "0x401000") is True
+    assert kg.add_gap_candidate(gap_id, "0x401000") is True
+    assert kg.fill_gap(gap_id, "0x402000") is True
+    assert kg.add_gap_candidate("missing", "0x0") is False
+    assert kg.fill_gap("missing", "0x0") is False
+    assert kg.list_gaps(resolved=False) == []
+    assert kg.list_gaps(resolved=True)[0]["candidates"] == ["0x401000"]
+
+    attack_id = kg.add_attack_surface(
+        "0x403000", name="packet parser", reachable_from="network", call_stack=["0x401000"]
+    )
+    assert kg.update_attack_surface(
+        attack_id,
+        max_input_size=4096,
+        has_length_check=1,
+        parsing_depth=3,
+        known_vulns=["bb-1"],
+        fuzz_priority=0.9,
+    ) is True
+    attack = kg.list_attack_surface()[0]
+    assert attack["max_input_size"] == 4096
+    assert attack["known_vulns"] == ["bb-1"]
+    assert kg.update_attack_surface(attack_id, unsupported=True) is False
+    assert kg.update_attack_surface("missing", name="nope") is False
+
+    peripheral_id = kg.add_peripheral(
+        "0x600000", name="UART", periph_type="uart", drivers=["0x401000"]
+    )
+    assert kg.add_peripheral("0x600000", name="duplicate") == peripheral_id
+    assert kg.record_peripheral_access("0x600000", "0x402000", 0x10, "read") == peripheral_id
+    assert kg.record_peripheral_access("0x600000", "0x402000", 0x10, "write") == peripheral_id
+    peripheral = kg.list_peripherals()[0]
+    assert peripheral["drivers"] == ["0x401000", "0x402000"]
+    assert peripheral["registers"] == [{"offset": 0x10, "name": "reg_010", "access_pattern": "read"}]
+
+    assert kg.summary() == {
+        "systems": 0,
+        "structs": 0,
+        "state_machines": 0,
+        "gaps_open": 0,
+        "gaps_filled": 1,
+        "attack_surface_entries": 1,
+        "peripherals": 1,
+    }
+
+
 # ─── Finding 11: insight_index address normalization + copied tags ───────────
 
 
@@ -322,3 +435,32 @@ def test_insight_index_dirty_retained_on_failed_autosave(tmp_path):
     # _mark_dirty fired an autosave that failed (parent is a file); the pending
     # change must be retained so the next autosave window retries it.
     assert idx._dirty is True
+
+
+def test_insight_index_rebuilds_and_persists_metadata(tmp_path):
+    path = tmp_path / "insight.json"
+    idx = InsightIndex(str(path))
+    idx.rebuild([
+        ("0x401000", {"behavior_tags": ["crypto", "Network"], "name": "encrypt"}),
+        ("0x402000", {"behavior_tags": ["parser"], "tier": "L2"}),
+    ])
+    assert len(idx) == 2
+    assert idx.stats()["total_tags"] == 3
+    assert "crypto" in idx.stats()["tag_histogram"]
+    assert "InsightIndex" in repr(idx)
+    assert idx.get_function("not-an-address") is None
+    assert idx.get_function("0x401000")["name"] == "encrypt"
+    idx.save()
+
+    restored = InsightIndex(str(path))
+    assert restored.get_function("401000")["tags"] == ["crypto", "Network"]
+    assert restored.get_function("0x402000")["tier"] == "L2"
+
+
+def test_insight_index_corrupt_persistence_is_preserved(tmp_path):
+    path = tmp_path / "insight.json"
+    path.write_text("{not-json", encoding="utf-8")
+    idx = InsightIndex(str(path))
+    assert len(idx) == 0
+    assert not path.exists()
+    assert path.with_name("insight.json.corrupt").read_text(encoding="utf-8") == "{not-json"
