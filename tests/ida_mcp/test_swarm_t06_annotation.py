@@ -54,6 +54,7 @@ class TestGovernCommentHelper(unittest.TestCase):
 class TestBulkSetDryRunAndGovernance(unittest.TestCase):
     def setUp(self):
         self.mod = load_tool_module("annotation")
+        self.mod.MCPError.ANNOTATION_ERROR = "ANNOTATION_ERROR"
         self.writes = _install_comment_mocks()
 
     def test_dry_run_does_not_write(self):
@@ -95,10 +96,23 @@ class TestBulkSetDryRunAndGovernance(unittest.TestCase):
             ("set_func_cmt", (0x401100, "f", 0)),
         ])
 
+    def test_rejected_write_is_reported_per_item(self):
+        self.mod.idc.set_cmt = lambda *a, **kw: False
+        r = self.mod.annotation(
+            action="bulk_set",
+            items='[{"addr":"0x401000","text":"hello"}]',
+            dry_run=False,
+        )
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["set_count"], 0)
+        self.assertEqual(r["error_count"], 1)
+        self.assertEqual(r["errors"][0]["error"], "IDA rejected comment write")
+
 
 class TestSetStructuredDryRunAndGovernance(unittest.TestCase):
     def setUp(self):
         self.mod = load_tool_module("annotation")
+        self.mod.MCPError.ANNOTATION_ERROR = "ANNOTATION_ERROR"
         self.writes = _install_comment_mocks()
 
     def test_dry_run_does_not_write(self):
@@ -117,6 +131,14 @@ class TestSetStructuredDryRunAndGovernance(unittest.TestCase):
         self.assertTrue(r["ok"], r)
         self.assertEqual(self.writes[0][1][1], f"note {REDACTED_TEXT}")
 
+    def test_rejected_write_returns_annotation_error(self):
+        self.mod.idc.set_cmt = lambda *a, **kw: False
+        r = self.mod.annotation(
+            action="set_structured", addr="0x401000", text="note", dry_run=False,
+        )
+        self.assertTrue(r["error"], r)
+        self.assertEqual(r["code"], "ANNOTATION_ERROR")
+
 
 class TestImportMdDryRunAndGovernance(unittest.TestCase):
     def setUp(self):
@@ -124,6 +146,7 @@ class TestImportMdDryRunAndGovernance(unittest.TestCase):
             "annotation",
             common_overrides={"validate_path_safe": lambda p, *a, **kw: (p, None)},
         )
+        self.mod.MCPError.ANNOTATION_ERROR = "ANNOTATION_ERROR"
         self.writes = _install_comment_mocks()
 
     def _run(self, dry_run):
@@ -150,10 +173,19 @@ class TestImportMdDryRunAndGovernance(unittest.TestCase):
         self.assertEqual(self.writes[0][1][1], REDACTED_TEXT)
         self.assertNotIn("192.168.1.1", self.writes[0][1][1])
 
+    def test_rejected_write_is_not_counted_as_imported(self):
+        self.mod.idc.set_cmt = lambda *a, **kw: False
+        r = self._run(dry_run=False)
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["count"], 0)
+        self.assertEqual(r["error_count"], 1)
+        self.assertEqual(r["errors"][0]["error"], "IDA rejected comment write")
+
 
 class TestAutoCommentGovernance(unittest.TestCase):
     def setUp(self):
         self.mod = load_tool_module("annotation")
+        self.mod.MCPError.ANNOTATION_ERROR = "ANNOTATION_ERROR"
         self.writes = _install_comment_mocks()
         idc = sys.modules["idc"]
         idaapi = sys.modules["idaapi"]
@@ -181,6 +213,12 @@ class TestAutoCommentGovernance(unittest.TestCase):
         r = self.mod.annotation(action="auto_comment", addr="0x401000", dry_run=True)
         self.assertTrue(r["ok"], r)
         self.assertEqual(self.writes, [])
+
+    def test_rejected_write_returns_annotation_error(self):
+        self.mod.idc.set_cmt = lambda *a, **kw: False
+        r = self.mod.annotation(action="auto_comment", addr="0x401000", dry_run=False)
+        self.assertTrue(r["error"], r)
+        self.assertEqual(r["code"], "ANNOTATION_ERROR")
 
 
 if __name__ == "__main__":
