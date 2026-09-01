@@ -399,6 +399,27 @@ def test_bashrc_shim_shell_quotes_user_controlled_paths(tmp_path, monkeypatch):
     assert "$(touch SHOULD_NOT_RUN)" in content
 
 
+def test_bashrc_shim_is_restored_by_install_rollback(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main
+    from ida_pro_mcp.installer.clients import rollback_from_backups
+    from ida_pro_mcp.installer.common import InstallReport
+
+    home = tmp_path / "home"
+    home.mkdir()
+    bashrc = home / ".bashrc"
+    original = "# user shell configuration\n"
+    bashrc.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    report = InstallReport()
+
+    main.install_bashrc_cli(tmp_path / "install", dry_run=False, report=report)
+    assert bashrc.read_text(encoding="utf-8") != original
+
+    rollback_from_backups(report)
+
+    assert bashrc.read_text(encoding="utf-8") == original
+
+
 def test_bashrc_shim_rejects_symlinked_config(tmp_path, monkeypatch):
     from ida_pro_mcp.installer import main
     from ida_pro_mcp.installer.common import InstallReport

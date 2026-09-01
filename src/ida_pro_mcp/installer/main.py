@@ -727,6 +727,7 @@ def install_bashrc_cli(install_root: Path, dry_run: bool, report: InstallReport)
         updated = existing.rstrip("\n") + ("\n" if existing.strip() else "") + block
     if not dry_run:
         bashrc.parent.mkdir(parents=True, exist_ok=True)
+        backup_file(bashrc, report, dry_run=False)
         atomic_write_text(bashrc, updated)
     report.add_modified(bashrc)
 
@@ -1275,7 +1276,12 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
             try:
                 chosen_install = _resolve_ida_install(opts, ui)
             except RuntimeError as exc:
-                if opts.ida_dir or opts.ida_version or opts.ida_runtime == "idalib":
+                if (
+                    opts.ida_dir
+                    or opts.ida_version
+                    or opts.sigs_dir
+                    or opts.ida_runtime == "idalib"
+                ):
                     raise
                 msg = str(exc)
                 if "no IDA Pro install found" not in msg and "No IDA Pro install detected" not in msg:
@@ -1444,8 +1450,9 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
         if opts.sigs_dir:
             sig_source = _absolute_path(opts.sigs_dir)
             if chosen_install is None:
-                ui.warn("--sigs requires an IDA install; skipping signature staging")
-                report.add_step("sigs", "failed", "no IDA install to derive <IDADIR>/sig from")
+                raise RuntimeError(
+                    "--sigs requires an IDA install to derive <IDADIR>/sig from"
+                )
             else:
                 sig_dir = find_ida_sig_dir(chosen_install.path)
                 manifest = stage_sigs(sig_source, sig_dir, opts.dry_run, report)
