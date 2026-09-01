@@ -503,11 +503,19 @@ def test_llama_download_rejects_oversized_release_metadata(tmp_path, monkeypatch
     from ida_pro_mcp.installer.common import InstallReport
     from ida_pro_mcp.installer.runtime import download_and_install_llama_server
 
-    monkeypatch.setattr(runtime, "_MAX_RELEASE_METADATA_SIZE", 8)
+    # The repository's sys.modules isolation can restore a package attribute
+    # while a previously imported function still points at its original
+    # globals dict. Patch the function's loaded module so this test remains
+    # independent of collection/order.
+    monkeypatch.setitem(
+        download_and_install_llama_server.__globals__,
+        "_MAX_RELEASE_METADATA_SIZE",
+        8,
+    )
     monkeypatch.setattr(
         runtime.urllib.request,
         "urlopen",
-        lambda *_args, **_kwargs: _Response(b"123456789"),
+        lambda *_args, **_kwargs: _Response(b"[]       "),
     )
 
     with pytest.raises(RuntimeError, match="release metadata exceeds"):

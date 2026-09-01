@@ -853,6 +853,32 @@ def test_embedder_doctor_rejects_symlinked_install_root(tmp_path):
     assert not (outside / "embedder.json").exists()
 
 
+def test_embedder_doctor_fails_when_backend_is_not_ready(tmp_path, monkeypatch):
+    from ida_pro_mcp.host.intelligence import core as intel_core
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    class _FakeEmbedder:
+        _instance = object()
+
+        def status(self, *, probe, deep_hash):
+            assert probe is True
+            assert deep_hash is False
+            return {"ready": False, "backend": "local"}
+
+        def embed_vector(self, _text):
+            raise RuntimeError("backend is unavailable")
+
+    monkeypatch.setattr(intel_core, "BgeCodeEmbedder", _FakeEmbedder)
+    opts = InstallerOptions(
+        embedder_doctor=True,
+        interactive=False,
+        install_root=tmp_path / "install",
+    )
+
+    assert main_mod.run_embedder_doctor(opts, main_mod.UI()) == 1
+
+
 def test_wizard_does_not_activate_idalib_before_install_confirmation(tmp_path, monkeypatch):
     from ida_pro_mcp.installer import main as main_mod
     from ida_pro_mcp.installer.common import InstallerOptions

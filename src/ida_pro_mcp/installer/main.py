@@ -182,7 +182,11 @@ def run_embedder_doctor(opts: InstallerOptions, ui: UI) -> int:
             ui.warn(f"gemini: {status.get('error')}")
         ui.info("fallback: unavailable (semantic features fail explicitly)")
         print(json.dumps(status, indent=2))
-        return 0
+        # A doctor command is commonly used as a readiness gate by scripts and
+        # service managers.  Reporting a healthy-looking exit code when either
+        # the backend probe or the quick embedding check failed makes those
+        # callers proceed with a known-broken semantic setup.
+        return 0 if status.get("ready") and status.get("embed_test_ok") else 1
     finally:
         intel_core.BgeCodeEmbedder._instance = prev_instance
         for name, value in previous_doctor_env.items():
