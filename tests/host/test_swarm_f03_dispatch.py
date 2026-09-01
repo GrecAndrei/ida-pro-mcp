@@ -102,6 +102,9 @@ class _ContinuationHarness(ServerArgsMixin, ServerDispatchMixin, _GuardrailStubs
     def _resolve_session_from_idb_ref(self, ref):
         return None
 
+    def _truncation_owner_id(self):
+        return "owner"
+
     def call_tool(self, tool_name, idb_path, **kwargs):
         self._calls.append((tool_name, idb_path, dict(kwargs)))
         return {"ok": True}
@@ -112,6 +115,8 @@ class _ContinuationHarness(ServerArgsMixin, ServerDispatchMixin, _GuardrailStubs
             "action": action,
             "args": dict(args),
             "next_offset": 1,
+            "session_id": self.current_session.session_id,
+            "owner_id": self._truncation_owner_id(),
             "created_at": time.time(),
         }
         return token
