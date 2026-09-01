@@ -630,7 +630,7 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
 
     opts.rollback_on_fail = _prompt_yes_no(
         "Rollback backed-up config files on failure?",
-        default=True if not opts.rollback_on_fail else opts.rollback_on_fail,
+        default=opts.rollback_on_fail,
     )
     ui.info(
         "Policy gates are ON by default — they require evidence cards and "
@@ -868,7 +868,20 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         "(default: scope to the chosen IDA install's idat binary)",
     )
     parser.add_argument("--install-cli-shim", action="store_true", help="opt-in bashrc PATH shim installation")
-    parser.add_argument("--rollback-on-fail", action="store_true", help="restore backed up config files if install fails")
+    rollback_group = parser.add_mutually_exclusive_group()
+    rollback_group.add_argument(
+        "--rollback-on-fail",
+        dest="rollback_on_fail",
+        action="store_true",
+        default=True,
+        help="restore backed up config files if install fails (default)",
+    )
+    rollback_group.add_argument(
+        "--no-rollback-on-fail",
+        dest="rollback_on_fail",
+        action="store_false",
+        help="keep partial client changes when a later install phase fails",
+    )
     parser.add_argument(
         "--runtime-source",
         choices=["auto", "local", "snapshot", "pypi"],

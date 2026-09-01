@@ -152,7 +152,10 @@ class InstallerOptions:
     yes: bool = False
     kill_ida: bool = False
     install_cli_shim: bool = False
-    rollback_on_fail: bool = False
+    # Restoring client configs after a later phase fails is the safe default in
+    # both interactive and headless installs. Callers that intentionally want
+    # best-effort partial changes can opt out explicitly.
+    rollback_on_fail: bool = True
     runtime_source: str = "auto"
     skills_mode: str = "agent"
     install_claude_skills: bool = True  # install skills for Claude Code / OpenCode

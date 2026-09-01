@@ -475,6 +475,14 @@ def test_parse_args_preserves_kill_scope_and_unverified_download_opt_in():
     assert parse_args(["--verify-corpus"]).verify_bron_corpus is True
 
 
+def test_parse_args_defaults_to_rollback_and_supports_explicit_opt_out():
+    from ida_pro_mcp.installer.main import parse_args
+
+    assert parse_args(["--yes"]).rollback_on_fail is True
+    assert parse_args(["--yes", "--no-rollback-on-fail"]).rollback_on_fail is False
+    assert parse_args(["--rollback-on-fail"]).rollback_on_fail is True
+
+
 def test_prompt_secret_uses_hidden_terminal_input(monkeypatch):
     from ida_pro_mcp.installer import main as main_mod
 
