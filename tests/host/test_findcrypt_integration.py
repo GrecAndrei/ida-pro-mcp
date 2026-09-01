@@ -52,6 +52,14 @@ def test_safe_extract_rejects_path_traversal(tmp_path: Path):
     assert not (tmp_path / "outside.yar").exists()
 
 
+def test_safe_extract_rejects_non_regular_archive_input(tmp_path: Path):
+    archive = tmp_path / "not-an-archive"
+    archive.mkdir()
+
+    with pytest.raises(RuntimeError, match="not a regular file"):
+        findcrypt.extract_findcrypt_rules(str(archive), str(tmp_path / "rules"))
+
+
 def test_safe_extract_rejects_existing_symlink_path(tmp_path: Path):
     archive = tmp_path / "symlinked-target.zip"
     _write_zip(archive, {"rules/outside.yar": b"rule bad { condition: true }"})

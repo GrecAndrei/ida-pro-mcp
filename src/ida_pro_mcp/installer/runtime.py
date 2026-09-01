@@ -992,6 +992,8 @@ def _extract_archive(archive: Path, out_dir: Path) -> None:
     during extraction.
     """
     reject_symlink_path(archive, "archive path")
+    if not archive.is_file():
+        raise RuntimeError(f"archive path is not a regular file: {archive}")
     reject_symlink_path(out_dir, "archive extraction path")
     out_dir.mkdir(parents=True, exist_ok=True)
     extract_root = out_dir.resolve()
@@ -1135,6 +1137,7 @@ def download_and_install_llama_server(
         # no binaries. Scan the ordered release list instead and pick the
         # newest compatible asset.
         api_url = "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=20"
+    explicit_release = bool(release_tag)
     req = urllib.request.Request(
         api_url,
         headers={"Accept": "application/vnd.github+json", "User-Agent": "ida-pro-mcp-installer"},
@@ -1150,7 +1153,11 @@ def download_and_install_llama_server(
     best_score = -10_000
     saw_unverified_match = False
     for release in releases:
-        if not isinstance(release, dict) or release.get("draft"):
+        if (
+            not isinstance(release, dict)
+            or release.get("draft")
+            or (release.get("prerelease") and not explicit_release)
+        ):
             continue
         assets = release.get("assets") or []
         if not isinstance(assets, list):

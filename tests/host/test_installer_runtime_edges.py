@@ -451,6 +451,53 @@ def test_archive_extraction_accepts_safe_zip_and_rejects_zip_slip(tmp_path):
     assert not (tmp_path / "outside").exists()
 
 
+def test_archive_extraction_rejects_non_regular_archive_input(tmp_path):
+    from ida_pro_mcp.installer.runtime import _extract_archive
+
+    archive = tmp_path / "not-an-archive"
+    archive.mkdir()
+
+    with pytest.raises(RuntimeError, match="not a regular file"):
+        _extract_archive(archive, tmp_path / "out")
+
+
+def test_llama_download_skips_prereleases_by_default(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer.common import InstallReport
+    from ida_pro_mcp.installer.runtime import download_and_install_llama_server
+
+    release = {
+        "tag_name": "b123-beta",
+        "prerelease": True,
+        "assets": [
+            {
+                "name": "llama-b123-beta-bin-ubuntu-x64.zip",
+                "browser_download_url": (
+                    "https://github.com/ggml-org/llama.cpp/releases/download/"
+                    "b123-beta/llama-b123-beta-bin-ubuntu-x64.zip"
+                ),
+                "digest": f"sha256:{'0' * 64}",
+                "size": 1,
+            }
+        ],
+    }
+    calls = 0
+
+    def _urlopen(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return _Response(json.dumps([release]).encode())
+
+    monkeypatch.setattr(
+        "ida_pro_mcp.installer.runtime.urllib.request.urlopen", _urlopen
+    )
+
+    with pytest.raises(RuntimeError, match="Unable to resolve"):
+        download_and_install_llama_server(
+            tmp_path, dry_run=False, report=InstallReport()
+        )
+    assert calls == 1
+
+
 def test_archive_extraction_rejects_tar_link_outside_root(tmp_path):
     from ida_pro_mcp.installer.runtime import _extract_archive
 

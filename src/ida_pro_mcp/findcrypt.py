@@ -100,6 +100,8 @@ def extract_findcrypt_rules(zip_path: str, dst_dir: str) -> str:
     """Safely extract bounded YARA rule files from a FindCrypt ZIP archive."""
     if os.path.islink(zip_path):
         raise RuntimeError(f"Refusing symlinked FindCrypt archive: {zip_path}")
+    if not os.path.isfile(zip_path):
+        raise RuntimeError(f"FindCrypt archive is not a regular file: {zip_path}")
     _reject_symlink_path(dst_dir)
     root = os.path.abspath(dst_dir)
     os.makedirs(root, exist_ok=True)
