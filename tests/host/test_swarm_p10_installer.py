@@ -525,6 +525,35 @@ def test_run_install_passes_env_corpus_verification_to_downloader(tmp_path, monk
     assert captured == {"force": False, "force_verify": True}
 
 
+def test_run_install_skips_optional_corpus_by_default(tmp_path, monkeypatch):
+    import importlib
+
+    bron_corpus = importlib.import_module("ida_pro_mcp.installer.bron_corpus")
+    main_mod = importlib.import_module("ida_pro_mcp.installer.main")
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    install_root = tmp_path / "install-root"
+    fake_python = install_root / "python"
+    monkeypatch.setattr(
+        main_mod,
+        "setup_runtime_environment",
+        lambda **_kwargs: fake_python,
+    )
+    monkeypatch.setattr(
+        bron_corpus,
+        "download_bron_corpus",
+        lambda **_kwargs: pytest.fail("optional corpus must not download by default"),
+    )
+    opts = InstallerOptions(
+        interactive=False,
+        only={"runtime"},
+        install_root=install_root,
+        source_root=tmp_path,
+    )
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 0
+
+
 # ---------------------------------------------------------------------------
 # python_environment_kind — IDA 9.4 uv/conda/homebrew interpreter awareness
 # ---------------------------------------------------------------------------

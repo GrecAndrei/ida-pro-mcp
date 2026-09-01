@@ -205,6 +205,7 @@ class InstallerOptions:
     sigs_dir: str = ""  # --sigs <dir>: stage a FLIRT sig pack into IDA's sig dir
     ida_binary_path: str = ""  # optional --kill-ida executable scope
     allow_unverified_downloads: bool = False  # explicit supply-chain escape hatch
+    with_bron_corpus: bool = False  # opt-in download of the optional threat corpus
     verify_bron_corpus: bool = False  # require per-source BRON SHA-256 env vars
 
 

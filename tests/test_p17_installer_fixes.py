@@ -488,6 +488,14 @@ def test_parse_args_preserves_kill_scope_and_unverified_download_opt_in():
     assert parse_args(["--verify-corpus"]).verify_bron_corpus is True
 
 
+def test_parse_args_requires_explicit_opt_in_for_corpus_download():
+    from ida_pro_mcp.installer.main import parse_args
+
+    assert parse_args(["--yes"]).with_bron_corpus is False
+    assert parse_args(["--yes", "--with-corpus"]).with_bron_corpus is True
+    assert parse_args(["--yes", "--verify-corpus"]).with_bron_corpus is True
+
+
 def test_parse_args_defaults_to_rollback_and_supports_explicit_opt_out():
     from ida_pro_mcp.installer.main import parse_args
 

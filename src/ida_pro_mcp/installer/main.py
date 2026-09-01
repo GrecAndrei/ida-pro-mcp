@@ -636,6 +636,13 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
         "Rollback backed-up config files on failure?",
         default=opts.rollback_on_fail,
     )
+    corpus_env_enabled = os.environ.get("IDA_MCP_BRON_CORPUS_VERIFY", "").lower() in {
+        "1", "true", "yes", "on"
+    }
+    opts.with_bron_corpus = _prompt_yes_no(
+        "Download the optional threat corpus and crypto signatures?",
+        default=opts.with_bron_corpus or opts.verify_bron_corpus or corpus_env_enabled,
+    )
     ui.info(
         "Policy gates are ON by default — they require evidence cards and "
         "acknowledgements for write-surface tools. Disable them only if you "
@@ -950,6 +957,11 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         help="allow llama-server downloads when GitHub omits its SHA-256 digest (unsafe; prefer verified assets)",
     )
     parser.add_argument(
+        "--with-corpus",
+        action="store_true",
+        help="download and build the optional threat corpus and crypto signatures",
+    )
+    parser.add_argument(
         "--verify-corpus",
         action="store_true",
         help="require IDA_MCP_BRON_CORPUS_SHA256_* hashes for every threat-corpus source",
@@ -1044,6 +1056,7 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         ida_runtime=args.ida_runtime or "idat",
         ida_binary_path=args.ida_binary_path,
         allow_unverified_downloads=args.allow_unverified_downloads,
+        with_bron_corpus=args.with_corpus or args.verify_corpus,
         verify_bron_corpus=args.verify_corpus,
     )
     if opts.setup_embedder:
@@ -1361,7 +1374,11 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
         else:
             report.add_step("runtime", "skipped", "filtered by --only")
 
-        if _phase_enabled(opts, "runtime") and not opts.dry_run:
+        corpus_env_enabled = os.environ.get("IDA_MCP_BRON_CORPUS_VERIFY", "").lower() in {
+            "1", "true", "yes", "on"
+        }
+        corpus_requested = opts.with_bron_corpus or opts.verify_bron_corpus or corpus_env_enabled
+        if _phase_enabled(opts, "runtime") and corpus_requested and not opts.dry_run:
             ui.info("Downloading threat corpus and crypto signatures")
             try:
                 from .bron_corpus import download_bron_corpus
@@ -1396,7 +1413,12 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                 ui.warn(f"Corpus download failed (non-fatal): {exc}")
                 report.add_step("corpus", "warn", str(exc))
         elif _phase_enabled(opts, "runtime"):
-            report.add_step("corpus", "skipped", "dry-run")
+            detail = (
+                "dry-run"
+                if opts.dry_run and corpus_requested
+                else "optional; pass --with-corpus to enable"
+            )
+            report.add_step("corpus", "skipped", detail)
 
         # ── r2/Rizin engine (paper §8.2 item 11) ────────────────────────
         # Resolve an existing rz/r2 on PATH and record it as IDA_MCP_R2_BIN

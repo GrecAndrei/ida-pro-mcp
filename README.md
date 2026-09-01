@@ -305,11 +305,13 @@ release asset only when GitHub supplies its digest; an older release without
 one is refused. `--allow-unverified-downloads` is available only as an
 explicit, unsafe compatibility escape hatch.
 
-The optional threat corpus uses a moving set of upstream sources. Normal
-installs record each downloaded source checksum and reject unexpected changes
-when reusing the cache. For strict first-download verification, provide one
+The optional threat corpus is not downloaded by a normal install. Opt in with
+`python install.py --with-corpus`; it uses a moving set of upstream sources.
+Normal corpus-enabled installs record each downloaded source checksum and reject
+unexpected changes when reusing the cache. For strict first-download verification, provide one
 `IDA_MCP_BRON_CORPUS_SHA256_<SOURCE>` variable per source and run
-`python install.py --verify-corpus` (or set `IDA_MCP_BRON_CORPUS_VERIFY=1`).
+`python install.py --verify-corpus` (which also enables the corpus), or set
+`IDA_MCP_BRON_CORPUS_VERIFY=1`.
 The source keys are `CWE`, `ATTACK_ENTERPRISE`, `ATTACK_ICS`, `ATTACK_MOBILE`,
 `SIGNATURE_BASE`, and `FINDCRYPT`.
 
@@ -451,8 +453,8 @@ Portions of `ida_mcp/utils.py` and the vendored `ida_mcp/zeromcp` package come f
 also where the idea of driving IDA over MCP came from. `zeromcp` keeps its own
 LICENSE alongside the sources.
 
-FindCrypt signatures and the threat corpus are fetched from their upstream projects
-by the installer.
+When enabled, FindCrypt signatures and the threat corpus are fetched from their
+upstream projects by the installer.
 
 ## License
 
