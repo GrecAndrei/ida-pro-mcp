@@ -69,6 +69,8 @@ def test_group_create_validates_shape_membership_and_duplicates(tmp_path):
     assert server._ms_group_create({"session_ids": "AAAA0001"})["error"] is True
     assert server._ms_group_create({"session_ids": ["AAAA0001"]})["error"] is True
     assert server._ms_group_create({"session_ids": ["AAAA0001", ""]})["error"] is True
+    assert server._ms_group_create({"session_ids": ["AAAA0001", "aaaa0001"]})["error"] is True
+    assert server._ms_group_create({"session_ids": ["AAAA0001", 2]})["error"] is True
     missing = server._ms_group_create({"session_ids": ["AAAA0001", "FFFF9999"]})
     assert missing["error"] is True
     assert "not found" in missing["message"]
@@ -82,6 +84,58 @@ def test_group_create_validates_shape_membership_and_duplicates(tmp_path):
     duplicate = _create(server)
     assert duplicate["error"] is True
     assert "already exists" in duplicate["message"]
+
+
+def test_group_rehydration_ignores_malformed_root(tmp_path):
+    (tmp_path / "groups.json").write_text("null", encoding="utf-8")
+
+    server = _Server(tmp_path)
+
+    listed = server._handle_multi_session("group_list", {})
+    assert listed == {"ok": True, "groups": [], "count": 0}
+
+
+def test_group_rehydration_normalizes_malformed_link_rows(tmp_path):
+    (tmp_path / "groups.json").write_text(
+        json.dumps(
+            [
+                {
+                    "group_id": "g1",
+                    "session_ids": ["aaaa0001", "AAAA0001", 7, "bbbb0002"],
+                    "links": {
+                        " puts ": {
+                            "provider_sid": "aaaa0001",
+                            "export_ea": " 0x10 ",
+                            "importer_sids": ["bbbb0002", "BBBB0002", 3],
+                        },
+                        "missing-provider": {
+                            "export_ea": "0x20",
+                            "importer_sids": [],
+                        },
+                        "string-importers": {
+                            "provider_sid": "aaaa0001",
+                            "export_ea": "0x30",
+                            "importer_sids": "bbbb0002",
+                        },
+                    },
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    server = _Server(tmp_path)
+    group = server._get_group("g1")
+
+    assert group is not None
+    assert group.session_ids == ["AAAA0001", "BBBB0002"]
+    assert group.links == {
+        "puts": {
+            "provider_sid": "AAAA0001",
+            "export_ea": "0x10",
+            "importer_sids": ["BBBB0002"],
+        }
+    }
 
 
 def test_group_list_status_and_unknown_action_have_stable_shapes(tmp_path):
