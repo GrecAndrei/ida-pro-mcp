@@ -32,6 +32,7 @@ Pinned fixes (all implemented in the q04 wave):
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import time
@@ -49,6 +50,34 @@ def _semantic():
     would raise ImportError at call time)."""
     load_tool_submodule("search", common_overrides={"os": os})
     return sys.modules["ida_pro_mcp.ida_mcp.tools.search.semantic"]
+
+
+def test_insight_prefilter_ignores_malformed_persisted_shapes(tmp_path, monkeypatch):
+    """A damaged optional insight index must never break the search router."""
+    search = _module("search")
+    malformed = tmp_path / "malformed.json"
+    malformed.write_text("[]", encoding="utf-8")
+    assert search._load_insight_index(str(malformed)) == {}
+    assert search._query_insight_by_tags(["crypto"], mode="or") == []
+
+    malformed.write_text(
+        '{"tag_map": {"crypto": "not-a-list"}, "func_map": []}',
+        encoding="utf-8",
+    )
+    assert search._query_insight_by_tags(["crypto"], mode="or") == []
+
+    valid = tmp_path / "valid.json"
+    valid.write_text(
+        '{"tag_map": {"crypto": ["0x401000", null]}, '
+        '"func_map": {"0x401000": {}}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        search,
+        "_load_insight_index",
+        lambda path="": json.loads(valid.read_text(encoding="utf-8")),
+    )
+    assert search._query_insight_by_tags([1, " CRYPTO "], mode="or") == ["0x401000"]
 
 
 # ---------------------------------------------------------------------------
