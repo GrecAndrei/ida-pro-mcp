@@ -775,13 +775,16 @@ def _replace_with_symlink_or_copy(src: Path, dst: Path) -> str:
         shutil.rmtree(staging_dir, ignore_errors=True)
 
 
-def _install_claude_opencode_skills(report: InstallReport, dry_run: bool, ui: UI) -> None:
+def _install_claude_opencode_skills(report: InstallReport, dry_run: bool, ui: UI) -> bool:
     """Auto-generate and install skills for Claude Code and OpenCode."""
     try:
         from .skills import default_skill_dirs, install_skills
     except ImportError as exc:
-        report.add_warning(f"claude-skills: import error — {exc}")
-        return
+        message = f"claude-skills import failed: {exc}"
+        report.add_warning(message)
+        report.add_step("claude-skills", "warn", message)
+        ui.warn(message)
+        return False
     try:
         target_dirs = default_skill_dirs()
         written = install_skills(target_dirs, dry_run=dry_run)
@@ -796,8 +799,13 @@ def _install_claude_opencode_skills(report: InstallReport, dry_run: bool, ui: UI
             f"{action} {len(written)} skills ({count} files) to {len(target_dirs)} dirs",
         )
         ui.ok(f"Claude/OpenCode skills: {action} {len(written)} skills")
+        return True
     except Exception as exc:
-        report.add_warning(f"claude-skills install failed: {exc}")
+        message = f"claude-skills install failed: {exc}"
+        report.add_warning(message)
+        report.add_step("claude-skills", "warn", message)
+        ui.warn(message)
+        return False
 
 
 def install_codex_skills(source_root: Path, mode: str, report: InstallReport, dry_run: bool) -> None:
