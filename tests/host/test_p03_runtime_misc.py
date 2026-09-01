@@ -10,7 +10,6 @@ import io
 import os
 import sys
 import threading
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -211,6 +210,8 @@ class _WatchdogHost(ServerRuntimeMixin):
         self._analysis_watchdog_stall_seconds = 0.05
         self.state = state
         self.verdicts = []
+        self.poll_seen = threading.Event()
+        self.stalled_seen = threading.Event()
 
     def _runtime_alive(self, runtime):
         return True
@@ -219,7 +220,12 @@ class _WatchdogHost(ServerRuntimeMixin):
         return self.state
 
     def _update_session_indexing_metadata(self, session_id, **updates):
-        self.verdicts.append(updates.get("analysis_state"))
+        verdict = updates.get("analysis_state")
+        self.verdicts.append(verdict)
+        if verdict != "starting":
+            self.poll_seen.set()
+        if verdict == "stalled":
+            self.stalled_seen.set()
 
 
 def test_watchdog_never_flags_active_analysis_as_stalled():
@@ -231,8 +237,9 @@ def test_watchdog_never_flags_active_analysis_as_stalled():
         "inventory": {"functions_qty": 5},
     }
     host = _WatchdogHost(state)
+    host._analysis_watchdog_interval = 0.0
     host._start_analysis_watchdog(SID, 9999)
-    time.sleep(0.3)
+    assert host.poll_seen.wait(timeout=2)
     host._stop_analysis_watchdog(SID)
 
     assert host.verdicts[0] == "starting"
@@ -248,8 +255,9 @@ def test_watchdog_flags_inactive_flat_analysis_as_stalled():
         "inventory": {"functions_qty": 5},
     }
     host = _WatchdogHost(state)
+    host._analysis_watchdog_interval = 0.0
     host._start_analysis_watchdog(SID, 9999)
-    time.sleep(0.3)
+    assert host.stalled_seen.wait(timeout=2)
     host._stop_analysis_watchdog(SID)
 
     assert "stalled" in host.verdicts

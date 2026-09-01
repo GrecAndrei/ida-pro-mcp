@@ -5,7 +5,6 @@ import os
 import subprocess
 import sys
 import threading
-import time
 import uuid
 
 import pytest
@@ -60,10 +59,7 @@ def test_cancel():
 
     def _slow(task):
         ready.set()
-        for _ in range(100):
-            if task._cancel_event.is_set():
-                return
-            time.sleep(0.01)
+        task._cancel_event.wait()
 
     task_id = mgr.submit("script", {}, run_fn=_slow)
     assert ready.wait(timeout=5), "worker never started"

@@ -9,7 +9,6 @@ tree, and lets us tune cache size/TTL without breaking the contract.
 
 import importlib.util
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -81,14 +80,17 @@ def test_cache_invalidate_all_drops_all_entries():
     assert cache.stats()["misses"] == 2
 
 
-def test_cache_ttl_expiry_evicts_old_entry():
+def test_cache_ttl_expiry_evicts_old_entry(monkeypatch):
     """The cache must respect ttl_seconds and not surface stale data
     forever. Use a tiny TTL so the test doesn't take 5 minutes.
     """
-    cache = _fresh_cache().__class__(max_entries=4, ttl_seconds=0.05)
+    mod = _load_cache()
+    now = [100.0]
+    monkeypatch.setattr(mod.time, "time", lambda: now[0])
+    cache = mod.ToolResultCache(max_entries=4, ttl_seconds=5.0)
     cache.put("code", {"x": 1}, {"a": 1})
     assert cache.get("code", {"x": 1}) == {"a": 1}
-    time.sleep(0.1)
+    now[0] += 5.1
     assert cache.get("code", {"x": 1}) is None
 
 

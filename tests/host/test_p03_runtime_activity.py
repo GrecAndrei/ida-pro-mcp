@@ -6,7 +6,6 @@ raise ``RuntimeError: list changed size during iteration`` in daemon mode.
 """
 
 import threading
-import time
 
 from ida_pro_mcp.host.server.server_runtime import ServerRuntimeMixin
 
@@ -64,11 +63,12 @@ def test_record_activity_replaces_list_instead_of_mutating_in_place():
 def test_concurrent_record_and_iterate_raises_no_runtime_error():
     """Two writers appending while readers iterate must not raise RuntimeError."""
     host = _ActivityHost()
-    stop = threading.Event()
     errors = []
+    start = threading.Barrier(4)
 
     def writer():
-        while not stop.is_set():
+        start.wait()
+        for _ in range(1000):
             try:
                 host._record_activity(
                     "code", _entry(addr="0x400000"), {"ok": True, "items": []},
@@ -78,7 +78,8 @@ def test_concurrent_record_and_iterate_raises_no_runtime_error():
                 errors.append(exc)
 
     def reader():
-        while not stop.is_set():
+        start.wait()
+        for _ in range(1000):
             try:
                 host._build_recent_workset(
                     "AB12CDEF", 20, include_bookmarks=False, include_items=False
@@ -86,15 +87,15 @@ def test_concurrent_record_and_iterate_raises_no_runtime_error():
             except Exception as exc:  # pragma: no cover - failure branch
                 errors.append(exc)
 
-    threads = [threading.Thread(target=writer, daemon=True) for _ in range(2)] + [
-        threading.Thread(target=reader, daemon=True) for _ in range(2)
+    threads = [threading.Thread(target=writer) for _ in range(2)] + [
+        threading.Thread(target=reader) for _ in range(2)
     ]
     for t in threads:
         t.start()
-    time.sleep(0.4)
-    stop.set()
+    # All workers start together, then execute a fixed amount of work. The
+    # test no longer depends on a scheduler-dependent sleep window.
     for t in threads:
-        t.join(timeout=3)
+        t.join()
 
     assert errors == [], errors
 

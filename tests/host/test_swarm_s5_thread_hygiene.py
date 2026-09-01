@@ -22,7 +22,6 @@ from __future__ import annotations
 import json
 import os
 import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -35,28 +34,12 @@ def _live_batch_threads() -> list[threading.Thread]:
 
 
 def _assert_no_batch_threads(timeout: float = 2.0) -> None:
-    """Poll (bounded) until every batch-* thread has exited.
-
-    A parked executor's workers consume a shutdown sentinel and exit within
-    ~0.1s; the bounded poll guards against CI timing jitter without a hard
-    busy-wait that could flake.
-    """
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if not _live_batch_threads():
-            return
-        time.sleep(0.02)
+    """Join the parked workers, then assert that all of them exited."""
+    for thread in _live_batch_threads():
+        thread.join(timeout=timeout)
     alive = [t.name for t in _live_batch_threads()]
-    raise AssertionError(f"batch-* threads still alive after teardown: {alive}")
-
-
-def _wait_for(predicate, timeout: float = 5.0) -> bool:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if predicate():
-            return True
-        time.sleep(0.02)
-    return False
+    if alive:
+        raise AssertionError(f"batch-* threads still alive after teardown: {alive}")
 
 
 # ---------------------------------------------------------------------------
@@ -71,15 +54,17 @@ def test_idle_batch_pool_reclaims_worker_threads():
     them at interpreter exit), so this failed."""
     mgr = BatchManager(max_workers=2)
     started = threading.Event()
+    entered = threading.Event()
 
     def _work(task):
+        entered.set()
         started.wait(timeout=5)
         return {"ok": True, "n": task.args.get("n")}
 
     try:
         ids = [mgr.submit("tool_call", {"n": i}, run_fn=_work) for i in range(4)]
         # Workers are genuinely busy, so the pool must be live.
-        assert _wait_for(lambda: len(_live_batch_threads()) >= 1)
+        assert entered.wait(timeout=5)
         started.set()
         for tid in ids:
             mgr.wait(tid, timeout=5)
@@ -96,13 +81,15 @@ def test_explicit_shutdown_reclaims_threads_and_is_idempotent():
     repeated call (e.g. atexit after an explicit teardown) is a safe no-op."""
     mgr = BatchManager(max_workers=1)
     release = threading.Event()
+    entered = threading.Event()
 
     def _work(task):
+        entered.set()
         release.wait(timeout=5)
         return {"ok": True}
 
     mgr.submit("tool_call", {"x": 1}, run_fn=_work)
-    assert _wait_for(lambda: len(_live_batch_threads()) >= 1)
+    assert entered.wait(timeout=5)
     release.set()
     mgr.shutdown()  # joins the running worker
     _assert_no_batch_threads()

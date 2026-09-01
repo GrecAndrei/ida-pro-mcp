@@ -12,12 +12,13 @@ import hashlib
 import hmac
 import json
 import threading
-import time
 from types import SimpleNamespace
 
 from ida_pro_mcp.host.errors import MCPError
 from ida_pro_mcp.host.server.server import IDAMCPServer
 from ida_pro_mcp.host.server.server_client_state import mint_agent_ticket
+
+_FUTURE_EXPIRY = 4_102_444_800.0  # 2100-01-01; independent of test run time
 
 
 class _FakeIdaProcess:
@@ -73,7 +74,7 @@ def _activate(server: IDAMCPServer, *agents: str) -> dict:
 
 
 def _login(server: IDAMCPServer, request_id: int, name: str, secret: str) -> dict:
-    ticket = mint_agent_ticket(secret, name, exp=time.time() + 3600)
+    ticket = mint_agent_ticket(secret, name, exp=_FUTURE_EXPIRY)
     return _tool_call(
         server, request_id, "session", {"action": "agent_login", "name": name, "ticket": ticket}
     )
@@ -87,7 +88,7 @@ def _login_with_scopes(
     scopes: list[str],
 ) -> dict:
     ticket = mint_agent_ticket(
-        secret, name, exp=time.time() + 3600, scopes=scopes
+        secret, name, exp=_FUTURE_EXPIRY, scopes=scopes
     )
     return _tool_call(
         server,
@@ -136,7 +137,7 @@ def test_agent_login_rejects_name_outside_allowlist(tmp_path, monkeypatch):
 def test_agent_login_rejects_forged_signature(tmp_path, monkeypatch):
     server = _make_server(tmp_path, monkeypatch)
     _activate(server, "agentA")
-    ticket = mint_agent_ticket("sekret", "agentA", exp=time.time() + 3600)
+    ticket = mint_agent_ticket("sekret", "agentA", exp=_FUTURE_EXPIRY)
     name, body, _sig = ticket.rsplit(".", 2)
     forged = f"{name}.{body}.deadbeef" + _sig[8:]
     res = _tool_call(
@@ -150,7 +151,7 @@ def test_agent_login_rejects_forged_signature(tmp_path, monkeypatch):
 def test_agent_login_rejects_expired_ticket(tmp_path, monkeypatch):
     server = _make_server(tmp_path, monkeypatch)
     _activate(server, "agentA")
-    ticket = mint_agent_ticket("sekret", "agentA", exp=time.time() - 5)
+    ticket = mint_agent_ticket("sekret", "agentA", exp=1.0)
     res = _tool_call(
         server, 1, "session",
         {"action": "agent_login", "name": "agentA", "ticket": ticket},
@@ -162,7 +163,7 @@ def test_agent_login_rejects_expired_ticket(tmp_path, monkeypatch):
 def test_agent_login_rejects_malformed_signed_expiry(tmp_path, monkeypatch):
     server = _make_server(tmp_path, monkeypatch)
     _activate(server, "agentA")
-    original = mint_agent_ticket("sekret", "agentA", exp=time.time() + 3600)
+    original = mint_agent_ticket("sekret", "agentA", exp=_FUTURE_EXPIRY)
     _name, body, _signature = original.split(".")
     payload = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
     payload["exp"] = "not-a-number"
@@ -205,7 +206,7 @@ def test_public_agent_sso_operations_are_reachable_through_tools_call(
     )
     assert activated.get("ok") is True
 
-    ticket = mint_agent_ticket("sekret", "agentA", exp=time.time() + 3600)
+    ticket = mint_agent_ticket("sekret", "agentA", exp=_FUTURE_EXPIRY)
     logged_in = _tool_call(
         server,
         2,

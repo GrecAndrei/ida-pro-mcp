@@ -28,7 +28,6 @@ import signal
 import subprocess
 import sys
 import threading
-import time
 
 from ida_pro_mcp.host.server import server_runtime_leases as srl
 from ida_pro_mcp.host.server.server_runtime_leases import ServerRuntimeLeasesMixin
@@ -95,11 +94,24 @@ def _write_lease(tmp_path, sid=TMP_SID, *, pid=54321, updated=0.0, **extra):
     return path
 
 
-def _run_heartbeat(runtime, seconds=0.08):
+class _OneHeartbeatWait:
+    """Allow exactly one heartbeat pass without waiting on wall-clock time."""
+
+    def __init__(self):
+        self._waits = 0
+
+    def wait(self, _timeout=None):
+        self._waits += 1
+        return self._waits > 1
+
+    def set(self):
+        return None
+
+
+def _run_heartbeat(runtime):
+    runtime._lease_thread_stop = _OneHeartbeatWait()
     t = threading.Thread(target=runtime._lease_heartbeat_loop, daemon=True)
     t.start()
-    time.sleep(seconds)
-    runtime._lease_thread_stop.set()
     t.join(timeout=2.0)
     assert not t.is_alive()
     return t
@@ -169,7 +181,7 @@ def test_runtime_tree_still_alive_probes_real_process_group(tmp_path, monkeypatc
     Exercises the real killpg + /proc-group scan with a generic subprocess."""
     runtime = _FakeIdaHost(tmp_path)
     child = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(30)"],
+        [sys.executable, "-c", "import signal; signal.pause()"],
         start_new_session=True,
     )
     try:
@@ -363,10 +375,10 @@ def test_kill_stale_process_tree_real_tree(tmp_path, monkeypatch):
         [
             sys.executable,
             "-c",
-            "import subprocess, sys, time\n"
-            "c = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+            "import signal, subprocess, sys\n"
+            "c = subprocess.Popen([sys.executable, '-c', 'import signal; signal.pause()'])\n"
             "print(c.pid, flush=True)\n"
-            "time.sleep(30)\n",
+            "signal.pause()\n",
         ],
         start_new_session=True,
         stdout=subprocess.PIPE,
@@ -380,16 +392,7 @@ def test_kill_stale_process_tree_real_tree(tmp_path, monkeypatch):
         monkeypatch.setattr(srl, "PROCESS_TERMINATION_TIMEOUT_SECONDS", 2.0)
         assert runtime._kill_stale_process_tree(launcher.pid) is True
         assert launcher.wait(timeout=10) is not None
-
-        deadline = time.time() + 5
-        while time.time() < deadline:
-            try:
-                os.kill(child_pid, 0)
-            except ProcessLookupError:
-                break
-            time.sleep(0.05)
-        else:
-            raise AssertionError("tree child survived the group kill")
+        assert runtime._proc_group_has_live_member(launcher.pid) is False
     finally:
         with __import__("contextlib").suppress(Exception):
             launcher.kill()

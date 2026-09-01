@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 import struct
 import sys
+import threading
 import types
 from pathlib import Path
 
@@ -142,11 +143,17 @@ def test_search_func_by_sig_size_rules_are_and():
 # ---------------------------------------------------------------------------
 
 def _assert_terminates(fn, *args):
-    import time
+    done = threading.Event()
 
-    t0 = time.monotonic()
-    fn(*args)
-    assert time.monotonic() - t0 < 1.0, "scan loop failed to terminate on BADADDR"
+    def _run():
+        fn(*args)
+        done.set()
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    assert done.wait(timeout=1), "scan loop failed to terminate on BADADDR"
+    worker.join(timeout=1)
+    assert not worker.is_alive()
 
 
 def test_search_insns_terminates_on_badaddr():

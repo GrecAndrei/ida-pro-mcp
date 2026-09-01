@@ -431,7 +431,6 @@ def test_reader_auto_refreshes_after_rebuild_replaces_rows(tmp_path):
     the assembler-cached index only refreshed when empty.  The read path
     now notices the DB mtime moved and reloads."""
     import sqlite3
-    import time
 
     db_path = str(tmp_path / "sample.embeddings.db")
     writer = FunctionEmbeddingIndex(db_path, _KeywordEmbedder())
@@ -443,9 +442,11 @@ def test_reader_auto_refreshes_after_rebuild_replaces_rows(tmp_path):
     assert hits
     assert hits[0]["ea"] == "0x401000"
 
-    time.sleep(0.01)
     # Simulate a full rebuild: the only row is deleted and rewritten with a
     # different embedding (gamma -> [-1, 0]).
+    # Force the reader's freshness marker behind the on-disk state instead of
+    # sleeping to cross a filesystem timestamp boundary.
+    reader._db_mtime_ns = -1
     with sqlite3.connect(db_path) as conn:
         conn.execute("DELETE FROM func_embeddings")
         conn.commit()

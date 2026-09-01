@@ -514,13 +514,24 @@ class TestIdleShutdown:
         stopped: list = []
         monkeypatch.setattr(obj, "_server_has_active_slots", lambda: False)
         monkeypatch.setattr(obj, "stop", lambda: stopped.append(1))
+
+        class _InlineTimer:
+            def __init__(self, _delay, target, args=()):
+                self._target = target
+                self._args = args
+                self.daemon = False
+                self.cancelled = False
+
+            def start(self):
+                self._target(*self._args)
+
+            def cancel(self):
+                self.cancelled = True
+
+        monkeypatch.setattr(rerank_mod.threading, "Timer", _InlineTimer)
         obj._schedule_idle_shutdown(0.05)
-        assert obj._idle_timer is not None
-        deadline = time.monotonic() + 1.0
-        while not stopped and time.monotonic() < deadline:
-            time.sleep(0.01)
-        obj._cancel_idle_shutdown()
         assert stopped == [1]
+        assert obj._idle_timer is None
 
     def test_shutdown_if_idle_generation_mismatch(self, monkeypatch):
         obj = _stub_reranker()
@@ -587,13 +598,12 @@ class TestRecycleAndLimits:
         monkeypatch.setattr(rerank_mod, "RERANK_MAX_REQUESTS", 1000)
         written: list = []
         monkeypatch.setattr(obj, "_write_lease", written.append)
-        t0 = time.time()
+        monkeypatch.setattr(rerank_mod.time, "time", lambda: 1234.5)
         obj._record_success_and_maybe_recycle()
         out = written[0]
         assert {k: out[k] for k in lease} == dict(lease, request_count=2, rss=25)
         # updated_at is stamped with the current wall clock, not carried over.
-        assert abs(out["updated_at"] - time.time()) < 5.0
-        assert out["updated_at"] >= t0
+        assert out["updated_at"] == 1234.5
 
     def test_record_success_recycles_on_request_limit(self, monkeypatch):
         obj = _stub_reranker()

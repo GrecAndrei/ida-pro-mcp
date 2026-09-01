@@ -67,6 +67,7 @@ TOOLS = {}
 # an ephemeral one (TOCTOU self-heal: if the host pre-allocated port was
 # taken between host-close and our bind, we bind 0 and report back).
 _BOUND_PORT = None
+_SERVER_READY = threading.Event()
 TOOL_ALIASES = {
     # Dispatcher advertises the tool as 'governance'; IDA-side file is
     # 'governance_engine.py' (the file is the engine implementation).
@@ -610,6 +611,7 @@ def _resolve_port():
 
 def run_server():
     global _BOUND_PORT
+    _SERVER_READY.clear()
     port = _resolve_port()
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -647,6 +649,7 @@ def run_server():
         except Exception as e:
             log_ev(f"Failed to publish RPC port: {e}")
     log_ev(f"Listening on {bound_port}")
+    _SERVER_READY.set()
 
     while not _SHUTDOWN_EVENT.is_set():
         conn = None

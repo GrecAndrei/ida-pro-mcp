@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import os
 import threading
-import time
 
 from ida_pro_mcp.host.server.server_multi_session import (
     ServerMultiSessionMixin,
@@ -352,13 +351,21 @@ def test_group_link_does_not_hold_group_lock_during_ida_rpc(tmp_path):
     worker.start()
     assert imports_started.wait(timeout=10)
 
-    started = time.monotonic()
-    status = server._ms_status({})
-    elapsed = time.monotonic() - started
+    status_box: dict = {}
+    status_done = threading.Event()
+
+    def _status():
+        status_box["value"] = server._ms_status({})
+        status_done.set()
+
+    status_thread = threading.Thread(target=_status)
+    status_thread.start()
+    assert status_done.wait(timeout=2)
     release_imports.set()
+    status_thread.join(timeout=2)
     worker.join(timeout=10)
 
-    assert status["ok"] is True
-    assert elapsed < 1.0
+    assert status_box["value"]["ok"] is True
+    assert not status_thread.is_alive()
     assert not worker.is_alive()
     assert result.get("ok") is True
