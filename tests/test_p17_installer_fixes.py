@@ -161,7 +161,9 @@ def test_dry_run_client_config_does_not_create_parent_directories(tmp_path):
     )
     assert not path.parent.exists()
     assert not path.exists()
-    assert str(path) in report.modified_files
+    # A dry-run describes planned steps without claiming that a file was
+    # modified; the target does not exist and no write occurred.
+    assert str(path) not in report.modified_files
 
 
 def test_empty_client_path_environment_overrides_use_platform_defaults(tmp_path, monkeypatch):
