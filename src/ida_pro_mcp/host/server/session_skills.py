@@ -88,6 +88,97 @@ def _activity_result_scalar(result: object) -> str:
 
 
 class SessionSkillsMixin(SessionBootstrapMixin):
+    @staticmethod
+    def _default_skills_state() -> dict:
+        return {"skills": {}, "q_table": {}, "activity_log": [], "hypotheses": []}
+
+    @staticmethod
+    def _finite_score(value, default: float = 0.5) -> float:
+        try:
+            score = float(value)
+        except (TypeError, ValueError):
+            return default
+        if not math.isfinite(score):
+            return default
+        return max(0.0, min(1.0, score))
+
+    @classmethod
+    def _normalize_skills_state(cls, data) -> dict:
+        """Validate the JSON shape before skill methods consume persisted data."""
+        if not isinstance(data, dict):
+            return cls._default_skills_state()
+
+        normalized = dict(data)
+        raw_skills = data.get("skills")
+        skills = {}
+        if isinstance(raw_skills, dict):
+            for skill_id, raw_skill in raw_skills.items():
+                if not isinstance(raw_skill, dict):
+                    continue
+                skill = dict(raw_skill)
+                skill["q_value"] = cls._finite_score(skill.get("q_value", 0.5))
+                description = skill.get("description", "")
+                skill["description"] = description if isinstance(description, str) else str(description)
+                tags = skill.get("tags", [])
+                if isinstance(tags, str):
+                    tags = [tags]
+                elif not isinstance(tags, (list, tuple)):
+                    tags = []
+                skill["tags"] = [str(tag) for tag in tags if str(tag).strip()]
+                for counter in ("success_count", "failure_count"):
+                    if counter in skill:
+                        try:
+                            skill[counter] = max(0, int(skill[counter]))
+                        except (TypeError, ValueError):
+                            skill[counter] = 0
+                skills[str(skill_id)] = skill
+        normalized["skills"] = skills
+
+        raw_q_table = data.get("q_table")
+        normalized["q_table"] = (
+            {str(skill_id): cls._finite_score(score) for skill_id, score in raw_q_table.items()}
+            if isinstance(raw_q_table, dict)
+            else {}
+        )
+
+        for key in ("activity_log", "hypotheses"):
+            value = data.get(key)
+            normalized[key] = [entry for entry in value if isinstance(entry, dict)] if isinstance(value, list) else []
+
+        bootstrap = data.get("bootstrap")
+        if not isinstance(bootstrap, dict):
+            normalized["bootstrap"] = {}
+        else:
+            normalized_bootstrap = dict(bootstrap)
+            for key in (
+                "history", "readiness_history", "metric_snapshots", "disputes",
+                "mitigation_history", "policy_reweight_history", "rollback_history",
+                "autopilot_runs", "outcomes",
+            ):
+                value = normalized_bootstrap.get(key)
+                normalized_bootstrap[key] = (
+                    [entry for entry in value if isinstance(entry, dict)]
+                    if isinstance(value, list) else []
+                )
+            policies = normalized_bootstrap.get("policies")
+            normalized_bootstrap["policies"] = (
+                {str(policy_id): policy for policy_id, policy in policies.items() if isinstance(policy, dict)}
+                if isinstance(policies, dict) else {}
+            )
+            for key, default in (("tournament_runs", 0), ("total_rounds", 0)):
+                try:
+                    normalized_bootstrap[key] = max(0, int(normalized_bootstrap.get(key, default)))
+                except (TypeError, ValueError):
+                    normalized_bootstrap[key] = default
+            for key, default in (("decay_lambda", 0.03), ("min_bootstrap_weight", 0.1)):
+                normalized_bootstrap[key] = cls._finite_score(
+                    normalized_bootstrap.get(key, default), default=default
+                )
+            if not isinstance(normalized_bootstrap.get("autopilot_policy"), dict):
+                normalized_bootstrap["autopilot_policy"] = {}
+            normalized["bootstrap"] = normalized_bootstrap
+        return normalized
+
     def _get_skills_path(self, sid: str) -> str:
         safe_sid = str(sid).replace("/", "_").replace("\\", "_")
         return os.path.join(self.session_dir, f"SID_{safe_sid}", "skills.json")
@@ -101,10 +192,10 @@ class SessionSkillsMixin(SessionBootstrapMixin):
         if os.path.exists(path):
             try:
                 with open(path, encoding="utf-8") as f:
-                    return json.load(f)
-            except (json.JSONDecodeError, OSError):
+                    return self._normalize_skills_state(json.load(f))
+            except (json.JSONDecodeError, OSError, UnicodeError):
                 pass
-        return {"skills": {}, "q_table": {}, "activity_log": [], "hypotheses": []}
+        return self._default_skills_state()
 
     def _save_skills(self, sid: str, data: dict):
         path = self._get_skills_path(sid)

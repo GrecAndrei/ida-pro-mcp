@@ -13,7 +13,6 @@ completes; manual small-area operations stay available.
 from __future__ import annotations
 
 import threading
-import time
 
 import pytest
 
@@ -238,7 +237,9 @@ def test_background_reuse_across_client_restart(tmp_path, monkeypatch):
     server2.shutdown()
 
 
-def test_background_load_error_surfaces_in_status(tmp_path, server):
+def test_background_load_error_surfaces_in_status(tmp_path, server, monkeypatch):
+    from ida_pro_mcp.host.server import server_session
+
     binary = tmp_path / "err.bin"
     binary.write_bytes(b"\x00" * 1024)
     errors = server._background_load_errors = {}
@@ -248,12 +249,26 @@ def test_background_load_error_surfaces_in_status(tmp_path, server):
 
     server._ensure_runtime_and_idb = _ensure
 
+    class _InlineThread:
+        def __init__(self, target, args=(), kwargs=None, **_options):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            self._target(*self._args, **self._kwargs)
+
+    real_thread = server_session.threading.Thread
+
+    def _thread_factory(*args, **kwargs):
+        if str(kwargs.get("name", "")).startswith("ida-bg-"):
+            return _InlineThread(*args, **kwargs)
+        return real_thread(*args, **kwargs)
+
+    monkeypatch.setattr(server_session.threading, "Thread", _thread_factory)
+
     result = _open(server, "ida_open_background", {"binary_path": str(binary)})
     sid = result["session_id"]
-
-    deadline = time.time() + 5
-    while time.time() < deadline and sid not in errors:
-        time.sleep(0.02)
     assert sid in errors
 
     status = _open(server, "ida_session_status", {}, request_id=2)

@@ -10,7 +10,6 @@ isolation for background tasks, and defensive argument coercion.
 from __future__ import annotations
 
 import threading
-import time
 import typing
 from types import SimpleNamespace
 
@@ -143,17 +142,15 @@ def test_cancel_cooperative_worker_reports_cancelled_with_result():
     """A cooperative worker that aborts (semantic-index style) must finalize as
     'cancelled' and keep its payload (e.g. a resume cursor)."""
     mgr = BatchManager(max_workers=1)
-    ready = []
+    ready = threading.Event()
 
     def _coop(task):
-        ready.append(1)
-        while not task._cancel_event.is_set():
-            time.sleep(0.005)
+        ready.set()
+        task._cancel_event.wait()
         return {"ok": True, "cancelled": True, "next_cursor": "0x20"}
 
     task_id = mgr.submit("semantic_index", {}, run_fn=_coop)
-    while not ready:
-        time.sleep(0.005)
+    assert ready.wait(timeout=5)
     cancel_result = mgr.cancel(task_id)
     assert cancel_result["state"] == "cancelled"
     assert cancel_result["result"] == {"ok": True, "cancelled": True, "next_cursor": "0x20"}
@@ -164,16 +161,15 @@ def test_cancel_does_not_report_completed_write_work_as_cancelled():
     """A task whose work ran to completion despite a cancel request must be
     reported as done with its result, not as a false cancellation."""
     mgr = BatchManager(max_workers=1)
-    ready = []
+    ready = threading.Event()
 
     def _write(task):
-        ready.append(1)
-        task._cancel_event.wait(timeout=3)  # completes the "write" regardless
+        ready.set()
+        task._cancel_event.wait()  # completes the "write" regardless
         return {"ok": True, "applied": 1}
 
     task_id = mgr.submit("tool_call", {}, run_fn=_write)
-    while not ready:
-        time.sleep(0.005)
+    assert ready.wait(timeout=5)
     cancel_result = mgr.cancel(task_id)
     assert cancel_result["state"] == "done"
     assert cancel_result["result"] == {"ok": True, "applied": 1}
@@ -207,20 +203,29 @@ def test_trim_history_never_evicts_running_task(monkeypatch):
     monkeypatch.setattr(bm_module, "_MAX_TASK_HISTORY", 10)
     mgr = BatchManager(max_workers=2)
     release = threading.Event()
-    started: list[str] = []
+    started = threading.Event()
 
     def _slow(task):
-        started.append(task.task_id)
-        release.wait(timeout=5)
+        started.set()
+        release.wait()
         return {"ok": True}
 
     running_id = mgr.submit("script", {}, run_fn=_slow)
-    while not started:
-        time.sleep(0.005)
+    assert started.wait(timeout=5)
     try:
+        terminal_ids = []
         for _ in range(30):
-            mgr.submit("script", {}, run_fn=lambda task: {"ok": True})
-        time.sleep(0.2)  # let the terminal tasks finish
+            terminal_ids.append(
+                mgr.submit("script", {}, run_fn=lambda task: {"ok": True})
+            )
+        for task_id in terminal_ids:
+            result = mgr.wait(task_id, timeout=5)
+            # Completed history may legitimately be evicted once the cap is
+            # exceeded; the invariant under test is that the live task stays.
+            if result.get("error"):
+                assert result["code"] == MCPError.NOT_FOUND
+            else:
+                assert result["state"] == "done"
         status = mgr.status(running_id)
         assert status, "running task must not be evicted by _trim_history"
         assert status[0]["state"] == "running"

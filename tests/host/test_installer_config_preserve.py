@@ -45,6 +45,10 @@ class TestStripJsoncComments(unittest.TestCase):
         out = _strip_jsonc_comments('{"a": [1, 2, 3,], "b": {"c": 1,},}')
         self.assertEqual(out, '{"a": [1, 2, 3], "b": {"c": 1}}')
 
+    def test_unterminated_block_comment_is_rejected(self):
+        with self.assertRaises(ValueError):
+            _strip_jsonc_comments('{"a": 1} /* never closed')
+
     def test_slash_inside_string_preserved(self):
         out = _strip_jsonc_comments('{"url": "https://example.com/x"}')
         self.assertIn('https://example.com/x', out)
@@ -107,6 +111,13 @@ class TestLoadJsonConfig(unittest.TestCase):
             _load_json_config(p)
         self.assertIn("Could not parse", str(ctx.exception))
         self.assertIn("Fix the syntax", str(ctx.exception))
+
+    def test_scalar_top_level_is_rejected(self):
+        p = self.tmp / "scalar.json"
+        p.write_text("[]")
+        with self.assertRaises(ConfigParseError) as ctx:
+            _load_json_config(p)
+        self.assertIn("top-level JSON object", str(ctx.exception))
 
 
 class TestUpdateJsonConfigPreservesUserData(unittest.TestCase):
@@ -196,6 +207,55 @@ class TestUpdateJsonConfigPreservesUserData(unittest.TestCase):
         self.assertIn("Could not parse", report.errors[0])
         # modified_files must NOT include this path.
         self.assertNotIn(str(p), report.modified_files)
+        self.assertEqual(list(self.tmp.glob("broken.json.bak.*")), [])
+
+    def test_unterminated_comment_left_untouched(self):
+        p = self.tmp / "unterminated-comment.json"
+        original = '{"theme": "dark"} /* comment never closes\n'
+        p.write_text(original)
+        report = self._make_report()
+
+        ok = update_json_config(
+            p, "ida-pro-mcp", {"command": "y"}, report, dry_run=False
+        )
+
+        self.assertFalse(ok)
+        self.assertEqual(p.read_text(), original)
+        self.assertEqual(len(report.errors), 1)
+        self.assertIn("unterminated block comment", report.errors[0])
+        self.assertNotIn(str(p), report.modified_files)
+        self.assertEqual(list(self.tmp.glob("unterminated-comment.json.bak.*")), [])
+
+    def test_wrong_server_container_type_left_untouched(self):
+        for value in ("[]", "null"):
+            p = self.tmp / f"wrong-container-{value[:2]}.json"
+            original = f'{{"theme": "dark", "mcpServers": {value}}}\n'
+            p.write_text(original)
+            report = self._make_report()
+
+            ok = update_json_config(
+                p, "ida-pro-mcp", {"command": "y"}, report, dry_run=False
+            )
+
+            self.assertFalse(ok)
+            self.assertEqual(p.read_text(), original)
+            self.assertEqual(len(report.errors), 1)
+            self.assertIn("must be an object", report.errors[0])
+            self.assertNotIn(str(p), report.modified_files)
+
+    def test_dry_run_does_not_claim_json_config_modified(self):
+        p = self.tmp / "user.json"
+        original = '{"theme": "dark"}\n'
+        p.write_text(original)
+        report = self._make_report()
+
+        ok = update_json_config(
+            p, "ida-pro-mcp", {"command": "y"}, report, dry_run=True
+        )
+
+        self.assertTrue(ok)
+        self.assertEqual(p.read_text(), original)
+        self.assertNotIn(str(p), report.modified_files)
 
 
 class TestUpdateTomlConfigPreservesUserData(unittest.TestCase):
@@ -237,6 +297,21 @@ class TestUpdateTomlConfigPreservesUserData(unittest.TestCase):
         self.assertEqual(p.read_text(), original)
         self.assertEqual(len(report.errors), 1)
         self.assertIn("Could not parse", report.errors[0])
+        self.assertNotIn(str(p), report.modified_files)
+        self.assertEqual(list(self.tmp.glob("broken.toml.bak.*")), [])
+
+    def test_dry_run_does_not_claim_toml_config_modified(self):
+        p = self.tmp / "user.toml"
+        original = 'theme = "dark"\n'
+        p.write_text(original)
+        report = InstallReport()
+
+        ok = update_toml_config(
+            p, "ida-pro-mcp", {"command": "y"}, report, dry_run=True
+        )
+
+        self.assertTrue(ok)
+        self.assertEqual(p.read_text(), original)
         self.assertNotIn(str(p), report.modified_files)
 
 

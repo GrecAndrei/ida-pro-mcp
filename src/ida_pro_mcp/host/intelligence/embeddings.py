@@ -1014,8 +1014,8 @@ class FunctionEmbeddingIndex:
                         if name and name != (row[1] or ""):
                             new_search_tokens, new_name_tokens = _persist_search_tokens(name, str(row[3] or ""))
                             conn.execute(
-                                "UPDATE func_embeddings SET name=?, search_tokens=?, name_tokens=? WHERE ea=?",
-                                (name, new_search_tokens, new_name_tokens, func_ea),
+                                "UPDATE func_embeddings SET name=?, search_tokens=?, name_tokens=?, indexed_at=? WHERE ea=?",
+                                (name, new_search_tokens, new_name_tokens, time.time(), func_ea),
                             )
                         indexed += 1
                         continue

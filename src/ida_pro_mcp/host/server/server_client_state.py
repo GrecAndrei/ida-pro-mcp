@@ -19,6 +19,7 @@ import contextvars
 import hashlib
 import hmac
 import json
+import math
 import os
 import secrets
 import threading
@@ -27,6 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..errors import MCPError, make_error
+from ..policy import classify_tool_action
 
 # Guards lazy initialisation of the per-server SSO realm store (the daemon
 # serves several connection threads, and ``sso_activate`` is one-shot).
@@ -63,7 +65,10 @@ def mint_agent_ticket(
     payload = {
         "name": name,
         "exp": int(exp or 0),
-        "scopes": scopes or ["all"],
+        # ``None`` means the default unrestricted ticket. An explicitly empty
+        # list is a valid least-privilege ticket and must not silently widen to
+        # ``all``.
+        "scopes": ["all"] if scopes is None else scopes,
         "nonce": nonce or secrets.token_hex(8),
     }
     payload_str = json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -792,7 +797,16 @@ class ServerClientStateMixin:
             return None, make_error(
                 MCPError.POLICY_DENIED, "Ticket payload name mismatch."
             )
-        exp = float(meta.get("exp") or 0)
+        try:
+            exp = float(meta.get("exp") or 0)
+        except (TypeError, ValueError, OverflowError):
+            return None, make_error(
+                MCPError.POLICY_DENIED, "Ticket expiry must be a finite number."
+            )
+        if not math.isfinite(exp):
+            return None, make_error(
+                MCPError.POLICY_DENIED, "Ticket expiry must be a finite number."
+            )
         if exp and exp < time.time():
             return None, make_error(MCPError.POLICY_DENIED, "Ticket has expired.")
         raw_scopes = meta.get("scopes")
@@ -914,7 +928,18 @@ class ServerClientStateMixin:
                 MCPError.POLICY_DENIED,
                 f"Agent '{agent}' is logged in on a different connection.",
             )
-        exp = float(entry.get("exp") or 0)
+        try:
+            exp = float(entry.get("exp") or 0)
+        except (TypeError, ValueError, OverflowError):
+            return make_error(
+                MCPError.POLICY_DENIED,
+                f"Agent '{agent}' ticket has an invalid expiry; call agent_login again.",
+            )
+        if not math.isfinite(exp):
+            return make_error(
+                MCPError.POLICY_DENIED,
+                f"Agent '{agent}' ticket has an invalid expiry; call agent_login again.",
+            )
         if exp and exp < time.time():
             return make_error(
                 MCPError.POLICY_DENIED,
@@ -922,6 +947,65 @@ class ServerClientStateMixin:
             )
         state.active_agent = agent
         return None
+
+    def _agent_scope_error(
+        self, tool: Any, action: Any
+    ) -> dict[str, Any] | None:
+        """Return a denial when the bound agent lacks the requested scope.
+
+        Ticket scopes are capability filters, not replacements for the normal
+        policy gate. ``all`` permits every action; otherwise a scope may name
+        a risk tier (``read``, ``write_idb``, ...), a backend tool, or an exact
+        ``tool:action`` pair. The check lives at the dispatch boundary so it
+        also covers calls issued by a public batch or background worker.
+        """
+        state = self._client_request_state()
+        agent = state.active_agent
+        if not agent:
+            return None
+        tool_name = str(tool or "").strip().lower()
+        action_name = str(action or "").strip().lower()
+        # An agent must always be able to release its own resources, even when
+        # the orchestrator issued a deliberately empty or expired capability
+        # set and the caller is trying to clean up after a failed task.
+        if tool_name == "session" and action_name == "agent_logout":
+            return None
+
+        realm = self._sso_realm()
+        with realm["lock"]:
+            entry = (realm.get("logged_in") or {}).get(agent) or {}
+            scopes = entry.get("scopes")
+        if not isinstance(scopes, list):
+            scopes = []
+        normalized_scopes = {
+            str(scope).strip().lower() for scope in scopes if str(scope).strip()
+        }
+        if "all" in normalized_scopes:
+            return None
+
+        candidates = {tool_name}
+        if action_name:
+            candidates.add(f"{tool_name}:{action_name}")
+        # An unknown backend pair still fails closed below; scope checks must
+        # not turn a classifier problem into an execution bypass.
+        with contextlib.suppress(Exception):
+            candidates.add(classify_tool_action(tool_name, action_name).value)
+        if normalized_scopes.intersection(candidates):
+            return None
+        requested = f"{tool_name}:{action_name}" if action_name else tool_name
+        return make_error(
+            MCPError.POLICY_DENIED,
+            f"Agent '{agent}' is not authorized for '{requested}'.",
+            hint=(
+                "Request a ticket with scope 'all', the required risk tier, "
+                f"backend tool '{tool_name}', or exact scope '{requested}'."
+            ),
+            details={
+                "agent": agent,
+                "requested": requested,
+                "scopes": sorted(normalized_scopes),
+            },
+        )
 
     def _unbind_agent_call(self) -> None:
         """Clear the per-call agent identity (pairs with ``_bind_agent_call``)."""

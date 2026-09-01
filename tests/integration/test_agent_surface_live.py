@@ -266,8 +266,42 @@ class LiveMCPClient:
             env["IDA_MCP_COMPACT_CHAR_BUDGET"] = "500"
         source_root = str(REPO_ROOT / "src")
         env["PYTHONPATH"] = source_root + os.pathsep + env.get("PYTHONPATH", "")
+        command = [sys.executable, "-u", "-m", "ida_pro_mcp.host.server"]
+        if env.get("IDA_MCP_LIVE_COVERAGE") == "1":
+            # The host is separately launched under coverage.  The IDA
+            # interpreter uses server_script.py's dependency-free tracer, so
+            # it does not need the coverage package on its embedded sys.path.
+            try:
+                import coverage
+            except Exception:
+                # Keep the live test usable with the system interpreter, which
+                # may run pytest without having coverage installed.  In that
+                # case the optional mode simply collects no child data rather
+                # than replacing a working host command with one that exits
+                # before initialize.
+                pass
+            else:
+                coverage_root = str(Path(coverage.__file__).resolve().parent.parent)
+                env["PYTHONPATH"] = coverage_root + os.pathsep + env["PYTHONPATH"]
+                coverage_file = env.get("IDA_MCP_LIVE_COVERAGE_FILE")
+                if coverage_file:
+                    # coverage's CLI reads COVERAGE_FILE, while the IDA-side
+                    # line tracer writes one JSON file per IDA process.
+                    env["COVERAGE_FILE"] = coverage_file
+                    env.setdefault("IDA_MCP_LIVE_TRACE_FILE", coverage_file + ".ida-trace")
+                command = [
+                    sys.executable,
+                    "-u",
+                    "-m",
+                    "coverage",
+                    "run",
+                    "--parallel-mode",
+                    "--source=src/ida_pro_mcp",
+                    "-m",
+                    "ida_pro_mcp.host.server",
+                ]
         self.process = subprocess.Popen(
-            [sys.executable, "-u", "-m", "ida_pro_mcp.host.server"],
+            command,
             cwd=REPO_ROOT,
             env=env,
             text=True,

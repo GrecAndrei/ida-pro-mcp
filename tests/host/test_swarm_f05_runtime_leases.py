@@ -14,7 +14,6 @@ import json
 import os
 import signal
 import threading
-import time
 from types import SimpleNamespace
 
 from ida_pro_mcp.host.server import server_runtime_leases as srl
@@ -88,11 +87,24 @@ def _write_lease(tmp_path, sid=TMP_SID, *, pid=54321, updated=0.0):
     return path
 
 
-def _run_heartbeat(runtime, seconds=0.08):
+class _OneHeartbeatWait:
+    """Allow exactly one heartbeat pass without waiting on wall-clock time."""
+
+    def __init__(self):
+        self._waits = 0
+
+    def wait(self, _timeout=None):
+        self._waits += 1
+        return self._waits > 1
+
+    def set(self):
+        return None
+
+
+def _run_heartbeat(runtime):
+    runtime._lease_thread_stop = _OneHeartbeatWait()
     t = threading.Thread(target=runtime._lease_heartbeat_loop, daemon=True)
     t.start()
-    time.sleep(seconds)
-    runtime._lease_thread_stop.set()
     t.join(timeout=2.0)
     assert not t.is_alive()
     return t

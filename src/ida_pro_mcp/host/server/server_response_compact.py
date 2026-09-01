@@ -300,6 +300,12 @@ class ServerResponseCompactMixin:
                     # can distinguish "false" from "key absent".
                     out[key] = raw
                     continue
+                if key == "scopes" and isinstance(raw, list) and not raw:
+                    # An empty SSO capability set is meaningful: omitting it
+                    # would make a least-privilege login response look like a
+                    # legacy response with no scope information.
+                    out[key] = []
+                    continue
                 if key == "details":
                     compact_details = self._compact_error_details(raw, opts)
                     if compact_details is None and opts.get("drop_empty"):

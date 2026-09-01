@@ -7,12 +7,18 @@ isolation over one connection, and per-agent runtime teardown.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import threading
-import time
+from types import SimpleNamespace
 
 from ida_pro_mcp.host.errors import MCPError
 from ida_pro_mcp.host.server.server import IDAMCPServer
 from ida_pro_mcp.host.server.server_client_state import mint_agent_ticket
+
+_FUTURE_EXPIRY = 4_102_444_800.0  # 2100-01-01; independent of test run time
 
 
 class _FakeIdaProcess:
@@ -68,9 +74,27 @@ def _activate(server: IDAMCPServer, *agents: str) -> dict:
 
 
 def _login(server: IDAMCPServer, request_id: int, name: str, secret: str) -> dict:
-    ticket = mint_agent_ticket(secret, name, exp=time.time() + 3600)
+    ticket = mint_agent_ticket(secret, name, exp=_FUTURE_EXPIRY)
     return _tool_call(
         server, request_id, "session", {"action": "agent_login", "name": name, "ticket": ticket}
+    )
+
+
+def _login_with_scopes(
+    server: IDAMCPServer,
+    request_id: int,
+    name: str,
+    secret: str,
+    scopes: list[str],
+) -> dict:
+    ticket = mint_agent_ticket(
+        secret, name, exp=_FUTURE_EXPIRY, scopes=scopes
+    )
+    return _tool_call(
+        server,
+        request_id,
+        "session",
+        {"action": "agent_login", "name": name, "ticket": ticket},
     )
 
 
@@ -113,7 +137,7 @@ def test_agent_login_rejects_name_outside_allowlist(tmp_path, monkeypatch):
 def test_agent_login_rejects_forged_signature(tmp_path, monkeypatch):
     server = _make_server(tmp_path, monkeypatch)
     _activate(server, "agentA")
-    ticket = mint_agent_ticket("sekret", "agentA", exp=time.time() + 3600)
+    ticket = mint_agent_ticket("sekret", "agentA", exp=_FUTURE_EXPIRY)
     name, body, _sig = ticket.rsplit(".", 2)
     forged = f"{name}.{body}.deadbeef" + _sig[8:]
     res = _tool_call(
@@ -127,13 +151,38 @@ def test_agent_login_rejects_forged_signature(tmp_path, monkeypatch):
 def test_agent_login_rejects_expired_ticket(tmp_path, monkeypatch):
     server = _make_server(tmp_path, monkeypatch)
     _activate(server, "agentA")
-    ticket = mint_agent_ticket("sekret", "agentA", exp=time.time() - 5)
+    ticket = mint_agent_ticket("sekret", "agentA", exp=1.0)
     res = _tool_call(
         server, 1, "session",
         {"action": "agent_login", "name": "agentA", "ticket": ticket},
     )
     assert res.get("error") is True
     assert "expired" in str(res.get("message", ""))
+
+
+def test_agent_login_rejects_malformed_signed_expiry(tmp_path, monkeypatch):
+    server = _make_server(tmp_path, monkeypatch)
+    _activate(server, "agentA")
+    original = mint_agent_ticket("sekret", "agentA", exp=_FUTURE_EXPIRY)
+    _name, body, _signature = original.split(".")
+    payload = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+    payload["exp"] = "not-a-number"
+    payload_str = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    encoded = base64.urlsafe_b64encode(payload_str.encode("utf-8")).decode("ascii").rstrip("=")
+    signature = hmac.new(
+        b"sekret", payload_str.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    ticket = f"agentA.{encoded}.{signature}"
+
+    res = _tool_call(
+        server,
+        1,
+        "session",
+        {"action": "agent_login", "name": "agentA", "ticket": ticket},
+    )
+    assert res.get("error") is True
+    assert res.get("code") == MCPError.POLICY_DENIED
+    assert "expiry" in str(res.get("message", ""))
 
 
 def test_agent_login_success(tmp_path, monkeypatch):
@@ -143,6 +192,92 @@ def test_agent_login_success(tmp_path, monkeypatch):
     assert res.get("ok") is True
     assert res["agent"] == "agentA"
     assert "agentA" in server._client_request_state().agents_logged_in
+
+
+def test_public_agent_sso_operations_are_reachable_through_tools_call(
+    tmp_path, monkeypatch
+):
+    server = _make_server(tmp_path, monkeypatch)
+    activated = _tool_call(
+        server,
+        1,
+        "ida_sso_activate",
+        {"agents": ["agentA"]},
+    )
+    assert activated.get("ok") is True
+
+    ticket = mint_agent_ticket("sekret", "agentA", exp=_FUTURE_EXPIRY)
+    logged_in = _tool_call(
+        server,
+        2,
+        "ida_agent_login",
+        {"name": "agentA", "ticket": ticket},
+    )
+    assert logged_in.get("ok") is True
+    assert logged_in["agent"] == "agentA"
+
+    logged_out = _tool_call(
+        server,
+        3,
+        "ida_agent_logout",
+        {"name": "agentA"},
+    )
+    assert logged_out.get("ok") is True
+
+
+def test_agent_ticket_scopes_gate_dispatch_but_keep_logout_available(tmp_path, monkeypatch):
+    server = _make_server(tmp_path, monkeypatch)
+    _activate(server, "agentA")
+    login = _login_with_scopes(
+        server, 1, "agentA", "sekret", ["session:status"]
+    )
+    assert login.get("ok") is True
+
+    allowed = _tool_call(
+        server, 2, "session", {"action": "status", "agent": "agentA"}
+    )
+    assert allowed.get("ok") is True
+
+    binary = _binary(tmp_path, "scoped.bin")
+    denied = _tool_call(
+        server,
+        3,
+        "session",
+        {"action": "create", "binary_path": str(binary), "agent": "agentA"},
+    )
+    assert denied.get("error") is True
+    assert denied.get("code") == MCPError.POLICY_DENIED
+    assert "not authorized" in str(denied.get("message", ""))
+
+    logout = _tool_call(
+        server,
+        4,
+        "session",
+        {"action": "agent_logout", "name": "agentA", "agent": "agentA"},
+    )
+    assert logout.get("ok") is True
+
+
+def test_empty_agent_scope_set_denies_calls_but_allows_cleanup(tmp_path, monkeypatch):
+    server = _make_server(tmp_path, monkeypatch)
+    _activate(server, "agentA")
+    login = _login_with_scopes(server, 1, "agentA", "sekret", [])
+    assert login.get("ok") is True
+    assert login["scopes"] == []
+
+    denied = _tool_call(
+        server, 2, "session", {"action": "status", "agent": "agentA"}
+    )
+    assert denied.get("error") is True
+    assert denied.get("code") == MCPError.POLICY_DENIED
+
+    logout = _tool_call(
+        server,
+        3,
+        "session",
+        {"action": "agent_logout", "name": "agentA", "agent": "agentA"},
+    )
+    assert logout.get("ok") is True
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +411,51 @@ def test_agent_logout_tears_down_only_its_sessions(tmp_path, monkeypatch):
     status_b = _tool_call(server, 7, "session", {"action": "status", "agent": "agentB"})
     assert status_b.get("ok") is True
     assert status_b["session"]["session_id"] == sid_b
+
+
+def test_background_worker_preserves_agent_scoped_session(tmp_path, monkeypatch):
+    """A background task submitted by an agent must keep its agent boundary.
+
+    The worker gets a private request state. It must not turn the agent's
+    session into connection-global ownership or lose the identity before the
+    queued tool call executes.
+    """
+    server = _make_server(tmp_path, monkeypatch)
+    _activate(server, "agentA", "agentB")
+    _login(server, 1, "agentA", "sekret")
+    session = SimpleNamespace(session_id="agent-session")
+    state = server._client_request_state()
+    state.active_agent = "agentA"
+    state.owned_sessions_by_agent["agentA"] = {session.session_id}
+    state.current_session_by_agent["agentA"] = session
+
+    observed = {}
+
+    def run(_task):
+        worker_state = server._client_request_state()
+        observed["agent"] = worker_state.active_agent
+        observed["session"] = server.current_session
+        observed["global_ownership"] = set(worker_state.owned_session_ids)
+        observed["agent_ownership"] = set(
+            worker_state.owned_sessions_by_agent.get("agentA", set())
+        )
+        return {"ok": True}
+
+    try:
+        bound = server._bind_background_run(run, session=session)
+        assert bound(SimpleNamespace()) == {"ok": True}
+        assert observed == {
+            "agent": "agentA",
+            "session": session,
+            "global_ownership": set(),
+            "agent_ownership": {"agent-session"},
+        }
+        # The submitting connection state is unchanged apart from retaining
+        # the agent-scoped grant needed to query the task later.
+        assert state.owned_session_ids == set()
+        assert state.owned_sessions_by_agent["agentA"] == {"agent-session"}
+    finally:
+        server.shutdown()
 
 
 def test_connection_close_releases_every_bound_agent(tmp_path, monkeypatch):

@@ -217,6 +217,11 @@ class TestRuleFileIteration:
         (rules_dir / "notes.txt").write_text("not a rule", encoding="utf-8")
         big = rules_dir / "big.yar"
         big.write_bytes(b"x" * (2_000_000 + 1))
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "outside.yar").write_text(SIMPLE_RULE, encoding="utf-8")
+        (rules_dir / "linked.yar").symlink_to(outside / "outside.yar")
+        (rules_dir / "linked-dir").symlink_to(outside, target_is_directory=True)
         files = ys._iter_rule_files(str(rules_dir))
         assert [fname for _ns, fname in files] == [str(rules_dir / "small.yar")]
 

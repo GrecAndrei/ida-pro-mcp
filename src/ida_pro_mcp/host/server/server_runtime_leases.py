@@ -6,6 +6,7 @@ from __future__ import annotations
 import atexit
 import contextlib
 import json
+import math
 import os
 import signal
 import subprocess
@@ -50,6 +51,47 @@ STALE_CLEANUP_BUDGET_SECONDS = _resolve_stale_cleanup_budget()
 # lease itself is atomically replaced, so readers/writers cannot interleave a
 # compare-and-remove transaction with a fresh lease publication.
 _RUNTIME_LEASE_IO_LOCK = threading.RLock()
+
+
+def _lease_pid(value: object) -> int:
+    """Parse a persisted PID without truncating unsafe numeric values."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        value = value.strip()
+        if value.isascii() and value.isdigit():
+            with contextlib.suppress(ValueError):
+                return int(value)
+    return 0
+
+
+def _lease_timestamp(value: object) -> float:
+    """Parse a lease timestamp; non-finite values are always stale."""
+    try:
+        timestamp = float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return timestamp if math.isfinite(timestamp) else 0.0
+
+
+def _process_start_token(pid: int) -> str:
+    """Return Linux's PID-reuse-resistant process start token."""
+    if sys.platform != "linux" or pid <= 0:
+        return ""
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as proc_stat:
+            data = proc_stat.read()
+    except (OSError, UnicodeError):
+        return ""
+    end = data.rfind(")")
+    if end < 0:
+        return ""
+    fields = data[end + 1 :].split()
+    # The field after the command name is state (3); starttime is field 22,
+    # which is offset 19 in the tail after the final closing parenthesis.
+    return fields[19] if len(fields) > 19 else ""
 
 
 @contextmanager
@@ -101,6 +143,8 @@ class ServerRuntimeLeasesMixin:
                 "idat_exe": str(self.idat_exe or ""),
                 "owner_pid": os.getpid(),
                 "owner_id": str(getattr(self, "_runtime_owner_id", "") or ""),
+                "process_start_token": _process_start_token(int(proc.pid)),
+                "owner_start_token": _process_start_token(os.getpid()),
                 "updated_at": time.time(),
             }
             path = self._runtime_lease_path(sid)
@@ -129,9 +173,11 @@ class ServerRuntimeLeasesMixin:
                         lease = json.load(f)
                 except Exception:
                     return
+                if not isinstance(lease, dict):
+                    return
                 try:
-                    lease_pid = int(lease.get("pid") or 0)
-                except Exception:
+                    lease_pid = _lease_pid(lease.get("pid"))
+                except Exception:  # pragma: no cover - defensive for odd mappings
                     lease_pid = 0
                 if lease_pid != pid:
                     return
@@ -570,14 +616,20 @@ class ServerRuntimeLeasesMixin:
             if expected_path:
                 expected_path = os.path.realpath(os.path.expanduser(expected_path))
                 expected_names.add(os.path.basename(expected_path).lower())
+            expected_start = str(lease.get("process_start_token") or "").strip()
+            if expected_start:
+                # A matching executable name is not enough: a recycled PID can
+                # point at another idat64 binary. A lease written by this
+                # version records Linux's process start time, so require the
+                # same process instance whenever that evidence is available.
+                if _process_start_token(pid) != expected_start:
+                    return False
             try:
                 actual_exe = os.path.realpath(proc_exe)
             except Exception:
                 actual_exe = ""
             if actual_exe:
                 base = os.path.basename(actual_exe).lower()
-                if base in expected_names:
-                    return True
                 if expected_path:
                     try:
                         if (
@@ -588,6 +640,13 @@ class ServerRuntimeLeasesMixin:
                             return True
                     except Exception:
                         pass
+                    # /proc exposes a real executable path. If it is present
+                    # and differs from the recorded path, a same-named binary
+                    # from another IDA installation is not our runtime.
+                    if os.path.exists(actual_exe):
+                        return False
+                elif base in expected_names:
+                    return True
             try:
                 with open(proc_cmdline, "rb") as f:
                     cmdline = f.read().decode("utf-8", errors="ignore")
@@ -654,10 +713,7 @@ class ServerRuntimeLeasesMixin:
             Legacy leases without an owner retain the existing stale-cleanup
             behavior.
             """
-            try:
-                owner_pid = int(lease.get("owner_pid") or 0)
-            except Exception:
-                return False
+            owner_pid = _lease_pid(lease.get("owner_pid"))
             if owner_pid <= 0 or owner_pid == os.getpid():
                 return False
             try:
@@ -670,6 +726,16 @@ class ServerRuntimeLeasesMixin:
                 return True
             except Exception:
                 return False
+            expected_start = str(lease.get("owner_start_token") or "").strip()
+            if expected_start:
+                # A dead host's PID may have been recycled. Treat an
+                # uninspectable owner conservatively, but allow reclamation
+                # once the kernel proves that the PID is a new process.
+                actual_start = _process_start_token(owner_pid)
+                if not actual_start:
+                    return True
+                if actual_start != expected_start:
+                    return False
             return True
 
     def _remove_lease_if_unchanged(self, path: str, expected_updated: float) -> bool:
@@ -686,10 +752,9 @@ class ServerRuntimeLeasesMixin:
                         lease = json.load(f)
                 except Exception:
                     return False
-                try:
-                    updated = float(lease.get("updated_at") or 0.0)
-                except Exception:
-                    updated = 0.0
+                if not isinstance(lease, dict):
+                    return False
+                updated = _lease_timestamp(lease.get("updated_at"))
                 if updated != expected_updated:
                     return False
                 with contextlib.suppress(OSError):
@@ -712,10 +777,9 @@ class ServerRuntimeLeasesMixin:
                         current = json.load(f)
                 except Exception:
                     return False
-                try:
-                    updated = float(current.get("updated_at") or 0.0)
-                except Exception:
-                    updated = 0.0
+                if not isinstance(current, dict):
+                    return False
+                updated = _lease_timestamp(current.get("updated_at"))
                 if updated != expected_updated:
                     return False
                 self._write_runtime_lease_record_unlocked(path, lease)
@@ -743,6 +807,12 @@ class ServerRuntimeLeasesMixin:
                     with _runtime_lease_io_lock(path), contextlib.suppress(OSError):
                         os.remove(path)
                     continue
+                if not isinstance(lease, dict):
+                    # JSON scalars/arrays are damaged lease records, not
+                    # ownership claims. Remove them without ever reading a PID.
+                    with _runtime_lease_io_lock(path), contextlib.suppress(OSError):
+                        os.remove(path)
+                    continue
                 sid = _normalize_session_id(lease.get("session_id"))
                 sid_from_name = m.group(1)
                 if not sid or sid != sid_from_name:
@@ -750,14 +820,8 @@ class ServerRuntimeLeasesMixin:
                     with _runtime_lease_io_lock(path), contextlib.suppress(OSError):
                         os.remove(path)
                     continue
-                try:
-                    pid = int(lease.get("pid") or 0)
-                except Exception:
-                    pid = 0
-                try:
-                    updated = float(lease.get("updated_at") or 0.0)
-                except Exception:
-                    updated = 0.0
+                pid = _lease_pid(lease.get("pid"))
+                updated = _lease_timestamp(lease.get("updated_at"))
                 with self._runtime_lock:
                     tracked = bool(sid and sid in self.session_runtimes)
                 if tracked:

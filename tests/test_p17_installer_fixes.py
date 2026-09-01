@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 import textwrap
 import types as _stdlib_types
@@ -112,6 +113,19 @@ def test_update_json_config_writes_under_servers_key(tmp_path):
     assert entry["command"] == "/x/python"
 
 
+def test_checkout_client_map_preserves_copilot_servers_schema():
+    from ida_pro_mcp.installer.clients import load_client_map
+
+    repo_root = Path(__file__).resolve().parents[1]
+    client_map = load_client_map(repo_root)
+
+    for client in ("Copilot CLI", "VS Code"):
+        assert client_map[client]["json"] == {
+            "top_level_key": "servers",
+            "type": "stdio",
+        }
+
+
 def test_update_json_config_default_still_uses_mcpservers(tmp_path):
     from ida_pro_mcp.installer import clients
     from ida_pro_mcp.installer.common import InstallReport
@@ -130,6 +144,151 @@ def test_update_json_config_default_still_uses_mcpservers(tmp_path):
     assert "mcpServers" in data
     assert "servers" not in data
     assert "type" not in data["mcpServers"]["ida-pro-mcp"]
+
+
+def test_dry_run_client_config_does_not_create_parent_directories(tmp_path):
+    from ida_pro_mcp.installer import clients
+    from ida_pro_mcp.installer.common import InstallReport
+
+    path = tmp_path / "not-created" / "mcp.json"
+    report = InstallReport()
+    assert clients.update_json_config(
+        path,
+        "ida-pro-mcp",
+        {"command": "/x/python"},
+        report,
+        dry_run=True,
+    )
+    assert not path.parent.exists()
+    assert not path.exists()
+    # A dry-run describes planned steps without claiming that a file was
+    # modified; the target does not exist and no write occurred.
+    assert str(path) not in report.modified_files
+
+
+def test_empty_client_path_environment_overrides_use_platform_defaults(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import clients
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", "")
+    monkeypatch.setenv("APPDATA", "")
+
+    paths = clients.get_config_paths(Path(__file__).resolve().parents[1])
+
+    assert paths["VS Code"] == home / ".config" / "Code" / "User" / "globalStorage" / "github.copilot" / "mcp.json"
+    assert paths["Claude Desktop"] == home / ".config" / "Claude" / "claude_desktop_config.json"
+
+
+def test_blank_client_path_environment_overrides_use_platform_defaults(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import clients
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("OPENCODE_CONFIG", "   ")
+    monkeypatch.setenv("XDG_CONFIG_HOME", "")
+
+    paths = clients.get_config_paths(Path(__file__).resolve().parents[1])
+
+    assert paths["OpenCode"] == home / ".config" / "opencode" / "opencode.json"
+
+
+def test_client_path_environment_overrides_expand_environment_paths(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import clients
+
+    monkeypatch.setenv("CLIENT_CONFIG_ROOT", str(tmp_path))
+    monkeypatch.setenv("OPENCODE_CONFIG", "$CLIENT_CONFIG_ROOT/opencode.json")
+
+    paths = clients.get_config_paths(Path(__file__).resolve().parents[1])
+
+    assert paths["OpenCode"] == tmp_path / "opencode.json"
+
+
+def test_client_path_selection_skips_non_file_placeholder_for_fallback(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import clients
+
+    home = tmp_path / "home"
+    xdg = tmp_path / "config"
+    home.mkdir()
+    xdg.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+
+    preferred = xdg / "copilot" / "mcp-config.json"
+    preferred.mkdir(parents=True)
+    fallback = home / ".copilot" / "mcp-config.json"
+    fallback.parent.mkdir(parents=True)
+    fallback.write_text("{}", encoding="utf-8")
+
+    paths = clients.get_config_paths(Path(__file__).resolve().parents[1])
+
+    assert paths["Copilot CLI"] == fallback
+
+
+def test_legacy_copilot_wrapper_preserves_unparseable_config(tmp_path):
+    import install
+
+    path = tmp_path / "copilot" / "mcp.json"
+    path.parent.mkdir()
+    original = '{"keep": [}\n'
+    path.write_text(original, encoding="utf-8")
+
+    assert install._update_copilot_config(
+        path,
+        "ida-pro-mcp",
+        {"command": "/x/python", "args": [], "env": {}},
+    ) is False
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_legacy_antigravity_wrapper_does_not_leave_plugin_on_config_failure(tmp_path):
+    import install
+
+    path = tmp_path / "antigravity" / "mcp.json"
+    path.parent.mkdir()
+    original = '{"keep": [}\n'
+    path.write_text(original, encoding="utf-8")
+
+    assert install._write_antigravity_plugin(
+        path,
+        "ida-pro-mcp",
+        {"command": "/x/python", "args": [], "env": {}},
+    ) is False
+    assert path.read_text(encoding="utf-8") == original
+    assert not (path.parent / "plugin.json").exists()
+
+
+def test_legacy_server_config_selects_local_backend_explicitly(tmp_path):
+    import install
+
+    config = install.get_mcp_server_config(tmp_path)
+
+    assert config["env"]["IDA_MCP_EMBED_BACKEND"] == "local"
+
+
+def test_legacy_server_config_normalizes_relative_install_path(tmp_path, monkeypatch):
+    import install
+
+    monkeypatch.chdir(tmp_path)
+    config = install.get_mcp_server_config(Path("install"))
+
+    assert config["command"] == str(tmp_path / "install" / ".venv" / "bin" / "python")
+    assert config["env"]["IDA_PRO_MCP_HOME"] == str(tmp_path / "install")
+
+
+def test_legacy_server_config_expands_environment_install_path(tmp_path, monkeypatch):
+    import install
+
+    monkeypatch.setenv("LEGACY_INSTALL_ROOT", str(tmp_path / "install"))
+
+    config = install.get_mcp_server_config(Path("$LEGACY_INSTALL_ROOT"))
+
+    assert config["command"] == str(
+        tmp_path / "install" / ".venv" / "bin" / "python"
+    )
+    assert config["env"]["IDA_PRO_MCP_HOME"] == str(tmp_path / "install")
 
 
 def test_configure_clients_writes_vscode_copilot_under_servers(tmp_path, monkeypatch):
@@ -168,6 +327,64 @@ def test_configure_clients_writes_vscode_copilot_under_servers(tmp_path, monkeyp
     assert copilot_data["servers"]["ida-pro-mcp"]["type"] == "stdio"
 
 
+def test_client_configuration_summary_reports_partial_setup(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallReport
+
+    monkeypatch.setattr(
+        main_mod,
+        "get_config_paths",
+        lambda _source_root: {"first": tmp_path / "first", "second": tmp_path / "second"},
+    )
+    report = InstallReport()
+
+    main_mod._report_client_configuration(
+        tmp_path, ["first"], report, main_mod.UI()
+    )
+
+    assert report.steps[-1] == {
+        "name": "clients",
+        "status": "warn",
+        "detail": "configured 1/2 clients",
+    }
+    assert "configured 1/2 clients" in report.warnings[-1]
+
+
+def test_client_configuration_summary_marks_dry_run_as_planned(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallReport
+
+    monkeypatch.setattr(
+        main_mod,
+        "get_config_paths",
+        lambda _source_root: {"first": tmp_path / "first"},
+    )
+    report = InstallReport()
+
+    main_mod._report_client_configuration(
+        tmp_path, ["first"], report, main_mod.UI(), dry_run=True
+    )
+
+    assert report.steps[-1] == {
+        "name": "clients",
+        "status": "dry-run",
+        "detail": "would configure 1 clients",
+    }
+    assert report.warnings == []
+
+
+def test_client_configuration_summary_fails_when_all_updates_fail(tmp_path):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallReport
+
+    report = InstallReport()
+    report.add_warning("client update failed")
+    report.metadata["client_update_failures"] = ["fake-client"]
+
+    with pytest.raises(RuntimeError, match="no supported client was configured"):
+        main_mod._report_client_configuration(tmp_path, [], report, main_mod.UI())
+
+
 # ---------------------------------------------------------------------------
 # installer.runtime: env the spawned server inherits
 # ---------------------------------------------------------------------------
@@ -178,6 +395,29 @@ def test_build_stdio_config_emits_install_root(tmp_path):
 
     cfg = build_stdio_config(tmp_path / "python", tmp_path)
     assert cfg["env"]["IDA_PRO_MCP_HOME"] == str(tmp_path)
+
+
+def test_build_stdio_config_preserves_explicit_gemini_vertex_choice(tmp_path):
+    from ida_pro_mcp.installer.runtime import build_stdio_config
+
+    cfg = build_stdio_config(
+        tmp_path / "python",
+        tmp_path,
+        embed_backend="gemini",
+        gemini_vertex=True,
+    )
+    assert cfg["env"]["IDA_MCP_GEMINI_VERTEX"] == "1"
+
+
+def test_build_stdio_config_preserves_explicit_local_choice(tmp_path):
+    from ida_pro_mcp.installer.runtime import build_stdio_config
+
+    cfg = build_stdio_config(
+        tmp_path / "python",
+        tmp_path,
+        embed_backend="local",
+    )
+    assert cfg["env"]["IDA_MCP_EMBED_BACKEND"] == "local"
 
 
 def test_build_stdio_config_rerank_disabled_wins_over_profile(tmp_path):
@@ -259,6 +499,18 @@ def test_parse_args_no_embed_auto_flag():
     assert parse_args([]).embed_auto is True
 
 
+def test_parse_args_rejects_conflicting_interactive_modes():
+    from ida_pro_mcp.installer.main import parse_args
+
+    for argv in (
+        ["--yes", "--interactive"],
+        ["--interactive", "--no-interactive"],
+        ["--yes", "--no-interactive"],
+    ):
+        with pytest.raises(SystemExit):
+            parse_args(argv)
+
+
 def test_parse_args_with_r2_and_sigs_flags():
     """WO-INST: --with-r2 and --sigs <dir> must parse onto InstallerOptions."""
     from ida_pro_mcp.installer.main import parse_args
@@ -283,6 +535,38 @@ def test_parse_args_preserves_kill_scope_and_unverified_download_opt_in():
     )
     assert opts.ida_binary_path == "/opt/ida/idat64"
     assert opts.allow_unverified_downloads is True
+    assert parse_args(["--verify-corpus"]).verify_bron_corpus is True
+
+
+def test_parse_args_requires_explicit_opt_in_for_corpus_download():
+    from ida_pro_mcp.installer.main import parse_args
+
+    assert parse_args(["--yes"]).with_bron_corpus is False
+    assert parse_args(["--yes", "--with-corpus"]).with_bron_corpus is True
+    assert parse_args(["--yes", "--verify-corpus"]).with_bron_corpus is True
+
+
+def test_parse_args_defaults_to_rollback_and_supports_explicit_opt_out():
+    from ida_pro_mcp.installer.main import parse_args
+
+    assert parse_args(["--yes"]).rollback_on_fail is True
+    assert parse_args(["--yes", "--no-rollback-on-fail"]).rollback_on_fail is False
+    assert parse_args(["--rollback-on-fail"]).rollback_on_fail is True
+
+
+def test_prompt_secret_uses_hidden_terminal_input(monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+
+    captured: dict[str, str] = {}
+
+    def _getpass(prompt):
+        captured["prompt"] = prompt
+        return " secret-value "
+
+    monkeypatch.setattr(main_mod.getpass, "getpass", _getpass)
+
+    assert main_mod._prompt_secret("Gemini API key") == "secret-value"
+    assert captured == {"prompt": "Gemini API key: "}
 
 
 def test_build_stdio_config_records_r2_bin(tmp_path):
@@ -315,6 +599,516 @@ def test_wizard_embed_prompt_default_honors_no_embed_auto(tmp_path, monkeypatch)
 
     out = main_mod._run_interactive_wizard(opts, main_mod.UI())
     assert out.embed_auto is False
+
+
+def test_wizard_gemini_still_requires_a_local_reranker_choice(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    opts = InstallerOptions(interactive=True, embed_backend="gemini")
+    monkeypatch.setattr(main_mod, "find_embed_model", lambda *a, **k: "")
+    monkeypatch.setattr(main_mod, "find_llama_server_bin", lambda *a, **k: "")
+    monkeypatch.setattr(main_mod, "find_rerank_model", lambda *a, **k: "")
+
+    def _choice(question, choices, default):
+        if question == "Embedding backend":
+            return "gemini-embedding-2 (cloud, requires API key)"
+        return default
+
+    monkeypatch.setattr(main_mod, "_prompt_choice", _choice)
+    monkeypatch.setattr(
+        main_mod,
+        "_prompt_yes_no",
+        lambda question, default: False if "reranker" in question.lower() else default,
+    )
+    monkeypatch.setattr(main_mod, "_prompt_secret", lambda _question: "")
+    monkeypatch.setattr(main_mod, "_prompt_text", lambda _question, default="": default)
+
+    out = main_mod._run_interactive_wizard(opts, main_mod.UI())
+
+    assert out.embed_backend == "gemini"
+    assert out.rerank_disabled is True
+
+
+def test_wizard_preserves_explicit_runtime_paths_over_discovery(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    explicit_model = tmp_path / "explicit-model.gguf"
+    explicit_model.write_bytes(b"explicit")
+    explicit_server = tmp_path / "explicit-server"
+    explicit_server.write_bytes(b"explicit")
+    explicit_reranker = tmp_path / "explicit-reranker.gguf"
+    explicit_reranker.write_bytes(b"explicit")
+    opts = InstallerOptions(
+        interactive=True,
+        embed_auto=True,
+        embed_model_path=str(explicit_model),
+        embed_server_bin=str(explicit_server),
+        rerank_model_path=str(explicit_reranker),
+    )
+    monkeypatch.setattr(main_mod, "find_embed_model", lambda *a, **k: str(tmp_path / "auto-model.gguf"))
+    monkeypatch.setattr(main_mod, "find_llama_server_bin", lambda *a, **k: str(tmp_path / "auto-server"))
+    monkeypatch.setattr(main_mod, "find_rerank_model", lambda *a, **k: str(tmp_path / "auto-reranker.gguf"))
+    monkeypatch.setattr(main_mod, "_prompt_yes_no", lambda _question, default: default)
+    monkeypatch.setattr(main_mod, "_prompt_choice", lambda _question, _choices, default: default)
+    monkeypatch.setattr(main_mod, "_prompt_text", lambda _question, default="": default)
+    monkeypatch.setattr(main_mod, "_prompt_secret", lambda _question: "")
+
+    out = main_mod._run_interactive_wizard(opts, main_mod.UI())
+
+    assert out.embed_model_path == str(explicit_model)
+    assert out.embed_server_bin == str(explicit_server)
+    assert out.rerank_model_path == str(explicit_reranker)
+
+
+def test_noninteractive_gemini_install_persists_detected_reranker(tmp_path, monkeypatch):
+    from ida_pro_mcp.host.intelligence import core as intel_core
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    install_root = tmp_path / "install"
+    rerank_model = tmp_path / "reranker.gguf"
+    rerank_model.write_bytes(b"reranker")
+    opts = InstallerOptions(
+        interactive=False,
+        only={"clients"},
+        install_root=install_root,
+        embed_backend="gemini",
+        rerank_profile="qwen3-reranker-0.6b",
+    )
+    monkeypatch.setattr(main_mod, "detect_ida_installs", list)
+    monkeypatch.setattr(main_mod, "find_rerank_model", lambda *a, **k: str(rerank_model))
+    monkeypatch.setattr(main_mod, "get_config_paths", lambda _root: {"fake": tmp_path / "fake.json"})
+    captured: dict = {}
+
+    def _configure(**kwargs):
+        captured["server_cfg"] = kwargs["server_cfg"]
+        return ["fake"]
+
+    monkeypatch.setattr(main_mod, "configure_clients", _configure)
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 0
+    assert captured["server_cfg"]["env"]["IDA_MCP_RERANK_MODEL"] == str(rerank_model)
+    state = json.loads((install_root / "embedder.json").read_text(encoding="utf-8"))
+    assert state["rerank"] == {
+        "profile": "qwen3-reranker-0.6b",
+        "model_path": str(rerank_model.resolve()),
+    }
+
+
+def test_noninteractive_gemini_install_disables_missing_reranker(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    opts = InstallerOptions(
+        interactive=False,
+        only={"clients"},
+        install_root=tmp_path / "install",
+        embed_backend="gemini",
+    )
+    monkeypatch.setattr(main_mod, "detect_ida_installs", list)
+    monkeypatch.setattr(main_mod, "find_rerank_model", lambda *a, **k: "")
+    monkeypatch.setattr(main_mod, "get_config_paths", lambda _root: {"fake": tmp_path / "fake.json"})
+    captured: dict = {}
+
+    def _configure(**kwargs):
+        captured["server_cfg"] = kwargs["server_cfg"]
+        return ["fake"]
+
+    monkeypatch.setattr(main_mod, "configure_clients", _configure)
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 0
+    env = captured["server_cfg"]["env"]
+    assert env["IDA_MCP_RERANK_DISABLED"] == "1"
+    assert "IDA_MCP_RERANK_PROFILE" not in env
+
+
+def test_noninteractive_rerank_download_is_honored_without_local_embedding(
+    tmp_path, monkeypatch
+):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    rerank_model = tmp_path / "downloaded-reranker.gguf"
+    rerank_model.write_bytes(b"reranker")
+    opts = InstallerOptions(
+        interactive=False,
+        only={"clients"},
+        install_root=tmp_path / "install",
+        embed_auto=False,
+        download_rerank_model=True,
+        accept_model_license=True,
+    )
+    monkeypatch.setattr(main_mod, "detect_ida_installs", list)
+    monkeypatch.setattr(main_mod, "find_rerank_model", lambda *a, **k: "")
+    downloaded: dict[str, str] = {}
+
+    def _download(root, profile):
+        downloaded["root"] = str(root)
+        downloaded["profile"] = profile
+        return str(rerank_model)
+
+    monkeypatch.setattr(main_mod, "download_rerank_model", _download)
+    monkeypatch.setattr(main_mod, "get_config_paths", lambda _root: {})
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 0
+    assert downloaded == {
+        "root": str(tmp_path / "install"),
+        "profile": "qwen3-reranker-0.6b",
+    }
+
+
+@pytest.mark.parametrize("option_name", [
+    "embed_model_path",
+    "embed_server_bin",
+    "rerank_model_path",
+])
+def test_noninteractive_install_rejects_missing_explicit_runtime_paths(
+    tmp_path, monkeypatch, option_name
+):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    opts = InstallerOptions(
+        interactive=False,
+        only={"clients"},
+        install_root=tmp_path / "install",
+        embed_auto=False,
+    )
+    setattr(opts, option_name, str(tmp_path / f"missing-{option_name}"))
+    monkeypatch.setattr(main_mod, "detect_ida_installs", list)
+    monkeypatch.setattr(
+        main_mod,
+        "configure_clients",
+        lambda **_kwargs: pytest.fail("invalid runtime path reached client configuration"),
+    )
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 1
+
+
+def test_noninteractive_install_persists_absolute_runtime_paths(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"embedding")
+    reranker = tmp_path / "reranker.gguf"
+    reranker.write_bytes(b"reranker")
+    server = tmp_path / "llama-server"
+    server.write_bytes(b"#!/bin/sh\n")
+    server.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+    opts = InstallerOptions(
+        interactive=False,
+        only={"clients"},
+        install_root=tmp_path / "install",
+        embed_auto=False,
+        embed_model_path="model.gguf",
+        embed_server_bin="llama-server",
+        rerank_model_path="reranker.gguf",
+    )
+    monkeypatch.setattr(main_mod, "detect_ida_installs", list)
+    captured: dict = {}
+
+    def _configure(**kwargs):
+        captured["env"] = kwargs["server_cfg"]["env"]
+        return []
+
+    monkeypatch.setattr(main_mod, "configure_clients", _configure)
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 0
+    assert captured["env"]["IDA_MCP_EMBED_MODEL"] == str(model)
+    assert captured["env"]["IDA_MCP_EMBED_SERVER_BIN"] == str(server)
+    assert captured["env"]["IDA_MCP_RERANK_MODEL"] == str(reranker)
+
+
+def test_noninteractive_install_normalizes_relative_install_root(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    monkeypatch.chdir(tmp_path)
+    opts = InstallerOptions(
+        interactive=False,
+        only={"clients"},
+        install_root=Path("install"),
+        embed_auto=False,
+    )
+    monkeypatch.setattr(main_mod, "detect_ida_installs", list)
+    captured: dict = {}
+
+    def _configure(**kwargs):
+        captured["env"] = kwargs["server_cfg"]["env"]
+        return []
+
+    monkeypatch.setattr(main_mod, "configure_clients", _configure)
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 0
+    assert opts.install_root == tmp_path / "install"
+    assert captured["env"]["IDA_PRO_MCP_HOME"] == str(tmp_path / "install")
+
+
+def test_embedder_doctor_honors_custom_root_and_gemini_overrides(tmp_path, monkeypatch):
+    from ida_pro_mcp.host.intelligence import core as intel_core
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    observed: dict[str, str] = {}
+
+    class _FakeEmbedder:
+        _instance = object()
+
+        def __init__(self):
+            for name in (
+                "IDA_PRO_MCP_HOME",
+                "IDA_MCP_EMBED_BACKEND",
+                "IDA_MCP_GEMINI_MODEL",
+                "IDA_MCP_GEMINI_DIM",
+                "IDA_MCP_GEMINI_VERTEX",
+                "GEMINI_API_KEY",
+                "GOOGLE_CLOUD_PROJECT",
+                "VERTEX_AI_LOCATION",
+            ):
+                observed[name] = os.environ.get(name, "")
+
+        def status(self, *, probe, deep_hash):
+            assert probe is True
+            assert deep_hash is False
+            return {"ready": True, "backend": "gemini"}
+
+        def embed_vector(self, _text):
+            return [0.1, 0.2]
+
+    monkeypatch.setattr(intel_core, "BgeCodeEmbedder", _FakeEmbedder)
+    opts = InstallerOptions(
+        embedder_doctor=True,
+        install_root=tmp_path / "custom-install",
+        embed_backend="gemini",
+        gemini_access="vertex",
+        gemini_api_key="doctor-key",
+        gemini_model="gemini-test",
+        gemini_dim=321,
+        gemini_vertex_project="doctor-project",
+        gemini_vertex_location="europe-west4",
+    )
+
+    assert main_mod.run_embedder_doctor(opts, main_mod.UI()) == 0
+    assert observed == {
+        "IDA_PRO_MCP_HOME": str(tmp_path / "custom-install"),
+        "IDA_MCP_EMBED_BACKEND": "gemini",
+        "IDA_MCP_GEMINI_MODEL": "gemini-test",
+        "IDA_MCP_GEMINI_DIM": "321",
+        "IDA_MCP_GEMINI_VERTEX": "1",
+        "GEMINI_API_KEY": "doctor-key",
+        "GOOGLE_CLOUD_PROJECT": "doctor-project",
+        "VERTEX_AI_LOCATION": "europe-west4",
+    }
+
+
+def test_embedder_doctor_rejects_symlinked_install_root(tmp_path):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    install_root = tmp_path / "install-link"
+    install_root.symlink_to(outside, target_is_directory=True)
+
+    opts = InstallerOptions(
+        embedder_doctor=True,
+        interactive=False,
+        install_root=install_root,
+    )
+
+    assert main_mod.run_embedder_doctor(opts, main_mod.UI()) == 1
+    assert not (outside / "embedder.json").exists()
+
+
+def test_embedder_doctor_fails_when_backend_is_not_ready(tmp_path, monkeypatch):
+    from ida_pro_mcp.host.intelligence import core as intel_core
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    class _FakeEmbedder:
+        _instance = object()
+
+        def status(self, *, probe, deep_hash):
+            assert probe is True
+            assert deep_hash is False
+            return {"ready": False, "backend": "local"}
+
+        def embed_vector(self, _text):
+            raise RuntimeError("backend is unavailable")
+
+    monkeypatch.setattr(intel_core, "BgeCodeEmbedder", _FakeEmbedder)
+    opts = InstallerOptions(
+        embedder_doctor=True,
+        interactive=False,
+        install_root=tmp_path / "install",
+    )
+
+    assert main_mod.run_embedder_doctor(opts, main_mod.UI()) == 1
+
+
+def test_wizard_does_not_activate_idalib_before_install_confirmation(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    opts = InstallerOptions(
+        interactive=True,
+        ida_runtime="idalib",
+        install_root=tmp_path / "install",
+    )
+    activation_calls: list[str] = []
+    monkeypatch.setattr(main_mod, "find_embed_model", lambda *a, **k: "")
+    monkeypatch.setattr(main_mod, "find_llama_server_bin", lambda *a, **k: "")
+    monkeypatch.setattr(main_mod, "find_idalib_python_dir", lambda _path: "/fake/idalib/python")
+    monkeypatch.setattr(
+        main_mod,
+        "activate_idalib",
+        lambda path: (activation_calls.append(path) or (True, "activated")),
+    )
+    monkeypatch.setattr(main_mod, "_prompt_choice", lambda _q, _choices, default: default)
+    monkeypatch.setattr(main_mod, "_prompt_text", lambda _q, default="": default)
+    monkeypatch.setattr(main_mod, "_prompt_secret", lambda _q: "")
+    monkeypatch.setattr(main_mod, "_prompt_model_path", lambda _profile: "")
+    monkeypatch.setattr(
+        main_mod,
+        "_prompt_yes_no",
+        lambda question, default: False if "Proceed with installation" in question else default,
+    )
+
+    with pytest.raises(RuntimeError, match="Installation cancelled"):
+        main_mod._run_interactive_wizard(opts, main_mod.UI())
+
+    assert activation_calls == []
+
+
+def test_noninteractive_idalib_install_activates_after_client_configuration(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+    from ida_pro_mcp.installer.discovery import IdaInstall
+
+    ida_dir = tmp_path / "ida"
+    ida_dir.mkdir()
+    selected = IdaInstall(
+        path=ida_dir,
+        version=(9, 4),
+        build="",
+        idat_binary=None,
+        arch="x64",
+        flavor="pro",
+        source="explicit",
+    )
+    opts = InstallerOptions(
+        interactive=False,
+        only={"clients"},
+        install_root=tmp_path / "install",
+        embed_auto=False,
+        ida_runtime="idalib",
+    )
+    events: list[str] = []
+    activation_calls: list[str] = []
+    monkeypatch.setattr(main_mod, "_resolve_ida_install", lambda *_args: selected)
+    monkeypatch.setattr(main_mod, "get_config_paths", lambda _root: {})
+    monkeypatch.setattr(main_mod, "configure_clients", lambda **_kwargs: events.append("configure") or [])
+    monkeypatch.setattr(main_mod, "find_idalib_python_dir", lambda _path: "/fake/idalib/python")
+    monkeypatch.setattr(
+        main_mod,
+        "activate_idalib",
+        lambda path: (activation_calls.append(path) or (events.append("activate") or (True, "activated"))),
+    )
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 0
+    assert events == ["configure", "activate"]
+    assert activation_calls == [str(ida_dir)]
+
+
+def test_noninteractive_idalib_install_fails_without_ida(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    monkeypatch.setattr(main_mod, "detect_ida_installs", list)
+    opts = InstallerOptions(
+        interactive=False,
+        only={"clients"},
+        install_root=tmp_path / "install",
+        ida_runtime="idalib",
+    )
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 1
+
+
+def test_dry_run_idalib_install_does_not_require_ida(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    monkeypatch.setattr(main_mod, "detect_ida_installs", list)
+    opts = InstallerOptions(
+        dry_run=True,
+        interactive=False,
+        only={"clients"},
+        install_root=tmp_path / "install",
+        ida_runtime="idalib",
+    )
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 0
+
+
+def test_idalib_requires_clients_phase(tmp_path):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    opts = InstallerOptions(
+        interactive=False,
+        only={"runtime"},
+        install_root=tmp_path / "install",
+        ida_runtime="idalib",
+    )
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 1
+
+
+def test_idalib_failure_rolls_back_embedder_state(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+    from ida_pro_mcp.installer.discovery import IdaInstall
+
+    install_root = tmp_path / "install"
+    install_root.mkdir()
+    state_path = install_root / "embedder.json"
+    original_state = '{"backend": "local", "profile": "old"}\n'
+    state_path.write_text(original_state, encoding="utf-8")
+    model = tmp_path / "embed.gguf"
+    model.write_bytes(b"model")
+    ida_dir = tmp_path / "ida"
+    ida_dir.mkdir()
+    selected = IdaInstall(
+        path=ida_dir,
+        version=(9, 4),
+        build="",
+        idat_binary=None,
+        arch="x64",
+        flavor="pro",
+        source="explicit",
+    )
+    opts = InstallerOptions(
+        interactive=False,
+        only={"clients"},
+        install_root=install_root,
+        embed_auto=True,
+        embed_model_path=str(model),
+        rerank_disabled=True,
+        ida_runtime="idalib",
+    )
+    monkeypatch.setattr(main_mod, "_resolve_ida_install", lambda *_args: selected)
+    monkeypatch.setattr(main_mod, "get_config_paths", lambda _root: {"fake": tmp_path / "fake.json"})
+    monkeypatch.setattr(main_mod, "configure_clients", lambda **_kwargs: ["fake"])
+    monkeypatch.setattr(main_mod, "find_idalib_python_dir", lambda _path: "/fake/idalib/python")
+    monkeypatch.setattr(main_mod, "activate_idalib", lambda _path: (False, "activation rejected"))
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 1
+    assert state_path.read_text(encoding="utf-8") == original_state
 
 
 def test_wizard_rerank_decline_persists_rerank_disabled(tmp_path, monkeypatch):
@@ -699,3 +1493,25 @@ def test_snapshot_source_ignores_sockets_and_temp_dirs(tmp_path):
 
     s1.close()
     s2.close()
+
+
+def test_snapshot_source_does_not_follow_checkout_symlinks(tmp_path):
+    from ida_pro_mcp.installer.common import InstallReport
+    from ida_pro_mcp.installer.runtime import _snapshot_source
+
+    source_root = tmp_path / "src_root"
+    source_root.mkdir()
+    (source_root / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("do not copy", encoding="utf-8")
+    (source_root / "linked-secrets").symlink_to(outside, target_is_directory=True)
+
+    target = _snapshot_source(
+        source_root,
+        tmp_path / "install_root",
+        dry_run=False,
+        report=InstallReport(),
+    )
+
+    assert not (target / "linked-secrets").exists()

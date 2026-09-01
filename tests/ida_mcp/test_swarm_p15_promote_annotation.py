@@ -208,6 +208,17 @@ class TestMarkDangerousShapeAndPersistence(unittest.TestCase):
         # regular inline comments (repeatable=False)
         self.assertTrue(all(r == 0 for _ea, _c, r in self.writes))
 
+    def test_rejected_comment_is_exposed_as_write_failure(self):
+        self.idc.set_cmt = lambda *args: False
+        result = self.mod.annotation(
+            action="mark_dangerous", addr="0x401000", prefix="[MCP] ", limit=10,
+            dry_run=False,
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["write_failures"], ["0x401010", "0x401020"])
+        self.assertEqual(self.writes, [])
+
     def test_limit_caps_the_number_of_warnings(self):
         result = self.mod.annotation(
             action="mark_dangerous", addr="0x401000", prefix="[MCP] ", limit=1,

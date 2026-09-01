@@ -189,6 +189,8 @@ class Session:
 
     @classmethod
     def from_dict(cls, data: dict) -> "Session":
+        if not isinstance(data, dict):
+            raise ValueError("session metadata must be an object")
         sid = _normalize_session_id(data.get("session_id"))
         if not sid:
             raise ValueError("invalid or missing session_id")
@@ -197,26 +199,49 @@ class Session:
             idb_path = ""
         elif not isinstance(idb_path, str):
             raise ValueError("idb_path must be a string")
+        binary_path = data.get("binary_path", "")
+        if binary_path is None:
+            binary_path = ""
+        elif not isinstance(binary_path, str):
+            raise ValueError("binary_path must be a string")
+        analysis_options = data.get("analysis_options")
+        if not isinstance(analysis_options, dict):
+            analysis_options = {}
+        ida_args = data.get("ida_args")
+        if not isinstance(ida_args, list):
+            ida_args = []
+        ida_args = [arg for arg in ida_args if isinstance(arg, str)]
+        tags = data.get("tags")
+        if not isinstance(tags, list):
+            tags = []
+        tags = [str(tag) for tag in tags if tag is not None]
+        linked_sessions = data.get("linked_sessions")
+        if not isinstance(linked_sessions, list):
+            linked_sessions = []
+        linked_sessions = [sid_value for sid_value in linked_sessions if isinstance(sid_value, str)]
+        metadata = data.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
         created = _parse_iso_datetime(data.get("created_at"))
         accessed = _parse_iso_datetime(data.get("last_accessed"))
         return cls(
             sid,
             idb_path,
-            data.get("binary_path", ""),
-            data.get("analysis_options", {}) or {},
+            binary_path,
+            analysis_options,
             data.get("analysis_applied", False),
             data.get("analysis_gate"),
-            data.get("ida_args", []) or [],
+            ida_args,
             created,
             accessed,
-            data.get("tags", []) or [],
-            data.get("notes", ""),
-            data.get("auto_name", ""),
-            data.get("phase", "triage"),
-            data.get("linked_sessions", []) or [],
+            tags,
+            data.get("notes", "") if isinstance(data.get("notes", ""), str) else "",
+            data.get("auto_name", "") if isinstance(data.get("auto_name", ""), str) else "",
+            data.get("phase", "triage") if isinstance(data.get("phase", "triage"), str) else "triage",
+            linked_sessions,
             data.get("packed_idb", False),
-            data.get("policy_mode"),
-            data.get("metadata", {}) or {},
+            data.get("policy_mode") if isinstance(data.get("policy_mode"), str) else None,
+            metadata,
         )
 
 
@@ -821,12 +846,17 @@ class SessionManager(SessionSkillsMixin):
             session.last_accessed = datetime.now()
             self.sessions[new_sid] = session
             self._save_metadata(session)
-            if skills_import:
+            # An export may legitimately have no learned skills while still
+            # carrying activity or hypotheses.  Gate restoration on the
+            # presence of any exported workspace field, not on the truthiness
+            # of the skills mapping alone.
+            if any(value is not None for value in (skills_import, activity_import, hypotheses_import)):
                 current = self._load_skills(new_sid)
-                current["skills"].update(skills_import)
-                if activity_import:
+                if isinstance(skills_import, dict):
+                    current["skills"].update(skills_import)
+                if isinstance(activity_import, list):
                     current["activity_log"] = activity_import
-                if hypotheses_import:
+                if isinstance(hypotheses_import, list):
                     current["hypotheses"] = hypotheses_import
                 self._save_skills(new_sid, current)
             return copy.copy(session)
@@ -1404,12 +1434,21 @@ class BookmarkManager:
             }
             for i, bm in enumerate(bookmarks):
                 if bm["addr"] == data.get("addr"):
-                    new_bm["id"] = bm["id"]
-                    bookmarks[i] = new_bm
+                    # Treat an add at an existing address as a partial update:
+                    # omitted fields must not erase analyst notes, category,
+                    # priority, or tags left by an earlier call.
+                    updated_bm = dict(bm)
+                    updated_bm["id"] = bm["id"]
+                    updated_bm["addr"] = data.get("addr")
+                    updated_bm["timestamp"] = new_bm["timestamp"]
+                    for key in ("name", "notes", "category", "priority", "tags"):
+                        if key in data:
+                            updated_bm[key] = new_bm[key]
+                    bookmarks[i] = updated_bm
                     res = self.save(sid, bookmarks)
                     if is_error_result(res):
                         return res
-                    return {"ok": True, "updated": True, "bookmark": new_bm}
+                    return {"ok": True, "updated": True, "bookmark": updated_bm}
             bookmarks.append(new_bm)
             res = self.save(sid, bookmarks)
             if is_error_result(res):

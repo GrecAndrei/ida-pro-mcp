@@ -124,17 +124,31 @@ def _detect_crypto_algorithm(func_ea: int) -> str:
     return alg
 
 
-def _set_inline_comment(addr: int, comment: str, dry_run: bool) -> None:
+def _write_comment(writer, *args) -> bool:
+    """Call an IDA comment writer and normalize its success result.
+
+    IDA versions differ on whether successful setters return ``None`` or a
+    truthy value.  A concrete falsy result, however, means the write was
+    rejected; treating it as success makes annotation counts lie.
+    """
+    try:
+        result = writer(*args)
+    except Exception:
+        return False
+    return result is None or bool(result)
+
+
+def _set_inline_comment(addr: int, comment: str, dry_run: bool) -> bool:
     if dry_run:
-        return
+        return True
     governed = _govern_comment(comment)
     if governed is None:
-        return
+        return False
     existing = idc.get_cmt(addr, 0) or ""
     if governed in existing:
-        return
+        return True
     new_cmt = f"{existing}  {governed}" if existing else governed
-    idc.set_cmt(addr, new_cmt, 0)
+    return _write_comment(idc.set_cmt, addr, new_cmt, 0)
 
 
 def _classify_crypto_function(func_ea: int) -> Optional[str]:
@@ -237,7 +251,14 @@ def _auto_comment_one(addr_ea: int, prefix: str, dry_run: bool = False,
     if not comment:
         return {"ok": True, "addr": hex(addr_ea), "applied": False, "reason": "no_interesting_signal"}
 
-    _set_inline_comment(addr_ea, comment, dry_run=dry_run)
+    if not _set_inline_comment(addr_ea, comment, dry_run=dry_run):
+        return {
+            "ok": False,
+            "addr": hex(addr_ea),
+            "applied": False,
+            "reason": "comment_write_failed",
+            "comment": comment,
+        }
     return {"ok": True, "addr": hex(addr_ea), "applied": True, "reason": reason, "comment": comment}
 
 
@@ -423,9 +444,10 @@ def annotation(
         Returns: {ok, imported, count, errors?}
 
     summary - Commenting coverage statistics.
-        Returns: {total_functions, functions_commented, coverage_pct, inline_comments, avg_comments_per_func}
+    Returns: {total_functions, functions_commented, coverage_pct, inline_comments, avg_comments_per_func}
     """
     try:
+        write_failures = []
         # Public MCP names stay on the wire; accept them beside legacy aliases.
         addr = public_arg(kwargs, 'address', addr)
         # ----------------------------------------------------------------
@@ -438,6 +460,12 @@ def annotation(
             if err:
                 return err
             out = _auto_comment_one(ea, prefix=prefix, dry_run=dry_run)
+            if not out.get("ok", True):
+                return make_error(
+                    MCPError.ANNOTATION_ERROR,
+                    f"Failed to persist annotation at {hex(ea)}",
+                    hint="IDA rejected the comment write; verify the address accepts comments and retry.",
+                )
             return {
                 "ok": True,
                 "annotations": str(out),
@@ -465,9 +493,12 @@ def annotation(
                                         crypto_map=crypto_map)
                 if one.get("applied"):
                     annotations.append(one)
+                elif not one.get("ok", True):
+                    write_failures.append(hex(head))
 
             return {"ok": True, "function": fname, "annotations": "\n".join(str(x) for x in annotations),
-                    "count": len(annotations), "dry_run": dry_run}
+                    "count": len(annotations), "dry_run": dry_run,
+                    "write_failures": write_failures}
 
         # ----------------------------------------------------------------
         # ACTION: label_loops
@@ -503,10 +534,12 @@ def annotation(
                                 existing = idc.get_cmt(loop_head, 0) or ""
                                 if prefix not in existing:
                                     new_cmt = f"{existing}  {governed}" if existing else governed
-                                    idc.set_cmt(loop_head, new_cmt, 0)
+                                    if not _write_comment(idc.set_cmt, loop_head, new_cmt, 0):
+                                        write_failures.append(hex(loop_head))
 
             return {"ok": True, "function": fname, "loops": "\n".join(str(x) for x in loops),
-                    "count": len(loops), "dry_run": dry_run}
+                    "count": len(loops), "dry_run": dry_run,
+                    "write_failures": write_failures}
 
         # ----------------------------------------------------------------
         # ACTION: label_branches
@@ -552,10 +585,12 @@ def annotation(
                             existing = idc.get_cmt(last_insn, 0) or ""
                             if prefix not in existing:
                                 new_cmt = f"{existing}  {governed}" if existing else governed
-                                idc.set_cmt(last_insn, new_cmt, 0)
+                                if not _write_comment(idc.set_cmt, last_insn, new_cmt, 0):
+                                    write_failures.append(hex(last_insn))
 
             return {"ok": True, "function": fname, "branches": "\n".join(str(x) for x in branches),
-                    "count": len(branches), "dry_run": dry_run}
+                    "count": len(branches), "dry_run": dry_run,
+                    "write_failures": write_failures}
 
         # ----------------------------------------------------------------
         # ACTION: mark_dangerous
@@ -603,10 +638,12 @@ def annotation(
                                 existing = idc.get_cmt(call_addr, 0) or ""
                                 if prefix not in existing:
                                     new_cmt = f"{existing}  {governed}" if existing else governed
-                                    idc.set_cmt(call_addr, new_cmt, 0)
+                                    if not _write_comment(idc.set_cmt, call_addr, new_cmt, 0):
+                                        write_failures.append(hex(call_addr))
 
             return {"ok": True, "warnings": "\n".join(str(x) for x in warnings),
-                    "count": len(warnings), "dry_run": dry_run}
+                    "count": len(warnings), "dry_run": dry_run,
+                    "write_failures": write_failures}
 
         # ----------------------------------------------------------------
         # ACTION: annotate_constants
@@ -643,11 +680,13 @@ def annotation(
                                 existing = idc.get_cmt(head, 0) or ""
                                 if prefix not in existing:
                                     new_cmt = f"{existing}  {governed}" if existing else governed
-                                    idc.set_cmt(head, new_cmt, 0)
+                                    if not _write_comment(idc.set_cmt, head, new_cmt, 0):
+                                        write_failures.append(hex(head))
                         break  # one annotation per instruction
 
             return {"ok": True, "function": fname, "constants": "\n".join(str(x) for x in constants),
-                    "count": len(constants), "dry_run": dry_run}
+                    "count": len(constants), "dry_run": dry_run,
+                    "write_failures": write_failures}
 
         # ----------------------------------------------------------------
         # ACTION: tag_functions
@@ -695,10 +734,12 @@ def annotation(
                             existing = idc.get_func_cmt(func_ea, 1) or ""
                             if prefix not in existing:
                                 new_cmt = f"{existing}\n{governed}" if existing else governed
-                                idc.set_func_cmt(func_ea, new_cmt, 1)
+                                if not _write_comment(idc.set_func_cmt, func_ea, new_cmt, 1):
+                                    write_failures.append(hex(func_ea))
 
             return {"ok": True, "tagged": "\n".join(str(x) for x in tagged),
-                    "count": len(tagged), "dry_run": dry_run}
+                    "count": len(tagged), "dry_run": dry_run,
+                    "write_failures": write_failures}
 
         # ----------------------------------------------------------------
         # ACTION: document_args
@@ -755,11 +796,13 @@ def annotation(
                     existing = idc.get_func_cmt(ea, 1) or ""
                     if prefix not in existing:
                         new_cmt = f"{existing}\n{governed}" if existing else governed
-                        idc.set_func_cmt(ea, new_cmt, 1)
+                        if not _write_comment(idc.set_func_cmt, ea, new_cmt, 1):
+                            write_failures.append(hex(ea))
 
             return {"ok": True, "function": fname, "params": result_params,
                     "apis_used": api_usage[:10], "annotations": "\n".join(str(x) for x in annotations),
-                    "count": len(annotations), "dry_run": dry_run}
+                    "count": len(annotations), "dry_run": dry_run,
+                    "write_failures": write_failures}
 
         # ----------------------------------------------------------------
         # ACTION: mark_error_paths
@@ -827,12 +870,14 @@ def annotation(
                                 existing = idc.get_cmt(check_ea, 0) or ""
                                 if prefix not in existing:
                                     new_cmt = f"{existing}  {governed}" if existing else governed
-                                    idc.set_cmt(check_ea, new_cmt, 0)
+                                    if not _write_comment(idc.set_cmt, check_ea, new_cmt, 0):
+                                        write_failures.append(hex(check_ea))
                         break
                     check_ea = idc.next_head(check_ea, fn.end_ea)
 
             return {"ok": True, "function": fname, "error_paths": "\n".join(str(x) for x in error_paths),
-                    "count": len(error_paths), "dry_run": dry_run}
+                    "count": len(error_paths), "dry_run": dry_run,
+                    "write_failures": write_failures}
 
         # ----------------------------------------------------------------
         # ACTION: propagate_names
@@ -878,10 +923,12 @@ def annotation(
                             existing = idc.get_func_cmt(callee_ea, 1) or ""
                             if prefix not in existing:
                                 new_cmt = f"{existing}\n{governed}" if existing else governed
-                                idc.set_func_cmt(callee_ea, new_cmt, 1)
+                                if not _write_comment(idc.set_func_cmt, callee_ea, new_cmt, 1):
+                                    write_failures.append(hex(callee_ea))
 
             return {"ok": True, "function": fname, "suggestions": "\n".join(str(x) for x in suggestions),
-                    "count": len(suggestions), "dry_run": dry_run}
+                    "count": len(suggestions), "dry_run": dry_run,
+                    "write_failures": write_failures}
 
         # ----------------------------------------------------------------
         # ACTION: cleanup
@@ -916,13 +963,14 @@ def annotation(
                         lines = func_cmt.split("\n")
                         cleaned = [l for l in lines if prefix not in l]
                         new_cmt = "\n".join(cleaned).strip()
-                        if not dry_run:
-                            idc.set_func_cmt(func_ea, new_cmt, repeatable)
-                        removed.append({
-                            "addr": hex(func_ea),
-                            "type": "func_comment",
-                            "repeatable": bool(repeatable),
-                        })
+                        if dry_run or _write_comment(idc.set_func_cmt, func_ea, new_cmt, repeatable):
+                            removed.append({
+                                "addr": hex(func_ea),
+                                "type": "func_comment",
+                                "repeatable": bool(repeatable),
+                            })
+                        else:
+                            write_failures.append(hex(func_ea))
 
                 # Clean inline comments
                 curr = fn.start_ea
@@ -936,18 +984,20 @@ def annotation(
                             parts = cmt.split("  ")
                             cleaned = [p for p in parts if prefix not in p]
                             new_cmt = "  ".join(cleaned).strip()
-                            if not dry_run:
-                                idc.set_cmt(curr, new_cmt, repeatable)
-                            removed.append({
-                                "addr": hex(curr),
-                                "type": "inline_comment",
-                                "repeatable": bool(repeatable),
-                            })
+                            if dry_run or _write_comment(idc.set_cmt, curr, new_cmt, repeatable):
+                                removed.append({
+                                    "addr": hex(curr),
+                                    "type": "inline_comment",
+                                    "repeatable": bool(repeatable),
+                                })
+                            else:
+                                write_failures.append(hex(curr))
                     curr = idc.next_head(curr, fn.end_ea)
                     if curr == idaapi.BADADDR: break
 
             return {"ok": True, "removed": "\n".join(str(x) for x in removed),
-                    "count": len(removed), "dry_run": dry_run}
+                    "count": len(removed), "dry_run": dry_run,
+                    "write_failures": write_failures}
 
         # ----------------------------------------------------------------
         # ACTION: validate (Neuro-Symbolic Governance)
@@ -1091,7 +1141,12 @@ def _annotation_comment_mgr_action(action, addr, text, items, path, fmt,
             return make_error(MCPError.GOVERNANCE_BLOCKED,
                               "Comment blocked by governance rules")
         if not dry_run:
-            idc.set_cmt(ea, governed, 0)
+            if not _write_comment(idc.set_cmt, ea, governed, 0):
+                return make_error(
+                    MCPError.ANNOTATION_ERROR,
+                    f"Failed to set comment at {hex(ea)}",
+                    hint="IDA rejected the comment write; verify the address accepts comments and retry.",
+                )
         return {"ok": True, "addr": hex(ea), "format": fmt_value, "length": len(governed),
                 "dry_run": dry_run}
 
@@ -1126,14 +1181,18 @@ def _annotation_comment_mgr_action(action, addr, text, items, path, fmt,
                     errors.append({"addr": item_addr, "error": "blocked by governance"})
                     continue
                 cmt_type = item.get("type", "regular")
+                write_ok = True
                 if not dry_run:
                     if cmt_type == "repeatable":
-                        idc.set_cmt(ea, governed, 1)
+                        write_ok = _write_comment(idc.set_cmt, ea, governed, 1)
                     elif cmt_type == "func":
-                        idc.set_func_cmt(ea, governed, 0)
+                        write_ok = _write_comment(idc.set_func_cmt, ea, governed, 0)
                     else:
-                        idc.set_cmt(ea, governed, 0)
-                set_count += 1
+                        write_ok = _write_comment(idc.set_cmt, ea, governed, 0)
+                if write_ok:
+                    set_count += 1
+                else:
+                    errors.append({"addr": item_addr, "error": "IDA rejected comment write"})
             except Exception as e:
                 errors.append({"addr": item.get("addr"), "error": str(e)})
 
@@ -1213,9 +1272,10 @@ def _annotation_comment_mgr_action(action, addr, text, items, path, fmt,
                 if governed is None:
                     errors.append({"addr": addr_str, "error": "blocked by governance"})
                     continue
-                if not dry_run:
-                    idc.set_cmt(ea, governed, 0)
-                imported += 1
+                if dry_run or _write_comment(idc.set_cmt, ea, governed, 0):
+                    imported += 1
+                else:
+                    errors.append({"addr": addr_str, "error": "IDA rejected comment write"})
             except Exception as e:
                 errors.append({"addr": addr_str, "error": str(e)})
         return {"ok": True, "imported": True, "count": imported,

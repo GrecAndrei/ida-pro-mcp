@@ -29,7 +29,9 @@ class _Response:
 
 
 def _patch_model(monkeypatch, body: bytes):
-    from ida_pro_mcp.host.intelligence import model_profiles
+    import importlib
+
+    model_profiles = importlib.import_module("ida_pro_mcp.host.intelligence.model_profiles")
 
     profile = model_profiles.MODEL_PROFILES["zembed-1"]
     patched = replace(
@@ -37,7 +39,9 @@ def _patch_model(monkeypatch, body: bytes):
         download_sha256=hashlib.sha256(body).hexdigest(),
         download_size=len(body),
     )
-    monkeypatch.setitem(model_profiles.MODEL_PROFILES, "zembed-1", patched)
+    profiles = dict(model_profiles.MODEL_PROFILES)
+    profiles["zembed-1"] = patched
+    monkeypatch.setattr(model_profiles, "MODEL_PROFILES", profiles)
     return patched
 
 
@@ -130,7 +134,7 @@ def test_scoped_kill_fails_closed_when_process_listing_is_unavailable(monkeypatc
 
     monkeypatch.setattr(runtime.sys, "platform", "linux")
     monkeypatch.setattr(runtime.subprocess, "run", _run)
-    runtime.kill_ida_processes(tmp_path / "idat64")
+    assert runtime.kill_ida_processes(tmp_path / "idat64") is False
 
     assert calls == [["pgrep", "-af", "(ida|idat)64?"]]
 
@@ -198,6 +202,188 @@ def test_client_config_symlink_is_not_replaced(tmp_path):
     assert json.loads(target.read_text(encoding="utf-8")) == {"keep": True}
 
 
+def test_client_config_symlinked_parent_is_not_created_or_replaced(tmp_path):
+    from ida_pro_mcp.installer import clients
+    from ida_pro_mcp.installer.common import InstallReport
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    redirected_parent = tmp_path / "config-parent"
+    redirected_parent.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(clients.ConfigParseError, match="symlinked client config"):
+        clients.update_json_config(
+            redirected_parent / "settings.json",
+            "ida-pro-mcp",
+            {"command": "/x/python"},
+            InstallReport(),
+            dry_run=False,
+        )
+
+    assert not (outside / "settings.json").exists()
+
+
+def test_client_config_rejects_non_regular_target(tmp_path):
+    from ida_pro_mcp.installer import clients
+    from ida_pro_mcp.installer.common import InstallReport
+
+    path = tmp_path / "settings.json"
+    path.mkdir()
+
+    with pytest.raises(clients.ConfigParseError, match="non-regular client config path"):
+        clients.update_json_config(
+            path,
+            "ida-pro-mcp",
+            {"command": "/x/python"},
+            InstallReport(),
+            dry_run=False,
+        )
+
+
+def test_installer_error_log_rejects_non_regular_target(tmp_path):
+    from ida_pro_mcp.installer import main
+
+    log_path = tmp_path / "install-error.log"
+    log_path.mkdir()
+
+    with pytest.raises(RuntimeError, match="non-regular installer error log path"):
+        main._write_install_error_log(log_path, "traceback")
+
+
+def test_client_map_falls_back_when_checkout_config_is_not_a_file(tmp_path):
+    from ida_pro_mcp.installer.clients import load_client_map
+
+    source_root = tmp_path / "checkout"
+    source_root.mkdir()
+    (source_root / "client_configs.json").mkdir()
+
+    client_map = load_client_map(source_root)
+
+    assert "Codex" in client_map
+
+
+def test_run_install_rejects_symlinked_install_root_without_writing_through_it(tmp_path):
+    from ida_pro_mcp.installer import main
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    install_root = tmp_path / "install"
+    install_root.symlink_to(outside, target_is_directory=True)
+    opts = InstallerOptions(
+        interactive=False,
+        only={"shell"},
+        install_root=install_root,
+        source_root=tmp_path,
+    )
+
+    assert main.run_install(opts, main.UI()) == 1
+    assert not (outside / "install-report.json").exists()
+    assert not (outside / "install-error.log").exists()
+
+
+def test_run_install_handles_non_directory_install_root(tmp_path):
+    from ida_pro_mcp.installer import main
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    install_root = tmp_path / "install"
+    install_root.write_text("not a directory", encoding="utf-8")
+    opts = InstallerOptions(
+        interactive=False,
+        only={"shell"},
+        install_root=install_root,
+        source_root=tmp_path,
+    )
+
+    assert main.run_install(opts, main.UI()) == 1
+
+
+def test_run_install_dry_run_does_not_create_installer_lock(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    install_root = tmp_path / "install"
+    opts = InstallerOptions(
+        dry_run=True,
+        interactive=False,
+        only={"clients"},
+        install_root=install_root,
+        source_root=tmp_path,
+    )
+    monkeypatch.setattr(main, "detect_ida_installs", list)
+    monkeypatch.setattr(main, "configure_clients", lambda **_kwargs: [])
+
+    assert main.run_install(opts, main.UI()) == 0
+    assert not (install_root / ".install.lock").exists()
+    assert (install_root / "install-report.json").is_file()
+
+
+def test_installer_lock_serializes_same_install_root(tmp_path):
+    from ida_pro_mcp.installer.common import installer_lock
+
+    install_root = tmp_path / "install"
+
+    def _second_run() -> None:
+        with installer_lock(install_root):
+            pass
+
+    with installer_lock(install_root), pytest.raises(
+        RuntimeError, match="Another installer is already running"
+    ):
+        _second_run()
+
+    with installer_lock(install_root):
+        pass
+    assert (install_root / ".install.lock").is_file()
+
+
+def test_installer_lock_expands_environment_root(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer.common import installer_lock
+
+    install_root = tmp_path / "expanded-install"
+    monkeypatch.setenv("INSTALLER_LOCK_ROOT", str(install_root))
+
+    with installer_lock(Path("$INSTALLER_LOCK_ROOT")) as lock_path:
+        assert lock_path == install_root / ".install.lock"
+
+    assert (install_root / ".install.lock").is_file()
+    assert not (tmp_path / "$INSTALLER_LOCK_ROOT").exists()
+
+
+def test_install_report_rejects_symlinked_destination_parent(tmp_path):
+    from ida_pro_mcp.installer.common import InstallReport
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    redirected_parent = tmp_path / "report-parent"
+    redirected_parent.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlinked installer report path"):
+        InstallReport().write(redirected_parent / "install-report.json")
+
+    assert not (outside / "install-report.json").exists()
+
+
+def test_rollback_does_not_follow_a_replaced_config_symlink(tmp_path):
+    from ida_pro_mcp.installer import clients
+    from ida_pro_mcp.installer.common import InstallReport
+
+    target = tmp_path / "settings.json"
+    target.write_text('{"old": true}', encoding="utf-8")
+    report = InstallReport()
+    assert clients.backup_file(target, report, dry_run=False) is not None
+
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"must": "remain"}', encoding="utf-8")
+    target.unlink()
+    target.symlink_to(outside)
+
+    with pytest.raises(RuntimeError, match="symlinked rollback target"):
+        clients.rollback_from_backups(report)
+
+    assert outside.read_text(encoding="utf-8") == '{"must": "remain"}'
+
+
 def test_bashrc_shim_shell_quotes_user_controlled_paths(tmp_path, monkeypatch):
     from ida_pro_mcp.installer import main
     from ida_pro_mcp.installer.common import InstallReport
@@ -211,6 +397,149 @@ def test_bashrc_shim_shell_quotes_user_controlled_paths(tmp_path, monkeypatch):
     content = (home / ".bashrc").read_text(encoding="utf-8")
     assert "export IDA_PRO_MCP_HOME='" in content
     assert "$(touch SHOULD_NOT_RUN)" in content
+
+
+def test_bashrc_shim_reports_windows_skip(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main
+    from ida_pro_mcp.installer.common import InstallReport
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setattr(main.sys, "platform", "win32")
+    report = InstallReport()
+
+    assert main.install_bashrc_cli(tmp_path / "install", dry_run=False, report=report) is False
+    assert report.warnings == ["bashrc shim skipped on Windows"]
+    assert not (home / ".bashrc").exists()
+
+
+def test_bashrc_shim_dry_run_does_not_claim_a_modified_file(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main
+    from ida_pro_mcp.installer.common import InstallReport
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    report = InstallReport()
+
+    assert main.install_bashrc_cli(tmp_path / "install", dry_run=True, report=report) is True
+    assert report.modified_files == []
+    assert not (home / ".bashrc").exists()
+
+
+def test_claude_skills_dry_run_does_not_claim_modified_files(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main
+    from ida_pro_mcp.installer.common import InstallReport
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    report = InstallReport()
+
+    main._install_claude_opencode_skills(report, dry_run=True, ui=main.UI())
+
+    assert report.modified_files == []
+    assert report.steps[0]["status"] == "dry-run"
+
+
+def test_claude_skills_failure_is_visible_in_report(tmp_path, monkeypatch):
+    import importlib
+
+    from ida_pro_mcp.installer import main
+    from ida_pro_mcp.installer.common import InstallReport
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+    def fail_publish(*_args, **_kwargs):
+        raise OSError("permission denied")
+
+    skills = importlib.import_module(f"{main.__package__}.skills")
+    monkeypatch.setattr(skills, "_publish_skill", fail_publish)
+    report = InstallReport()
+
+    assert main._install_claude_opencode_skills(report, dry_run=False, ui=main.UI()) is False
+    assert report.steps == [
+        {
+            "name": "claude-skills",
+            "status": "warn",
+            "detail": "claude-skills install failed: permission denied",
+        }
+    ]
+    assert report.warnings == ["claude-skills install failed: permission denied"]
+
+
+def test_bashrc_shim_is_restored_by_install_rollback(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main
+    from ida_pro_mcp.installer.clients import rollback_from_backups
+    from ida_pro_mcp.installer.common import InstallReport
+
+    home = tmp_path / "home"
+    home.mkdir()
+    bashrc = home / ".bashrc"
+    original = "# user shell configuration\n"
+    bashrc.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    report = InstallReport()
+
+    main.install_bashrc_cli(tmp_path / "install", dry_run=False, report=report)
+    assert bashrc.read_text(encoding="utf-8") != original
+
+    rollback_from_backups(report)
+
+    assert bashrc.read_text(encoding="utf-8") == original
+
+
+def test_bashrc_shim_rejects_symlinked_config(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main
+    from ida_pro_mcp.installer.common import InstallReport
+
+    home = tmp_path / "home"
+    home.mkdir()
+    outside = tmp_path / "outside.bashrc"
+    outside.write_text("# preserve", encoding="utf-8")
+    (home / ".bashrc").symlink_to(outside)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+    with pytest.raises(RuntimeError, match="symlinked bashrc path"):
+        main.install_bashrc_cli(tmp_path / "install", dry_run=False, report=InstallReport())
+
+    assert outside.read_text(encoding="utf-8") == "# preserve"
+
+
+def test_bashrc_shim_rejects_non_regular_config(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main
+    from ida_pro_mcp.installer.common import InstallReport
+
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".bashrc").mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+    with pytest.raises(RuntimeError, match="non-regular bashrc path"):
+        main.install_bashrc_cli(tmp_path / "install", dry_run=False, report=InstallReport())
+
+
+def test_bashrc_shim_does_not_corrupt_malformed_markers(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main
+    from ida_pro_mcp.installer.common import InstallReport
+
+    home = tmp_path / "home"
+    home.mkdir()
+    bashrc = home / ".bashrc"
+    bashrc.write_text(
+        "# <<< ida-pro-mcp <<<\nkeep this\n# >>> ida-pro-mcp >>>\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+    main.install_bashrc_cli(tmp_path / "install", dry_run=False, report=InstallReport())
+    content = bashrc.read_text(encoding="utf-8")
+    assert "# <<< ida-pro-mcp <<<\nkeep this\n# >>> ida-pro-mcp >>>" in content
+    assert content.count("# >>> ida-pro-mcp >>>") == 2
+    assert content.count("# <<< ida-pro-mcp <<<") == 2
 
 
 def test_corpus_hash_mismatch_never_replaces_existing_source(tmp_path, monkeypatch):
@@ -237,6 +566,210 @@ def test_corpus_hash_mismatch_never_replaces_existing_source(tmp_path, monkeypat
     assert not list(tmp_path.glob("*.part"))
 
 
+def test_corpus_publish_failure_preserves_existing_source(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import bron_corpus
+
+    spec = dict(bron_corpus.BRON_SOURCES["cwe"])
+    spec["filename"] = "cwe-publish-failure.zip"
+    monkeypatch.setitem(bron_corpus.BRON_SOURCES, "cwe", spec)
+    destination = tmp_path / spec["filename"]
+    destination.write_bytes(b"previous-corpus")
+    monkeypatch.setattr(
+        bron_corpus.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _Response(b"new-corpus"),
+    )
+    real_replace = bron_corpus.os.replace
+
+    def _fail_publish(source, target):
+        if Path(target) == destination:
+            raise OSError("publish failed")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(bron_corpus.os, "replace", _fail_publish)
+
+    with pytest.raises(RuntimeError, match="download failed for cwe"):
+        bron_corpus.download_source("cwe", str(tmp_path), force=True)
+
+    assert destination.read_bytes() == b"previous-corpus"
+    assert not list(tmp_path.glob(".dl-*.part"))
+
+
+def test_corpus_empty_download_preserves_existing_source(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import bron_corpus
+
+    spec = dict(bron_corpus.BRON_SOURCES["cwe"])
+    spec["filename"] = "cwe-empty.zip"
+    monkeypatch.setitem(bron_corpus.BRON_SOURCES, "cwe", spec)
+    destination = tmp_path / spec["filename"]
+    destination.write_bytes(b"previous-corpus")
+    monkeypatch.setattr(
+        bron_corpus.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _Response(b""),
+    )
+
+    with pytest.raises(RuntimeError, match="download was empty"):
+        bron_corpus.download_source("cwe", str(tmp_path), force=True)
+
+    assert destination.read_bytes() == b"previous-corpus"
+    assert not list(tmp_path.glob(".dl-*.part"))
+
+
+def test_corpus_cached_symlink_is_refused_without_following_it(tmp_path):
+    from ida_pro_mcp.installer import bron_corpus
+
+    outside = tmp_path / "outside.zip"
+    outside.write_bytes(b"must remain untouched")
+    cached = tmp_path / bron_corpus.BRON_SOURCES["cwe"]["filename"]
+    cached.symlink_to(outside)
+
+    with pytest.raises(RuntimeError, match="symlinked cached corpus source"):
+        bron_corpus.download_source("cwe", str(tmp_path))
+
+    assert outside.read_bytes() == b"must remain untouched"
+
+
+def test_empty_cached_corpus_source_requires_a_refresh(tmp_path):
+    from ida_pro_mcp.installer import bron_corpus
+
+    cached = tmp_path / bron_corpus.BRON_SOURCES["cwe"]["filename"]
+    cached.touch()
+
+    with pytest.raises(RuntimeError, match="cached cwe source is empty"):
+        bron_corpus.download_source("cwe", str(tmp_path))
+
+
+def test_corpus_manifest_ignores_non_regular_cache_objects(tmp_path):
+    from ida_pro_mcp.installer import bron_corpus
+
+    (tmp_path / ".sha256.json").mkdir()
+
+    assert bron_corpus._read_sha_manifest(str(tmp_path)) == {}
+
+
+def test_strict_corpus_mode_does_not_build_from_partial_verified_sources(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import bron_corpus
+
+    monkeypatch.setattr(
+        bron_corpus,
+        "BRON_SOURCES",
+        {
+            "cwe": {"filename": "cwe.zip"},
+            "attack_ics": {"filename": "ics.json"},
+        },
+    )
+
+    def _download(key, _directory, **_kwargs):
+        if key == "attack_ics":
+            raise RuntimeError("missing expected SHA-256")
+        return {"path": str(tmp_path / "cwe.zip")}
+
+    monkeypatch.setattr(bron_corpus, "download_source", _download)
+    result = bron_corpus.download_bron_corpus(
+        sources_dir=str(tmp_path), force_verify=True
+    )
+
+    assert result["built"] is False
+    assert "strict verification failed" in result["reason"]
+
+
+def test_corpus_source_directory_rejects_symlinked_parent(tmp_path):
+    from ida_pro_mcp.installer import bron_corpus
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    redirected_parent = tmp_path / "cache-parent"
+    redirected_parent.symlink_to(outside, target_is_directory=True)
+    sources_dir = redirected_parent / "threat-corpus"
+
+    with pytest.raises(RuntimeError, match="symlinked corpus source directory"):
+        bron_corpus.download_bron_corpus(
+            sources_dir=str(sources_dir), only=["cwe"]
+        )
+
+    assert not (outside / "threat-corpus").exists()
+
+
+def test_cwe_extraction_does_not_follow_existing_target_symlink(tmp_path):
+    from ida_pro_mcp.installer import bron_corpus
+
+    archive = tmp_path / "cwe.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("nested/cwe.xml", b"<cwe />")
+    output = tmp_path / "cwe"
+    output.mkdir()
+    outside = tmp_path / "outside.xml"
+    outside.write_bytes(b"must remain untouched")
+    (output / "cwe.xml").symlink_to(outside)
+
+    with pytest.raises(RuntimeError, match="symlinked CWE extraction target"):
+        bron_corpus._unpack_cwe_zip(str(archive), str(output))
+
+    assert outside.read_bytes() == b"must remain untouched"
+
+
+def test_cwe_refresh_replaces_stale_materialized_files(tmp_path):
+    from ida_pro_mcp.installer import bron_corpus
+
+    first = tmp_path / "first.zip"
+    with zipfile.ZipFile(first, "w") as zf:
+        zf.writestr("old.xml", b"<old />")
+    output = tmp_path / "cwe"
+    bron_corpus._unpack_cwe_zip(str(first), str(output))
+
+    second = tmp_path / "second.zip"
+    with zipfile.ZipFile(second, "w") as zf:
+        zf.writestr("new.xml", b"<new />")
+    result = bron_corpus._unpack_cwe_zip(str(second), str(output))
+
+    assert Path(result).read_bytes() == b"<new />"
+    assert not (output / "old.xml").exists()
+
+
+def test_signature_extraction_does_not_follow_existing_directory_symlink(tmp_path):
+    from ida_pro_mcp.installer import bron_corpus
+
+    archive = tmp_path / "signature-base.tar.gz"
+    with tarfile.open(archive, "w:gz") as tf:
+        content = b"rule test { condition: true }"
+        member = tarfile.TarInfo("signature-base/rules/test.yar")
+        member.size = len(content)
+        tf.addfile(member, io.BytesIO(content))
+    output = tmp_path / "signature-base"
+    output.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (output / "yara").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlinked YARA extraction directory"):
+        bron_corpus._unpack_signature_base_tar(str(archive), str(output))
+
+    assert not (outside / "test.yar").exists()
+
+
+def test_signature_refresh_replaces_stale_materialized_rules(tmp_path):
+    from ida_pro_mcp.installer import bron_corpus
+
+    def _archive(path: Path, name: str, content: bytes):
+        with tarfile.open(path, "w:gz") as tf:
+            member = tarfile.TarInfo(f"signature-base/rules/{name}")
+            member.size = len(content)
+            tf.addfile(member, io.BytesIO(content))
+
+    first = tmp_path / "first.tar.gz"
+    _archive(first, "old.yar", b"rule old { condition: true }")
+    output = tmp_path / "signature-base"
+    bron_corpus._unpack_signature_base_tar(str(first), str(output))
+
+    second = tmp_path / "second.tar.gz"
+    _archive(second, "new.yar", b"rule new { condition: true }")
+    result = bron_corpus._unpack_signature_base_tar(str(second), str(output))
+
+    assert Path(result, "new.yar").read_bytes() == b"rule new { condition: true }"
+    assert not (output / "yara" / "old.yar").exists()
+
+
 def test_corpus_verify_env_is_strict_when_expected_hash_is_missing(tmp_path, monkeypatch):
     from ida_pro_mcp.installer import bron_corpus
 
@@ -258,7 +791,21 @@ def test_corpus_force_refresh_updates_manifest_after_upstream_change(tmp_path, m
     destination = tmp_path / "cwe-test.zip"
     destination.write_bytes(old)
     (tmp_path / ".sha256.json").write_text(
-        json.dumps({"sources": {"cwe": {"path": str(destination), "sha256": hashlib.sha256(old).hexdigest()}}}),
+        json.dumps(
+            {
+                "sources": {
+                    "cwe": {
+                        "path": str(destination),
+                        "sha256": hashlib.sha256(old).hexdigest(),
+                    },
+                    "attack_ics": {
+                        "path": str(tmp_path / "ics.json"),
+                        "sha256": "old-ics-digest",
+                        "bytes": 7,
+                    },
+                }
+            }
+        ),
         encoding="utf-8",
     )
     monkeypatch.setattr(
@@ -273,3 +820,8 @@ def test_corpus_force_refresh_updates_manifest_after_upstream_change(tmp_path, m
     assert result["built"] is False
     manifest = json.loads((tmp_path / ".sha256.json").read_text(encoding="utf-8"))
     assert manifest["sources"]["cwe"]["sha256"] == hashlib.sha256(new).hexdigest()
+    assert manifest["sources"]["attack_ics"] == {
+        "path": str(tmp_path / "ics.json"),
+        "sha256": "old-ics-digest",
+        "bytes": 7,
+    }

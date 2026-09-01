@@ -5,7 +5,6 @@ Covers host-side logic that doesn't require a live IDA session.
 import json
 import os
 import sys
-import time
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
@@ -41,7 +40,7 @@ class TestTruncationTTL(unittest.TestCase):
         token = _store_truncation({"data": [1, 2, 3]}, {"data": {"type": "list", "total": 3, "chunk_size": 2, "next_offset": 2}})
         self.assertIn(token, _TRUNCATION_STORE)
         # Manually set created_at to past
-        _TRUNCATION_STORE[token]["created_at"] = time.time() - _TOKEN_TTL_SEC - 1
+        _TRUNCATION_STORE[token]["created_at"] = 0.0
         _prune_expired()
         self.assertNotIn(token, _TRUNCATION_STORE)
 

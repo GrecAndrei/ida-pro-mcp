@@ -8,7 +8,6 @@ hazard. Pure-Python, no live IDA needed.
 from __future__ import annotations
 
 import threading
-import time
 
 from ida_pro_mcp.host.intelligence.usage import DriftDetector, UsageIntelligence
 
@@ -18,6 +17,7 @@ class TestSessionReportSnapshot:
     def test_session_report_is_safe_under_concurrent_observe(self):
         d = DriftDetector()
         stop = threading.Event()
+        observed = threading.Event()
 
         def _observe_loop():
             i = 0
@@ -27,11 +27,13 @@ class TestSessionReportSnapshot:
                     latency_ms=float(i % 50), error=None,
                     addr=f"0x{i % 10000:x}",
                 )
+                observed.set()
                 i += 1
 
         t = threading.Thread(target=_observe_loop, daemon=True)
         t.start()
         try:
+            assert observed.wait(timeout=2)
             for _ in range(300):
                 report = d.session_report("s1")
                 assert report["session_id"] == "s1"
@@ -110,7 +112,12 @@ class TestEvictSession:
 
 # ── finding: _loop() swallows sweep exceptions with no logging ──
 class _RaisingSweepUsage(UsageIntelligence):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.sweep_seen = threading.Event()
+
     def _check_all_sessions(self):
+        self.sweep_seen.set()
         raise RuntimeError("boom")
 
 
@@ -119,7 +126,7 @@ class TestLoopExceptionHandling:
         ui = _RaisingSweepUsage("/tmp/audit", drift_check_interval=0.01)
         ui.start()
         try:
-            time.sleep(0.3)  # let the loop fire its (raising) sweep
+            assert ui.sweep_seen.wait(timeout=2)
             assert ui.is_running()
             assert not ui._stop.is_set()
         finally:
@@ -134,8 +141,14 @@ class _SlowSweepUsage(UsageIntelligence):
     """Holds the loop thread inside a drift sweep so stop();start() lands in
     the 'old loop still dying' window deterministically."""
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.sweep_entered = threading.Event()
+        self.release_sweep = threading.Event()
+
     def _check_all_sessions(self):
-        time.sleep(0.5)
+        self.sweep_entered.set()
+        self.release_sweep.wait()
         super()._check_all_sessions()
 
 
@@ -143,9 +156,10 @@ class TestRestart:
     def test_start_after_stop_restarts_a_dying_observer(self):
         ui = _SlowSweepUsage("/tmp/audit", drift_check_interval=0.01)
         ui.start()
-        time.sleep(0.2)  # loop is inside the sleeping sweep
+        assert ui.sweep_entered.wait(timeout=2)
         assert ui.is_running()
         ui.stop()  # latch set while the loop is still inside the sweep
+        ui.release_sweep.set()
         ui.start()  # must join the dying loop and spawn a fresh one
         try:
             assert ui.is_running()

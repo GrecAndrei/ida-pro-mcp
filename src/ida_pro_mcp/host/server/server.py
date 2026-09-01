@@ -873,6 +873,7 @@ class IDAMCPServer(
                     if agent_tag is not None
                     else None
                 )
+                next_cache_scope = None
                 if bind_err is not None:
                     res = bind_err
                 else:
@@ -893,6 +894,11 @@ class IDAMCPServer(
                                     self._session_inflight_calls.get(sid_hint_text, 0) or 0
                                 ) + 1
                         res = self._execute_tool(tn, call_args)
+                        # Agent identity is intentionally cleared in the
+                        # finally block below. Capture the token scope while
+                        # it is still bound so an agent's pagination token
+                        # cannot become a plain connection token afterward.
+                        next_cache_scope = self._next_cache_scope(call_args)
                     finally:
                         if sid_hint_text:
                             with self._runtime_lock:
@@ -907,7 +913,12 @@ class IDAMCPServer(
                         if agent_tag is not None:
                             self._unbind_agent_call()
                 if isinstance(call_args, dict):
-                    res = self._cache_next_page(resolved_tn or "", call_args, res)
+                    res = self._cache_next_page(
+                        resolved_tn or "",
+                        call_args,
+                        res,
+                        scope=next_cache_scope,
+                    )
                     self._record_activity(resolved_tn or "", call_args, res)
             raw_res = res
             if operation is not None:

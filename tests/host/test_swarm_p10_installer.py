@@ -188,6 +188,22 @@ def test_stage_sigs_single_file_source(tmp_path):
     assert dest.read_bytes() == sig_file.read_bytes()
 
 
+def test_stage_sigs_single_gz_file_source(tmp_path):
+    from ida_pro_mcp.installer.common import InstallReport
+    from ida_pro_mcp.installer.runtime import stage_sigs
+
+    sig_file = tmp_path / "riscv64_gnu.sig.gz"
+    sig_file.write_bytes(b"\x1f\x8b\x08\x00single gzip signature")
+    sig_dir = tmp_path / "ida-pro-9.3" / "sig"
+
+    manifest = stage_sigs(sig_file, sig_dir, dry_run=False, report=InstallReport())
+
+    assert manifest.count == 1
+    dest = sig_dir / sig_file.name
+    assert dest.is_file()
+    assert dest.read_bytes() == sig_file.read_bytes()
+
+
 def test_stage_sigs_preserves_nested_subdirs(tmp_path):
     """A multi-arch pack with nested layout must not collide on basename."""
     from ida_pro_mcp.installer.common import InstallReport
@@ -235,6 +251,42 @@ def test_stage_sigs_missing_source_raises(tmp_path):
     missing = tmp_path / "does-not-exist"
     with pytest.raises(RuntimeError, match="--sigs source not found"):
         stage_sigs(missing, tmp_path / "sig", dry_run=False, report=InstallReport())
+
+
+def test_stage_sigs_refuses_symlinked_destination_root(tmp_path):
+    from ida_pro_mcp.installer.common import InstallReport
+    from ida_pro_mcp.installer.runtime import stage_sigs
+
+    sig_file = tmp_path / "riscv64.sig"
+    sig_file.write_bytes(b"signature")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sig_dir = tmp_path / "ida-pro-9.3" / "sig"
+    sig_dir.parent.mkdir()
+    sig_dir.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlinked IDA signature directory"):
+        stage_sigs(sig_file, sig_dir, dry_run=False, report=InstallReport())
+
+    assert not (outside / sig_file.name).exists()
+
+
+def test_stage_sigs_refuses_symlinked_destination_parent(tmp_path):
+    from ida_pro_mcp.installer.common import InstallReport
+    from ida_pro_mcp.installer.runtime import stage_sigs
+
+    sig_file = tmp_path / "riscv64.sig"
+    sig_file.write_bytes(b"signature")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    redirected_parent = tmp_path / "ida-link"
+    redirected_parent.symlink_to(outside, target_is_directory=True)
+    sig_dir = redirected_parent / "sig"
+
+    with pytest.raises(RuntimeError, match="symlinked IDA signature directory"):
+        stage_sigs(sig_file, sig_dir, dry_run=False, report=InstallReport())
+
+    assert not (outside / "sig" / sig_file.name).exists()
 
 
 def test_stage_sigs_empty_pack_returns_zero_count(tmp_path):
@@ -369,6 +421,55 @@ def test_run_install_stages_sigs_with_only_sigs_phase(tmp_path, monkeypatch):
     assert payload["metadata"]["sigs_manifest"]["sig_dir"] == str(sig_dir)
 
 
+def test_run_install_fails_when_sigs_have_no_ida_install(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    opts = InstallerOptions(
+        interactive=False,
+        only={"sigs"},
+        install_root=tmp_path / "install-root",
+        sigs_dir=str(tmp_path / "sig-pack"),
+    )
+    monkeypatch.setattr(main_mod, "detect_ida_installs", list)
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 1
+
+
+def test_run_install_fails_when_sig_source_has_no_signature_files(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    install_dir = tmp_path / "ida-pro-9.3"
+    install_dir.mkdir()
+    empty_pack = tmp_path / "empty-pack"
+    empty_pack.mkdir()
+    (empty_pack / "README.txt").write_text("not a signature", encoding="utf-8")
+    opts = InstallerOptions(
+        interactive=False,
+        only={"sigs"},
+        install_root=tmp_path / "install-root",
+        sigs_dir=str(empty_pack),
+    )
+    monkeypatch.setattr(main_mod, "detect_ida_installs", lambda: [_fake_ida_install(install_dir)])
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 1
+
+
+def test_with_r2_requires_clients_phase(tmp_path):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    opts = InstallerOptions(
+        interactive=False,
+        only={"runtime"},
+        install_root=tmp_path / "install-root",
+        with_r2=True,
+    )
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 1
+
+
 def test_run_install_with_r2_records_env_into_client_config(tmp_path, monkeypatch):
     """`--only clients --with-r2` records the resolved rz/r2 as IDA_MCP_R2_BIN
     in the generated client config."""
@@ -401,6 +502,134 @@ def test_run_install_with_r2_records_env_into_client_config(tmp_path, monkeypatc
     assert main_mod.run_install(opts, main_mod.UI()) == 0
 
     assert captured["server_cfg"]["env"].get("IDA_MCP_R2_BIN") == fake_rz
+
+
+def test_run_install_passes_explicit_corpus_verification_to_downloader(tmp_path, monkeypatch):
+    import importlib
+
+    bron_corpus = importlib.import_module("ida_pro_mcp.installer.bron_corpus")
+    main_mod = importlib.import_module("ida_pro_mcp.installer.main")
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    install_root = tmp_path / "install-root"
+    install_root.mkdir()
+    fake_python = install_root / "python"
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        main_mod,
+        "setup_runtime_environment",
+        lambda **_kwargs: fake_python,
+    )
+
+    def _download(**kwargs):
+        captured.update(kwargs)
+        return {"built": True, "reason": "test", "downloads": {}, "counts": {}}
+
+    monkeypatch.setattr(bron_corpus, "download_bron_corpus", _download)
+    opts = InstallerOptions(
+        interactive=False,
+        only={"runtime"},
+        install_root=install_root,
+        source_root=tmp_path,
+        verify_bron_corpus=True,
+    )
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 0
+    assert captured == {"force": False, "force_verify": True}
+
+
+def test_run_install_passes_env_corpus_verification_to_downloader(tmp_path, monkeypatch):
+    import importlib
+
+    bron_corpus = importlib.import_module("ida_pro_mcp.installer.bron_corpus")
+    main_mod = importlib.import_module("ida_pro_mcp.installer.main")
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    install_root = tmp_path / "install-root"
+    install_root.mkdir()
+    fake_python = install_root / "python"
+    captured: dict[str, object] = {}
+
+    monkeypatch.setenv("IDA_MCP_BRON_CORPUS_VERIFY", "yes")
+    monkeypatch.setattr(
+        main_mod,
+        "setup_runtime_environment",
+        lambda **_kwargs: fake_python,
+    )
+
+    def _download(**kwargs):
+        captured.update(kwargs)
+        return {"built": True, "reason": "test", "downloads": {}, "counts": {}}
+
+    monkeypatch.setattr(bron_corpus, "download_bron_corpus", _download)
+    opts = InstallerOptions(
+        interactive=False,
+        only={"runtime"},
+        install_root=install_root,
+        source_root=tmp_path,
+    )
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 0
+    assert captured == {"force": False, "force_verify": True}
+
+
+def test_run_install_fails_when_requested_corpus_cannot_be_built(tmp_path, monkeypatch):
+    import importlib
+
+    bron_corpus = importlib.import_module("ida_pro_mcp.installer.bron_corpus")
+    main_mod = importlib.import_module("ida_pro_mcp.installer.main")
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    install_root = tmp_path / "install-root"
+    monkeypatch.setattr(
+        main_mod,
+        "setup_runtime_environment",
+        lambda **_kwargs: install_root / "python",
+    )
+    monkeypatch.setattr(
+        bron_corpus,
+        "download_bron_corpus",
+        lambda **_kwargs: {"built": False, "reason": "no usable sources", "downloads": {}},
+    )
+    opts = InstallerOptions(
+        interactive=False,
+        only={"runtime"},
+        install_root=install_root,
+        source_root=tmp_path,
+        with_bron_corpus=True,
+    )
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 1
+
+
+def test_run_install_skips_optional_corpus_by_default(tmp_path, monkeypatch):
+    import importlib
+
+    bron_corpus = importlib.import_module("ida_pro_mcp.installer.bron_corpus")
+    main_mod = importlib.import_module("ida_pro_mcp.installer.main")
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    install_root = tmp_path / "install-root"
+    fake_python = install_root / "python"
+    monkeypatch.setattr(
+        main_mod,
+        "setup_runtime_environment",
+        lambda **_kwargs: fake_python,
+    )
+    monkeypatch.setattr(
+        bron_corpus,
+        "download_bron_corpus",
+        lambda **_kwargs: pytest.fail("optional corpus must not download by default"),
+    )
+    opts = InstallerOptions(
+        interactive=False,
+        only={"runtime"},
+        install_root=install_root,
+        source_root=tmp_path,
+    )
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -459,6 +688,18 @@ def test_find_idalib_python_dir_missing(tmp_path):
     assert find_idalib_python_dir(str(install)) == ""
 
 
+def test_find_idalib_python_dir_rejects_symlinked_python_tree(tmp_path):
+    from ida_pro_mcp.installer.runtime import find_idalib_python_dir
+
+    install = tmp_path / "ida-pro-9.4"
+    external = tmp_path / "external-python"
+    (external / "idapro").mkdir(parents=True)
+    (install / "idalib").mkdir(parents=True)
+    (install / "idalib" / "python").symlink_to(external, target_is_directory=True)
+
+    assert find_idalib_python_dir(str(install)) == ""
+
+
 def test_activate_idalib_runs_activator(tmp_path, monkeypatch):
     import ida_pro_mcp.installer.runtime as runtime_mod
 
@@ -481,6 +722,27 @@ def test_activate_idalib_runs_activator(tmp_path, monkeypatch):
     ok, detail = runtime_mod.activate_idalib(str(install))
     assert ok is True
     assert calls and calls[0][-2:] == ["-d", str(install)]
+
+
+def test_activate_idalib_rejects_symlinked_activation_script(tmp_path, monkeypatch):
+    import ida_pro_mcp.installer.runtime as runtime_mod
+
+    install = tmp_path / "ida-pro-9.4"
+    python_dir = install / "idalib" / "python"
+    (python_dir / "idapro").mkdir(parents=True)
+    external = tmp_path / "activate.py"
+    external.write_text("exit 0\n")
+    (python_dir / "py-activate-idalib.py").symlink_to(external)
+    monkeypatch.setattr(
+        runtime_mod.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("symlinked activator must not execute"),
+    )
+
+    ok, detail = runtime_mod.activate_idalib(str(install))
+
+    assert ok is False
+    assert "symlinked" in detail
 
 
 def test_activate_idalib_reports_failure(tmp_path, monkeypatch):

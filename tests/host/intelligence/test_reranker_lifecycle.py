@@ -203,6 +203,18 @@ class TestModuleHelpers:
         )
         assert rerank_mod._find_rerank_model() == str(model)
 
+    def test_find_rerank_model_state_override_accepts_custom_filename(self, tmp_path, monkeypatch):
+        model = tmp_path / "my-reranker.gguf"
+        model.write_bytes(b"m")
+        monkeypatch.delenv("IDA_MCP_RERANK_MODEL", raising=False)
+        monkeypatch.setattr(
+            rerank_mod,
+            "_read_rerank_state",
+            lambda: {"model_path": str(model), "profile": "qwen3-reranker-0.6b"},
+        )
+
+        assert rerank_mod._find_rerank_model() == str(model)
+
     def test_find_rerank_model_hf_cache(self, tmp_path, monkeypatch):
         home = tmp_path / "home"
         hf_file = home / ".cache" / "huggingface" / "hub" / "models--ggml-org--Qwen3-Reranker-0.6B-Q8_0-GGUF" / "snapshots" / "abc" / "Qwen3-Reranker-0.6B-q8_0.gguf"
@@ -401,8 +413,42 @@ class TestLease:
         )
         assert obj._pid_is_expected_server(1) is False
         monkeypatch.setattr(rerank_mod, "_process_command", lambda pid: "")
-        assert obj._pid_is_expected_server(1, {"schema": 1}) is True
+        assert obj._pid_is_expected_server(1, {"schema": 1}) is False
         assert obj._pid_is_expected_server(1, {"schema": 9}) is False
+
+    def test_lease_matches_requires_process_identity_when_recorded(self, monkeypatch):
+        obj = _stub_reranker()
+        base = {
+            "schema": 1,
+            "pid": 42,
+            "owner_pid": 43,
+            "process_start_token": "old",
+            "owner_start_token": "owner-old",
+            "port": 1234,
+        }
+        monkeypatch.setattr(rerank_mod, "_pid_alive", lambda pid: True)
+        monkeypatch.setattr(rerank_mod, "_process_start_token", lambda pid: "")
+
+        assert obj._lease_matches(base) is False
+
+    def test_retire_does_not_delete_replaced_same_pid_lease(self, tmp_path, monkeypatch):
+        lease_file = tmp_path / "lease.json"
+        monkeypatch.setattr(rerank_mod, "RERANK_LEASE_FILE", str(lease_file))
+        original = {
+            "schema": 1,
+            "pid": 42,
+            "owner_pid": 43,
+            "process_start_token": "old",
+            "owner_start_token": "owner-old",
+        }
+        replacement = dict(original, process_start_token="new")
+        lease_file.write_text(json.dumps(replacement), encoding="utf-8")
+        obj = _stub_reranker()
+        monkeypatch.setattr(rerank_mod, "_pid_alive", lambda pid: False)
+
+        rerank_mod.Reranker._retire_lease_process(obj, original, "stale")
+
+        assert lease_file.exists()
 
     def test_retire_lease_kills_and_clears(self, tmp_path, monkeypatch):
         lease_file = tmp_path / "lease.json"
@@ -468,13 +514,24 @@ class TestIdleShutdown:
         stopped: list = []
         monkeypatch.setattr(obj, "_server_has_active_slots", lambda: False)
         monkeypatch.setattr(obj, "stop", lambda: stopped.append(1))
+
+        class _InlineTimer:
+            def __init__(self, _delay, target, args=()):
+                self._target = target
+                self._args = args
+                self.daemon = False
+                self.cancelled = False
+
+            def start(self):
+                self._target(*self._args)
+
+            def cancel(self):
+                self.cancelled = True
+
+        monkeypatch.setattr(rerank_mod.threading, "Timer", _InlineTimer)
         obj._schedule_idle_shutdown(0.05)
-        assert obj._idle_timer is not None
-        deadline = time.monotonic() + 1.0
-        while not stopped and time.monotonic() < deadline:
-            time.sleep(0.01)
-        obj._cancel_idle_shutdown()
         assert stopped == [1]
+        assert obj._idle_timer is None
 
     def test_shutdown_if_idle_generation_mismatch(self, monkeypatch):
         obj = _stub_reranker()
@@ -541,13 +598,12 @@ class TestRecycleAndLimits:
         monkeypatch.setattr(rerank_mod, "RERANK_MAX_REQUESTS", 1000)
         written: list = []
         monkeypatch.setattr(obj, "_write_lease", written.append)
-        t0 = time.time()
+        monkeypatch.setattr(rerank_mod.time, "time", lambda: 1234.5)
         obj._record_success_and_maybe_recycle()
         out = written[0]
         assert {k: out[k] for k in lease} == dict(lease, request_count=2, rss=25)
         # updated_at is stamped with the current wall clock, not carried over.
-        assert abs(out["updated_at"] - time.time()) < 5.0
-        assert out["updated_at"] >= t0
+        assert out["updated_at"] == 1234.5
 
     def test_record_success_recycles_on_request_limit(self, monkeypatch):
         obj = _stub_reranker()
@@ -714,7 +770,7 @@ class TestStopAndReady:
         assert obj._owns_proc is False
         assert not lease_file.exists()
 
-    def test_stop_kills_leased_process_when_proc_unknown(self, tmp_path, monkeypatch):
+    def test_stop_keeps_uninspectable_leased_process_for_retry(self, tmp_path, monkeypatch):
         lease_file = tmp_path / "lease.json"
         lease_file.write_text(json.dumps({"schema": 1, "pid": 777, "owner_pid": os.getpid()}))
         monkeypatch.setattr(rerank_mod, "RERANK_LEASE_FILE", str(lease_file))
@@ -722,7 +778,8 @@ class TestStopAndReady:
         monkeypatch.setattr(rerank_mod.os, "kill", lambda pid, sig: killed.append((pid, sig)))
         obj = _stub_reranker()
         obj.stop()
-        assert (777, 15) in killed
+        assert killed == []
+        assert lease_file.exists()
 
     def test_stop_leaves_foreign_lease(self, tmp_path, monkeypatch):
         lease_file = tmp_path / "lease.json"

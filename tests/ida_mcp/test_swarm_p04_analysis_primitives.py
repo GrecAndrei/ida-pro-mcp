@@ -18,9 +18,9 @@ All tests use _FakeIda-style fakes; no live IDA is required.
 """
 import os
 import sys
-import time
 import types
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
@@ -265,32 +265,34 @@ class TestAutoWait(_AnalysisBase):
     def test_timeout_zero_single_pump_still_running(self):
         # timeout_ms=0 performs one immediate pump and reports still-running
         # without sleeping — fully deterministic.
-        started = time.time()
         res = self.mod.analysis(action="auto_wait", timeout_ms=0)
-        elapsed = time.time() - started
         self.assertEqual(res.get("ok"), True)
         self.assertIs(res["analysis_done"], False)
         self.assertIs(res["timed_out"], True)
         self.assertEqual(res["queue_depth"], 1)
         self.assertEqual(self.ida_auto.make_step_calls, 1)
         self.assertEqual(self.ida_auto.auto_wait_calls, 0)
-        self.assertLess(elapsed, 0.5)
 
     def test_timeout_bounded_and_never_calls_unbounded_auto_wait(self):
         # Analyzer never drains; the wait must return within ~timeout_ms, report
         # timed_out, and keep the unbounded ida_auto.auto_wait() untouched.
         self.ida_auto.flip_after = None
-        started = time.time()
-        res = self.mod.analysis(action="auto_wait", timeout_ms=150)
-        elapsed = time.time() - started
+        now = [100.0]
+
+        def _advance_time():
+            now[0] += 0.05
+            return now[0]
+
+        with mock.patch("time.time", side_effect=_advance_time), mock.patch(
+            "time.sleep", return_value=None
+        ):
+            res = self.mod.analysis(action="auto_wait", timeout_ms=150)
         self.assertEqual(res.get("ok"), True)
         self.assertIs(res["analysis_done"], False)
         self.assertIs(res["timed_out"], True)
         self.assertGreaterEqual(res["queue_depth"], 1)
         self.assertGreaterEqual(self.ida_auto.make_step_calls, 1)
         self.assertEqual(self.ida_auto.auto_wait_calls, 0)
-        # Bounded: returns well inside a second despite a never-draining queue.
-        self.assertLess(elapsed, 1.0)
 
     def test_invalid_timeout_ms_errors(self):
         res = self.mod.analysis(action="auto_wait", timeout_ms="not-an-int")

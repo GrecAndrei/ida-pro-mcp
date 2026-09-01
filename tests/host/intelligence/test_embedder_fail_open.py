@@ -1,6 +1,7 @@
 import os
 import socket
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -13,7 +14,9 @@ if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
 import contextlib
+import json
 
+from ida_pro_mcp.host.intelligence import core as core_mod
 from ida_pro_mcp.host.intelligence.core import BehaviorClassifier, BgeCodeEmbedder
 
 
@@ -104,6 +107,33 @@ class TestBgeCodeEmbedderFailOpen(unittest.TestCase):
         ) as retire:
             emb.embed("request")
             retire.assert_called_once()
+
+    def test_pid_is_expected_server_refuses_uninspectable_process(self):
+        """A lease alone must not authorize killing an uninspectable PID."""
+        emb = BgeCodeEmbedder()
+        with mock.patch.object(core_mod, "_process_command", return_value=""):
+            self.assertFalse(emb._pid_is_expected_server(42, {"schema": 2}))
+
+    def test_stop_keeps_uninspectable_leased_process_for_retry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lease_file = os.path.join(tmpdir, "lease.json")
+            with open(lease_file, "w", encoding="utf-8") as handle:
+                json.dump({"schema": 2, "pid": 777, "owner_pid": os.getpid()}, handle)
+            with mock.patch.object(core_mod, "_EMBED_LEASE_FILE", lease_file), mock.patch.object(
+                core_mod, "_process_command", return_value=""
+            ), mock.patch.object(core_mod.os, "kill") as kill:
+                BgeCodeEmbedder().stop()
+
+            kill.assert_not_called()
+            self.assertTrue(os.path.exists(lease_file))
+
+    def test_lease_matches_rejects_fractional_pid(self):
+        emb = BgeCodeEmbedder()
+        self.assertFalse(
+            emb._lease_matches(
+                {"schema": 2, "pid": 42.5, "owner_pid": os.getpid(), "port": 1234}
+            )
+        )
 
     def test_embed_recovers_counter_on_successful_rpc(self):
         emb = BgeCodeEmbedder()

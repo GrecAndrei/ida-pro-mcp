@@ -101,6 +101,17 @@ def test_from_env_accepts_directory_or_binary_and_ignores_missing(monkeypatch, t
     assert values == [install.resolve(), install.resolve()]
 
 
+def test_from_env_ignores_blank_values_and_expands_environment_paths(monkeypatch, tmp_path):
+    install = tmp_path / "ida"
+    install.mkdir()
+    monkeypatch.setenv("IDA_DISCOVERY_ROOT", str(tmp_path))
+    monkeypatch.setenv("IDADIR", "$IDA_DISCOVERY_ROOT/ida")
+    monkeypatch.setenv("IDA_DIR", "   ")
+    monkeypatch.setenv("IDA_MCP_IDAT", "")
+
+    assert list(discovery._from_env()) == [install.resolve()]
+
+
 def test_from_path_returns_parent_of_first_available_binary(monkeypatch, tmp_path):
     install = tmp_path / "ida"
     install.mkdir()
@@ -132,6 +143,30 @@ def test_detect_ida_installs_deduplicates_sources_and_sorts_flavor(monkeypatch, 
     assert [item.source for item in installs] == ["env", "path"]
 
 
+def test_detect_ida_installs_prefers_newer_build_of_same_release(monkeypatch, tmp_path):
+    older = tmp_path / "a-older-build"
+    newer = tmp_path / "z-newer-build"
+    for install, version in (
+        (older, "9.3.250101.aaaaaaaa"),
+        (newer, "9.3.260421.bbbbbbbb"),
+    ):
+        install.mkdir()
+        _binary(install / "idat64", b"wrapper")
+        _binary(install / "ida64", _elf(version))
+
+    monkeypatch.setattr(discovery, "_from_env", lambda: iter([older, newer]))
+    monkeypatch.setattr(discovery, "_from_path", lambda: iter([]))
+    monkeypatch.setattr(discovery, "_scan_home", lambda: iter([]))
+    monkeypatch.setattr(discovery, "_scan_system_dirs", lambda: iter([]))
+
+    installs = discovery.detect_ida_installs()
+
+    assert [item.build for item in installs] == [
+        "260421.bbbbbbbb",
+        "250101.aaaaaaaa",
+    ]
+
+
 def test_selection_rejects_bad_explicit_directory_and_out_of_range_default(tmp_path):
     with pytest.raises(RuntimeError, match="does not contain"):
         select_ida_install([], explicit_dir=tmp_path / "not-an-install")
@@ -144,9 +179,37 @@ def test_selection_rejects_bad_explicit_directory_and_out_of_range_default(tmp_p
 def test_install_state_rejects_malformed_selected_records(tmp_path):
     state_path = tmp_path / discovery.STATE_FILE
     for payload in (
+        [],
+        "not an object",
         {"selected": []},
         {"selected": {"path": str(tmp_path)}},
         {"selected": {"path": str(tmp_path), "version": ["not", "ints"]}},
     ):
         state_path.write_text(__import__("json").dumps(payload), encoding="utf-8")
         assert discovery.read_install_state(tmp_path) is None
+
+
+def test_install_state_rejects_symlinked_root_and_state_file(tmp_path):
+    install = IdaInstall(
+        tmp_path / "ida",
+        (9, 3),
+        "260421.be7de18d",
+        None,
+        "x64",
+        "pro",
+        "explicit",
+    )
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    redirected_root = tmp_path / "install-link"
+    redirected_root.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlinked installer state path"):
+        discovery.write_install_state(redirected_root, install)
+    assert not (outside / discovery.STATE_FILE).exists()
+
+    state_root = tmp_path / "state"
+    state_root.mkdir()
+    redirected_state = state_root / discovery.STATE_FILE
+    redirected_state.symlink_to(outside / "selected.json")
+    assert discovery.read_install_state(state_root) is None

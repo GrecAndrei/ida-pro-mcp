@@ -9,7 +9,6 @@ instead of an unbounded pile-up of waiting threads.
 from __future__ import annotations
 
 import threading
-import time
 
 import pytest
 
@@ -51,7 +50,7 @@ def _register_runtime(harness, sid: str, port: int) -> threading.Lock:
     return lock
 
 
-def _local_echo_server(port: int = 0, hold: float = 0.0, concurrency_counter=None):
+def _local_echo_server(port: int = 0, concurrency_counter=None, hold_event=None):
     """A minimal TCP server that replies with a canned JSON payload.
 
     If concurrency_counter is given, it records concurrent entry so tests can
@@ -90,6 +89,12 @@ def _local_echo_server(port: int = 0, hold: float = 0.0, concurrency_counter=Non
                         concurrency_counter["max"] = max(
                             concurrency_counter["max"], concurrency_counter["active"]
                         )
+                        ready_count = int(concurrency_counter.get("ready_count", 0) or 0)
+                        ready_event = concurrency_counter.get("ready_event")
+                        if ready_count and ready_event is not None and (
+                            concurrency_counter["active"] >= ready_count
+                        ):
+                            ready_event.set()
                     try:
                         header = c.recv(4)
                         if len(header) != 4:
@@ -101,8 +106,8 @@ def _local_echo_server(port: int = 0, hold: float = 0.0, concurrency_counter=Non
                             if not chunk:
                                 return
                             data += chunk
-                        if hold:
-                            time.sleep(hold)
+                        if hold_event is not None:
+                            hold_event.wait(timeout=5)
                         payload = json.dumps({"ok": True}).encode("utf-8")
                         c.sendall(len(payload).to_bytes(4, "big") + payload)
                     finally:
@@ -123,8 +128,17 @@ def harness():
 
 def test_same_session_rpc_lane_serializes(harness):
     """Two concurrent RPCs to one session must never overlap on the bridge."""
-    counter = {"active": 0, "max": 0, "lock": threading.Lock()}
-    srv, stop, port = _local_echo_server(0, hold=0.25, concurrency_counter=counter)
+    release = threading.Event()
+    counter = {
+        "active": 0,
+        "max": 0,
+        "lock": threading.Lock(),
+        "ready_count": 1,
+        "ready_event": threading.Event(),
+    }
+    srv, stop, port = _local_echo_server(
+        0, concurrency_counter=counter, hold_event=release
+    )
     _register_runtime(harness, "AAAA1111", port)
     try:
         results = {}
@@ -143,6 +157,8 @@ def test_same_session_rpc_lane_serializes(harness):
         ]
         for t in threads:
             t.start()
+        assert counter["ready_event"].wait(timeout=2)
+        release.set()
         for t in threads:
             t.join(timeout=10)
         assert results["a"] == {"ok": True}
@@ -156,9 +172,20 @@ def test_same_session_rpc_lane_serializes(harness):
 
 def test_different_session_lanes_run_in_parallel(harness):
     """RPCs to different sessions must overlap on their separate lanes."""
-    counter = {"active": 0, "max": 0, "lock": threading.Lock()}
-    srv_a, stop_a, port_a = _local_echo_server(0, hold=0.4, concurrency_counter=counter)
-    srv_b, stop_b, port_b = _local_echo_server(0, hold=0.4, concurrency_counter=counter)
+    release = threading.Event()
+    counter = {
+        "active": 0,
+        "max": 0,
+        "lock": threading.Lock(),
+        "ready_count": 2,
+        "ready_event": threading.Event(),
+    }
+    srv_a, stop_a, port_a = _local_echo_server(
+        0, concurrency_counter=counter, hold_event=release
+    )
+    srv_b, stop_b, port_b = _local_echo_server(
+        0, concurrency_counter=counter, hold_event=release
+    )
     _register_runtime(harness, "AAAA1111", port_a)
     _register_runtime(harness, "BBBB2222", port_b)
     try:
@@ -178,6 +205,8 @@ def test_different_session_lanes_run_in_parallel(harness):
         ]
         for t in threads:
             t.start()
+        assert counter["ready_event"].wait(timeout=2)
+        release.set()
         for t in threads:
             t.join(timeout=10)
         assert results["a"] == {"ok": True}
@@ -196,7 +225,6 @@ def test_queue_timeout_raises_when_lane_busy(harness):
     lock = _register_runtime(harness, "AAAA1111", 19024)
     lock.acquire()
     try:
-        t0 = time.monotonic()
         with pytest.raises(TimeoutError):
             harness._send_rpc_raw(
                 {"tool": "funcs", "args": {"action": "list"}},
@@ -205,7 +233,6 @@ def test_queue_timeout_raises_when_lane_busy(harness):
                 recv_timeout=10,
                 queue_timeout=0.1,
             )
-        assert time.monotonic() - t0 < 2.0
     finally:
         lock.release()
 
@@ -309,23 +336,42 @@ def test_health_reports_rpc_queue_depth(tmp_path, monkeypatch):
 
 def test_unbounded_queue_waits_for_lane(harness):
     """queue_timeout=None (legacy default) blocks until the lane frees."""
-    srv, stop, port = _local_echo_server(0, hold=0.2)
-    lock = _register_runtime(harness, "AAAA1111", port)
-    lock.acquire()
+    srv, stop, port = _local_echo_server(0)
+    acquire_seen = threading.Event()
+    release = threading.Event()
 
-    def _release_later():
-        time.sleep(0.2)
-        lock.release()
+    class _GateLock:
+        def acquire(self, timeout=None):
+            assert timeout is None
+            acquire_seen.set()
+            return release.wait(timeout=2)
 
-    threading.Thread(target=_release_later, daemon=True).start()
-    try:
-        result = harness._send_rpc_raw(
+        def release(self):
+            release.set()
+
+    _register_runtime(harness, "AAAA1111", port)
+    harness.session_runtimes["AAAA1111"]["rpc_lock"] = _GateLock()
+    result_box = {}
+
+    def _call():
+        result_box["result"] = harness._send_rpc_raw(
             {"tool": "funcs", "args": {"action": "list"}},
             port,
             timeout=5,
             recv_timeout=10,
         )
-        assert result == {"ok": True}
+
+    caller = threading.Thread(target=_call)
+    caller.start()
+    try:
+        assert acquire_seen.wait(timeout=2)
+        assert caller.is_alive()
+        release.set()
+        caller.join(timeout=2)
+        assert not caller.is_alive()
+        assert result_box["result"] == {"ok": True}
     finally:
+        release.set()
+        caller.join(timeout=2)
         stop.set()
         srv.close()

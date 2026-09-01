@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 import os
 import stat
@@ -11,8 +12,88 @@ from pathlib import Path
 from typing import Any
 
 
+@contextlib.contextmanager
+def installer_lock(install_root: Path):
+    """Serialize installers targeting the same managed root.
+
+    Installer phases replace directories and client files atomically, but two
+    independent installer processes can still interleave those replacements
+    and leave a mixed-version environment.  The OS lock is released when the
+    process exits, including crashes, so a stale lock file never blocks future
+    installs.
+    """
+    root = Path(
+        os.path.abspath(
+            os.path.expandvars(os.path.expanduser(os.fspath(install_root)))
+        )
+    )
+    lock_path = root / ".install.lock"
+    reject_symlink_path(lock_path, "installer lock path")
+    root.mkdir(parents=True, exist_ok=True)
+    # Re-check after creating missing parents; an attacker or another process
+    # must not be able to swap a managed component between validation and open.
+    reject_symlink_path(lock_path, "installer lock path")
+    flags = os.O_RDWR | os.O_CREAT
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    if os.name == "nt":
+        flags |= getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(lock_path, flags, 0o600)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise RuntimeError(f"Refusing symlinked installer lock path: {lock_path}") from exc
+        raise
+
+    acquired = False
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            os.ftruncate(fd, 1)
+            os.lseek(fd, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                raise RuntimeError(
+                    f"Another installer is already running for {root}"
+                ) from exc
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                if exc.errno in (errno.EACCES, errno.EAGAIN):
+                    raise RuntimeError(
+                        f"Another installer is already running for {root}"
+                    ) from exc
+                raise
+        acquired = True
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        yield lock_path
+    finally:
+        if acquired:
+            if os.name == "nt":
+                import msvcrt
+
+                with contextlib.suppress(OSError):
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                with contextlib.suppress(OSError):
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        with contextlib.suppress(OSError):
+            os.close(fd)
+
+
 def _atomic_write(path: Path, payload: bytes) -> None:
     """Replace *path* atomically, keeping partial writes out of user files."""
+    reject_symlink_path(path, "atomic write path")
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         mode = stat.S_IMODE(path.stat().st_mode)
@@ -52,13 +133,29 @@ def atomic_write_bytes(path: Path, content: bytes) -> None:
     _atomic_write(path, content)
 
 
+def reject_symlink_path(path: Path, description: str) -> None:
+    """Reject a managed path or any existing parent that is a symlink."""
+    current = path.expanduser()
+    if not current.is_absolute():
+        current = Path(os.path.abspath(current))
+    while True:
+        if current.is_symlink():
+            raise RuntimeError(f"Refusing symlinked {description}: {current}")
+        if current.parent == current:
+            return
+        current = current.parent
+
+
 @dataclass
 class InstallerOptions:
     dry_run: bool = False
     yes: bool = False
     kill_ida: bool = False
     install_cli_shim: bool = False
-    rollback_on_fail: bool = False
+    # Restoring client configs after a later phase fails is the safe default in
+    # both interactive and headless installs. Callers that intentionally want
+    # best-effort partial changes can opt out explicitly.
+    rollback_on_fail: bool = True
     runtime_source: str = "auto"
     skills_mode: str = "agent"
     install_claude_skills: bool = True  # install skills for Claude Code / OpenCode
@@ -108,6 +205,8 @@ class InstallerOptions:
     sigs_dir: str = ""  # --sigs <dir>: stage a FLIRT sig pack into IDA's sig dir
     ida_binary_path: str = ""  # optional --kill-ida executable scope
     allow_unverified_downloads: bool = False  # explicit supply-chain escape hatch
+    with_bron_corpus: bool = False  # opt-in download of the optional threat corpus
+    verify_bron_corpus: bool = False  # require per-source BRON SHA-256 env vars
 
 
 @dataclass
@@ -149,6 +248,7 @@ class InstallReport:
         self.finished_at = datetime.now(UTC).isoformat()
 
     def write(self, path: Path) -> None:
+        reject_symlink_path(path, "installer report path")
         payload = {
             "started_at": self.started_at,
             "finished_at": self.finished_at,

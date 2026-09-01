@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import os
 import threading
-import time
 
 from ida_pro_mcp.host.server.server_multi_session import (
     ServerMultiSessionMixin,
@@ -52,6 +51,36 @@ def test_analysis_gate_round_trips_through_to_dict_from_dict():
     assert junk.analysis_gate is None
     missing = Session.from_dict({"session_id": "ABC12345"})
     assert missing.analysis_gate is None
+
+
+def test_session_from_dict_normalizes_optional_metadata_types():
+    restored = Session.from_dict(
+        {
+            "session_id": "ABC12345",
+            "idb_path": None,
+            "binary_path": None,
+            "analysis_options": ["not a mapping"],
+            "ida_args": ["-A", 123, None],
+            "tags": ["firmware", 7, None],
+            "notes": 42,
+            "auto_name": 99,
+            "phase": 123,
+            "linked_sessions": ["DEF67890", 1],
+            "policy_mode": {"mode": "strict"},
+            "metadata": ["not a mapping"],
+        }
+    )
+    assert restored.idb_path == ""
+    assert restored.binary_path == ""
+    assert restored.analysis_options == {}
+    assert restored.ida_args == ["-A"]
+    assert restored.tags == ["firmware", "7"]
+    assert restored.notes == ""
+    assert restored.auto_name == "session_ABC12345"
+    assert restored.phase == "triage"
+    assert restored.linked_sessions == ["DEF67890"]
+    assert restored.policy_mode is None
+    assert restored.metadata == {}
 
 
 def test_analysis_gate_survives_manager_save_and_reload(tmp_path):
@@ -322,13 +351,21 @@ def test_group_link_does_not_hold_group_lock_during_ida_rpc(tmp_path):
     worker.start()
     assert imports_started.wait(timeout=10)
 
-    started = time.monotonic()
-    status = server._ms_status({})
-    elapsed = time.monotonic() - started
+    status_box: dict = {}
+    status_done = threading.Event()
+
+    def _status():
+        status_box["value"] = server._ms_status({})
+        status_done.set()
+
+    status_thread = threading.Thread(target=_status)
+    status_thread.start()
+    assert status_done.wait(timeout=2)
     release_imports.set()
+    status_thread.join(timeout=2)
     worker.join(timeout=10)
 
-    assert status["ok"] is True
-    assert elapsed < 1.0
+    assert status_box["value"]["ok"] is True
+    assert not status_thread.is_alive()
     assert not worker.is_alive()
     assert result.get("ok") is True

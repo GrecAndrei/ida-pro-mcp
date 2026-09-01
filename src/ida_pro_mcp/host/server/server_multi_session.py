@@ -8,6 +8,7 @@ tool calls (e.g. decompile) to the session that owns a given symbol.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import threading
@@ -17,6 +18,7 @@ from typing import Any
 
 from ..config import log_rpc
 from ..errors import MCPError, make_error
+from .server_runtime_leases import _runtime_lease_io_lock
 
 
 class SessionGroup:
@@ -51,15 +53,45 @@ class SessionGroup:
         references survive a restart (D3-F9). Unknown keys are dropped and
         malformed link rows are skipped defensively.
         """
-        group = cls(str(data.get("group_id") or ""), str(data.get("name") or ""))
+        if not isinstance(data, dict):
+            return cls("")
+        group = cls(str(data.get("group_id") or "").strip(), str(data.get("name") or "").strip())
         raw_sids = data.get("session_ids") or []
         if isinstance(raw_sids, list):
-            group.session_ids = [str(s) for s in raw_sids if s]
+            seen_sids: set[str] = set()
+            for raw_sid in raw_sids:
+                if not isinstance(raw_sid, str):
+                    continue
+                sid = raw_sid.strip().upper()
+                if sid and sid not in seen_sids:
+                    group.session_ids.append(sid)
+                    seen_sids.add(sid)
         links = data.get("links")
         if isinstance(links, dict):
             for name, link in links.items():
-                if isinstance(link, dict):
-                    group.links[str(name)] = dict(link)
+                if not isinstance(name, str) or not name.strip() or not isinstance(link, dict):
+                    continue
+                provider_sid = link.get("provider_sid")
+                export_ea = link.get("export_ea")
+                importer_sids = link.get("importer_sids")
+                if not isinstance(provider_sid, str) or not provider_sid.strip():
+                    continue
+                if not isinstance(export_ea, str) or not export_ea.strip():
+                    continue
+                if not isinstance(importer_sids, list):
+                    continue
+                importers: list[str] = []
+                for raw_sid in importer_sids:
+                    if not isinstance(raw_sid, str):
+                        continue
+                    sid = raw_sid.strip().upper()
+                    if sid and sid not in importers:
+                        importers.append(sid)
+                group.links[name.strip()] = {
+                    "provider_sid": provider_sid.strip().upper(),
+                    "export_ea": export_ea.strip(),
+                    "importer_sids": importers,
+                }
         meta = data.get("metadata")
         if isinstance(meta, dict):
             group.metadata = dict(meta)
@@ -120,7 +152,13 @@ class ServerMultiSessionMixin:
         except Exception as e:
             log_rpc(f"Failed to load session groups from {path}: {e}")
             return
-        raw = data if isinstance(data, list) else data.get("groups", [])
+        if isinstance(data, list):
+            raw = data
+        elif isinstance(data, dict):
+            raw = data.get("groups", [])
+        else:
+            log_rpc(f"Ignoring malformed session groups root in {path}")
+            return
         if not isinstance(raw, list):
             return
         loaded = 0
@@ -149,19 +187,23 @@ class ServerMultiSessionMixin:
         # the file, an older snapshot can otherwise win the race and erase the
         # newer group's update.
         with self._groups_persist_lock:
+            tmp = f"{path}.{os.getpid()}.tmp"
             try:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 # Pid-scoped tmp so concurrent hosts sharing one cache never
                 # write into each other's temp file; os.replace is atomic.
-                tmp = f"{path}.{os.getpid()}.tmp"
-                with self._session_groups_lock:
-                    payload = [g.to_dict() for g in self._session_groups.values()]
-                with open(tmp, "w", encoding="utf-8") as f:
-                    json.dump(payload, f, indent=2)
-                    f.flush()
-                os.replace(tmp, path)
+                with _runtime_lease_io_lock(path):
+                    with self._session_groups_lock:
+                        payload = [g.to_dict() for g in self._session_groups.values()]
+                    with open(tmp, "w", encoding="utf-8") as f:
+                        json.dump(payload, f, indent=2)
+                        f.flush()
+                    os.replace(tmp, path)
             except Exception as e:
                 log_rpc(f"Failed to persist session groups to {path}: {e}")
+            finally:
+                with contextlib.suppress(OSError):
+                    os.remove(tmp)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -277,10 +319,18 @@ class ServerMultiSessionMixin:
 
         # Validate that all sessions exist
         valid_sids: list[str] = []
+        seen_sids: set[str] = set()
         for raw_sid in session_ids:
+            if not isinstance(raw_sid, str):
+                return make_error(MCPError.INVALID_ARGS, "session_ids must contain strings")
             sid = str(raw_sid).strip().upper()
             if not sid:
                 return make_error(MCPError.INVALID_ARGS, "Empty session_id in list")
+            if sid in seen_sids:
+                return make_error(
+                    MCPError.INVALID_ARGS,
+                    f"Duplicate session_id '{sid}' in group",
+                )
             if not self.session_mgr.session_exists(sid):
                 return make_error(
                     MCPError.SESSION_NOT_FOUND,
@@ -288,6 +338,7 @@ class ServerMultiSessionMixin:
                     hint="All sessions in the group must exist. Use ida_session_list.",
                 )
             valid_sids.append(sid)
+            seen_sids.add(sid)
 
         name = str(args.get("name") or "").strip()
         group_id = str(args.get("group_id") or "").strip() or str(uuid.uuid4())[:8]

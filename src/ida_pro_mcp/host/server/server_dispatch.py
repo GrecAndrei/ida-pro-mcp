@@ -1222,6 +1222,31 @@ class ServerDispatchMixin(ServerClientStateMixin):
         base_args = dict(entry.get("args") or {})
         base_args["action"] = entry.get("action")
 
+        # The cache is server-wide, while client state is connection- and
+        # agent-scoped.  Reject a token before replaying any backend call when
+        # it was minted for another connection, agent, or session.  Unscoped
+        # entries are accepted only by an equally unscoped compatibility
+        # caller; a scoped caller must not unlock one accidentally.
+        current_session_id, current_owner_id = self._next_cache_scope(base_args)
+        cached_session_id = str(entry.get("session_id") or "")
+        cached_owner_id = str(entry.get("owner_id") or "")
+        if cached_session_id or cached_owner_id:
+            if (
+                (cached_session_id and current_session_id != cached_session_id)
+                or (cached_owner_id and current_owner_id != cached_owner_id)
+            ):
+                return make_error(
+                    MCPError.TRUNCATION_TOKEN_INVALID,
+                    "next_token is not valid for this connection or session",
+                    hint="Continue the token from the MCP connection and session that created it.",
+                )
+        elif current_session_id or current_owner_id:
+            return make_error(
+                MCPError.TRUNCATION_TOKEN_INVALID,
+                "Unscoped next_token cannot be used by a scoped caller",
+                hint="Re-run the original call to obtain a scoped continuation token.",
+            )
+
         # Two token flavours share this cache:
         #   * PP-pagination tokens (minted by _cache_post_process_next) carry a
         #     "post_process" entry; the host re-fetches the full result and
@@ -1349,7 +1374,13 @@ class ServerDispatchMixin(ServerClientStateMixin):
         return result
 
     def _cache_post_process_next(
-        self, tool_name: str, base_args: dict, pp_params: dict, result: Any
+        self,
+        tool_name: str,
+        base_args: dict,
+        pp_params: dict,
+        result: Any,
+        *,
+        scope: tuple[str, str] | None = None,
     ) -> Any:
         """Cache a continuation token if the result has more pages."""
         if not isinstance(result, dict) or is_error_result(result):
@@ -1375,6 +1406,7 @@ class ServerDispatchMixin(ServerClientStateMixin):
         self._prune_next_cache()
         token = uuid.uuid4().hex[:12].upper()
         effective_page = int(page_size) if page_size else count
+        session_id, owner_id = scope or self._next_cache_scope(base_args)
 
         with self._next_cache_lock():
             self._next_cache[token] = {
@@ -1387,6 +1419,8 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     if k not in {"next_token", "_forwarded_offset"}
                 },
                 "next_offset": current_offset + effective_page,
+                "session_id": session_id,
+                "owner_id": owner_id,
                 "created_at": time.time(),
             }
         result["next_token"] = token
@@ -1701,6 +1735,10 @@ class ServerDispatchMixin(ServerClientStateMixin):
             args = self._normalize_tool_call_args(tool_name, args)
             if is_error_result(args):
                 return args
+
+            scope_error = self._agent_scope_error(tool_name, args.get("action"))
+            if scope_error is not None:
+                return scope_error
 
             # Agent SSO: ``agent`` is a host-level identity tag, never an IDA
             # argument. It is normally popped in the tools/call dispatcher;

@@ -7,7 +7,12 @@ import shutil
 import uuid
 from pathlib import Path
 
-from .common import InstallReport, atomic_write_bytes, atomic_write_text
+from .common import (
+    InstallReport,
+    atomic_write_bytes,
+    atomic_write_text,
+    reject_symlink_path,
+)
 
 # Canonical legacy server identifiers that should be migrated/replaced with
 # the current canonical MCP server name.
@@ -16,6 +21,11 @@ LEGACY_SERVER_NAMES = (
     "ida_mcp",
     "ida-pro-mcp-server",
 )
+
+
+def _expand_configured_path(value: str) -> Path:
+    """Expand user/environment references from client path settings."""
+    return Path(os.path.expandvars(os.path.expanduser(str(value).strip())))
 
 
 def _atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:
@@ -40,17 +50,20 @@ def load_client_map(source_root: Path) -> dict:
         Path(__file__).resolve().parent / "client_configs.json",
     ]
     for config_path in candidates:
-        if config_path.exists():
+        if config_path.is_file():
             data = json.loads(config_path.read_text(encoding="utf-8"))
             return data.get("clients", {})
     return {}
 
 
 def backup_file(path: Path, report: InstallReport, dry_run: bool) -> Path | None:
+    reject_symlink_path(path, "client config path")
     if not path.exists() and not path.is_symlink():
         if not dry_run:
             report.add_created(path)
         return None
+    if not path.is_file():
+        raise RuntimeError(f"Refusing non-regular client config path: {path}")
     # Two client updates can happen inside the same second. A UUID keeps
     # those rollback points independent instead of overwriting one another.
     backup = path.with_suffix(path.suffix + f".bak.{uuid.uuid4().hex}")
@@ -90,13 +103,25 @@ def _prune_legacy_entries(container: dict, server_name: str) -> None:
         container.pop(key, None)
 
 
-def _prepare_config_path(path: Path, report: InstallReport, dry_run: bool) -> None:
-    if path.is_symlink():
+def _validate_config_path(path: Path) -> None:
+    try:
+        reject_symlink_path(path, "client config path")
+    except RuntimeError as exc:
         raise ConfigParseError(
             f"Refusing to replace symlinked client config {path}; "
             "update its target explicitly and re-run the installer."
+        ) from exc
+    if path.exists() and not path.is_file():
+        raise ConfigParseError(
+            f"Refusing non-regular client config path {path}; "
+            "choose a regular file or remove the path before retrying."
         )
-    path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _prepare_config_path(path: Path, report: InstallReport, dry_run: bool) -> None:
+    _validate_config_path(path)
+    if not dry_run:
+        path.parent.mkdir(parents=True, exist_ok=True)
     backup_file(path, report, dry_run)
 
 
@@ -137,6 +162,8 @@ def _strip_jsonc_comments(text: str) -> str:
             i += 2
             while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
                 i += 1
+            if i + 1 >= n:
+                raise ValueError("unterminated block comment")
             i += 2
             continue
         out.append(ch)
@@ -165,7 +192,13 @@ def _load_json_config(path: Path, *, allow_comments: bool = True) -> dict:
     if not content.strip():
         return {}
     try:
-        return json.loads(content)
+        config = json.loads(content)
+        if not isinstance(config, dict):
+            raise ConfigParseError(
+                f"{path} must contain a top-level JSON object; "
+                "fix the syntax or remove the file before retrying."
+            )
+        return config
     except json.JSONDecodeError:
         pass
     if not allow_comments:
@@ -174,8 +207,14 @@ def _load_json_config(path: Path, *, allow_comments: bool = True) -> dict:
             "fix the syntax or remove the file before retrying."
         )
     try:
-        return json.loads(_strip_jsonc_comments(content))
-    except json.JSONDecodeError as exc:
+        config = json.loads(_strip_jsonc_comments(content))
+        if not isinstance(config, dict):
+            raise ConfigParseError(
+                f"{path} must contain a top-level JSON object; "
+                "fix the syntax or remove the file before retrying."
+            )
+        return config
+    except (json.JSONDecodeError, ValueError) as exc:
         raise ConfigParseError(
             f"Could not parse {path} as JSON or JSONC: {exc}. "
             "Fix the syntax or remove the file before retrying."
@@ -239,8 +278,13 @@ def _toml_dump_simple(data: dict) -> str:
 
 def get_config_paths(source_root: Path) -> dict[str, Path]:
     home = Path.home()
-    appdata = Path(os.environ.get("APPDATA", str(home / "AppData" / "Roaming")))
-    xdg_config = Path(os.environ.get("XDG_CONFIG_HOME", str(home / ".config")))
+    appdata = _expand_configured_path(
+        os.environ.get("APPDATA", "").strip()
+        or str(home / "AppData" / "Roaming")
+    )
+    xdg_config = _expand_configured_path(
+        os.environ.get("XDG_CONFIG_HOME", "").strip() or str(home / ".config")
+    )
     is_windows = os.name == "nt"
     raw = load_client_map(source_root)
 
@@ -257,15 +301,20 @@ def get_config_paths(source_root: Path) -> dict[str, Path]:
         paths = meta.get("paths", [])
         env_override = meta.get("env_override")
         pick_existing = bool(meta.get("pick_existing", False))
-        if env_override and os.environ.get(env_override):
-            out[name] = Path(os.environ[env_override]).expanduser()
+        override_value = os.environ.get(env_override, "").strip() if env_override else ""
+        if override_value:
+            out[name] = _expand_configured_path(override_value)
             continue
         if isinstance(paths, dict):
             out[name] = resolve(paths.get("windows" if is_windows else "unix", ""))
             continue
         candidates = [resolve(p) for p in paths]
         if pick_existing:
-            existing = next((p for p in candidates if p.exists()), None)
+            # A directory (or other placeholder) at the preferred location
+            # must not mask a usable fallback. Keep symlinks in the selection
+            # so the updater can reject them explicitly instead of silently
+            # switching to another target.
+            existing = next((p for p in candidates if p.is_file() or p.is_symlink()), None)
             out[name] = existing or candidates[0]
         else:
             out[name] = candidates[0]
@@ -282,7 +331,7 @@ def update_json_config(
     top_level_key: str = "mcpServers",
     server_type: str = "",
 ) -> bool:
-    _prepare_config_path(path, report, dry_run)
+    _validate_config_path(path)
     try:
         config = _load_json_config(path, allow_comments=True)
     except ConfigParseError as exc:
@@ -292,25 +341,38 @@ def update_json_config(
     # "servers" top-level key instead of the classic "mcpServers", and expect
     # local servers to declare "type": "stdio".  Writing under the wrong key
     # makes the server silently invisible to the client.
+    if top_level_key in config and not isinstance(config[top_level_key], dict):
+        report.add_error(
+            f"Could not update {path}: top-level {top_level_key!r} must be an object. "
+            "Fix the syntax or remove the key before retrying."
+        )
+        return False
     config.setdefault(top_level_key, {})
     entry = dict(server_cfg)
     if server_type:
         entry["type"] = server_type
     _upsert_server_entry(config[top_level_key], server_name, entry)
+    _prepare_config_path(path, report, dry_run)
     if not dry_run:
         _atomic_write_text(path, json.dumps(config, indent=2))
-    report.add_modified(path)
+        report.add_modified(path)
     return True
 
 
 def update_opencode_config(path: Path, server_name: str, server_cfg: dict, report: InstallReport, dry_run: bool) -> bool:
-    _prepare_config_path(path, report, dry_run)
+    _validate_config_path(path)
     try:
         config = _load_json_config(path, allow_comments=True)
     except ConfigParseError as exc:
         report.add_error(str(exc))
         return False
     config.setdefault("$schema", "https://opencode.ai/config.json")
+    if "mcp" in config and not isinstance(config["mcp"], dict):
+        report.add_error(
+            f"Could not update {path}: top-level 'mcp' must be an object. "
+            "Fix the syntax or remove the key before retrying."
+        )
+        return False
     config.setdefault("mcp", {})
     opencode_entry = {
         "type": "local",
@@ -319,9 +381,10 @@ def update_opencode_config(path: Path, server_name: str, server_cfg: dict, repor
         "environment": server_cfg.get("env", {}),
     }
     _upsert_server_entry(config["mcp"], server_name, opencode_entry)
+    _prepare_config_path(path, report, dry_run)
     if not dry_run:
         _atomic_write_text(path, json.dumps(config, indent=2))
-    report.add_modified(path)
+        report.add_modified(path)
     return True
 
 
@@ -336,7 +399,7 @@ def update_toml_config(path: Path, server_name: str, server_cfg: dict, report: I
     except ImportError:
         tomli_w = None
 
-    _prepare_config_path(path, report, dry_run)
+    _validate_config_path(path)
     config = {}
     if path.exists():
         try:
@@ -347,8 +410,15 @@ def update_toml_config(path: Path, server_name: str, server_cfg: dict, report: I
                 "Fix the syntax or remove the file before retrying."
             )
             return False
+    if "mcp_servers" in config and not isinstance(config["mcp_servers"], dict):
+        report.add_error(
+            f"Could not update {path}: top-level 'mcp_servers' must be a table. "
+            "Fix the syntax or remove the key before retrying."
+        )
+        return False
     config.setdefault("mcp_servers", {})
     _upsert_server_entry(config["mcp_servers"], server_name, server_cfg)
+    _prepare_config_path(path, report, dry_run)
     if not dry_run:
         if tomli_w is not None:
             import io
@@ -357,7 +427,7 @@ def update_toml_config(path: Path, server_name: str, server_cfg: dict, report: I
             _atomic_write_bytes(path, buf.getvalue())
         else:
             _atomic_write_text(path, _toml_dump_simple(config))
-    report.add_modified(path)
+        report.add_modified(path)
     return True
 
 
@@ -374,6 +444,7 @@ def configure_clients(
     server_name: str = "ida-pro-mcp",
 ) -> list[str]:
     configured: list[str] = []
+    failed: list[str] = []
     meta_by_client = _client_meta(source_root)
     for client, path in get_config_paths(source_root).items():
         try:
@@ -394,8 +465,13 @@ def configure_clients(
                 )
             if ok:
                 configured.append(client)
+            else:
+                failed.append(client)
         except Exception as exc:
             report.add_warning(f"{client} config update failed: {exc}")
+            failed.append(client)
+    if failed:
+        report.metadata["client_update_failures"] = failed
     return configured
 
 
@@ -403,10 +479,16 @@ def rollback_from_backups(report: InstallReport) -> None:
     for item in reversed(report.backups):
         target = Path(item["target"])
         backup = Path(item["backup"])
+        reject_symlink_path(target, "rollback target")
+        reject_symlink_path(backup, "rollback backup")
         if not backup.exists():
             continue
+        if not backup.is_file():
+            raise RuntimeError(f"Rollback backup is not a regular file: {backup}")
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(backup, target)
+        # Atomic replacement never follows a target symlink if a concurrent
+        # process swaps the config after the preflight check.
+        atomic_write_bytes(target, backup.read_bytes())
     for value in reversed(report.created_files):
         target = Path(value)
         if target.is_file() or target.is_symlink():

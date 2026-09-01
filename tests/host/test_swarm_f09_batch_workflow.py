@@ -23,7 +23,6 @@ import os
 import subprocess
 import sys
 import threading
-import time
 from types import SimpleNamespace
 
 import ida_pro_mcp.host.server.server_batch as sb_module
@@ -418,6 +417,7 @@ def test_bg_wait_caps_unbounded_and_huge_timeouts(tmp_path, monkeypatch):
     monkeypatch.setattr(sb_module, "_BG_WAIT_MAX_SECONDS", 0.1)
     server = _make_server(tmp_path, monkeypatch)
     block = threading.Event()
+    waits: list[float] = []
     server._execute_tool = lambda tool, args: {"ok": True, "tool": tool}
     token = server._begin_client_connection()
     try:
@@ -426,17 +426,19 @@ def test_bg_wait_caps_unbounded_and_huge_timeouts(tmp_path, monkeypatch):
         task_id = server._batch_manager.submit(
             "tool_call", {"x": 1}, session_id="SID_T1", run_fn=lambda task: block.wait(3) or {"ok": True}
         )
-        start = time.time()
+        monkeypatch.setattr(
+            server._batch_manager,
+            "wait",
+            lambda task_id, timeout=None: waits.append(timeout) or {"state": "running"},
+        )
         huge = server._bg_wait({"task_id": task_id, "timeout": 99999})
         assert huge.get("error") is not True
-        assert (time.time() - start) < 2, "huge timeout must be capped"
         assert huge["state"] == "running"
 
-        start = time.time()
         implicit = server._bg_wait({"task_id": task_id})
         assert implicit.get("error") is not True
-        assert (time.time() - start) < 2, "None timeout must be capped"
         assert implicit["state"] == "running"
+        assert waits == [0.1, 0.1]
     finally:
         block.set()
         server._end_client_connection(token)
