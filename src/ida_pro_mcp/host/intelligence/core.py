@@ -837,6 +837,20 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _lease_pid(value: object) -> int:
+    """Parse a persisted subprocess PID without truncating unsafe values."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        value = value.strip()
+        if value.isascii() and value.isdigit():
+            with contextlib.suppress(ValueError):
+                return int(value)
+    return 0
+
+
 def _process_command(pid: int) -> str:
     if sys.platform.startswith("linux"):
         try:
@@ -1245,20 +1259,22 @@ class BgeCodeEmbedder:
             return json.loads(response.read())
 
     def _lease_matches(self, lease: dict[str, Any]) -> bool:
+        if not isinstance(lease, dict):
+            return False
         try:
             if int(lease.get("schema") or 0) != _EMBED_LEASE_SCHEMA:
                 return False
-            pid = int(lease.get("pid") or 0)
-            owner_pid = int(lease.get("owner_pid") or 0)
+            pid = _lease_pid(lease.get("pid"))
+            owner_pid = _lease_pid(lease.get("owner_pid"))
             port = int(lease.get("port") or 0)
         except (TypeError, ValueError):
             return False
         if not _pid_alive(pid) or not _pid_alive(owner_pid) or port <= 0:
             return False
-        expected_start = str(lease.get("process_start_token") or "")
+        expected_start = str(lease.get("process_start_token") or "").strip()
         if expected_start and _process_start_token(pid) != expected_start:
             return False
-        expected_owner_start = str(lease.get("owner_start_token") or "")
+        expected_owner_start = str(lease.get("owner_start_token") or "").strip()
         if expected_owner_start and _process_start_token(owner_pid) != expected_owner_start:
             return False
         identity = self._lease_identity()
@@ -1282,9 +1298,11 @@ class BgeCodeEmbedder:
     def _pid_is_expected_server(self, pid: int, lease: dict[str, Any] | None = None) -> bool:
         command = _process_command(pid)
         if not command:
-            # On platforms without process-command inspection, only terminate
-            # a process represented by a current, identity-bearing lease.
-            return bool(lease and int(lease.get("schema") or 0) == _EMBED_LEASE_SCHEMA)
+            # A lease proves that a server existed, not that this PID still
+            # belongs to it. Refuse to signal when process identity cannot be
+            # inspected; the next startup can reclaim the lease without
+            # risking an unrelated process.
+            return False
         server_path = str((lease or {}).get("server_path") or self._server_bin or "")
         model_path = str((lease or {}).get("model_path") or self._model_path or "")
         return bool(
@@ -1296,10 +1314,11 @@ class BgeCodeEmbedder:
 
     def _retire_lease_process(self, lease: dict[str, Any], reason: str) -> None:
         try:
-            pid = int(lease.get("pid") or 0)
+            pid = _lease_pid(lease.get("pid"))
         except (TypeError, ValueError):
             pid = 0
-        if pid > 0 and _pid_alive(pid) and self._pid_is_expected_server(pid, lease):
+        can_remove_lease = pid <= 0 or not _pid_alive(pid)
+        if pid > 0 and not can_remove_lease and self._pid_is_expected_server(pid, lease):
             with contextlib.suppress(OSError):
                 os.kill(pid, 15)
             deadline = time.monotonic() + 3.0
@@ -1308,10 +1327,12 @@ class BgeCodeEmbedder:
             if _pid_alive(pid):
                 with contextlib.suppress(OSError):
                     os.kill(pid, 9)
-        with contextlib.suppress(OSError):
-            current = self._read_lease()
-            if not current or current.get("pid") == lease.get("pid"):
-                os.unlink(_EMBED_LEASE_FILE)
+            can_remove_lease = not _pid_alive(pid)
+        if can_remove_lease:
+            with contextlib.suppress(OSError):
+                current = self._read_lease()
+                if not current or current == lease:
+                    os.unlink(_EMBED_LEASE_FILE)
         self._last_recycle_reason = reason
         self._invalidate_embedding_cache()
         self._ready = False
@@ -1399,7 +1420,7 @@ class BgeCodeEmbedder:
         lease = self._read_lease()
         if not lease or not self._lease_matches(lease):
             return
-        pid = int(lease.get("pid") or 0)
+        pid = _lease_pid(lease.get("pid"))
         rss = _process_rss_bytes(pid)
         prev_rss = int(lease.get("rss") or 0)
         count = int(lease.get("request_count") or 0) + 1
@@ -1599,20 +1620,35 @@ class BgeCodeEmbedder:
         try:
             with open(_EMBED_LEASE_FILE, encoding="utf-8") as f:
                 lease = json.load(f)
-            lease_pid = int(lease.get("pid") or 0)
-            if int(lease.get("owner_pid") or 0) == os.getpid() and lease_pid > 0:
+            if not isinstance(lease, dict):
+                lease = {}
+            lease_pid = _lease_pid(lease.get("pid"))
+            owner_pid = _lease_pid(lease.get("owner_pid"))
+            owner_start = str(lease.get("owner_start_token") or "").strip()
+            owner_matches = owner_pid == os.getpid() and (
+                not owner_start or _process_start_token(owner_pid) == owner_start
+            )
+            if owner_matches and lease_pid > 0:
                 owned_pid = owned_pid or lease_pid
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             lease_pid = 0
+        lease_process_stopped = False
         if owned_pid and self._proc and self._proc.poll() is None:
             self._proc.terminate()
             try:
                 self._proc.wait(timeout=5)
+                lease_process_stopped = True
             except Exception:
                 self._proc.kill()
-                with contextlib.suppress(Exception):
+                try:
                     self._proc.wait(timeout=2)
-        elif owned_pid and self._proc is None:
+                except Exception:
+                    pass
+                else:
+                    lease_process_stopped = True
+        elif owned_pid and self._proc:
+            lease_process_stopped = True
+        elif owned_pid and self._proc is None and self._pid_is_expected_server(owned_pid, lease):
             try:
                 os.kill(owned_pid, 15)
                 deadline = time.monotonic() + 2.0
@@ -1626,9 +1662,16 @@ class BgeCodeEmbedder:
                     os.kill(owned_pid, 9)
             except OSError:
                 pass
+            else:
+                lease_process_stopped = not _pid_alive(owned_pid)
         if owned_pid:
             try:
-                if lease_pid == owned_pid:
+                if (
+                    lease_process_stopped
+                    and lease_pid == owned_pid
+                    and lease
+                    and self._read_lease() == lease
+                ):
                     os.unlink(_EMBED_LEASE_FILE)
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 pass

@@ -413,8 +413,42 @@ class TestLease:
         )
         assert obj._pid_is_expected_server(1) is False
         monkeypatch.setattr(rerank_mod, "_process_command", lambda pid: "")
-        assert obj._pid_is_expected_server(1, {"schema": 1}) is True
+        assert obj._pid_is_expected_server(1, {"schema": 1}) is False
         assert obj._pid_is_expected_server(1, {"schema": 9}) is False
+
+    def test_lease_matches_requires_process_identity_when_recorded(self, monkeypatch):
+        obj = _stub_reranker()
+        base = {
+            "schema": 1,
+            "pid": 42,
+            "owner_pid": 43,
+            "process_start_token": "old",
+            "owner_start_token": "owner-old",
+            "port": 1234,
+        }
+        monkeypatch.setattr(rerank_mod, "_pid_alive", lambda pid: True)
+        monkeypatch.setattr(rerank_mod, "_process_start_token", lambda pid: "")
+
+        assert obj._lease_matches(base) is False
+
+    def test_retire_does_not_delete_replaced_same_pid_lease(self, tmp_path, monkeypatch):
+        lease_file = tmp_path / "lease.json"
+        monkeypatch.setattr(rerank_mod, "RERANK_LEASE_FILE", str(lease_file))
+        original = {
+            "schema": 1,
+            "pid": 42,
+            "owner_pid": 43,
+            "process_start_token": "old",
+            "owner_start_token": "owner-old",
+        }
+        replacement = dict(original, process_start_token="new")
+        lease_file.write_text(json.dumps(replacement), encoding="utf-8")
+        obj = _stub_reranker()
+        monkeypatch.setattr(rerank_mod, "_pid_alive", lambda pid: False)
+
+        rerank_mod.Reranker._retire_lease_process(obj, original, "stale")
+
+        assert lease_file.exists()
 
     def test_retire_lease_kills_and_clears(self, tmp_path, monkeypatch):
         lease_file = tmp_path / "lease.json"
@@ -726,7 +760,7 @@ class TestStopAndReady:
         assert obj._owns_proc is False
         assert not lease_file.exists()
 
-    def test_stop_kills_leased_process_when_proc_unknown(self, tmp_path, monkeypatch):
+    def test_stop_keeps_uninspectable_leased_process_for_retry(self, tmp_path, monkeypatch):
         lease_file = tmp_path / "lease.json"
         lease_file.write_text(json.dumps({"schema": 1, "pid": 777, "owner_pid": os.getpid()}))
         monkeypatch.setattr(rerank_mod, "RERANK_LEASE_FILE", str(lease_file))
@@ -734,7 +768,8 @@ class TestStopAndReady:
         monkeypatch.setattr(rerank_mod.os, "kill", lambda pid, sig: killed.append((pid, sig)))
         obj = _stub_reranker()
         obj.stop()
-        assert (777, 15) in killed
+        assert killed == []
+        assert lease_file.exists()
 
     def test_stop_leaves_foreign_lease(self, tmp_path, monkeypatch):
         lease_file = tmp_path / "lease.json"
