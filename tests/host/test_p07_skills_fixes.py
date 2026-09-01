@@ -127,7 +127,12 @@ def test_load_skills_normalizes_valid_but_malformed_json(tmp_path):
             "q_table": {"good": "inf", "other": "0.8"},
             "activity_log": [{"action": "find"}, "not an entry"],
             "hypotheses": "not a list",
-            "bootstrap": {"disputes": "not a list"},
+            "bootstrap": {
+                "disputes": "not a list",
+                "readiness_history": [{"readiness": False}, "not a row"],
+                "policies": {"broken": "not a policy"},
+                "tournament_runs": "bad",
+            },
         },
     )
 
@@ -141,6 +146,11 @@ def test_load_skills_normalizes_valid_but_malformed_json(tmp_path):
     assert state["activity_log"] == [{"action": "find"}]
     assert state["hypotheses"] == []
     assert state["bootstrap"]["disputes"] == []
+    assert state["bootstrap"]["readiness_history"] == [{"readiness": False}]
+    assert state["bootstrap"]["policies"] == {}
+    assert state["bootstrap"]["tournament_runs"] == 0
+    trend = mgr.bootstrap_readiness_trend("SID_TEST")
+    assert trend["enough_data"] is False
 
 
 def test_load_skills_rejects_non_object_root(tmp_path):

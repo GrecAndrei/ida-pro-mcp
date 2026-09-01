@@ -151,11 +151,31 @@ class SessionSkillsMixin(SessionBootstrapMixin):
         else:
             normalized_bootstrap = dict(bootstrap)
             for key in (
-                "readiness_history", "metric_snapshots", "disputes",
-                "mitigation_history", "policy_reweight_history",
+                "history", "readiness_history", "metric_snapshots", "disputes",
+                "mitigation_history", "policy_reweight_history", "rollback_history",
+                "autopilot_runs", "outcomes",
             ):
                 value = normalized_bootstrap.get(key)
-                normalized_bootstrap[key] = value if isinstance(value, list) else []
+                normalized_bootstrap[key] = (
+                    [entry for entry in value if isinstance(entry, dict)]
+                    if isinstance(value, list) else []
+                )
+            policies = normalized_bootstrap.get("policies")
+            normalized_bootstrap["policies"] = (
+                {str(policy_id): policy for policy_id, policy in policies.items() if isinstance(policy, dict)}
+                if isinstance(policies, dict) else {}
+            )
+            for key, default in (("tournament_runs", 0), ("total_rounds", 0)):
+                try:
+                    normalized_bootstrap[key] = max(0, int(normalized_bootstrap.get(key, default)))
+                except (TypeError, ValueError):
+                    normalized_bootstrap[key] = default
+            for key, default in (("decay_lambda", 0.03), ("min_bootstrap_weight", 0.1)):
+                normalized_bootstrap[key] = cls._finite_score(
+                    normalized_bootstrap.get(key, default), default=default
+                )
+            if not isinstance(normalized_bootstrap.get("autopilot_policy"), dict):
+                normalized_bootstrap["autopilot_policy"] = {}
             normalized["bootstrap"] = normalized_bootstrap
         return normalized
 
