@@ -31,6 +31,45 @@ def test_agent_skill_install_contains_the_reference_tree(monkeypatch, tmp_path):
     assert not report.warnings
 
 
+def test_checkout_backed_codex_skill_link_is_reused(monkeypatch, tmp_path):
+    source_root = tmp_path / "source"
+    skill_root = source_root / ".agents" / "skills" / "ida-pro-mcp"
+    skill_root.mkdir(parents=True)
+    (skill_root / "SKILL.md").write_text("# Skill\n", encoding="utf-8")
+    (skill_root / "references").mkdir()
+    (skill_root / "references" / "operations.md").write_text("# Operations\n", encoding="utf-8")
+    codex_home = tmp_path / "codex"
+    destination = codex_home / "skills" / "ida-pro-mcp"
+    destination.parent.mkdir(parents=True)
+    destination.symlink_to(skill_root, target_is_directory=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    report = InstallReport()
+    install_codex_skills(source_root, "agent", report, dry_run=False)
+
+    assert destination.is_symlink()
+    assert destination.resolve() == skill_root.resolve()
+    assert any("checkout-backed skill link" in step["detail"] for step in report.steps)
+
+
+def test_codex_skill_link_to_unrelated_directory_is_still_rejected(monkeypatch, tmp_path):
+    source_root = tmp_path / "source"
+    skill_root = source_root / ".agents" / "skills" / "ida-pro-mcp"
+    skill_root.mkdir(parents=True)
+    (skill_root / "SKILL.md").write_text("# Skill\n", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    codex_home = tmp_path / "codex"
+    destination = codex_home / "skills" / "ida-pro-mcp"
+    destination.parent.mkdir(parents=True)
+    destination.symlink_to(outside, target_is_directory=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    with pytest.raises(RuntimeError, match="symlinked skill installation path"):
+        install_codex_skills(source_root, "agent", InstallReport(), dry_run=False)
+    assert not (outside / "SKILL.md").exists()
+
+
 def test_packaged_installer_generates_codex_skill_without_repository_tree(
     monkeypatch, tmp_path
 ):

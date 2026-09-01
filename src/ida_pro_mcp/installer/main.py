@@ -838,7 +838,27 @@ def install_codex_skills(source_root: Path, mode: str, report: InstallReport, dr
     selected = [agent_skill]
     codex_home = os.environ.get("CODEX_HOME", "").strip() or str(Path.home() / ".codex")
     codex_skills = _absolute_path(codex_home) / "skills"
-    reject_symlink_path(codex_skills / selected[0].name / "SKILL.md", "skill installation path")
+    # A checkout-backed Codex skill is a supported development layout:
+    # ~/.codex/skills/ida-pro-mcp -> <checkout>/.agents/skills/ida-pro-mcp.
+    # It is safe to retain only when the link resolves to this exact source
+    # skill.  Any other destination symlink remains rejected so an installer
+    # run cannot write through a user-controlled redirect.
+    reject_symlink_path(codex_skills, "skill installation root")
+    destination = codex_skills / selected[0].name
+    if destination.is_symlink():
+        try:
+            if destination.resolve(strict=True) == agent_skill.resolve(strict=True):
+                report.add_step(
+                    "skills",
+                    "dry-run" if dry_run else "ok",
+                    f"using existing checkout-backed skill link at {destination}",
+                )
+                return
+        except OSError:
+            pass
+        reject_symlink_path(destination / "SKILL.md", "skill installation path")
+    else:
+        reject_symlink_path(destination / "SKILL.md", "skill installation path")
     if dry_run:
         report.add_step("skills", "dry-run", f"would install {len(selected)} entries to {codex_skills}")
         return

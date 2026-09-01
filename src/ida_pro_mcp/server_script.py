@@ -20,6 +20,60 @@ import threading
 import time
 from typing import Annotated, Literal, get_args, get_origin
 
+
+def _start_live_trace():
+    """Trace project lines in IDA without requiring packages inside IDA.
+
+    The live harness runs this file in IDA's embedded interpreter, which is a
+    separate process and may not have the host virtualenv's coverage package.
+    A tiny opt-in ``sys.settrace`` collector keeps that boundary measurable
+    while remaining inert for ordinary IDA launches.
+    """
+    if os.environ.get("IDA_MCP_LIVE_COVERAGE") != "1":
+        return None
+    output = os.environ.get("IDA_MCP_LIVE_TRACE_FILE", "")
+    if not output:
+        coverage_file = os.environ.get("IDA_MCP_LIVE_COVERAGE_FILE", "")
+        output = f"{coverage_file}.ida-trace" if coverage_file else ""
+    if not output:
+        return None
+    source_root = os.path.realpath(os.path.dirname(os.path.abspath(__file__)))
+    lines = {}
+    filename_in_project = {}
+
+    def _trace(frame, event, _arg):
+        if event == "line":
+            filename = frame.f_code.co_filename
+            included = filename_in_project.get(filename)
+            if included is None:
+                real_filename = os.path.realpath(filename)
+                included = real_filename == source_root or real_filename.startswith(source_root + os.sep)
+                filename_in_project[filename] = included
+                filename = real_filename
+            if included:
+                lines.setdefault(filename, set()).add(frame.f_lineno)
+        return _trace
+
+    sys.settrace(_trace)
+    threading.settrace(_trace)
+    return output, lines
+
+
+_LIVE_TRACE = _start_live_trace()
+
+
+def _save_live_trace():
+    """Flush the optional line trace before IDA tears down its interpreter."""
+    if _LIVE_TRACE is None:
+        return
+    output, lines = _LIVE_TRACE
+    try:
+        trace_path = f"{output}.{os.getpid()}.json"
+        with open(trace_path, "w", encoding="utf-8") as trace_file:
+            json.dump({name: sorted(values) for name, values in lines.items()}, trace_file)
+    except Exception as exc:
+        print(f"Live trace save failed: {exc}", file=sys.stderr)
+
 # Per-session heartbeat file (the host passes IDA_MCP_SESSION_LOG_DIR). All
 # sessions used to share one /tmp/ida_mcp_heartbeat.txt, and a full /tmp
 # (ENOSPC) then crashed every session on its next log write — see the many
@@ -332,6 +386,9 @@ def _handle_shutdown():
             log_ev(f"Shutdown save_database failed: {e}")
     else:
         log_ev("Shutdown during startup analysis; skipping save_database")
+    # The host may terminate the IDA process tree immediately after receiving
+    # this response, so flush the optional live trace before returning.
+    _save_live_trace()
     return {
         "ok": True,
         "shutdown": True,
@@ -1190,3 +1247,4 @@ if __name__ == "__main__":
     while listener_thread.is_alive():
         _drain_tool_queue()
         listener_thread.join(timeout=0.05)
+    _save_live_trace()

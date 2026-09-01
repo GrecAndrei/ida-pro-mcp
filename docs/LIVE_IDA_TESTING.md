@@ -33,7 +33,7 @@ in a few minutes. If it is still going after ~10 minutes, an RPC is hung.
 | `test_agent_surface_catalog_live.py` | 104 | One test per operation in `AGENT_OPERATIONS`: every `ida_*` op must answer correctly with its documented example, or fail with a *coded* error (never a protocol error, never an exception). Pins graceful expectations where the environment makes them deterministic (e.g. `GOVERNANCE_BLOCKED` for the hard-blocked `ida_patch_bytes`, `TRUNCATION_TOKEN_INVALID` for a bogus token). |
 | `test_agent_surface_behavior_live.py` | 66 | Deep behavior: exact decompile/disassembly shapes, calc semantics, type round-trips (declare/get/struct/enum/TIL export-import), findings lifecycle, mutation→verify→restore round-trips, undo transactions, snapshots, batch bindings/chaining, the r2 sidecar, firmware heuristics, and the python tool. |
 | `test_agent_surface_extended_live.py` | 170 | Extra live coverage on a shared session: discovery filters/pagination, public-contract edges (legacy names rejected, `address` not `addr`, missing `risk_ack`), query language, calc, findings, layout edits behind snapshots, batch public names, python/idc, firmware carve, session/type/search edges, and a dedicated emulate start/step/stop session. |
-| `test_legacy_surface_live.py` | 171 | Legacy `tool(action=...)` compatibility surface: action dispatch, response contracts, search/code/data tools, annotations, types, memory, sessions, and the broader legacy action catalog. |
+| `test_legacy_surface_live.py` | 176 | Legacy `tool(action=...)` compatibility surface: action dispatch, response contracts, search/code/data tools, annotations, types, memory, sessions, and the broader legacy action catalog, including expanded annotation, analysis, intelligence, exploit, emulation, and type/data sweeps. |
 | `test_ida_live_integration.py` | 20 | Additional legacy integration: custom detectors, search analyze scopes, and emulate lifecycle. |
 | `test_real_usage_live.py` | 11 | Analyst-style workflows that carry returned addresses across discovery, code, graph, memory, sessions, findings, snapshots, types, calculation, and next-target operations; also verifies recovery after a bad request and coded optional-backend failures. |
 
@@ -72,3 +72,23 @@ be used where that non-commercial license is acceptable.
 
 It is intentionally opt-in. A missing or unusable IDA install fails an
 explicit live run, while ordinary unit/contract test runs skip it.
+
+## Combined live and offline coverage
+
+Coverage for the host and embedded IDA interpreters can be collected together.
+The host uses `coverage.py`; the embedded IDA process uses a dependency-free
+line tracer because its Python environment is separate. Both modes are opt-in
+and ordinary launches remain unchanged:
+
+```bash
+coverage_dir=$(mktemp -d /tmp/ida-mcp-coverage.XXXXXX)
+IDA_MCP_LIVE_TEST=1 IDA_MCP_LIVE_IDADIR=/path/to/ida \
+  IDA_MCP_LIVE_COVERAGE=1 \
+  IDA_MCP_LIVE_COVERAGE_FILE="$coverage_dir/.coverage" \
+  python -m pytest -q tests/integration -m live_ida
+```
+
+The live run writes one `.ida-trace.<pid>.json` file per IDA process. Merge
+those line sets with the offline `coverage.py` data before reporting a
+project-wide percentage. The tracer is intentionally line-only: branch
+coverage must be measured separately in the offline suite.
