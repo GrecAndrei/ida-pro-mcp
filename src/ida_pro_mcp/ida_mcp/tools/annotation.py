@@ -444,9 +444,10 @@ def annotation(
         Returns: {ok, imported, count, errors?}
 
     summary - Commenting coverage statistics.
-        Returns: {total_functions, functions_commented, coverage_pct, inline_comments, avg_comments_per_func}
+    Returns: {total_functions, functions_commented, coverage_pct, inline_comments, avg_comments_per_func}
     """
     try:
+        write_failures = []
         # Public MCP names stay on the wire; accept them beside legacy aliases.
         addr = public_arg(kwargs, 'address', addr)
         # ----------------------------------------------------------------
@@ -492,9 +493,12 @@ def annotation(
                                         crypto_map=crypto_map)
                 if one.get("applied"):
                     annotations.append(one)
+                elif not one.get("ok", True):
+                    write_failures.append(hex(head))
 
             return {"ok": True, "function": fname, "annotations": "\n".join(str(x) for x in annotations),
-                    "count": len(annotations), "dry_run": dry_run}
+                    "count": len(annotations), "dry_run": dry_run,
+                    "write_failures": write_failures}
 
         # ----------------------------------------------------------------
         # ACTION: label_loops
@@ -530,10 +534,12 @@ def annotation(
                                 existing = idc.get_cmt(loop_head, 0) or ""
                                 if prefix not in existing:
                                     new_cmt = f"{existing}  {governed}" if existing else governed
-                                    idc.set_cmt(loop_head, new_cmt, 0)
+                                    if not _write_comment(idc.set_cmt, loop_head, new_cmt, 0):
+                                        write_failures.append(hex(loop_head))
 
             return {"ok": True, "function": fname, "loops": "\n".join(str(x) for x in loops),
-                    "count": len(loops), "dry_run": dry_run}
+                    "count": len(loops), "dry_run": dry_run,
+                    "write_failures": write_failures}
 
         # ----------------------------------------------------------------
         # ACTION: label_branches
@@ -579,10 +585,12 @@ def annotation(
                             existing = idc.get_cmt(last_insn, 0) or ""
                             if prefix not in existing:
                                 new_cmt = f"{existing}  {governed}" if existing else governed
-                                idc.set_cmt(last_insn, new_cmt, 0)
+                                if not _write_comment(idc.set_cmt, last_insn, new_cmt, 0):
+                                    write_failures.append(hex(last_insn))
 
             return {"ok": True, "function": fname, "branches": "\n".join(str(x) for x in branches),
-                    "count": len(branches), "dry_run": dry_run}
+                    "count": len(branches), "dry_run": dry_run,
+                    "write_failures": write_failures}
 
         # ----------------------------------------------------------------
         # ACTION: mark_dangerous
@@ -630,10 +638,12 @@ def annotation(
                                 existing = idc.get_cmt(call_addr, 0) or ""
                                 if prefix not in existing:
                                     new_cmt = f"{existing}  {governed}" if existing else governed
-                                    idc.set_cmt(call_addr, new_cmt, 0)
+                                    if not _write_comment(idc.set_cmt, call_addr, new_cmt, 0):
+                                        write_failures.append(hex(call_addr))
 
             return {"ok": True, "warnings": "\n".join(str(x) for x in warnings),
-                    "count": len(warnings), "dry_run": dry_run}
+                    "count": len(warnings), "dry_run": dry_run,
+                    "write_failures": write_failures}
 
         # ----------------------------------------------------------------
         # ACTION: annotate_constants
@@ -670,11 +680,13 @@ def annotation(
                                 existing = idc.get_cmt(head, 0) or ""
                                 if prefix not in existing:
                                     new_cmt = f"{existing}  {governed}" if existing else governed
-                                    idc.set_cmt(head, new_cmt, 0)
+                                    if not _write_comment(idc.set_cmt, head, new_cmt, 0):
+                                        write_failures.append(hex(head))
                         break  # one annotation per instruction
 
             return {"ok": True, "function": fname, "constants": "\n".join(str(x) for x in constants),
-                    "count": len(constants), "dry_run": dry_run}
+                    "count": len(constants), "dry_run": dry_run,
+                    "write_failures": write_failures}
 
         # ----------------------------------------------------------------
         # ACTION: tag_functions
@@ -722,10 +734,12 @@ def annotation(
                             existing = idc.get_func_cmt(func_ea, 1) or ""
                             if prefix not in existing:
                                 new_cmt = f"{existing}\n{governed}" if existing else governed
-                                idc.set_func_cmt(func_ea, new_cmt, 1)
+                                if not _write_comment(idc.set_func_cmt, func_ea, new_cmt, 1):
+                                    write_failures.append(hex(func_ea))
 
             return {"ok": True, "tagged": "\n".join(str(x) for x in tagged),
-                    "count": len(tagged), "dry_run": dry_run}
+                    "count": len(tagged), "dry_run": dry_run,
+                    "write_failures": write_failures}
 
         # ----------------------------------------------------------------
         # ACTION: document_args
@@ -782,11 +796,13 @@ def annotation(
                     existing = idc.get_func_cmt(ea, 1) or ""
                     if prefix not in existing:
                         new_cmt = f"{existing}\n{governed}" if existing else governed
-                        idc.set_func_cmt(ea, new_cmt, 1)
+                        if not _write_comment(idc.set_func_cmt, ea, new_cmt, 1):
+                            write_failures.append(hex(ea))
 
             return {"ok": True, "function": fname, "params": result_params,
                     "apis_used": api_usage[:10], "annotations": "\n".join(str(x) for x in annotations),
-                    "count": len(annotations), "dry_run": dry_run}
+                    "count": len(annotations), "dry_run": dry_run,
+                    "write_failures": write_failures}
 
         # ----------------------------------------------------------------
         # ACTION: mark_error_paths
@@ -854,12 +870,14 @@ def annotation(
                                 existing = idc.get_cmt(check_ea, 0) or ""
                                 if prefix not in existing:
                                     new_cmt = f"{existing}  {governed}" if existing else governed
-                                    idc.set_cmt(check_ea, new_cmt, 0)
+                                    if not _write_comment(idc.set_cmt, check_ea, new_cmt, 0):
+                                        write_failures.append(hex(check_ea))
                         break
                     check_ea = idc.next_head(check_ea, fn.end_ea)
 
             return {"ok": True, "function": fname, "error_paths": "\n".join(str(x) for x in error_paths),
-                    "count": len(error_paths), "dry_run": dry_run}
+                    "count": len(error_paths), "dry_run": dry_run,
+                    "write_failures": write_failures}
 
         # ----------------------------------------------------------------
         # ACTION: propagate_names
@@ -905,10 +923,12 @@ def annotation(
                             existing = idc.get_func_cmt(callee_ea, 1) or ""
                             if prefix not in existing:
                                 new_cmt = f"{existing}\n{governed}" if existing else governed
-                                idc.set_func_cmt(callee_ea, new_cmt, 1)
+                                if not _write_comment(idc.set_func_cmt, callee_ea, new_cmt, 1):
+                                    write_failures.append(hex(callee_ea))
 
             return {"ok": True, "function": fname, "suggestions": "\n".join(str(x) for x in suggestions),
-                    "count": len(suggestions), "dry_run": dry_run}
+                    "count": len(suggestions), "dry_run": dry_run,
+                    "write_failures": write_failures}
 
         # ----------------------------------------------------------------
         # ACTION: cleanup
@@ -943,13 +963,14 @@ def annotation(
                         lines = func_cmt.split("\n")
                         cleaned = [l for l in lines if prefix not in l]
                         new_cmt = "\n".join(cleaned).strip()
-                        if not dry_run:
-                            idc.set_func_cmt(func_ea, new_cmt, repeatable)
-                        removed.append({
-                            "addr": hex(func_ea),
-                            "type": "func_comment",
-                            "repeatable": bool(repeatable),
-                        })
+                        if dry_run or _write_comment(idc.set_func_cmt, func_ea, new_cmt, repeatable):
+                            removed.append({
+                                "addr": hex(func_ea),
+                                "type": "func_comment",
+                                "repeatable": bool(repeatable),
+                            })
+                        else:
+                            write_failures.append(hex(func_ea))
 
                 # Clean inline comments
                 curr = fn.start_ea
@@ -963,18 +984,20 @@ def annotation(
                             parts = cmt.split("  ")
                             cleaned = [p for p in parts if prefix not in p]
                             new_cmt = "  ".join(cleaned).strip()
-                            if not dry_run:
-                                idc.set_cmt(curr, new_cmt, repeatable)
-                            removed.append({
-                                "addr": hex(curr),
-                                "type": "inline_comment",
-                                "repeatable": bool(repeatable),
-                            })
+                            if dry_run or _write_comment(idc.set_cmt, curr, new_cmt, repeatable):
+                                removed.append({
+                                    "addr": hex(curr),
+                                    "type": "inline_comment",
+                                    "repeatable": bool(repeatable),
+                                })
+                            else:
+                                write_failures.append(hex(curr))
                     curr = idc.next_head(curr, fn.end_ea)
                     if curr == idaapi.BADADDR: break
 
             return {"ok": True, "removed": "\n".join(str(x) for x in removed),
-                    "count": len(removed), "dry_run": dry_run}
+                    "count": len(removed), "dry_run": dry_run,
+                    "write_failures": write_failures}
 
         # ----------------------------------------------------------------
         # ACTION: validate (Neuro-Symbolic Governance)
