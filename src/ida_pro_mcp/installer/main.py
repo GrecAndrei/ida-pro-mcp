@@ -1383,12 +1383,25 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                     "Stopping ALL IDA processes (--kill-ida without a binary "
                     "scope; pass --ida-binary-path or --ida-dir to narrow this)"
                 )
+            kill_succeeded = True
             if not opts.dry_run:
-                kill_ida_processes(binary_path=kill_target)
+                kill_succeeded = kill_ida_processes(binary_path=kill_target)
+                if not kill_succeeded:
+                    message = (
+                        "Could not enumerate or terminate the requested IDA "
+                        "processes; continuing with installation."
+                    )
+                    report.add_warning(message)
+                    ui.warn(message)
             report.add_step(
                 "kill_ida",
-                "dry-run" if opts.dry_run else "ok",
-                ("would stop " if opts.dry_run else "stopped ") + (kill_target or "unscoped"),
+                "dry-run" if opts.dry_run else ("ok" if kill_succeeded else "warn"),
+                (
+                    ("would stop " if opts.dry_run else "stopped ")
+                    + (kill_target or "unscoped")
+                    if kill_succeeded
+                    else "process enumeration or termination failed"
+                ),
             )
         else:
             report.add_step("kill_ida", "skipped", "not requested")

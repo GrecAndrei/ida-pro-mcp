@@ -134,7 +134,7 @@ def test_scoped_kill_fails_closed_when_process_listing_is_unavailable(monkeypatc
 
     monkeypatch.setattr(runtime.sys, "platform", "linux")
     monkeypatch.setattr(runtime.subprocess, "run", _run)
-    runtime.kill_ida_processes(tmp_path / "idat64")
+    assert runtime.kill_ida_processes(tmp_path / "idat64") is False
 
     assert calls == [["pgrep", "-af", "(ida|idat)64?"]]
 

@@ -286,7 +286,7 @@ def run_checked(
     raise RuntimeError(f"{' '.join(cmd)} failed ({result.returncode}): {tail}")
 
 
-def kill_ida_processes(binary_path: str | Path | None = None) -> None:
+def kill_ida_processes(binary_path: str | Path | None = None) -> bool:
     """Terminate running ida/idat processes.
 
     If `binary_path` is provided, only kill processes whose executable path
@@ -294,8 +294,10 @@ def kill_ida_processes(binary_path: str | Path | None = None) -> None:
     that path.  Without a filter the installer would happily SIGKILL a
     user's unrelated long-running IDA on a different binary — see §6.2.
 
-    On failure to enumerate processes (missing pgrep/tasklist, permission
-    error) this function silently returns.
+    Returns ``False`` when a scoped process listing cannot be obtained or a
+    matching process cannot be terminated. Unscoped termination returns
+    ``True`` after attempting each platform command; a non-zero exit code
+    there simply means that no process with that name was running.
     """
     target_resolved: str | None = None
     if binary_path:
@@ -336,16 +338,24 @@ def kill_ida_processes(binary_path: str | Path | None = None) -> None:
                     if exe_resolved == wanted:
                         pids.append(pid)
                 for pid in pids:
-                    subprocess.run(
-                        ["taskkill", "/F", "/PID", pid], capture_output=True
-                    )
-                return
+                    try:
+                        killed = subprocess.run(
+                            ["taskkill", "/F", "/PID", pid], capture_output=True
+                        )
+                    except (OSError, subprocess.TimeoutExpired):
+                        return False
+                    if killed.returncode != 0:
+                        return False
+                return True
             # WMIC unavailable or denied: fail closed. An explicit binary
             # scope must never degrade into killing every IDA process.
-            return
+            return False
         for name in ["idat.exe", "idat64.exe", "ida.exe", "ida64.exe"]:
-            subprocess.run(["taskkill", "/F", "/IM", name], capture_output=True)
-        return
+            try:
+                subprocess.run(["taskkill", "/F", "/IM", name], capture_output=True)
+            except (OSError, subprocess.TimeoutExpired):
+                return False
+        return True
 
     if target_resolved:
         # pgrep -af lists "<pid> <cmdline>"; we match on the first token
@@ -377,14 +387,23 @@ def kill_ida_processes(binary_path: str | Path | None = None) -> None:
                 if exe_resolved == target_resolved:
                     pids.append(parts[0])
             for pid in pids:
-                subprocess.run(["kill", "-KILL", pid], capture_output=True)
-            return
+                try:
+                    killed = subprocess.run(["kill", "-KILL", pid], capture_output=True)
+                except (OSError, subprocess.TimeoutExpired):
+                    return False
+                if killed.returncode != 0:
+                    return False
+            return True
         # pgrep -af missing or denied: fail closed. An explicit binary scope
         # must never degrade into killing every IDA process.
-        return
+        return False
 
     for name in ["idat", "idat64", "ida", "ida64"]:
-        subprocess.run(["pkill", "-x", name], capture_output=True)
+        try:
+            subprocess.run(["pkill", "-x", name], capture_output=True)
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+    return True
 
 
 def choose_runtime_source(runtime_source: str, source_root: Path) -> str:
