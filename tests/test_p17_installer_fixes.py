@@ -349,6 +349,29 @@ def test_client_configuration_summary_reports_partial_setup(tmp_path, monkeypatc
     assert "configured 1/2 clients" in report.warnings[-1]
 
 
+def test_client_configuration_summary_marks_dry_run_as_planned(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallReport
+
+    monkeypatch.setattr(
+        main_mod,
+        "get_config_paths",
+        lambda _source_root: {"first": tmp_path / "first"},
+    )
+    report = InstallReport()
+
+    main_mod._report_client_configuration(
+        tmp_path, ["first"], report, main_mod.UI(), dry_run=True
+    )
+
+    assert report.steps[-1] == {
+        "name": "clients",
+        "status": "dry-run",
+        "detail": "would configure 1 clients",
+    }
+    assert report.warnings == []
+
+
 def test_client_configuration_summary_fails_when_all_updates_fail(tmp_path):
     from ida_pro_mcp.installer import main as main_mod
     from ida_pro_mcp.installer.common import InstallReport

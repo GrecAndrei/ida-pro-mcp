@@ -1095,16 +1095,24 @@ def _report_client_configuration(
     configured: list[str],
     report: InstallReport,
     ui: UI,
+    *,
+    dry_run: bool = False,
 ) -> None:
     """Report partial client setup instead of presenting it as success."""
     expected = len(get_config_paths(source_root))
     actual = len(configured)
     if actual == expected:
-        report.add_step("clients", "ok", f"configured {actual} clients")
-        ui.ok(f"Configured {actual} clients")
+        action = "would configure" if dry_run else "configured"
+        status = "dry-run" if dry_run else "ok"
+        report.add_step("clients", status, f"{action} {actual} clients")
+        if dry_run:
+            ui.info(f"Would configure {actual} clients")
+        else:
+            ui.ok(f"Configured {actual} clients")
         return
 
-    detail = f"configured {actual}/{expected} clients"
+    action = "would configure" if dry_run else "configured"
+    detail = f"{action} {actual}/{expected} clients"
     report.add_warning(
         f"Client configuration was incomplete: {detail}. "
         "Review installer warnings and fix the affected client config files."
@@ -1478,8 +1486,20 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
         if opts.with_r2:
             r2_bin, r2_ver = resolve_r2_binary()
             if r2_bin:
-                ui.ok(f"Rizin/radare2 engine binary: {r2_bin} ({r2_ver or 'version unknown'})")
-                ui.info("The resolved binary is recorded as IDA_MCP_R2_BIN in the generated MCP client config.")
+                if opts.dry_run:
+                    ui.info(
+                        f"Rizin/radare2 engine binary would be recorded: {r2_bin} "
+                        f"({r2_ver or 'version unknown'})"
+                    )
+                else:
+                    ui.ok(
+                        f"Rizin/radare2 engine binary: {r2_bin} "
+                        f"({r2_ver or 'version unknown'})"
+                    )
+                    ui.info(
+                        "The resolved binary is recorded as IDA_MCP_R2_BIN in the "
+                        "generated MCP client config."
+                    )
             else:
                 msg = (
                     "rz/r2 not found on PATH. Install Rizin (or radare2) to enable the r2 "
@@ -1491,8 +1511,14 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                 report.add_warning(msg)
             report.add_step(
                 "r2",
-                "ok" if r2_bin else "warn",
-                f"{r2_bin} {r2_ver or ''}".strip() if r2_bin else "rz/r2 not found on PATH",
+                "dry-run" if opts.dry_run and r2_bin else ("ok" if r2_bin else "warn"),
+                (
+                    f"would record {r2_bin} {r2_ver or ''}".strip()
+                    if opts.dry_run and r2_bin
+                    else f"{r2_bin} {r2_ver or ''}".strip()
+                    if r2_bin
+                    else "rz/r2 not found on PATH"
+                ),
             )
         elif _phase_enabled(opts, "r2"):
             report.add_step("r2", "skipped", "not requested (pass --with-r2)")
@@ -1613,7 +1639,9 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                     dry_run=opts.dry_run,
                 )
                 report.metadata["configured_clients"] = configured
-                _report_client_configuration(source_root, configured, report, ui)
+                _report_client_configuration(
+                    source_root, configured, report, ui, dry_run=opts.dry_run
+                )
             else:
                 embed_model = opts.embed_model_path
                 embed_server = opts.embed_server_bin
@@ -1726,7 +1754,9 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                     dry_run=opts.dry_run,
                 )
                 report.metadata["configured_clients"] = configured
-                _report_client_configuration(source_root, configured, report, ui)
+                _report_client_configuration(
+                    source_root, configured, report, ui, dry_run=opts.dry_run
+                )
         else:
             report.add_step("clients", "skipped", "filtered by --only")
 
