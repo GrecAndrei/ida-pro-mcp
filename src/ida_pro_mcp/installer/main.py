@@ -1294,6 +1294,15 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
             _warn_ida_python_compat(chosen_install, report, ui)
 
         opts = _run_interactive_wizard(opts, ui)
+        if opts.ida_runtime == "idalib" and not _phase_enabled(opts, "clients"):
+            raise RuntimeError(
+                "--ida-runtime idalib requires the clients phase so its activation "
+                "and runtime setting are applied"
+            )
+        if opts.with_r2 and not _phase_enabled(opts, "clients"):
+            raise RuntimeError(
+                "--with-r2 requires the clients phase so IDA_MCP_R2_BIN can be recorded"
+            )
         # Validate user-supplied paths before any client config is touched.
         # The wizard already validates model paths, but CLI/API callers do not
         # go through those prompts.  A disabled reranker is intentionally not

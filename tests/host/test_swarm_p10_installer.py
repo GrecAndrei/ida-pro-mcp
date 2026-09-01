@@ -456,6 +456,20 @@ def test_run_install_fails_when_sig_source_has_no_signature_files(tmp_path, monk
     assert main_mod.run_install(opts, main_mod.UI()) == 1
 
 
+def test_with_r2_requires_clients_phase(tmp_path):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    opts = InstallerOptions(
+        interactive=False,
+        only={"runtime"},
+        install_root=tmp_path / "install-root",
+        with_r2=True,
+    )
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 1
+
+
 def test_run_install_with_r2_records_env_into_client_config(tmp_path, monkeypatch):
     """`--only clients --with-r2` records the resolved rz/r2 as IDA_MCP_R2_BIN
     in the generated client config."""

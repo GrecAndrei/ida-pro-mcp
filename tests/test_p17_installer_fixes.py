@@ -1005,6 +1005,20 @@ def test_dry_run_idalib_install_does_not_require_ida(tmp_path, monkeypatch):
     assert main_mod.run_install(opts, main_mod.UI()) == 0
 
 
+def test_idalib_requires_clients_phase(tmp_path):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    opts = InstallerOptions(
+        interactive=False,
+        only={"runtime"},
+        install_root=tmp_path / "install",
+        ida_runtime="idalib",
+    )
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 1
+
+
 def test_wizard_rerank_decline_persists_rerank_disabled(tmp_path, monkeypatch):
     """Declining the reranker in the wizard must set rerank_disabled so the
     default profile cannot leak into state / client env."""
