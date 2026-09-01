@@ -1372,6 +1372,14 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
             "1", "true", "yes", "on"
         }
         corpus_requested = opts.with_bron_corpus or opts.verify_bron_corpus or corpus_env_enabled
+        if (
+            (opts.with_bron_corpus or opts.verify_bron_corpus)
+            and not _phase_enabled(opts, "runtime")
+        ):
+            raise RuntimeError(
+                "--with-corpus/--verify-corpus requires the runtime phase; "
+                "remove --only clients (or include runtime)"
+            )
         if _phase_enabled(opts, "runtime") and corpus_requested and not opts.dry_run:
             ui.info("Downloading threat corpus and crypto signatures")
             try:
@@ -1403,9 +1411,12 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                     "corpus", "ok" if built else "warn",
                     f"{total} entries, {sources_downloaded} sources",
                 )
+                if not built:
+                    raise RuntimeError(f"threat corpus was not built: {reason}")
             except Exception as exc:
-                ui.warn(f"Corpus download failed (non-fatal): {exc}")
+                ui.warn(f"Corpus download failed: {exc}")
                 report.add_step("corpus", "warn", str(exc))
+                raise RuntimeError(f"threat corpus installation failed: {exc}") from exc
         elif _phase_enabled(opts, "runtime"):
             detail = (
                 "dry-run"

@@ -490,7 +490,7 @@ def test_run_install_passes_explicit_corpus_verification_to_downloader(tmp_path,
 
     def _download(**kwargs):
         captured.update(kwargs)
-        return {"built": False, "reason": "test", "downloads": {}}
+        return {"built": True, "reason": "test", "downloads": {}, "counts": {}}
 
     monkeypatch.setattr(bron_corpus, "download_bron_corpus", _download)
     opts = InstallerOptions(
@@ -526,7 +526,7 @@ def test_run_install_passes_env_corpus_verification_to_downloader(tmp_path, monk
 
     def _download(**kwargs):
         captured.update(kwargs)
-        return {"built": False, "reason": "test", "downloads": {}}
+        return {"built": True, "reason": "test", "downloads": {}, "counts": {}}
 
     monkeypatch.setattr(bron_corpus, "download_bron_corpus", _download)
     opts = InstallerOptions(
@@ -538,6 +538,35 @@ def test_run_install_passes_env_corpus_verification_to_downloader(tmp_path, monk
 
     assert main_mod.run_install(opts, main_mod.UI()) == 0
     assert captured == {"force": False, "force_verify": True}
+
+
+def test_run_install_fails_when_requested_corpus_cannot_be_built(tmp_path, monkeypatch):
+    import importlib
+
+    bron_corpus = importlib.import_module("ida_pro_mcp.installer.bron_corpus")
+    main_mod = importlib.import_module("ida_pro_mcp.installer.main")
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    install_root = tmp_path / "install-root"
+    monkeypatch.setattr(
+        main_mod,
+        "setup_runtime_environment",
+        lambda **_kwargs: install_root / "python",
+    )
+    monkeypatch.setattr(
+        bron_corpus,
+        "download_bron_corpus",
+        lambda **_kwargs: {"built": False, "reason": "no usable sources", "downloads": {}},
+    )
+    opts = InstallerOptions(
+        interactive=False,
+        only={"runtime"},
+        install_root=install_root,
+        source_root=tmp_path,
+        with_bron_corpus=True,
+    )
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 1
 
 
 def test_run_install_skips_optional_corpus_by_default(tmp_path, monkeypatch):
