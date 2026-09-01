@@ -54,6 +54,36 @@ def test_analysis_gate_round_trips_through_to_dict_from_dict():
     assert missing.analysis_gate is None
 
 
+def test_session_from_dict_normalizes_optional_metadata_types():
+    restored = Session.from_dict(
+        {
+            "session_id": "ABC12345",
+            "idb_path": None,
+            "binary_path": None,
+            "analysis_options": ["not a mapping"],
+            "ida_args": ["-A", 123, None],
+            "tags": ["firmware", 7, None],
+            "notes": 42,
+            "auto_name": 99,
+            "phase": 123,
+            "linked_sessions": ["DEF67890", 1],
+            "policy_mode": {"mode": "strict"},
+            "metadata": ["not a mapping"],
+        }
+    )
+    assert restored.idb_path == ""
+    assert restored.binary_path == ""
+    assert restored.analysis_options == {}
+    assert restored.ida_args == ["-A"]
+    assert restored.tags == ["firmware", "7"]
+    assert restored.notes == ""
+    assert restored.auto_name == "session_ABC12345"
+    assert restored.phase == "triage"
+    assert restored.linked_sessions == ["DEF67890"]
+    assert restored.policy_mode is None
+    assert restored.metadata == {}
+
+
 def test_analysis_gate_survives_manager_save_and_reload(tmp_path):
     mgr1 = SessionManager(str(tmp_path))
     session = mgr1.create_session("/tmp/x.bin")
