@@ -7,6 +7,7 @@ Extracted from host/server.py so the main JSON-RPC server file is less monolithi
 from __future__ import annotations
 
 import json
+import math
 import re
 import shlex
 import threading
@@ -54,14 +55,59 @@ class ServerArgsMixin:
             return
         now = time.time()
         with self._next_cache_lock():
-            expired = [
-                token
-                for token, row in self._next_cache.items()
-                if (now - float(row.get("created_at", 0.0)))
-                > float(self._next_cache_ttl_seconds)
-            ]
+            expired = []
+            for token, row in list(self._next_cache.items()):
+                if not isinstance(row, dict):
+                    expired.append(token)
+                    continue
+                try:
+                    created_at = float(row.get("created_at", 0.0))
+                    ttl = float(self._next_cache_ttl_seconds)
+                except (TypeError, ValueError, OverflowError):
+                    expired.append(token)
+                    continue
+                if not math.isfinite(created_at) or not math.isfinite(ttl) or (
+                    now - created_at
+                ) > ttl:
+                    expired.append(token)
             for token in expired:
                 self._next_cache.pop(token, None)
+
+    def _next_cache_scope(self, args: dict | None = None) -> tuple[str, str]:
+        """Return the connection/agent and session scope for a page token.
+
+        ``_next_cache`` is shared by all daemon connections on one server, so
+        a token must carry the same isolation boundary as truncation tokens.
+        Resolve an explicit ``idb`` target first; otherwise use the active
+        connection/agent session.  Focused mixin tests and compatibility
+        callers may not expose the full client-state mixin, so missing scope
+        information remains empty and is handled fail-closed at lookup time.
+        """
+        owner_id = ""
+        owner_fn = getattr(self, "_truncation_owner_id", None)
+        if callable(owner_fn):
+            try:
+                owner_id = str(owner_fn() or "")
+            except Exception:
+                owner_id = ""
+
+        session_id = ""
+        if isinstance(args, dict) and args.get("idb"):
+            resolver = getattr(self, "_resolve_session_from_idb_ref", None)
+            if callable(resolver):
+                try:
+                    target = resolver(args.get("idb"))
+                except Exception:
+                    target = None
+                if target is not None:
+                    session_id = str(getattr(target, "session_id", "") or "")
+        if not session_id:
+            try:
+                current = getattr(self, "current_session", None)
+                session_id = str(getattr(current, "session_id", "") or "")
+            except Exception:
+                session_id = ""
+        return session_id, owner_id
 
     def _parse_action_tail_tokens(self, tail: str) -> dict:
         parsed: dict[str, Any] = {}
@@ -325,7 +371,14 @@ class ServerArgsMixin:
 
         return self._normalize_field_variants(tool_name, out)
 
-    def _cache_next_page(self, tool_name: str, args: dict, payload: Any) -> Any:
+    def _cache_next_page(
+        self,
+        tool_name: str,
+        args: dict,
+        payload: Any,
+        *,
+        scope: tuple[str, str] | None = None,
+    ) -> Any:
         if not isinstance(payload, dict) or is_error_result(payload):
             return payload
         if not _coerce_bool(payload.get("truncated"), False):
@@ -374,12 +427,15 @@ class ServerArgsMixin:
         cache_args.pop("next_token", None)
         cache_args.pop("token", None)
         cache_args.pop("cursor", None)
+        session_id, owner_id = scope or self._next_cache_scope(cache_args)
         with self._next_cache_lock():
             self._next_cache[token] = {
                 "tool": tool_name,
                 "action": action,
                 "args": cache_args,
                 "next_offset": next_offset,
+                "session_id": session_id,
+                "owner_id": owner_id,
                 "created_at": time.time(),
             }
         out = dict(payload)
