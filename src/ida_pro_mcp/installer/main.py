@@ -14,7 +14,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .clients import backup_file, configure_clients, rollback_from_backups
-from .common import InstallerOptions, InstallReport, atomic_write_text, find_ida_sig_dir
+from .common import (
+    InstallerOptions,
+    InstallReport,
+    atomic_write_text,
+    find_ida_sig_dir,
+    reject_symlink_path,
+)
 from .discovery import (
     STATE_FILE,
     IdaInstall,
@@ -62,6 +68,11 @@ class UI:
 
     def err(self, msg: str) -> None:
         print(f"{self.c_err}[err]{self.c_reset} {msg}")
+
+
+def _absolute_path(path: Path | str) -> Path:
+    """Expand a user path without resolving symlinks or requiring existence."""
+    return Path(os.path.abspath(os.path.expandvars(os.path.expanduser(os.fspath(path)))))
 
 
 def _sha256_file(path: str) -> str:
@@ -725,7 +736,29 @@ def install_codex_skills(source_root: Path, mode: str, report: InstallReport, dr
         report.add_warning("agent skill source not found; regenerate skills before installing")
         return
     selected = [agent_skill]
-    codex_skills = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser() / "skills"
+    codex_home = os.environ.get("CODEX_HOME", "").strip() or str(Path.home() / ".codex")
+    codex_skills = _absolute_path(codex_home) / "skills"
+    # A checkout-backed Codex skill is a supported development layout:
+    # ~/.codex/skills/ida-pro-mcp -> <checkout>/.agents/skills/ida-pro-mcp.
+    # Retain it only when it resolves to this exact source skill. Any other
+    # destination symlink remains rejected so installation cannot write through
+    # a user-controlled redirect.
+    reject_symlink_path(codex_skills, "skill installation root")
+    destination = codex_skills / selected[0].name
+    if destination.is_symlink():
+        try:
+            if destination.resolve(strict=True) == agent_skill.resolve(strict=True):
+                report.add_step(
+                    "skills",
+                    "dry-run" if dry_run else "ok",
+                    f"using existing checkout-backed skill link at {destination}",
+                )
+                return
+        except OSError:
+            pass
+        reject_symlink_path(destination / "SKILL.md", "skill installation path")
+    else:
+        reject_symlink_path(destination / "SKILL.md", "skill installation path")
     if dry_run:
         report.add_step("skills", "dry-run", f"would install {len(selected)} entries to {codex_skills}")
         return

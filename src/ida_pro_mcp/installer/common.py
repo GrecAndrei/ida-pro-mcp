@@ -52,6 +52,19 @@ def atomic_write_bytes(path: Path, content: bytes) -> None:
     _atomic_write(path, content)
 
 
+def reject_symlink_path(path: Path, description: str) -> None:
+    """Reject a managed path or any existing parent that is a symlink."""
+    current = path.expanduser()
+    if not current.is_absolute():
+        current = Path(os.path.abspath(current))
+    while True:
+        if current.is_symlink():
+            raise RuntimeError(f"Refusing symlinked {description}: {current}")
+        if current.parent == current:
+            return
+        current = current.parent
+
+
 @dataclass
 class InstallerOptions:
     dry_run: bool = False

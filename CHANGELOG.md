@@ -2,6 +2,11 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-09-01 — checkout-backed skill installation
+
+- Reuse the Codex skill symlink when it points to the active checkout, while
+  continuing to reject unrelated symlink redirects.
+
 ## 2026-08-27 — 1.0.0a1 repository cleanup and retrieval foundations
 
 - Centralized the package, MCP handshake, CLI, and benchmark version in
