@@ -32,6 +32,7 @@ MAX_DOWNLOAD_SIZE = 2 * 1024 * 1024 * 1024  # 2 GiB
 _DOWNLOAD_CHUNK_BYTES = 1 * 1024 * 1024  # 1 MiB
 _MODEL_MAX_DOWNLOAD_SIZE = 8 * 1024**3
 _MAX_EXTRACTED_ARCHIVE_SIZE = 8 * 1024**3
+_MAX_RELEASE_METADATA_SIZE = 16 * 1024**2
 _TRUE_ENV = {"1", "true", "yes", "on"}
 
 
@@ -129,6 +130,22 @@ def _download_to_file(
             with contextlib.suppress(OSError):
                 temporary.unlink()
         raise
+
+
+def _read_response_limited(response, *, max_bytes: int, label: str) -> bytes:
+    """Read a bounded metadata response without trusting Content-Length."""
+    payload = bytearray()
+    while True:
+        remaining = max_bytes - len(payload)
+        chunk = response.read(min(_DOWNLOAD_CHUNK_BYTES, remaining + 1))
+        if not chunk:
+            break
+        payload.extend(chunk)
+        if len(payload) > max_bytes:
+            raise RuntimeError(
+                f"{label} exceeds the {max_bytes} byte safety limit"
+            )
+    return bytes(payload)
 
 
 def _profile_download_url(profile: object) -> str:
@@ -1143,7 +1160,12 @@ def download_and_install_llama_server(
         headers={"Accept": "application/vnd.github+json", "User-Agent": "ida-pro-mcp-installer"},
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
-        payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+        metadata = _read_response_limited(
+            resp,
+            max_bytes=_MAX_RELEASE_METADATA_SIZE,
+            label="llama.cpp release metadata",
+        )
+        payload = json.loads(metadata.decode("utf-8", errors="replace"))
     releases = [payload] if isinstance(payload, dict) else payload
     if not isinstance(releases, list) or not releases:
         raise RuntimeError("No release metadata found for llama.cpp")

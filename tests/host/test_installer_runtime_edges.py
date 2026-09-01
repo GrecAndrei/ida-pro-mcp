@@ -498,6 +498,24 @@ def test_llama_download_skips_prereleases_by_default(tmp_path, monkeypatch):
     assert calls == 1
 
 
+def test_llama_download_rejects_oversized_release_metadata(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import runtime
+    from ida_pro_mcp.installer.common import InstallReport
+    from ida_pro_mcp.installer.runtime import download_and_install_llama_server
+
+    monkeypatch.setattr(runtime, "_MAX_RELEASE_METADATA_SIZE", 8)
+    monkeypatch.setattr(
+        runtime.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _Response(b"123456789"),
+    )
+
+    with pytest.raises(RuntimeError, match="release metadata exceeds"):
+        download_and_install_llama_server(
+            tmp_path, dry_run=False, report=InstallReport()
+        )
+
+
 def test_archive_extraction_rejects_tar_link_outside_root(tmp_path):
     from ida_pro_mcp.installer.runtime import _extract_archive
 
