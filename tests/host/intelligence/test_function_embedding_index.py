@@ -187,6 +187,29 @@ def test_fast_refresh_does_not_downgrade_an_existing_full_decomp_vector(tmp_path
     assert matches[0]["name"] == "renamed_target"
 
 
+def test_fast_refresh_rename_invalidates_same_process_lexical_idf(tmp_path):
+    db_path = str(tmp_path / "sample.embeddings.db")
+    index = FunctionEmbeddingIndex(db_path, _BatchEmbedder())
+    assert index.index_many(
+        [
+            ("0x401000", "target", "deep behavior marker full pseudocode", {"index_quality": "full"}),
+            ("0x401100", "other", "common utility marker", {"index_quality": "full"}),
+        ]
+    ) == {"indexed": 2, "failed": 0}
+
+    # Warm the in-process IDF snapshot before the higher-quality row is renamed.
+    assert index.search_text("deep behavior marker", top_k=5)
+    assert index.index_many(
+        [("0x401000", "rare_unique", "short fast signature", {"index_quality": "fast"})]
+    ) == {"indexed": 1, "failed": 0}
+
+    same_process = index.search_text("rare_unique", top_k=5)
+    fresh_reader = FunctionEmbeddingIndex(db_path, _BatchEmbedder())
+    fresh_process = fresh_reader.search_text("rare_unique", top_k=5)
+    assert same_process and fresh_process
+    assert same_process[0]["score"] == pytest.approx(fresh_process[0]["score"])
+
+
 def test_lexical_search_normalizes_behavior_verbs_and_print_apis(tmp_path):
     index = FunctionEmbeddingIndex(str(tmp_path / "sample.embeddings.db"), _BatchEmbedder())
     index.index_many(
