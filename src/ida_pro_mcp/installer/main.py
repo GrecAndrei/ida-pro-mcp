@@ -856,9 +856,10 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         action="store_true",
         help="print planned actions without changing managed files (writes an install report)",
     )
-    parser.add_argument("--yes", action="store_true", help="non-interactive mode")
-    parser.add_argument("--interactive", action="store_true", help="force interactive wizard mode")
-    parser.add_argument("--no-interactive", action="store_true", help="disable interactive wizard mode")
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--yes", action="store_true", help="non-interactive mode")
+    mode_group.add_argument("--interactive", action="store_true", help="force interactive wizard mode")
+    mode_group.add_argument("--no-interactive", action="store_true", help="disable interactive wizard mode")
     parser.add_argument("--kill-ida", action="store_true", help="terminate running ida/idat processes before install")
     parser.add_argument(
         "--ida-binary-path",

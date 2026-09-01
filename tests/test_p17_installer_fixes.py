@@ -473,6 +473,18 @@ def test_parse_args_no_embed_auto_flag():
     assert parse_args([]).embed_auto is True
 
 
+def test_parse_args_rejects_conflicting_interactive_modes():
+    from ida_pro_mcp.installer.main import parse_args
+
+    for argv in (
+        ["--yes", "--interactive"],
+        ["--interactive", "--no-interactive"],
+        ["--yes", "--no-interactive"],
+    ):
+        with pytest.raises(SystemExit):
+            parse_args(argv)
+
+
 def test_parse_args_with_r2_and_sigs_flags():
     """WO-INST: --with-r2 and --sigs <dir> must parse onto InstallerOptions."""
     from ida_pro_mcp.installer.main import parse_args
