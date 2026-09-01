@@ -846,12 +846,17 @@ class SessionManager(SessionSkillsMixin):
             session.last_accessed = datetime.now()
             self.sessions[new_sid] = session
             self._save_metadata(session)
-            if skills_import:
+            # An export may legitimately have no learned skills while still
+            # carrying activity or hypotheses.  Gate restoration on the
+            # presence of any exported workspace field, not on the truthiness
+            # of the skills mapping alone.
+            if any(value is not None for value in (skills_import, activity_import, hypotheses_import)):
                 current = self._load_skills(new_sid)
-                current["skills"].update(skills_import)
-                if activity_import:
+                if isinstance(skills_import, dict):
+                    current["skills"].update(skills_import)
+                if isinstance(activity_import, list):
                     current["activity_log"] = activity_import
-                if hypotheses_import:
+                if isinstance(hypotheses_import, list):
                     current["hypotheses"] = hypotheses_import
                 self._save_skills(new_sid, current)
             return copy.copy(session)
@@ -1429,12 +1434,21 @@ class BookmarkManager:
             }
             for i, bm in enumerate(bookmarks):
                 if bm["addr"] == data.get("addr"):
-                    new_bm["id"] = bm["id"]
-                    bookmarks[i] = new_bm
+                    # Treat an add at an existing address as a partial update:
+                    # omitted fields must not erase analyst notes, category,
+                    # priority, or tags left by an earlier call.
+                    updated_bm = dict(bm)
+                    updated_bm["id"] = bm["id"]
+                    updated_bm["addr"] = data.get("addr")
+                    updated_bm["timestamp"] = new_bm["timestamp"]
+                    for key in ("name", "notes", "category", "priority", "tags"):
+                        if key in data:
+                            updated_bm[key] = new_bm[key]
+                    bookmarks[i] = updated_bm
                     res = self.save(sid, bookmarks)
                     if is_error_result(res):
                         return res
-                    return {"ok": True, "updated": True, "bookmark": new_bm}
+                    return {"ok": True, "updated": True, "bookmark": updated_bm}
             bookmarks.append(new_bm)
             res = self.save(sid, bookmarks)
             if is_error_result(res):

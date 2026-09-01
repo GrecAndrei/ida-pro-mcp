@@ -139,8 +139,15 @@ class ServerArgsMixin:
             return ""
         text = ACTION_PREFIX_RE.sub("", text)
         text = text.strip().strip(",").strip()
+        # Preserve a JSON action object for the parser below.  Stripping
+        # balanced wrappers first would turn {"action":"find",...} into a
+        # fragment and make the action tail parser consume the remainder as a
+        # malformed action name.
+        if text.startswith("{") and text.endswith("}"):
+            return text
         # Handle malformed fragments like action\":\"lookup addr=0x...
-        text = text.strip(ACTION_STRIP_CHARS)
+        if not re.search(r"\s", text):
+            text = text.strip(ACTION_STRIP_CHARS)
         text = ACTION_PREFIX_RE.sub("", text)
         text = text.strip().strip(",")
         # Keep multi-token action strings intact here so key=value tails survive tokenization;

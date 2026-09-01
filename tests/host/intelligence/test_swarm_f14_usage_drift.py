@@ -17,6 +17,7 @@ class TestSessionReportSnapshot:
     def test_session_report_is_safe_under_concurrent_observe(self):
         d = DriftDetector()
         stop = threading.Event()
+        observed = threading.Event()
 
         def _observe_loop():
             i = 0
@@ -26,11 +27,13 @@ class TestSessionReportSnapshot:
                     latency_ms=float(i % 50), error=None,
                     addr=f"0x{i % 10000:x}",
                 )
+                observed.set()
                 i += 1
 
         t = threading.Thread(target=_observe_loop, daemon=True)
         t.start()
         try:
+            assert observed.wait(timeout=2)
             for _ in range(300):
                 report = d.session_report("s1")
                 assert report["session_id"] == "s1"
