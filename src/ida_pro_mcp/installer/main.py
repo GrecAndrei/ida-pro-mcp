@@ -82,6 +82,26 @@ def _absolute_path(path: Path | str) -> Path:
     return Path(os.path.abspath(os.path.expandvars(os.path.expanduser(os.fspath(path)))))
 
 
+def _is_checkout_skill_link(path: Path) -> bool:
+    """Return whether a link targets a complete skill inside a Git checkout."""
+    try:
+        target = path.resolve(strict=True)
+        if (
+            not target.is_dir()
+            or target.name != "ida-pro-mcp"
+            or target.parent.name != "skills"
+            or target.parent.parent.name != ".agents"
+            or not (target / "SKILL.md").is_file()
+            or not (target / "references" / "operations.md").is_file()
+        ):
+            return False
+        checkout_root = target.parent.parent.parent
+        git_marker = checkout_root / ".git"
+        return git_marker.is_dir() or git_marker.is_file()
+    except OSError:
+        return False
+
+
 def run_embedder_doctor(opts: InstallerOptions, ui: UI) -> int:
     install_root = _absolute_path(opts.install_root or get_install_root())
     try:
@@ -847,7 +867,10 @@ def install_codex_skills(source_root: Path, mode: str, report: InstallReport, dr
     destination = codex_skills / selected[0].name
     if destination.is_symlink():
         try:
-            if destination.resolve(strict=True) == agent_skill.resolve(strict=True):
+            if (
+                destination.resolve(strict=True) == agent_skill.resolve(strict=True)
+                or _is_checkout_skill_link(destination)
+            ):
                 report.add_step(
                     "skills",
                     "dry-run" if dry_run else "ok",

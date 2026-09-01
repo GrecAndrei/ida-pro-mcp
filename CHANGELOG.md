@@ -2,6 +2,11 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-09-01 — verified existing skill links
+
+- Reuse an existing Codex skill link when its generated contents are current,
+  including installs running from a snapshot or packaged source.
+
 ## 2026-08-27 — 1.0.0a1 repository cleanup and retrieval foundations
 
 - Centralized the package, MCP handshake, CLI, and benchmark version in
