@@ -6,9 +6,11 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 
 import pytest
 
+import ida_pro_mcp.host.batch_manager as batch_manager_module
 from ida_pro_mcp.services import BatchManager, BatchTask
 
 
@@ -136,3 +138,38 @@ def test_persisted_task_keeps_submission_args(tmp_path, monkeypatch):
     assert persisted[0]["args"] == {
         "tool_call": {"tool": "calc", "args": {"action": "eval", "expr": "2+2"}}
     }
+
+
+def test_persisted_loader_skips_bad_records_and_recovers_inflight_tasks(
+    tmp_path, monkeypatch
+):
+    """One malformed record must not hide valid history or fake liveness."""
+    monkeypatch.setenv("IDA_MCP_BATCH_STATE_DIR", str(tmp_path))
+    fixed_uuid = uuid.UUID("1234567890abcdef1234567890abcdef")
+    monkeypatch.setattr(batch_manager_module.uuid, "uuid4", lambda: fixed_uuid)
+    (tmp_path / "tasks-1234567890ab.json").write_text(
+        json.dumps(
+            [
+                {"task_id": "first", "state": "done", "args": {"n": 1}},
+                "damaged-record",
+                {
+                    "task_id": "interrupted",
+                    "state": "running",
+                    "args": {"n": 2},
+                },
+                {"task_id": "last", "state": "cancelled", "args": {"n": 3}},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    mgr = BatchManager(max_workers=1)
+    try:
+        tasks = {task["task_id"]: task for task in mgr.status()}
+        assert set(tasks) == {"first", "interrupted", "last"}
+        assert tasks["first"]["state"] == "done"
+        assert tasks["last"]["state"] == "cancelled"
+        assert tasks["interrupted"]["state"] == "failed"
+        assert "restart" in tasks["interrupted"]["error"]
+    finally:
+        mgr.shutdown()
