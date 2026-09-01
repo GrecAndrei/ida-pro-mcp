@@ -68,7 +68,7 @@ def mint_agent_ticket(
         # ``None`` means the default unrestricted ticket. An explicitly empty
         # list is a valid least-privilege ticket and must not silently widen to
         # ``all``.
-        "scopes": ["all"] if scopes is None else list(scopes),
+        "scopes": ["all"] if scopes is None else scopes,
         "nonce": nonce or secrets.token_hex(8),
     }
     payload_str = json.dumps(payload, sort_keys=True, separators=(",", ":"))
