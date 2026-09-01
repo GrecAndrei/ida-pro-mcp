@@ -673,20 +673,13 @@ def _activate_idalib_after_install(
         report.add_step("idalib", "dry-run", "would activate after installation")
         return
     if chosen_install is None:
-        message = "idalib selected but no IDA install was resolved; activation skipped"
-        report.add_warning(message)
-        ui.warn(message)
-        return
+        raise RuntimeError("idalib selected but no IDA install was resolved")
 
     ida_dir = str(chosen_install.path)
     if not find_idalib_python_dir(ida_dir):
-        message = (
-            f"idalib selected but no idapro package was found under {ida_dir}/idalib/python; "
-            "activation skipped"
+        raise RuntimeError(
+            f"idalib selected but no idapro package was found under {ida_dir}/idalib/python"
         )
-        report.add_warning(message)
-        ui.warn(message)
-        return
 
     ok, detail = activate_idalib(ida_dir)
     if ok:
@@ -696,13 +689,7 @@ def _activate_idalib_after_install(
             "IDA_MCP_RUNTIME=idalib is ready for MCP clients."
         )
     else:
-        message = (
-            f"idalib activation failed ({detail}); sessions will fail "
-            "until activation succeeds."
-        )
-        report.add_warning(message)
-        report.add_step("idalib", "warn", detail)
-        ui.warn(message)
+        raise RuntimeError(f"idalib activation failed ({detail})")
 
 
 def install_bashrc_cli(install_root: Path, dry_run: bool, report: InstallReport) -> None:
@@ -1283,11 +1270,12 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
             or opts.sigs_dir
             or opts.ida_dir
             or opts.ida_version
+            or opts.ida_runtime == "idalib"
         ):
             try:
                 chosen_install = _resolve_ida_install(opts, ui)
             except RuntimeError as exc:
-                if opts.ida_dir or opts.ida_version:
+                if opts.ida_dir or opts.ida_version or opts.ida_runtime == "idalib":
                     raise
                 msg = str(exc)
                 if "no IDA Pro install found" not in msg and "No IDA Pro install detected" not in msg:

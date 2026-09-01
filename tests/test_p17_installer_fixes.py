@@ -974,6 +974,21 @@ def test_noninteractive_idalib_install_activates_after_client_configuration(tmp_
     assert activation_calls == [str(ida_dir)]
 
 
+def test_noninteractive_idalib_install_fails_without_ida(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    monkeypatch.setattr(main_mod, "detect_ida_installs", list)
+    opts = InstallerOptions(
+        interactive=False,
+        only={"clients"},
+        install_root=tmp_path / "install",
+        ida_runtime="idalib",
+    )
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 1
+
+
 def test_wizard_rerank_decline_persists_rerank_disabled(tmp_path, monkeypatch):
     """Declining the reranker in the wizard must set rerank_disabled so the
     default profile cannot leak into state / client env."""
