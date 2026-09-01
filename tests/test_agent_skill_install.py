@@ -145,3 +145,29 @@ def test_skill_refresh_preserves_user_files_and_publishes_as_one_directory(tmp_p
     assert (skill_dir / "SKILL.md").read_text(encoding="utf-8") == "old skill"
     assert (references / "operations.md").read_text(encoding="utf-8") == "old reference"
     assert (skill_dir / "user-notes.md").read_text(encoding="utf-8") == "keep me"
+
+
+def test_multi_target_skill_install_rolls_back_when_later_target_fails(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import skills
+
+    first_root = tmp_path / "first"
+    first_skill = first_root / skills.SKILL_NAME
+    first_skill.mkdir(parents=True)
+    (first_skill / "SKILL.md").write_text("first old", encoding="utf-8")
+    second_root = tmp_path / "second"
+
+    real_publish = skills.install_skills.__globals__["_publish_skill"]
+
+    def fail_second(skill_dir, skill_text, reference_text):
+        if Path(skill_dir) == second_root / skills.SKILL_NAME:
+            raise OSError("second target unavailable")
+        return real_publish(skill_dir, skill_text, reference_text)
+
+    monkeypatch.setitem(skills.install_skills.__globals__, "_publish_skill", fail_second)
+
+    with pytest.raises(OSError, match="second target unavailable"):
+        skills.install_skills([first_root, second_root])
+
+    assert (first_skill / "SKILL.md").read_text(encoding="utf-8") == "first old"
+    assert not (second_root / skills.SKILL_NAME).exists()
+    assert not list(first_root.glob(".*transaction-backup-*"))
