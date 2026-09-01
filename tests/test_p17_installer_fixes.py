@@ -1031,6 +1031,48 @@ def test_idalib_requires_clients_phase(tmp_path):
     assert main_mod.run_install(opts, main_mod.UI()) == 1
 
 
+def test_idalib_failure_rolls_back_embedder_state(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+    from ida_pro_mcp.installer.discovery import IdaInstall
+
+    install_root = tmp_path / "install"
+    install_root.mkdir()
+    state_path = install_root / "embedder.json"
+    original_state = '{"backend": "local", "profile": "old"}\n'
+    state_path.write_text(original_state, encoding="utf-8")
+    model = tmp_path / "embed.gguf"
+    model.write_bytes(b"model")
+    ida_dir = tmp_path / "ida"
+    ida_dir.mkdir()
+    selected = IdaInstall(
+        path=ida_dir,
+        version=(9, 4),
+        build="",
+        idat_binary=None,
+        arch="x64",
+        flavor="pro",
+        source="explicit",
+    )
+    opts = InstallerOptions(
+        interactive=False,
+        only={"clients"},
+        install_root=install_root,
+        embed_auto=True,
+        embed_model_path=str(model),
+        rerank_disabled=True,
+        ida_runtime="idalib",
+    )
+    monkeypatch.setattr(main_mod, "_resolve_ida_install", lambda *_args: selected)
+    monkeypatch.setattr(main_mod, "get_config_paths", lambda _root: {"fake": tmp_path / "fake.json"})
+    monkeypatch.setattr(main_mod, "configure_clients", lambda **_kwargs: ["fake"])
+    monkeypatch.setattr(main_mod, "find_idalib_python_dir", lambda _path: "/fake/idalib/python")
+    monkeypatch.setattr(main_mod, "activate_idalib", lambda _path: (False, "activation rejected"))
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 1
+    assert state_path.read_text(encoding="utf-8") == original_state
+
+
 def test_wizard_rerank_decline_persists_rerank_disabled(tmp_path, monkeypatch):
     """Declining the reranker in the wizard must set rerank_disabled so the
     default profile cannot leak into state / client env."""

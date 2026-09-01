@@ -1524,6 +1524,8 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                 if not opts.dry_run:
                     try:
                         from ida_pro_mcp.host.intelligence.core import write_embedder_state
+                        state_target = install_root / "embedder.json"
+                        backup_file(state_target, report, dry_run=False)
                         state_path = write_embedder_state(
                             install_root,
                             backend="gemini",
@@ -1541,6 +1543,7 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                             ),
                         )
                         report.metadata["embedder_state"] = str(state_path)
+                        report.add_modified(Path(state_path))
                     except Exception as exc:
                         ui.warn(f"Could not persist embedder.json: {exc}")
                 if opts.gemini_access == "vertex" and opts.gemini_install_auth and not opts.dry_run:
@@ -1653,6 +1656,8 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                 if (embed_model or embed_server or rerank_model) and not opts.dry_run:
                     try:
                         from ida_pro_mcp.host.intelligence.core import write_embedder_state
+                        state_target = install_root / "embedder.json"
+                        backup_file(state_target, report, dry_run=False)
                         # An explicit decline (opts.rerank_disabled) must not
                         # pin any rerank profile into state — that would make
                         # the host resolve the default profile and silently
@@ -1669,6 +1674,7 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                             rerank=rerank_arg,
                         )
                         report.metadata["embedder_state"] = str(state_path)
+                        report.add_modified(Path(state_path))
                     except Exception as exc:
                         ui.warn(f"Could not persist embedder.json: {exc}")
                 server_cfg = build_stdio_config(
