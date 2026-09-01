@@ -692,10 +692,10 @@ def _activate_idalib_after_install(
         raise RuntimeError(f"idalib activation failed ({detail})")
 
 
-def install_bashrc_cli(install_root: Path, dry_run: bool, report: InstallReport) -> None:
+def install_bashrc_cli(install_root: Path, dry_run: bool, report: InstallReport) -> bool:
     if sys.platform == "win32":
         report.add_warning("bashrc shim skipped on Windows")
-        return
+        return False
     bashrc = Path.home() / ".bashrc"
     reject_symlink_path(bashrc, "bashrc path")
     block_start = "# >>> ida-pro-mcp >>>"
@@ -729,7 +729,8 @@ def install_bashrc_cli(install_root: Path, dry_run: bool, report: InstallReport)
         bashrc.parent.mkdir(parents=True, exist_ok=True)
         backup_file(bashrc, report, dry_run=False)
         atomic_write_text(bashrc, updated)
-    report.add_modified(bashrc)
+        report.add_modified(bashrc)
+    return True
 
 
 def _replace_with_symlink_or_copy(src: Path, dst: Path) -> str:
@@ -785,9 +786,10 @@ def _install_claude_opencode_skills(report: InstallReport, dry_run: bool, ui: UI
         target_dirs = default_skill_dirs()
         written = install_skills(target_dirs, dry_run=dry_run)
         count = sum(len(paths) for paths in written.values())
-        for _skill_name, paths in written.items():
-            for p in paths:
-                report.add_modified(p)
+        if not dry_run:
+            for paths in written.values():
+                for p in paths:
+                    report.add_modified(p)
         action = "would install" if dry_run else "installed"
         report.add_step(
             "claude-skills", "ok" if not dry_run else "dry-run",
@@ -814,9 +816,10 @@ def install_codex_skills(source_root: Path, mode: str, report: InstallReport, dr
         codex_skills = _absolute_path(codex_home) / "skills"
         written = install_skills([codex_skills], dry_run=dry_run)
         count = sum(len(paths) for paths in written.values())
-        for paths in written.values():
-            for path in paths:
-                report.add_modified(path)
+        if not dry_run:
+            for paths in written.values():
+                for path in paths:
+                    report.add_modified(path)
         action = "would generate" if dry_run else "generated"
         report.add_step(
             "skills",
@@ -846,7 +849,12 @@ def install_codex_skills(source_root: Path, mode: str, report: InstallReport, dr
         else:
             _replace_with_symlink_or_copy(src, dst)
             report.add_modified(dst)
-    report.add_step("skills", "ok", f"installed {len(selected)} skills")
+    report.add_step(
+        "skills",
+        "dry-run" if dry_run else "ok",
+        f"would install {len(selected)} skills to {codex_skills}" if dry_run
+        else f"installed {len(selected)} skills",
+    )
 
 
 def parse_args(argv: list[str] | None = None) -> InstallerOptions:
@@ -1361,7 +1369,11 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                 )
             if not opts.dry_run:
                 kill_ida_processes(binary_path=kill_target)
-            report.add_step("kill_ida", "ok", kill_target or "unscoped")
+            report.add_step(
+                "kill_ida",
+                "dry-run" if opts.dry_run else "ok",
+                ("would stop " if opts.dry_run else "stopped ") + (kill_target or "unscoped"),
+            )
         else:
             report.add_step("kill_ida", "skipped", "not requested")
 
@@ -1378,8 +1390,14 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                 dry_run=opts.dry_run,
                 report=report,
             )
-            report.add_step("runtime", "ok", str(python_exe))
-            if opts.runtime_source == "local":
+            report.add_step(
+                "runtime",
+                "dry-run" if opts.dry_run else "ok",
+                ("would prepare " if opts.dry_run else "ready: ") + str(python_exe),
+            )
+            if opts.dry_run:
+                ui.info("Runtime environment would be prepared")
+            elif opts.runtime_source == "local":
                 ui.ok("Development mode: using source tree")
             else:
                 ui.ok("Runtime environment ready")
@@ -1719,9 +1737,18 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
 
         if opts.install_cli_shim and _phase_enabled(opts, "shell"):
             ui.info("Installing shell CLI shim")
-            install_bashrc_cli(install_root, opts.dry_run, report)
-            report.add_step("shell", "ok", "bashrc updated")
-            ui.ok("CLI shell shim installed")
+            shell_supported = install_bashrc_cli(install_root, opts.dry_run, report)
+            if shell_supported:
+                shell_status = "dry-run" if opts.dry_run else "ok"
+                shell_detail = "would update bashrc" if opts.dry_run else "bashrc updated"
+                report.add_step("shell", shell_status, shell_detail)
+                if opts.dry_run:
+                    ui.info("CLI shell shim would be installed")
+                else:
+                    ui.ok("CLI shell shim installed")
+            else:
+                report.add_step("shell", "skipped", "not supported on Windows")
+                ui.info("CLI shell shim skipped on Windows")
         else:
             report.add_step("shell", "skipped", "not requested")
 

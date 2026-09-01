@@ -399,6 +399,50 @@ def test_bashrc_shim_shell_quotes_user_controlled_paths(tmp_path, monkeypatch):
     assert "$(touch SHOULD_NOT_RUN)" in content
 
 
+def test_bashrc_shim_reports_windows_skip(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main
+    from ida_pro_mcp.installer.common import InstallReport
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setattr(main.sys, "platform", "win32")
+    report = InstallReport()
+
+    assert main.install_bashrc_cli(tmp_path / "install", dry_run=False, report=report) is False
+    assert report.warnings == ["bashrc shim skipped on Windows"]
+    assert not (home / ".bashrc").exists()
+
+
+def test_bashrc_shim_dry_run_does_not_claim_a_modified_file(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main
+    from ida_pro_mcp.installer.common import InstallReport
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    report = InstallReport()
+
+    assert main.install_bashrc_cli(tmp_path / "install", dry_run=True, report=report) is True
+    assert report.modified_files == []
+    assert not (home / ".bashrc").exists()
+
+
+def test_claude_skills_dry_run_does_not_claim_modified_files(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main
+    from ida_pro_mcp.installer.common import InstallReport
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    report = InstallReport()
+
+    main._install_claude_opencode_skills(report, dry_run=True, ui=main.UI())
+
+    assert report.modified_files == []
+    assert report.steps[0]["status"] == "dry-run"
+
+
 def test_bashrc_shim_is_restored_by_install_rollback(tmp_path, monkeypatch):
     from ida_pro_mcp.installer import main
     from ida_pro_mcp.installer.clients import rollback_from_backups

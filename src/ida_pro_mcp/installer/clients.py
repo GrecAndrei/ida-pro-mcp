@@ -355,7 +355,7 @@ def update_json_config(
     _prepare_config_path(path, report, dry_run)
     if not dry_run:
         _atomic_write_text(path, json.dumps(config, indent=2))
-    report.add_modified(path)
+        report.add_modified(path)
     return True
 
 
@@ -384,7 +384,7 @@ def update_opencode_config(path: Path, server_name: str, server_cfg: dict, repor
     _prepare_config_path(path, report, dry_run)
     if not dry_run:
         _atomic_write_text(path, json.dumps(config, indent=2))
-    report.add_modified(path)
+        report.add_modified(path)
     return True
 
 
@@ -427,7 +427,7 @@ def update_toml_config(path: Path, server_name: str, server_cfg: dict, report: I
             _atomic_write_bytes(path, buf.getvalue())
         else:
             _atomic_write_text(path, _toml_dump_simple(config))
-    report.add_modified(path)
+        report.add_modified(path)
     return True
 
 
