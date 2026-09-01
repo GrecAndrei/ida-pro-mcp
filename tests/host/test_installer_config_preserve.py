@@ -207,6 +207,7 @@ class TestUpdateJsonConfigPreservesUserData(unittest.TestCase):
         self.assertIn("Could not parse", report.errors[0])
         # modified_files must NOT include this path.
         self.assertNotIn(str(p), report.modified_files)
+        self.assertEqual(list(self.tmp.glob("broken.json.bak.*")), [])
 
     def test_unterminated_comment_left_untouched(self):
         p = self.tmp / "unterminated-comment.json"
@@ -223,6 +224,7 @@ class TestUpdateJsonConfigPreservesUserData(unittest.TestCase):
         self.assertEqual(len(report.errors), 1)
         self.assertIn("unterminated block comment", report.errors[0])
         self.assertNotIn(str(p), report.modified_files)
+        self.assertEqual(list(self.tmp.glob("unterminated-comment.json.bak.*")), [])
 
     def test_wrong_server_container_type_left_untouched(self):
         for value in ("[]", "null"):
@@ -282,6 +284,7 @@ class TestUpdateTomlConfigPreservesUserData(unittest.TestCase):
         self.assertEqual(len(report.errors), 1)
         self.assertIn("Could not parse", report.errors[0])
         self.assertNotIn(str(p), report.modified_files)
+        self.assertEqual(list(self.tmp.glob("broken.toml.bak.*")), [])
 
 
 if __name__ == "__main__":

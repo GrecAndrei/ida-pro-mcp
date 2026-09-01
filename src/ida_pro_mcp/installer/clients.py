@@ -103,7 +103,7 @@ def _prune_legacy_entries(container: dict, server_name: str) -> None:
         container.pop(key, None)
 
 
-def _prepare_config_path(path: Path, report: InstallReport, dry_run: bool) -> None:
+def _validate_config_path(path: Path) -> None:
     try:
         reject_symlink_path(path, "client config path")
     except RuntimeError as exc:
@@ -116,6 +116,10 @@ def _prepare_config_path(path: Path, report: InstallReport, dry_run: bool) -> No
             f"Refusing non-regular client config path {path}; "
             "choose a regular file or remove the path before retrying."
         )
+
+
+def _prepare_config_path(path: Path, report: InstallReport, dry_run: bool) -> None:
+    _validate_config_path(path)
     if not dry_run:
         path.parent.mkdir(parents=True, exist_ok=True)
     backup_file(path, report, dry_run)
@@ -327,7 +331,7 @@ def update_json_config(
     top_level_key: str = "mcpServers",
     server_type: str = "",
 ) -> bool:
-    _prepare_config_path(path, report, dry_run)
+    _validate_config_path(path)
     try:
         config = _load_json_config(path, allow_comments=True)
     except ConfigParseError as exc:
@@ -348,6 +352,7 @@ def update_json_config(
     if server_type:
         entry["type"] = server_type
     _upsert_server_entry(config[top_level_key], server_name, entry)
+    _prepare_config_path(path, report, dry_run)
     if not dry_run:
         _atomic_write_text(path, json.dumps(config, indent=2))
     report.add_modified(path)
@@ -355,7 +360,7 @@ def update_json_config(
 
 
 def update_opencode_config(path: Path, server_name: str, server_cfg: dict, report: InstallReport, dry_run: bool) -> bool:
-    _prepare_config_path(path, report, dry_run)
+    _validate_config_path(path)
     try:
         config = _load_json_config(path, allow_comments=True)
     except ConfigParseError as exc:
@@ -376,6 +381,7 @@ def update_opencode_config(path: Path, server_name: str, server_cfg: dict, repor
         "environment": server_cfg.get("env", {}),
     }
     _upsert_server_entry(config["mcp"], server_name, opencode_entry)
+    _prepare_config_path(path, report, dry_run)
     if not dry_run:
         _atomic_write_text(path, json.dumps(config, indent=2))
     report.add_modified(path)
@@ -393,7 +399,7 @@ def update_toml_config(path: Path, server_name: str, server_cfg: dict, report: I
     except ImportError:
         tomli_w = None
 
-    _prepare_config_path(path, report, dry_run)
+    _validate_config_path(path)
     config = {}
     if path.exists():
         try:
@@ -412,6 +418,7 @@ def update_toml_config(path: Path, server_name: str, server_cfg: dict, report: I
         return False
     config.setdefault("mcp_servers", {})
     _upsert_server_entry(config["mcp_servers"], server_name, server_cfg)
+    _prepare_config_path(path, report, dry_run)
     if not dry_run:
         if tomli_w is not None:
             import io
