@@ -1464,25 +1464,29 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                 raise RuntimeError(
                     "--sigs requires an IDA install to derive <IDADIR>/sig from"
                 )
+            sig_dir = find_ida_sig_dir(chosen_install.path)
+            manifest = stage_sigs(sig_source, sig_dir, opts.dry_run, report)
+            report.metadata["sigs_manifest"] = manifest.to_dict()
+            total = manifest.count + len(manifest.skipped)
+            if not total:
+                raise RuntimeError(f"No *.sig / *.sig.gz files found under {sig_source}")
+            if manifest.count:
+                action = "would stage" if opts.dry_run else "staged"
+                ui.ok(f"{action} {manifest.count} signature file(s) into {sig_dir}")
+                ui.info(
+                    "ida_list_sigs (the host MCP signature op) surfaces them by basename "
+                    "from <IDADIR>/sig; apply one per IDB with ida_apply_sig."
+                )
             else:
-                sig_dir = find_ida_sig_dir(chosen_install.path)
-                manifest = stage_sigs(sig_source, sig_dir, opts.dry_run, report)
-                report.metadata["sigs_manifest"] = manifest.to_dict()
-                if manifest.count:
-                    action = "would stage" if opts.dry_run else "staged"
-                    ui.ok(f"{action} {manifest.count} signature file(s) into {sig_dir}")
-                    ui.info(
-                        "ida_list_sigs (the host MCP signature op) surfaces them by basename "
-                        "from <IDADIR>/sig; apply one per IDB with ida_apply_sig."
-                    )
-                    report.add_step(
-                        "sigs",
-                        "dry-run" if opts.dry_run else "ok",
-                        f"{manifest.count} file(s) -> {sig_dir}",
-                    )
-                else:
-                    ui.warn(f"No *.sig / *.sig.gz files found under {sig_source}")
-                    report.add_step("sigs", "warn", f"no signature files found in {sig_source}")
+                ui.info(
+                    f"Preserved {total} existing signature file(s) in {sig_dir}; "
+                    "nothing new was staged."
+                )
+            report.add_step(
+                "sigs",
+                "dry-run" if opts.dry_run else "ok",
+                f"{manifest.count} staged, {len(manifest.skipped)} already present -> {sig_dir}",
+            )
         elif _phase_enabled(opts, "sigs"):
             report.add_step("sigs", "skipped", "not requested (pass --sigs <dir>)")
 

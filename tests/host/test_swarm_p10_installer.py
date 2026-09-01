@@ -436,6 +436,26 @@ def test_run_install_fails_when_sigs_have_no_ida_install(tmp_path, monkeypatch):
     assert main_mod.run_install(opts, main_mod.UI()) == 1
 
 
+def test_run_install_fails_when_sig_source_has_no_signature_files(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallerOptions
+
+    install_dir = tmp_path / "ida-pro-9.3"
+    install_dir.mkdir()
+    empty_pack = tmp_path / "empty-pack"
+    empty_pack.mkdir()
+    (empty_pack / "README.txt").write_text("not a signature", encoding="utf-8")
+    opts = InstallerOptions(
+        interactive=False,
+        only={"sigs"},
+        install_root=tmp_path / "install-root",
+        sigs_dir=str(empty_pack),
+    )
+    monkeypatch.setattr(main_mod, "detect_ida_installs", lambda: [_fake_ida_install(install_dir)])
+
+    assert main_mod.run_install(opts, main_mod.UI()) == 1
+
+
 def test_run_install_with_r2_records_env_into_client_config(tmp_path, monkeypatch):
     """`--only clients --with-r2` records the resolved rz/r2 as IDA_MCP_R2_BIN
     in the generated client config."""
