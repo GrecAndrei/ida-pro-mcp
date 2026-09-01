@@ -536,6 +536,90 @@ def test_live_code_navigation_uses_fixture_symbols(live_context: LiveContext):
         assert payload
 
 
+def test_live_read_only_operation_matrix_reaches_real_handlers(live_context: LiveContext):
+    """Exercise the public read-only routes through the real MCP boundary.
+
+    The catalog test above proves that these operations are advertised.  This
+    matrix also makes sure their dispatch and IDA-side handlers can be used by
+    a client.  Optional backends and deliberately invalid identifiers may
+    return a structured error, but must not break the JSON-RPC contract.
+    """
+    client = live_context.client
+    arguments: dict[str, dict[str, Any]] = {
+        "ida_session_state": {},
+        "ida_session_status": {},
+        "ida_session_health": {},
+        "ida_session_get": {"session_id": "missing-live-session"},
+        "ida_session_list": {"limit": 20},
+        "ida_sso_activate": {"agents": ["live-agent"]},
+        "ida_agent_login": {"name": "live-agent", "ticket": "not-a-ticket"},
+        "ida_agent_logout": {"name": "live-agent"},
+        "ida_overview": {},
+        "ida_find": {"query": "fixture_entry", "kind": "names", "limit": 10},
+        "ida_semantic_search": {"query": "function that calls the fixture leaf", "mode": "quick", "limit": 5},
+        "ida_reranker_status": {"probe": True},
+        "ida_function_families": {"min_size": 2, "limit": 5},
+        "ida_index_status": {},
+        "ida_cancel_index": {"task_id": "missing-live-index"},
+        "ida_list_functions": {"query": "fixture_", "limit": 20},
+        "ida_calc_eval": {"expr": "0x10 + 2"},
+        "ida_calc_offset": {"address": "fixture_entry", "target": "fixture_leaf"},
+        "ida_calc_convert": {"value": "2k"},
+        "ida_calc_resolve": {"address": "fixture_entry"},
+        "ida_calc_deref": {"address": "0x400000", "type": "u8"},
+        "ida_calc_chain": {"address": "0x400000", "offsets": [0]},
+        "ida_calc_align": {"value": "0x401003", "size": 16},
+        "ida_calc_bitops": {"value": "0xff", "target": "0x0f", "bit_op": "xor"},
+        "ida_list_strings": {"query": "IDA_MCP_AGENT_SURFACE_MARKER", "limit": 20},
+        "ida_list_imports": {"limit": 20},
+        "ida_decompile": {"address": "fixture_entry"},
+        "ida_disassemble": {"address": "fixture_entry", "limit": 20},
+        "ida_xrefs_to": {"address": "fixture_leaf"},
+        "ida_callers": {"address": "fixture_leaf"},
+        "ida_callees": {"address": "fixture_entry"},
+        "ida_list_findings": {"limit": 20},
+        "ida_search_findings": {"query": "fixture", "limit": 10},
+        "ida_analysis_brief": {"limit": 5},
+        "ida_next_target": {"strategy": "coverage", "limit": 5},
+        "ida_read_bytes": {"address": "0x400000", "size": 16},
+        "ida_get_type": {"name": "int"},
+        "ida_list_types": {"kind": "struct", "limit": 20},
+        "ida_list_segments": {},
+        "ida_callgraph": {"address": "fixture_entry", "depth": 2, "format": "json"},
+        "ida_list_sigs": {"query": ""},
+        "ida_continue": {"token": "missing-live-token"},
+        "ida_help": {"topic": "ida_decompile"},
+        "ida_sreg_get": {"start": "fixture_entry", "reg": "cs"},
+        "ida_sreg_list": {"start": "fixture_entry"},
+        "ida_auto_wait": {"timeout_ms": 1000},
+        "ida_events": {"limit": 20},
+        "ida_registers": {"addr": "fixture_entry"},
+        "ida_search_data_value": {"value": "0xDEADBEEF", "limit": 5},
+        "ida_search_query_lang": {"query": "functions with size > 10 LIMIT 5"},
+        "ida_r2_status": {},
+        "ida_r2_bininfo": {},
+        "ida_r2_load_hints": {},
+        "ida_r2_disassemble_hypothesis": {"address": "fixture_entry", "count": 8},
+        "ida_r2_vxrefs": {"value": "0x20000000", "limit": 5},
+        "ida_fw_detect_vector_table": {"start": "0x0", "end": "0x400"},
+        "ida_fw_detect_load_base": {},
+        "ida_fw_detect_mmio": {},
+        "ida_fw_rtos_scan": {},
+        "ida_emulate": {"action": "info"},
+    }
+    read_only = {
+        operation.name
+        for operation in AGENT_OPERATIONS
+        if str(operation.risk_tier) == "RiskTier.READ" or operation.risk_tier.value == "read"
+    }
+    assert set(arguments) <= read_only
+    for name, payload_args in arguments.items():
+        payload = client.call(name, payload_args)
+        assert isinstance(payload, dict), (name, payload)
+        if payload.get("error") is True:
+            assert isinstance(payload.get("code"), str) and payload["code"], (name, payload)
+
+
 def test_live_mutations_and_findings_are_observable(live_context: LiveContext):
     client = live_context.client
     original = "fixture_mutation_target"

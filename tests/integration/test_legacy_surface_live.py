@@ -626,6 +626,12 @@ def test_legacy_analysis_and_database_controls_are_live(
         ("add_entry", {"addr": "rich_tiny", "ordinal": 29991, "name": "expanded_entry"}),
         ("save_idb", {"path": str(tmp_path / "expanded-copy.i64")}),
     ):
+        if action in {
+            "set_processor", "set_architecture", "set_loader_options", "set_options",
+            "set_af", "set_gp", "reanalyze", "run", "analyze", "make_code",
+            "undefine", "force_offset", "add_entry", "save_idb",
+        }:
+            extra = {**extra, "_risk_ack": True}
         legacy_ctx.coded_or_ok("analysis", action=action, **extra)
 
     snapshot = legacy_ctx.coded_or_ok(
@@ -633,7 +639,8 @@ def test_legacy_analysis_and_database_controls_are_live(
     )
     if snapshot.get("error") is not True:
         legacy_ctx.coded_or_ok(
-            "analysis", action="restore_snapshot", snapshot_name="expanded-live-snapshot"
+            "analysis", action="restore_snapshot", snapshot_name="expanded-live-snapshot",
+            _risk_ack=True,
         )
 
 
@@ -989,3 +996,330 @@ def test_legacy_code_navigation_variants_are_live(legacy_ctx: LegacyContext):
         ("summary", {}),
     ):
         legacy_ctx.coded_or_ok("search", action=action, limit=10, **extra)
+
+
+def test_legacy_calc_aliases_and_typed_paths_are_live(legacy_ctx: LegacyContext):
+    """Exercise calculator inference, scalar formats, and typed reads end to end."""
+    for action, extra in (
+        ("eval", {"expr": "(1 + 2) * 3 == 9"}),
+        ("eval", {"expr": "u8('0x400000') + u16('0x400001')"}),
+        ("eval", {"expr": "rich_entry + 0x10"}),
+        ("eval", {"semantic_action": "delta", "intent": "distance between rich_entry and rich_helper"}),
+        ("offset", {"addr": "rich_helper", "target": "rich_entry"}),
+        ("offset", {"intent": "distance between rich_entry and rich_helper"}),
+        ("convert", {"value": "2k"}),
+        ("convert", {"value": "-1"}),
+        ("convert", {"value": "rich_entry"}),
+        ("resolve", {"addr": "rich_entry"}),
+        ("resolve", {"addr": "0x0", "to_va": True}),
+        ("resolve", {"intent": "file offset 0x0"}),
+        ("deref", {"addr": "0x400000", "type": "bytes", "size": 8}),
+        ("deref", {"addr": "0x400000", "type": "s8"}),
+        ("deref", {"addr": "0x400000", "type": "s16"}),
+        ("deref", {"addr": "0x400000", "type": "s32"}),
+        ("deref", {"addr": "0x400000", "type": "s64"}),
+        ("deref", {"addr": "0x400000", "type": "f32"}),
+        ("deref", {"addr": "0x400000", "type": "f64"}),
+        ("deref", {"addr": "0x400000", "type": "ptr", "size": 8, "deref_depth": 3}),
+        ("deref", {"addr": "rich_use_strings", "type": "string"}),
+        ("chain", {"addr": "0x400000", "offsets": [0]}),
+        ("chain", {"addr": "0x400000", "offsets": "0x0;1"}),
+        ("chain", {"addr": "0x400000", "intent": "pointer chain at 0x400000 offsets 0"}),
+        ("align", {"addr": "rich_entry", "size": 10}),
+        ("align", {"expr": "0x401003", "size": 16}),
+        ("align", {"value": "0x401003", "size": 16}),
+        ("bitops", {"op": "and", "value": "0xff", "target": "0x0f"}),
+        ("bitops", {"op": "or", "value": "0x10", "target": "0x03"}),
+        ("bitops", {"op": "xor", "value": "0xff", "target": "0x0f"}),
+        ("bitops", {"op": "not", "value": "0xff"}),
+        ("bitops", {"op": "shl", "value": "1", "target": "3"}),
+        ("bitops", {"op": "shr", "value": "8", "target": "2"}),
+        ("eval", {"expr": "1 + 1", "persist": True, "_risk_ack": True}),
+    ):
+        legacy_ctx.coded_or_ok("calc", action=action, **extra)
+
+
+def test_legacy_misc_knowledge_and_symbol_file_paths_are_live(
+    legacy_ctx: LegacyContext, tmp_path: Path
+):
+    """Verify utility files, symbol persistence, and optional loader failures."""
+    text_path = tmp_path / "misc-live.txt"
+    binary_path = tmp_path / "misc-live.bin"
+    db_path = tmp_path / "knowledge-live.sqlite3"
+    legacy_ctx.coded_or_ok(
+        "misc", action="write_file", path=str(text_path), content="live utility text",
+        _risk_ack=True,
+    )
+    legacy_ctx.coded_or_ok(
+        "misc", action="write_file", path=str(binary_path), content="00 ff 10",
+        encoding="binary", _risk_ack=True,
+    )
+    legacy_ctx.coded_or_ok("misc", action="read_file", path=str(text_path))
+    legacy_ctx.coded_or_ok(
+        "misc", action="read_file", path=str(binary_path), encoding="binary"
+    )
+    for action, extra in (
+        ("load_sig", {"name": "missing-live-signature"}),
+        ("list_sigs", {"name": "libc"}),
+        ("plugin_run", {"name": "missing-live-plugin"}),
+        ("health", {"verbose": False}),
+        ("health", {"verbose": True}),
+        ("reload", {"module": "funcs"}),
+    ):
+        legacy_ctx.coded_or_ok("misc", action=action, **extra, _risk_ack=True)
+
+    export = legacy_ctx.coded_or_ok(
+        "symbols", action="export", path=str(tmp_path / "symbols-live.json"),
+        _risk_ack=True,
+    )
+    if export.get("error") is not True:
+        assert (tmp_path / "symbols-live.json").exists()
+    for action, extra in (
+        ("load_pdb", {"path": str(tmp_path / "missing-live.pdb")}),
+        ("load_dwarf", {}),
+        ("status", {}),
+        ("apply", {"addr": "rich_entry"}),
+    ):
+        legacy_ctx.coded_or_ok("symbols", action=action, **extra, _risk_ack=True)
+
+    for action, extra in (
+        ("export_session", {"db_path": str(db_path), "session_id": legacy_ctx.session_id}),
+        ("import_symbols", {"db_path": str(db_path), "min_confidence": 0.0, "limit": 20}),
+        ("symbol_lookup", {"db_path": str(db_path), "query": "rich", "limit": 20}),
+    ):
+        legacy_ctx.coded_or_ok("knowledge", action=action, **extra, _risk_ack=True)
+
+
+def test_legacy_function_modify_and_analysis_write_paths_are_live(
+    legacy_ctx: LegacyContext, tmp_path: Path
+):
+    """Cover acknowledged IDB edits while restoring the fixture afterward."""
+    info = legacy_ctx.coded_or_ok(
+        "funcs", action="info", addr="rich_entry", include_xrefs=True,
+        include_prototype=True, include_stack=True,
+    )
+    fn_info = info.get("function") if info.get("error") is not True else None
+    if isinstance(fn_info, dict) and fn_info.get("end"):
+        legacy_ctx.coded_or_ok(
+            "funcs", action="change", addr="rich_entry", end=fn_info["end"],
+            _risk_ack=True,
+        )
+    for action, extra in (
+        ("create", {"addr": "rich_tiny", "name": "rich_tiny"}),
+        ("set_flags", {"addr": "rich_entry", "flags": 0}),
+        ("delete", {"addr": "0xdeadbeef"}),
+        ("list", {"query": "rich", "min_size": 1, "min_xrefs": 0, "named_only": True, "offset": 1, "count": 5}),
+    ):
+        legacy_ctx.coded_or_ok("funcs", action=action, **extra, _risk_ack=True)
+
+    snapshot = legacy_ctx.coded_or_ok(
+        "analysis", action="snapshot", snapshot_name="modify-live-snapshot",
+        _risk_ack=True,
+    )
+    try:
+        for comment_type in ("regular", "repeatable", "anterior", "posterior"):
+            legacy_ctx.coded_or_ok(
+                "modify", action="comment", addr="rich_tiny",
+                value=f"temporary {comment_type} comment", comment_type=comment_type,
+                _risk_ack=True,
+            )
+        legacy_ctx.coded_or_ok(
+            "modify", action="rename", addr="rich_tiny", value="mcp_temporary_tiny",
+            _risk_ack=True,
+        )
+        legacy_ctx.coded_or_ok(
+            "modify", action="rename", addr="mcp_temporary_tiny", value="rich_tiny",
+            _risk_ack=True,
+        )
+        legacy_ctx.coded_or_ok(
+            "modify", action="set_type", addr="rich_entry", type_str="int32_t",
+            _risk_ack=True,
+        )
+        legacy_ctx.coded_or_ok(
+            "modify", action="patch_bytes", addr="rich_tiny", nop=True, count=1,
+            _risk_ack=True,
+        )
+        legacy_ctx.coded_or_ok(
+            "modify", action="patch_asm", addr="rich_tiny", asm="nop; nop",
+            _risk_ack=True,
+        )
+        legacy_ctx.coded_or_ok(
+            "modify", action="rename_local", addr="rich_entry",
+            new_name="temporary_local", _risk_ack=True,
+        )
+        legacy_ctx.coded_or_ok(
+            "modify", action="create_data", addr="0x400000", item_type="byte",
+            count=2, _risk_ack=True,
+        )
+        legacy_ctx.coded_or_ok(
+            "modify", action="create_strlit", addr="0x400000", size=4,
+            strtype="c", _risk_ack=True,
+        )
+        legacy_ctx.coded_or_ok("modify", action="undo_begin", _risk_ack=True)
+        legacy_ctx.coded_or_ok("modify", action="undo_end", _risk_ack=True)
+    finally:
+        if snapshot.get("error") is not True:
+            legacy_ctx.coded_or_ok(
+                "analysis", action="restore_snapshot", snapshot_name="modify-live-snapshot",
+                _risk_ack=True,
+            )
+
+
+def test_legacy_memory_typed_search_and_segment_analysis_are_live(
+    legacy_ctx: LegacyContext
+):
+    """Exercise typed memory modes plus the full segment analysis matrix."""
+    string_payload = legacy_ctx.ok(
+        "data", action="strings", query="RICH_FIXTURE", count=1
+    )
+    string_addr = None
+    first_line = str(string_payload.get("strings") or "").splitlines()
+    if first_line and first_line[0].split():
+        token = first_line[0].split()[0]
+        if token.startswith("0x"):
+            string_addr = token
+
+    for value_type in ("s8", "s16", "s32", "s64", "f32", "f64", "ptr", "string"):
+        legacy_ctx.coded_or_ok(
+            "memory", action="read", addr=string_addr or "0x400000",
+            type=value_type, size=8,
+        )
+    for action, extra in (
+        ("search", {"addr": "0x400000", "end_addr": "0x401000", "data": "0x7f", "int_width": 1}),
+        ("search", {"addr": "0x400000", "end_addr": "0x401000", "data": "7f 45 ?? 46"}),
+        ("search", {"addr": "0x400000", "end_addr": "0x401000", "data": "ELF", "regex": True}),
+        ("search", {"addr": "0x400000", "end_addr": "0x401000", "data": "7f", "literal": True}),
+        ("compare", {"addr1": "0x400000", "addr2": "0x400001", "size": 8}),
+        ("pointers", {"addr": "0x400000", "end_addr": "0x401000", "aligned": True}),
+        ("struct_walk", {"addr": "0x400000", "depth": 0}),
+    ):
+        legacy_ctx.coded_or_ok("memory", action=action, **extra)
+
+    scratch_start = "0x700000"
+    scratch_end = "0x701000"
+    added = legacy_ctx.coded_or_ok(
+        "segments", action="add", start=scratch_start, end=scratch_end,
+        name="mcp_scratch", sclass="DATA", _risk_ack=True,
+    )
+    current_start = scratch_start
+    if added.get("error") is not True:
+        for action, extra in (
+            ("info", {"start": current_start}),
+            ("set_attr", {"start": current_start, "attr": "color", "value": 0x123456}),
+            ("set_perms", {"start": current_start, "value": "rw"}),
+            ("analyze", {"start": current_start}),
+            ("find_code", {"start": current_start}),
+            ("find_data", {"start": current_start}),
+            ("sreg_get", {"start": current_start, "reg": "cs"}),
+            ("sreg_list", {"start": current_start}),
+        ):
+            legacy_ctx.coded_or_ok("segments", action=action, **extra, _risk_ack=True)
+        moved = legacy_ctx.coded_or_ok(
+            "segments", action="move", start=current_start, end="0x710000",
+            _risk_ack=True,
+        )
+        if moved.get("error") is not True:
+            current_start = "0x710000"
+        legacy_ctx.coded_or_ok(
+            "segments", action="delete", start=current_start, _risk_ack=True
+        )
+
+    for action, extra in (
+        ("analyze", {}),
+        ("merge", {}),
+        ("compare", {"name": ".text", "name2": ".text"}),
+        ("list", {"offset": 1, "count": 2}),
+    ):
+        legacy_ctx.coded_or_ok("segments", action=action, **extra)
+
+
+def test_legacy_batch_templates_pipes_conditions_and_macros_are_live(
+    legacy_ctx: LegacyContext
+):
+    """Exercise the batch DSL and JSON orchestration modes over real tools."""
+    dry = legacy_ctx.coded_or_ok(
+        "batch", script='set targets = data(action="functions")\nreturn targets',
+        dry_run=True, _risk_ack=True,
+    )
+    if dry.get("error") is not True:
+        assert dry.get("mode") == "script"
+
+    for template in ("analyze_function", "map_binary", "deep_function_audit"):
+        legacy_ctx.coded_or_ok(
+            "batch", template=template, template_vars={"addr": "rich_entry"},
+            _risk_ack=True,
+        )
+    legacy_ctx.coded_or_ok(
+        "batch", template="not-a-template", template_vars={"addr": "rich_entry"},
+        _risk_ack=True,
+    )
+
+    calls = [
+        {"tool": "data", "action": "functions", "count": 3},
+        {
+            "tool": "search", "action": "find", "query": "rich_entry",
+            "depends_on": 0, "pipe_from": 0, "pipe_field": "functions",
+            "if_result": {"index": 0, "field": "ok", "op": "eq", "value": True},
+        },
+        {"tool": "calc", "action": "eval", "expr": "1 + 1", "depends_on": [0, 1]},
+    ]
+    legacy_ctx.coded_or_ok(
+        "batch", calls=calls, stop_on_error=False, _risk_ack=True
+    )
+
+    script = "\n".join(
+        (
+            'set rows = [{"name":"b","score":2},{"name":"a","score":1},{"name":"b","score":2}]',
+            "filter rows where score >= 1",
+            "set names = rows | sort(-score) | pluck(name) | unique",
+            'if names != "never": data(action="lookup", query="rich_entry")',
+            'for row in rows: calc(action="convert", value="2k")',
+            "return names",
+        )
+    )
+    result = legacy_ctx.coded_or_ok("batch", script=script, _risk_ack=True)
+    if result.get("error") is not True:
+        assert isinstance(result.get("final"), list), result
+
+
+def test_legacy_types_declarations_inference_and_dependency_graph_are_live(
+    legacy_ctx: LegacyContext
+):
+    """Cover type parsing modes and nested dependency rendering via MCP."""
+    for declaration in (
+        "typedef unsigned long ExpandedWord;",
+        "struct ExpandedNested { ExpandedWord count; uint8_t data[4]; };",
+        "struct ExpandedOuter { struct ExpandedNested nested; int status; };",
+        "enum ExpandedMode { EXPANDED_MODE_A = 3, EXPANDED_MODE_B = 4 };",
+    ):
+        legacy_ctx.coded_or_ok(
+            "types", action="declare", declaration=declaration, _risk_ack=True
+        )
+
+    for declaration in (
+        "int *",
+        "int expanded_function(int value);",
+        "struct ExpandedNested",
+        "enum ExpandedMode",
+    ):
+        legacy_ctx.coded_or_ok(
+            "types", action="parse_decl", declaration=declaration, _risk_ack=True
+        )
+    for action, extra in (
+        ("list", {"query": "Expanded", "offset": 0, "count": 50}),
+        ("get", {"name": "ExpandedOuter", "include_members": True}),
+        ("infer", {"addr": "rich_entry", "include_xrefs": True}),
+        ("propagate", {"addr": "rich_entry", "limit": 10}),
+        ("type_graph", {"name": "ExpandedOuter", "max_depth": 5}),
+        ("visualize", {"name": "ExpandedOuter", "format": "text"}),
+        ("diff", {"name": "ExpandedNested", "other_name": "ExpandedOuter"}),
+        ("enum_values", {"name": "ExpandedMode", "value": 3}),
+        ("search_structs", {"query": "Expanded", "offset": 0, "count": 50}),
+        ("vtable", {"addr": "rich_entry"}),
+    ):
+        legacy_ctx.coded_or_ok("types", action=action, **extra, _risk_ack=True)
+
+    for name in (
+        "ExpandedOuter", "ExpandedNested", "ExpandedMode", "ExpandedWord",
+    ):
+        legacy_ctx.coded_or_ok("types", action="til_delete", name=name, _risk_ack=True)

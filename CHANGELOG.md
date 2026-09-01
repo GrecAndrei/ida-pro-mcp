@@ -2,6 +2,11 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-09-01 — expanded coverage and test stability
+
+- Expanded offline and opt-in live coverage across the public and legacy MCP
+  surfaces, and stabilized batch-history and client-path tests.
+
 ## 2026-08-27 — 1.0.0a1 repository cleanup and retrieval foundations
 
 - Centralized the package, MCP handshake, CLI, and benchmark version in

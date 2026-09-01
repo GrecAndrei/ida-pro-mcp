@@ -188,6 +188,7 @@ def test_blank_client_path_environment_overrides_use_platform_defaults(tmp_path,
     home.mkdir()
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     monkeypatch.setenv("OPENCODE_CONFIG", "   ")
+    monkeypatch.setenv("XDG_CONFIG_HOME", "")
 
     paths = clients.get_config_paths(Path(__file__).resolve().parents[1])
 
