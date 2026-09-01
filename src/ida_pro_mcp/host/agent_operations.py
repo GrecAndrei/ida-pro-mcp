@@ -92,6 +92,16 @@ class AgentOperation:
                         f"'{key}' must be one of: {choices}",
                         details={"operation": self.name, "argument": key},
                     )
+            if isinstance(schema, dict):
+                nested_error = _validate_schema_value(value, schema, key)
+                if nested_error is not None:
+                    message, details = nested_error
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        f"{message} for operation '{self.name}'",
+                        hint=f"Use ida_help(topic='{self.name}') for the exact contract.",
+                        details={"operation": self.name, **details},
+                    )
         # Mutating ops advertise risk_ack as required; only an explicit true
         # counts as acknowledgement (false/0/"true" must not pass schema).
         if "risk_ack" in required and arguments.get("risk_ack") is not True:
@@ -147,6 +157,100 @@ def _matches_schema_type(value: Any, schema: Mapping[str, Any]) -> bool:
         if kind == "object" and isinstance(value, dict):
             return True
     return False
+
+
+def _validate_schema_value(
+    value: Any, schema: Mapping[str, Any], path: str
+) -> tuple[str, dict[str, Any]] | None:
+    """Validate the nested JSON-Schema subset used by public operations.
+
+    The MCP boundary cannot rely on a full JSON-Schema validator because the
+    operation schemas are also consumed by clients with different validators.
+    Keeping this small recursive check in sync with the schemas prevents
+    malformed nested objects from reaching the legacy dispatcher.
+    """
+    if not _matches_schema_type(value, schema):
+        expected = schema.get("type", "valid value")
+        return (
+            f"'{path}' must be {expected}",
+            {"argument": path, "expected": expected},
+        )
+
+    enum = schema.get("enum")
+    if isinstance(enum, list) and value not in enum:
+        choices = ", ".join(str(item) for item in enum)
+        return (
+            f"'{path}' must be one of: {choices}",
+            {"argument": path},
+        )
+
+    if isinstance(value, str) and "minLength" in schema:
+        try:
+            min_length = int(schema["minLength"])
+        except (TypeError, ValueError):
+            min_length = 0
+        if len(value) < min_length:
+            return (
+                f"'{path}' must contain at least {min_length} characters",
+                {"argument": path, "minLength": min_length},
+            )
+
+    schema_type = schema.get("type")
+    if schema_type == "object" and isinstance(value, dict):
+        properties = schema.get("properties", {})
+        if not isinstance(properties, dict):
+            properties = {}
+        if schema.get("additionalProperties") is False:
+            unknown = sorted(str(key) for key in value if key not in properties)
+            if unknown:
+                names = ", ".join(f"'{path}.{key}'" for key in unknown)
+                return (
+                    f"Unknown argument(s): {names}",
+                    {"argument": path, "unknown": unknown},
+                )
+
+        required = schema.get("required", [])
+        if not isinstance(required, list):
+            required = []
+        for key in required:
+            if key not in value or value[key] is None:
+                child_path = f"{path}.{key}"
+                return (
+                    f"'{child_path}' is required",
+                    {"argument": child_path, "required": key},
+                )
+            child_schema = properties.get(key)
+            if value[key] == "" and isinstance(child_schema, dict):
+                min_length = child_schema.get("minLength")
+                try:
+                    rejects_empty = min_length is None or int(min_length) > 0
+                except (TypeError, ValueError):
+                    rejects_empty = True
+                if rejects_empty:
+                    child_path = f"{path}.{key}"
+                    return (
+                        f"'{child_path}' is required",
+                        {"argument": child_path, "required": key},
+                    )
+
+        for key, child_value in value.items():
+            child_schema = properties.get(key)
+            if isinstance(child_schema, dict):
+                nested_error = _validate_schema_value(
+                    child_value, child_schema, f"{path}.{key}"
+                )
+                if nested_error is not None:
+                    return nested_error
+
+    if schema_type == "array" and isinstance(value, list):
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(value):
+                nested_error = _validate_schema_value(item, item_schema, f"{path}[{index}]")
+                if nested_error is not None:
+                    return nested_error
+
+    return None
 
 
 def _schema(properties: dict[str, dict[str, Any]], required: list[str] | None = None) -> dict[str, Any]:

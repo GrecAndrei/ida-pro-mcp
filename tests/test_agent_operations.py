@@ -38,6 +38,27 @@ def test_find_translates_to_the_legacy_backend_without_losing_its_required_query
     assert operation.validate({"query": "recv", "pattern": "wrong field"})
 
 
+def test_public_validation_enforces_nested_schema_constraints():
+    open_binary = get_agent_operation("ida_open_binary")
+    assert open_binary is not None
+    error = open_binary.validate(
+        {
+            "binary_path": "/samples/target.exe",
+            "architecture": {"processor": "metapc", "unexpected": True},
+        }
+    )
+    assert error is not None
+    assert error["code"] == "INVALID_ARGS"
+    assert "architecture.unexpected" in error["message"]
+
+    batch = get_agent_operation("ida_batch")
+    assert batch is not None
+    error = batch.validate({"calls": [{"name": "ida_overview", "extra": 1}]})
+    assert error is not None
+    assert error["code"] == "INVALID_ARGS"
+    assert "calls[0].extra" in error["message"]
+
+
 def test_semantic_search_translates_address_scope_and_score_controls():
     operation = get_agent_operation("ida_semantic_search")
     assert operation is not None

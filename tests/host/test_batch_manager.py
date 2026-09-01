@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -110,3 +111,28 @@ def test_wait_timeout():
     result = mgr.wait(task_id, timeout=0.1)
     assert result["state"] == "running"
     mgr.cancel(task_id)
+
+
+def test_persisted_task_keeps_submission_args(tmp_path, monkeypatch):
+    """Reloaded task history must retain the request that created the task.
+
+    The public status response does not expose args, but the on-disk task
+    record does. Losing them makes persisted background work impossible to
+    audit or resume accurately after a restart.
+    """
+    monkeypatch.setenv("IDA_MCP_BATCH_STATE_DIR", str(tmp_path))
+    mgr = BatchManager(max_workers=1)
+    task_id = mgr.submit(
+        "tool_call",
+        {"tool_call": {"tool": "calc", "args": {"action": "eval", "expr": "2+2"}}},
+    )
+    mgr.wait(task_id, timeout=5)
+    mgr.shutdown()
+
+    state_files = list(tmp_path.glob("tasks-*.json"))
+    assert len(state_files) == 1
+    state_path = state_files[0]
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    assert persisted[0]["args"] == {
+        "tool_call": {"tool": "calc", "args": {"action": "eval", "expr": "2+2"}}
+    }

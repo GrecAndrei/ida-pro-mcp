@@ -68,13 +68,28 @@ class BackgroundMixin(ServerClientStateMixin):
                     worker.current_session_by_agent = dict(
                         getattr(parent, "current_session_by_agent", {}) or {}
                     )
+                    # A background submission may be made while one agent is
+                    # bound for the current call. Preserve that identity in
+                    # the private worker state so its session and ownership
+                    # remain agent-scoped instead of silently becoming a
+                    # connection-global task.
+                    worker.active_agent = getattr(parent, "active_agent", None)
                     if session is not None:
                         sid = str(getattr(session, "session_id", "") or "")
                         if sid:
                             # Keep the client's ownership grant so it can later
                             # retrieve the task's status/result via _bg_*.
-                            parent.owned_session_ids.add(sid)
-                            worker.owned_session_ids.add(sid)
+                            active_agent = getattr(parent, "active_agent", None)
+                            if active_agent:
+                                parent.owned_sessions_by_agent.setdefault(
+                                    active_agent, set()
+                                ).add(sid)
+                                worker.owned_sessions_by_agent.setdefault(
+                                    active_agent, set()
+                                ).add(sid)
+                            else:
+                                parent.owned_session_ids.add(sid)
+                                worker.owned_session_ids.add(sid)
                         worker.current_session = session
                     var.set(worker)
                 elif session is not None:

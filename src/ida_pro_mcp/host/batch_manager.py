@@ -340,6 +340,12 @@ class BatchManager:
                 for t in list(self._tasks.values()):
                     if t.state in ("done", "failed", "cancelled"):
                         d = t.to_dict()
+                        # ``to_dict`` is the public status shape and
+                        # intentionally omits request arguments. Persistence
+                        # still needs the original call so a later manager can
+                        # faithfully reconstruct task history (and any
+                        # resume/debug consumer can see what was submitted).
+                        d["args"] = t.args
                         r = d.get("result")
                         if r is not None:
                             try:

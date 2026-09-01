@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import threading
 import time
+from types import SimpleNamespace
 
 from ida_pro_mcp.host.errors import MCPError
 from ida_pro_mcp.host.server.server import IDAMCPServer
@@ -276,6 +277,51 @@ def test_agent_logout_tears_down_only_its_sessions(tmp_path, monkeypatch):
     status_b = _tool_call(server, 7, "session", {"action": "status", "agent": "agentB"})
     assert status_b.get("ok") is True
     assert status_b["session"]["session_id"] == sid_b
+
+
+def test_background_worker_preserves_agent_scoped_session(tmp_path, monkeypatch):
+    """A background task submitted by an agent must keep its agent boundary.
+
+    The worker gets a private request state. It must not turn the agent's
+    session into connection-global ownership or lose the identity before the
+    queued tool call executes.
+    """
+    server = _make_server(tmp_path, monkeypatch)
+    _activate(server, "agentA", "agentB")
+    _login(server, 1, "agentA", "sekret")
+    session = SimpleNamespace(session_id="agent-session")
+    state = server._client_request_state()
+    state.active_agent = "agentA"
+    state.owned_sessions_by_agent["agentA"] = {session.session_id}
+    state.current_session_by_agent["agentA"] = session
+
+    observed = {}
+
+    def run(_task):
+        worker_state = server._client_request_state()
+        observed["agent"] = worker_state.active_agent
+        observed["session"] = server.current_session
+        observed["global_ownership"] = set(worker_state.owned_session_ids)
+        observed["agent_ownership"] = set(
+            worker_state.owned_sessions_by_agent.get("agentA", set())
+        )
+        return {"ok": True}
+
+    try:
+        bound = server._bind_background_run(run, session=session)
+        assert bound(SimpleNamespace()) == {"ok": True}
+        assert observed == {
+            "agent": "agentA",
+            "session": session,
+            "global_ownership": set(),
+            "agent_ownership": {"agent-session"},
+        }
+        # The submitting connection state is unchanged apart from retaining
+        # the agent-scoped grant needed to query the task later.
+        assert state.owned_session_ids == set()
+        assert state.owned_sessions_by_agent["agentA"] == {"agent-session"}
+    finally:
+        server.shutdown()
 
 
 def test_connection_close_releases_every_bound_agent(tmp_path, monkeypatch):
