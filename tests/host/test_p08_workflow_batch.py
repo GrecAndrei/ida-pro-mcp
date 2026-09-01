@@ -219,7 +219,13 @@ def test_trim_history_never_evicts_running_task(monkeypatch):
                 mgr.submit("script", {}, run_fn=lambda task: {"ok": True})
             )
         for task_id in terminal_ids:
-            assert mgr.wait(task_id, timeout=5)["state"] == "done"
+            result = mgr.wait(task_id, timeout=5)
+            # Completed history may legitimately be evicted once the cap is
+            # exceeded; the invariant under test is that the live task stays.
+            if result.get("error"):
+                assert result["code"] == MCPError.NOT_FOUND
+            else:
+                assert result["state"] == "done"
         status = mgr.status(running_id)
         assert status, "running task must not be evicted by _trim_history"
         assert status[0]["state"] == "running"
