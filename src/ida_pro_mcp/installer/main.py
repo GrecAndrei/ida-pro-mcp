@@ -1271,7 +1271,7 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
             or opts.sigs_dir
             or opts.ida_dir
             or opts.ida_version
-            or opts.ida_runtime == "idalib"
+            or (opts.ida_runtime == "idalib" and not opts.dry_run)
         ):
             try:
                 chosen_install = _resolve_ida_install(opts, ui)
@@ -1280,7 +1280,7 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
                     opts.ida_dir
                     or opts.ida_version
                     or opts.sigs_dir
-                    or opts.ida_runtime == "idalib"
+                    or (opts.ida_runtime == "idalib" and not opts.dry_run)
                 ):
                     raise
                 msg = str(exc)
