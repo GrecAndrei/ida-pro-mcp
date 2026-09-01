@@ -178,6 +178,8 @@ def test_embedder_state_publish_failure_preserves_existing_state(tmp_path, monke
 
 
 def test_normal_runtime_install_removes_an_old_live_source_pointer(monkeypatch, tmp_path):
+    from ida_pro_mcp.installer.clients import rollback_from_backups
+
     install_root = tmp_path / "install"
     venv_python = install_root / ".venv" / "bin" / "python"
     venv_python.parent.mkdir(parents=True)
@@ -197,16 +199,19 @@ def test_normal_runtime_install_removes_an_old_live_source_pointer(monkeypatch, 
     monkeypatch.setattr("ida_pro_mcp.installer.runtime._probe_venv", lambda _python: True)
     monkeypatch.setattr("ida_pro_mcp.installer.runtime.run_checked", fake_run_checked)
 
+    report = InstallReport()
     setup_runtime_environment(
         install_root=install_root,
         source_root=tmp_path / "missing-source",
         runtime_source="pypi",
         dry_run=False,
-        report=InstallReport(),
+        report=report,
     )
 
     assert not live_pointer.exists()
     assert any(command[-2:] == ["install", "ida-pro-mcp"] for command in commands)
+    rollback_from_backups(report)
+    assert live_pointer.read_text(encoding="utf-8") == "/working/tree/src\n"
 
 
 def test_normal_runtime_install_rejects_non_regular_live_source_pointer(monkeypatch, tmp_path):

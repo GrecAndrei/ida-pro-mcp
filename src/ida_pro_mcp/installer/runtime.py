@@ -1525,6 +1525,9 @@ def _write_dev_pth(venv_dir: Path, source_root: Path, dry_run: bool, report: Ins
     if dry_run:
         report.add_step("dev_pth", "dry-run", f"would write {pth_path} -> {src_path}")
         return pth_path
+    from .clients import backup_file
+
+    backup_file(pth_path, report, dry_run=False)
     atomic_write_text(pth_path, f"{src_path}\n")
     report.add_modified(pth_path)
     report.add_step("dev_pth", "ok", f"{pth_path} -> {src_path}")
@@ -1570,6 +1573,9 @@ def _remove_dev_pth(venv_dir: Path, report: InstallReport) -> None:
     if pth_path.exists() and not pth_path.is_file():
         raise RuntimeError(f"development source pointer is not a regular file: {pth_path}")
     if pth_path.is_file():
+        from .clients import backup_file
+
+        backup_file(pth_path, report, dry_run=False)
         pth_path.unlink()
         report.add_modified(pth_path)
         report.add_step("dev_pth", "removed", f"removed live source pointer {pth_path}")
