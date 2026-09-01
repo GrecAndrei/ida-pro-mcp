@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from ida_pro_mcp.host.policy import PolicyMode, strictest
+from ida_pro_mcp.host.server import server_runtime as server_runtime_mod
 from ida_pro_mcp.host.server.server_dispatch import ServerDispatchMixin
 from ida_pro_mcp.host.server.server_runtime import ServerRuntimeMixin
 from ida_pro_mcp.host.server.server_session import ServerSessionMixin
@@ -343,6 +344,42 @@ def test_claim_is_refused_while_a_live_owner_holds_it(tmp_path):
 
     other = _LeaseHost(tmp_path, "owner-b")
     assert other._claim_runtime_ownership("A1B2C3D4") is None
+
+
+def test_claim_reclaims_malformed_owner_record(tmp_path):
+    """A damaged owner file cannot crash or permanently block a session."""
+    host = _LeaseHost(tmp_path, "owner-a")
+    path = host._runtime_owner_path("A1B2C3D4")
+    with open(path, "w", encoding="utf-8") as owner_fh:
+        json.dump(["not-an-owner"], owner_fh)
+
+    assert host._claim_runtime_ownership("A1B2C3D4") == path
+    owner = json.loads(open(path, encoding="utf-8").read())
+    assert owner["owner_id"] == "owner-a"
+
+
+def test_claim_reclaims_owner_pid_after_process_reuse(tmp_path, monkeypatch):
+    """A live PID with a changed start token is not the old host anymore."""
+    holder = _LeaseHost(tmp_path, "owner-old")
+    path = holder._runtime_owner_path("A1B2C3D4")
+    with open(path, "w", encoding="utf-8") as owner_fh:
+        json.dump(
+            {
+                "session_id": "A1B2C3D4",
+                "owner_pid": 424242,
+                "owner_id": "owner-old",
+                "owner_start_token": "old",
+            },
+            owner_fh,
+        )
+
+    replacement = _LeaseHost(tmp_path, "owner-new")
+    monkeypatch.setattr(server_runtime_mod.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(server_runtime_mod, "_process_start_token", lambda pid: "new")
+
+    assert replacement._claim_runtime_ownership("A1B2C3D4") == path
+    owner = json.loads(open(path, encoding="utf-8").read())
+    assert owner["owner_id"] == "owner-new"
 
 
 def test_reclaiming_own_lease_is_idempotent(tmp_path):
