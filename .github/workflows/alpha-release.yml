@@ -1,0 +1,139 @@
+name: Alpha Release Artifacts
+
+# Publishing is intentionally manual and protected by the `release` environment.
+# The workflow only accepts an existing, matching alpha tag; it never invents a
+# tag from the default branch.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing alpha tag, for example v1.0.0a1"
+        required: true
+        type: string
+      publish:
+        description: "Publish the built assets as a GitHub prerelease"
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: alpha-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout requested tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+      - name: Validate tag and package version
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+a[0-9]+$ ]] || {
+            echo "Only PEP 440 alpha tags such as v1.0.0a1 are publishable" >&2
+            exit 1
+          }
+          git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"
+          version="$(python -c 'from ida_pro_mcp._version import __version__; print(__version__)')"
+          test "v$version" = "$RELEASE_TAG" || {
+            echo "tag $RELEASE_TAG does not match package version $version" >&2
+            exit 1
+          }
+      - name: Install build tools
+        run: python -m pip install --upgrade pip build
+      - name: Build wheel and source distribution
+        run: python -m build --sdist --wheel --outdir dist
+      - name: Create source bundle for users
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          git archive --format=tar.gz --prefix="ida-pro-mcp-$version/" HEAD > "dist/ida-pro-mcp-$version-bundle.tar.gz"
+          git archive --format=zip --prefix="ida-pro-mcp-$version/" HEAD > "dist/ida-pro-mcp-$version-bundle.zip"
+          python -m zipfile -t "dist/ida-pro-mcp-$version-bundle.zip"
+      - name: Write manifest and checksums
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          dist = Path("dist")
+          manifest = {
+              "tag": os.environ["RELEASE_TAG"],
+              "commit": subprocess.check_output(
+                  ["git", "rev-parse", "HEAD"], text=True
+              ).strip(),
+              "files": sorted(path.name for path in dist.iterdir() if path.is_file()),
+              "install": "Download the bundle, extract it, then run: python install.py",
+          }
+          (dist / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          lines = []
+          for path in sorted(dist.iterdir()):
+              if path.name == "SHA256SUMS" or not path.is_file():
+                  continue
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              lines.append(f"{digest}  {path.name}")
+          (dist / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+          (cd dist && sha256sum -c SHA256SUMS)
+      - name: Upload release candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ida-pro-mcp-${{ inputs.tag }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: build
+    if: inputs.publish == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: release
+      url: https://github.com/${{ github.repository }}/releases/tag/${{ inputs.tag }}
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Download release candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ida-pro-mcp-${{ inputs.tag }}
+          path: dist
+      - name: Attest release assets
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: "dist/*"
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" \
+              --title "ida-pro-mcp $RELEASE_TAG" --prerelease \
+              --generate-notes
+          fi

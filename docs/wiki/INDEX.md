@@ -1,33 +1,30 @@
 # Wiki Index
 
-The wiki documents the current `ida_*` operation surface. The legacy
-`tool(action=...)` API is a compatibility backend, not the supported
-contract. Full contracts for every operation live in
-[docs/TOOLS_REFERENCE.md](../TOOLS_REFERENCE.md) (generated from
-`host/agent_operations.py`); this wiki is the narrative layer.
+IDA Pro MCP is easiest to use as a short, evidence-driven workflow. These
+pages explain how to install it, connect a client, inspect a binary, preserve
+findings, and make reviewed IDB changes.
 
-## Getting Started
+## Start here
 
-- [QuickStart](QuickStart.md)
+- [Install and run your first session](getting-started.md)
+- [Configure an MCP client](client-configuration.md)
+- [A practical reverse-engineering workflow](reverse-engineering-workflow.md)
+- [Findings, evidence, and conflicts](findings-and-evidence.md)
+- [Safe IDB edits and rollback](safe-idb-edits.md)
 
-## Core
+## When something needs explaining
 
-- [Sessions](core/sessions.md) — lifecycle, background loading, safe mode, RPC concurrency
-- [Investigation](core/investigation.md) — findings, kinds, lifecycle, evidence, export, IDB round-trip
-- [Frontier](core/frontier.md) — `ida_next_target` strategies
-- [Intelligence](core/intelligence.md) — semantic indexing and search
-- [RISC-V raw-blob firmware](riscv_firmware.md) — recipe for opaque headerless firmware analysis
+- [Search, embeddings, and reranking](search-and-retrieval.md)
+- [Sessions and troubleshooting](sessions-troubleshooting.md)
+- [Live IDA validation](live-ida-validation.md)
+- [Reference and FAQ](reference-faq.md)
 
-## Tools
+## Detailed reference
 
-- [Session](tools/session.md) — open/close/switch/status/health
-- [Discovery](tools/discovery.md) — overview, find, functions, strings, imports
-- [Code](tools/code.md) — decompile, disassemble, xrefs, callers, callees, read_bytes, callgraph
-- [Findings](tools/findings.md) — write/list/search/update/export/publish
-- [Edit](tools/edit.md) — rename, comment, create/change function, patch_bytes, rename_local
-- [Types](tools/types.md) — list/get/declare/apply types (structs, enums, typedefs)
-- [Segments](tools/segments.md) — list/add/set_attrs
-- [Signatures](tools/signatures.md) — FLIRT list_sigs/apply_sig
-- [Calculation](tools/calculation.md) — eval, offset, convert, deref, chain, align, bitops
-- [Support](tools/support.md) — help, continue, python
-- [Workflow](tools/workflow.md) — batch
+- [Generated operation reference](../TOOLS_REFERENCE.md)
+- [RISC-V raw-blob firmware](riscv_firmware.md)
+- [Architecture and safety guides](../guide/architecture.md)
+
+The older pages under `tools/` and `core/` remain as detailed reference
+material. Start with the task pages above; use `ida_help` and the generated
+operation reference for exact schemas.

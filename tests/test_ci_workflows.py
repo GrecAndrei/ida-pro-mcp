@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from scripts.check_workflow_pins import find_violations
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 BUILD_SCRIPT = ROOT / "scripts" / "build_native_llama.sh"
@@ -101,3 +103,35 @@ def test_ida_runtime_matrix_never_runs_on_hosted_runners():
                     "the matrix runner must stay the single source of truth; "
                     "do not inline pytest test paths into the workflow"
                 )
+
+
+def test_all_workflow_actions_use_immutable_refs():
+    assert find_violations(WORKFLOWS) == []
+
+
+def test_dependency_review_blocks_high_severity_changes():
+    wf = _load_workflow("dependency-review.yml")
+    action_steps = [
+        step
+        for step in wf["jobs"]["review"]["steps"]
+        if "dependency-review-action" in str(step.get("uses", ""))
+    ]
+    assert len(action_steps) == 1
+    assert action_steps[0]["with"]["fail-on-severity"] == "high"
+    assert wf["permissions"]["contents"] == "read"
+
+
+def test_alpha_release_requires_existing_alpha_tag_and_protected_publish():
+    wf = _load_workflow("alpha-release.yml")
+    triggers = wf.get("on")
+    if not isinstance(triggers, dict):
+        triggers = wf.get(True)
+    assert set(triggers) == {"workflow_dispatch"}
+    inputs = triggers["workflow_dispatch"]["inputs"]
+    assert inputs["tag"]["required"] is True
+    assert inputs["publish"]["type"] == "boolean"
+
+    publish = wf["jobs"]["publish"]
+    assert publish["if"] == "inputs.publish == true"
+    assert publish["environment"]["name"] == "release"
+    assert publish["permissions"] == {"contents": "write", "id-token": "write"}
