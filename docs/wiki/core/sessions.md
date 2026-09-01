@@ -97,6 +97,14 @@ session, its own ownership, and teardown scoped to it alone.
 5. **Teardown**: `session action=agent_logout name=rev_a` (or connection
    close) releases **only** that agent's runtimes and leases.
 
+Ticket `scopes` are enforced capability filters. `all` permits every backend
+action; otherwise a scope can be a risk tier (`read`, `write_idb`,
+`destructive`, and the other values reported by policy), a backend tool such as
+`code`, or an exact pair such as `code:decompile`. Scopes do not replace the
+normal policy gate: a write still needs its normal `risk_ack` when policy
+requires it. `agent_logout` is always allowed so an agent can release its own
+resources even when its capability set is empty.
+
 ### What isolation means
 
 - Each agent has its own **active session** (`current_session` is per-agent);
@@ -118,6 +126,7 @@ session, its own ownership, and teardown scoped to it alone.
 | Expired ticket | `POLICY_DENIED` |
 | Logged in on a *different* connection | `POLICY_DENIED` |
 | `agent` tag on an un-logged-in name | `POLICY_DENIED` |
+| Agent ticket lacks the requested scope | `POLICY_DENIED` |
 
 ## Ownership forensics (who holds a session)
 

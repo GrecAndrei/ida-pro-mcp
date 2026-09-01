@@ -179,6 +179,11 @@ class ServerWorkflowBatchMixin:
             action = str(cleaned_args.get("action", "") or "")
             if resolved_name in _BATCH_FAST_PATH_EXCLUDED_TOOLS:
                 return None
+            # A public batch is already bound to the submitting agent. The
+            # fast path must not bypass that agent's capability scopes merely
+            # because it sends several read calls in one RPC.
+            if self._agent_scope_error(resolved_name, action) is not None:
+                return None
             # Pure-read gate: policy must allow as a read with no ack, no
             # reasons, and no flags. This is the same classification the
             # per-call path enforces in _execute_tool_inner.

@@ -79,6 +79,24 @@ def _login(server: IDAMCPServer, request_id: int, name: str, secret: str) -> dic
     )
 
 
+def _login_with_scopes(
+    server: IDAMCPServer,
+    request_id: int,
+    name: str,
+    secret: str,
+    scopes: list[str],
+) -> dict:
+    ticket = mint_agent_ticket(
+        secret, name, exp=time.time() + 3600, scopes=scopes
+    )
+    return _tool_call(
+        server,
+        request_id,
+        "session",
+        {"action": "agent_login", "name": name, "ticket": ticket},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Realm lifecycle
 # ---------------------------------------------------------------------------
@@ -173,6 +191,61 @@ def test_agent_login_success(tmp_path, monkeypatch):
     assert res.get("ok") is True
     assert res["agent"] == "agentA"
     assert "agentA" in server._client_request_state().agents_logged_in
+
+
+def test_agent_ticket_scopes_gate_dispatch_but_keep_logout_available(tmp_path, monkeypatch):
+    server = _make_server(tmp_path, monkeypatch)
+    _activate(server, "agentA")
+    login = _login_with_scopes(
+        server, 1, "agentA", "sekret", ["session:status"]
+    )
+    assert login.get("ok") is True
+
+    allowed = _tool_call(
+        server, 2, "session", {"action": "status", "agent": "agentA"}
+    )
+    assert allowed.get("ok") is True
+
+    binary = _binary(tmp_path, "scoped.bin")
+    denied = _tool_call(
+        server,
+        3,
+        "session",
+        {"action": "create", "binary_path": str(binary), "agent": "agentA"},
+    )
+    assert denied.get("error") is True
+    assert denied.get("code") == MCPError.POLICY_DENIED
+    assert "not authorized" in str(denied.get("message", ""))
+
+    logout = _tool_call(
+        server,
+        4,
+        "session",
+        {"action": "agent_logout", "name": "agentA", "agent": "agentA"},
+    )
+    assert logout.get("ok") is True
+
+
+def test_empty_agent_scope_set_denies_calls_but_allows_cleanup(tmp_path, monkeypatch):
+    server = _make_server(tmp_path, monkeypatch)
+    _activate(server, "agentA")
+    login = _login_with_scopes(server, 1, "agentA", "sekret", [])
+    assert login.get("ok") is True
+    assert login["scopes"] == []
+
+    denied = _tool_call(
+        server, 2, "session", {"action": "status", "agent": "agentA"}
+    )
+    assert denied.get("error") is True
+    assert denied.get("code") == MCPError.POLICY_DENIED
+
+    logout = _tool_call(
+        server,
+        3,
+        "session",
+        {"action": "agent_logout", "name": "agentA", "agent": "agentA"},
+    )
+    assert logout.get("ok") is True
 
 
 # ---------------------------------------------------------------------------

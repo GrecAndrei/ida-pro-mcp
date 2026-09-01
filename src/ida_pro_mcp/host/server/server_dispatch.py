@@ -1702,6 +1702,10 @@ class ServerDispatchMixin(ServerClientStateMixin):
             if is_error_result(args):
                 return args
 
+            scope_error = self._agent_scope_error(tool_name, args.get("action"))
+            if scope_error is not None:
+                return scope_error
+
             # Agent SSO: ``agent`` is a host-level identity tag, never an IDA
             # argument. It is normally popped in the tools/call dispatcher;
             # this is a defensive strip for any non-protocol path that feeds
