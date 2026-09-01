@@ -58,7 +58,11 @@ _VERTEX_COMPAT_CLIENTS: frozenset[str] = frozenset({
 
 def _absolute_install_path(path: Path | str) -> Path:
     """Expand a compatibility API install path without requiring existence."""
-    return Path(os.path.abspath(os.path.expanduser(os.fspath(path))))
+    return Path(
+        os.path.abspath(
+            os.path.expandvars(os.path.expanduser(os.fspath(path)))
+        )
+    )
 
 
 def _resolve_venv_python(install_root: Path) -> Path:

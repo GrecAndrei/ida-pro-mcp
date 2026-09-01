@@ -22,7 +22,11 @@ def installer_lock(install_root: Path):
     process exits, including crashes, so a stale lock file never blocks future
     installs.
     """
-    root = Path(os.path.abspath(os.path.expanduser(os.fspath(install_root))))
+    root = Path(
+        os.path.abspath(
+            os.path.expandvars(os.path.expanduser(os.fspath(install_root)))
+        )
+    )
     lock_path = root / ".install.lock"
     reject_symlink_path(lock_path, "installer lock path")
     root.mkdir(parents=True, exist_ok=True)

@@ -337,6 +337,19 @@ def test_installer_lock_serializes_same_install_root(tmp_path):
     assert (install_root / ".install.lock").is_file()
 
 
+def test_installer_lock_expands_environment_root(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer.common import installer_lock
+
+    install_root = tmp_path / "expanded-install"
+    monkeypatch.setenv("INSTALLER_LOCK_ROOT", str(install_root))
+
+    with installer_lock(Path("$INSTALLER_LOCK_ROOT")) as lock_path:
+        assert lock_path == install_root / ".install.lock"
+
+    assert (install_root / ".install.lock").is_file()
+    assert not (tmp_path / "$INSTALLER_LOCK_ROOT").exists()
+
+
 def test_install_report_rejects_symlinked_destination_parent(tmp_path):
     from ida_pro_mcp.installer.common import InstallReport
 
