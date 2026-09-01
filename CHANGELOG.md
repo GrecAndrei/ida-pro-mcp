@@ -171,6 +171,19 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    corrupt-row reloads, fail-soft metadata access, vector/search edge cases,
    structured API filtering, and lexical-only hybrid results.
 
+## 2026-09-01 — documentation, contribution policy, and alpha artifacts
+
+- Reworked the README around installation, first use, investigation workflow,
+  safety, privacy, and troubleshooting instead of implementation detail.
+- Added readable task-oriented wiki pages and published them to the project
+  GitHub wiki.
+- Added contributor guidance with required `[minor]`, `[relevant]`, `[major]`,
+  or `[PR-work]` commit prefixes and sparse-commit rules.
+- Added immutable GitHub Actions pins, dependency review, commit/workflow
+  policy checks, and a manually protected alpha release-artifact workflow.
+
+## 2026-09-01 — expanded coverage and test stability
+
 - Expanded offline and opt-in live coverage across the public and legacy MCP
   surfaces, and stabilized batch-history and client-path tests.
 

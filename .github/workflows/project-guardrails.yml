@@ -1,0 +1,74 @@
+name: Project Guardrails
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: project-guardrails-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      highest_class: ${{ steps.classify.outputs.highest_class }}
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Validate commit classes
+        id: classify
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline="$(git log --reverse --format=%H -- .github/commit-policy-baseline | tail -n 1)"
+          test -n "$baseline" || { echo "commit policy baseline is missing" >&2; exit 1; }
+          baseline_parent="$(git rev-parse "$baseline^")"
+          report="$(python scripts/check_commit_policy.py --range "$baseline_parent..HEAD")"
+          printf '%s\n' "$report"
+          highest="$(printf '%s\n' "$report" | sed -n 's/^highest_class=//p')"
+          test -n "$highest" || { echo "commit policy did not report a class" >&2; exit 1; }
+          echo "highest_class=$highest" >> "$GITHUB_OUTPUT"
+      - name: Check immutable action references
+        run: python scripts/check_workflow_pins.py
+
+  significant-change:
+    needs: policy
+    if: needs.policy.outputs.highest_class == 'relevant' || needs.policy.outputs.highest_class == 'major'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install package and checks
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . --group dev
+          pip install build pip-audit
+      - name: Lint and verify generated contracts
+        run: |
+          ruff check .
+          python scripts/check_schema_integrity.py
+          python scripts/generate_tool_skills.py
+          git diff --exit-code -- .agents/skills docs/TOOLS_REFERENCE.md
+          git diff --check
+      - name: Run offline suite
+        env:
+          IDA_MCP_DISABLE_RATE_LIMIT: "1"
+          IDA_MCP_POLICY_MODE: "permissive"
+        run: python -m pytest -q --ignore=tests/integration
+      - name: Build and audit package
+        run: |
+          python -m build --sdist --wheel --outdir dist
+          pip-audit --strict --progress-spinner off

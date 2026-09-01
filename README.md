@@ -1,461 +1,373 @@
 # IDA Pro MCP
 
-Give an LLM agent a working seat at IDA Pro.
+IDA Pro MCP is a local Model Context Protocol server for IDA Pro. It lets an
+MCP client inspect an IDB, ask IDA for deterministic analysis results, and,
+when explicitly allowed, write annotations or other changes back to the IDB.
+The host process runs outside IDA and starts a separate IDA headless process
+for each session by default.
 
-This is an [MCP](https://modelcontextprotocol.io) server that exposes IDA Pro's
-analysis to a model as 107 exact-schema operations — decompile, cross-reference,
-search, rename, annotate — plus an investigation workspace so the model's
-conclusions survive across turns instead of living in a context window.
+The current version is `1.0.0a1`. This is alpha software. The public
+`ida_*` operation names, schemas, and workspace format may change before a
+stable 1.0.0 release. The default client surface contains 107 exact-schema operations.
+The generated [tool reference](docs/TOOLS_REFERENCE.md) contains the complete
+list, arguments, and examples.
 
-It runs deterministic IDA SDK calls. There is no LLM service behind it, and
-nothing about your binary leaves the machine.
+## Before you install
 
-> **Alpha (1.0.0a1).** The agent interface is still moving. Pin a commit if you
-> depend on it.
+You need:
 
----
+- IDA Pro or IDA Home 9.2 or newer, with a usable `idat`/`idat64` executable.
+  The repository’s live test evidence covers IDA 9.3 and 9.4; 9.2 is the
+  declared compatibility floor.
+- Python 3.11 or newer for the host and installer.
+- Permission to run IDA on the binaries you plan to inspect, and enough disk
+  space for a managed Python environment, session files, and IDB copies.
+- An MCP client that supports a local stdio server, such as Claude Code,
+  Codex, OpenCode, Claude Desktop, Cursor, VS Code/Copilot, Windsurf, Cline,
+  Roo Code, Gemini CLI, or Antigravity.
 
-## Why this instead of a thin SDK wrapper
+Normal analysis does not require a language model or an embedding model. The
+optional semantic-search features use a local model by default and remain
+disabled when no model is configured.
 
-**Every operation has an exact schema.** The surface is `ida_decompile(address)`,
-not `tool(action="decompile", ...)`. Models don't infer argument shapes, so they
-don't burn turns on `INVALID_ARGS`. `ida_help(topic="ida_decompile")` returns the
-contract over MCP, so it works in clients with no filesystem access.
+The default runtime is `idat`: one headless IDA process per session. The
+`idalib` backend is experimental, requires an IDA 9.3-or-newer installation
+with the `idapro` package activated, and is not needed for a first install.
 
-**Decompilation comes with structure, not just text.** `ida_decompile` returns
-pseudocode *plus* a bounded evidence block: CFG shape, resolved call targets,
-ctree control points, and local data-flow. `ida_disassemble` returns the CFG and
-call-target portion without starting Hex-Rays. A model reasoning about a function
-gets the graph, not only the listing.
+## Install from the source checkout
 
-**Semantic search runs locally — in process by default — or against an opt-in
-cloud model, and it says so when it can't.** Function embeddings and
-cross-encoder reranking run inside the server through a native llama.cpp library
-(`libmcp_llama.so`, loaded via `ctypes`): no subprocess, no HTTP server, no JSON
-round trips. The two `llama-server` subprocesses remain as the fallback when the
-library isn't built. When you opt in (`--embed-backend gemini`), a Google
-`gemini-embedding-2` cloud backend is used instead — it uploads only the compact
-behavioral signature of each function, never the full decompilation. If the
-model, library, server, or cloud credentials are unavailable, semantic
-operations return an explicit unavailable result — they never fall back to a
-different vector space, and never hand back a zero vector dressed as a score.
-The index records model, dimension, and prompt format, and rebuilds when any
-changes.
-
-**The workspace remembers, and comes back on its own.** `ida_write_finding`
-records a claim with confidence and evidence into a per-session SQLite workspace
-with an append-only audit trail. You do not have to ask for it back: every
-response about an address carries `_recall` — the findings, verdicts, and open
-questions already recorded there.
-
-**Dead ends are recorded too.** `ida_mark_examined` costs one line and says "I
-read this, it's a CRT wrapper, skip it." Search results come back tagged with
-what you already dismissed, so the next session doesn't re-read forty functions
-to re-conclude the same nothing.
-
-**Claims notice when they go out of date.** Each finding is anchored to a digest
-of the code it was made against. When that code changes, the claim is flagged
-stale — including "boring" verdicts, since that too is a claim about code that
-just changed. `ida_next_target(strategy="stale")` lists them.
-
-**Disagreement is never merged away.** Recording a rejection over a confirmed
-claim keeps both rows and links them as a conflict rather than silently taking
-the higher confidence. `ida_next_target(strategy="conflict")` surfaces them.
-
-**Conclusions land in the IDB, not just here.** `ida_publish_findings` writes
-confirmed findings into the database as repeatable comments and — where IDA
-still auto-named the function — as symbols, so the marked-up IDB is something
-you can open in the GUI without this tool. It never overwrites a name someone
-else applied. `ida_import_annotations` reads existing names and comments back
-as findings, so a session inherits the last analyst's work.
-
-**Next-step suggestions explain themselves.** `ida_next_target` takes a named
-strategy — `unresolved`, `stale`, `conflict`, `coverage`, `frontier` — and every
-candidate states why it was chosen ("12 callers, never examined"), rather than
-emerging from an opaque blended score.
-
-**Mutations are gated, and the gate is yours.** Anything that writes to the IDB
-requires an explicit `risk_ack`. Policy strictness comes from the operator, via
-`IDA_MCP_POLICY_MODE` or `~/.config/ida-pro-mcp/policy.json`; a session can tighten
-it but never relax it. See [the safety model](docs/guide/safety-model.md).
-
-**Concurrent sessions stay separated.** Each MCP connection owns the sessions it
-opened. Another client cannot drive, switch to, or kill a session it did not open,
-and disconnecting tears down the `idat` processes that connection started.
-
----
-
-## Install
+The installer creates a managed environment under the install root, installs
+a frozen copy of the checkout into it, and writes client configuration for the
+supported client locations. From the repository root, run:
 
 ```bash
-python install.py
+python3 install.py
 ```
 
-That builds the runtime environment, locates IDA, configures supported MCP
-clients, and installs the portable `ida-pro-mcp` skill for Claude Code, Codex,
-and OpenCode.
-
-**Requirements:** IDA Pro 9.2+, Python 3.11+. Runtime dependencies are four
-packages (`tomli-w`, `yara-python`, `requests`, `numpy`) — no torch, no
-transformers.
-
-From source:
+For a known IDA installation, pass it explicitly:
 
 ```bash
-git clone https://github.com/GrecAndrei/ida-pro-mcp.git
-cd ida-pro-mcp
-pip install -e .
-python -u -m ida_pro_mcp.host.server
+python3 install.py --ida-dir /path/to/ida-pro-9.3
 ```
 
-### Build the fast in-process retrieval backend (optional, recommended)
-
-Embedding and reranking work out of the box via `llama-server` subprocesses. To
-get the much faster in-process native backend instead, build it once against a
-llama.cpp checkout:
+For a non-interactive run:
 
 ```bash
-# clone llama.cpp once, wherever you keep external source checkouts
-git clone https://github.com/ggml-org/llama.cpp /path/to/llama.cpp
-
-# build the trimmed library + quantizer, then install into the layout
-LLAMA_CPP_SRC=/path/to/llama.cpp \
-INSTALL_BIN="$HOME/.local/share/ida-pro-mcp/bin" \
-  ./scripts/build_native_llama.sh
+python3 install.py --yes --no-ida-prompt --ida-dir /path/to/ida-pro-9.3
 ```
 
-That compiles a minimal llama.cpp (CPU + OpenMP only — no server, UI, tools,
-vision, or GPU backends) and the C-ABI driver into one self-contained
-`libmcp_llama.so`, plus `mcp_quantize` for producing Q4_K_M models (see below).
-The install root is `~/.local/share/ida-pro-mcp` (Linux), `%LOCALAPPDATA%\ida-pro-mcp`
-(Windows), or wherever `IDA_PRO_MCP_HOME` points.
+The installer can also find IDA through `IDADIR`, `IDA_DIR`, the IDA
+executables on `PATH`, and common installation directories. `--ida-version`
+selects a version when more than one installation is present. Use
+`--dry-run` to inspect the planned changes first.
 
-The server auto-enables native per retrieval component when the library and
-matching model are present; HTTP remains the fallback for anything missing.
-`IDA_MCP_BACKEND=native` pins it explicitly.
+The installer does not download an embedding model unless you select or
+request one. It may create or update configuration files for every client
+location in its built-in client map, including clients that are not installed
+on your machine. Check `install-report.json` in the install root and remove
+unused entries if necessary. Existing regular configuration files are backed
+up before they are changed; malformed, symlinked, or non-regular files are
+refused rather than overwritten.
 
----
+Restart the MCP client after installation so it reloads its configuration.
+The installer also installs the generated Codex skills by default and tries to
+install the generated Claude Code/OpenCode skills. Use `--no-install-skills`
+if you do not want those files.
 
-## Quick start
+The default install root is:
 
-```jsonc
-// Open a binary
-{"name": "ida_open_binary", "arguments": {"binary_path": "/path/to/binary"}}
+- Linux and macOS: `~/.local/share/ida-pro-mcp`
+- Windows: `%LOCALAPPDATA%/ida-pro-mcp`
 
-// Orient
-{"name": "ida_overview",      "arguments": {}}
-{"name": "ida_session_state", "arguments": {}}
+Set `IDA_PRO_MCP_HOME` or pass `--install-root` to choose another location.
 
-// Find and read code
-{"name": "ida_find",       "arguments": {"query": "recv", "limit": 20}}
-{"name": "ida_decompile",  "arguments": {"address": "0x401000"}}
-{"name": "ida_xrefs_to",   "arguments": {"address": "0x401000"}}
+## Install from a release artifact
 
-// Record what you concluded
-{"name": "ida_write_finding", "arguments": {
-    "title": "packet receive handler",
-    "content": "Parses inbound data before dispatching on the command byte.",
-    "address": "0x401000",
-    "confidence": 0.8}}
+Alpha releases are built by GitHub Actions and published manually as
+prereleases. When a release is available, download the `bundle.zip` or
+`bundle.tar.gz` asset and its `SHA256SUMS` file from the
+[releases page](https://github.com/GrecAndrei/ida-pro-mcp/releases). Verify the
+checksum, extract the bundle, and run the installer from its top-level
+directory:
 
-// Record what you ruled out, so the next session doesn't re-read it
-{"name": "ida_mark_examined", "arguments": {
-    "address": "0x401a20", "verdict": "boring",
-    "note": "CRT string helper, no input handling."}}
-
-// Leave the conclusions in the IDB itself
-{"name": "ida_publish_findings", "arguments": {"dry_run": true}}
-
-// Writes need an acknowledgement
-{"name": "ida_rename", "arguments": {
-    "address": "0x401000", "name": "handle_recv", "risk_ack": true}}
+```bash
+python3 install.py --yes --no-ida-prompt --ida-dir /path/to/ida-pro-9.3
 ```
 
-A typical path through the surface:
+The release also contains a wheel and source distribution for scripted Python
+installations. The bundle is the simplest route because it includes the
+installer and all project files needed to configure an MCP client. Releases
+are alpha quality; keep the original binary and IDB and read the release notes
+before upgrading.
+
+## Connect an MCP client
+
+The installer writes the server entry for the client configuration paths it
+knows. It supports Gemini CLI, Antigravity, Antigravity IDE, Antigravity CLI,
+Claude Code, Codex, Copilot CLI, OpenCode, Claude Desktop, Cursor, VS Code,
+Windsurf, Cline, and Roo Code.
+OpenCode and Copilot-family clients use different configuration shapes; let
+the installer write those files or follow
+[the OpenCode setup guide](docs/OPENCODE_SETUP.md).
+
+For a client that uses the common JSON format, the entry is equivalent to:
+
+```json
+{
+  "mcpServers": {
+    "ida-pro-mcp": {
+      "command": "/path/to/ida-pro-mcp/.venv/bin/python",
+      "args": ["-u", "-m", "ida_pro_mcp.host.server"],
+      "env": {
+        "IDA_PRO_MCP_HOME": "/path/to/ida-pro-mcp",
+        "IDADIR": "/path/to/ida-pro-9.3",
+        "IDA_MCP_TOOL_SURFACE": "agent"
+      }
+    }
+  }
+}
+```
+
+On Windows, use the managed interpreter at
+`<install-root>/.venv/Scripts/python.exe`. The important details are the
+managed interpreter, `-u -m ida_pro_mcp.host.server`, the selected IDA
+directory, and `IDA_MCP_TOOL_SURFACE=agent`. Do not point the client at
+`install.py`; that file is the installer, not the MCP server.
+
+After changing a client configuration, fully restart the client and check that
+`ida_help` appears in its available operations. If the client shows only a
+legacy broad `tool(action=...)` interface, check that the environment selects
+the default `agent` surface rather than
+`IDA_MCP_TOOL_SURFACE=legacy`.
+
+## A first useful session
+
+Use an absolute path to a test binary first. Opening a binary normally waits
+for IDA’s initial analysis to finish; a large binary can take time.
 
 ```text
-ida_open_binary → ida_session_state → ida_overview → ida_find
-  → ida_decompile / ida_disassemble / ida_xrefs_to → ida_write_finding
+ida_open_binary(binary_path="/absolute/path/to/sample")
+ida_session_status()
+ida_overview()
+ida_list_imports(limit=30)
+ida_list_strings(query="http", limit=30)
+ida_find(query="main", limit=20)
+ida_decompile(address="<address returned by IDA>")
+ida_xrefs_to(address="<same address>")
 ```
 
----
+Use `ida_help(topic="ida_decompile")` whenever you need the exact argument
+schema. Public operation schemas are strict: unknown arguments are rejected.
+Addresses may be accepted as integers or strings according to the individual
+operation contract; use the form shown by `ida_help` for the operation in
+your client.
 
-## The operations
+For a small investigation record, the workspace findings operations are:
+
+```text
+ida_write_finding(title="Input reaches parser", address="<address returned by IDA>", kind="finding", status="confirmed", confidence=0.8, evidence=[{"type":"call", "value":"recv", "address":"<evidence address>"}])
+ida_analysis_brief()
+ida_next_target()
+ida_export_findings(format="markdown")
+```
+
+Workspace findings are kept separately from IDB edits. If the active policy
+permits the workspace write, `ida_write_finding` records a finding locally;
+otherwise the server returns a policy error. `ida_publish_findings(dry_run=true)`
+previews IDB changes. Publishing, renaming, patching, and other IDB mutations
+are policy-gated and require the operation’s documented acknowledgement where
+the operation exposes one.
+
+## Operations at a glance
+
+The front page stays task-oriented, but this compact index keeps the public
+surface easy to scan. Each name below is prefixed with `ida_` when called. The
+complete schemas and examples remain in the [generated operation reference](docs/TOOLS_REFERENCE.md).
 
 | Group | Operations |
 |---|---|
-| **Session** | `open_binary`, `open_background`, `close_session`, `session_get`, `session_list`, `sso_activate`, `agent_login`, `agent_logout`, `session_switch`, `session_state`, `session_status`, `session_health` |
-| **Discovery** | `overview`, `find`, `list_functions`, `list_imports`, `list_strings`, `semantic_search`, `index_functions`, `index_status`, `cancel_index`, `reranker_status`, `function_families`, `auto_wait`, `events`, `registers`, `search_data_value`, `search_query_lang`, `r2_status`, `r2_bininfo`, `r2_load_hints`, `r2_disassemble_hypothesis`, `r2_vxrefs`, `fw_detect_vector_table`, `fw_detect_load_base`, `fw_detect_mmio`, `fw_rtos_scan`, `fw_carve` |
-| **Code** | `decompile`, `disassemble`, `xrefs_to`, `callers`, `callees`, `read_bytes`, `callgraph`, `emulate` |
-| **Findings** | `write_finding`, `mark_examined`, `update_finding`, `list_findings`, `search_findings`, `next_target`, `analysis_brief`, `export_findings` |
-| **IDB sync** | `publish_findings`, `import_annotations` |
-| **Edit** | `rename`, `comment`, `change_function`, `create_function`, `patch_bytes`, `rename_local`, `make_code`, `undefine`, `save_idb`, `create_data`, `create_strlit`, `undo_begin`, `undo_end`, `add_entry`, `idb_snapshot`, `idb_restore_snapshot`, `mark_dangerous` |
-| **Types** | `get_type`, `declare_type`, `apply_type`, `list_types`, `struct_member_add`, `struct_member_del`, `struct_member_rename`, `struct_member_set_type`, `enum_member_add`, `enum_member_rename`, `enum_member_revalue`, `til_delete`, `til_export`, `til_import` |
-| **Segments** | `list_segments`, `add_segment`, `set_segment_attrs`, `sreg_get`, `sreg_set`, `sreg_list` |
-| **Signatures** | `apply_sig`, `list_sigs` |
-| **Calculation** | `calc_eval`, `calc_convert`, `calc_deref`, `calc_offset`, `calc_align`, `calc_bitops`, `calc_chain`, `calc_resolve` |
-| **Support** | `help`, `continue`, `python` |
+| **Session** | `open_binary`, `open_background`, `session_state`, `session_status`, `session_health`, `close_session`, `session_get`, `session_list`, `sso_activate`, `agent_login`, `agent_logout`, `session_switch` |
+| **Discovery** | `overview`, `find`, `semantic_search`, `reranker_status`, `function_families`, `index_functions`, `index_status`, `cancel_index`, `list_functions`, `list_strings`, `list_imports`, `list_types`, `list_segments`, `list_sigs`, `sreg_get`, `sreg_list`, `auto_wait`, `events`, `registers`, `search_data_value`, `search_query_lang`, `r2_status`, `r2_bininfo`, `r2_load_hints`, `r2_disassemble_hypothesis`, `r2_vxrefs`, `fw_detect_vector_table`, `fw_detect_load_base`, `fw_detect_mmio`, `fw_rtos_scan`, `fw_carve` |
+| **Code** | `decompile`, `disassemble`, `xrefs_to`, `callers`, `callees`, `read_bytes`, `get_type`, `callgraph`, `emulate` |
+| **Findings** | `write_finding`, `mark_examined`, `list_findings`, `search_findings`, `update_finding`, `export_findings`, `publish_findings`, `import_annotations`, `analysis_brief`, `next_target` |
+| **Edit** | `create_function`, `change_function`, `rename`, `comment`, `patch_bytes`, `save_idb`, `make_code`, `undefine`, `rename_local`, `declare_type`, `apply_type`, `add_segment`, `set_segment_attrs`, `apply_sig`, `sreg_set`, `create_data`, `create_strlit`, `undo_begin`, `undo_end`, `add_entry`, `idb_snapshot`, `idb_restore_snapshot`, `struct_member_add`, `struct_member_del`, `struct_member_rename`, `struct_member_set_type`, `enum_member_add`, `enum_member_rename`, `enum_member_revalue`, `til_delete`, `til_export`, `til_import`, `mark_dangerous` |
+| **Calculation** | `calc_eval`, `calc_offset`, `calc_convert`, `calc_resolve`, `calc_deref`, `calc_chain`, `calc_align`, `calc_bitops` |
+| **Support** | `python`, `continue`, `help` |
 | **Workflow** | `batch` |
 
-All prefixed `ida_`. Full contracts in [docs/TOOLS_REFERENCE.md](docs/TOOLS_REFERENCE.md),
-or ask the server: `ida_help(query="strings")`.
+## What is safe, and what is not
 
-The earlier broad `tool(action=...)` API still exists for old scripts —
-set `IDA_MCP_TOOL_SURFACE=legacy`. It is a compatibility backend, not the
-supported contract.
+The server’s baseline policy is `assist`. A session may tighten the operator’s
+baseline policy but cannot relax it. The policy is deterministic; it does not
+decide that a risky operation is safe because a client asks for it.
 
----
+Read-only inspection is the normal starting point. Examples include
+`ida_overview`, `ida_find`, `ida_list_functions`, `ida_list_strings`,
+`ida_list_imports`, `ida_decompile`, `ida_disassemble`, `ida_xrefs_to`,
+`ida_callers`, `ida_callees`, `ida_callgraph`, `ida_read_bytes`, and the
+calculation operations. These still consume local files and IDA resources,
+and the MCP client receives their results.
 
-## Configuration
+The following actions change durable state or execute code and should be
+treated as high impact:
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `IDA_MCP_TOOL_SURFACE` | `agent` | `agent` for the `ida_*` operations, `legacy` for the old catalog |
-| `IDA_MCP_RESPONSE_MODE` | `compact` | `full` for unabridged payloads |
-| `IDA_MCP_POLICY_MODE` | `assist` | `off`, `permissive`, `assist`, `enforce` — operator baseline |
+- `ida_rename`, `ida_comment`, `ida_patch_bytes`, function/type/segment/data
+  changes, signature application, `ida_save_idb`, snapshots, and undo/restore
+  operations can change the IDB or related state.
+- `ida_publish_findings` writes findings into the IDB. Run its dry-run form
+  first; the non-dry-run form is gated.
+- `ida_close_session` tears down the live IDA runtime and is destructive from
+  the session’s point of view.
+- `ida_python` executes arbitrary Python in the active IDA process. It is
+  blocked in safe mode and requires an explicit risk acknowledgement under
+  the normal policy.
+- `ida_emulate` is useful for controlled checks, but mutating emulator actions
+  require the corresponding acknowledgement.
+- `ida_til_export` and `ida_til_import` access the filesystem and are gated.
+  Filesystem paths are constrained by the configured memory root where that
+  guard applies.
 
----
+Do not use `--disable-policy` as a convenience flag. It sets
+`IDA_MCP_POLICY_MODE=off` and disables all policy gates, including write
+acknowledgements and other workflow controls. If a call is denied, read the
+operation’s `ida_help` entry and supply the exact acknowledged argument only
+when that operation’s schema supports it.
 
-## Local retrieval (embed + rerank)
+While IDA is still performing initial analysis, safe mode blocks some
+full-binary analysis, indexing, and script operations. It is intended to keep
+early-session calls narrow; poll `ida_session_status` or
+`ida_session_health` rather than bypassing the guard.
 
-Semantic search and full indexing are optional. Both stages — the bi-encoder
-embedding index and the cross-encoder reranker — run on one of two local
-backends with the same public contract:
+The bridge listens on loopback and uses a per-session token. It is not a
+network service: do not expose or forward the bridge port to an untrusted
+network. Treat imported scripts, traces, binaries, corpus data, and client
+requests as untrusted input.
 
-- **Native (default when built).** A single in-process shared library
-  (`libmcp_llama.so`) drives llama.cpp through `ctypes`. No subprocess, no HTTP,
-  no JSON, no lease/lock files, no per-request graph allocation — RSS plateaus,
-  and the recycle machinery that the HTTP path needs is bypassed. Rerank scores
-  and embed vectors match the HTTP path to float noise.
-- **HTTP (fallback).** The two full `llama-server` subprocesses
-  (`--embedding` and `--rerank`), with the lifecycle, recycling, and chunking
-  machinery described under HTTP knobs below.
+## Privacy and data handling
 
-Selection: the server sets `IDA_MCP_NATIVE=1` at startup when the native
-library and at least one matching retrieval model are found and no backend is
-pinned. Each embedder/reranker still checks its own model before taking the
-native route. `IDA_MCP_BACKEND=native|http` overrides either way.
+The normal host-to-IDA path is local. The project does not run a built-in LLM
+service in the analysis path, and local embedding is opt-in. That does not
+make the whole workflow automatically offline:
 
-### Why the native path is faster
+- The connected MCP client receives paths, symbols, strings, bytes,
+  decompilation, findings, and other results. The client or its model provider
+  may transmit that context according to its own account, model, and retention
+  settings. IDA Pro MCP cannot control those transfers.
+- If you explicitly select the Gemini embedding backend, the server sends a
+  compact behavioral signature to Google rather than a full decompilation.
+  The signature can still contain code-derived calls, constants, string
+  literals, and control-flow information. Do not enable it for binaries that
+  must remain on the workstation.
+- Installer dependency downloads, optional model and `llama-server` downloads,
+  optional threat-corpus downloads, and external Rizin/radare2 integrations
+  can make network requests when enabled.
+- Local cache, logs, session metadata, managed IDBs, and the blackboard may
+  contain paths, analysis metadata, and findings. Protect the install/data
+  directories. If you pass a Gemini AI Studio key to the installer, the key
+  may be written into the generated MCP client environment block; prefer an
+  environment-based credential and review the client configuration.
 
-- **Batched decode.** Instead of one sequence per `llama_decode` (KV cache
-  cleared, weights streamed, per call), `encode_batched` packs up to 4 by
-  default into one decode with distinct `seq_id`s, each with its own KV
-  stream, clearing the KV once per batch. The decode graph runs over a physical
-  512-token microbatch by default, so several documents packed into one decode
-  fill the graph — the weights stream once for a full batch instead of once per
-  document. That is the dominant cost for a bandwidth-bound 0.6B model.
-- **KV cache.** Native uses F16 KV by default to match llama-server vectors;
-  `IDA_MCP_NATIVE_KV=q8` halves the ~28 KiB/token footprint when memory is the
-  constraint, with a small quality tradeoff. `IDA_MCP_NATIVE_SEQUENCES` tunes
-  the width.
-- **Q4_K_M weights.** `mcp_quantize` (built alongside the library) converts any
-  Q8_0 GGUF to Q4_K_M — ~1.6× fewer weight bytes to stream. Model discovery
-  prefers `Q4_K_M` over `Q8_0` when both are installed (`IDA_MCP_Q4=0` forces
-  Q8; an explicit `IDA_MCP_EMBED_MODEL` / state path always wins).
+For a local-only setup, use the default local runtime, leave Gemini and other
+optional downloads disabled, and configure the MCP client and its model
+according to your organization’s data policy. “Local-only” still requires
+checking what the client sends to its own model provider.
 
-```bash
-# convert your Q8_0 model to Q4_K_M for the fast path
-mcp_quantize /path/to/qwen3-embedding-0.6b-q8_0.gguf /path/to/qwen3-embedding-0.6b-Q4_K_M.gguf Q4_K_M
-mcp_quantize /path/to/qwen3-reranker-0.6b-q8_0.gguf  /path/to/qwen3-reranker-0.6b-Q4_K_M.gguf  Q4_K_M
-```
+## Common troubleshooting
 
-### Model profiles
+### The installer cannot find IDA
 
-The default recall profile is Qwen3-Embedding-0.6B (last-token pooling, 1024
-dims); bge-code-v1 remains as a legacy fallback and Zembed 1 is opt-in and
-non-commercial.
-
-| Profile | Dims | Size | License | Notes |
-| --- | ---: | --- | --- | --- |
-| `qwen3-embedding-0.6b` | 1024 | ~396 MiB Q4 | Apache-2.0 | **Default.** 0.6B, fast on CPU. |
-| `bge-code-v1` | 1536 | ~1.6 GB Q8 | Apache-2.0 | Legacy fallback. |
-| `zembed-1` | 2560 | ~2.5 GB Q4 | CC-BY-NC-4.0 | Opt-in; slower on CPU. |
-
-Semantic search is two-stage. Stage 1 recalls a wide candidate pool with the
-embedding index (bi-encoder); Stage 2 re-scores it with a cross-encoder
-reranker so the top of the list is the genuinely most relevant functions. The
-reranker is a no-op (recall order preserved, `rerank: {applied: false}`) when no
-rerank model is installed.
-
-| Reranker profile | Size | Family | Notes |
-| --- | ---: | --- | --- |
-| `qwen3-reranker-0.6b` | ~396 MiB Q4 | Qwen3 | **Default.** Speed tier. |
-| `qwen3-reranker-4b` | ~2.5 GB Q4 | Qwen3 | Opt-in; precision tier for deep dives. |
-| `bge-reranker-v2-gemma` | ~1.6 GB Q4 | BGE | Middle tier; the public conversion is headless (constant scores) — verify before relying on it. |
-| `bge-reranker-v2-m3` | ~0.6 GB Q8 | BGE | Opt-in compatibility. |
+Pass the installation directory explicitly:
 
 ```bash
-# managed download, explicit opt-in (HTTP backend path)
-python install.py --embed-profile qwen3-embedding-0.6b --download-embed-model \
-  --install-llama-server
-python install.py --rerank-profile qwen3-reranker-0.6b --download-rerank-model
-
-# or point at your own GGUF
-python install.py --embed-profile qwen3-embedding-0.6b --embed-model /path/to/model.gguf
-python install.py --rerank-profile qwen3-reranker-0.6b --rerank-model /path/to/reranker.gguf
-
-# check a configuration without opening IDA
-python install.py --embedder-doctor
+python3 install.py --ida-dir /path/to/ida-pro-9.3
 ```
 
-Managed model downloads use immutable Hugging Face revisions and pinned
-SHA-256 digests. The llama-server installer selects a compatible GitHub
-release asset only when GitHub supplies its digest; an older release without
-one is refused. `--allow-unverified-downloads` is available only as an
-explicit, unsafe compatibility escape hatch.
+You can also set `IDADIR` or `IDA_DIR`. If several installations are found,
+use `--ida-version 9.3` or `--no-ida-prompt` to control selection. Confirm
+that the selected directory contains a runnable `idat` or `idat64`.
 
-The optional threat corpus is not downloaded by a normal install. Opt in with
-`python install.py --with-corpus`; it uses a moving set of upstream sources.
-Normal corpus-enabled installs record each downloaded source checksum and reject
-unexpected changes when reusing the cache. For strict first-download verification, provide one
-`IDA_MCP_BRON_CORPUS_SHA256_<SOURCE>` variable per source and run
-`python install.py --verify-corpus` (which also enables the corpus), or set
-`IDA_MCP_BRON_CORPUS_VERIFY=1`.
-The source keys are `CWE`, `ATTACK_ENTERPRISE`, `ATTACK_ICS`, `ATTACK_MOBILE`,
-`SIGNATURE_BASE`, and `FINDCRYPT`.
+### The client does not show IDA Pro MCP
 
-The embed model starts only for explicit indexing, semantic search, or anchor
-refresh; the reranker starts only for the rerank stage of semantic search.
-Ordinary tool calls never spin them up. Indexing is interruptible and resumable:
-a background job returns a cursor to pass back to `ida_index_functions`, and a
-partial index is preserved if a batch fails.
+Restart the client and inspect its configuration entry. Confirm that its
+command uses the managed venv Python and `-u -m ida_pro_mcp.host.server`, and
+that the `env` block contains the correct `IDADIR`. Review
+`install-report.json`; the installer records client update failures and keeps
+backups next to modified files. OpenCode and Copilot-family configuration
+shapes differ from the common JSON example.
 
-### Native backend knobs
+### Opening a binary takes a long time or appears stuck
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `IDA_MCP_BACKEND` | auto | `native` pins the in-process backend; `http`/`llama` forces the subprocess path |
-| `IDA_MCP_NATIVE` | set at startup | `1` when the library and at least one matching model are found and the backend is unpinned |
-| `IDA_MCP_NATIVE_LIB` | auto-detect | explicit path to `libmcp_llama.so` |
-| `IDA_MCP_NATIVE_CTX` | `2048` | per-sequence context (max tokens a doc can occupy) |
-| `IDA_MCP_NATIVE_THREADS` | half available CPUs (capped at 16) | threads for the decode; explicit values override |
-| `IDA_MCP_NATIVE_UBATCH` | `512` | physical tokens per native graph execution; benchmark `1024`/`2048` on larger machines |
-| `IDA_MCP_NATIVE_KV` | `f16` | native KV precision; set `q8` for lower memory/faster inference with a small quality tradeoff |
-| `IDA_MCP_NATIVE_DOC_CHARS` | `6000` | rerank document cap in chars (truncated head-first) |
-| `IDA_MCP_NATIVE_SEQUENCES` | `4` | max sequences packed per `llama_decode` batch (`1`–`64`); `MCP_NSEQ` remains an alias |
-| `IDA_MCP_NATIVE_RERANK_CACHE` | `128` | bounded exact-query rerank score cache; `0` disables it |
-| `IDA_MCP_Q4` | `1` | prefer `Q4_K_M` over `Q8_0` when both are installed; `0` forces Q8 |
+The normal `ida_open_binary` call waits for initial analysis. Check
+`ida_session_status` and `ida_session_health`, allow more time for a large
+binary, and check the per-session logs under the install/data directory. The
+background-open operation is available, but it is intended for cases where
+you understand its asynchronous behavior and safe-mode restrictions.
 
-### HTTP backend knobs
+### A write operation is denied
 
-Used only when the native library is absent or `IDA_MCP_BACKEND=http`. The
-embed server starts for indexing / semantic search / anchor refresh; the rerank
-server starts for the rerank stage. One request in flight per server; a
-timed-out request recycles that server rather than queueing behind it, and the
-RSS/recycle machinery bounds memory (embed floor ~3 GiB, rerank ~5 GiB, with
-differential growth checks that only recycle on real leaks).
+This is usually the policy working as configured. Use `ida_help` to inspect the
+operation’s exact schema and its acknowledgement requirement. Do not add
+arbitrary arguments: schemas are strict. Review `IDA_MCP_POLICY_MODE` and the
+operator policy file before changing policy. Disabling all policy gates is a
+separate, deliberately unsafe choice.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `IDA_MCP_EMBED_PROFILE` | `qwen3-embedding-0.6b` | Selects prompts and expected model profile |
-| `IDA_MCP_EMBED_MODEL` | auto-detect | Path to the GGUF model |
-| `IDA_MCP_EMBED_SERVER_BIN` | auto-detect | Path to `llama-server` |
-| `IDA_MCP_EMBED_THREADS` | adaptive | CPU threads, from available affinity |
-| `IDA_MCP_EMBED_BATCH` / `_MAX_BATCH` | `1` / adaptive | Indexing batch size; grows on success up to the ceiling |
-| `IDA_MCP_EMBED_GPU` | `0` | `1` offloads to a GPU backend (CPU is forced otherwise) |
-| `IDA_MCP_EMBED_MAX_RSS_MB` | adaptive | RSS recycle limit; `0` derives one from model size |
-| `IDA_MCP_EMBED_IDLE_TIMEOUT` | `15` | Seconds to keep the server after its last request; `0` disables |
-| `IDA_MCP_EMBED_CACHE` | `4096` | Bounded exact-text embedding cache; `0` disables |
-| `IDA_MCP_RERANK_PROFILE` | `qwen3-reranker-0.6b` | Selects the rerank model profile |
-| `IDA_MCP_RERANK_MODEL` | auto-detect | Path to the rerank GGUF |
-| `IDA_MCP_RERANK_DOC_CHARS` | `6000` | Document cap per rerank pair |
-| `IDA_MCP_RERANK_DOC_BUDGET_CHARS` | `800` | Per-document budget passed to the reranker from search |
-| `IDA_MCP_RERANK_POOL` | `8` | Recalled pool capped before cross-encoder re-scoring; benchmarked 12/12 top-1 on the bundled corpus |
-| `IDA_MCP_RERANK_CHUNK` | `8` | Documents scored per request, so peak memory tracks the chunk not the pool |
-| `IDA_MCP_RERANK_CTX` | `1024` | Per-pair rerank context size (query + document) |
-| `IDA_MCP_RERANK_CACHE` | `128` | Bounded exact-chunk score cache; `0` disables it |
+### Semantic search is unavailable
 
-The full set of knobs for both backends lives in
-[docs/wiki/core/intelligence.md](docs/wiki/core/intelligence.md).
-
-### Benchmarking
-
-Performance and retrieval quality are measured at run time against the selected
-corpus, model, backend, and machine. Use the portable pipelines in
-[`benchmarks/README.md`](benchmarks/README.md); they emit JSON and Markdown
-reports with the inputs and environment recorded, so one workstation's numbers
-are not presented as product guarantees.
-
-### Cloud embeddings (Gemini, opt-in)
-
-An alternative backend that calls Google's `gemini-embedding-2` (or
-`gemini-embedding-001`) instead of running a local GGUF. **Opt in explicitly** —
-selection is never automatic, so a stray `GOOGLE_CLOUD_PROJECT` in your
-environment cannot silently switch you to a cloud model.
-
-> **Privacy:** the cloud backend uploads the *compact behavioral signature* of each
-> function (calls, constants, string literals, control-flow profile) — never the
-> full decompilation. If you cannot send any code to Google, keep the local backend.
+Semantic search is optional and requires an index and a compatible embedding
+backend. Ordinary listing, search, decompilation, and cross-reference work do
+not require it. To set up the optional local path, use the installer’s explicit
+embedder options, for example:
 
 ```bash
-# AI Studio (API key from https://aistudio.google.com/apikey)
-export GEMINI_API_KEY="..."
-
-# Vertex AI (GCP) — project + region; ADC via GOOGLE_APPLICATION_CREDENTIALS
-export GOOGLE_CLOUD_PROJECT="my-project"
-export VERTEX_AI_LOCATION="us-central1"
-export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
-
-# pick the cloud backend for a new install (interactive wizard asks too)
-python install.py --embed-backend gemini --gemini-access aistudio --gemini-api-key "$GEMINI_API_KEY"
-python install.py --embed-backend gemini --gemini-access vertex \
-  --gemini-vertex-project "$GOOGLE_CLOUD_PROJECT" --gemini-vertex-location us-central1 --gemini-install-auth
-
-# check your setup without opening IDA
-python install.py --embedder-doctor --embed-backend gemini
+python3 install.py --setup-embedder
 ```
 
-The installer writes `embedder.json` with `{"backend": "gemini", ...}` so the
-server picks the cloud backend, and (when you provide it) persists the AI Studio
-key into the generated MCP client config env block. The key is **never** written
-to `embedder.json`.
+The installer can also run `--embedder-doctor`, use an explicit model path, or
+download a selected model and `llama-server` when requested. Model licenses,
+disk use, and network downloads are your responsibility. If the model is
+missing, the server should report semantic search as unavailable rather than
+pretending that it ran.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `IDA_MCP_EMBED_BACKEND` | `local` | `gemini` selects the cloud backend |
-| `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | Google AI Studio API key |
-| `VERTEX_AI_ACCESS_TOKEN` / `GOOGLE_ACCESS_TOKEN` | — | Already-obtained Vertex bearer token |
-| `GOOGLE_APPLICATION_CREDENTIALS` | — | Service-account JSON for Vertex ADC (needs `google-auth`) |
-| `GOOGLE_CLOUD_PROJECT` / `VERTEX_AI_PROJECT` | — | Vertex project (from env or `embedder.json`) |
-| `VERTEX_AI_LOCATION` / `GOOGLE_CLOUD_REGION` | `us-central1` | Vertex region |
-| `IDA_MCP_GEMINI_MODEL` | `gemini-embedding-2` | Embedding model name |
-| `IDA_MCP_GEMINI_DIM` | `768` | Output dimensionality (128–3072) |
-| `IDA_MCP_GEMINI_TASK_TYPE` | auto | `none` omits `taskType`; else a value like `retrieval_document` |
-| `IDA_MCP_GEMINI_BATCH` | `16` | Requests per batch call |
-| `IDA_MCP_GEMINI_TIMEOUT` / `_BATCH_TIMEOUT` | `30` / `120` | Seconds per request |
+### The installer refuses a client configuration
 
----
+Fix the reported JSON, JSONC, or TOML syntax and rerun the installer. It also
+refuses symlinked and non-regular configuration paths to avoid overwriting an
+unexpected target. Existing regular files are backed up; the installer’s
+default rollback behavior can restore those backups if a later phase fails.
 
-## Development
+### An IDA session or runtime fails
 
-```bash
-ruff check .
-python scripts/check_schema_integrity.py
-python scripts/generate_tool_skills.py
-pytest -q
-```
+Check `ida_session_health`, the session log, and the bridge log. Confirm that
+the client is using the same install root and `IDADIR` that the installer
+recorded. The default `idat` backend gives each session its own process; do not
+switch to experimental `idalib` while diagnosing a basic installation.
 
-`host/agent_operations.py` is the single source of truth: `tools/list`, `ida_help`,
-the installed skill, and `docs/TOOLS_REFERENCE.md` are all generated from it. Change
-an operation, then regenerate — CI checks for drift.
+## Reference material
 
-Live IDA integration tests need a local IDA install and a target binary; they skip
-otherwise. See [CONTRIBUTING.md](CONTRIBUTING.md) for conventions and
-[the architecture guide](docs/guide/architecture.md) for the layout.
+- [Project wiki](https://github.com/GrecAndrei/ida-pro-mcp/wiki) — task-oriented
+  installation, investigation, editing, and troubleshooting guides.
+- [Local wiki pages](docs/wiki/INDEX.md) — the same hand-authored material
+  shipped for the built-in wiki tool.
+- [Generated operation reference](docs/TOOLS_REFERENCE.md) — every public
+  operation, schema, example, and backend mapping.
+- [Safety model](docs/guide/safety-model.md) — trust boundaries, policy modes,
+  loopback transport, session ownership, and filesystem guards.
+- [Investigation workspace](docs/wiki/core/investigation.md) — findings,
+  evidence, targets, and exports.
+- [Intelligence and embeddings](docs/wiki/core/intelligence.md) — local and
+  optional Gemini retrieval backends.
+- [OpenCode setup](docs/OPENCODE_SETUP.md) — OpenCode configuration and skills.
+- [Architecture](docs/guide/architecture.md) — host, IDA runtime, and data
+  flow for readers who need implementation detail.
+- [Security policy](SECURITY.md) — reporting and security guidance.
+- [Live IDA testing](docs/LIVE_IDA_TESTING.md) — what the repository’s tests
+  do and do not prove about a real IDA installation.
+- [Versioning and release checklist](docs/guide/versioning.md) and the
+  [changelog](CHANGELOG.md) — alpha status and release history.
+- [Documentation index](docs/index.md) — the full map of maintained guides,
+  references, wiki pages, and research notes.
 
----
-
-## Credits
-
-Portions of `ida_mcp/utils.py` and the vendored `ida_mcp/zeromcp` package come from
-[ida-pro-mcp by mrexodia](https://github.com/mrexodia/ida-pro-mcp) (MIT), which is
-also where the idea of driving IDA over MCP came from. `zeromcp` keeps its own
-LICENSE alongside the sources.
-
-When enabled, FindCrypt signatures and the threat corpus are fetched from their
-upstream projects by the installer.
-
-## License
-
-GPL-3.0-only. See [LICENSE](LICENSE).
+For exact operation names, use the generated reference or ask the running
+server with `ida_help`. The older `tool(action=...)` backend remains available
+for compatibility and is selected with `IDA_MCP_TOOL_SURFACE=legacy`; new
+integrations should use the exact-schema `ida_*` surface.
