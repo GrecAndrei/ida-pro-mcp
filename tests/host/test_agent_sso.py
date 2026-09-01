@@ -193,6 +193,37 @@ def test_agent_login_success(tmp_path, monkeypatch):
     assert "agentA" in server._client_request_state().agents_logged_in
 
 
+def test_public_agent_sso_operations_are_reachable_through_tools_call(
+    tmp_path, monkeypatch
+):
+    server = _make_server(tmp_path, monkeypatch)
+    activated = _tool_call(
+        server,
+        1,
+        "ida_sso_activate",
+        {"agents": ["agentA"]},
+    )
+    assert activated.get("ok") is True
+
+    ticket = mint_agent_ticket("sekret", "agentA", exp=time.time() + 3600)
+    logged_in = _tool_call(
+        server,
+        2,
+        "ida_agent_login",
+        {"name": "agentA", "ticket": ticket},
+    )
+    assert logged_in.get("ok") is True
+    assert logged_in["agent"] == "agentA"
+
+    logged_out = _tool_call(
+        server,
+        3,
+        "ida_agent_logout",
+        {"name": "agentA"},
+    )
+    assert logged_out.get("ok") is True
+
+
 def test_agent_ticket_scopes_gate_dispatch_but_keep_logout_available(tmp_path, monkeypatch):
     server = _make_server(tmp_path, monkeypatch)
     _activate(server, "agentA")

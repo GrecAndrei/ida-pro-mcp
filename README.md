@@ -3,7 +3,7 @@
 Give an LLM agent a working seat at IDA Pro.
 
 This is an [MCP](https://modelcontextprotocol.io) server that exposes IDA Pro's
-analysis to a model as 104 exact-schema operations — decompile, cross-reference,
+analysis to a model as 107 exact-schema operations — decompile, cross-reference,
 search, rename, annotate — plus an investigation workspace so the model's
 conclusions survive across turns instead of living in a context window.
 
@@ -184,7 +184,7 @@ ida_open_binary → ida_session_state → ida_overview → ida_find
 
 | Group | Operations |
 |---|---|
-| **Session** | `open_binary`, `open_background`, `close_session`, `session_get`, `session_list`, `session_switch`, `session_state`, `session_status`, `session_health` |
+| **Session** | `open_binary`, `open_background`, `close_session`, `session_get`, `session_list`, `sso_activate`, `agent_login`, `agent_logout`, `session_switch`, `session_state`, `session_status`, `session_health` |
 | **Discovery** | `overview`, `find`, `list_functions`, `list_imports`, `list_strings`, `semantic_search`, `index_functions`, `index_status`, `cancel_index`, `reranker_status`, `function_families`, `auto_wait`, `events`, `registers`, `search_data_value`, `search_query_lang`, `r2_status`, `r2_bininfo`, `r2_load_hints`, `r2_disassemble_hypothesis`, `r2_vxrefs`, `fw_detect_vector_table`, `fw_detect_load_base`, `fw_detect_mmio`, `fw_rtos_scan`, `fw_carve` |
 | **Code** | `decompile`, `disassemble`, `xrefs_to`, `callers`, `callees`, `read_bytes`, `callgraph`, `emulate` |
 | **Findings** | `write_finding`, `mark_examined`, `update_finding`, `list_findings`, `search_findings`, `next_target`, `analysis_brief`, `export_findings` |

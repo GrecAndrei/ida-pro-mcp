@@ -38,6 +38,33 @@ def test_find_translates_to_the_legacy_backend_without_losing_its_required_query
     assert operation.validate({"query": "recv", "pattern": "wrong field"})
 
 
+def test_agent_sso_operations_use_strict_public_contracts_and_session_backend():
+    activate = get_agent_operation("ida_sso_activate")
+    login = get_agent_operation("ida_agent_login")
+    logout = get_agent_operation("ida_agent_logout")
+    assert activate is not None and login is not None and logout is not None
+
+    assert not activate.validate({"agents": ["rev_a"]})
+    assert activate.to_backend_call({"agents": ["rev_a"]}) == (
+        "session",
+        {"action": "sso_activate", "agents": ["rev_a"]},
+    )
+    assert not login.validate(
+        {"name": "rev_a", "ticket": "rev_a.<payload>.<signature>"}
+    )
+    assert login.to_backend_call(
+        {"name": "rev_a", "ticket": "rev_a.<payload>.<signature>"}
+    ) == (
+        "session",
+        {
+            "action": "agent_login",
+            "name": "rev_a",
+            "ticket": "rev_a.<payload>.<signature>",
+        },
+    )
+    assert not logout.validate({})
+
+
 def test_public_validation_enforces_nested_schema_constraints():
     open_binary = get_agent_operation("ida_open_binary")
     assert open_binary is not None

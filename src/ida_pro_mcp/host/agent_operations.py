@@ -546,6 +546,56 @@ AGENT_OPERATIONS: tuple[AgentOperation, ...] = (
         backend_action="list",
     ),
     AgentOperation(
+        name="ida_sso_activate",
+        description="Activate the one-shot agent SSO realm with an allowlist of agent names.",
+        category="session",
+        input_schema=_schema(
+            {
+                "agents": {
+                    "type": "array",
+                    "description": "Agent names that may log in on this server.",
+                    "items": {"type": "string"},
+                },
+                "secret": {
+                    "type": "string",
+                    "description": "Optional HMAC secret; otherwise the configured environment secret or a generated secret is used.",
+                },
+            },
+            ["agents"],
+        ),
+        example={"agents": ["rev_a", "audit_b"]},
+        backend_tool="session",
+        backend_action="sso_activate",
+    ),
+    AgentOperation(
+        name="ida_agent_login",
+        description="Log an agent into the active SSO realm with a signed ticket.",
+        category="session",
+        input_schema=_schema(
+            {
+                "name": {"type": "string", "description": "Allowlisted agent name."},
+                "ticket": {"type": "string", "description": "Signed name.payload.signature ticket minted for this agent."},
+            },
+            ["name", "ticket"],
+        ),
+        example={"name": "rev_a", "ticket": "rev_a.<payload>.<signature>"},
+        backend_tool="session",
+        backend_action="agent_login",
+    ),
+    AgentOperation(
+        name="ida_agent_logout",
+        description="Log an agent out and release only that agent's sessions.",
+        category="session",
+        input_schema=_schema(
+            {
+                "name": {"type": "string", "description": "Agent name to log out; omit when the per-call agent tag identifies it."},
+            }
+        ),
+        example={"name": "rev_a"},
+        backend_tool="session",
+        backend_action="agent_logout",
+    ),
+    AgentOperation(
         name="ida_session_switch",
         description="Switch the active session to another session by ID or binary path.",
         category="session",
