@@ -113,6 +113,19 @@ def test_update_json_config_writes_under_servers_key(tmp_path):
     assert entry["command"] == "/x/python"
 
 
+def test_checkout_client_map_preserves_copilot_servers_schema():
+    from ida_pro_mcp.installer.clients import load_client_map
+
+    repo_root = Path(__file__).resolve().parents[1]
+    client_map = load_client_map(repo_root)
+
+    for client in ("Copilot CLI", "VS Code"):
+        assert client_map[client]["json"] == {
+            "top_level_key": "servers",
+            "type": "stdio",
+        }
+
+
 def test_update_json_config_default_still_uses_mcpservers(tmp_path):
     from ida_pro_mcp.installer import clients
     from ida_pro_mcp.installer.common import InstallReport
