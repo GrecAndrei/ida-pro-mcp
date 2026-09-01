@@ -347,6 +347,18 @@ def test_client_configuration_summary_reports_partial_setup(tmp_path, monkeypatc
     assert "configured 1/2 clients" in report.warnings[-1]
 
 
+def test_client_configuration_summary_fails_when_all_updates_fail(tmp_path):
+    from ida_pro_mcp.installer import main as main_mod
+    from ida_pro_mcp.installer.common import InstallReport
+
+    report = InstallReport()
+    report.add_warning("client update failed")
+    report.metadata["client_update_failures"] = ["fake-client"]
+
+    with pytest.raises(RuntimeError, match="no supported client was configured"):
+        main_mod._report_client_configuration(tmp_path, [], report, main_mod.UI())
+
+
 # ---------------------------------------------------------------------------
 # installer.runtime: env the spawned server inherits
 # ---------------------------------------------------------------------------

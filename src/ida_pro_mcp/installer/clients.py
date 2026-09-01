@@ -444,6 +444,7 @@ def configure_clients(
     server_name: str = "ida-pro-mcp",
 ) -> list[str]:
     configured: list[str] = []
+    failed: list[str] = []
     meta_by_client = _client_meta(source_root)
     for client, path in get_config_paths(source_root).items():
         try:
@@ -464,8 +465,13 @@ def configure_clients(
                 )
             if ok:
                 configured.append(client)
+            else:
+                failed.append(client)
         except Exception as exc:
             report.add_warning(f"{client} config update failed: {exc}")
+            failed.append(client)
+    if failed:
+        report.metadata["client_update_failures"] = failed
     return configured
 
 

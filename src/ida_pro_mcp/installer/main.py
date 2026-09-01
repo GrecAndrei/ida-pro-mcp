@@ -1094,6 +1094,14 @@ def _report_client_configuration(
     )
     report.add_step("clients", "warn", detail)
     ui.warn(f"Client configuration incomplete: {detail}")
+    client_failures = report.metadata.get("client_update_failures")
+    if expected and not actual and client_failures:
+        message = (
+            "Client configuration failed: no supported client was configured. "
+            "Review installer warnings and fix the affected client config files."
+        )
+        report.add_error(message)
+        raise RuntimeError(message)
 
 
 def _write_install_error_log(log_path: Path, traceback_text: str) -> None:
