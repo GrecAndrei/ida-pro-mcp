@@ -19,6 +19,7 @@ import contextvars
 import hashlib
 import hmac
 import json
+import math
 import os
 import secrets
 import threading
@@ -792,7 +793,16 @@ class ServerClientStateMixin:
             return None, make_error(
                 MCPError.POLICY_DENIED, "Ticket payload name mismatch."
             )
-        exp = float(meta.get("exp") or 0)
+        try:
+            exp = float(meta.get("exp") or 0)
+        except (TypeError, ValueError, OverflowError):
+            return None, make_error(
+                MCPError.POLICY_DENIED, "Ticket expiry must be a finite number."
+            )
+        if not math.isfinite(exp):
+            return None, make_error(
+                MCPError.POLICY_DENIED, "Ticket expiry must be a finite number."
+            )
         if exp and exp < time.time():
             return None, make_error(MCPError.POLICY_DENIED, "Ticket has expired.")
         raw_scopes = meta.get("scopes")
@@ -914,7 +924,18 @@ class ServerClientStateMixin:
                 MCPError.POLICY_DENIED,
                 f"Agent '{agent}' is logged in on a different connection.",
             )
-        exp = float(entry.get("exp") or 0)
+        try:
+            exp = float(entry.get("exp") or 0)
+        except (TypeError, ValueError, OverflowError):
+            return make_error(
+                MCPError.POLICY_DENIED,
+                f"Agent '{agent}' ticket has an invalid expiry; call agent_login again.",
+            )
+        if not math.isfinite(exp):
+            return make_error(
+                MCPError.POLICY_DENIED,
+                f"Agent '{agent}' ticket has an invalid expiry; call agent_login again.",
+            )
         if exp and exp < time.time():
             return make_error(
                 MCPError.POLICY_DENIED,

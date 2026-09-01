@@ -7,6 +7,10 @@ isolation over one connection, and per-agent runtime teardown.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import threading
 import time
 from types import SimpleNamespace
@@ -135,6 +139,31 @@ def test_agent_login_rejects_expired_ticket(tmp_path, monkeypatch):
     )
     assert res.get("error") is True
     assert "expired" in str(res.get("message", ""))
+
+
+def test_agent_login_rejects_malformed_signed_expiry(tmp_path, monkeypatch):
+    server = _make_server(tmp_path, monkeypatch)
+    _activate(server, "agentA")
+    original = mint_agent_ticket("sekret", "agentA", exp=time.time() + 3600)
+    _name, body, _signature = original.split(".")
+    payload = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+    payload["exp"] = "not-a-number"
+    payload_str = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    encoded = base64.urlsafe_b64encode(payload_str.encode("utf-8")).decode("ascii").rstrip("=")
+    signature = hmac.new(
+        b"sekret", payload_str.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    ticket = f"agentA.{encoded}.{signature}"
+
+    res = _tool_call(
+        server,
+        1,
+        "session",
+        {"action": "agent_login", "name": "agentA", "ticket": ticket},
+    )
+    assert res.get("error") is True
+    assert res.get("code") == MCPError.POLICY_DENIED
+    assert "expiry" in str(res.get("message", ""))
 
 
 def test_agent_login_success(tmp_path, monkeypatch):
