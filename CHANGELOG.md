@@ -4,6 +4,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
 
 ## 2026-09-02 — PR-work coverage checkpoint
 
+ - Added offline architecture coverage for RISC-V GP reference repair,
+   stale/unmapped target handling, processor-option fallback, reanalysis
+   scheduling, and signed immediate detection.
  - Added offline type-action coverage for public aliases, parser and apply
    failures, struct/enum validation, inference/read/vtable guards, and TIL
    lifecycle errors.

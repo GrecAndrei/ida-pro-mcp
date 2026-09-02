@@ -270,3 +270,80 @@ def test_family_helpers_use_detected_architecture_when_unspecified(monkeypatch, 
     assert arch.get_return_register() == "x0"
     assert arch.get_stack_pointer_names() == {"sp"}
     assert "b" in arch.get_tail_call_mnemonics()
+
+
+def test_riscv_gp_reference_repair_handles_stale_and_unmapped_targets(monkeypatch, arch):
+    import ida_ida
+    import ida_idp
+    import ida_segment
+    import ida_ua
+
+    ida_xref = types.ModuleType("ida_xref")
+    monkeypatch.setitem(__import__("sys").modules, "ida_xref", ida_xref)
+
+    segment = types.SimpleNamespace(start_ea=0x1000, end_ea=0x1100)
+    ops = [types.SimpleNamespace(type=2, reg=3, addr=0x20)] + [types.SimpleNamespace(type=0, reg=0, addr=0)] * 5
+    insn = types.SimpleNamespace(ops=ops, get_canon_mnem=lambda: "sw")
+    added = []
+    removed = []
+    monkeypatch.setattr(arch, "is_riscv_family", lambda: True)
+    monkeypatch.setattr(ida_idp, "str2reg", lambda _name: 3, raising=False)
+    monkeypatch.setattr(ida_ida, "inf_get_app_bitness", lambda: 32, raising=False)
+    monkeypatch.setattr(ida_segment, "get_first_segment_ea", lambda: 0x1000, raising=False)
+    monkeypatch.setattr(ida_segment, "get_next_segment_ea", lambda _ea: idc.BADADDR, raising=False)
+    monkeypatch.setattr(ida_segment, "getseg", lambda ea: segment if segment.start_ea <= ea < segment.end_ea else None, raising=False)
+    monkeypatch.setattr(ida_ua, "insn_t", lambda: insn, raising=False)
+    monkeypatch.setattr(ida_ua, "decode_insn", lambda _insn, _ea: True, raising=False)
+    monkeypatch.setattr(idc, "next_head", lambda *_args: idc.BADADDR, raising=False)
+    monkeypatch.setattr(ida_xref, "get_first_dref_from", lambda *_args: 0x20, raising=False)
+    monkeypatch.setattr(ida_xref, "get_next_dref_from", lambda *_args: idc.BADADDR, raising=False)
+    monkeypatch.setattr(ida_xref, "del_dref", lambda ea, target: removed.append((ea, target)), raising=False)
+    monkeypatch.setattr(ida_xref, "add_dref", lambda ea, target, kind: added.append((ea, target, kind)), raising=False)
+    monkeypatch.setattr(ida_xref, "dr_W", 7, raising=False)
+    monkeypatch.setattr(ida_xref, "dr_R", 8, raising=False)
+    monkeypatch.setattr(idc, "BADADDR", 0xFFFFFFFFFFFFFFFF, raising=False)
+
+    repaired = arch._riscv_gp_fix_refs(0x1000, old_gp=0x2000)
+    assert repaired == {"fixed": 1, "skipped": 0}
+    assert removed == [(0x1000, 0x20)]
+    assert added == [(0x1000, 0x1020, 7)]
+
+    ops[0].addr = 0x2000
+    assert arch._riscv_gp_fix_refs(0x1000) == {"fixed": 0, "skipped": 1}
+    monkeypatch.setattr(arch, "is_riscv_family", lambda: False)
+    assert arch._riscv_gp_fix_refs(0x1000) == {"fixed": 0, "skipped": 0}
+
+
+def test_riscv_gp_apply_directive_queues_reanalysis_and_detects_signed_lui(monkeypatch, arch):
+    import ida_auto
+    import ida_ida
+    import ida_idp
+
+    monkeypatch.setattr(arch, "_APPLIED_RISCV_GP", None)
+    monkeypatch.setattr(arch, "_riscv_gp_fix_refs", lambda *_args, **_kwargs: {"fixed": 0, "skipped": 0})
+    monkeypatch.setattr(idc, "set_processor_options", lambda _value: None, raising=False)
+    monkeypatch.setattr(idc, "get_inf_attr", lambda attr: 0x1000 if attr == idc.INF_MIN_EA else 0x2000, raising=False)
+    monkeypatch.setattr(ida_auto, "plan_range", lambda *_args: None, raising=False)
+    monkeypatch.setattr(ida_ida, "inf_get_app_bitness", lambda: 32, raising=False)
+    queued = arch._apply_riscv_gp(0x1234)
+    assert queued[:3] == (True, None, True)
+    assert arch._apply_riscv_gp(0x1234) == (True, None, False, {})
+
+    monkeypatch.setattr(arch, "_APPLIED_RISCV_GP", None)
+    monkeypatch.delattr(idc, "set_processor_options", raising=False)
+    monkeypatch.setattr(ida_idp, "process_config_directive", lambda _value: None, raising=False)
+    monkeypatch.setattr(arch, "_riscv_gp_fix_refs", lambda *_args, **_kwargs: {"fixed": 0, "skipped": 1})
+    applied = arch._apply_riscv_gp(0x1235)
+    assert applied[0] is True and applied[2] is True
+
+    monkeypatch.setattr(arch, "_apply_riscv_gp", lambda _value: (False, "no", False, {}))
+    monkeypatch.setattr(idautils, "Entries", lambda: iter([(1, 0x1000, "entry", False)]), raising=False)
+    monkeypatch.setattr(idc, "get_name_ea_simple", lambda _name: idc.BADADDR, raising=False)
+    monkeypatch.setattr(idc, "get_inf_attr", lambda _attr: 0x1000, raising=False)
+    mnems = {0x1000: "lui", 0x1004: "addi"}
+    monkeypatch.setattr(idc, "print_insn_mnem", lambda ea: mnems.get(ea, "nop"), raising=False)
+    monkeypatch.setattr(idc, "print_operand", lambda _ea, index: "gp" if index == 0 else "0x80000", raising=False)
+    monkeypatch.setattr(idc, "get_operand_value", lambda _ea, index: 0x80000 if index == 1 else 0xFFF, raising=False)
+    monkeypatch.setattr(idc, "next_head", lambda ea, _end: ea + 4 if ea == 0x1000 else idc.BADADDR, raising=False)
+    result = arch.detect_riscv_gp()
+    assert result["found"] is True and result["gp"] == 0xFFFFFFFF7FFFFFFF
