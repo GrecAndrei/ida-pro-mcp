@@ -33,6 +33,8 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    teardown and adoption, stale leases, and SSO scope/lifecycle rejection.
  - Expanded runtime-lease coverage for signal races, process-tree identity
    failures, heartbeat transitions, shutdown faults, and registration errors.
+ - Added response-pipeline coverage for bounded address collection, malformed
+   output filters, session-scoped blackboard lookup, and enrichment fallbacks.
  - Expanded bootstrap lifecycle coverage for mitigation, autopilot,
    calibration, disputes, reweighting, and persisted outcome paths.
  - Expanded code-helper coverage for dataflow, firmware signals, decompiler
