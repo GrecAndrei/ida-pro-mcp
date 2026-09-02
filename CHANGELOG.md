@@ -35,6 +35,8 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Hardened the memory filesystem boundary by rejecting symlink components before
    path canonicalization, and added dispatch coverage for filesystem,
    bookmark, truncation, plugin, policy, and strict-gate modes.
+ - Isolated the expanded fake-IDB coverage modules so their temporary SDK
+   imports cannot affect unrelated tests in the full suite.
 
 - Expanded offline and opt-in live coverage across the public and legacy MCP
   surfaces, and stabilized batch-history and client-path tests.

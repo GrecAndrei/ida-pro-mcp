@@ -7,7 +7,26 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 from tests._isolated_repo_loader import load_ida_module, load_tool_module
+
+
+@pytest.fixture(autouse=True)
+def _restore_import_state():
+    """Keep fake IDA modules local to each test.
+
+    The isolated loader intentionally installs modules in ``sys.modules`` so
+    the source file can import as if it were running inside IDA. Restoring the
+    complete table matters in the full suite: otherwise a later host or
+    IDA-side test can accidentally import this file's fake SDK.
+    """
+    before = dict(sys.modules)
+    yield
+    for name in list(sys.modules):
+        if name not in before:
+            del sys.modules[name]
+    sys.modules.update(before)
 
 
 def _errors():

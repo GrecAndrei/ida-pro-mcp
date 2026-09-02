@@ -20,6 +20,17 @@ from tests._isolated_repo_loader import load_ida_module, load_tool_module
 REPO = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture(autouse=True)
+def _restore_import_state():
+    """Keep the fake type-library imports from leaking into other tests."""
+    before = dict(sys.modules)
+    yield
+    for name in list(sys.modules):
+        if name not in before:
+            del sys.modules[name]
+    sys.modules.update(before)
+
+
 class _Value:
     def __init__(self, text, size, *, kind="other", name=None, pointed=None):
         self.text = text
