@@ -48,6 +48,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added native-backend coverage for ctypes loading, availability selection,
    cache generations, and failure recovery, plus r2 coverage for parser,
    environment, subprocess, disassembly, bininfo, and pointer-scan boundaries.
+ - Added reranker lifecycle coverage for state/profile resolution, lease
+   identity rejection, malformed responses, cache waiters, deadline handling,
+   and subprocess recovery paths.
 
 - Expanded offline and opt-in live coverage across the public and legacy MCP
   surfaces, and stabilized batch-history and client-path tests.
