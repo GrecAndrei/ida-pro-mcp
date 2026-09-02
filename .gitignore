@@ -51,7 +51,7 @@ install-report.json
 # Testing/CI artifacts
 .pytest_cache/
 .tmp/
-.pytest_tmp/
+.pytest_tmp*/
 benchmark-results/
 .ruff_cache/
 .coverage
@@ -69,6 +69,7 @@ htmlcov/
 .codex/
 .claude/
 .commandcode/
+.pi/
 ida_mcp_cache/
 
 # Local probe/report artifacts
