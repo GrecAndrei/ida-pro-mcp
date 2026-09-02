@@ -14,6 +14,10 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    embedder doctor outcomes, and packaged client configuration.
  - Expanded runtime lifecycle, ownership, diagnostics, macro, archive, and
    checkpoint boundary coverage.
+ - Added search-combinator parser, cache, index, and degradation-mode tests.
+ - Added blackboard governance, filesystem, evidence, memory, and proposal
+   lifecycle boundary tests.
+ - Added type-library member-editing and compatibility failure-mode tests.
  - Expanded session administration coverage for narrative limits, validation,
    bulk tagging/deletion cleanup, snapshots, merges, macro registry behavior,
    conditional workflow branches, and recent-workset options.
