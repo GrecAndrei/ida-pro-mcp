@@ -21,6 +21,7 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    all 107 operations, dual-engine runtime, and multi-agent integrations.
  - Updated the release workflow (`alpha-release.yml`) to automatically use dedicated
    release notes when publishing.
+ - Streamlined and simplified the release notes structure for v1.0.0a1.
  - Synchronized user guides, client setup, and release notes to the official external
    GitHub Wiki repository (`https://github.com/GrecAndrei/ida-pro-mcp/wiki`).
 
