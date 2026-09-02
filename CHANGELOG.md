@@ -20,6 +20,10 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    mitigation, and dispatch modes, plus function-management, decompiler
    helper, and compositional-search paths. Also fixed comparison aliases such
    as `neq` being parsed as the shorter `ne` operator.
+ - Added offline coverage for the public type operation's inspection,
+   declaration, local/global/function application, inference, structured reads,
+   propagation, dependency graphs, vtables, member editing, enum editing, and
+   TIL carry paths, including IDA 9 fallback behavior and explicit failures.
 
 - Expanded offline and opt-in live coverage across the public and legacy MCP
   surfaces, and stabilized batch-history and client-path tests.
