@@ -264,3 +264,83 @@ def test_cleanup_idle_and_workflow_boundaries(tmp_path):
     assert flow["step_count"] == 4
     assert flow["steps"][0]["result"]["code"] == MCPError.INVALID_ARGS
     assert flow["steps"][2]["skipped"] is False if "skipped" in flow["steps"][2] else True
+
+
+def test_session_strategy_analogy_activity_hypothesis_and_macro_edges(tmp_path):
+    host, manager, session = _host(tmp_path)
+    sid = session.session_id
+
+    manager.rate_skill = lambda *args, **kwargs: {"rated": True, **kwargs}
+    manager.list_skills = lambda *args, **kwargs: {"skills": [], **kwargs}
+    manager.suggest_triage = lambda *args, **kwargs: {"triage": True, **kwargs}
+    manager.suggest_strategy = lambda *args, **kwargs: {"strategy": True, **kwargs}
+    manager.get_phase = lambda *_args: {"phase": "triage"}
+    manager.dashboard = lambda *_args: {"dashboard": True}
+    manager.suggest_analogy = lambda *args, **kwargs: {"analogy": True, **kwargs}
+    manager.log_activity = lambda *args, **kwargs: {"logged": True, **kwargs}
+    manager.track_hypothesis = lambda *args, **kwargs: {"hypothesis": "H1", **kwargs}
+    manager.confirm_hypothesis = lambda *args, **kwargs: {"confirmed": True, **kwargs}
+    manager.refute_hypothesis = lambda *args, **kwargs: {"refuted": True, **kwargs}
+
+    for action in (
+        host._session_action_rate_skill,
+        host._session_action_list_skills,
+        host._session_action_suggest_triage,
+        host._session_action_suggest_strategy,
+        host._session_action_get_phase,
+        host._session_action_dashboard,
+    ):
+        assert action({"session_id": "bad/id"})["code"] == MCPError.INVALID_ARGS
+
+    assert host._session_action_rate_skill({"session_id": sid, "skill_id": "x", "reward": "bad"})["code"] == MCPError.INVALID_ARGS
+    assert host._session_action_rate_skill({"session_id": sid, "skill_id": "x", "reward": "0.75"})["rated"] is True
+    assert host._session_action_list_skills({"session_id": sid, "min_q": "bad"})["code"] == MCPError.INVALID_ARGS
+    skills = host._session_action_list_skills({"session_id": sid, "min_q": "0.4", "global_skills": "false"})
+    assert skills["global_skills"] is False
+    assert host._session_action_suggest_triage({"session_id": sid, "limit": "bad"})["code"] == MCPError.INVALID_ARGS
+    assert host._session_action_suggest_triage({"session_id": sid, "context": 7})["limit"] == 5
+    assert host._session_action_suggest_strategy({"session_id": sid, "context": 7})["context"] == "7"
+    assert host._session_action_get_phase({"session_id": sid})["phase"] == "triage"
+    assert host._session_action_dashboard({"session_id": sid})["dashboard"] is True
+
+    assert host._session_action_suggest_analogy({"session_id": sid, "library_idbs": "bad"})["code"] == MCPError.INVALID_ARGS
+    assert host._session_action_suggest_analogy({"session_id": sid, "threshold_cosine": "bad"})["code"] == MCPError.INVALID_ARGS
+    assert host._session_action_suggest_analogy({"session_id": sid, "threshold_structural": "bad"})["code"] == MCPError.INVALID_ARGS
+    assert host._session_action_suggest_analogy({"session_id": sid, "limit": "bad"})["code"] == MCPError.INVALID_ARGS
+    analogy = host._session_action_suggest_analogy({"session_id": sid, "library_idbs": ["a.i64"], "limit": "2"})
+    assert analogy["limit"] == 2
+
+    applied = []
+    host.call_tool = lambda *args, **kwargs: applied.append((args, kwargs)) or {"ok": True}
+    result = host._session_action_apply_analogy({
+        "session_id": sid,
+        "mappings": ["bad", {}, {"name": "missing"}, {"addr": "0x1000", "name": "renamed", "comment": "note"}],
+    })
+    assert result["applied"] == 4
+    assert len(applied) == 2
+
+    assert host._session_action_log_activity({"session_id": sid, "tool": "x"})["code"] == MCPError.INVALID_ARGS
+    assert host._session_action_log_activity({"session_id": sid, "tool": "x", "event": "done"})["logged"] is True
+    assert host._session_action_track_hypothesis({"session_id": sid})["code"] == MCPError.INVALID_ARGS
+    assert host._session_action_track_hypothesis({"session_id": sid, "statement": "x", "confidence": "bad"})["code"] == MCPError.INVALID_ARGS
+    tracked = host._session_action_track_hypothesis({"session_id": sid, "statement": "x", "evidence_for": "a,b", "evidence_against": "c", "confidence": "0.8"})
+    assert tracked["evidence_for"] == ["a", "b"]
+    assert host._session_action_confirm_hypothesis({"session_id": sid})["code"] == MCPError.INVALID_ARGS
+    assert host._session_action_confirm_hypothesis({"session_id": sid, "id": "H1", "evidence": "yes"})["confirmed"] is True
+    assert host._session_action_refute_hypothesis({"session_id": sid})["code"] == MCPError.INVALID_ARGS
+    assert host._session_action_refute_hypothesis({"session_id": sid, "id": "H1"})["code"] == MCPError.INVALID_ARGS
+    assert host._session_action_refute_hypothesis({"session_id": sid, "id": "H1", "reason": "wrong", "evidence": "no"})["refuted"] is True
+
+    assert host._session_action_macro_delete({})["code"] == MCPError.INVALID_ARGS
+    assert host._session_action_macro_run({})["code"] == MCPError.INVALID_ARGS
+    assert host._session_action_macro_run({"name": "missing"})["code"] == MCPError.FILE_NOT_FOUND
+    host._session_macros["one"] = {"name": "one", "data": {"action": "status"}}
+    host._execute_tool = lambda _tool, args: {"ok": True, **args}
+    ran = host._session_action_macro_run({"name": "one", "run_action": "status"})
+    assert ran["macro"] == "one"
+    host._session_macros["workflow"] = {"name": "workflow", "data": {"calls": [{"tool": "session", "action": "status"}]}}
+    assert host._session_action_macro_run({"name": "workflow"})["step_count"] == 1
+    assert host._run_workflow_sequence("bad", ["not-a-dict"], {})["steps"][0]["result"]["code"] == MCPError.INVALID_ARGS
+
+    host.current_session = None
+    assert host._session_action_recent_workset({})["code"] == MCPError.INVALID_ARGS

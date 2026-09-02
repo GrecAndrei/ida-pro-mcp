@@ -335,6 +335,64 @@ def test_background_open_disabled_and_enabled_reuse_and_fresh_paths(tmp_path, mo
     assert any(sid == existing.session_id for sid, _updates in manager.updated)
 
 
+def test_create_session_reuse_and_fresh_inference_edges(tmp_path, monkeypatch):
+    binary = tmp_path / "input.bin"
+    binary.write_bytes(b"input")
+    host, manager = _host(tmp_path)
+    prep_error = {"error": True, "code": MCPError.INVALID_ARGS}
+    host._prepare_open_args = lambda _args: (None, {}, {}, False, None, prep_error)
+    assert _code(host._session_action_create({})) == MCPError.INVALID_ARGS
+
+    created = []
+    host._prepare_open_args = lambda _args: (
+        str(binary), {"processor": "arm"},
+        {"inferred_profile": {"file_kind": "packed_idb", "candidates": []}, "inference_warning": "verify"},
+        False, ["-z"], None,
+    )
+    host._select_reuse_candidate = lambda *_args: None
+    host._mark_analysis_pending = lambda session: created.append(("pending", session.session_id))
+    host._open_result = lambda session: {"ok": True, "session_id": session.session_id}
+    host._arch_inference_warning = lambda _meta: "verify"
+    host._ensure_runtime_and_idb = lambda _session: None
+    host._session_is_running = lambda _sid: False
+    host._wait_for_analysis_complete = lambda _session: {"analysis_functions": 12}
+    host._analysis_is_complete = lambda _sid: True
+    host._safe_mode_active = lambda _sid: False
+    fresh = host._session_action_create({"tags": "one,two", "notes": "hello", "policy_mode": "unsafe"})
+    assert fresh["ok"] is True
+    assert fresh["analysis_functions"] == 12
+    assert fresh["architecture_recommendations"][0]["arguments"]["processor"] == "arm"
+    assert fresh["warning"] == "verify"
+    assert manager.created[0].packed_idb is True
+    assert created
+
+    existing = _Session("EXIST001", str(binary))
+    existing.analysis_options = {"processor": "arm"}
+    host, manager = _host(tmp_path, [existing])
+    monkeypatch.setattr(session_mod, "background_open_enabled", lambda: False)
+    host._prepare_open_args = lambda _args: (
+        str(binary), {"processor": "arm"}, {}, False, ["--loader"], None,
+    )
+    host._select_reuse_candidate = lambda *_args: existing
+    host._mark_analysis_pending = lambda _session: None
+    host._open_result = lambda session, **kwargs: {"ok": True, "session_id": session.session_id, **kwargs}
+    host._ensure_runtime_and_idb = lambda _session: {"error": True, "code": MCPError.IDA_CRASHED}
+    host._session_is_running = lambda _sid: False
+    host._wait_for_analysis_complete = lambda _session: {"analysis_functions": 9}
+    host._analysis_is_complete = lambda _sid: False
+    host._safe_mode_active = lambda _sid: True
+    reused = host._session_action_create({"binary_path": str(binary)})
+    assert reused["ok"] is True
+    assert reused["spawn_error"]["code"] == MCPError.IDA_CRASHED
+    assert reused["analysis_functions"] == 9
+    assert reused["safe_mode"] is True
+    assert manager.updated[-1][1]["ida_args"] == ["--loader"]
+
+    host._select_reuse_candidate = lambda *_args: existing
+    manager.update_session = lambda *_args, **_kwargs: None
+    assert _code(host._session_action_create({})) == MCPError.SESSION_NOT_FOUND
+
+
 def test_attach_open_envelope_includes_recommendations_errors_and_completion(tmp_path):
     session = _Session(binary_path=str(tmp_path / "sample.bin"))
     host, _ = _host(tmp_path, [session])
