@@ -32,6 +32,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    fragmented responses, queue contention, bounded retries, payload limits,
    process termination, library-init diagnosis, IDA discovery, backend command
    construction, safe rendering, and IDB backup paths.
+ - Hardened the memory filesystem boundary by rejecting symlink components before
+   path canonicalization, and added dispatch coverage for filesystem,
+   bookmark, truncation, plugin, policy, and strict-gate modes.
 
 - Expanded offline and opt-in live coverage across the public and legacy MCP
   surfaces, and stabilized batch-history and client-path tests.
