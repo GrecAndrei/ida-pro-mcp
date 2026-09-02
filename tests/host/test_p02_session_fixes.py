@@ -806,6 +806,22 @@ def test_multi_session_groups_concurrent_access_does_not_crash():
     assert not errors
     # No lost updates: every group the writer created survives, so a lock-
     # discipline regression (a reader or writer bypassing the lock and tearing
-    # the store) would not pass silently.
     assert len(mixin._session_groups) == 300
     assert all(isinstance(mixin._session_groups[k], SessionGroup) for k in mixin._session_groups)
+
+
+def test_prepare_open_args_expands_tilde_and_env_vars(tmp_path, monkeypatch):
+    class DummyServer(ServerSessionMixin):
+        def _normalize_ida_args(self, args):
+            return args
+
+    server = DummyServer()
+    target = tmp_path / "sample.bin"
+    target.write_bytes(b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 16)
+
+    monkeypatch.setenv("TEST_TARGET_DIR", str(tmp_path))
+    bin_path, _, _, _, _, err = server._prepare_open_args(
+        {"binary_path": "$TEST_TARGET_DIR/sample.bin"}
+    )
+    assert err is None
+    assert bin_path == str(target.resolve())

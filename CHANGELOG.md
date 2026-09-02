@@ -31,6 +31,13 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    updated release checklist in `docs/guide/versioning.md`.
  - Updated `AGENTS.md` instructions with current codebase layout, 22+ agent client
    formats, auto-installers, routine checks, and release template safeguards.
+ - Fixed 5 major UX issues across the MCP server, installer, and agent workflows:
+   1. Enabled automatic `~` tilde and environment variable expansion in `ida_open_binary`.
+   2. Resolved contradictory `_risk_ack` vs `risk_ack` error hints and accepted `_risk_ack`
+      as a forgiving alias in public operation schemas.
+   3. Prevented fatal installer crashes and rollbacks on pre-existing symlinked skill targets.
+   4. Added natural reverse-engineering trigger keywords to `.agents/skills/ida-pro-mcp/SKILL.md`.
+   5. Expanded IDA Pro discovery to detect modern macOS and nested `idabin/` directory layouts.
 
 ## 2026-09-02 — PR-work coverage checkpoint
 

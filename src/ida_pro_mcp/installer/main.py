@@ -846,6 +846,14 @@ def install_codex_skills(source_root: Path, mode: str, report: InstallReport, dr
 
         codex_home = os.environ.get("CODEX_HOME", "").strip() or str(Path.home() / ".codex")
         codex_skills = _absolute_path(codex_home) / "skills"
+        destination = codex_skills / "ida-pro-mcp"
+        if destination.is_symlink() and _is_checkout_skill_link(destination):
+            report.add_step(
+                "skills",
+                "dry-run" if dry_run else "ok",
+                f"using existing checkout-backed skill link at {destination}",
+            )
+            return
         written = install_skills([codex_skills], dry_run=dry_run)
         count = sum(len(paths) for paths in written.values())
         if not dry_run:

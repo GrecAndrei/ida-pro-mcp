@@ -136,3 +136,35 @@ def test_main_uninstall(tmp_path: Path) -> None:
         rc = main(["--uninstall", "--install-root", str(install_root)])
         assert rc == 0
         assert not (bin_dir / "ida-pro-mcp").exists()
+
+
+def test_install_codex_skills_reuses_checkout_symlinks_in_packaged_mode(tmp_path: Path, monkeypatch) -> None:
+    from ida_pro_mcp.installer.main import install_codex_skills
+
+    # Create dummy checkout skill structure
+    repo_root = tmp_path / "checkout"
+    git_dir = repo_root / ".git"
+    git_dir.mkdir(parents=True)
+    skill_src = repo_root / ".agents" / "skills" / "ida-pro-mcp"
+    skill_src.mkdir(parents=True)
+    (skill_src / "SKILL.md").write_text("# Test Skill\n")
+    (skill_src / "references").mkdir()
+    (skill_src / "references" / "operations.md").write_text("# Ops\n")
+
+    codex_home = tmp_path / "codex"
+    codex_skills = codex_home / "skills"
+    codex_skills.mkdir(parents=True)
+    skill_link = codex_skills / "ida-pro-mcp"
+    skill_link.symlink_to(skill_src, target_is_directory=True)
+    assert skill_link.is_symlink()
+
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    report = InstallReport()
+    # In packaged mode (source_root has no .agents/skills/ida-pro-mcp)
+    packaged_root = tmp_path / "empty_source"
+    packaged_root.mkdir()
+
+    install_codex_skills(packaged_root, "agent", report, dry_run=True)
+    # The checkout link should be kept intact and acknowledged
+    assert skill_link.is_symlink()
+    assert any("checkout-backed" in step.get("detail", "") for step in report.steps)

@@ -333,17 +333,36 @@ def _detect_flavor(install_dir: Path) -> str:
 
 
 def _find_idat(install_dir: Path) -> Path | None:
-    for name in _ida_binary_names():
+    names = _ida_binary_names()
+    for name in names:
         candidate = install_dir / name
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return candidate
-    # Some macOS installs wrap the binary in Contents/MacOS
+    # Modern IDA 9.x layout with idabin subdirectory
+    idabin = install_dir / "idabin"
+    if idabin.is_dir():
+        for name in names:
+            candidate = idabin / name
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return candidate
+    # macOS installs wrapped in Contents/MacOS directly
     mac = install_dir / "Contents" / "MacOS"
     if mac.is_dir():
-        for name in _ida_binary_names():
+        for name in names:
             candidate = mac / name
             if candidate.is_file() and os.access(candidate, os.X_OK):
                 return candidate
+    # macOS installs with nested .app bundles (e.g. ida64.app/Contents/MacOS)
+    try:
+        for app in sorted(install_dir.glob("*.app")):
+            app_mac = app / "Contents" / "MacOS"
+            if app_mac.is_dir():
+                for name in names:
+                    candidate = app_mac / name
+                    if candidate.is_file() and os.access(candidate, os.X_OK):
+                        return candidate
+    except OSError:
+        pass
     return None
 
 
