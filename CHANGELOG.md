@@ -14,6 +14,12 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added cross-mode tests for context indexing, persistence, telemetry,
    housekeeping, enrichment failure handling, compaction, and singleton
    lifecycle behavior.
+ - Added analysis-helper coverage for raw-binary detection, mapped-range
+   fallbacks, executable-segment scoring, auto-analysis scheduling, and entry
+   point bootstrapping.
+ - Added session-action coverage for bulk lifecycle operations, skills,
+   analogies, hypotheses, activity, recent worksets, macros, and conditional
+   workflow steps.
  - Hardened installer state discovery, runtime lease identity checks, bounded
    metadata reads, enum compatibility, and constant-scan progress handling
    while keeping this PR focused on coverage and stability.
