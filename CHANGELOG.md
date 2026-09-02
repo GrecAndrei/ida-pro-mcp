@@ -16,6 +16,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added IDB metadata/state/register compatibility matrices and firmware
    shaping boundary coverage for raw ranges, load-base hypotheses, MMIO/RTOS
    scans, segment carving, audit tails, and degraded SDK modes.
+ - Added search metadata truncation/error coverage and FindCrypt extraction
+   safety tests for archive links, oversized or symlinked rules, destination
+   rollback, and cache discovery fallbacks.
 
 ## 2026-09-02 — Multi-agent configuration and skill system redesign
 
