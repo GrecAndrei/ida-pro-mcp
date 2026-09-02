@@ -72,6 +72,10 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added gadget-discovery boundary coverage for cross-architecture terminators,
    raw/head scan selection, write-where and stack-pivot shapes, pivot-chain
    fallbacks, and exploit-assessment modes.
+ - Added intelligence-core coverage for model/state discovery fallbacks,
+   conservative lease validation and retirement, Windows lock handling, GPU
+   startup selection, embedding-cache waiters, and classifier cache/report
+   behavior.
 
 - Expanded offline and opt-in live coverage across the public and legacy MCP
   surfaces, and stabilized batch-history and client-path tests.
