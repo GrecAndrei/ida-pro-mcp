@@ -52,6 +52,43 @@ def test_checkout_backed_codex_skill_link_is_reused(monkeypatch, tmp_path):
     assert any("checkout-backed skill link" in step["detail"] for step in report.steps)
 
 
+def test_generated_skill_link_is_reused_when_source_is_a_snapshot(monkeypatch, tmp_path):
+    snapshot = tmp_path / "snapshot"
+    skill_root = snapshot / ".agents" / "skills" / "ida-pro-mcp"
+    skill_root.mkdir(parents=True)
+    from ida_pro_mcp.host.agent_operations import (
+        render_agent_operations_markdown,
+        render_agent_skill_markdown,
+    )
+
+    (skill_root / "SKILL.md").write_text(render_agent_skill_markdown(), encoding="utf-8")
+    (skill_root / "references").mkdir()
+    (skill_root / "references" / "operations.md").write_text(
+        render_agent_operations_markdown(), encoding="utf-8"
+    )
+
+    codex_home = tmp_path / "codex"
+    destination = codex_home / "skills" / "ida-pro-mcp"
+    destination.parent.mkdir(parents=True)
+    checkout_skill = tmp_path / "checkout" / ".agents" / "skills" / "ida-pro-mcp"
+    checkout_skill.mkdir(parents=True)
+    (checkout_skill.parent.parent.parent / ".git").mkdir()
+    (checkout_skill / "SKILL.md").write_text("# Checkout skill\n", encoding="utf-8")
+    (checkout_skill / "references").mkdir()
+    (checkout_skill / "references" / "operations.md").write_text(
+        "# Checkout operations\n", encoding="utf-8"
+    )
+    destination.symlink_to(checkout_skill, target_is_directory=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    report = InstallReport()
+    install_codex_skills(snapshot, "agent", report, dry_run=False)
+
+    assert destination.is_symlink()
+    assert destination.resolve() == checkout_skill.resolve()
+    assert any("checkout-backed skill link" in step["detail"] for step in report.steps)
+
+
 def test_codex_skill_link_to_unrelated_directory_is_still_rejected(monkeypatch, tmp_path):
     source_root = tmp_path / "source"
     skill_root = source_root / ".agents" / "skills" / "ida-pro-mcp"
