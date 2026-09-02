@@ -4,6 +4,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
 
 ## 2026-09-02 — PR-work coverage checkpoint
 
+ - Added offline coverage for code-helper decompiler diagnostics, firmware
+   constant/string fallbacks, annotation comment recovery, and detector
+   metadata failure and limit paths.
  - Expanded deterministic offline coverage across the host/IDA bridge, public
    operation dispatch, response handling, type and analysis surfaces, gadget
    discovery, retrieval, and cross-mode test isolation. The corrected PR branch
