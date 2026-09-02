@@ -134,4 +134,8 @@ def test_alpha_release_requires_existing_alpha_tag_and_protected_publish():
     publish = wf["jobs"]["publish"]
     assert publish["if"] == "inputs.publish == true"
     assert publish["environment"]["name"] == "release"
-    assert publish["permissions"] == {"contents": "write", "id-token": "write"}
+    assert publish["permissions"] == {
+        "contents": "write",
+        "id-token": "write",
+        "attestations": "write",
+    }
