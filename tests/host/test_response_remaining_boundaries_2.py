@@ -387,3 +387,142 @@ def test_prepare_response_payload_surfaces_workspace_and_late_enrichment_failure
         call_args={"action": "find", "addr": "0x401000"},
     )
     assert result["ok"] is True
+
+
+def test_response_helpers_cover_non_dict_and_empty_branch_shapes(monkeypatch):
+    host = _PipelineHost()
+    assert host._pointer_note_signal_from_value({1: "0x401000"}) > 0
+    assert host._compute_pointer_note_signal("unrelated", {1: "plain"}, []) == 0
+    assert host._compute_pointer_note_signal("unrelated", [], []) == 0
+    assert host._compute_pointer_note_signal("unrelated", {"other": "plain"}, []) == 0
+    assert host._compute_pointer_note_signal(
+        "calc", {f"field_{i}": i for i in range(21)}, {}
+    ) >= 0
+    assert host._compute_pointer_note_signal(
+        "calc", {"_internal": "0x401000"}, {}
+    ) >= 0
+
+    host.current_session = SimpleNamespace(session_id="CURRENT")
+    host._resolve_session_from_idb_ref = None
+    assert host._resolve_response_session({"idb": "other"}) is host.current_session
+
+    class Store:
+        def observe_code(self, *_args, **_kwargs):
+            return {}
+
+    def get_store():
+        return Store()
+
+    host._get_blackboard_store = get_store
+    host._capture_code_anchor(
+        "code",
+        "decompile",
+        {},
+        {"pseudocode": "", "code": 123},
+    )
+
+    host.assembler = SimpleNamespace(assemble=lambda **_kwargs: {
+        "related_findings": [{"title": ""}, {"title": "already"}],
+    })
+    context = {"_recall": ["finding: already"]}
+    host._assemble_and_inject_context("search", "find", context, "0x401000", _opts())
+    assert "_context" not in context
+
+    assert host._build_llm_execution_directive(
+        {"required_followup_call": {"tool": "calc"}}
+    ).startswith("MCP_RECOMMENDED_CALL")
+    assert host._compute_pointer_note_signal("unrelated", {}, {"address": ""}) == 0
+
+
+def test_response_helpers_cover_rpc_misses_and_no_owner_truncation(monkeypatch):
+    host = _PipelineHost()
+    host.session_runtimes["rpc"] = {"port": 1001}
+    host._send_rpc_raw = lambda *_args, **_kwargs: {"ok": False}
+    assert host._get_session_imagebase("rpc") is None
+    assert host.session_runtimes["rpc"]["imagebase"] is None
+
+    monkeypatch.delattr(_PipelineHost, "_truncation_owner_id")
+    result = host._prepare_response_payload(
+        {"ok": True, "items": ["a", "b"]},
+        _opts(char_budget=20),
+        tool_name="search",
+        call_args={},
+    )
+    assert isinstance(result, dict)
+
+
+def test_response_pipeline_covers_empty_resume_digest_and_late_negative_results(monkeypatch):
+    host = _PipelineHost()
+    host.enable_response_enrichment = True
+    host._insight_index = SimpleNamespace(get_function=lambda _address: None)
+    monkeypatch.setattr(
+        enrichment_module,
+        "digest_decompiled",
+        lambda _text, schema_attrs=None: {},
+    )
+    result = host._prepare_response_payload(
+        {"ok": True, "code": 123, "confidence": 0.9},
+        _opts(mode="full"),
+        tool_name="code",
+        call_args={"action": "decompile", "addr": "0x401000"},
+    )
+    assert result["ok"] is True
+
+    host.current_session = SimpleNamespace(session_id="")
+    host.session_mgr = SimpleNamespace()
+    host._exec = lambda *_args, **_kwargs: {"ok": False}
+    result = host._prepare_response_payload(
+        {"ok": True, "value": "plain"},
+        _opts(mode="full"),
+        tool_name="search",
+        call_args={"action": "find", "addr": "0x401000"},
+    )
+    assert result["ok"] is True
+
+    host._capture_code_anchor = lambda *_args, **_kwargs: None
+    result = host._prepare_response_payload(
+        ["raw", "response"],
+        _opts(mode="full"),
+        tool_name="search",
+        call_args={},
+    )
+    assert result == ["raw", "response"]
+
+
+def test_response_pipeline_covers_no_pointer_note_and_empty_digest_or_resume(monkeypatch):
+    host = _PipelineHost()
+    host._pointer_note_min_signal = 100.0
+    result = host._prepare_response_payload(
+        {"ok": True, "confidence": 0.9},
+        _opts(mode="full"),
+        tool_name="unrelated",
+        call_args={},
+    )
+    assert "llm_address_lockstep_warnings" not in result
+
+    host = _PipelineHost()
+    host.enable_response_enrichment = True
+    host._insight_index = SimpleNamespace(get_function=lambda _address: None)
+    monkeypatch.setattr(
+        enrichment_module,
+        "digest_decompiled",
+        lambda _text, schema_attrs=None: {},
+    )
+    result = host._prepare_response_payload(
+        {"ok": True, "code": "int f(){}"},
+        _opts(mode="full"),
+        tool_name="code",
+        call_args={"action": "decompile", "addr": "0x401000"},
+    )
+    assert "_digest" not in result
+
+    host.current_session = SimpleNamespace(session_id="S")
+    host.session_mgr = SimpleNamespace()
+    monkeypatch.setattr(enrichment_module, "build_session_resume", lambda *_args, **_kwargs: None)
+    result = host._prepare_response_payload(
+        {"ok": True},
+        _opts(mode="full"),
+        tool_name="search",
+        call_args={},
+    )
+    assert "_session_resume" not in result

@@ -35,6 +35,8 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    failures, heartbeat transitions, shutdown faults, and registration errors.
  - Added response-pipeline coverage for bounded address collection, malformed
    output filters, session-scoped blackboard lookup, and enrichment fallbacks.
+ - Added server-state coverage for request properties, scoped insight-cache
+   eviction, persistence failures, and uninitialized gate registries.
  - Expanded bootstrap lifecycle coverage for mitigation, autopilot,
    calibration, disputes, reweighting, and persisted outcome paths.
  - Expanded code-helper coverage for dataflow, firmware signals, decompiler
