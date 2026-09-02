@@ -68,18 +68,16 @@ session, its own ownership, and teardown scoped to it alone.
 
 ### Flow
 
-> **Known gap.** The SSO actions run behind the legacy `session` tool/action
-> interface (`tools/call name="session" action=sso_activate|agent_login|agent_logout`).
-> The default agent surface advertises only the `ida_*` operations, and none of
-> them covers SSO, so this flow is **not reachable (or discoverable) through
-> `tools/list`**. `mint_agent_ticket` is a host-side Python helper in
-> `host/server/server_client_state.py` with no MCP operation behind it — an
-> external MCP client cannot mint tickets through the public interface; it must
-> construct them itself (computing the HMAC with the realm secret) or run
-> host-side code.
+The public `ida_sso_activate`, `ida_agent_login`, and `ida_agent_logout`
+operations are the discoverable entry points. The equivalent legacy
+`session(action=sso_activate|agent_login|agent_logout)` calls remain available
+for compatibility. `mint_agent_ticket` is intentionally still a host-side
+Python helper in `host/server/server_client_state.py`; an external MCP client
+must construct tickets itself (computing the HMAC with the realm secret) or run
+host-side code.
 
 1. **Orchestrator activates the realm** and assigns the agent names:
-   `session action=sso_activate agents=["rev_a","audit_b"]`. The realm is
+   `ida_sso_activate(agents=["rev_a","audit_b"])`. The realm is
    one-shot per server process; the secret comes from the `secret` argument,
    the `IDA_MCP_SSO_SECRET` env var, or is generated (and returned) once.
 2. **Orchestrator mints a ticket per agent** with that secret. Tickets are
@@ -88,14 +86,22 @@ session, its own ownership, and teardown scoped to it alone.
    nonce}` (the host's `mint_agent_ticket(secret, name, exp, scopes, nonce)`
    helper shows the exact construction). Give each subagent its ticket (env
    var / system prompt).
-3. **Subagent logs on** once: `session action=agent_login name=rev_a
-   ticket=<ticket>`. The server verifies signature, expiry, allowlist, and
+3. **Subagent logs on** once: `ida_agent_login(name=rev_a, ticket=<ticket>)`.
+   The server verifies signature, expiry, allowlist, and
    that the ticket name matches — then binds the identity to *this* connection.
 4. **Every session-scoped call carries its agent tag**:
-   `session action=status agent=rev_a`. The tag is validated against the
+   `ida_session_status(agent=rev_a)`. The tag is validated against the
    logged-in identity for the current connection and is never forwarded to IDA.
-5. **Teardown**: `session action=agent_logout name=rev_a` (or connection
+5. **Teardown**: `ida_agent_logout(name=rev_a)` (or connection
    close) releases **only** that agent's runtimes and leases.
+
+Ticket `scopes` are enforced capability filters. `all` permits every backend
+action; otherwise a scope can be a risk tier (`read`, `write_idb`,
+`destructive`, and the other values reported by policy), a backend tool such as
+`code`, or an exact pair such as `code:decompile`. Scopes do not replace the
+normal policy gate: a write still needs its normal `risk_ack` when policy
+requires it. `agent_logout` is always allowed so an agent can release its own
+resources even when its capability set is empty.
 
 ### What isolation means
 
@@ -118,6 +124,7 @@ session, its own ownership, and teardown scoped to it alone.
 | Expired ticket | `POLICY_DENIED` |
 | Logged in on a *different* connection | `POLICY_DENIED` |
 | `agent` tag on an un-logged-in name | `POLICY_DENIED` |
+| Agent ticket lacks the requested scope | `POLICY_DENIED` |
 
 ## Ownership forensics (who holds a session)
 

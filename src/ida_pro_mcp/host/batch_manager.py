@@ -340,6 +340,12 @@ class BatchManager:
                 for t in list(self._tasks.values()):
                     if t.state in ("done", "failed", "cancelled"):
                         d = t.to_dict()
+                        # ``to_dict`` is the public status shape and
+                        # intentionally omits request arguments. Persistence
+                        # still needs the original call so a later manager can
+                        # faithfully reconstruct task history (and any
+                        # resume/debug consumer can see what was submitted).
+                        d["args"] = t.args
                         r = d.get("result")
                         if r is not None:
                             try:
@@ -374,19 +380,42 @@ class BatchManager:
         try:
             with open(path) as f:
                 data = json.load(f)
+            if not isinstance(data, list):
+                return
             for d in data:
+                # A damaged or hand-edited record must not hide every valid
+                # task that follows it in the history file.
+                if not isinstance(d, dict):
+                    continue
+                task_id = d.get("task_id")
+                if not isinstance(task_id, str) or not task_id.strip():
+                    continue
+                args = d.get("args", {})
+                if not isinstance(args, dict):
+                    args = {}
+                state = d.get("state", "done")
+                if state in {"pending", "running"}:
+                    # No Future survives a process restart, so reporting an
+                    # orphaned task as still running would make it impossible
+                    # to cancel or recover honestly.
+                    state = "failed"
+                    error = d.get("error") or "Task interrupted by host restart."
+                elif state not in {"done", "failed", "cancelled"}:
+                    continue
+                else:
+                    error = d.get("error")
                 t = BatchTask(
-                    task_id=d.get("task_id", uuid.uuid4().hex[:12]),
+                    task_id=task_id,
                     session_id=d.get("session_id"),
                     action=d.get("action", "script"),
-                    args=d.get("args", {}),
+                    args=args,
                 )
-                t.state = d.get("state", "done")
+                t.state = state
                 t.created_at = d.get("created_at", time.time())
                 t.started_at = d.get("started_at")
                 t.finished_at = d.get("finished_at")
                 t.result = d.get("result")
-                t.error = d.get("error")
+                t.error = error
                 with self._lock:
                     self._tasks[t.task_id] = t
         except Exception:

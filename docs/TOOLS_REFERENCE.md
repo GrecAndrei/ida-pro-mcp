@@ -525,6 +525,113 @@ Example:
 }
 ```
 
+## `ida_sso_activate`
+
+Activate the one-shot agent SSO realm with an allowlist of agent names.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "agents": {
+      "type": "array",
+      "description": "Agent names that may log in on this server.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "secret": {
+      "type": "string",
+      "description": "Optional HMAC secret; otherwise the configured environment secret or a generated secret is used."
+    }
+  },
+  "required": [
+    "agents"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_sso_activate",
+  "arguments": {
+    "agents": [
+      "rev_a",
+      "audit_b"
+    ]
+  }
+}
+```
+
+## `ida_agent_login`
+
+Log an agent into the active SSO realm with a signed ticket.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Allowlisted agent name."
+    },
+    "ticket": {
+      "type": "string",
+      "description": "Signed name.payload.signature ticket minted for this agent."
+    }
+  },
+  "required": [
+    "name",
+    "ticket"
+  ],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_agent_login",
+  "arguments": {
+    "name": "rev_a",
+    "ticket": "rev_a.<payload>.<signature>"
+  }
+}
+```
+
+## `ida_agent_logout`
+
+Log an agent out and release only that agent's sessions.
+
+Input schema:
+```json
+{
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Agent name to log out; omit when the per-call agent tag identifies it."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
+```
+
+Example:
+```json
+{
+  "name": "ida_agent_logout",
+  "arguments": {
+    "name": "rev_a"
+  }
+}
+```
+
 ## `ida_session_switch`
 
 Switch the active session to another session by ID or binary path.

@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
-import time
 
 import pytest
 
@@ -61,7 +60,7 @@ class TestQualityClobberGuard:
                    (ea,name,dim,vec_blob,pseudo_hash,indexed_at,index_quality,
                     func_size,bb_count,api_count,string_count,segment,is_thunk,cyclomatic,has_loops)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                ("0x1000", "good_fn", 4, b"x" * 16, "phx", time.time(), "full",
+                ("0x1000", "good_fn", 4, b"x" * 16, "phx", 100.0, "full",
                  42, 5, 3, 2, ".text", 0, 7, 1),
             )
             conn.commit()
@@ -107,7 +106,22 @@ class TestIndexAsyncGate:
 
     def test_available_gate_runs_thread_and_releases(self, tmp_path):
         idx = _make_index(tmp_path)
-        idx._async_gate = threading.Semaphore(1)
+        released = threading.Event()
+
+        class _Gate:
+            _value = 1
+
+            def acquire(self, blocking=False):
+                if self._value <= 0:
+                    return False
+                self._value = 0
+                return True
+
+            def release(self):
+                self._value = 1
+                released.set()
+
+        idx._async_gate = _Gate()
         started = threading.Event()
         release = threading.Event()
         called = []
@@ -122,9 +136,7 @@ class TestIndexAsyncGate:
         assert started.wait(timeout=2.0)
         assert idx._async_gate._value == 0  # still held by the running thread
         release.set()
-        deadline = time.time() + 2.0
-        while idx._async_gate._value == 0 and time.time() < deadline:
-            time.sleep(0.01)
+        assert released.wait(timeout=2)
         assert idx._async_gate._value == 1  # released in the wrapper's finally
         assert called == ["0x3000"]
 

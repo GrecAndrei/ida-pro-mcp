@@ -19,6 +19,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 
 from ida_pro_mcp.host.server.server_session import ServerSessionMixin
@@ -389,14 +390,20 @@ class TestWaitForIdb(unittest.TestCase):
     def test_polls_until_idb_appears(self):
         idb_path = os.path.join(self.tmpdir, "test.i64")
         s = self.Session(session_id="W2", binary_path=self.test_binary, idb_path=idb_path)
+        poll_seen = threading.Event()
+
+        def runtime_alive(_runtime):
+            poll_seen.set()
+            return True
+
+        self.harness._runtime_alive = runtime_alive
+        self.harness.session_runtimes[s.session_id] = {"process": object()}
 
         def writer():
-            import time as _t
-            _t.sleep(0.5)
+            assert poll_seen.wait(timeout=2)
             with open(idb_path, "wb") as f:
                 f.write(b"IDB")
 
-        import threading
         t = threading.Thread(target=writer, daemon=True)
         t.start()
         self.assertTrue(self.harness._wait_for_idb(s, timeout=5.0))

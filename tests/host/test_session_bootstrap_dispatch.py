@@ -143,3 +143,84 @@ def test_bootstrap_scalar_coercers_reject_non_integral_values():
     assert _coerce_predicted01("1") == (1.0, None)
     assert _coerce_predicted01(-0.1)[0] is None
     assert _coerce_predicted01("not-a-number")[0] is None
+
+
+@pytest.mark.parametrize("action", [case[0] for case in _CASES])
+def test_every_bootstrap_action_returns_session_error_before_manager(action):
+    host = _Host()
+    host._require_session_sid = lambda _args: (None, {"error": True, "code": "SESSION_NOT_FOUND"})
+
+    result = host._handle_session_bootstrap(action, {})
+
+    assert result["code"] == "SESSION_NOT_FOUND"
+    assert host.session_mgr.calls == []
+
+
+@pytest.mark.parametrize(
+    "action,args",
+    [
+        ("bootstrap_init", {}),
+        ("bootstrap_run_tournament", {}),
+        ("bootstrap_ingest_outcome", {"predicted": 0.5, "observed": 1}),
+        ("bootstrap_open_dispute", {"claim_id": "c", "reason": "r", "predicted": 0.5}),
+        ("bootstrap_resolve_dispute", {"dispute_id": "d", "observed": 1}),
+        ("bootstrap_snapshot", {}),
+        ("bootstrap_simulate_batch", {}),
+        ("bootstrap_prune_data", {}),
+        ("bootstrap_update_baseline", {}),
+        ("bootstrap_apply_mitigation", {}),
+        ("bootstrap_policy_reweight", {}),
+        ("bootstrap_autopilot", {}),
+        ("bootstrap_set_autopilot_policy", {}),
+        ("bootstrap_rollback_last_reweight", {}),
+        ("bootstrap_record_readiness", {}),
+        ("bootstrap_finalize_report", {}),
+    ],
+)
+def test_bootstrap_mutating_actions_require_session_ownership(action, args):
+    host = _Host()
+    host.owned_error = {"error": True, "code": "FILE_LOCKED"}
+    result = host._handle_session_bootstrap(action, {"session_id": "abc12345", **args})
+
+    assert result == host.owned_error
+    assert host.session_mgr.calls == []
+
+
+def test_bootstrap_required_fields_and_empty_values_are_rejected():
+    host = _Host()
+    cases = [
+        ("bootstrap_compute_blend", {}),
+        ("bootstrap_ingest_outcome", {"observed": 1}),
+        ("bootstrap_ingest_outcome", {"predicted": 0.5}),
+        ("bootstrap_open_dispute", {"reason": "r", "predicted": 0.5}),
+        ("bootstrap_open_dispute", {"claim_id": "c", "predicted": 0.5}),
+        ("bootstrap_open_dispute", {"claim_id": "c", "reason": "r"}),
+        ("bootstrap_resolve_dispute", {"observed": 1}),
+        ("bootstrap_resolve_dispute", {"dispute_id": "d"}),
+    ]
+
+    for action, extra in cases:
+        result = host._handle_session_bootstrap(
+            action, {"session_id": "abc12345", **extra}
+        )
+        assert result["error"] is True, (action, extra, result)
+    assert host.session_mgr.calls == []
+
+
+def test_bootstrap_numeric_validation_rejects_bad_init_and_batch_values():
+    host = _Host()
+    cases = [
+        ("bootstrap_init", {"decay_lambda": "bad"}),
+        ("bootstrap_init", {"min_bootstrap_weight": "bad"}),
+        ("bootstrap_simulate_batch", {"positive_rate": "bad"}),
+        ("bootstrap_update_baseline", {"percentile": "bad"}),
+        ("bootstrap_policy_reweight", {"max_shift": "bad"}),
+        ("bootstrap_readiness_gate", {"max_ece": "bad"}),
+    ]
+
+    for action, extra in cases:
+        result = host._handle_session_bootstrap(
+            action, {"session_id": "abc12345", **extra}
+        )
+        assert result["error"] is True, (action, result)
+    assert host.session_mgr.calls == []

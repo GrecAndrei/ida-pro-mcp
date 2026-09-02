@@ -88,6 +88,18 @@ class _FakeClassifier:
         return self.hits
 
 
+class _InlineThread:
+    """Run a background callback synchronously for deterministic unit tests."""
+
+    def __init__(self, target, args=(), kwargs=None, **_options):
+        self._target = target
+        self._args = args
+        self._kwargs = kwargs or {}
+
+    def start(self):
+        self._target(*self._args, **self._kwargs)
+
+
 class _FakeBBStore:
     def __init__(self, addr_entries=None, by_addr=None, sem_entries=None):
         self._addr = addr_entries or []
@@ -122,11 +134,12 @@ class TestAssemble:
         )
         assert pack == {}
 
-    def test_full_decompile_pipeline_with_fakes(self, tmp_path):
+    def test_full_decompile_pipeline_with_fakes(self, tmp_path, monkeypatch):
         idb = str(tmp_path / "fake.idb")
         emb = _FakeEmbedder()
         cls = _FakeClassifier()
         obj = _make_assembler(embedder=emb, classifier=cls)
+        monkeypatch.setattr(context_mod.threading, "Thread", _InlineThread)
         bb = _FakeBBStore(
             addr_entries=[_entry("a1", "0x1000")],
             sem_entries=[_entry("s1", "0x9000", 0.7)],
@@ -157,35 +170,29 @@ class TestAssemble:
         assert "stuck" not in pack
         # The embedder and classifier were actually exercised.
         assert cls.calls
-        # The indexing side effect landed in the DB (async persist).
-        row = None
-        for _ in range(50):
-            with idx._conn() as conn:
-                row = conn.execute(
-                    "SELECT name, document_text FROM func_embeddings WHERE ea=?", ("0x1000",)
-                ).fetchone()
-            if row is not None:
-                break
-            time.sleep(0.02)
+        # The indexing side effect landed in the DB. The background callback
+        # is inline in this unit test, so no scheduler-dependent polling is
+        # needed.
+        with idx._conn() as conn:
+            row = conn.execute(
+                "SELECT name, document_text FROM func_embeddings WHERE ea=?", ("0x1000",)
+            ).fetchone()
         assert row is not None and row[0] == "sub_1000"
         assert row[1].startswith("void target(void)")
 
-    def test_request_persist_restamps_freshness_after_own_commit(self, tmp_path):
+    def test_request_persist_restamps_freshness_after_own_commit(self, tmp_path, monkeypatch):
         obj = _make_assembler(embedder=_FakeEmbedder())
+        monkeypatch.setattr(context_mod.threading, "Thread", _InlineThread)
         idx = obj._get_index(str(tmp_path / "fresh.idb"))
         assert obj._schedule_embedding_persist(
             idx, "0x1000", "target", [1.0, 0.0, 0.0, 0.0],
             "hash", "void target(void)", "sig-hash", "void target(void) { return; }",
         ) is True
 
-        for _ in range(50):
-            with idx._conn() as conn:
-                row = conn.execute(
-                    "SELECT document_text FROM func_embeddings WHERE ea=?", ("0x1000",)
-                ).fetchone()
-            if row is not None and not idx.db_changed_since_load():
-                break
-            time.sleep(0.02)
+        with idx._conn() as conn:
+            row = conn.execute(
+                "SELECT document_text FROM func_embeddings WHERE ea=?", ("0x1000",)
+            ).fetchone()
         assert row is not None
         assert idx.db_changed_since_load() is False
 

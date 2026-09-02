@@ -7,12 +7,14 @@ import math
 import os
 import sys
 import tempfile
-import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 from ida_pro_mcp.host.stores.blackboard_store import BlackboardStore
+
+_FAKE_NOW = 1_000_000_000.0
 
 
 class TestConfidenceDecay(unittest.TestCase):
@@ -36,10 +38,14 @@ class TestConfidenceDecay(unittest.TestCase):
         from contextlib import closing
         with closing(self.store._conn()) as conn:
             conn.execute("UPDATE blackboard SET updated_at=? WHERE id=?",
-                         (time.time() - 30 * 86400, eid))
+                         (_FAKE_NOW - 30 * 86400, eid))
             conn.commit()
         # Decay with 14-day half-life
-        updated = self.store.decay_stale_confidence(half_life_days=14.0)
+        with mock.patch(
+            "ida_pro_mcp.host.stores.blackboard_store.time.time",
+            return_value=_FAKE_NOW,
+        ):
+            updated = self.store.decay_stale_confidence(half_life_days=14.0)
         self.assertGreater(updated, 0)
         entry = self.store.read(eid)
         self.assertLess(entry["confidence"], 0.9)
@@ -49,7 +55,11 @@ class TestConfidenceDecay(unittest.TestCase):
     def test_decay_preserves_recent_entries(self):
         eid = self.store.write(title="recent entry", content="test", confidence=0.9)
         # Don't modify updated_at — it's recent
-        self.store.decay_stale_confidence(half_life_days=14.0)
+        with mock.patch(
+            "ida_pro_mcp.host.stores.blackboard_store.time.time",
+            return_value=_FAKE_NOW,
+        ):
+            self.store.decay_stale_confidence(half_life_days=14.0)
         # Should not decay entries less than 1 day old
         entry = self.store.read(eid)
         self.assertAlmostEqual(entry["confidence"], 0.9, places=1)
@@ -60,7 +70,7 @@ class TestConfidenceDecay(unittest.TestCase):
         from contextlib import closing
         with closing(self.store._conn()) as conn:
             conn.execute("UPDATE blackboard SET updated_at=? WHERE id=?",
-                         (time.time() - 60 * 86400, eid))
+                         (_FAKE_NOW - 60 * 86400, eid))
             conn.commit()
         self.store.decay_stale_confidence(half_life_days=14.0, min_confidence=0.1)
         entry = self.store.read(eid)
@@ -76,11 +86,15 @@ class TestConfidenceDecay(unittest.TestCase):
         import sqlite3
         from contextlib import closing
         with closing(self.store._conn()) as conn:
-            old_time = time.time() - 20 * 86400
+            old_time = _FAKE_NOW - 20 * 86400
             conn.execute("UPDATE blackboard SET updated_at=? WHERE id=?", (old_time, eid_normal))
             conn.execute("UPDATE blackboard SET updated_at=? WHERE id=?", (old_time, eid_calibrated))
             conn.commit()
-        self.store.decay_stale_confidence(half_life_days=14.0)
+        with mock.patch(
+            "ida_pro_mcp.host.stores.blackboard_store.time.time",
+            return_value=_FAKE_NOW,
+        ):
+            self.store.decay_stale_confidence(half_life_days=14.0)
         normal_entry = self.store.read(eid_normal)
         calibrated_entry = self.store.read(eid_calibrated)
         # Calibrated should have higher confidence (decays slower)

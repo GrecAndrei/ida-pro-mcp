@@ -137,9 +137,9 @@ class TestNewOperationRegistration(unittest.TestCase):
         cls.actions = tool_actions()
         cls.all_ops = {operation.name: operation for operation in list_agent_operations()}
 
-    def test_operation_count_grew_to_104(self):
+    def test_operation_count_grew_to_107(self):
         names = [operation.name for operation in list_agent_operations()]
-        self.assertEqual(len(names), 104, "registration wave must add 37 ops on top of 67")
+        self.assertEqual(len(names), 107, "registration wave must add 40 ops on top of 67")
         for name in NEW_OPERATION_NAMES:
             self.assertIn(name, names)
 

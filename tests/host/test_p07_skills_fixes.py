@@ -110,6 +110,66 @@ def test_rate_skill_tolerates_missing_counters_negative_reward(tmp_path):
     assert stored.get("failure_count") == 1
 
 
+def test_load_skills_normalizes_valid_but_malformed_json(tmp_path):
+    mgr, _ = _make_manager(tmp_path)
+    _write_skills(
+        mgr,
+        {
+            "skills": {
+                "good": {
+                    "q_value": "nan",
+                    "description": 123,
+                    "tags": "firmware",
+                    "success_count": "bad",
+                },
+                "discarded": ["not a skill"],
+            },
+            "q_table": {"good": "inf", "other": "0.8"},
+            "activity_log": [{"action": "find"}, "not an entry"],
+            "hypotheses": "not a list",
+            "bootstrap": {
+                "disputes": "not a list",
+                "readiness_history": [{"readiness": False}, "not a row"],
+                "policies": {"broken": "not a policy"},
+                "tournament_runs": "bad",
+            },
+        },
+    )
+
+    state = mgr._load_skills("SID_TEST")
+    assert set(state["skills"]) == {"good"}
+    assert state["skills"]["good"]["q_value"] == 0.5
+    assert state["skills"]["good"]["description"] == "123"
+    assert state["skills"]["good"]["tags"] == ["firmware"]
+    assert state["skills"]["good"]["success_count"] == 0
+    assert state["q_table"] == {"good": 0.5, "other": 0.8}
+    assert state["activity_log"] == [{"action": "find"}]
+    assert state["hypotheses"] == []
+    assert state["bootstrap"]["disputes"] == []
+    assert state["bootstrap"]["readiness_history"] == [{"readiness": False}]
+    assert state["bootstrap"]["policies"] == {}
+    assert state["bootstrap"]["tournament_runs"] == 0
+    trend = mgr.bootstrap_readiness_trend("SID_TEST")
+    assert trend["enough_data"] is False
+
+
+def test_load_skills_rejects_non_object_root(tmp_path):
+    mgr, _ = _make_manager(tmp_path)
+    _write_skills(mgr, ["valid json, wrong root type"])
+    assert mgr._load_skills("SID_TEST") == {
+        "skills": {}, "q_table": {}, "activity_log": [], "hypotheses": [],
+    }
+
+
+def test_load_skills_recovers_from_invalid_utf8(tmp_path):
+    mgr, _ = _make_manager(tmp_path)
+    with open(mgr._get_skills_path("SID_TEST"), "wb") as handle:
+        handle.write(b"\xff")
+    assert mgr._load_skills("SID_TEST") == {
+        "skills": {}, "q_table": {}, "activity_log": [], "hypotheses": [],
+    }
+
+
 # ---------------------------------------------------------------------------
 # F4: _detect_dead_end reduces JSON result blobs to scalar identities
 # ---------------------------------------------------------------------------

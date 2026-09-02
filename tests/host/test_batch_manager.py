@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
 import threading
-import time
+import uuid
 
 import pytest
 
+import ida_pro_mcp.host.batch_manager as batch_manager_module
 from ida_pro_mcp.services import BatchManager, BatchTask
 
 
@@ -57,10 +59,7 @@ def test_cancel():
 
     def _slow(task):
         ready.set()
-        for _ in range(100):
-            if task._cancel_event.is_set():
-                return
-            time.sleep(0.01)
+        task._cancel_event.wait()
 
     task_id = mgr.submit("script", {}, run_fn=_slow)
     assert ready.wait(timeout=5), "worker never started"
@@ -110,3 +109,63 @@ def test_wait_timeout():
     result = mgr.wait(task_id, timeout=0.1)
     assert result["state"] == "running"
     mgr.cancel(task_id)
+
+
+def test_persisted_task_keeps_submission_args(tmp_path, monkeypatch):
+    """Reloaded task history must retain the request that created the task.
+
+    The public status response does not expose args, but the on-disk task
+    record does. Losing them makes persisted background work impossible to
+    audit or resume accurately after a restart.
+    """
+    monkeypatch.setenv("IDA_MCP_BATCH_STATE_DIR", str(tmp_path))
+    mgr = BatchManager(max_workers=1)
+    task_id = mgr.submit(
+        "tool_call",
+        {"tool_call": {"tool": "calc", "args": {"action": "eval", "expr": "2+2"}}},
+    )
+    mgr.wait(task_id, timeout=5)
+    mgr.shutdown()
+
+    state_files = list(tmp_path.glob("tasks-*.json"))
+    assert len(state_files) == 1
+    state_path = state_files[0]
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    assert persisted[0]["args"] == {
+        "tool_call": {"tool": "calc", "args": {"action": "eval", "expr": "2+2"}}
+    }
+
+
+def test_persisted_loader_skips_bad_records_and_recovers_inflight_tasks(
+    tmp_path, monkeypatch
+):
+    """One malformed record must not hide valid history or fake liveness."""
+    monkeypatch.setenv("IDA_MCP_BATCH_STATE_DIR", str(tmp_path))
+    fixed_uuid = uuid.UUID("1234567890abcdef1234567890abcdef")
+    monkeypatch.setattr(batch_manager_module.uuid, "uuid4", lambda: fixed_uuid)
+    (tmp_path / "tasks-1234567890ab.json").write_text(
+        json.dumps(
+            [
+                {"task_id": "first", "state": "done", "args": {"n": 1}},
+                "damaged-record",
+                {
+                    "task_id": "interrupted",
+                    "state": "running",
+                    "args": {"n": 2},
+                },
+                {"task_id": "last", "state": "cancelled", "args": {"n": 3}},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    mgr = BatchManager(max_workers=1)
+    try:
+        tasks = {task["task_id"]: task for task in mgr.status()}
+        assert set(tasks) == {"first", "interrupted", "last"}
+        assert tasks["first"]["state"] == "done"
+        assert tasks["last"]["state"] == "cancelled"
+        assert tasks["interrupted"]["state"] == "failed"
+        assert "restart" in tasks["interrupted"]["error"]
+    finally:
+        mgr.shutdown()

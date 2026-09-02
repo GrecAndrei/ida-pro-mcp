@@ -88,6 +88,18 @@ class _Harness(ServerArgsMixin, ServerDispatchMixin):
         return "assist"
 
 
+class _ScopedHarness(_Harness):
+    """Small harness with the same scope signals as a live connection."""
+
+    def __init__(self, owner_id="connection-a", session_id="session-a"):
+        super().__init__()
+        self._scope_owner_id = owner_id
+        self.current_session.session_id = session_id
+
+    def _truncation_owner_id(self):
+        return self._scope_owner_id
+
+
 # ---------------------------------------------------------------------------
 # Blackboard / background policy preflight (no longer exempted)
 # ---------------------------------------------------------------------------
@@ -183,6 +195,19 @@ def test_next_cache_lock_is_shared_between_dispatch_and_args_mixins():
     assert entry is not None
 
 
+def test_next_cache_prunes_malformed_rows_without_breaking_dispatch():
+    h = _Harness()
+    h._next_cache = {
+        "not-a-row": object(),
+        "bad-time": {"created_at": "not-a-number"},
+        "good": {"created_at": time.time()},
+    }
+
+    h._prune_next_cache()
+
+    assert set(h._next_cache) == {"good"}
+
+
 # ---------------------------------------------------------------------------
 # _cache_next_page: no token clobber, no null-offset collapse
 # ---------------------------------------------------------------------------
@@ -224,6 +249,41 @@ def test_cache_next_page_mints_and_recovers_action():
     assert entry["tool"] == "search"
     assert entry["action"] == "find"
     assert entry["next_offset"] == 3
+
+
+def test_next_token_is_bound_to_connection_and_session():
+    h = _ScopedHarness()
+    result = {
+        "ok": True,
+        "truncated": True,
+        "offset": 0,
+        "count": 3,
+        "total": 9,
+    }
+    out = h._cache_next_page("search", {"action": "find"}, result)
+    token = out["next_token"]
+    assert h._next_cache[token]["owner_id"] == "connection-a"
+    assert h._next_cache[token]["session_id"] == "session-a"
+
+    h._scope_owner_id = "connection-b"
+    denied = h._handle_next_continuation("search", token, {})
+    assert denied.get("code") == MCPError.TRUNCATION_TOKEN_INVALID
+
+
+def test_next_token_is_bound_to_target_session():
+    h = _ScopedHarness()
+    result = {
+        "ok": True,
+        "_count": 3,
+        "_total": 9,
+        "_post_processed": True,
+    }
+    h._cache_post_process_next("search", {"action": "find"}, {"limit": 3}, result)
+    token = result["next_token"]
+
+    h.current_session.session_id = "session-b"
+    denied = h._handle_next_continuation("search", token, {})
+    assert denied.get("code") == MCPError.TRUNCATION_TOKEN_INVALID
 
 
 # ---------------------------------------------------------------------------

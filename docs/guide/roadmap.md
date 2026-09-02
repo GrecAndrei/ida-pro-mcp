@@ -19,7 +19,7 @@ surface or documentation source.
 
 The default agent surface (`tool_surface == "agent"`) advertises every `ida_*`
 operation from the catalog in `tools/list` — the full
-`list_agent_operations()` catalog (104 operations; the count is pinned by
+`list_agent_operations()` catalog (107 operations; the count is pinned by
 `tests/test_docs_sync.py` / `tests/host/test_swarm_p14_stale_docs.py`). There is
 no hidden default subset:
 what a fresh agent sees is the full catalog.

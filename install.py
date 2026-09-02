@@ -21,7 +21,6 @@ def _bootstrap_import_path() -> None:
 _bootstrap_import_path()
 
 from ida_pro_mcp.installer.clients import (  # noqa: E402
-    LEGACY_SERVER_NAMES,
     get_config_paths,
     update_json_config as _update_json_config,
     update_opencode_config as _update_opencode_config,
@@ -57,8 +56,18 @@ _VERTEX_COMPAT_CLIENTS: frozenset[str] = frozenset({
 })
 
 
+def _absolute_install_path(path: Path | str) -> Path:
+    """Expand a compatibility API install path without requiring existence."""
+    return Path(
+        os.path.abspath(
+            os.path.expandvars(os.path.expanduser(os.fspath(path)))
+        )
+    )
+
+
 def _resolve_venv_python(install_root: Path) -> Path:
     """Return the Python executable path inside a project venv."""
+    install_root = _absolute_install_path(install_root)
     return install_root / ".venv" / (
         "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
     )
@@ -72,7 +81,13 @@ def get_mcp_config_paths() -> dict[str, Path]:
     """
     cfg = get_config_paths(_SOURCE_ROOT)
     home = Path.home()
-    xdg = Path(os.environ.get("XDG_CONFIG_HOME", str(home / ".config")))
+    xdg = Path(
+        os.path.expandvars(
+            os.path.expanduser(
+                os.environ.get("XDG_CONFIG_HOME", "").strip() or str(home / ".config")
+            )
+        )
+    )
     # Copilot always lives under ~/.copilot regardless of XDG.
     cfg["Copilot CLI"] = home / ".copilot" / "mcp-config.json"
     cfg["OpenCode"] = xdg / "opencode" / "opencode.json"
@@ -91,8 +106,12 @@ def get_mcp_server_config(
     enabled when *global_vertex_compat* is set or *client_name* is in the
     known vertex-compat set.
     """
+    install_path = _absolute_install_path(install_path)
     python_exe = _resolve_venv_python(install_path)
-    cfg = build_stdio_config(python_exe, install_path)
+    # This compatibility API is the legacy local-backend surface. Explicitly
+    # select local mode so an old caller cannot inherit backend=gemini from a
+    # newer state file without asking for the cloud backend.
+    cfg = build_stdio_config(python_exe, install_path, embed_backend="local")
     if global_vertex_compat or client_name in _VERTEX_COMPAT_CLIENTS:
         cfg.setdefault("env", {})["IDA_MCP_VERTEX_COMPAT"] = "1"
     return cfg
@@ -154,12 +173,21 @@ def _write_antigravity_plugin(
     """Write Antigravity CLI plugin.json if missing, then delegate to JSON updater."""
     try:
         plugin_json = config_path.parent / "plugin.json"
+        from ida_pro_mcp.installer.common import atomic_write_text, reject_symlink_path
+
+        reject_symlink_path(plugin_json, "Antigravity plugin path")
         plugin_json.parent.mkdir(parents=True, exist_ok=True)
+        created_plugin = False
         if not plugin_json.exists():
-            plugin_json.write_text(
+            atomic_write_text(
+                plugin_json,
                 json.dumps({"name": server_name}, indent=2), encoding="utf-8"
             )
-        return _delegate_json_config(config_path, server_name, server_cfg, InstallReport())
+            created_plugin = True
+        ok = _delegate_json_config(config_path, server_name, server_cfg, InstallReport())
+        if not ok and created_plugin:
+            plugin_json.unlink()
+        return ok
     except Exception:
         _log.exception("Antigravity plugin config failed")
         return False
@@ -170,33 +198,19 @@ def _update_copilot_config(
     server_name: str,
     server_cfg: dict[str, Any],
 ) -> bool:
-    """Write Copilot CLI config in its legacy format."""
+    """Write Copilot CLI config in its legacy format through the safe updater."""
     try:
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        if config_path.exists():
-            try:
-                config = json.loads(config_path.read_text(encoding="utf-8"))
-            except Exception:
-                config = {}
-        else:
-            config = {}
-        config.pop("servers", None)
-        mcp_servers = config.setdefault("mcpServers", {})
-        for legacy in list(mcp_servers.keys()):
-            if legacy != server_name and (
-                legacy in LEGACY_SERVER_NAMES
-                or "ida-pro-mcp" in str(mcp_servers.get(legacy, {})).lower()
-            ):
-                mcp_servers.pop(legacy, None)
-        mcp_servers[server_name] = {
-            "type": "local",
-            "command": server_cfg["command"],
-            "args": server_cfg.get("args", []),
-            "env": server_cfg.get("env", {}),
-            "tools": ["*"],
-        }
-        config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
-        return True
+        legacy_cfg = dict(server_cfg)
+        legacy_cfg["tools"] = ["*"]
+        return _update_json_config(
+            path=config_path,
+            server_name=server_name,
+            server_cfg=legacy_cfg,
+            report=InstallReport(),
+            dry_run=False,
+            top_level_key="mcpServers",
+            server_type="local",
+        )
     except Exception:
         _log.exception("Copilot CLI config update failed")
         return False

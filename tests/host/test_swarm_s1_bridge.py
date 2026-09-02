@@ -38,7 +38,6 @@ import json
 import socket
 import sys
 import threading
-import time
 import types
 from pathlib import Path
 
@@ -172,9 +171,7 @@ def _running_bridge(mod, tmp_path, monkeypatch):
 
     drainer = threading.Thread(target=_drain_loop, name="s1-test-main", daemon=True)
     drainer.start()
-    deadline = time.monotonic() + 10.0
-    while not port_file.exists() and time.monotonic() < deadline:
-        time.sleep(0.02)
+    assert mod._SERVER_READY.wait(timeout=10.0), "run_server never became ready"
     assert port_file.exists(), "run_server never published the port file"
     port = int(port_file.read_text(encoding="ascii").strip())
     assert port == mod._BOUND_PORT, "reported port must match the bound port"
@@ -277,6 +274,21 @@ def test_dispatch_executes_on_drainer_thread(bridge):
         or {"ok": True, "action": action}
     }
     result_box = {}
+    queued = threading.Event()
+    real_queue = bridge._TOOL_QUEUE
+
+    class _QueueProxy:
+        def put(self, item):
+            real_queue.put(item)
+            queued.set()
+
+        def get_nowait(self):
+            return real_queue.get_nowait()
+
+        def empty(self):
+            return real_queue.empty()
+
+    bridge._TOOL_QUEUE = _QueueProxy()
 
     def _caller():
         result_box["res"] = bridge._dispatch_on_main_thread(
@@ -285,10 +297,7 @@ def test_dispatch_executes_on_drainer_thread(bridge):
 
     t = threading.Thread(target=_caller, name="rpc-caller", daemon=True)
     t.start()
-    deadline = time.monotonic() + 5.0
-    while bridge._TOOL_QUEUE.empty() and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert not bridge._TOOL_QUEUE.empty(), "caller never enqueued the request"
+    assert queued.wait(timeout=2), "caller never enqueued the request"
     bridge._drain_tool_queue()
     t.join(timeout=5)
     assert not t.is_alive(), "caller must be unblocked once the main thread drains"

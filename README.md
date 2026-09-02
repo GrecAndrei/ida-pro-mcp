@@ -3,7 +3,7 @@
 Give an LLM agent a working seat at IDA Pro.
 
 This is an [MCP](https://modelcontextprotocol.io) server that exposes IDA Pro's
-analysis to a model as 104 exact-schema operations — decompile, cross-reference,
+analysis to a model as 107 exact-schema operations — decompile, cross-reference,
 search, rename, annotate — plus an investigation workspace so the model's
 conclusions survive across turns instead of living in a context window.
 
@@ -184,7 +184,7 @@ ida_open_binary → ida_session_state → ida_overview → ida_find
 
 | Group | Operations |
 |---|---|
-| **Session** | `open_binary`, `open_background`, `close_session`, `session_get`, `session_list`, `session_switch`, `session_state`, `session_status`, `session_health` |
+| **Session** | `open_binary`, `open_background`, `close_session`, `session_get`, `session_list`, `sso_activate`, `agent_login`, `agent_logout`, `session_switch`, `session_state`, `session_status`, `session_health` |
 | **Discovery** | `overview`, `find`, `list_functions`, `list_imports`, `list_strings`, `semantic_search`, `index_functions`, `index_status`, `cancel_index`, `reranker_status`, `function_families`, `auto_wait`, `events`, `registers`, `search_data_value`, `search_query_lang`, `r2_status`, `r2_bininfo`, `r2_load_hints`, `r2_disassemble_hypothesis`, `r2_vxrefs`, `fw_detect_vector_table`, `fw_detect_load_base`, `fw_detect_mmio`, `fw_rtos_scan`, `fw_carve` |
 | **Code** | `decompile`, `disassemble`, `xrefs_to`, `callers`, `callees`, `read_bytes`, `callgraph`, `emulate` |
 | **Findings** | `write_finding`, `mark_examined`, `update_finding`, `list_findings`, `search_findings`, `next_target`, `analysis_brief`, `export_findings` |
@@ -304,6 +304,16 @@ SHA-256 digests. The llama-server installer selects a compatible GitHub
 release asset only when GitHub supplies its digest; an older release without
 one is refused. `--allow-unverified-downloads` is available only as an
 explicit, unsafe compatibility escape hatch.
+
+The optional threat corpus is not downloaded by a normal install. Opt in with
+`python install.py --with-corpus`; it uses a moving set of upstream sources.
+Normal corpus-enabled installs record each downloaded source checksum and reject
+unexpected changes when reusing the cache. For strict first-download verification, provide one
+`IDA_MCP_BRON_CORPUS_SHA256_<SOURCE>` variable per source and run
+`python install.py --verify-corpus` (which also enables the corpus), or set
+`IDA_MCP_BRON_CORPUS_VERIFY=1`.
+The source keys are `CWE`, `ATTACK_ENTERPRISE`, `ATTACK_ICS`, `ATTACK_MOBILE`,
+`SIGNATURE_BASE`, and `FINDCRYPT`.
 
 The embed model starts only for explicit indexing, semantic search, or anchor
 refresh; the reranker starts only for the rerank stage of semantic search.
@@ -443,8 +453,8 @@ Portions of `ida_mcp/utils.py` and the vendored `ida_mcp/zeromcp` package come f
 also where the idea of driving IDA over MCP came from. `zeromcp` keeps its own
 LICENSE alongside the sources.
 
-FindCrypt signatures and the threat corpus are fetched from their upstream projects
-by the installer.
+When enabled, FindCrypt signatures and the threat corpus are fetched from their
+upstream projects by the installer.
 
 ## License
 

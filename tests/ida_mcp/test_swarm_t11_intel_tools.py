@@ -32,7 +32,6 @@ import ida_pro_mcp.services  # noqa: E402
 
 # Load the tool modules once at collection time so they survive the per-test
 # sys.modules restore.
-install_common_stub()
 _INTELLIGENCE = load_tool_module("intelligence")
 _BLACKBOARD = load_tool_module("blackboard")
 

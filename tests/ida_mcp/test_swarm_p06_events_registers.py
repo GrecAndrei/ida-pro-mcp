@@ -16,6 +16,7 @@ standalone with _FakeIda-style fakes — no live IDA, no MCP server:
   riscv exposes a ``csr`` register class so an LLM can reason about
   ecall/mret/CSR handlers without hallucinating register names.
 """
+import builtins
 import inspect
 import os
 import sys
@@ -196,6 +197,9 @@ def test_install_hooks_idempotent_and_unhook():
     assert inst1 is not None
     assert inst1.hooked is True
     assert events.install_hooks() is inst1  # idempotent
+    sys.modules["idc"].get_func_name = lambda _ea: "created_func"
+    inst1.auto_empty_finally()
+    inst1.func_created(0x401000)
     events.unhook_hooks()
     assert inst1.hooked is False
     # Re-install after unhook yields a fresh, hooked instance.
@@ -208,6 +212,30 @@ def test_install_hooks_idempotent_and_unhook():
 def test_install_hooks_guarded_outside_ida():
     events = _load_events_standalone()  # no ida_idp -> no hook wiring
     assert events.install_hooks() is None
+
+
+def test_events_function_name_fallback_and_hook_cleanup_failures(monkeypatch):
+    events = _load_events_standalone()
+    idc = sys.modules["idc"]
+    idaapi = types.ModuleType("idaapi")
+    idaapi.get_func_name = lambda _ea: "idaapi_name"
+    monkeypatch.setitem(sys.modules, "idaapi", idaapi)
+    monkeypatch.setattr(idc, "get_func_name", lambda _ea: "", raising=False)
+    assert events._func_name(0x401000) == "idaapi_name"
+
+    class _BadHooks:
+        def hook(self):
+            raise RuntimeError("hook failed")
+
+        def unhook(self):
+            raise RuntimeError("unhook failed")
+
+    events._IDB_HOOKS_BASE = _BadHooks
+    events.EventHooks = _BadHooks
+    events._INSTALLED_HOOKS = None
+    assert events.install_hooks() is None
+    events._INSTALLED_HOOKS = _BadHooks()
+    events.unhook_hooks()
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +292,37 @@ def test_sse_emit_no_server_is_record_only():
     # Record-only when no SSE server/connections are reachable; no crash.
     assert len(events.EVENT_RING) == 1
     assert events.EVENT_RING[0]["type"] == "function_created"
+
+
+def test_events_defensive_address_resolution_and_sse_connection_failures(monkeypatch):
+    events = _load_events_standalone()
+    assert events._fmt_addr(None) == ""
+    assert events._fmt_addr(-1) == ""
+    assert events._fmt_addr("not-an-address") == ""
+
+    real_import = builtins.__import__
+
+    def blocked_event_import(name, *args, **kwargs):
+        if name in {"ida_pro_mcp.ida_mcp.rpc", "ida_mcp.rpc", "rpc"}:
+            raise ImportError("rpc unavailable")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked_event_import)
+    assert events._resolve_mcp_server() is None
+    events._invalidate_tool_cache()
+
+    monkeypatch.undo()
+    rpc_stub = types.ModuleType("ida_pro_mcp.ida_mcp.rpc")
+
+    class _DeadConnection:
+        def send_event(self, *_args):
+            raise RuntimeError("socket closed")
+
+    rpc_stub.MCP_SERVER = types.SimpleNamespace(_sse_connections=[_DeadConnection()])
+    monkeypatch.setitem(sys.modules, "ida_pro_mcp.ida_mcp.rpc", rpc_stub)
+    events._sse_emit({"type": "test"})
+    rpc_stub.MCP_SERVER = types.SimpleNamespace(_sse_connections={"dead": _DeadConnection()})
+    events._sse_emit({"type": "test"})
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +428,69 @@ def test_idb_registers_unavailable_without_ida_idp():
     res = mod.idb(action="registers")
     assert res["ok"] is False
     assert res["code"] == "IDA_ERROR"
+
+
+def test_idb_registers_synthesizes_sparse_processor_table(monkeypatch):
+    """IDA 9.x may expose names only through get_reg_name()."""
+    ph = _make_ph([], first_ireg=0, last_ireg=1)
+    mod = _load_idb(ph, proc_name="riscv")
+    ida_idp = sys.modules["ida_idp"]
+    names = {(0, 8): "x0", (1, 8): "x1", (2, 8): "pc"}
+    monkeypatch.setattr(ida_idp, "get_reg_name", lambda reg, width: names.get((reg, width)), raising=False)
+    monkeypatch.setattr(ida_idp, "ph_get_reg_first_sreg", lambda: 2, raising=False)
+    monkeypatch.setattr(ida_idp, "ph_get_reg_last_sreg", lambda: 2, raising=False)
+    result = mod.idb(action="registers")
+    assert result["ok"] is True, result
+    classes = {item["reg_class"]: item["registers"] for item in result["classes"]}
+    assert classes["gpr"] == ["x0"]
+    assert classes["segment"] == ["pc"]
+    assert classes["other"] == ["x1"]
+    assert classes["segment"] == ["pc"]
+    assert "mstatus" in classes["csr"]
+
+
+def test_idb_state_composes_active_audit_raw_blob_and_debugger_modes(monkeypatch, tmp_path):
+    mod = _load_idb(_make_ph(_X86_REGS, first_ireg=0, last_ireg=15), proc_name="metapc")
+    idb_path = tmp_path / "state.i64"
+    input_path = tmp_path / "opaque.bin"
+    idb_path.write_bytes(b"idb")
+    input_path.write_bytes(b"opaque binary")
+    audit_day = tmp_path / "audit" / "2026-09"
+    audit_day.mkdir(parents=True)
+    (audit_day / "audit_2026-09-01.jsonl").write_text(
+        '{"ts":"now","tool":"idb","action":"state","latency_ms":2}\n'
+        "not-json\n"
+        "[1]\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("IDA_MCP_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(mod.idaapi, "get_idb_path", lambda: str(idb_path), raising=False)
+    monkeypatch.setattr(mod.idaapi, "get_input_file_path", lambda: str(input_path), raising=False)
+    monkeypatch.setattr(mod.idaapi, "auto_state", lambda: 4, raising=False)
+    monkeypatch.setattr(mod.idaapi, "get_auto_display", lambda: "Analyzing", raising=False)
+    monkeypatch.setattr(mod.idaapi, "auto_is_ok", lambda: False, raising=False)
+    monkeypatch.setattr(mod.idaapi, "get_func_qty", lambda: 0, raising=False)
+    monkeypatch.setattr(mod.idaapi, "get_strlist_qty", lambda: 0, raising=False)
+    monkeypatch.setattr(mod.idaapi, "is_debugger_on", lambda: True, raising=False)
+    monkeypatch.setattr(mod.idaapi, "get_process_state", lambda: 2, raising=False)
+    monkeypatch.setattr(mod.ida_nalt, "get_import_module_qty", lambda: 0, raising=False)
+    monkeypatch.setattr(mod.ida_entry, "get_entry_qty", lambda: 0, raising=False)
+    monkeypatch.setattr(mod.ida_kernwin, "get_cursor_ea", lambda: 0x401000, raising=False)
+    state = mod.idb_state(audit_tail=5)
+    assert state["ok"] is True
+    assert state["analysis"] == {
+        "state": "FINAL_IDB", "state_id": 4, "display": "Analyzing",
+        "is_ok": False, "active": True,
+    }
+    assert state["database"]["input_size"] == len(b"opaque binary")
+    assert state["inventory"]["functions_qty"] == 0
+    assert state["ui"]["cursor_ea"] == "0x401000"
+    assert state["debugger"] == {"active": True, "process_state": "PROCESS_RUNNING"}
+    assert len(state["audit_tail"]) == 1
+    assert state["audit_tail"][0]["ok"] is True
+    assert state["indicators"]["raw_blob"] is True
+    assert state["indicators"]["arch_unverified"] is True
+    assert state["indicators"]["needs_packer_check"] is True
 
 
 # ---------------------------------------------------------------------------

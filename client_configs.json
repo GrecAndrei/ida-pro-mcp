@@ -28,7 +28,7 @@
     "Copilot CLI": {
       "paths": ["{xdg_config}/copilot/mcp-config.json", "{home}/.copilot/mcp-config.json"],
       "pick_existing": true,
-      "env_fallback": "XDG_CONFIG_HOME"
+      "json": {"top_level_key": "servers", "type": "stdio"}
     },
     "OpenCode": {
       "paths": ["{xdg_config}/opencode/opencode.json"],
@@ -54,7 +54,8 @@
         "windows": "{appdata}/Code/User/globalStorage/github.copilot/mcp.json",
         "unix": "{xdg_config}/Code/User/globalStorage/github.copilot/mcp.json"
       },
-      "pick_existing": false
+      "pick_existing": false,
+      "json": {"top_level_key": "servers", "type": "stdio"}
     },
     "Windsurf": {
       "paths": ["{home}/.windsurf/mcp_config.json"],

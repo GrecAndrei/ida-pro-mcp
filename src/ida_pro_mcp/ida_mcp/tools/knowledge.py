@@ -13,14 +13,25 @@ from ._common import (
     make_error,
     tool
 )
-
-try:
-    from ida_pro_mcp.services import SymbolDB
-except ImportError:
-    from host.stores.symbol_db import SymbolDB  # type: ignore[import-not-found]
-
 from .. import compat as _compat
 
+# Resolve the host-side store lazily.  The IDA-side plugin is also loaded in
+# stripped-down IDA runtimes and fake-IDB harnesses where importing the full
+# host service facade at module import time is unnecessary (and can leave
+# host/IDA module state behind before the caller has established its session).
+SymbolDB = None
+
+
+def _symbol_db_class():
+    global SymbolDB
+    if SymbolDB is not None:
+        return SymbolDB
+    try:
+        from ida_pro_mcp.services import SymbolDB as symbol_db
+    except ImportError:
+        from host.stores.symbol_db import SymbolDB as symbol_db  # type: ignore[import-not-found]
+    SymbolDB = symbol_db
+    return symbol_db
 
 def _collect_string_refs(func_ea: int, limit: int = 24) -> List[str]:
     out: List[str] = []
@@ -77,7 +88,7 @@ def knowledge(
     **kwargs,
 ) -> dict:
     try:
-        sdb = SymbolDB(db_path)
+        sdb = _symbol_db_class()(db_path)
 
         if action == "symbol_lookup":
             if not query:

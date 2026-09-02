@@ -19,7 +19,7 @@ import zipfile
 from pathlib import Path, PureWindowsPath
 from urllib.parse import quote, urlsplit
 
-from .common import InstallReport, SigsManifest, atomic_write_text
+from .common import InstallReport, SigsManifest, atomic_write_text, reject_symlink_path
 
 _log = logging.getLogger(__name__)
 
@@ -32,6 +32,7 @@ MAX_DOWNLOAD_SIZE = 2 * 1024 * 1024 * 1024  # 2 GiB
 _DOWNLOAD_CHUNK_BYTES = 1 * 1024 * 1024  # 1 MiB
 _MODEL_MAX_DOWNLOAD_SIZE = 8 * 1024**3
 _MAX_EXTRACTED_ARCHIVE_SIZE = 8 * 1024**3
+_MAX_RELEASE_METADATA_SIZE = 16 * 1024**2
 _TRUE_ENV = {"1", "true", "yes", "on"}
 
 
@@ -51,6 +52,23 @@ def _normalise_sha256(value: object) -> str:
     return text if re.fullmatch(r"[0-9a-f]{64}", text) else ""
 
 
+def _read_response_limited(response, *, max_bytes: int, label: str) -> bytes:
+    """Read a response while refusing to cross the caller's byte budget."""
+    if max_bytes < 0:
+        raise ValueError("max_bytes must be non-negative")
+    chunks: list[bytes] = []
+    total = 0
+    while total <= max_bytes:
+        chunk = response.read(min(_DOWNLOAD_CHUNK_BYTES, max_bytes + 1 - total))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > max_bytes:
+            raise RuntimeError(f"{label} exceeds the {max_bytes} byte safety limit")
+    return b"".join(chunks)
+
+
 def _download_to_file(
     request: urllib.request.Request,
     destination: Path,
@@ -62,6 +80,7 @@ def _download_to_file(
     expected_size: int = 0,
 ) -> tuple[int, str]:
     """Stream a response to a same-directory temporary file and verify it."""
+    reject_symlink_path(destination, f"{label} destination")
     destination.parent.mkdir(parents=True, exist_ok=True)
     raw_expected_sha256 = str(expected_sha256 or "").strip()
     expected_sha256 = _normalise_sha256(raw_expected_sha256)
@@ -148,9 +167,19 @@ def _validate_https_host(url: str, host: str, *, path_prefix: str = "") -> None:
         raise RuntimeError(f"Refusing untrusted download URL: {url}")
 
 
-def _copy_file_atomically(source: Path, destination: Path) -> None:
-    """Copy a regular file without exposing a partially-copied destination."""
+def _copy_file_atomically(
+    source: Path, destination: Path, *, overwrite: bool = True
+) -> None:
+    """Copy a regular file without exposing a partial destination.
+
+    With ``overwrite=False`` the final hard-link step is atomic and refuses an
+    existing destination, which lets callers implement a real no-clobber
+    policy even if another process creates the file after a preflight check.
+    """
+    reject_symlink_path(destination, "file copy destination")
     destination.parent.mkdir(parents=True, exist_ok=True)
+    if not overwrite and destination.exists():
+        raise FileExistsError(destination)
     temporary: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -161,8 +190,13 @@ def _copy_file_atomically(source: Path, destination: Path) -> None:
                 shutil.copyfileobj(input_file, output, length=_DOWNLOAD_CHUNK_BYTES)
             output.flush()
             os.fsync(output.fileno())
-        os.replace(temporary, destination)
-        temporary = None
+        if overwrite:
+            os.replace(temporary, destination)
+            temporary = None
+        else:
+            os.link(temporary, destination, follow_symlinks=False)
+            temporary.unlink()
+            temporary = None
     finally:
         if temporary is not None:
             with contextlib.suppress(OSError):
@@ -170,11 +204,12 @@ def _copy_file_atomically(source: Path, destination: Path) -> None:
 
 
 def get_install_root() -> Path:
-    override = os.environ.get("IDA_PRO_MCP_HOME")
+    override = os.environ.get("IDA_PRO_MCP_HOME", "").strip()
     if override:
-        return Path(override).expanduser()
+        return Path(os.path.expandvars(os.path.expanduser(override)))
     if sys.platform == "win32":
-        base = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
+        local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+        base = Path(local_appdata or str(Path.home() / "AppData" / "Local"))
         return base / "ida-pro-mcp"
     return Path.home() / ".local" / "share" / "ida-pro-mcp"
 
@@ -254,7 +289,7 @@ def run_checked(
     raise RuntimeError(f"{' '.join(cmd)} failed ({result.returncode}): {tail}")
 
 
-def kill_ida_processes(binary_path: str | Path | None = None) -> None:
+def kill_ida_processes(binary_path: str | Path | None = None) -> bool:
     """Terminate running ida/idat processes.
 
     If `binary_path` is provided, only kill processes whose executable path
@@ -262,8 +297,10 @@ def kill_ida_processes(binary_path: str | Path | None = None) -> None:
     that path.  Without a filter the installer would happily SIGKILL a
     user's unrelated long-running IDA on a different binary — see §6.2.
 
-    On failure to enumerate processes (missing pgrep/tasklist, permission
-    error) this function silently returns.
+    Returns ``False`` when a scoped process listing cannot be obtained or a
+    matching process cannot be terminated. Unscoped termination returns
+    ``True`` after attempting each platform command; a non-zero exit code
+    there simply means that no process with that name was running.
     """
     target_resolved: str | None = None
     if binary_path:
@@ -304,16 +341,24 @@ def kill_ida_processes(binary_path: str | Path | None = None) -> None:
                     if exe_resolved == wanted:
                         pids.append(pid)
                 for pid in pids:
-                    subprocess.run(
-                        ["taskkill", "/F", "/PID", pid], capture_output=True
-                    )
-                return
+                    try:
+                        killed = subprocess.run(
+                            ["taskkill", "/F", "/PID", pid], capture_output=True
+                        )
+                    except (OSError, subprocess.TimeoutExpired):
+                        return False
+                    if killed.returncode != 0:
+                        return False
+                return True
             # WMIC unavailable or denied: fail closed. An explicit binary
             # scope must never degrade into killing every IDA process.
-            return
+            return False
         for name in ["idat.exe", "idat64.exe", "ida.exe", "ida64.exe"]:
-            subprocess.run(["taskkill", "/F", "/IM", name], capture_output=True)
-        return
+            try:
+                subprocess.run(["taskkill", "/F", "/IM", name], capture_output=True)
+            except (OSError, subprocess.TimeoutExpired):
+                return False
+        return True
 
     if target_resolved:
         # pgrep -af lists "<pid> <cmdline>"; we match on the first token
@@ -345,14 +390,23 @@ def kill_ida_processes(binary_path: str | Path | None = None) -> None:
                 if exe_resolved == target_resolved:
                     pids.append(parts[0])
             for pid in pids:
-                subprocess.run(["kill", "-KILL", pid], capture_output=True)
-            return
+                try:
+                    killed = subprocess.run(["kill", "-KILL", pid], capture_output=True)
+                except (OSError, subprocess.TimeoutExpired):
+                    return False
+                if killed.returncode != 0:
+                    return False
+            return True
         # pgrep -af missing or denied: fail closed. An explicit binary scope
         # must never degrade into killing every IDA process.
-        return
+        return False
 
     for name in ["idat", "idat64", "ida", "ida64"]:
-        subprocess.run(["pkill", "-x", name], capture_output=True)
+        try:
+            subprocess.run(["pkill", "-x", name], capture_output=True)
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+    return True
 
 
 def choose_runtime_source(runtime_source: str, source_root: Path) -> str:
@@ -364,6 +418,32 @@ def choose_runtime_source(runtime_source: str, source_root: Path) -> str:
     if (source_root / "pyproject.toml").exists():
         return "snapshot"
     return "pypi"
+
+
+def _read_installer_embedder_state(install_root: Path) -> dict:
+    """Read embedder state from the install root being configured.
+
+    The host-side state reader intentionally follows the process environment
+    because it is used by a running server.  Installer discovery receives an
+    explicit ``install_root`` instead, so consulting that process-global state
+    would let a custom install inherit another install's model or server.
+    Keep this read local to the target root and treat malformed state as absent
+    so filesystem discovery can still proceed.
+    """
+    state_path = Path(install_root) / "embedder.json"
+    try:
+        reject_symlink_path(state_path, "installer embedder state path")
+        if not state_path.is_file():
+            return {}
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, RuntimeError, json.JSONDecodeError, TypeError, ValueError):
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
+def _expand_configured_path(value: str) -> Path:
+    """Expand shell-style user/environment references in configured paths."""
+    return Path(os.path.expandvars(os.path.expanduser(str(value).strip())))
 
 
 def find_embed_model(install_root: Path, profile: str = "") -> str:
@@ -380,17 +460,16 @@ def find_embed_model(install_root: Path, profile: str = "") -> str:
     """
     # 1. Explicit env override.
     env_val = os.environ.get("IDA_MCP_EMBED_MODEL", "").strip()
-    if env_val and Path(env_val).is_file():
-        return env_val
+    env_path = _expand_configured_path(env_val) if env_val else None
+    if env_path is not None and env_path.is_file():
+        return str(env_path)
 
     # 2. embedder.json (persistent state from a previous install/doctor run).
-    state: dict = {}
+    state = _read_installer_embedder_state(install_root)
     try:
         from ida_pro_mcp.host.intelligence.core import (
-            _read_embedder_state,
             _select_state_path,
         )
-        state = _read_embedder_state()
         manual = _select_state_path(state.get("model_path"))
         state_profile = str(state.get("profile") or "").strip().lower()
         requested_from_env = str(profile or os.environ.get("IDA_MCP_EMBED_PROFILE") or "").strip().lower()
@@ -449,7 +528,7 @@ def find_embed_model(install_root: Path, profile: str = "") -> str:
         for entry in extra.split(sep):
             entry = entry.strip()
             if entry:
-                bases.append(Path(entry).expanduser())
+                bases.append(_expand_configured_path(entry))
 
     searched: list[str] = []
     seen: set[Path] = set()
@@ -513,6 +592,7 @@ def download_embed_model(install_root: Path, profile: str) -> str:
         )
     _validate_https_host(url, "huggingface.co")
     model_dir = install_root / "models"
+    reject_symlink_path(model_dir, "managed model path")
     model_dir.mkdir(parents=True, exist_ok=True)
     destination = model_dir / selected.download_filename
     if destination.is_symlink():
@@ -563,6 +643,7 @@ def download_rerank_model(install_root: Path, profile: str) -> str:
         )
     _validate_https_host(url, "huggingface.co")
     model_dir = install_root / "models"
+    reject_symlink_path(model_dir, "managed model path")
     model_dir.mkdir(parents=True, exist_ok=True)
     destination = model_dir / selected.download_filename
     if destination.is_symlink():
@@ -590,22 +671,6 @@ def download_rerank_model(install_root: Path, profile: str) -> str:
 
 
 def find_llama_server_bin(install_root: Path) -> str:
-    env_val = os.environ.get("IDA_MCP_EMBED_SERVER_BIN", "").strip()
-    if env_val and Path(env_val).is_file():
-        return env_val
-
-    # Manual override via embedder.json (mirrors host discovery).
-    try:
-        from ida_pro_mcp.host.intelligence.core import (
-            _read_embedder_state,
-            _select_state_path,
-        )
-        manual = _select_state_path(_read_embedder_state().get("server_bin"))
-        if manual:
-            return manual
-    except Exception:
-        pass
-
     def _is_executable(p: Path) -> bool:
         if not p.is_file():
             return False
@@ -613,6 +678,24 @@ def find_llama_server_bin(install_root: Path) -> str:
             low = str(p).lower()
             return low.endswith((".exe", ".bat", ".cmd"))
         return os.access(str(p), os.X_OK)
+
+    env_val = os.environ.get("IDA_MCP_EMBED_SERVER_BIN", "").strip()
+    env_path = _expand_configured_path(env_val) if env_val else None
+    if env_path is not None and _is_executable(env_path):
+        return str(env_path)
+
+    # Manual override via the target install's embedder.json.
+    try:
+        from ida_pro_mcp.host.intelligence.core import (
+            _select_state_path,
+        )
+        manual = _select_state_path(
+            _read_installer_embedder_state(install_root).get("server_bin")
+        )
+        if manual and _is_executable(Path(manual)):
+            return manual
+    except Exception:
+        pass
 
     binary_names = ("llama-server.exe", "llama-server") if sys.platform == "win32" else (
         "llama-server", "llama-server.exe",
@@ -624,14 +707,20 @@ def find_llama_server_bin(install_root: Path) -> str:
         install_root.parent,
     ]
     if sys.platform == "win32":
+        local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+        program_files = os.environ.get("ProgramFiles", "").strip() or r"C:\Program Files"
+        program_files_x86 = os.environ.get("ProgramFiles(x86)", "").strip() or r"C:\Program Files (x86)"
         roots.extend([
             home / "scoop" / "apps" / "llama.cpp" / "current",
             home / "scoop" / "apps" / "llama.cpp" / "current" / "bin",
-            Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "llama.cpp" / "bin",
-            Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "llama.cpp" / "bin",
-            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "llama.cpp" / "bin",
-            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "llama.cpp",
+            Path(program_files) / "llama.cpp" / "bin",
+            Path(program_files_x86) / "llama.cpp" / "bin",
         ])
+        if local_appdata:
+            roots.extend([
+                Path(local_appdata) / "Programs" / "llama.cpp" / "bin",
+                Path(local_appdata) / "Programs" / "llama.cpp",
+            ])
     else:
         roots.extend([
             home / ".local" / "bin",
@@ -662,18 +751,113 @@ def find_llama_server_bin(install_root: Path) -> str:
     return ""
 
 
-def find_rerank_model(install_root: Path, profile: str = "qwen3-reranker-0.6b") -> str:
-    """Locate an already-installed rerank GGUF, mirroring the host's _find_rerank_model logic."""
+def find_rerank_model(install_root: Path, profile: str = "") -> str:
+    """Locate an installed reranker matching the requested profile.
+
+    The host intentionally falls back to another known reranker when the
+    requested family is unavailable.  That is useful at runtime, but wrong
+    for the installer wizard: a user selecting the 4B or BGE profile must not
+    be told that a different model was found and then have that model pinned
+    into client configuration.
+    """
     env_val = os.environ.get("IDA_MCP_RERANK_MODEL", "").strip()
-    if env_val and Path(env_val).is_file():
-        return env_val
+    env_path = _expand_configured_path(env_val) if env_val else None
+    if env_path is not None and env_path.is_file():
+        return str(env_path)
+
+    from ida_pro_mcp.host.intelligence.rerank_profiles import (
+        get_rerank_model_profile,
+        profile_from_rerank_model,
+    )
+
+    state = _read_installer_embedder_state(install_root)
     try:
-        from ida_pro_mcp.host.intelligence.rerank import _find_rerank_model
-        result = _find_rerank_model()
-        if result:
-            return result
+        from ida_pro_mcp.host.intelligence.rerank import (
+            _select_state_path,
+        )
+
+        nested_state = state.get("rerank")
+        state = nested_state if isinstance(nested_state, dict) else {}
+        manual = _select_state_path(state.get("model_path"))
+        requested_name = str(
+            profile
+            or os.environ.get("IDA_MCP_RERANK_PROFILE")
+            or state.get("profile")
+            or "qwen3-reranker-0.6b"
+        ).strip()
+        selected = get_rerank_model_profile(requested_name)
+        if selected is None:
+            selected = get_rerank_model_profile("qwen3-reranker-0.6b")
+        if manual and selected is not None:
+            state_profile = get_rerank_model_profile(state.get("profile"))
+            if state_profile is not None and state_profile.key == selected.key:
+                return manual
+            if not state.get("profile") and profile_from_rerank_model(manual).key == selected.key:
+                return manual
     except Exception:
         pass
+
+    requested_name = str(
+        profile
+        or os.environ.get("IDA_MCP_RERANK_PROFILE")
+        or state.get("profile")
+        or "qwen3-reranker-0.6b"
+    ).strip()
+    selected = get_rerank_model_profile(requested_name)
+    if selected is None:
+        selected = get_rerank_model_profile("qwen3-reranker-0.6b")
+    if selected is None or not selected.filename_patterns:
+        return ""
+
+    home = Path.home()
+    cwd = Path.cwd()
+    bases: list[Path] = [
+        install_root,
+        install_root / "models",
+        install_root.parent,
+        home / ".cache" / "ida-pro-mcp" / "models",
+        home / "models",
+        home / "Downloads",
+        home / "Downloads" / "ida-pro-mcp",
+        home / "Documents",
+        home / "Documents" / "ida-pro-mcp",
+        cwd,
+        cwd / "models",
+    ]
+    extra = os.environ.get("IDA_MCP_RERANK_SEARCH_PATHS", "").strip()
+    if extra:
+        sep = ";" if sys.platform == "win32" else ":"
+        bases.extend(
+            _expand_configured_path(entry)
+            for entry in extra.split(sep)
+            if entry.strip()
+        )
+
+    seen: set[Path] = set()
+    for base in bases:
+        try:
+            resolved_base = base.resolve()
+        except OSError:
+            continue
+        if resolved_base in seen or not resolved_base.is_dir():
+            continue
+        seen.add(resolved_base)
+        for pattern in selected.filename_patterns:
+            for candidate in sorted(resolved_base.glob(pattern)):
+                if candidate.is_file():
+                    return str(candidate)
+
+    hf_root = home / ".cache" / "huggingface" / "hub"
+    if hf_root.is_dir():
+        for pattern in selected.filename_patterns:
+            for candidate in hf_root.glob(f"models--*/snapshots/*/{pattern}"):
+                if candidate.is_file():
+                    return str(candidate)
+
+    for pattern in selected.filename_patterns:
+        for candidate in install_root.rglob(pattern):
+            if candidate.is_file():
+                return str(candidate)
     return ""
 
 
@@ -740,14 +924,16 @@ def stage_sigs(
     if not source.exists():
         raise RuntimeError(f"--sigs source not found: {source}")
     if source.is_file():
-        if source.suffix.lower() in (".sig", ".sig.gz"):
+        if source.name.lower().endswith((".sig", ".sig.gz")):
             candidates = [source]
         else:
             candidates = []
     else:
         candidates = sorted(list(source.rglob("*.sig")) + list(source.rglob("*.sig.gz")))
 
-    sig_root = sig_dir.expanduser().resolve()
+    requested_sig_root = sig_dir.expanduser()
+    reject_symlink_path(requested_sig_root, "IDA signature directory")
+    sig_root = requested_sig_root.resolve()
     staged: list[str] = []
     skipped: list[str] = []
     for cand in candidates:
@@ -768,12 +954,25 @@ def stage_sigs(
             dest.resolve().relative_to(sig_root)
         except ValueError as exc:
             raise RuntimeError(f"signature destination escapes IDA sig directory: {dest}") from exc
+        current = sig_root
+        for part in dest.relative_to(sig_root).parts:
+            current /= part
+            if current.is_symlink():
+                raise RuntimeError(f"Refusing symlinked signature destination: {current}")
         if dest.exists():
             skipped.append(str(dest))
             continue
         staged.append(str(dest))
         if not dry_run:
-            _copy_file_atomically(cand, dest)
+            try:
+                _copy_file_atomically(cand, dest, overwrite=False)
+            except FileExistsError:
+                # A bundled signature (or another installer) appeared after
+                # the preflight check. Preserve it and report the same result
+                # as the non-racing path.
+                staged.pop()
+                skipped.append(str(dest))
+                continue
             report.add_modified(dest)
 
     return SigsManifest(
@@ -831,6 +1030,10 @@ def _extract_archive(archive: Path, out_dir: Path) -> None:
     catching attacks that exploit case-folding or symlinks created
     during extraction.
     """
+    reject_symlink_path(archive, "archive path")
+    if not archive.is_file():
+        raise RuntimeError(f"archive path is not a regular file: {archive}")
+    reject_symlink_path(out_dir, "archive extraction path")
     out_dir.mkdir(parents=True, exist_ok=True)
     extract_root = out_dir.resolve()
     extracted_bytes = 0
@@ -951,9 +1154,10 @@ def download_and_install_llama_server(
     binary_name = "llama-server.exe" if sys.platform == "win32" else "llama-server"
     target_dir = install_root / "bin"
     target_path = target_dir / binary_name
+    reject_symlink_path(target_dir, "managed llama-server path")
     if target_path.is_symlink():
         raise RuntimeError(f"Refusing managed llama-server path symlink: {target_path}")
-    if target_path.exists() and os.access(target_path, os.X_OK):
+    if target_path.is_file() and os.access(target_path, os.X_OK):
         return str(target_path)
     if dry_run:
         report.add_step("llama_server", "dry-run", f"would install to {target_path}")
@@ -972,12 +1176,18 @@ def download_and_install_llama_server(
         # no binaries. Scan the ordered release list instead and pick the
         # newest compatible asset.
         api_url = "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=20"
+    explicit_release = bool(release_tag)
     req = urllib.request.Request(
         api_url,
         headers={"Accept": "application/vnd.github+json", "User-Agent": "ida-pro-mcp-installer"},
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
-        payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+        metadata = _read_response_limited(
+            resp,
+            max_bytes=_MAX_RELEASE_METADATA_SIZE,
+            label="llama.cpp release metadata",
+        )
+        payload = json.loads(metadata.decode("utf-8", errors="replace"))
     releases = [payload] if isinstance(payload, dict) else payload
     if not isinstance(releases, list) or not releases:
         raise RuntimeError("No release metadata found for llama.cpp")
@@ -987,7 +1197,11 @@ def download_and_install_llama_server(
     best_score = -10_000
     saw_unverified_match = False
     for release in releases:
-        if not isinstance(release, dict) or release.get("draft"):
+        if (
+            not isinstance(release, dict)
+            or release.get("draft")
+            or (release.get("prerelease") and not explicit_release)
+        ):
             continue
         assets = release.get("assets") or []
         if not isinstance(assets, list):
@@ -1185,6 +1399,12 @@ def _wipe_venv(venv_dir: Path) -> None:
     """
     if not venv_dir.exists():
         return
+    if not venv_dir.is_dir():
+        try:
+            venv_dir.unlink()
+            return
+        except OSError:
+            pass
     deadline = time.time() + 15.0
     while time.time() < deadline:
         try:
@@ -1193,7 +1413,7 @@ def _wipe_venv(venv_dir: Path) -> None:
         except OSError:
             time.sleep(0.5)
     try:
-        backup = venv_dir.with_name(f".venv.stale.{int(time.time())}")
+        backup = venv_dir.with_name(f".venv.stale.{int(time.time())}-{uuid.uuid4().hex}")
         venv_dir.rename(backup)
     except OSError as exc:
         raise RuntimeError(
@@ -1216,8 +1436,22 @@ def _snapshot_source(
     the working checkout never leak into a running install. Older snapshots
     are pruned; only the newest is kept.
     """
+    try:
+        source_resolved = source_root.resolve()
+        install_resolved = install_root.resolve()
+        nested_install = install_resolved.relative_to(source_resolved)
+    except ValueError:
+        nested_install = None
+    except OSError as exc:
+        raise RuntimeError(f"Could not resolve snapshot paths: {exc}") from exc
+    if nested_install is not None and not nested_install.parts:
+        raise RuntimeError(
+            "runtime snapshot requires --install-root to be outside the source checkout"
+        )
+
     stamp = time.strftime("%Y%m%d-%H%M")
     target = install_root / f"runtime-src-{stamp}"
+    reject_symlink_path(target, "runtime snapshot path")
     if dry_run:
         report.add_step("snapshot", "dry-run", f"would copy {source_root} -> {target}")
         return target
@@ -1238,8 +1472,20 @@ def _snapshot_source(
             path = os.path.join(folder, name)
             try:
                 st = os.lstat(path)
-                if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode) or stat.S_ISLNK(st.st_mode)):
+                # Do not follow checkout symlinks into arbitrary directories
+                # or copy linked secrets into the managed runtime snapshot.
+                if stat.S_ISLNK(st.st_mode) or not (
+                    stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)
+                ):
                     ignored.add(name)
+                elif nested_install is not None:
+                    candidate_relative = Path(path).resolve().relative_to(source_resolved)
+                    if (
+                        candidate_relative.parts
+                        and nested_install.parts
+                        and candidate_relative.parts[0] == nested_install.parts[0]
+                    ):
+                        ignored.add(name)
             except OSError:
                 ignored.add(name)
         return ignored
@@ -1286,22 +1532,36 @@ def _write_dev_pth(venv_dir: Path, source_root: Path, dry_run: bool, report: Ins
         [str(python_exe), "-c", "import site; print(site.getsitepackages()[0])"],
         timeout=15,
     )
-    site_packages = Path(result.stdout.strip())
+    raw_site_packages = result.stdout.strip()
+    if not raw_site_packages or "\n" in raw_site_packages or "\r" in raw_site_packages:
+        raise RuntimeError("venv did not report a usable site-packages directory")
+    site_packages = Path(raw_site_packages).expanduser()
+    if not site_packages.is_absolute():
+        raise RuntimeError(f"venv reported a relative site-packages directory: {site_packages}")
+    reject_symlink_path(site_packages, "venv site-packages path")
+    if not site_packages.is_dir():
+        raise RuntimeError(f"venv site-packages directory does not exist: {site_packages}")
     pth_path = site_packages / "ida_pro_mcp_dev.pth"
+    reject_symlink_path(pth_path, "development source pointer")
     src_path = source_root / "src"
     if dry_run:
         report.add_step("dev_pth", "dry-run", f"would write {pth_path} -> {src_path}")
         return pth_path
+    from .clients import backup_file
+
+    backup_file(pth_path, report, dry_run=False)
     atomic_write_text(pth_path, f"{src_path}\n")
     report.add_modified(pth_path)
     report.add_step("dev_pth", "ok", f"{pth_path} -> {src_path}")
 
     # Remove any stale pip-installed copy so the .pth source takes precedence
     stale_pkg_dir = site_packages / "ida_pro_mcp"
+    reject_symlink_path(stale_pkg_dir, "stale runtime package path")
     if stale_pkg_dir.is_dir():
         shutil.rmtree(stale_pkg_dir)
         report.add_step("dev_pth", "cleanup", f"removed stale {stale_pkg_dir}")
     for p in site_packages.glob("ida_pro_mcp-*.dist-info"):
+        reject_symlink_path(p, "stale runtime metadata path")
         if p.is_dir():
             shutil.rmtree(p)
             report.add_step("dev_pth", "cleanup", f"removed stale {p}")
@@ -1321,8 +1581,23 @@ def _remove_dev_pth(venv_dir: Path, report: InstallReport) -> None:
         [str(python_exe), "-c", "import site; print(site.getsitepackages()[0])"],
         timeout=15,
     )
-    pth_path = Path(result.stdout.strip()) / "ida_pro_mcp_dev.pth"
+    raw_site_packages = result.stdout.strip()
+    if not raw_site_packages or "\n" in raw_site_packages or "\r" in raw_site_packages:
+        raise RuntimeError("venv did not report a usable site-packages directory")
+    site_packages = Path(raw_site_packages).expanduser()
+    if not site_packages.is_absolute():
+        raise RuntimeError(f"venv reported a relative site-packages directory: {site_packages}")
+    reject_symlink_path(site_packages, "venv site-packages path")
+    if not site_packages.is_dir():
+        raise RuntimeError(f"venv site-packages directory does not exist: {site_packages}")
+    pth_path = site_packages / "ida_pro_mcp_dev.pth"
+    reject_symlink_path(pth_path, "development source pointer")
+    if pth_path.exists() and not pth_path.is_file():
+        raise RuntimeError(f"development source pointer is not a regular file: {pth_path}")
     if pth_path.is_file():
+        from .clients import backup_file
+
+        backup_file(pth_path, report, dry_run=False)
         pth_path.unlink()
         report.add_modified(pth_path)
         report.add_step("dev_pth", "removed", f"removed live source pointer {pth_path}")
@@ -1336,6 +1611,7 @@ def setup_runtime_environment(
     report: InstallReport,
 ) -> Path:
     venv_dir = install_root / ".venv"
+    reject_symlink_path(venv_dir, "runtime environment path")
     python_exe = _venv_python_exe(venv_dir)
     if dry_run:
         report.metadata["venv_python"] = str(python_exe)
@@ -1369,13 +1645,13 @@ def setup_runtime_environment(
 
     resolved_source = choose_runtime_source(runtime_source, source_root)
 
-    if runtime_source == "local":
+    if resolved_source == "local":
         _write_dev_pth(venv_dir, source_root, dry_run, report)
         report.metadata["runtime_source"] = "local-dev"
         report.metadata["runtime_package"] = f"pth:{source_root / 'src'}"
     else:
         _remove_dev_pth(venv_dir, report)
-        if runtime_source == "snapshot":
+        if resolved_source == "snapshot":
             package_spec = str(_snapshot_source(source_root, install_root, dry_run, report))
             report.metadata["runtime_source"] = "snapshot"
         else:
@@ -1402,9 +1678,15 @@ def find_idalib_python_dir(ida_dir: str) -> str:
     """
     if not ida_dir:
         return ""
-    candidate = os.path.join(ida_dir, "idalib", "python")
-    if os.path.isdir(os.path.join(candidate, "idapro")):
-        return candidate
+    candidate = Path(ida_dir) / "idalib" / "python"
+    try:
+        reject_symlink_path(candidate, "idalib Python path")
+        idapro_path = candidate / "idapro"
+        reject_symlink_path(idapro_path, "idalib package path")
+    except RuntimeError:
+        return ""
+    if idapro_path.is_dir():
+        return str(candidate)
     return ""
 
 
@@ -1415,9 +1697,16 @@ def activate_idalib(ida_dir: str) -> tuple[bool, str]:
     exists and exits 0.  Activation records the install idalib loads
     ``libidalib.so`` from; one install is active at a time.
     """
-    py = os.path.join(find_idalib_python_dir(ida_dir), "py-activate-idalib.py")
-    if not os.path.isfile(py):
+    python_dir = find_idalib_python_dir(ida_dir)
+    py_path = Path(python_dir) / "py-activate-idalib.py" if python_dir else Path()
+    try:
+        if python_dir:
+            reject_symlink_path(py_path, "idalib activation script path")
+    except RuntimeError as exc:
+        return False, str(exc)
+    if not py_path.is_file():
         return False, f"no py-activate-idalib.py under {ida_dir}"
+    py = str(py_path)
     try:
         result = subprocess.run(
             [sys.executable, py, "-d", ida_dir],
@@ -1444,6 +1733,7 @@ def build_stdio_config(
     gemini_api_key: str = "",
     gemini_vertex_project: str = "",
     gemini_vertex_location: str = "",
+    gemini_vertex: bool = False,
     ida_install: object | None = None,
     disable_policy: bool = False,
     rerank_disabled: bool = False,
@@ -1459,9 +1749,12 @@ def build_stdio_config(
 
     ``embed_backend == "gemini"`` selects the opt-in cloud embedder: the
     client env carries ``IDA_MCP_EMBED_BACKEND=gemini`` plus the chosen
-    credential (AI Studio API key or Vertex project/location).  The API key
-    is written into the generated client config only when the user provided
-    it; the server also honours the process environment if it is unset here.
+    credential (AI Studio API key or Vertex project/location).  When
+    ``gemini_vertex`` is true, the explicit Vertex choice is carried in the
+    environment even if the project is incomplete, so an ambient AI Studio
+    key cannot silently select the wrong route.  The API key is written into
+    the generated client config only when the user provided it; the server
+    also honours the process environment if it is unset here.
     """
     idadir = ""
     if ida_install is not None:
@@ -1512,8 +1805,15 @@ def build_stdio_config(
         env["IDA_MCP_RERANK_DISABLED"] = "1"
     elif rerank_profile:
         env["IDA_MCP_RERANK_PROFILE"] = rerank_profile
-    if str(embed_backend or "").lower() == "gemini":
+    backend_key = str(embed_backend or "").strip().lower()
+    if backend_key == "local":
+        # Explicitly selecting local mode must override a stale
+        # embedder.json that may still say backend=gemini.
+        env["IDA_MCP_EMBED_BACKEND"] = "local"
+    elif backend_key == "gemini":
         env["IDA_MCP_EMBED_BACKEND"] = "gemini"
+        if gemini_vertex:
+            env["IDA_MCP_GEMINI_VERTEX"] = "1"
         if gemini_api_key:
             env["GEMINI_API_KEY"] = gemini_api_key
         if gemini_vertex_project:

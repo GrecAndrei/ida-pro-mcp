@@ -634,9 +634,9 @@ def _legacy_frame_members(func_ea):
                 name = None
             if name:
                 break
-        name = name or f"var_{i}"
-        soff = int(getattr(member, "soff", 0) or 0)
-        eoff = int(getattr(member, "eoff", soff) or soff)
+        name = name or getattr(member, "name", None) or f"var_{i}"
+        soff = int(getattr(member, "soff", getattr(member, "offset", 0)) or 0)
+        eoff = int(getattr(member, "eoff", soff + int(getattr(member, "size", 0) or 0)) or soff)
         # size: ida_struct.get_member_size(member), then member.size,
         # then member.eoff - member.soff
         msize = None

@@ -27,7 +27,6 @@ import os
 import struct
 import sys
 import threading
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -523,12 +522,9 @@ def test_analysis_watcher_stops_cleanly_no_leaked_thread():
     host.session_mgr = SimpleNamespace(get_session=lambda sid: SimpleNamespace(session_id=sid))
     host.safe_mode_poll_seconds = 0.05
     host._spawn_analysis_watcher(SID)
-    for _ in range(50):
-        if any(t.name == f"ida-an-{SID}" and t.is_alive() for t in threading.enumerate()):
-            break
-        time.sleep(0.01)
     assert SID in host._analysis_watcher_stop_events
-    assert any(t.name == f"ida-an-{SID}" for t in threading.enumerate())
+    watcher = host._analysis_watcher_threads[SID]
+    assert watcher.name == f"ida-an-{SID}"
 
     # _forget_analysis_state clears the pending gate FIRST, then stops the
     # watcher — otherwise the watcher's exit path would re-arm itself.

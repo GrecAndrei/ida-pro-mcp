@@ -372,6 +372,11 @@ def _resolve_dependencies(calls):
     graph = {i: set() for i in range(n)}
     dependents = {i: [] for i in range(n)}
     for i, call in enumerate(calls):
+        if not isinstance(call, dict):
+            # The execution loop owns the user-facing malformed-call result;
+            # dependency resolution should not turn a bad item into an
+            # uncaught AttributeError before that envelope can be returned.
+            continue
         deps = call.get("depends_on")
         if deps is None:
             continue

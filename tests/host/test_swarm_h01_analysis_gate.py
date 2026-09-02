@@ -27,7 +27,7 @@ subprocess (always alive until removed from ``session_runtimes``).
 from __future__ import annotations
 
 import os
-import time
+import threading
 
 from ida_pro_mcp.host.errors import MCPError
 from ida_pro_mcp.host.server.server import IDAMCPServer
@@ -138,18 +138,19 @@ def test_watcher_requires_two_consecutive_complete_polls(tmp_path, monkeypatch):
         {"analysis_complete": True},
     ]
     state = {"i": 0}
+    complete_seen = threading.Event()
 
     def rpc(payload, port, recv_timeout=10):
         i = state["i"]
         state["i"] += 1
+        if state["i"] >= 4:
+            complete_seen.set()
         return sequence[min(i, len(sequence) - 1)]
 
     server._send_rpc_raw = rpc
     try:
         server._mark_analysis_pending(session)
-        deadline = time.time() + 8
-        while time.time() < deadline and server._safe_mode_active(sid):
-            time.sleep(0.02)
+        assert complete_seen.wait(timeout=2)
         assert not server._safe_mode_active(sid)
         assert server._analysis_is_complete(sid)
         # If a single True had lifted the gate, the watcher would have exited
@@ -173,19 +174,35 @@ def test_watcher_reports_interruption_when_seen_runtime_dies(tmp_path, monkeypat
         server, IDAMCPServer
     )
     server._spawn_analysis_watcher = lambda s: spawned.append(s) or real_spawn(s)
+    alive_seen = threading.Event()
+    real_runtime_record = server._runtime_record
+
+    def _runtime_record(session_id):
+        record = real_runtime_record(session_id)
+        if session_id == sid and record:
+            alive_seen.set()
+        return record
+
+    server._runtime_record = _runtime_record
+    error_seen = threading.Event()
+    real_record_error = server._record_background_error
+
+    def _record_background_error(session_id):
+        result = real_record_error(session_id)
+        if session_id == sid:
+            error_seen.set()
+        return result
+
+    server._record_background_error = _record_background_error
     server.session_runtimes[sid] = _fake_runtime()
     try:
         server._mark_analysis_pending(session)
         assert spawned == [sid]  # one watcher armed by the pending entry
         # Let the watcher observe the runtime alive (saw_runtime -> True).
-        time.sleep(0.3)
+        assert alive_seen.wait(timeout=2)
         # Simulate the runtime dying while auto-analysis is still pending.
         server.session_runtimes.pop(sid, None)
-        deadline = time.time() + 8
-        while time.time() < deadline and sid not in getattr(
-            server, "_background_load_errors", {}
-        ):
-            time.sleep(0.02)
+        assert error_seen.wait(timeout=2)
         err = getattr(server, "_background_load_errors", {}).get(sid)
         assert err is not None
         assert err.get("error") is True
@@ -195,9 +212,9 @@ def test_watcher_reports_interruption_when_seen_runtime_dies(tmp_path, monkeypat
         assert not server._analysis_is_complete(sid)
         # The watcher exits after recording the error and does NOT re-arm
         # (re-arming with the error recorded would spin forever).
-        deadline = time.time() + 8
-        while time.time() < deadline and sid in (server._analysis_watchers or set()):
-            time.sleep(0.02)
+        watcher = server._analysis_watcher_threads.get(sid)
+        assert watcher is not None
+        watcher.join(timeout=2)
         assert sid not in (server._analysis_watchers or set())
         assert spawned == [sid], spawned
     finally:
@@ -208,18 +225,28 @@ def test_watcher_never_registered_runtime_is_not_an_interruption(tmp_path, monke
     server = _make_server(tmp_path, monkeypatch)
     session = server.session_mgr.create_session("/tmp/noruntime.bin")
     sid = session.session_id
+    poll_seen = threading.Event()
+    real_runtime_record = server._runtime_record
+
+    def _runtime_record(session_id):
+        record = real_runtime_record(session_id)
+        if session_id == sid:
+            poll_seen.set()
+        return record
+
+    server._runtime_record = _runtime_record
     try:
         server._mark_analysis_pending(session)
         # No runtime ever registers (spawn still in flight): keep polling,
         # do NOT record an interruption error, do NOT lift.
-        time.sleep(0.3)
+        assert poll_seen.wait(timeout=2)
         assert sid not in getattr(server, "_background_load_errors", {})
         assert server._safe_mode_active(sid)
         # Lifting the gate lets the watcher exit cleanly on its next poll.
         server._mark_analysis_complete(session)
-        deadline = time.time() + 8
-        while time.time() < deadline and sid in (server._analysis_watchers or set()):
-            time.sleep(0.02)
+        watcher = server._analysis_watcher_threads.get(sid)
+        assert watcher is not None
+        watcher.join(timeout=2)
         assert sid not in (server._analysis_watchers or set())
     finally:
         server.shutdown()
@@ -483,20 +510,35 @@ def test_ensure_runtime_and_idb_propagates_start_server_failure(tmp_path, monkey
 
 
 def test_spawn_runtime_background_records_error_and_skips_deleted(tmp_path, monkeypatch):
+    from ida_pro_mcp.host.server import server_session
+
     server = _make_server(tmp_path, monkeypatch)
     server._ensure_runtime_and_idb = lambda s: {
         "error": True,
         "code": MCPError.IDA_CRASHED,
         "message": "boom",
     }
+
+    class _InlineThread:
+        def __init__(self, target, args=(), kwargs=None, **_options):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            self._target(*self._args, **self._kwargs)
+
+    real_thread = server_session.threading.Thread
+
+    def _thread_factory(*args, **kwargs):
+        if str(kwargs.get("name", "")).startswith("ida-bg-"):
+            return _InlineThread(*args, **kwargs)
+        return real_thread(*args, **kwargs)
+
+    monkeypatch.setattr(server_session.threading, "Thread", _thread_factory)
     try:
         s1 = server.session_mgr.create_session("/tmp/bg1.bin")
         server._spawn_runtime_background(s1)
-        deadline = time.time() + 5
-        while time.time() < deadline and s1.session_id not in (
-            server._background_load_errors or {}
-        ):
-            time.sleep(0.02)
         assert s1.session_id in (server._background_load_errors or {})
 
         # A session deleted while the spawn was in flight must not accumulate
@@ -505,7 +547,6 @@ def test_spawn_runtime_background_records_error_and_skips_deleted(tmp_path, monk
         sid2 = s2.session_id
         server.session_mgr.delete_session(sid2)
         server._spawn_runtime_background(s2)
-        time.sleep(0.5)
         assert sid2 not in (server._background_load_errors or {})
     finally:
         server.shutdown()

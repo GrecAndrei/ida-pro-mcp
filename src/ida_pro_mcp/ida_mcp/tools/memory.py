@@ -236,7 +236,20 @@ def memory(
     """
     # Public MCP names stay on the wire; accept them beside legacy aliases.
     addr = public_arg(kwargs, 'address', addr)
-    result = _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs)
+    # Keep the named arguments intact for the read-cache decorator.  Passing
+    # these positionally makes ``@idaread`` see an empty kwargs mapping and
+    # causes every memory read action at a given runtime to share one cache
+    # entry (e.g. entropy receiving a prior read/bytes response).
+    result = _memory_impl(
+        action=action,
+        addr=addr,
+        type=type,
+        size=size,
+        data=data,
+        end_addr=end_addr,
+        depth=depth,
+        **kwargs,
+    )
     return result
 
 
@@ -246,8 +259,26 @@ def _memory_impl(action, addr, type, size, data, end_addr, depth, **kwargs) -> d
     # cached and never invalidate the cache, while the write action rides
     # @idawrite and invalidates only the address family it touches.
     if action == "write":
-        return _memory_write_impl(action, addr, type, size, data, end_addr, depth, **kwargs)
-    return _memory_read_impl(action, addr, type, size, data, end_addr, depth, **kwargs)
+        return _memory_write_impl(
+            action=action,
+            addr=addr,
+            type=type,
+            size=size,
+            data=data,
+            end_addr=end_addr,
+            depth=depth,
+            **kwargs,
+        )
+    return _memory_read_impl(
+        action=action,
+        addr=addr,
+        type=type,
+        size=size,
+        data=data,
+        end_addr=end_addr,
+        depth=depth,
+        **kwargs,
+    )
 
 
 def _coerce_memory_params(action, addr, size, depth):

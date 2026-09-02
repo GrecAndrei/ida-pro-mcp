@@ -2045,9 +2045,14 @@ def _add_enum_member(tif: ida_typeinf.tinfo_t, member_name: str, value: int):
         return None
     if hasattr(tif, "add_edm"):
         try:
-            tif.add_edm(member_name, value, -1)
+            res = tif.add_edm(member_name, value, -1)
         except Exception as e:
             return make_error(MCPError.IDA_ERROR, f"add_edm failed: {e}")
+        if res not in (None, 0):
+            return make_error(
+                MCPError.IDA_ERROR,
+                f"add_edm failed with code {res}. The enumerator name must be unique and the value must be valid for the enum.",
+            )
         return None
     return make_error(MCPError.IDA_ERROR, "No enum member API available on this IDA version.")
 

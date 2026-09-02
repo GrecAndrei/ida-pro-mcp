@@ -280,6 +280,20 @@ def _wait_vulnerable_hits(client, timeout: float = 30.0) -> dict | None:
     return last
 
 
+def _get_live_session() -> tuple["MCPIntegrationClient", str | None]:
+    """Start the live client, create the fixture session, and await readiness."""
+    client = MCPIntegrationClient()
+    if not client.start():
+        raise unittest.SkipTest("Failed to start IDA MCP server")
+    try:
+        session_id = _require_session(client, _build_fixture())
+        _wait_session_ready(client, session_id)
+    except BaseException:
+        client.close()
+        raise
+    return client, session_id
+
+
 class MCPIntegrationClient:
     """JSON-RPC client for integration testing against live IDA MCP."""
 
@@ -351,13 +365,27 @@ class MCPIntegrationClient:
 
     def call_tool(self, tool: str, **args) -> dict:
         """Send a tool call and return the result."""
+        return self.request(
+            "tools/call",
+            {"name": tool, "arguments": args},
+        )
+
+    def request(self, method: str, params: dict | None = None) -> dict:
+        """Send an arbitrary JSON-RPC request and return its result envelope.
+
+        Legacy live tests need to exercise the protocol methods around the
+        compatibility tool, not only ``tools/call``. Keeping this helper at
+        the process boundary makes those checks use the same real client as
+        the existing legacy tests.
+        """
         self.request_id += 1
         request = {
             "jsonrpc": "2.0",
             "id": self.request_id,
-            "method": "tools/call",
-            "params": {"name": tool, "arguments": args},
+            "method": method,
         }
+        if params is not None:
+            request["params"] = params
         return self._send_request(request)
 
     def _send_request(self, request: dict) -> dict:

@@ -413,3 +413,151 @@ def test_write_embedder_state_gemini_never_stores_key(tmp_path):
 def test_write_embedder_state_rejects_unknown_backend(tmp_path):
     with pytest.raises(ValueError, match="unknown embedding backend"):
         write_embedder_state(tmp_path, backend="nonsense")
+
+
+def test_gemini_auth_cache_and_adc_fallback_modes(monkeypatch):
+    """Exercise both credential transports without contacting Google."""
+    import sys
+    import types
+    from datetime import UTC, datetime
+
+    gauth = types.ModuleType("google.auth")
+    gtransport = types.ModuleType("google.auth.transport")
+    grequests = types.ModuleType("google.auth.transport.requests")
+    google = types.ModuleType("google")
+    class _Request:
+        pass
+
+    creds = types.SimpleNamespace(
+        token="adc-token", expiry=datetime(2099, 1, 1, tzinfo=UTC), refresh=lambda _request: None
+    )
+    gauth.default = lambda **_kwargs: (creds, "project")
+    grequests.Request = _Request
+    google.auth = gauth
+    gauth.transport = gtransport
+    gtransport.requests = grequests
+    for name, module in {
+        "google": google,
+        "google.auth": gauth,
+        "google.auth.transport": gtransport,
+        "google.auth.transport.requests": grequests,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+
+    backend = GeminiEmbedBackend()
+    token, error = backend._adc_token()
+    assert token == "adc-token" and error == ""
+    assert backend._adc_expiry > 0
+    backend._adc_token_cache = "cached"
+    backend._adc_expiry = 9_999_999_999
+    assert backend._adc_token_cached() == "cached"
+    backend._adc_expiry = 0
+    assert backend._adc_token_cached() == "adc-token"
+    backend._mode = "vertex"
+    assert backend._auth_headers()["Authorization"] == "Bearer adc-token"
+
+    fallback_calls = []
+    gauth.default = lambda **kwargs: fallback_calls.append(kwargs) or (_ for _ in ()).throw(RuntimeError("scoped"))
+    gauth.default = lambda **kwargs: (
+        fallback_calls.append(kwargs), (_ for _ in ()).throw(RuntimeError("all unavailable"))
+    )[1]
+    failed, message = backend._adc_token()
+    assert failed == "" and "ADC unavailable" in message
+    assert len(fallback_calls) == 2
+
+
+def test_gemini_http_and_retry_boundaries(monkeypatch):
+    from requests import ConnectionError, Timeout
+
+    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    backend = GeminiEmbedBackend()
+    monkeypatch.setattr(gemini_mod.time, "sleep", lambda _seconds: None)
+
+    with (
+        mock.patch.object(gemini_mod.requests, "post", return_value=_fake_response([], status=200)),
+        pytest.raises(gemini_mod._GeminiHTTPError, match="unexpected Gemini response"),
+    ):
+        backend._request("url", {}, {}, 1)
+    response = _fake_response({}, status=400, text="task_type unsupported")
+    with (
+        mock.patch.object(gemini_mod.requests, "post", return_value=response),
+        pytest.raises(gemini_mod._GeminiHTTPError) as exc,
+    ):
+        backend._request("url", {}, {}, 1)
+    assert not exc.value.retryable
+
+    invalid = _fake_response(None, status=200)
+    invalid.json = lambda: (_ for _ in ()).throw(ValueError("bad json"))
+    with (
+        mock.patch.object(gemini_mod.requests, "post", return_value=invalid),
+        pytest.raises(gemini_mod._GeminiHTTPError, match="non-JSON"),
+    ):
+        backend._request("url", {}, {}, 1)
+
+    calls = {"n": 0}
+    def transient(*_args, **_kwargs):
+        calls["n"] += 1
+        raise ConnectionError("offline")
+
+    backend._retries = 1
+    with (
+        mock.patch.object(gemini_mod.requests, "post", side_effect=transient),
+        pytest.raises(ConnectionError),
+    ):
+        backend._post_retry("url", {}, {}, 1)
+    assert calls["n"] == 2
+    backend._retries = 0
+    with (
+        mock.patch.object(gemini_mod.requests, "post", side_effect=Timeout("slow")),
+        pytest.raises(Timeout),
+    ):
+        backend._post_retry("url", {}, {}, 1)
+
+
+def test_gemini_task_shapes_vectors_and_vertex_results(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    backend = GeminiEmbedBackend()
+    assert backend._task("classification") is None
+    backend._task_type_env = "classification"
+    assert backend._task("document") == "CLASSIFICATION"
+    backend._task_type_env = "off"
+    assert backend._task("document") is None
+    assert backend._task_present({"embedContentConfig": {"taskType": "x"}}, None)
+    assert backend._task_present({"instances": [{"task_type": "x"}]}, "instances")
+    assert backend._task_present({"requests": [{"embedContentConfig": {"taskType": "x"}}]}, "requests")
+    assert "taskType" not in backend._drop_task({"embedContentConfig": {"taskType": "x"}}, None)["embedContentConfig"]
+    assert "task_type" not in backend._drop_task({"instances": [{"task_type": "x"}]}, "instances")["instances"][0]
+    assert "taskType" not in backend._drop_task({"requests": [{"embedContentConfig": {"taskType": "x"}}]}, "requests")["requests"][0]["embedContentConfig"]
+    assert backend._normalize_vec(None) is None
+    assert backend._normalize_vec(["bad"]) is None
+    assert backend._normalize_vec([float("nan")] * backend.dim) is None
+    assert backend._normalize_vec([1.0] * (backend.dim - 1)) is None
+    assert backend._extract_list([{"embeddings": {"values": [1.0] * backend.dim}}], 1, vertex=True)
+    assert backend._extract_list([[1.0] * backend.dim], 1, vertex=True)
+    assert backend._extract_list([{}], 1, vertex=True) is None
+    assert backend._extract_list([{}], 1) is None
+
+
+def test_gemini_batch_lifecycle_and_probe_failure_modes(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    backend = GeminiEmbedBackend()
+    assert backend.embed_batch([]) == []
+    monkeypatch.setattr(backend, "_embed_request", lambda *_args, **_kwargs: None)
+    results = backend.embed_batch(["a", "b"])
+    assert len(results) == 2 and not any(result.ok for result in results)
+    monkeypatch.setattr(backend, "_embed_request", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert all(not result.ok for result in backend.embed_batch(["a"]))
+    backend._ready = False
+    backend._configure = lambda: setattr(backend, "_ready", True)
+    assert backend.ensure_ready() is True
+    backend.stop()
+    assert backend.ready is False
+    backend._ready = True
+    backend._probe = lambda: (False, "probe failed")
+    assert backend.status(probe=True)["probe_error"] == "probe failed"
+    backend._probe = GeminiEmbedBackend._probe.__get__(backend)
+    backend._embed_request = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("probe exception"))
+    assert backend.status(probe=True)["probe_error"] == "probe exception"
+    backend._mode = "aistudio"
+    assert backend.status(probe=False)["auth"] == "aistudio"
+    assert GeminiEmbedBackend.cosine([1.0], [1.0]) == pytest.approx(1.0)

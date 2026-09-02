@@ -114,6 +114,17 @@ def test_download_embed_model_rejects_declared_oversize_before_reading(tmp_path,
     assert response._read is False
 
 
+def test_download_embed_model_rejects_symlinked_models_directory(tmp_path):
+    from ida_pro_mcp.installer.runtime import download_embed_model
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (tmp_path / "models").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlinked managed model path"):
+        download_embed_model(tmp_path, "zembed-1")
+
+
 def test_download_embed_model_rejects_empty_body_and_cleans_partial(tmp_path, monkeypatch):
     from ida_pro_mcp.installer.runtime import download_embed_model
 
@@ -167,6 +178,7 @@ def test_find_model_and_server_honor_valid_environment_overrides(tmp_path, monke
     server = tmp_path / "llama-server"
     for path in (embed, rerank, server):
         path.write_bytes(b"x")
+    server.chmod(0o755)
     monkeypatch.setenv("IDA_MCP_EMBED_MODEL", str(embed))
     monkeypatch.setenv("IDA_MCP_RERANK_MODEL", str(rerank))
     monkeypatch.setenv("IDA_MCP_EMBED_SERVER_BIN", str(server))
@@ -174,6 +186,164 @@ def test_find_model_and_server_honor_valid_environment_overrides(tmp_path, monke
     assert find_embed_model(tmp_path, "zembed-1") == str(embed)
     assert find_rerank_model(tmp_path) == str(rerank)
     assert find_llama_server_bin(tmp_path) == str(server)
+
+
+def test_find_environment_overrides_expand_user_and_environment_paths(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer.runtime import find_embed_model, find_llama_server_bin, find_rerank_model
+
+    model = tmp_path / "embed.gguf"
+    rerank = tmp_path / "rerank.gguf"
+    server = tmp_path / "llama-server"
+    model.write_bytes(b"embed")
+    rerank.write_bytes(b"rerank")
+    server.write_bytes(b"server")
+    server.chmod(0o755)
+    monkeypatch.setenv("INSTALLER_TEST_ROOT", str(tmp_path))
+    monkeypatch.setenv("IDA_MCP_EMBED_MODEL", "$INSTALLER_TEST_ROOT/embed.gguf")
+    monkeypatch.setenv("IDA_MCP_RERANK_MODEL", "$INSTALLER_TEST_ROOT/rerank.gguf")
+    monkeypatch.setenv("IDA_MCP_EMBED_SERVER_BIN", "$INSTALLER_TEST_ROOT/llama-server")
+
+    assert find_embed_model(tmp_path / "missing", "qwen3-embedding-0.6b") == str(model)
+    assert find_rerank_model(tmp_path / "missing") == str(rerank)
+    assert find_llama_server_bin(tmp_path / "missing") == str(server)
+
+
+def test_find_helpers_use_state_from_explicit_install_root(tmp_path, monkeypatch):
+    """A custom install must not inherit state from the default install."""
+    from ida_pro_mcp.installer.runtime import (
+        find_embed_model,
+        find_llama_server_bin,
+        find_rerank_model,
+    )
+
+    target_root = tmp_path / "target-install"
+    foreign_root = tmp_path / "foreign-install"
+    target_root.mkdir()
+    foreign_root.mkdir()
+
+    target_embed = target_root / "qwen3-embedding-0.6b-q4_k_m.gguf"
+    foreign_embed = foreign_root / "qwen3-embedding-0.6b-q4_k_m.gguf"
+    target_rerank = target_root / "qwen3-reranker-0.6b-q4_k_m.gguf"
+    foreign_rerank = foreign_root / "qwen3-reranker-0.6b-q4_k_m.gguf"
+    target_server = target_root / "target-llama-server"
+    foreign_server = foreign_root / "foreign-llama-server"
+    for path in (target_embed, foreign_embed, target_rerank, foreign_rerank):
+        path.write_bytes(b"model")
+    for path in (target_server, foreign_server):
+        path.write_bytes(b"server")
+        path.chmod(0o755)
+
+    target_state = {
+        "profile": "qwen3-embedding-0.6b",
+        "model_path": str(target_embed),
+        "server_bin": str(target_server),
+        "rerank": {
+            "profile": "qwen3-reranker-0.6b",
+            "model_path": str(target_rerank),
+        },
+    }
+    foreign_state = {
+        "profile": "qwen3-embedding-0.6b",
+        "model_path": str(foreign_embed),
+        "server_bin": str(foreign_server),
+        "rerank": {
+            "profile": "qwen3-reranker-0.6b",
+            "model_path": str(foreign_rerank),
+        },
+    }
+    (target_root / "embedder.json").write_text(json.dumps(target_state), encoding="utf-8")
+    (foreign_root / "embedder.json").write_text(json.dumps(foreign_state), encoding="utf-8")
+
+    monkeypatch.setenv("IDA_PRO_MCP_HOME", str(foreign_root))
+    for name in (
+        "IDA_MCP_EMBED_MODEL",
+        "IDA_MCP_RERANK_MODEL",
+        "IDA_MCP_EMBED_SERVER_BIN",
+        "IDA_MCP_EMBED_PROFILE",
+        "IDA_MCP_RERANK_PROFILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr("ida_pro_mcp.installer.runtime.shutil.which", lambda _name: None)
+
+    assert find_embed_model(target_root, "qwen3-embedding-0.6b") == str(target_embed)
+    assert find_rerank_model(target_root, "qwen3-reranker-0.6b") == str(target_rerank)
+    assert find_llama_server_bin(target_root) == str(target_server)
+
+
+def test_blank_platform_overrides_do_not_create_relative_installer_paths(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import runtime
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("IDA_PRO_MCP_HOME", "   ")
+    monkeypatch.setenv("LOCALAPPDATA", "   ")
+
+    monkeypatch.setattr(runtime.sys, "platform", "win32")
+    assert runtime.get_install_root() == home / "AppData" / "Local" / "ida-pro-mcp"
+
+    monkeypatch.chdir(tmp_path)
+    relative_candidate = tmp_path / "Programs" / "llama.cpp" / "bin" / "llama-server"
+    relative_candidate.parent.mkdir(parents=True)
+    relative_candidate.write_bytes(b"server")
+    relative_candidate.chmod(0o755)
+    monkeypatch.setattr(runtime.shutil, "which", lambda _name: None)
+    assert runtime.find_llama_server_bin(tmp_path / "missing-install") == ""
+
+
+def test_find_llama_server_ignores_non_executable_environment_override(tmp_path, monkeypatch):
+    from ida_pro_mcp.host.intelligence import core
+    from ida_pro_mcp.installer.runtime import find_llama_server_bin
+
+    monkeypatch.setenv("IDA_MCP_EMBED_SERVER_BIN", str(tmp_path / "not-executable"))
+    monkeypatch.setattr(core, "_read_embedder_state", dict)
+    monkeypatch.setattr(core, "_select_state_path", lambda _value: "")
+    candidate = tmp_path / "bin" / "llama-server"
+    candidate.parent.mkdir()
+    candidate.write_bytes(b"server")
+    candidate.chmod(0o755)
+    monkeypatch.setattr("ida_pro_mcp.installer.runtime.shutil.which", lambda _name: None)
+
+    assert find_llama_server_bin(tmp_path) == str(candidate)
+
+
+def test_find_rerank_model_does_not_fallback_to_a_different_selected_profile(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer.runtime import find_rerank_model
+
+    monkeypatch.delenv("IDA_MCP_RERANK_MODEL", raising=False)
+    monkeypatch.delenv("IDA_MCP_RERANK_PROFILE", raising=False)
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / "qwen3-reranker-0.6b-q8_0.gguf").write_bytes(b"wrong-profile")
+
+    assert find_rerank_model(tmp_path, "qwen3-reranker-4b") == ""
+
+    selected = models / "Qwen3-Reranker-4B-Q4_K_M.gguf"
+    selected.write_bytes(b"selected-profile")
+    assert find_rerank_model(tmp_path, "qwen3-reranker-4b") == str(selected)
+
+
+def test_find_rerank_model_honors_custom_filename_from_target_state(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer.runtime import find_rerank_model
+
+    model = tmp_path / "models" / "my-reranker.gguf"
+    model.parent.mkdir()
+    model.write_bytes(b"custom-reranker")
+    (tmp_path / "embedder.json").write_text(
+        json.dumps(
+            {
+                "rerank": {
+                    "profile": "qwen3-reranker-0.6b",
+                    "model_path": str(model),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("IDA_MCP_RERANK_MODEL", raising=False)
+    monkeypatch.delenv("IDA_MCP_RERANK_PROFILE", raising=False)
+
+    assert find_rerank_model(tmp_path, "qwen3-reranker-0.6b") == str(model)
 
 
 def test_find_embed_model_searches_selected_profile_under_models(tmp_path, monkeypatch):
@@ -231,6 +401,37 @@ def test_run_checked_converts_timeout_to_runtime_error(monkeypatch):
         run_checked(["hung"], timeout=2)
 
 
+def test_setup_runtime_rejects_symlinked_venv_path(tmp_path):
+    from ida_pro_mcp.installer.common import InstallReport
+    from ida_pro_mcp.installer.runtime import setup_runtime_environment
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    install_root = tmp_path / "install"
+    install_root.mkdir()
+    (install_root / ".venv").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlinked runtime environment path"):
+        setup_runtime_environment(
+            install_root,
+            tmp_path,
+            "snapshot",
+            dry_run=True,
+            report=InstallReport(),
+        )
+
+
+def test_wipe_venv_removes_non_directory_placeholder_without_retry(tmp_path):
+    from ida_pro_mcp.installer.runtime import _wipe_venv
+
+    placeholder = tmp_path / ".venv"
+    placeholder.write_text("not a virtual environment", encoding="utf-8")
+
+    _wipe_venv(placeholder)
+
+    assert not placeholder.exists()
+
+
 def test_archive_extraction_accepts_safe_zip_and_rejects_zip_slip(tmp_path):
     from ida_pro_mcp.installer.runtime import _extract_archive
 
@@ -248,6 +449,79 @@ def test_archive_extraction_accepts_safe_zip_and_rejects_zip_slip(tmp_path):
     with pytest.raises(RuntimeError, match="absolute or traversal path"):
         _extract_archive(malicious, tmp_path / "bad-out")
     assert not (tmp_path / "outside").exists()
+
+
+def test_archive_extraction_rejects_non_regular_archive_input(tmp_path):
+    from ida_pro_mcp.installer.runtime import _extract_archive
+
+    archive = tmp_path / "not-an-archive"
+    archive.mkdir()
+
+    with pytest.raises(RuntimeError, match="not a regular file"):
+        _extract_archive(archive, tmp_path / "out")
+
+
+def test_llama_download_skips_prereleases_by_default(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer.common import InstallReport
+    from ida_pro_mcp.installer.runtime import download_and_install_llama_server
+
+    release = {
+        "tag_name": "b123-beta",
+        "prerelease": True,
+        "assets": [
+            {
+                "name": "llama-b123-beta-bin-ubuntu-x64.zip",
+                "browser_download_url": (
+                    "https://github.com/ggml-org/llama.cpp/releases/download/"
+                    "b123-beta/llama-b123-beta-bin-ubuntu-x64.zip"
+                ),
+                "digest": f"sha256:{'0' * 64}",
+                "size": 1,
+            }
+        ],
+    }
+    calls = 0
+
+    def _urlopen(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return _Response(json.dumps([release]).encode())
+
+    monkeypatch.setattr(
+        "ida_pro_mcp.installer.runtime.urllib.request.urlopen", _urlopen
+    )
+
+    with pytest.raises(RuntimeError, match="Unable to resolve"):
+        download_and_install_llama_server(
+            tmp_path, dry_run=False, report=InstallReport()
+        )
+    assert calls == 1
+
+
+def test_llama_download_rejects_oversized_release_metadata(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import runtime
+    from ida_pro_mcp.installer.common import InstallReport
+    from ida_pro_mcp.installer.runtime import download_and_install_llama_server
+
+    # The repository's sys.modules isolation can restore a package attribute
+    # while a previously imported function still points at its original
+    # globals dict. Patch the function's loaded module so this test remains
+    # independent of collection/order.
+    monkeypatch.setitem(
+        download_and_install_llama_server.__globals__,
+        "_MAX_RELEASE_METADATA_SIZE",
+        8,
+    )
+    monkeypatch.setattr(
+        runtime.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _Response(b"[]       "),
+    )
+
+    with pytest.raises(RuntimeError, match="release metadata exceeds"):
+        download_and_install_llama_server(
+            tmp_path, dry_run=False, report=InstallReport()
+        )
 
 
 def test_archive_extraction_rejects_tar_link_outside_root(tmp_path):
@@ -325,6 +599,34 @@ def test_download_llama_server_dry_run_and_existing_binary_skip_network(tmp_path
         lambda *_args, **_kwargs: pytest.fail("existing server must not be downloaded"),
     )
     assert download_and_install_llama_server(tmp_path, dry_run=False, report=InstallReport()) == str(target)
+
+
+def test_download_llama_server_does_not_treat_directory_as_existing_binary(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer.common import InstallReport
+    from ida_pro_mcp.installer.runtime import download_and_install_llama_server
+
+    target = tmp_path / "bin" / "llama-server"
+    target.mkdir(parents=True)
+    target.chmod(0o755)
+    monkeypatch.setattr(
+        "ida_pro_mcp.installer.runtime.urllib.request.urlopen",
+        lambda *_args, **_kwargs: _Response(json.dumps({"assets": []}).encode()),
+    )
+
+    with pytest.raises(RuntimeError, match="Unable to resolve"):
+        download_and_install_llama_server(tmp_path, dry_run=False, report=InstallReport())
+
+
+def test_download_llama_server_rejects_symlinked_bin_directory(tmp_path):
+    from ida_pro_mcp.installer.common import InstallReport
+    from ida_pro_mcp.installer.runtime import download_and_install_llama_server
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (tmp_path / "bin").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlinked managed llama-server path"):
+        download_and_install_llama_server(tmp_path, dry_run=True, report=InstallReport())
 
 
 def test_download_llama_server_rejects_missing_or_unsuitable_assets(tmp_path, monkeypatch):

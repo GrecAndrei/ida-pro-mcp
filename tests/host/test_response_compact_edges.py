@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ida_pro_mcp.host.config import _COMPACT_DROP
 from ida_pro_mcp.host.server.server_response_compact import ServerResponseCompactMixin
 
 
@@ -258,6 +259,39 @@ def test_compact_batch_result_reduces_tool_rows_and_preserves_metadata():
     assert out["summary"] == payload["summary"]
     assert out["error"] == "partial failure"
     assert out["workflow_meta"] == {"batch": True}
+
+
+def test_compact_value_preserves_false_ok_and_drops_metadata_only_details():
+    host = _CompactHost()
+    out = host._compact_value(
+        {"traceback": "internal", "ok": False, "details": {"traceback": "only"}},
+        _opts(drop_ok=True),
+    )
+    assert out == {"ok": False}
+
+
+def test_compact_value_tableifies_uniform_rows_and_drops_empty_list_items():
+    host = _CompactHost()
+    rows = host._compact_value(
+        [{"name": "a", "ea": 1}, {"name": "b", "ea": 2}, {"name": "c", "ea": 3}, {"name": "d", "ea": 4}],
+        _opts(table_mode=True),
+    )
+    assert rows["columns"] == ["name", "ea"]
+    assert len(rows["rows"]) == 4
+    assert "count" not in rows
+    assert host._compact_value([""], _opts()) is _COMPACT_DROP
+
+
+def test_table_mode_leaves_empty_or_wide_rows_and_batch_keeps_opaque_entries():
+    host = _CompactHost()
+    assert host._maybe_tableify([{}, {}, {}, {}], _opts(table_mode=True)) == [{}, {}, {}, {}]
+    wide = {f"key_{i}": i for i in range(25)}
+    assert host._maybe_tableify([wide] * 4, _opts(table_mode=True)) == [wide] * 4
+    out = host._compact_batch_result(
+        {"results": [{"name": "search", "result": {}}, "opaque"]},
+        _opts(batch_compact=True),
+    )
+    assert out["results"][1] == "opaque"
 
 
 def test_compact_batch_result_is_noop_when_not_enabled_or_shape_is_not_batch():

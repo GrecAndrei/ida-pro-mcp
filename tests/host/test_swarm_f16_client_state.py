@@ -17,11 +17,12 @@ from __future__ import annotations
 
 import os
 import threading
-import time
 
 from ida_pro_mcp.host.errors import MCPError, make_error
 from ida_pro_mcp.host.server.server import IDAMCPServer
 from ida_pro_mcp.host.server.server_client_state import mint_agent_ticket
+
+_FUTURE_EXPIRY = 4_102_444_800.0  # 2100-01-01; independent of test run time
 
 
 class _FakeIdaProcess:
@@ -415,7 +416,7 @@ def test_end_connection_drops_logged_in_agents_under_realm_lock(tmp_path, monkey
     res, err = server._sso_activate_realm(["agentA"], secret="sekret")
     assert err is None and res is not None
     ok, login_err = server._sso_agent_login(
-        "agentA", mint_agent_ticket("sekret", "agentA", exp=time.time() + 3600)
+        "agentA", mint_agent_ticket("sekret", "agentA", exp=_FUTURE_EXPIRY)
     )
     assert login_err is None and ok is not None
 
@@ -440,7 +441,7 @@ def test_agent_login_rejects_malformed_scopes(tmp_path, monkeypatch):
 
     for bad in (123, "read", [None, "read"]):
         ticket = mint_agent_ticket(
-            "sekret", "agentA", exp=time.time() + 3600, scopes=bad
+            "sekret", "agentA", exp=_FUTURE_EXPIRY, scopes=bad
         )
         ok, login_err = server._sso_agent_login("agentA", ticket)
         assert ok is None
@@ -455,7 +456,7 @@ def test_agent_login_accepts_valid_scopes(tmp_path, monkeypatch):
     assert err is None and res is not None
 
     ticket = mint_agent_ticket(
-        "sekret", "agentA", exp=time.time() + 3600, scopes=["read", "write"]
+        "sekret", "agentA", exp=_FUTURE_EXPIRY, scopes=["read", "write"]
     )
     ok, login_err = server._sso_agent_login("agentA", ticket)
     assert login_err is None and ok is not None

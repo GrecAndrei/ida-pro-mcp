@@ -41,6 +41,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 from ida_pro_mcp.host.agent_operations import AGENT_OPERATIONS  # noqa: E402
+from ida_pro_mcp.host.server.server_client_state import mint_agent_ticket  # noqa: E402
 from tests.integration.test_agent_surface_live import (  # noqa: E402
     DEFAULT_LIVE_PYTEST_TIMEOUT,
     LiveMCPClient,
@@ -103,6 +104,8 @@ EXCLUDED = {
 # Catalog example values replaced with fixture-derived addresses.
 _ADDR_TOKENS = ("0x401000", "0x401234", "0x401a20", "0x1234", "0x1000",
                 "0x601020", "0x40000000")
+_CATALOG_SSO_SECRET = "catalog-live-sso-secret"
+_CATALOG_SSO_EXPIRY = 4_102_444_800.0  # 2100-01-01; independent of wall clock
 
 
 def _build_fixture(tmp_path_factory: pytest.TempPathFactory) -> Path:
@@ -225,6 +228,17 @@ def _map_arguments(op_name: str, args: dict, ctx: CatalogContext) -> dict:
     if op_name == "ida_session_switch":
         out["session_id"] = ctx.session_id
         out["reopen"] = False
+    if op_name == "ida_sso_activate":
+        # The catalog example intentionally omits the optional secret.  A
+        # real login immediately afterward needs a deterministic secret that
+        # the test can use to mint a valid HMAC ticket.
+        out["secret"] = _CATALOG_SSO_SECRET
+    if op_name == "ida_agent_login":
+        out["ticket"] = mint_agent_ticket(
+            _CATALOG_SSO_SECRET,
+            str(out.get("name") or "rev_a"),
+            exp=_CATALOG_SSO_EXPIRY,
+        )
     if op_name == "ida_export_findings":
         out.pop("path", None)  # inline export; /tmp escapes the allowed root
     # The catalog's struct-member examples are independent snippets; string

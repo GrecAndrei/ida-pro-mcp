@@ -220,10 +220,28 @@ def test_kill_mid_build_keeps_safe_mode_and_surfaces_error(tmp_path, server):
     # watcher would see before the kill. The revamped watcher only flags a
     # "registered-then-dead" runtime once it has OBSERVED the runtime alive, so
     # hold the fake runtime registered long enough for one poll to land.
-    server.session_runtimes[sid] = {"process": _FakeIdaProcess()}
-    import time
+    runtime_seen = threading.Event()
+    real_runtime_record = server._runtime_record
 
-    time.sleep(0.2)
+    def _runtime_record(session_id):
+        record = real_runtime_record(session_id)
+        if session_id == sid and record:
+            runtime_seen.set()
+        return record
+
+    server._runtime_record = _runtime_record
+    error_seen = threading.Event()
+    real_record_error = server._record_background_error
+
+    def _record_background_error(session_id):
+        result = real_record_error(session_id)
+        if session_id == sid:
+            error_seen.set()
+        return result
+
+    server._record_background_error = _record_background_error
+    server.session_runtimes[sid] = {"process": _FakeIdaProcess()}
+    assert runtime_seen.wait(timeout=2)
     # session/kill is now classified DESTRUCTIVE (it tears down the runtime),
     # so it requires explicit ack even in the test's policy mode.
     killed = _open(
@@ -236,13 +254,8 @@ def test_kill_mid_build_keeps_safe_mode_and_surfaces_error(tmp_path, server):
 
     # The watcher notices the dead runtime and records the interruption
     # while keeping the half-analyzed IDB gated.
-    deadline = 3.0
-    import time
-
-    t0 = time.monotonic()
     errors = server._background_load_errors
-    while time.monotonic() - t0 < deadline and sid not in errors:
-        time.sleep(0.02)
+    assert error_seen.wait(timeout=2)
     assert sid in errors
     assert "before auto-analysis" in str(errors[sid].get("message") or "")
     assert server._safe_mode_active(sid)

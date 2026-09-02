@@ -19,12 +19,17 @@ from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from .common import atomic_write_text
+from .common import atomic_write_text, reject_symlink_path
 
 VERSION_TUPLE = tuple[int, int, int]
 # IDA build version: e.g. 9.3.260421.be7de18d  (major.minor.YYMMDD.shorthash)
 _BUILD_VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d{6})\.([0-9a-f]{6,8})")
 _VERSION_DIGITS_RE = re.compile(r"\d+")
+
+
+def _expand_configured_path(value: str | os.PathLike[str]) -> Path:
+    """Expand environment variables and ``~`` in an installer path value."""
+    return Path(os.path.expanduser(os.path.expandvars(os.fspath(value))))
 
 
 def parse_version(s: str) -> tuple[int, ...]:
@@ -45,6 +50,11 @@ def parse_version(s: str) -> tuple[int, ...]:
 STATE_FILE = "ida-install.json"
 
 
+def _expand_configured_path(value: str) -> Path:
+    """Expand user/environment references from installer path settings."""
+    return Path(os.path.expandvars(os.path.expanduser(str(value).strip())))
+
+
 def _safe_roots() -> list[Path]:
     """Filesystem roots a discovered IDA install is allowed to resolve into.
 
@@ -63,16 +73,16 @@ def _safe_roots() -> list[Path]:
         roots.append(Path("/usr"))
     else:
         for env in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "LOCALAPPDATA"):
-            v = os.environ.get(env)
+            v = os.environ.get(env, "").strip()
             if v:
-                roots.append(Path(v))
+                roots.append(_expand_configured_path(v))
     # Always allow the temp / staging dirs used by tests.  These do not
     # widen the production attack surface because production never
     # resolves a candidate to /tmp during a real install.
     for env in ("TMPDIR", "TEMP", "TMP"):
-        v = os.environ.get(env)
+        v = os.environ.get(env, "").strip()
         if v:
-            roots.append(Path(v))
+            roots.append(_expand_configured_path(v))
     cleaned: list[Path] = []
     for r in roots:
         try:
@@ -409,10 +419,10 @@ def _scan_system_dirs() -> Iterable[Path]:
     else:
         # Windows: Program Files / Program Files (x86)
         for env in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
-            base = os.environ.get(env)
+            base = os.environ.get(env, "").strip()
             if not base:
                 continue
-            bp = Path(base)
+            bp = _expand_configured_path(base)
             if not bp.is_dir():
                 continue
             for p in bp.iterdir():
@@ -441,10 +451,10 @@ def _from_path() -> Iterable[Path]:
 
 def _from_env() -> Iterable[Path]:
     for env_name in ("IDADIR", "IDA_DIR", "IDA_MCP_IDAT"):
-        val = os.environ.get(env_name)
+        val = os.environ.get(env_name, "").strip()
         if not val:
             continue
-        p = Path(val).expanduser()
+        p = _expand_configured_path(val)
         try:
             resolved = p.resolve()
         except OSError:
@@ -484,14 +494,23 @@ def detect_ida_installs() -> list[IdaInstall]:
     for p in _scan_system_dirs():
         _add(p, "system_scan" if sys.platform != "darwin" else "applications_scan")
 
-    # Sort: version desc, then pro > home > essential > free > unknown, then path
+    # Sort: version/build desc, then pro > home > essential > free > unknown,
+    # then path.  The public version is only major/minor, but IDA can have
+    # multiple builds of the same release installed; automatic selection must
+    # not choose an older build merely because its path sorts first.
     flavor_rank = {"pro": 0, "home": 1, "essential": 2, "free": 3, "unknown": 4}
 
     def _sort_key(i: IdaInstall) -> tuple:
+        build_match = re.match(r"^(\d{6})(?:\.([0-9a-fA-F]+))?", i.build or "")
+        build_date = int(build_match.group(1)) if build_match else -1
+        build_hash = build_match.group(2).lower() if build_match and build_match.group(2) else ""
         return (
             -i.version[0],
             -i.version[1],
+            -build_date,
+            -bool(build_match),
             flavor_rank.get(i.flavor, 9),
+            build_hash,
             str(i.path),
         )
 
@@ -501,6 +520,7 @@ def detect_ida_installs() -> list[IdaInstall]:
 def write_install_state(install_root: Path, install: IdaInstall) -> Path:
     """Persist the selected install to <install_root>/ida-install.json."""
     state_path = install_root / STATE_FILE
+    reject_symlink_path(state_path, "installer state path")
     payload = {
         "selected": install.to_dict(),
         "selected_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
@@ -512,11 +532,17 @@ def write_install_state(install_root: Path, install: IdaInstall) -> Path:
 def read_install_state(install_root: Path) -> IdaInstall | None:
     """Read back the last installer-selected IDA install, or None."""
     state_path = install_root / STATE_FILE
+    try:
+        reject_symlink_path(state_path, "installer state path")
+    except RuntimeError:
+        return None
     if not state_path.is_file():
         return None
     try:
         data = json.loads(state_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
         return None
     sel = data.get("selected")
     if not isinstance(sel, dict):

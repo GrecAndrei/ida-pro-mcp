@@ -961,7 +961,8 @@ class ServerBlackboardMixin(
                 "(set IDA_MCP_BLACKBOARD_ROOT or open a session).",
             )
         try:
-            canonical = os.path.realpath(os.path.join(root, path))
+            candidate = os.path.abspath(os.path.join(root, path))
+            canonical = os.path.realpath(candidate)
         except Exception:
             return "", make_error(MCPError.INVALID_ARGS, "blackboard file action: invalid path")
         try:
@@ -976,7 +977,10 @@ class ServerBlackboardMixin(
                 MCPError.INVALID_ARGS,
                 "blackboard file action: path escapes allowed root",
             )
-        if self._bb_path_has_symlink(canonical, root):
+        # Check the lexical path as well as the resolved path.  Checking only
+        # ``canonical`` would erase the symlink component before the safety
+        # walk saw it, allowing ``link/report.md`` to bypass the sandbox.
+        if self._bb_path_has_symlink(candidate, root) or self._bb_path_has_symlink(canonical, root):
             return "", make_error(
                 MCPError.INVALID_ARGS,
                 "blackboard file action: symbolic links are not allowed in path",

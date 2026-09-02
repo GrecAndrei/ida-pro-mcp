@@ -306,7 +306,12 @@ def calc(
                 # so sub_401000 is the symbol's EA, never the number 401000.
                 try:
                     sym_ea = idc.get_name_ea_simple(s)
-                    if sym_ea != idaapi.BADADDR:
+                    bad_values = {
+                        getattr(idaapi, "BADADDR", -1),
+                        getattr(idc, "BADADDR", getattr(idaapi, "BADADDR", -1)),
+                        (1 << 64) - 1,
+                    }
+                    if sym_ea is not None and sym_ea not in bad_values:
                         return sym_ea
                 except Exception:
                     pass

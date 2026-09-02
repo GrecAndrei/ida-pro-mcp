@@ -94,7 +94,8 @@ def _load_insight_index(path: str = "") -> dict:
         return {}
     try:
         with open(target, encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
     except Exception:
         return {}
 
@@ -108,14 +109,23 @@ def _query_insight_by_tags(tags: list, mode: str = "and") -> list:
     if not tags:
         return []
     payload = _load_insight_index()
+    if not isinstance(payload, dict):
+        return []
     tag_map = payload.get("tag_map", {})
     func_map = payload.get("func_map", {})
+    if not isinstance(tag_map, dict) or not isinstance(func_map, dict):
+        return []
 
-    tags = [t.lower() for t in tags if t]
+    tags = [t.strip().lower() for t in tags if isinstance(t, str) and t.strip()]
+    if not tags:
+        return []
     if mode == "and":
         candidates = None
         for tag in tags:
-            addrs = set(tag_map.get(tag, []))
+            raw_addrs = tag_map.get(tag, [])
+            if not isinstance(raw_addrs, (list, tuple, set)):
+                return []
+            addrs = {str(addr) for addr in raw_addrs if addr is not None}
             if candidates is None:
                 candidates = addrs
             else:
@@ -127,7 +137,13 @@ def _query_insight_by_tags(tags: list, mode: str = "and") -> list:
         seen = set()
         result_addrs = []
         for tag in tags:
-            for addr in tag_map.get(tag, []):
+            raw_addrs = tag_map.get(tag, [])
+            if not isinstance(raw_addrs, (list, tuple, set)):
+                continue
+            for raw_addr in raw_addrs:
+                if raw_addr is None:
+                    continue
+                addr = str(raw_addr)
                 if addr not in seen:
                     seen.add(addr)
                     result_addrs.append(addr)

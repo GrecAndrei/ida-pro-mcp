@@ -14,16 +14,19 @@ import json
 import os
 import subprocess
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
+from unittest import mock
 
 import pytest
 
 from ida_pro_mcp.host.policy import PolicyMode, strictest
+from ida_pro_mcp.host.server import server_runtime as server_runtime_mod
 from ida_pro_mcp.host.server.server_dispatch import ServerDispatchMixin
 from ida_pro_mcp.host.server.server_runtime import ServerRuntimeMixin
 from ida_pro_mcp.host.server.server_session import ServerSessionMixin
 from ida_pro_mcp.host.stores.blackboard_store import BlackboardStore
+
+_FAKE_NOW = 1_000_000_000.0
 
 # --------------------------------------------------------------------------
 # Policy mode: a session may tighten the operator baseline, never relax it
@@ -93,18 +96,17 @@ class _HealthHost(ServerDispatchMixin):
         self.cache_dir = ""
         self.ida_dir = ""
         self.idat_exe = ""
+        self._mutation_seen = threading.Event()
         self.session_mgr = type("M", (), {"discover_sessions": staticmethod(list)})()
 
     def _resolve_wiki_root(self):
         return ""
 
-    @staticmethod
-    def _runtime_alive(_runtime):
-        # Yield inside the loop so a concurrent writer reliably lands between
-        # iterations. Without this the real liveness check is fast enough that
-        # an unlocked iteration only rarely observes the mutation, and the test
-        # would pass against the unlocked implementation it exists to reject.
-        time.sleep(0.0002)
+    def _runtime_alive(self, _runtime):
+        # Let the churner perform a real concurrent mutation before returning.
+        # This creates the interleaving without relying on a scheduler-sized
+        # sleep window.
+        self._mutation_seen.wait(timeout=2)
         return False
 
 
@@ -123,6 +125,7 @@ def test_session_health_survives_concurrent_runtime_mutation():
             with host._runtime_lock:
                 host.session_runtimes[key] = {"process": None, "port": 1234}
                 host.session_runtimes.pop(f"CHURN{(i - 1) % 32:04d}", None)
+            host._mutation_seen.set()
             i += 1
 
     churner = threading.Thread(target=churn, daemon=True)
@@ -229,7 +232,7 @@ def _age_entry(store: BlackboardStore, entry_id: str, days: float) -> None:
     with sqlite3.connect(store.db_path) as conn:
         conn.execute(
             "UPDATE blackboard SET updated_at=? WHERE id=?",
-            (time.time() - days * 86400, entry_id),
+            (_FAKE_NOW - days * 86400, entry_id),
         )
         conn.commit()
 
@@ -240,7 +243,11 @@ def test_decay_does_not_bump_updated_at(tmp_path):
     _age_entry(store, entry_id, days=30)
     before = store.read(entry_id)["updated_at"]
 
-    assert store.decay_stale_confidence(half_life_days=14.0) == 1
+    with mock.patch(
+        "ida_pro_mcp.host.stores.blackboard_store.time.time",
+        return_value=_FAKE_NOW,
+    ):
+        assert store.decay_stale_confidence(half_life_days=14.0) == 1
 
     after = store.read(entry_id)
     assert after["confidence"] < 0.9
@@ -254,7 +261,11 @@ def test_decay_keeps_working_on_repeated_runs(tmp_path):
     entry_id = store.upsert_finding("Stale claim", category="note", confidence=0.9)["entry_id"]
     _age_entry(store, entry_id, days=30)
 
-    assert store.decay_stale_confidence(half_life_days=14.0) == 1
+    with mock.patch(
+        "ida_pro_mcp.host.stores.blackboard_store.time.time",
+        return_value=_FAKE_NOW,
+    ):
+        assert store.decay_stale_confidence(half_life_days=14.0) == 1
     first = store.read(entry_id)["confidence"]
 
     # Age it again relative to the decay we just recorded.
@@ -263,13 +274,17 @@ def test_decay_keeps_working_on_repeated_runs(tmp_path):
     with sqlite3.connect(store.db_path) as conn:
         conn.execute(
             "UPDATE blackboard SET decayed_at=? WHERE id=?",
-            (time.time() - 30 * 86400, entry_id),
+            (_FAKE_NOW - 30 * 86400, entry_id),
         )
         conn.commit()
 
-    assert store.decay_stale_confidence(half_life_days=14.0) == 1, (
-        "second decay run did nothing; decay reset its own clock"
-    )
+    with mock.patch(
+        "ida_pro_mcp.host.stores.blackboard_store.time.time",
+        return_value=_FAKE_NOW,
+    ):
+        assert store.decay_stale_confidence(half_life_days=14.0) == 1, (
+            "second decay run did nothing; decay reset its own clock"
+        )
     assert store.read(entry_id)["confidence"] < first
 
 
@@ -343,6 +358,42 @@ def test_claim_is_refused_while_a_live_owner_holds_it(tmp_path):
 
     other = _LeaseHost(tmp_path, "owner-b")
     assert other._claim_runtime_ownership("A1B2C3D4") is None
+
+
+def test_claim_reclaims_malformed_owner_record(tmp_path):
+    """A damaged owner file cannot crash or permanently block a session."""
+    host = _LeaseHost(tmp_path, "owner-a")
+    path = host._runtime_owner_path("A1B2C3D4")
+    with open(path, "w", encoding="utf-8") as owner_fh:
+        json.dump(["not-an-owner"], owner_fh)
+
+    assert host._claim_runtime_ownership("A1B2C3D4") == path
+    owner = json.loads(open(path, encoding="utf-8").read())
+    assert owner["owner_id"] == "owner-a"
+
+
+def test_claim_reclaims_owner_pid_after_process_reuse(tmp_path, monkeypatch):
+    """A live PID with a changed start token is not the old host anymore."""
+    holder = _LeaseHost(tmp_path, "owner-old")
+    path = holder._runtime_owner_path("A1B2C3D4")
+    with open(path, "w", encoding="utf-8") as owner_fh:
+        json.dump(
+            {
+                "session_id": "A1B2C3D4",
+                "owner_pid": 424242,
+                "owner_id": "owner-old",
+                "owner_start_token": "old",
+            },
+            owner_fh,
+        )
+
+    replacement = _LeaseHost(tmp_path, "owner-new")
+    monkeypatch.setattr(server_runtime_mod.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(server_runtime_mod, "_process_start_token", lambda pid: "new")
+
+    assert replacement._claim_runtime_ownership("A1B2C3D4") == path
+    owner = json.loads(open(path, encoding="utf-8").read())
+    assert owner["owner_id"] == "owner-new"
 
 
 def test_reclaiming_own_lease_is_idempotent(tmp_path):

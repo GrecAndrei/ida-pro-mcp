@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
+import getpass
 import json
 import os
 import shlex
@@ -13,12 +13,19 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .clients import backup_file, configure_clients, rollback_from_backups
+from . import runtime as _runtime
+from .clients import (
+    backup_file,
+    configure_clients,
+    get_config_paths,
+    rollback_from_backups,
+)
 from .common import (
     InstallerOptions,
     InstallReport,
     atomic_write_text,
     find_ida_sig_dir,
+    installer_lock,
     reject_symlink_path,
 )
 from .discovery import (
@@ -35,6 +42,7 @@ from .runtime import (
     choose_runtime_source,
     download_and_install_llama_server,
     download_embed_model,
+    download_rerank_model,
     find_embed_model,
     find_idalib_python_dir,
     find_llama_server_bin,
@@ -46,6 +54,8 @@ from .runtime import (
     setup_runtime_environment,
     stage_sigs,
 )
+
+_sha256_file = _runtime._sha256_file
 
 
 class UI:
@@ -75,19 +85,33 @@ def _absolute_path(path: Path | str) -> Path:
     return Path(os.path.abspath(os.path.expandvars(os.path.expanduser(os.fspath(path)))))
 
 
-def _sha256_file(path: str) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        while True:
-            chunk = f.read(1024 * 1024)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
+def _is_checkout_skill_link(path: Path) -> bool:
+    """Return whether a link targets a complete skill inside a Git checkout."""
+    try:
+        target = path.resolve(strict=True)
+        if (
+            not target.is_dir()
+            or target.name != "ida-pro-mcp"
+            or target.parent.name != "skills"
+            or target.parent.parent.name != ".agents"
+            or not (target / "SKILL.md").is_file()
+            or not (target / "references" / "operations.md").is_file()
+        ):
+            return False
+        checkout_root = target.parent.parent.parent
+        git_marker = checkout_root / ".git"
+        return git_marker.is_dir() or git_marker.is_file()
+    except OSError:
+        return False
 
 
 def run_embedder_doctor(opts: InstallerOptions, ui: UI) -> int:
-    install_root = opts.install_root or get_install_root()
+    install_root = _absolute_path(opts.install_root or get_install_root())
+    try:
+        reject_symlink_path(install_root, "installer root")
+    except RuntimeError as exc:
+        ui.err(str(exc))
+        return 1
     gemini_mode = opts.embed_backend == "gemini"
     profile = "" if gemini_mode else opts.embed_profile
     embed_model = "" if gemini_mode else (opts.embed_model_path or (
@@ -109,22 +133,52 @@ def run_embedder_doctor(opts: InstallerOptions, ui: UI) -> int:
     from ida_pro_mcp.host.intelligence import core as intel_core
 
     # Recreate singleton under doctor-selected env so status/probe reflect this setup.
-    prev_backend = os.environ.get("IDA_MCP_EMBED_BACKEND", "")
-    prev_server = os.environ.get("IDA_MCP_EMBED_SERVER_BIN", "")
-    prev_model = os.environ.get("IDA_MCP_EMBED_MODEL", "")
-    prev_profile = os.environ.get("IDA_MCP_EMBED_PROFILE", "")
+    # Include the managed root and cloud settings: otherwise a custom
+    # --install-root can report against the user's default state file and a
+    # --gemini-api-key/--gemini-model override has no effect on the probe.
+    doctor_env_names = (
+        "IDA_PRO_MCP_HOME",
+        "IDA_MCP_EMBED_BACKEND",
+        "IDA_MCP_EMBED_SERVER_BIN",
+        "IDA_MCP_EMBED_MODEL",
+        "IDA_MCP_EMBED_PROFILE",
+        "IDA_MCP_GEMINI_MODEL",
+        "IDA_MCP_GEMINI_DIM",
+        "IDA_MCP_GEMINI_VERTEX",
+        "GEMINI_API_KEY",
+        "GOOGLE_CLOUD_PROJECT",
+        "VERTEX_AI_LOCATION",
+    )
+    previous_doctor_env = {name: os.environ.get(name) for name in doctor_env_names}
     prev_instance = intel_core.BgeCodeEmbedder._instance
     try:
+        for name in doctor_env_names:
+            os.environ.pop(name, None)
+        os.environ["IDA_PRO_MCP_HOME"] = str(install_root)
         if gemini_mode:
             os.environ["IDA_MCP_EMBED_BACKEND"] = "gemini"
-        elif "IDA_MCP_EMBED_BACKEND" in os.environ:
-            del os.environ["IDA_MCP_EMBED_BACKEND"]
+        else:
+            # A previous Gemini install may have backend=gemini in the state
+            # file. Explicitly force this doctor invocation to inspect the
+            # requested local backend instead of inheriting that state.
+            os.environ["IDA_MCP_EMBED_BACKEND"] = "local"
         if embed_server:
             os.environ["IDA_MCP_EMBED_SERVER_BIN"] = embed_server
         if embed_model:
             os.environ["IDA_MCP_EMBED_MODEL"] = embed_model
         if profile:
             os.environ["IDA_MCP_EMBED_PROFILE"] = profile
+        if gemini_mode:
+            os.environ["IDA_MCP_GEMINI_MODEL"] = opts.gemini_model
+            os.environ["IDA_MCP_GEMINI_DIM"] = str(opts.gemini_dim)
+            if opts.gemini_access == "vertex":
+                os.environ["IDA_MCP_GEMINI_VERTEX"] = "1"
+            if opts.gemini_api_key:
+                os.environ["GEMINI_API_KEY"] = opts.gemini_api_key
+            if opts.gemini_vertex_project:
+                os.environ["GOOGLE_CLOUD_PROJECT"] = opts.gemini_vertex_project
+            if opts.gemini_vertex_location:
+                os.environ["VERTEX_AI_LOCATION"] = opts.gemini_vertex_location
         intel_core.BgeCodeEmbedder._instance = None
         emb = intel_core.BgeCodeEmbedder()
         status = emb.status(probe=True, deep_hash=False)
@@ -151,25 +205,18 @@ def run_embedder_doctor(opts: InstallerOptions, ui: UI) -> int:
             ui.warn(f"gemini: {status.get('error')}")
         ui.info("fallback: unavailable (semantic features fail explicitly)")
         print(json.dumps(status, indent=2))
-        return 0
+        # A doctor command is commonly used as a readiness gate by scripts and
+        # service managers.  Reporting a healthy-looking exit code when either
+        # the backend probe or the quick embedding check failed makes those
+        # callers proceed with a known-broken semantic setup.
+        return 0 if status.get("ready") and status.get("embed_test_ok") else 1
     finally:
         intel_core.BgeCodeEmbedder._instance = prev_instance
-        if prev_backend:
-            os.environ["IDA_MCP_EMBED_BACKEND"] = prev_backend
-        elif "IDA_MCP_EMBED_BACKEND" in os.environ:
-            del os.environ["IDA_MCP_EMBED_BACKEND"]
-        if prev_server:
-            os.environ["IDA_MCP_EMBED_SERVER_BIN"] = prev_server
-        elif "IDA_MCP_EMBED_SERVER_BIN" in os.environ:
-            del os.environ["IDA_MCP_EMBED_SERVER_BIN"]
-        if prev_model:
-            os.environ["IDA_MCP_EMBED_MODEL"] = prev_model
-        elif "IDA_MCP_EMBED_MODEL" in os.environ:
-            del os.environ["IDA_MCP_EMBED_MODEL"]
-        if prev_profile:
-            os.environ["IDA_MCP_EMBED_PROFILE"] = prev_profile
-        elif "IDA_MCP_EMBED_PROFILE" in os.environ:
-            del os.environ["IDA_MCP_EMBED_PROFILE"]
+        for name, value in previous_doctor_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 def _is_interactive_terminal() -> bool:
@@ -221,10 +268,8 @@ def _prompt_text(question: str, default: str = "") -> str:
 
 
 def _prompt_secret(question: str) -> str:
-    """Ask for a secret (API key). Terminal echo is left as-is; the value is
-    only ever persisted into the MCP client config env block on explicit
-    consent."""
-    return input(f"{question}: ").strip()
+    """Ask for a secret without echoing it into the terminal or command log."""
+    return getpass.getpass(f"{question}: ").strip()
 
 
 def _prompt_model_path(profile: str) -> str:
@@ -235,7 +280,7 @@ def _prompt_model_path(profile: str) -> str:
         ans = input("Model path (or press Enter to skip): ").strip().strip("\"'")
         if not ans:
             return ""
-        p = Path(ans).expanduser()
+        p = Path(os.path.expandvars(os.path.expanduser(ans)))
         if p.is_file():
             return str(p)
         print(f"File not found: {ans}. Check the path and try again.")
@@ -274,7 +319,7 @@ def _resolve_ida_install(opts: InstallerOptions, ui: UI) -> IdaInstall:
     if opts.ida_dir or opts.ida_version:
         chosen = select_ida_install(
             installs,
-            explicit_dir=Path(opts.ida_dir).expanduser() if opts.ida_dir else None,
+            explicit_dir=_absolute_path(opts.ida_dir) if opts.ida_dir else None,
             explicit_version=opts.ida_version or None,
         )
         ui.ok(f"Selected IDA install (override): {chosen.display}")
@@ -462,17 +507,20 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
             ui.info("The server will use a llama-server subprocess (HTTP). "
                     "For faster startup and lower RAM, build the native library after install: "
                     "  bash scripts/build_native_llama.sh")
-    if opts.embed_backend != "gemini" and auto_embed_model:
-        ui.ok(f"Detected embedding model: {auto_embed_model}")
+    selected_embed_model = opts.embed_model_path or auto_embed_model
+    if opts.embed_backend != "gemini" and selected_embed_model:
+        if not opts.embed_model_path:
+            ui.ok(f"Detected embedding model: {auto_embed_model}")
         # Honor an explicit --no-embed-auto: the prompt default reflects the
         # current flag so a bare Enter cannot silently flip an opt-out back on.
         opts.embed_auto = _prompt_yes_no("Enable semantic embedding model for MCP clients?", default=opts.embed_auto)
         if opts.embed_auto:
-            opts.embed_model_path = auto_embed_model
-            if auto_embed_server:
+            if not opts.embed_model_path:
+                opts.embed_model_path = auto_embed_model
+            if auto_embed_server and not opts.embed_server_bin:
                 ui.ok(f"Detected llama-server: {auto_embed_server}")
                 opts.embed_server_bin = auto_embed_server
-            else:
+            elif not auto_embed_server and not opts.embed_server_bin:
                 ui.warn("llama-server not found.")
                 opts.install_llama_server = _prompt_yes_no(
                     "Download and install llama-server automatically?",
@@ -505,7 +553,10 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
             opts.embed_auto = False
 
     # --- Reranker model (second model required for semantic search quality) ---
-    if opts.embed_backend != "gemini" and (opts.embed_auto or opts.embed_model_path):
+    # Gemini supplies the embedding model remotely, but reranking is still a
+    # separate local cross-encoder.  Keep this section independent of the
+    # embedding backend so cloud users do not silently lose reranking.
+    if opts.embed_backend == "gemini" or opts.embed_auto or opts.embed_model_path:
         ui.info(
             "Semantic search uses two models: an embedding model (already configured above) "
             "and a reranker (cross-encoder) that re-scores results for precision."
@@ -526,10 +577,13 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
             )
         ]
         auto_rerank_model = find_rerank_model(opts.install_root or get_install_root(), opts.rerank_profile)
-        if auto_rerank_model:
-            ui.ok(f"Detected reranker: {auto_rerank_model}")
+        selected_rerank_model = opts.rerank_model_path or auto_rerank_model
+        if selected_rerank_model:
+            if not opts.rerank_model_path:
+                ui.ok(f"Detected reranker: {auto_rerank_model}")
             if _prompt_yes_no("Enable reranker for improved semantic search precision?", default=True):
-                opts.rerank_model_path = auto_rerank_model
+                if not opts.rerank_model_path:
+                    opts.rerank_model_path = auto_rerank_model
             else:
                 # An explicit 'No' must stick: remember the opt-out and don't
                 # let the default profile leak into state / client env.
@@ -596,15 +650,21 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
             )
         else:
             ui.ok(f"idapro package found: {idalib_py}")
-            ok, detail = activate_idalib(ida_dir)
-            if ok:
-                ui.ok(f"idalib activated for {ida_dir} — IDA_MCP_RUNTIME=idalib will be written to client configs.")
-            else:
-                ui.warn(f"idalib activation failed ({detail}); sessions will fail until activation succeeds.")
+            ui.info(
+                "idalib activation will run after the installation phases complete, "
+                "because it changes IDA's global active runtime."
+            )
 
     opts.rollback_on_fail = _prompt_yes_no(
         "Rollback backed-up config files on failure?",
-        default=True if not opts.rollback_on_fail else opts.rollback_on_fail,
+        default=opts.rollback_on_fail,
+    )
+    corpus_env_enabled = os.environ.get("IDA_MCP_BRON_CORPUS_VERIFY", "").lower() in {
+        "1", "true", "yes", "on"
+    }
+    opts.with_bron_corpus = _prompt_yes_no(
+        "Download the optional threat corpus and crypto signatures?",
+        default=opts.with_bron_corpus or opts.verify_bron_corpus or corpus_env_enabled,
     )
     ui.info(
         "Policy gates are ON by default — they require evidence cards and "
@@ -623,11 +683,44 @@ def _run_interactive_wizard(opts: InstallerOptions, ui: UI) -> InstallerOptions:
     return opts
 
 
-def install_bashrc_cli(install_root: Path, dry_run: bool, report: InstallReport) -> None:
+def _activate_idalib_after_install(
+    opts: InstallerOptions,
+    chosen_install: IdaInstall | None,
+    report: InstallReport,
+    ui: UI,
+) -> None:
+    """Activate idalib only after all selected install phases have succeeded."""
+    if opts.ida_runtime != "idalib":
+        return
+    if opts.dry_run:
+        report.add_step("idalib", "dry-run", "would activate after installation")
+        return
+    if chosen_install is None:
+        raise RuntimeError("idalib selected but no IDA install was resolved")
+
+    ida_dir = str(chosen_install.path)
+    if not find_idalib_python_dir(ida_dir):
+        raise RuntimeError(
+            f"idalib selected but no idapro package was found under {ida_dir}/idalib/python"
+        )
+
+    ok, detail = activate_idalib(ida_dir)
+    if ok:
+        report.add_step("idalib", "ok", f"activated for {ida_dir}")
+        ui.ok(
+            f"idalib activated for {ida_dir} — "
+            "IDA_MCP_RUNTIME=idalib is ready for MCP clients."
+        )
+    else:
+        raise RuntimeError(f"idalib activation failed ({detail})")
+
+
+def install_bashrc_cli(install_root: Path, dry_run: bool, report: InstallReport) -> bool:
     if sys.platform == "win32":
         report.add_warning("bashrc shim skipped on Windows")
-        return
+        return False
     bashrc = Path.home() / ".bashrc"
+    reject_symlink_path(bashrc, "bashrc path")
     block_start = "# >>> ida-pro-mcp >>>"
     block_end = "# <<< ida-pro-mcp <<<"
     venv_bin = install_root / ".venv" / "bin"
@@ -644,23 +737,29 @@ def install_bashrc_cli(install_root: Path, dry_run: bool, report: InstallReport)
             "",
         ]
     )
+    if bashrc.exists() and not bashrc.is_file():
+        raise RuntimeError(f"Refusing non-regular bashrc path: {bashrc}")
     existing = bashrc.read_text(encoding="utf-8") if bashrc.exists() else ""
-    if block_start in existing and block_end in existing:
-        start = existing.index(block_start)
-        end = existing.index(block_end) + len(block_end)
+    start = existing.find(block_start)
+    end_marker = existing.find(block_end, start + len(block_start)) if start >= 0 else -1
+    if start >= 0 and end_marker >= 0:
+        end = end_marker + len(block_end)
         newline = existing.find("\n", end)
         updated = existing[:start] + block + ("" if newline == -1 else existing[newline + 1 :])
     else:
         updated = existing.rstrip("\n") + ("\n" if existing.strip() else "") + block
     if not dry_run:
         bashrc.parent.mkdir(parents=True, exist_ok=True)
+        backup_file(bashrc, report, dry_run=False)
         atomic_write_text(bashrc, updated)
-    report.add_modified(bashrc)
+        report.add_modified(bashrc)
+    return True
 
 
 def _replace_with_symlink_or_copy(src: Path, dst: Path) -> str:
     if not src.exists() and not src.is_symlink():
         raise FileNotFoundError(src)
+    reject_symlink_path(dst, "skill destination")
     dst.parent.mkdir(parents=True, exist_ok=True)
     staging_dir = Path(tempfile.mkdtemp(prefix=f".{dst.name}.staging-", dir=str(dst.parent)))
     staged = staging_dir / dst.name
@@ -699,28 +798,37 @@ def _replace_with_symlink_or_copy(src: Path, dst: Path) -> str:
         shutil.rmtree(staging_dir, ignore_errors=True)
 
 
-def _install_claude_opencode_skills(report: InstallReport, dry_run: bool, ui: UI) -> None:
+def _install_claude_opencode_skills(report: InstallReport, dry_run: bool, ui: UI) -> bool:
     """Auto-generate and install skills for Claude Code and OpenCode."""
     try:
         from .skills import default_skill_dirs, install_skills
     except ImportError as exc:
-        report.add_warning(f"claude-skills: import error — {exc}")
-        return
+        message = f"claude-skills import failed: {exc}"
+        report.add_warning(message)
+        report.add_step("claude-skills", "warn", message)
+        ui.warn(message)
+        return False
     try:
         target_dirs = default_skill_dirs()
         written = install_skills(target_dirs, dry_run=dry_run)
         count = sum(len(paths) for paths in written.values())
-        for _skill_name, paths in written.items():
-            for p in paths:
-                report.add_modified(p)
+        if not dry_run:
+            for paths in written.values():
+                for p in paths:
+                    report.add_modified(p)
         action = "would install" if dry_run else "installed"
         report.add_step(
             "claude-skills", "ok" if not dry_run else "dry-run",
             f"{action} {len(written)} skills ({count} files) to {len(target_dirs)} dirs",
         )
         ui.ok(f"Claude/OpenCode skills: {action} {len(written)} skills")
+        return True
     except Exception as exc:
-        report.add_warning(f"claude-skills install failed: {exc}")
+        message = f"claude-skills install failed: {exc}"
+        report.add_warning(message)
+        report.add_step("claude-skills", "warn", message)
+        ui.warn(message)
+        return False
 
 
 def install_codex_skills(source_root: Path, mode: str, report: InstallReport, dry_run: bool) -> None:
@@ -728,26 +836,44 @@ def install_codex_skills(source_root: Path, mode: str, report: InstallReport, dr
         report.add_step("skills", "skipped", "skills mode set to none")
         return
     source_root_skills = source_root / ".agents" / "skills"
-    if not source_root_skills.exists():
-        report.add_warning("skills source not found; skipping")
-        return
     agent_skill = source_root_skills / "ida-pro-mcp"
     if not (agent_skill / "SKILL.md").exists():
-        report.add_warning("agent skill source not found; regenerate skills before installing")
+        # PyPI wheels intentionally contain the runtime package, not the
+        # repository's .agents tree.  Generate the same skill content from the
+        # operation registry so a packaged install is still useful to Codex.
+        from .skills import install_skills
+
+        codex_home = os.environ.get("CODEX_HOME", "").strip() or str(Path.home() / ".codex")
+        codex_skills = _absolute_path(codex_home) / "skills"
+        written = install_skills([codex_skills], dry_run=dry_run)
+        count = sum(len(paths) for paths in written.values())
+        if not dry_run:
+            for paths in written.values():
+                for path in paths:
+                    report.add_modified(path)
+        action = "would generate" if dry_run else "generated"
+        report.add_step(
+            "skills",
+            "dry-run" if dry_run else "ok",
+            f"{action} {count} files to {codex_skills / 'ida-pro-mcp'}",
+        )
         return
     selected = [agent_skill]
     codex_home = os.environ.get("CODEX_HOME", "").strip() or str(Path.home() / ".codex")
     codex_skills = _absolute_path(codex_home) / "skills"
     # A checkout-backed Codex skill is a supported development layout:
     # ~/.codex/skills/ida-pro-mcp -> <checkout>/.agents/skills/ida-pro-mcp.
-    # Retain it only when it resolves to this exact source skill. Any other
-    # destination symlink remains rejected so installation cannot write through
-    # a user-controlled redirect.
+    # It is safe to retain only when the link resolves to this exact source
+    # skill.  Any other destination symlink remains rejected so an installer
+    # run cannot write through a user-controlled redirect.
     reject_symlink_path(codex_skills, "skill installation root")
     destination = codex_skills / selected[0].name
     if destination.is_symlink():
         try:
-            if destination.resolve(strict=True) == agent_skill.resolve(strict=True):
+            if (
+                destination.resolve(strict=True) == agent_skill.resolve(strict=True)
+                or _is_checkout_skill_link(destination)
+            ):
                 report.add_step(
                     "skills",
                     "dry-run" if dry_run else "ok",
@@ -777,15 +903,25 @@ def install_codex_skills(source_root: Path, mode: str, report: InstallReport, dr
         else:
             _replace_with_symlink_or_copy(src, dst)
             report.add_modified(dst)
-    report.add_step("skills", "ok", f"installed {len(selected)} skills")
+    report.add_step(
+        "skills",
+        "dry-run" if dry_run else "ok",
+        f"would install {len(selected)} skills to {codex_skills}" if dry_run
+        else f"installed {len(selected)} skills",
+    )
 
 
 def parse_args(argv: list[str] | None = None) -> InstallerOptions:
     parser = argparse.ArgumentParser(description="IDA Pro MCP installer")
-    parser.add_argument("--dry-run", action="store_true", help="print planned actions without mutating files")
-    parser.add_argument("--yes", action="store_true", help="non-interactive mode")
-    parser.add_argument("--interactive", action="store_true", help="force interactive wizard mode")
-    parser.add_argument("--no-interactive", action="store_true", help="disable interactive wizard mode")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print planned actions without changing managed files (writes an install report)",
+    )
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--yes", action="store_true", help="non-interactive mode")
+    mode_group.add_argument("--interactive", action="store_true", help="force interactive wizard mode")
+    mode_group.add_argument("--no-interactive", action="store_true", help="disable interactive wizard mode")
     parser.add_argument("--kill-ida", action="store_true", help="terminate running ida/idat processes before install")
     parser.add_argument(
         "--ida-binary-path",
@@ -794,7 +930,20 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         "(default: scope to the chosen IDA install's idat binary)",
     )
     parser.add_argument("--install-cli-shim", action="store_true", help="opt-in bashrc PATH shim installation")
-    parser.add_argument("--rollback-on-fail", action="store_true", help="restore backed up config files if install fails")
+    rollback_group = parser.add_mutually_exclusive_group()
+    rollback_group.add_argument(
+        "--rollback-on-fail",
+        dest="rollback_on_fail",
+        action="store_true",
+        default=True,
+        help="restore backed up config files if install fails (default)",
+    )
+    rollback_group.add_argument(
+        "--no-rollback-on-fail",
+        dest="rollback_on_fail",
+        action="store_false",
+        help="keep partial client changes when a later install phase fails",
+    )
     parser.add_argument(
         "--runtime-source",
         choices=["auto", "local", "snapshot", "pypi"],
@@ -857,6 +1006,16 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         "--allow-unverified-downloads",
         action="store_true",
         help="allow llama-server downloads when GitHub omits its SHA-256 digest (unsafe; prefer verified assets)",
+    )
+    parser.add_argument(
+        "--with-corpus",
+        action="store_true",
+        help="download and build the optional threat corpus and crypto signatures",
+    )
+    parser.add_argument(
+        "--verify-corpus",
+        action="store_true",
+        help="require IDA_MCP_BRON_CORPUS_SHA256_* hashes for every threat-corpus source",
     )
     parser.add_argument("--no-embed-auto", action="store_true", help="disable automatic embedder/server discovery")
     parser.add_argument("--skills-mode", choices=["agent", "none"], default="agent", help="Codex skill installation mode")
@@ -944,10 +1103,13 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         only=set(args.only),
         disable_policy=args.disable_policy,
         with_r2=args.with_r2,
+        with_corpus=args.with_corpus,
         sigs_dir=args.sigs,
         ida_runtime=args.ida_runtime or "idat",
         ida_binary_path=args.ida_binary_path,
         allow_unverified_downloads=args.allow_unverified_downloads,
+        with_bron_corpus=args.with_corpus or args.verify_corpus,
+        verify_bron_corpus=args.verify_corpus,
     )
     if opts.setup_embedder:
         opts.embed_auto = True
@@ -973,6 +1135,148 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
 
 def _phase_enabled(opts: InstallerOptions, name: str) -> bool:
     return not opts.only or name in opts.only
+
+
+def _report_client_configuration(
+    source_root: Path,
+    configured: list[str],
+    report: InstallReport,
+    ui: UI,
+    *,
+    dry_run: bool = False,
+) -> None:
+    """Report partial client setup instead of presenting it as success."""
+    expected = len(get_config_paths(source_root))
+    actual = len(configured)
+    if actual == expected:
+        action = "would configure" if dry_run else "configured"
+        status = "dry-run" if dry_run else "ok"
+        report.add_step("clients", status, f"{action} {actual} clients")
+        if dry_run:
+            ui.info(f"Would configure {actual} clients")
+        else:
+            ui.ok(f"Configured {actual} clients")
+        return
+
+    action = "would configure" if dry_run else "configured"
+    detail = f"{action} {actual}/{expected} clients"
+    report.add_warning(
+        f"Client configuration was incomplete: {detail}. "
+        "Review installer warnings and fix the affected client config files."
+    )
+    report.add_step("clients", "warn", detail)
+    ui.warn(f"Client configuration incomplete: {detail}")
+    client_failures = report.metadata.get("client_update_failures")
+    if expected and not actual and client_failures:
+        message = (
+            "Client configuration failed: no supported client was configured. "
+            "Review installer warnings and fix the affected client config files."
+        )
+        report.add_error(message)
+        raise RuntimeError(message)
+
+
+def _write_install_error_log(log_path: Path, traceback_text: str) -> None:
+    """Append a traceback without opening an unexpected filesystem object."""
+    reject_symlink_path(log_path, "installer error log path")
+    if log_path.exists() and not log_path.is_file():
+        raise RuntimeError(f"Refusing non-regular installer error log path: {log_path}")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(UTC).isoformat()
+    with open(log_path, "a", encoding="utf-8") as logf:
+        logf.write(f"\n=== {timestamp} run_install crashed ===\n{traceback_text}\n")
+
+
+def _normalise_runtime_path(
+    value: str,
+    label: str,
+    *,
+    executable: bool = False,
+    allow_missing: bool = False,
+) -> str:
+    """Return an absolute runtime path after checking its usable type.
+
+    Client configuration is consumed later from a different working
+    directory, so relative model and binary paths are not safe to persist.
+    Explicit paths are always checked; dry-run-only paths returned by planned
+    downloads may be absent until the real install runs.
+    """
+    candidate = Path(os.path.expandvars(os.path.expanduser(value)))
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    try:
+        resolved = candidate.resolve(strict=False)
+    except OSError as exc:
+        raise RuntimeError(f"Could not resolve {label} path {value!r}: {exc}") from exc
+    if allow_missing:
+        return str(resolved)
+    if not resolved.is_file():
+        raise RuntimeError(f"{label} is not an existing regular file: {value}")
+    if executable:
+        if sys.platform == "win32":
+            if resolved.suffix.lower() not in {".exe", ".bat", ".cmd"}:
+                raise RuntimeError(f"{label} does not have an executable Windows suffix: {value}")
+        elif not os.access(resolved, os.X_OK):
+            raise RuntimeError(f"{label} is not executable: {value}")
+    return str(resolved)
+
+
+def _resolve_reranker_for_install(
+    opts: InstallerOptions,
+    install_root: Path,
+    report: InstallReport,
+    ui: UI,
+    *,
+    semantic_enabled: bool,
+) -> str:
+    """Resolve the selected local reranker and make absence explicit.
+
+    Embedding and reranking are separate capabilities, including for Gemini's
+    cloud embedding backend.  Non-interactive installs must perform the same
+    profile-aware discovery as the wizard; otherwise the host can later find
+    an arbitrary default model or silently run without precision reranking.
+    """
+    if opts.rerank_disabled:
+        return ""
+    if not semantic_enabled and not opts.rerank_model_path and not opts.download_rerank_model:
+        return ""
+
+    rerank_model = opts.rerank_model_path
+    if not rerank_model:
+        rerank_model = find_rerank_model(install_root, opts.rerank_profile)
+
+    if opts.download_rerank_model and not rerank_model:
+        from ida_pro_mcp.host.intelligence.rerank_profiles import get_rerank_model_profile
+
+        selected_rerank = get_rerank_model_profile(opts.rerank_profile)
+        if selected_rerank is None:
+            raise RuntimeError(f"Unknown rerank profile: {opts.rerank_profile}")
+        if selected_rerank.opt_in and not opts.accept_model_license:
+            raise RuntimeError(
+                f"{selected_rerank.display_name} is {selected_rerank.license}; "
+                "rerun with --accept-model-license to download it"
+            )
+        if opts.dry_run:
+            ui.info(f"Would download {selected_rerank.display_name} rerank model")
+            report.add_step("rerank_model", "dry-run", selected_rerank.key)
+        else:
+            ui.info(f"Downloading {selected_rerank.display_name} rerank model")
+            rerank_model = download_rerank_model(install_root, selected_rerank.key)
+
+    if rerank_model:
+        ui.ok("Rerank model configured for MCP clients")
+        report.metadata["rerank_model"] = rerank_model
+    elif not opts.rerank_disabled and not opts.dry_run:
+        # Do not let host-side fallback discovery unexpectedly activate a
+        # different model after this installer explicitly found none.
+        opts.rerank_disabled = True
+        ui.warn(
+            f"No {opts.rerank_profile} reranker model found; reranking is disabled "
+            "explicitly. Install the selected cross-encoder and rerun the installer "
+            "to enable higher-precision semantic search."
+        )
+        report.add_step("rerank_model", "warn", "not found; explicitly disabled")
+    return rerank_model
 
 
 def _warn_ida_python_compat(chosen_install, report, ui) -> None:
@@ -1010,12 +1314,31 @@ def _warn_ida_python_compat(chosen_install, report, ui) -> None:
 
 
 def run_install(opts: InstallerOptions, ui: UI) -> int:
-    report = InstallReport()
+    """Run one installer transaction under the per-root process lock."""
     install_root = opts.install_root or get_install_root()
-    source_root = opts.source_root or Path.cwd()
+    if opts.dry_run:
+        # A dry run is a read-only plan except for the deliberate report file;
+        # acquiring the normal lock would create .install.lock and the root
+        # directory before any work has been performed.
+        return _run_install_unlocked(opts, ui)
+    try:
+        with installer_lock(install_root):
+            return _run_install_unlocked(opts, ui)
+    except (OSError, RuntimeError) as exc:
+        ui.err(f"Could not start installer: {exc}")
+        return 1
+
+
+def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
+    report = InstallReport()
+    install_root = _absolute_path(opts.install_root or get_install_root())
+    source_root = _absolute_path(opts.source_root or Path.cwd())
+    opts.install_root = install_root
+    opts.source_root = source_root
     report.metadata.update({"install_root": str(install_root), "source_root": str(source_root)})
 
     try:
+        reject_symlink_path(install_root, "installer root")
         # Resolve IDA only when a later phase actually needs it or the user
         # explicitly asked for an IDA override. Client configuration and
         # signature staging both need a concrete install, but runtime/skills/
@@ -1028,11 +1351,17 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
             or opts.sigs_dir
             or opts.ida_dir
             or opts.ida_version
+            or (opts.ida_runtime == "idalib" and not opts.dry_run)
         ):
             try:
                 chosen_install = _resolve_ida_install(opts, ui)
             except RuntimeError as exc:
-                if opts.ida_dir or opts.ida_version:
+                if (
+                    opts.ida_dir
+                    or opts.ida_version
+                    or opts.sigs_dir
+                    or (opts.ida_runtime == "idalib" and not opts.dry_run)
+                ):
                     raise
                 msg = str(exc)
                 if "no IDA Pro install found" not in msg and "No IDA Pro install detected" not in msg:
@@ -1045,6 +1374,32 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
             _warn_ida_python_compat(chosen_install, report, ui)
 
         opts = _run_interactive_wizard(opts, ui)
+        if opts.ida_runtime == "idalib" and not _phase_enabled(opts, "clients"):
+            raise RuntimeError(
+                "--ida-runtime idalib requires the clients phase so its activation "
+                "and runtime setting are applied"
+            )
+        if opts.with_r2 and not _phase_enabled(opts, "clients"):
+            raise RuntimeError(
+                "--with-r2 requires the clients phase so IDA_MCP_R2_BIN can be recorded"
+            )
+        # Validate user-supplied paths before any client config is touched.
+        # The wizard already validates model paths, but CLI/API callers do not
+        # go through those prompts.  A disabled reranker is intentionally not
+        # resolved or validated because it must stay inert even if a stale
+        # model path was supplied alongside the opt-out.
+        if opts.embed_backend != "gemini" and opts.embed_model_path:
+            opts.embed_model_path = _normalise_runtime_path(
+                opts.embed_model_path, "Embedding model"
+            )
+        if opts.embed_server_bin:
+            opts.embed_server_bin = _normalise_runtime_path(
+                opts.embed_server_bin, "llama-server binary", executable=True
+            )
+        if opts.rerank_model_path and not opts.rerank_disabled:
+            opts.rerank_model_path = _normalise_runtime_path(
+                opts.rerank_model_path, "Reranker model"
+            )
         if chosen_install is not None and not opts.dry_run:
             state_path = install_root / STATE_FILE
             backup_file(state_path, report, dry_run=False)
@@ -1075,9 +1430,26 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                     "Stopping ALL IDA processes (--kill-ida without a binary "
                     "scope; pass --ida-binary-path or --ida-dir to narrow this)"
                 )
+            kill_succeeded = True
             if not opts.dry_run:
-                kill_ida_processes(binary_path=kill_target)
-            report.add_step("kill_ida", "ok", kill_target or "unscoped")
+                kill_succeeded = kill_ida_processes(binary_path=kill_target)
+                if not kill_succeeded:
+                    message = (
+                        "Could not enumerate or terminate the requested IDA "
+                        "processes; continuing with installation."
+                    )
+                    report.add_warning(message)
+                    ui.warn(message)
+            report.add_step(
+                "kill_ida",
+                "dry-run" if opts.dry_run else ("ok" if kill_succeeded else "warn"),
+                (
+                    ("would stop " if opts.dry_run else "stopped ")
+                    + (kill_target or "unscoped")
+                    if kill_succeeded
+                    else "process enumeration or termination failed"
+                ),
+            )
         else:
             report.add_step("kill_ida", "skipped", "not requested")
 
@@ -1094,19 +1466,47 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                 dry_run=opts.dry_run,
                 report=report,
             )
-            report.add_step("runtime", "ok", str(python_exe))
-            if opts.runtime_source == "local":
+            report.add_step(
+                "runtime",
+                "dry-run" if opts.dry_run else "ok",
+                ("would prepare " if opts.dry_run else "ready: ") + str(python_exe),
+            )
+            if opts.dry_run:
+                ui.info("Runtime environment would be prepared")
+            elif opts.runtime_source == "local":
                 ui.ok("Development mode: using source tree")
             else:
                 ui.ok("Runtime environment ready")
         else:
             report.add_step("runtime", "skipped", "filtered by --only")
 
-        if _phase_enabled(opts, "runtime") and not opts.dry_run:
+        corpus_env_enabled = os.environ.get("IDA_MCP_BRON_CORPUS_VERIFY", "").lower() in {
+            "1", "true", "yes", "on"
+        }
+        corpus_requested = opts.with_bron_corpus or opts.verify_bron_corpus or corpus_env_enabled
+        if (
+            (opts.with_bron_corpus or opts.verify_bron_corpus)
+            and not _phase_enabled(opts, "runtime")
+        ):
+            raise RuntimeError(
+                "--with-corpus/--verify-corpus requires the runtime phase; "
+                "remove --only clients (or include runtime)"
+            )
+        if _phase_enabled(opts, "runtime") and corpus_requested and not opts.dry_run:
             ui.info("Downloading threat corpus and crypto signatures")
             try:
                 from .bron_corpus import download_bron_corpus
-                corpus_status = download_bron_corpus(force=False)
+                strict_corpus = opts.verify_bron_corpus or os.environ.get(
+                    "IDA_MCP_BRON_CORPUS_VERIFY", ""
+                ).lower() in {"1", "true", "yes", "on"}
+                if strict_corpus:
+                    ui.info(
+                        "Strict corpus verification enabled; every downloaded source "
+                        "must have its IDA_MCP_BRON_CORPUS_SHA256_* hash configured."
+                    )
+                corpus_status = download_bron_corpus(
+                    force=False, force_verify=strict_corpus
+                )
                 built = corpus_status.get("built", False)
                 counts = corpus_status.get("counts", {})
                 total = sum(counts.values()) if counts else 0
@@ -1123,11 +1523,19 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                     "corpus", "ok" if built else "warn",
                     f"{total} entries, {sources_downloaded} sources",
                 )
+                if not built:
+                    raise RuntimeError(f"threat corpus was not built: {reason}")
             except Exception as exc:
-                ui.warn(f"Corpus download failed (non-fatal): {exc}")
+                ui.warn(f"Corpus download failed: {exc}")
                 report.add_step("corpus", "warn", str(exc))
+                raise RuntimeError(f"threat corpus installation failed: {exc}") from exc
         elif _phase_enabled(opts, "runtime"):
-            report.add_step("corpus", "skipped", "dry-run")
+            detail = (
+                "dry-run"
+                if opts.dry_run and corpus_requested
+                else "optional; pass --with-corpus to enable"
+            )
+            report.add_step("corpus", "skipped", detail)
 
         # ── r2/Rizin engine (paper §8.2 item 11) ────────────────────────
         # Resolve an existing rz/r2 on PATH and record it as IDA_MCP_R2_BIN
@@ -1138,8 +1546,20 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
         if opts.with_r2:
             r2_bin, r2_ver = resolve_r2_binary()
             if r2_bin:
-                ui.ok(f"Rizin/radare2 engine binary: {r2_bin} ({r2_ver or 'version unknown'})")
-                ui.info("The resolved binary is recorded as IDA_MCP_R2_BIN in the generated MCP client config.")
+                if opts.dry_run:
+                    ui.info(
+                        f"Rizin/radare2 engine binary would be recorded: {r2_bin} "
+                        f"({r2_ver or 'version unknown'})"
+                    )
+                else:
+                    ui.ok(
+                        f"Rizin/radare2 engine binary: {r2_bin} "
+                        f"({r2_ver or 'version unknown'})"
+                    )
+                    ui.info(
+                        "The resolved binary is recorded as IDA_MCP_R2_BIN in the "
+                        "generated MCP client config."
+                    )
             else:
                 msg = (
                     "rz/r2 not found on PATH. Install Rizin (or radare2) to enable the r2 "
@@ -1151,8 +1571,14 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                 report.add_warning(msg)
             report.add_step(
                 "r2",
-                "ok" if r2_bin else "warn",
-                f"{r2_bin} {r2_ver or ''}".strip() if r2_bin else "rz/r2 not found on PATH",
+                "dry-run" if opts.dry_run and r2_bin else ("ok" if r2_bin else "warn"),
+                (
+                    f"would record {r2_bin} {r2_ver or ''}".strip()
+                    if opts.dry_run and r2_bin
+                    else f"{r2_bin} {r2_ver or ''}".strip()
+                    if r2_bin
+                    else "rz/r2 not found on PATH"
+                ),
             )
         elif _phase_enabled(opts, "r2"):
             report.add_step("r2", "skipped", "not requested (pass --with-r2)")
@@ -1163,38 +1589,56 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
         # .sig pack".  A staged RISC-V pack then shows up under ida_list_sigs
         # and can be applied per-IDB via ida_apply_sig.
         if opts.sigs_dir:
-            sig_source = Path(opts.sigs_dir).expanduser()
+            sig_source = _absolute_path(opts.sigs_dir)
             if chosen_install is None:
-                ui.warn("--sigs requires an IDA install; skipping signature staging")
-                report.add_step("sigs", "failed", "no IDA install to derive <IDADIR>/sig from")
+                raise RuntimeError(
+                    "--sigs requires an IDA install to derive <IDADIR>/sig from"
+                )
+            sig_dir = find_ida_sig_dir(chosen_install.path)
+            manifest = stage_sigs(sig_source, sig_dir, opts.dry_run, report)
+            report.metadata["sigs_manifest"] = manifest.to_dict()
+            total = manifest.count + len(manifest.skipped)
+            if not total:
+                raise RuntimeError(f"No *.sig / *.sig.gz files found under {sig_source}")
+            if manifest.count:
+                action = "would stage" if opts.dry_run else "staged"
+                ui.ok(f"{action} {manifest.count} signature file(s) into {sig_dir}")
+                ui.info(
+                    "ida_list_sigs (the host MCP signature op) surfaces them by basename "
+                    "from <IDADIR>/sig; apply one per IDB with ida_apply_sig."
+                )
             else:
-                sig_dir = find_ida_sig_dir(chosen_install.path)
-                manifest = stage_sigs(sig_source, sig_dir, opts.dry_run, report)
-                report.metadata["sigs_manifest"] = manifest.to_dict()
-                if manifest.count:
-                    action = "would stage" if opts.dry_run else "staged"
-                    ui.ok(f"{action} {manifest.count} signature file(s) into {sig_dir}")
-                    ui.info(
-                        "ida_list_sigs (the host MCP signature op) surfaces them by basename "
-                        "from <IDADIR>/sig; apply one per IDB with ida_apply_sig."
-                    )
-                    report.add_step(
-                        "sigs",
-                        "dry-run" if opts.dry_run else "ok",
-                        f"{manifest.count} file(s) -> {sig_dir}",
-                    )
-                else:
-                    ui.warn(f"No *.sig / *.sig.gz files found under {sig_source}")
-                    report.add_step("sigs", "warn", f"no signature files found in {sig_source}")
+                ui.info(
+                    f"Preserved {total} existing signature file(s) in {sig_dir}; "
+                    "nothing new was staged."
+                )
+            report.add_step(
+                "sigs",
+                "dry-run" if opts.dry_run else "ok",
+                f"{manifest.count} staged, {len(manifest.skipped)} already present -> {sig_dir}",
+            )
         elif _phase_enabled(opts, "sigs"):
             report.add_step("sigs", "skipped", "not requested (pass --sigs <dir>)")
 
         if _phase_enabled(opts, "clients"):
             ui.info("Configuring MCP clients")
             if opts.embed_backend == "gemini":
+                rerank_model = _resolve_reranker_for_install(
+                    opts,
+                    install_root,
+                    report,
+                    ui,
+                    semantic_enabled=True,
+                )
+                if rerank_model:
+                    rerank_model = _normalise_runtime_path(
+                        rerank_model, "Reranker model", allow_missing=opts.dry_run
+                    )
                 if not opts.dry_run:
                     try:
                         from ida_pro_mcp.host.intelligence.core import write_embedder_state
+                        state_target = install_root / "embedder.json"
+                        backup_file(state_target, report, dry_run=False)
                         state_path = write_embedder_state(
                             install_root,
                             backend="gemini",
@@ -1202,8 +1646,17 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                             gemini_dimension=opts.gemini_dim,
                             gemini_vertex_project=opts.gemini_vertex_project,
                             gemini_vertex_location=opts.gemini_vertex_location,
+                            rerank=(
+                                None
+                                if opts.rerank_disabled
+                                else {
+                                    "profile": opts.rerank_profile,
+                                    "model_path": rerank_model,
+                                }
+                            ),
                         )
                         report.metadata["embedder_state"] = str(state_path)
+                        report.add_modified(Path(state_path))
                     except Exception as exc:
                         ui.warn(f"Could not persist embedder.json: {exc}")
                 if opts.gemini_access == "vertex" and opts.gemini_install_auth and not opts.dry_run:
@@ -1227,11 +1680,12 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                     python_exe,
                     install_root,
                     embed_backend="gemini",
-                    rerank_model=opts.rerank_model_path,
+                    rerank_model=rerank_model,
                     rerank_profile=opts.rerank_profile,
                     gemini_api_key=opts.gemini_api_key,
                     gemini_vertex_project=opts.gemini_vertex_project,
                     gemini_vertex_location=opts.gemini_vertex_location,
+                    gemini_vertex=opts.gemini_access == "vertex",
                     ida_install=getattr(opts, "_ida_install", None),
                     disable_policy=opts.disable_policy,
                     rerank_disabled=opts.rerank_disabled,
@@ -1245,8 +1699,9 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                     dry_run=opts.dry_run,
                 )
                 report.metadata["configured_clients"] = configured
-                report.add_step("clients", "ok", f"configured {len(configured)} clients")
-                ui.ok(f"Configured {len(configured)} clients")
+                _report_client_configuration(
+                    source_root, configured, report, ui, dry_run=opts.dry_run
+                )
             else:
                 embed_model = opts.embed_model_path
                 embed_server = opts.embed_server_bin
@@ -1285,37 +1740,39 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                         allow_unverified=opts.allow_unverified_downloads or None,
                     )
                 if embed_model:
+                    embed_model = _normalise_runtime_path(
+                        embed_model, "Embedding model", allow_missing=opts.dry_run
+                    )
+                if embed_server:
+                    embed_server = _normalise_runtime_path(
+                        embed_server,
+                        "llama-server binary",
+                        executable=True,
+                        allow_missing=opts.dry_run,
+                    )
+                if embed_model:
                     ui.ok("Embedding model configured for MCP clients")
                     report.metadata["embed_model"] = embed_model
                 elif opts.embed_auto:
                     ui.warn("No embedding model detected; semantic embedding features remain disabled")
                 if embed_server:
                     report.metadata["embed_server_bin"] = embed_server
-                rerank_model = opts.rerank_model_path
-                if opts.download_rerank_model and not rerank_model:
-                    from ida_pro_mcp.host.intelligence.rerank_profiles import get_rerank_model_profile
-                    from ida_pro_mcp.installer.runtime import download_rerank_model
-
-                    selected_rerank = get_rerank_model_profile(opts.rerank_profile)
-                    if selected_rerank is None:
-                        raise RuntimeError(f"Unknown rerank profile: {opts.rerank_profile}")
-                    if selected_rerank.opt_in and not opts.accept_model_license:
-                        raise RuntimeError(
-                            f"{selected_rerank.display_name} is {selected_rerank.license}; "
-                            "rerun with --accept-model-license to download it"
-                        )
-                    if opts.dry_run:
-                        ui.info(f"Would download {selected_rerank.display_name} rerank model")
-                        report.add_step("rerank_model", "dry-run", selected_rerank.key)
-                    else:
-                        ui.info(f"Downloading {selected_rerank.display_name} rerank model")
-                        rerank_model = download_rerank_model(install_root, selected_rerank.key)
+                rerank_model = _resolve_reranker_for_install(
+                    opts,
+                    install_root,
+                    report,
+                    ui,
+                    semantic_enabled=bool(embed_model),
+                )
                 if rerank_model:
-                    ui.ok("Rerank model configured for MCP clients")
-                    report.metadata["rerank_model"] = rerank_model
+                    rerank_model = _normalise_runtime_path(
+                        rerank_model, "Reranker model", allow_missing=opts.dry_run
+                    )
                 if (embed_model or embed_server or rerank_model) and not opts.dry_run:
                     try:
                         from ida_pro_mcp.host.intelligence.core import write_embedder_state
+                        state_target = install_root / "embedder.json"
+                        backup_file(state_target, report, dry_run=False)
                         # An explicit decline (opts.rerank_disabled) must not
                         # pin any rerank profile into state — that would make
                         # the host resolve the default profile and silently
@@ -1332,6 +1789,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                             rerank=rerank_arg,
                         )
                         report.metadata["embedder_state"] = str(state_path)
+                        report.add_modified(Path(state_path))
                     except Exception as exc:
                         ui.warn(f"Could not persist embedder.json: {exc}")
                 server_cfg = build_stdio_config(
@@ -1340,6 +1798,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                     embed_model=embed_model,
                     embed_server_bin=embed_server,
                     embed_profile=opts.embed_profile,
+                    embed_backend="local",
                     rerank_model=rerank_model,
                     rerank_profile=opts.rerank_profile,
                     ida_install=getattr(opts, "_ida_install", None),
@@ -1355,8 +1814,9 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
                     dry_run=opts.dry_run,
                 )
                 report.metadata["configured_clients"] = configured
-                report.add_step("clients", "ok", f"configured {len(configured)} clients")
-                ui.ok(f"Configured {len(configured)} clients")
+                _report_client_configuration(
+                    source_root, configured, report, ui, dry_run=opts.dry_run
+                )
         else:
             report.add_step("clients", "skipped", "filtered by --only")
 
@@ -1375,14 +1835,26 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
 
         if opts.install_cli_shim and _phase_enabled(opts, "shell"):
             ui.info("Installing shell CLI shim")
-            install_bashrc_cli(install_root, opts.dry_run, report)
-            report.add_step("shell", "ok", "bashrc updated")
-            ui.ok("CLI shell shim installed")
+            shell_supported = install_bashrc_cli(install_root, opts.dry_run, report)
+            if shell_supported:
+                shell_status = "dry-run" if opts.dry_run else "ok"
+                shell_detail = "would update bashrc" if opts.dry_run else "bashrc updated"
+                report.add_step("shell", shell_status, shell_detail)
+                if opts.dry_run:
+                    ui.info("CLI shell shim would be installed")
+                else:
+                    ui.ok("CLI shell shim installed")
+            else:
+                report.add_step("shell", "skipped", "not supported on Windows")
+                ui.info("CLI shell shim skipped on Windows")
         else:
             report.add_step("shell", "skipped", "not requested")
 
+        if _phase_enabled(opts, "clients"):
+            _activate_idalib_after_install(opts, chosen_install, report, ui)
         report.finalize(True)
         report_path = install_root / "install-report.json"
+        reject_symlink_path(report_path, "installer report path")
         report.write(report_path)
 
     except Exception as exc:
@@ -1399,14 +1871,9 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
         log_root = opts.install_root or get_install_root()
         log_path = log_root / "install-error.log"
         try:
-            log_root.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.now(UTC).isoformat()
-            with open(log_path, "a", encoding="utf-8") as logf:
-                logf.write(
-                    f"\n=== {timestamp} run_install crashed ===\n{tb_text}\n"
-                )
+            _write_install_error_log(log_path, tb_text)
             ui.err(f"Full traceback: {log_path}")
-        except OSError as log_exc:
+        except (OSError, RuntimeError) as log_exc:
             ui.err(f"Could not write {log_path}: {log_exc}")
         if opts.rollback_on_fail:
             try:
@@ -1419,6 +1886,7 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
         report.finalize(False)
         report_path = (opts.install_root or get_install_root()) / "install-report.json"
         try:
+            reject_symlink_path(report_path, "installer report path")
             report.write(report_path)
             ui.warn(f"Failure report written to {report_path}")
         except Exception:

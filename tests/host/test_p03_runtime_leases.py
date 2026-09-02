@@ -110,6 +110,77 @@ def test_cleanup_removes_stale_lease_when_recorded_pid_is_dead(tmp_path, monkeyp
     assert not lease_path.exists()
 
 
+def test_cleanup_removes_json_scalar_without_reading_a_pid(tmp_path, monkeypatch):
+    """A valid JSON scalar is damaged metadata, never a lease to inspect."""
+    runtime = _LeaseRuntime(tmp_path)
+    lease_path = tmp_path / f"SID_{TMP_SID}.lease.json"
+    lease_path.write_text("[\"not-a-lease\"]", encoding="utf-8")
+    probed = []
+    monkeypatch.setattr(
+        server_runtime_leases.os,
+        "kill",
+        lambda pid, sig: probed.append((pid, sig)),
+    )
+
+    runtime._cleanup_stale_runtime_leases()
+
+    assert probed == []
+    assert not lease_path.exists()
+
+
+def test_cleanup_treats_nonfinite_timestamp_as_stale(tmp_path, monkeypatch):
+    """NaN/Infinity must not create leases that can never expire."""
+    runtime = _LeaseRuntime(tmp_path)
+    lease_path = _write_lease(tmp_path, pid=999999, updated="nan")
+
+    def _kill(pid, sig):
+        raise ProcessLookupError()
+
+    monkeypatch.setattr(server_runtime_leases.os, "kill", _kill)
+    runtime._cleanup_stale_runtime_leases()
+
+    assert not lease_path.exists()
+
+
+def test_cleanup_rejects_nonintegral_pid_without_truncating_it(tmp_path, monkeypatch):
+    """A float PID must not be truncated into a different process ID."""
+    runtime = _LeaseRuntime(tmp_path)
+    lease_path = _write_lease(tmp_path, pid=54321.9, updated=0.0)
+    probed = []
+    monkeypatch.setattr(
+        server_runtime_leases.os,
+        "kill",
+        lambda pid, sig: probed.append((pid, sig)),
+    )
+
+    runtime._cleanup_stale_runtime_leases()
+
+    assert probed == []
+    assert not lease_path.exists()
+
+
+def test_expected_process_rejects_recycled_pid_start_token(tmp_path, monkeypatch):
+    """An IDA-looking recycled PID is unsafe when its process instance changed."""
+    runtime = _LeaseRuntime(tmp_path)
+    monkeypatch.setattr(server_runtime_leases, "_process_start_token", lambda pid: "new")
+
+    assert runtime._is_expected_ida_process(
+        54321,
+        {"idat_exe": "", "process_start_token": "old"},
+    ) is False
+
+
+def test_foreign_owner_pid_reuse_does_not_keep_lease_forever(tmp_path, monkeypatch):
+    """A reused owner PID is not treated as a live foreign host."""
+    runtime = _LeaseRuntime(tmp_path)
+    monkeypatch.setattr(server_runtime_leases.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(server_runtime_leases, "_process_start_token", lambda pid: "new")
+
+    assert runtime._lease_has_live_foreign_owner(
+        {"owner_pid": 424242, "owner_start_token": "old"}
+    ) is False
+
+
 def test_cleanup_drops_lease_but_never_signals_recycled_live_pid(tmp_path, monkeypatch):
     """A live pid that is NOT an IDA process must not be killed; its stale
     lease is dropped so the shared cache does not accumulate."""
