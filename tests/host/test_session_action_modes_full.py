@@ -344,3 +344,120 @@ def test_session_strategy_analogy_activity_hypothesis_and_macro_edges(tmp_path):
 
     host.current_session = None
     assert host._session_action_recent_workset({})["code"] == MCPError.INVALID_ARGS
+
+
+def test_session_open_argument_result_and_analysis_state_boundaries(tmp_path, monkeypatch):
+    host, manager, session = _host(tmp_path)
+    def normalize_ida_args(value):
+        if any("\x00" in str(item) for item in (value or [])):
+            raise ValueError("IDA args must not contain NUL")
+        return [item for item in value if item != "-A"]
+
+    host._normalize_ida_args = normalize_ida_args
+    assert host._prepare_open_args({"idb_path": "/removed"})[-1]["code"] == MCPError.INVALID_ARGS
+    assert host._prepare_open_args({"binary_path": 7})[-1]["code"] == MCPError.INVALID_ARGS
+    assert host._prepare_open_args({"binary_path": "x", "analysis_options": []})[-1]["code"] == MCPError.INVALID_ARGS
+    assert host._prepare_open_args({"binary_path": "x", "architecture": []})[-1]["code"] == MCPError.INVALID_ARGS
+    assert host._prepare_open_args({"binary_path": "x", "analysis_options": {"processor": "arm"}, "processor": "mips"})[-1]["code"] == MCPError.INVALID_ARGS
+    assert host._prepare_open_args({"binary_path": "x", "architecture": {"arch": "arm"}, "processor": "mips"})[-1]["code"] == MCPError.INVALID_ARGS
+    assert host._prepare_open_args({"binary_path": "x", "ida_args": ["\x00"]})[-1]["code"] == MCPError.INVALID_ARGS
+    assert host._prepare_open_args({})[-1]["code"] == MCPError.INVALID_ARGS
+
+    binary = tmp_path / "payload.bin"
+    binary.write_bytes(b"payload")
+    prepared = host._prepare_open_args(
+        {
+            "binary_path": str(binary),
+            "architecture": {"arch": "arm", "bits": 32, "endianness": "little"},
+            "ida_args": ["-A", "-z"],
+        }
+    )
+    assert prepared[-1] is None
+    assert prepared[1]["processor"] == "arm"
+    assert prepared[1]["bitness"] == 32
+    assert prepared[4] == ["-z"]
+    assert host._preloads_match(SimpleNamespace(analysis_options={"processor": "arm"}), {"processor": "arm"})
+    assert not host._preloads_match(SimpleNamespace(analysis_options={"processor": "x86"}), {"processor": "arm"})
+
+    host._runtime_record = lambda _sid: {"process": _Process(alive=True), "port": 1234}
+    host._runtime_alive = lambda _runtime: True
+    host._send_rpc_raw = lambda *_args, **_kwargs: {"analysis_complete": True, "functions": 9}
+    assert host._open_analysis_state(session) == {"analysis_complete": True, "analysis_functions": 9}
+    host._send_rpc_raw = lambda *_args, **_kwargs: {"analysis_complete": False}
+    assert host._open_analysis_state(session) == {}
+    host._send_rpc_raw = lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("rpc"))
+    assert host._open_analysis_state(session) == {}
+
+    host._mark_analysis_complete = lambda current: setattr(current, "metadata", {"complete": True})
+    host.safe_mode_poll_seconds = 0
+    host._send_rpc_raw = lambda *_args, **_kwargs: {"analysis_complete": True, "functions": 9}
+    assert host._wait_for_analysis_complete(session, timeout=0.1)["analysis_complete"] is True
+
+    host._safe_mode_active = lambda _sid: False
+    host._analysis_is_complete = lambda _sid: True
+    host._checkpoint_staleness_warning = lambda _session: "stale checkpoint"
+    opened = host._open_result(
+        session,
+        background=True,
+        reused=True,
+        note="reused",
+        extra={"warning": "existing warning"},
+    )
+    assert opened["reused_existing_session"] is True
+    assert opened["background"] is True
+    assert opened["note"] == "reused"
+    assert opened["warning"] == "existing warning stale checkpoint"
+
+
+def test_session_discovery_reads_and_note_visibility_modes(tmp_path):
+    host, manager, session = _host(tmp_path)
+    manager._load_orphaned_idbs = lambda: None
+    manager.discover_sessions = lambda **_kwargs: [session]
+    discovered = host._session_action_discover({"query": "sample", "binary_name": "sample.bin"})
+    assert discovered["ok"] is True and discovered["count"] == 1
+
+    host._session_ownership_report = lambda _sid: {"locked": False, "holder": None}
+    host._safe_mode_active = lambda _sid: False
+    host._analysis_is_complete = lambda _sid: True
+    got = host._session_action_get({"session_id": session.session_id})
+    assert got["ok"] is True and got["session"]["analysis_complete"] is True
+    assert host._session_action_get({})["code"] == MCPError.INVALID_ARGS
+    assert host._session_action_get({"session_id": "bad/id"})["code"] == MCPError.INVALID_ARGS
+    assert host._session_action_get({"session_id": "MISSING1"})["code"] == MCPError.SESSION_NOT_FOUND
+
+    other = _Session("BBBB0002", tmp_path)
+    manager.search_notes = lambda _query: [session, other, SimpleNamespace(to_dict=lambda: {"session_id": "none"})]
+    host._client_owns_session = lambda sid: sid == session.session_id
+    host._session_is_busy = lambda sid: sid == other.session_id
+    assert host._session_action_search_notes({})["code"] == MCPError.INVALID_ARGS
+    notes = host._session_action_search_notes({"query": "needle"})
+    assert notes["count"] == 1 and notes["sessions"][0]["session_id"] == session.session_id
+
+    host._session_ownership_report = lambda _sid: {"locked": False}
+    host._runtime_record = lambda _sid: None
+    assert host._session_action_switch({})["code"] == MCPError.INVALID_ARGS
+    assert host._session_action_switch({"session_id": "bad/id"})["code"] == MCPError.INVALID_ARGS
+    assert host._session_action_switch({"session_id": "MISSING1"})["code"] == MCPError.SESSION_NOT_FOUND
+
+
+def test_session_state_coverage_cache_supports_legacy_text_and_eviction(tmp_path):
+    host, _manager, session = _host(tmp_path)
+    calls = []
+    host._execute_tool = lambda tool, args: calls.append((tool, args)) or {
+        "functions": "0x1000 4 sub_first\n0x2000 8 named_function\n"
+    }
+    coverage = host._get_cached_coverage(session.session_id)
+    assert coverage == {
+        "total_functions": 2,
+        "named_functions": 1,
+        "unnamed_functions": 1,
+        "pct_named": 50.0,
+    }
+    assert host._get_cached_coverage(session.session_id) == coverage
+    assert len(calls) == 1
+
+    host._session_state_cache = {f"old{i}": {"coverage": {}, "_ts": 0} for i in range(130)}
+    host._execute_tool = lambda *_args: {"items": [{"name": "j_jump"}, {"name": "real"}]}
+    fresh = host._get_cached_coverage("fresh")
+    assert fresh["unnamed_functions"] == 1
+    assert len(host._session_state_cache) <= 128
