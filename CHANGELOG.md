@@ -28,6 +28,10 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    selection, loader-option persistence, code/data conversion, analysis flags,
    offset creation, bounded reanalysis, raw mapped-range discovery, executable
    segment scoring, and scoped auto-analysis waits.
+ - Added host-runtime coverage for framed localhost RPC, auth-token injection,
+   fragmented responses, queue contention, bounded retries, payload limits,
+   process termination, library-init diagnosis, IDA discovery, backend command
+   construction, safe rendering, and IDB backup paths.
 
 - Expanded offline and opt-in live coverage across the public and legacy MCP
   surfaces, and stabilized batch-history and client-path tests.
