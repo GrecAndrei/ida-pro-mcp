@@ -4,6 +4,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
 
 ## 2026-09-02 — PR-work coverage checkpoint
 
+ - Expanded session administration coverage for narrative limits, validation,
+   bulk tagging/deletion cleanup, snapshots, merges, macro registry behavior,
+   conditional workflow branches, and recent-workset options.
  - Expanded session-state coverage for open-argument conflicts and aliases,
    analysis polling, enriched open results, discovery/get/note visibility, and
    legacy coverage-cache parsing and eviction.

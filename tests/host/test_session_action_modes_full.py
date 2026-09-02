@@ -461,3 +461,137 @@ def test_session_state_coverage_cache_supports_legacy_text_and_eviction(tmp_path
     fresh = host._get_cached_coverage("fresh")
     assert fresh["unnamed_functions"] == 1
     assert len(host._session_state_cache) <= 128
+
+
+def test_session_admin_snapshot_merge_and_narrative_modes(tmp_path):
+    host, manager, session = _host(tmp_path)
+    sid = session.session_id
+
+    host._activity_log = [
+        {"tool": "search", "action": "find", "addresses": ["0x10"], "topic": "entry", "target": "main", "ts": "t1"},
+        {"tool": "code", "action": "decompile", "addresses": [], "topic": "", "target": "", "ts": "t2"},
+    ]
+    narrative = host._session_action_narrative({"limit": "1"})
+    assert narrative["turn_count"] == 1
+    assert narrative["turns"][0]["action"] == "decompile"
+    assert "addresses" not in narrative["turns"][0]
+    assert narrative["session"]["session_id"] == sid
+
+    host.current_session = None
+    empty_narrative = host._session_action_narrative({"limit": "0"})
+    assert empty_narrative["turn_count"] == 1
+    assert empty_narrative["session"] == {}
+    host.current_session = session
+
+    manager.validate_session = lambda value: {"session_id": value, "valid": True}
+    assert host._session_action_validate({"session_id": "bad/id"})["code"] == MCPError.INVALID_ARGS
+    assert host._session_action_validate({"session_id": sid})["validation"]["valid"] is True
+    manager.validate_session = lambda _value: None
+    assert host._session_action_validate({"session_id": sid})["code"] == MCPError.SESSION_NOT_FOUND
+
+    manager.bulk_tag = lambda sids, tag: {"session_ids": sids, "tag": tag}
+    tagged = host._session_action_bulk_tag({"session_ids": [sid], "tag": "  important  "})
+    assert tagged["results"]["tag"] == "important"
+    assert host._session_action_bulk_tag({"session_ids": [sid], "tag": " "})["code"] == MCPError.INVALID_ARGS
+    assert host._session_action_bulk_tag({"session_ids": ["bad/id"], "tag": "x"})["code"] == MCPError.INVALID_ARGS
+
+    cleanup = []
+    forgotten = []
+    dropped = []
+
+    def record_cleanup(value):
+        cleanup.append(value)
+
+    def record_forgotten(value):
+        forgotten.append(value)
+
+    def record_dropped(value):
+        dropped.append(value)
+
+    host._require_owned_session_id = lambda _sid: None
+    host._cleanup_runtime = record_cleanup
+    host._forget_analysis_state = record_forgotten
+    host._drop_sid_from_groups = record_dropped
+    deleted = host._session_action_bulk_delete({"session_ids": [sid]})
+    assert deleted["ok"] is True and deleted["results"][0]["session_id"] == sid
+    assert host.current_session is None
+    assert cleanup == forgotten == dropped == [sid]
+    host.current_session = session
+
+    manager.snapshot_session = lambda value: {"snapshot_id": "snap-1", "message": "saved"}
+    snapshot = host._session_action_snapshot({"session_id": sid})
+    assert snapshot == {"ok": True, "session_id": sid, "snapshot_id": "snap-1", "message": "saved"}
+    manager.snapshot_session = lambda _value: None
+    assert host._session_action_snapshot({"session_id": sid})["code"] == MCPError.SESSION_NOT_FOUND
+    assert host._session_action_restore_snapshot({"session_id": sid})["code"] == MCPError.INVALID_ARGS
+
+    manager.snapshot_session = lambda _value: {"snapshot_id": "snap-1", "message": "saved"}
+    manager.restore_snapshot = lambda _sid, _snapshot: session
+    restored = host._session_action_restore_snapshot({"session_id": sid, "snapshot_id": "snap-1"})
+    assert restored["ok"] is True and restored["session"]["session_id"] == sid
+    manager.restore_snapshot = lambda _sid, _snapshot: None
+    assert host._session_action_restore_snapshot({"session_id": sid, "snapshot_id": "missing"})["code"] == MCPError.NOT_FOUND
+
+    source_sid = "SOURCE99"
+    manager.get_session = lambda value: session if value in (sid, source_sid) else None
+    manager.merge_sessions = lambda _target, _source: session
+    assert host._session_action_merge({"session_id": sid, "source_id": sid})["code"] == MCPError.INVALID_ARGS
+    merged = host._session_action_merge({"target_id": sid, "source_id": source_sid})
+    assert merged["ok"] is True and merged["session"]["session_id"] == sid
+    manager.merge_sessions = lambda _target, _source: None
+    assert host._session_action_merge({"session_id": sid, "source_id": source_sid})["code"] == MCPError.SESSION_NOT_FOUND
+    assert host._session_action_merge({"session_id": sid})["code"] == MCPError.INVALID_ARGS
+
+
+def test_session_macro_registry_and_workflow_branch_modes(tmp_path):
+    host, _manager, session = _host(tmp_path)
+    saved = []
+    host._save_session_macros = lambda: saved.append(True)
+    assert host._session_action_macro_set({})["code"] == MCPError.INVALID_ARGS
+    assert host._session_action_macro_set({"name": "bad", "data": []})["code"] == MCPError.INVALID_ARGS
+
+    configured = host._session_action_macro_set({"macro": " Inspect ", "data": {"_tool": "code", "action": "summary", "value": "$needle"}})
+    assert configured["name"] == "Inspect" and saved == [True]
+    assert host._session_action_macro_get({"macro": "inspect"})["data"]["action"] == "summary"
+    assert host._session_action_macro_get({"name": "missing"})["code"] == MCPError.FILE_NOT_FOUND
+    host._session_macros["malformed"] = "not-a-dict"
+    assert host._session_action_macro_list({})["count"] == 1
+    assert host._session_action_macro_delete({"name": "missing"})["code"] == MCPError.FILE_NOT_FOUND
+
+    calls = []
+    host._execute_tool = lambda tool, args: calls.append((tool, args)) or {"ok": True, "value": args.get("value", "done")}
+    ran = host._session_action_macro_run({"name": "inspect", "needle": "found"})
+    assert ran["macro"] == "inspect" and ran["value"] == "found"
+    assert calls[-1] == ("code", {"_tool": "code", "action": "summary", "value": "found", "needle": "found"})
+    host._session_macros["bad-run"] = {"name": "bad-run", "data": {}}
+    assert host._session_action_macro_run({"name": "bad-run", "run_action": 7})["code"] == MCPError.INVALID_ARGS
+    assert host._session_action_macro_run({"name": "bad-run", "run_action": "macro_list"})["code"] == MCPError.INVALID_ARGS
+    host._execute_tool = lambda *_args: {"error": True, "code": "IDA_ERROR"}
+    assert host._session_action_macro_run({"name": "bad-run", "run_action": "status"})["code"] == "IDA_ERROR"
+
+    host._session_macros["flow"] = {
+        "name": "flow",
+        "data": {
+            "calls": [
+                {"tool": "$tool", "action": "$action", "if": "$run", "then": {"tool": "$tool", "action": "$action", "value": "$value"}, "else": {"action": "fallback"}},
+                {"action": "", "if": "$run", "then": "not-a-step"},
+                {"action": "status", "value": "$step0_value"},
+            ]
+        },
+    }
+    host._execute_tool = lambda tool, args: {"ok": True, "tool": tool, "value": args.get("value", "result")}
+    flow = host._session_action_macro_run({"name": "flow", "tool": "session", "action": "status", "run": True, "value": "x"})
+    assert flow["step_count"] == 3
+    assert flow["steps"][0]["tool"] == "session"
+    assert flow["steps"][1]["skipped"] is True
+    assert flow["steps"][2]["result"]["value"] == "x"
+    fallback = host._run_workflow_sequence("flow", [{"action": "status", "if": "$run", "else": {"action": "list"}}], {"run": False})
+    assert fallback["steps"][0]["action"] == "list"
+
+    host._session_macros["inspect"] = {"name": "Inspect", "data": {"action": "status"}}
+    assert host._session_action_macro_delete({"name": "inspect"})["ok"] is True
+    assert saved[-1] is True
+
+    host._build_recent_workset = lambda sid, **kwargs: {"ok": True, "session_id": sid, **kwargs}
+    recent = host._session_action_recent_workset({"session_id": session.session_id, "n": "3", "include_bookmarks": "false", "include_items": "true"})
+    assert recent["n"] == 3 and recent["include_bookmarks"] is False and recent["include_items"] is True
