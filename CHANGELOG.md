@@ -2,6 +2,12 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-09-02 — PR-work coverage continuation
+
+ - Added offline boundary coverage for host response helpers, policy and audit
+   paths, blackboard trace handling, installer runtime modes, download guards,
+   platform process selection, venv recovery, and bundled-runtime setup.
+
 ## 2026-09-02 — Multi-agent configuration and skill system redesign
 
  - Expanded client configuration support for 8 additional AI coding agent environments:
