@@ -108,7 +108,7 @@ Claude Code, Codex, Copilot CLI, OpenCode, Claude Desktop, Cursor, VS Code,
 Windsurf, Cline, and Roo Code.
 OpenCode and Copilot-family clients use different configuration shapes; let
 the installer write those files or follow
-[the OpenCode setup guide](docs/OPENCODE_SETUP.md).
+[the OpenCode setup guide](docs/operations/opencode-setup.md).
 
 For a client that uses the common JSON format, the entry is equivalent to:
 
@@ -356,11 +356,11 @@ switch to experimental `idalib` while diagnosing a basic installation.
   evidence, targets, and exports.
 - [Intelligence and embeddings](docs/wiki/core/intelligence.md) — local and
   optional Gemini retrieval backends.
-- [OpenCode setup](docs/OPENCODE_SETUP.md) — OpenCode configuration and skills.
+- [OpenCode setup](docs/operations/opencode-setup.md) — OpenCode configuration and skills.
 - [Architecture](docs/guide/architecture.md) — host, IDA runtime, and data
   flow for readers who need implementation detail.
 - [Security policy](SECURITY.md) — reporting and security guidance.
-- [Live IDA testing](docs/LIVE_IDA_TESTING.md) — what the repository’s tests
+- [Live IDA testing](docs/operations/live-ida-testing.md) — what the repository’s tests
   do and do not prove about a real IDA installation.
 - [Versioning and release checklist](docs/guide/versioning.md) and the
   [changelog](CHANGELOG.md) — alpha status and release history.

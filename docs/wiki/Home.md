@@ -3,16 +3,15 @@
 IDA Pro MCP connects an MCP client to IDA Pro for repeatable analysis, a
 binary-scoped investigation workspace, and reviewed IDB annotations.
 
-This project is Alpha (`1.0.0a1`) — see the [v1.0.0a1 Genesis Release Notes](v1.0.0a1-Release-Notes) for the full feature breakdown. It exposes 107 deterministic, strict-schema `ida_*` operations supporting Hex-Rays decompilation, cross-references, type management, firmware detection, and multi-agent configuration across 22+ coding tools.
+This project is Alpha (`1.0.0a1`) — see [GitHub Releases](https://github.com/GrecAndrei/ida-pro-mcp/releases) for artifacts and release notes. It exposes 107 deterministic, strict-schema `ida_*` operations supporting Hex-Rays decompilation, cross-references, type management, firmware detection, and multi-agent configuration across 22+ coding tools.
 
 ## Start here
 
 1. [Install and run a first session](getting-started)
 2. [Connect an MCP client (Cursor, Claude Code, OpenClaw, Pi, Hermes, etc.)](client-configuration)
-3. Explore the [v1.0.0a1 Release Notes](v1.0.0a1-Release-Notes)
-4. Follow the [practical IDA workflow](reverse-engineering-workflow)
-5. Record conclusions in [findings and evidence](findings-and-evidence)
-6. Review [safe IDB changes and rollback](safe-idb-edits) before mutating an
+3. Follow the [practical IDA workflow](reverse-engineering-workflow)
+4. Record conclusions in [findings and evidence](findings-and-evidence)
+5. Review [safe IDB changes and rollback](safe-idb-edits) before mutating an
    IDB
 
 Use [Navigation](Navigation) to choose a task. For exact operation arguments,

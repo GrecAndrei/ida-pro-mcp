@@ -6,7 +6,6 @@ Choose the page that matches the job.
 | --- | --- |
 | Install the runtime and open a binary | [Install and run your first session](getting-started) |
 | Add the server to an MCP client (22+ clients) | [Configure an MCP client](client-configuration) |
-| Explore what's new in the Genesis release | [v1.0.0a1 Release Notes](v1.0.0a1-Release-Notes) |
 | Move from discovery to a defensible conclusion | [A practical reverse-engineering workflow](reverse-engineering-workflow) |
 | Preserve evidence, uncertainty, and disagreement | [Findings, evidence, and conflicts](findings-and-evidence) |
 | Rename, annotate, patch, or reshape an IDB | [Safe IDB edits and rollback](safe-idb-edits) |
@@ -17,10 +16,11 @@ Choose the page that matches the job.
 
 ## Repository references
 
+- [GitHub Releases](https://github.com/GrecAndrei/ida-pro-mcp/releases)
 - [Generated operation reference](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/TOOLS_REFERENCE.md)
 - [README](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/README.md)
 - [Safety model](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/guide/safety-model.md)
-- [Live IDA testing](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/LIVE_IDA_TESTING.md)
+- [Live IDA testing](https://github.com/GrecAndrei/ida-pro-mcp/blob/master/docs/operations/live-ida-testing.md)
 
 The older `tool(action=...)` interface is retained for compatibility. New
 clients should use the exact-schema `ida_*` operations.
