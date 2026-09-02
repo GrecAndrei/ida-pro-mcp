@@ -45,6 +45,24 @@ def _load_standalone(relpath: str, name: str):
     return mod
 
 
+def _run_worker(fn):
+    result = {}
+
+    def run():
+        try:
+            result["value"] = fn()
+        except BaseException as exc:  # surfaced in the calling thread
+            result["error"] = exc
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    thread.join(timeout=10)
+    assert not thread.is_alive(), "worker did not terminate"
+    if "error" in result:
+        raise result["error"]
+    return result.get("value")
+
+
 def _register_ida_mcp_pkg():
     """Register ``ida_pro_mcp.ida_mcp`` as a stub package pointing at the real
     source dir so standalone loads can resolve ``ida_pro_mcp.ida_mcp.*``
@@ -418,6 +436,104 @@ def test_sync_timeout_env_knob(monkeypatch):
         assert sync._sync_timeout() == 30.0  # non-finite -> default
     monkeypatch.delenv("IDA_MCP_SYNC_TIMEOUT")
     assert sync._sync_timeout() == 30.0
+
+
+def test_sync_kernel_version_and_batch_fallback_edges():
+    sync, _ = _load_sync_with_cache()
+    sync.idaapi.get_kernel_version = lambda: "9"
+    assert sync._parse_kernel_version() == (9, 0)
+    assert sync.IDAError("message").message == "message"
+
+    del sync.idaapi.is_batch
+    sync.ida_kernwin.cvar = None
+    assert sync._is_batch() is False
+
+
+def test_sync_wrapper_handles_bypass_batch_invalid_mode_and_sdk_exception():
+    sync, _ = _load_sync_with_cache()
+    sync.idaapi.is_batch = lambda: False
+    sync.ida_kernwin.execute_sync = lambda fn, flags=0: fn()
+    assert sync._sync_wrapper(lambda: {"main": True}, sync.IDASafety.SAFE_READ) == {"main": True}
+
+    sync.idaapi.is_batch = lambda: True
+    result = _run_worker(lambda: sync._sync_wrapper(lambda: {"batch": True}, sync.IDASafety.SAFE_READ))
+    assert result == {"batch": True}
+
+    sync.idaapi.is_batch = lambda: False
+
+    def invalid():
+        return sync._sync_wrapper(lambda: None, sync.IDASafety.SAFE_NONE)
+
+    with pytest.raises(sync.IDASyncError, match="Invalid safety mode"):
+        _run_worker(invalid)
+
+    def raises():
+        raise ValueError("from IDA callback")
+
+    with pytest.raises(ValueError, match="from IDA callback"):
+        _run_worker(lambda: sync._sync_wrapper(raises, sync.IDASafety.SAFE_READ))
+
+
+def test_sync_wrapper_timeout_does_not_wait_forever(monkeypatch):
+    sync, _ = _load_sync_with_cache()
+    sync.idaapi.is_batch = lambda: False
+    sync.ida_kernwin.execute_sync = lambda _fn, _flags=0: None
+    monkeypatch.setattr(sync, "_sync_timeout", lambda: 0.001)
+
+    with pytest.raises(sync.IDASyncError, match="timed out"):
+        _run_worker(lambda: sync._sync_wrapper(lambda: None, sync.IDASafety.SAFE_READ))
+
+
+def test_sync_cache_hit_non_dict_and_legacy_write_invalidation(monkeypatch):
+    sync, cache = _load_sync_with_cache()
+    cache.TOOL_CACHE.clear()
+
+    @sync.idaread
+    def read(addr, count=10):
+        return {"ok": True, "addr": addr, "count": count}
+
+    first = read("0x401000", count=10)
+    second = read(0x401000)
+    assert "_cache_hit" not in first
+    assert second["_cache_hit"] is True
+    assert second["addr"] == "0x401000"
+
+    @sync.idaread
+    def scalar(value):
+        return value
+
+    scalar("value")
+    assert scalar("value") == "value"
+
+    class LegacyCache:
+        def __init__(self):
+            self.invalidated = False
+
+        def invalidate_all(self):
+            self.invalidated = True
+
+    legacy = LegacyCache()
+    monkeypatch.setattr(sync, "_tool_cache", lambda: legacy)
+
+    @sync.idawrite
+    def write(value):
+        return {"ok": True, "value": value}
+
+    assert write("x")["ok"] is True
+    assert legacy.invalidated is True
+
+
+def test_sync_cache_key_signature_fallbacks(monkeypatch):
+    sync, _ = _load_sync_with_cache()
+
+    def tool(addr, count=10):
+        return addr, count
+
+    assert sync._signature_defaults(tool) == {"count": 10}
+    monkeypatch.setattr(sync.inspect, "signature", lambda _fn: (_ for _ in ()).throw(TypeError("opaque")))
+    assert sync._signature_defaults(object()) == {}
+    key = sync._cache_key_kwargs(object(), {"x": "1"}, ("positional",))
+    assert key["_arg_0"] == "positional"
 
 
 # ---------------------------------------------------------------------------
