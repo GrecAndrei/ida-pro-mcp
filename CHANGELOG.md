@@ -26,6 +26,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    cleanup, and declarative action fallbacks.
  - Added session analysis-gate coverage for watcher confirmation, teardown
    races, background spawn errors, architecture inference, and switch paths.
+ - Added dispatch coverage for RPC timeout/connection failures, wall-clock
+   termination, policy/guardrail faults, post-processing failures, and path
+   safety boundaries.
  - Expanded bootstrap lifecycle coverage for mitigation, autopilot,
    calibration, disputes, reweighting, and persisted outcome paths.
  - Expanded code-helper coverage for dataflow, firmware signals, decompiler
