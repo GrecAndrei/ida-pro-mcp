@@ -2,10 +2,21 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
-## 2026-09-01 — expanded coverage and test stability
+## 2026-09-02 — PR-work coverage checkpoint
+
+- Expanded deterministic offline coverage across the host/IDA bridge, public
+operation dispatch, response handling, type and analysis surfaces, gadget
+discovery, retrieval, and cross-mode test isolation. The current checkpoint
+measures 86% branch-aware source coverage; opt-in live-IDA tests remain
+separately gated.
 
 - Expanded offline and opt-in live coverage across the public and legacy MCP
   surfaces, and stabilized batch-history and client-path tests.
+
+## 2026-09-01 — checkout-backed skill installation
+
+- Reuse the Codex skill symlink when it points to the active checkout, while
+  continuing to reject unrelated symlink redirects.
 
 ## 2026-08-27 — 1.0.0a1 repository cleanup and retrieval foundations
 

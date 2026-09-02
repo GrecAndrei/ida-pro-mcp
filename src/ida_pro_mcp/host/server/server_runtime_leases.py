@@ -31,6 +31,46 @@ from ..config import (
 )
 
 
+def _lease_pid(value: object) -> int:
+    """Parse a lease PID conservatively, returning zero for invalid values."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value if value > 0 else 0
+    text = str(value or "").strip()
+    if not text or not text.isascii() or not text.isdigit():
+        return 0
+    try:
+        pid = int(text)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return pid if pid > 0 else 0
+
+
+def _lease_timestamp(value: object) -> float:
+    """Parse a finite lease timestamp, returning zero for invalid values."""
+    try:
+        timestamp = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return timestamp if math.isfinite(timestamp) and timestamp >= 0.0 else 0.0
+
+
+def _process_start_token(pid: int) -> str:
+    """Return Linux ``/proc`` start-time identity for *pid*, when available."""
+    if not sys.platform.startswith("linux") or pid <= 0:
+        return ""
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as handle:
+            data = handle.read()
+        end = data.rfind(")")
+        tail = data[end + 1 :].split() if end >= 0 else []
+        # ``tail`` starts at proc-stat field 3 (state); starttime is field 22.
+        return tail[19] if len(tail) > 19 else ""
+    except (OSError, ValueError):
+        return ""
+
+
 def _resolve_stale_cleanup_budget() -> float:
     """Bound total time spent killing stale runtime leases at host startup.
 

@@ -2070,7 +2070,11 @@ def _is_flow_control_mnemonic(mnem: str, arch=None) -> bool:
     if is_syscall_mnemonic(m, arch=arch):
         return True
     # AArch64 conditional branches: b.eq, b.ne, b.lt, b.hs, b.cs, ...
-    return is_arm_family(arch) and m.startswith("b.")
+    if is_arm_family(arch) and m.startswith("b."):
+        return True
+    # Keep common RISC-V/raw-blob branches visible even when a processor
+    # module reports an unknown architecture during early analysis.
+    return m in {"beq", "bne", "blt", "bge", "bltu", "bgeu", "jal", "jalr", "j", "jr", "ret"}
 
 
 def _flow_target_ea(ea: int) -> int | None:
@@ -2472,6 +2476,9 @@ def gather_function_context(func_ea: int, max_refs: int = 10) -> dict:
         func_start = _compat.get_func_start(func_ea)
         if func_start is None:
             return ctx
+        func = _compat.get_func_info(func_start)
+        if func is None:
+            return ctx
         # Callers
         callers = []
         ref = idaapi.get_first_cref_to(func_start)
@@ -2481,7 +2488,7 @@ def gather_function_context(func_ea: int, max_refs: int = 10) -> dict:
                 cname = ida_funcs.get_func_name(caller_func) or hex_ea(caller_func)
                 if cname not in callers:
                     callers.append(cname)
-            ref = idaapi.get_next_cref_to(func.start_ea, ref)
+            ref = idaapi.get_next_cref_to(func_start, ref)
         if callers:
             ctx["callers"] = callers
         # Callees

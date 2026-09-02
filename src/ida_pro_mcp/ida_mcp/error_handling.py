@@ -667,9 +667,15 @@ def parse_address_canonical(addr_str: str | int) -> Tuple[Optional[int], Optiona
     # 2) Known symbol.
     try:
         import idc
+        import idaapi
         ea = idc.get_name_ea_simple(s)
-        badaddr = getattr(idc, "BADADDR", -1)
-        if ea is not None and ea != badaddr:
+        badaddrs = {
+            getattr(idc, "BADADDR", -1),
+            getattr(idaapi, "BADADDR", -1),
+            -1,
+            (1 << 64) - 1,
+        }
+        if ea is not None and ea not in badaddrs:
             return int(ea), None
     except Exception:
         pass

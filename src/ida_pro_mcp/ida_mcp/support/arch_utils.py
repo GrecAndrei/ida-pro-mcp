@@ -642,8 +642,9 @@ def _riscv_operand_parts(disasm_lower: str, mnem: str) -> list[str]:
     and ``jalr rd, rs1, imm`` forms; the leading mnemonic token is stripped.
     """
     txt = (disasm_lower or "").strip()
-    if txt.split(" ", 1) and txt.split(" ", 1)[0] == mnem:
-        txt = txt.split(" ", 1)[1].strip()
+    parts = txt.split(" ", 1)
+    if parts[0] == mnem:
+        txt = parts[1].strip() if len(parts) == 2 else ""
     return [p.strip() for p in txt.split(",") if p.strip()]
 
 

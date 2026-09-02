@@ -7,6 +7,8 @@ installed.
 """
 from __future__ import annotations
 
+import types
+
 import pytest
 
 yara = pytest.importorskip("yara")
@@ -227,3 +229,91 @@ class TestRuleFileIteration:
 
     def test_iter_missing_dir(self):
         assert ys._iter_rule_files("/nonexistent") == []
+
+
+def test_yara_conversion_and_scan_failure_modes(tmp_path):
+    class _BadString:
+        identifier = "bad"
+
+        @property
+        def instances(self):
+            raise RuntimeError("instances unavailable")
+
+    class _Match:
+        rule = "demo"
+        namespace = None
+        tags = ["one"]
+        meta = {"count": 2, "obj": object()}
+        strings = [
+            types.SimpleNamespace(
+                identifier="ascii",
+                instances=[
+                    types.SimpleNamespace(matched_data=bytearray(b"hello"), offset="bad"),
+                    types.SimpleNamespace(matched_data="text", offset=4),
+                ],
+            ),
+            _BadString(),
+        ]
+
+    converted = ys._match_to_rule_match(_Match(), base_offset=0x1000)
+    assert converted.to_dict()["namespace"] == ""
+    assert converted.meta["count"] == 2
+    assert converted.meta["obj"]
+    assert [hit.offset for hit in converted.strings] == [0x1000, 0x1004]
+    assert converted.strings[0].to_dict()["data"] == "hello"
+
+    class _BrokenRules:
+        def match(self, **_kwargs):
+            raise RuntimeError("scan failed")
+
+    assert ys.scan_bytes(_BrokenRules(), b"data") == []
+    target = tmp_path / "sample.bin"
+    target.write_bytes(b"data")
+    assert ys.scan_file(_BrokenRules(), str(target)) == []
+    assert ys.scan_address_range(_BrokenRules(), lambda *_args: b"data", 10, 10) == []
+    assert ys.scan_address_range(_BrokenRules(), lambda *_args: (_ for _ in ()).throw(RuntimeError("read")), 0, 5, chunk_size=0) == []
+
+
+def test_yara_optional_dependency_and_scanner_load_failure_modes(monkeypatch, tmp_path):
+    monkeypatch.setattr(ys, "is_yara_available", lambda: False)
+    assert ys.yara_version() != ""
+    assert ys.compile_text("rule x { condition: true }") is None
+    rules, files, errors = ys.compile_rules(str(tmp_path))
+    assert rules is None and files == [] and errors[0]["code"] == "YARA_DISABLED"
+    assert ys.load_compiled_rules(str(tmp_path / "missing")) is None
+
+    scanner = ys.YaraScanner(str(tmp_path / "rules"), str(tmp_path / "compiled"))
+    status = scanner.load()
+    assert status["loaded"] is False
+    assert scanner.scan_bytes(b"data") == []
+    scanner.unload()
+
+
+def test_yara_scanner_compile_and_save_errors_are_reported(monkeypatch, tmp_path):
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir()
+    rule = rules_dir / "x.yar"
+    rule.write_text(SIMPLE_RULE, encoding="utf-8")
+
+    class _Yara:
+        class SyntaxError(Exception):
+            pass
+
+        @staticmethod
+        def compile(**_kwargs):
+            raise _Yara.SyntaxError("bad rule")
+
+    monkeypatch.setattr(ys, "is_yara_available", lambda: True)
+    monkeypatch.setitem(__import__("sys").modules, "yara", _Yara)
+    rules, files, errors = ys.compile_rules(str(rules_dir))
+    assert rules is None and files == []
+    assert errors[0]["code"] == "YARA_COMPILE_ERROR"
+
+    class _Compiled:
+        def save(self, _path):
+            raise OSError("disk full")
+
+    monkeypatch.setattr(ys, "_iter_rule_files", lambda _path: [("x", str(rule))])
+    monkeypatch.setattr(_Yara, "compile", staticmethod(lambda **_kwargs: _Compiled()))
+    _, _, save_errors = ys.compile_rules(str(rules_dir), str(tmp_path / "out" / "rules.bin"))
+    assert save_errors[0]["code"] == "IO_ERROR"

@@ -6,6 +6,7 @@ import json
 import os
 import stat
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -146,6 +147,35 @@ def reject_symlink_path(path: Path, description: str) -> None:
         current = current.parent
 
 
+@contextmanager
+def installer_lock(install_root: Path):
+    """Hold an exclusive, symlink-safe lock for one installer run."""
+    root = Path(install_root).expanduser()
+    reject_symlink_path(root, "installer lock root")
+    root.mkdir(parents=True, exist_ok=True)
+    reject_symlink_path(root, "installer lock root")
+    lock_path = root / ".install.lock"
+    reject_symlink_path(lock_path, "installer lock path")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(lock_path, flags | no_follow, 0o600)
+    except FileExistsError as exc:
+        raise RuntimeError("Another installer is already running") from exc
+    except OSError as exc:
+        if getattr(exc, "errno", None) in (17, 40):
+            raise RuntimeError("Another installer is already running") from exc
+        raise
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(f"pid={os.getpid()}\n")
+            handle.flush()
+        yield lock_path
+    finally:
+        with contextlib.suppress(OSError):
+            lock_path.unlink()
+
+
 @dataclass
 class InstallerOptions:
     dry_run: bool = False
@@ -199,6 +229,7 @@ class InstallerOptions:
     # config; it does NOT download a pinned release (documented follow-up,
     # mirroring the llama.cpp pin discipline).
     with_r2: bool = False  # --with-r2: resolve + record rz/r2 into the client config
+    with_corpus: bool = False  # --with-corpus: download/build the optional threat corpus
     # Signature-pack staging (paper §10.2 item 5e) — copies *.sig / *.sig.gz
     # from a source dir into <IDADIR>/sig, closing "nothing installs a RISC-V
     # .sig pack".

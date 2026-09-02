@@ -482,6 +482,52 @@ def test_native_bootstrap_does_not_steal_http_fallback_without_models(monkeypatc
     report = native.bootstrap_native_backend()
     assert report["enabled"] is False
 
+
+def test_native_embedder_empty_batch_failure_and_query_document_modes(monkeypatch):
+    emb = NativeEmbedder()
+    assert emb._encode([]) is None
+    assert emb.embed_batch([]) == []
+    assert emb.embed_query("query").ok
+    assert emb.embed_query_vector("query")
+    assert emb.embed_document("document").ok
+    assert emb.embed_documents(["a", "b"])[0].ok
+    assert NativeEmbedder.cosine([1.0, 0.0], [1.0, 0.0]) == 1.0
+
+    monkeypatch.setattr(_FakeLib, "mcp_embed_encode", lambda *_args: 1)
+    assert emb.embed_vector("failed") is None
+
+
+def test_native_embedder_zero_dimension_and_cache_eviction_modes(monkeypatch):
+    monkeypatch.setattr(_FakeLib, "mcp_embed_dim", lambda *_args: 0)
+    NativeEmbedder._instance = None
+    emb = NativeEmbedder()
+    assert emb.dim == 0
+    assert emb.embed("zero").ok is False
+
+    monkeypatch.setattr(_FakeLib, "mcp_embed_dim", lambda *_args: 4)
+    NativeEmbedder._instance = None
+    emb = NativeEmbedder()
+    emb._vec_cache_max = 0
+    assert emb.embed_vector("evict") is not None
+    assert emb.ensure_ready() is True
+
+
+def test_native_reranker_empty_deadline_failure_and_top_k_modes(monkeypatch):
+    rr = NativeReranker()
+    assert rr.rerank("q", []) == []
+    assert rr.rerank("q", ["a"], deadline=0.0) is None
+    assert rr.rerank("q", ["a", "b"], top_k=1)[0]["index"] == 0
+
+    monkeypatch.setattr(_FakeLib, "mcp_rerank_score", lambda *_args: 1)
+    rr._score_cache.clear()
+    assert rr.rerank("failed", ["a"]) is None
+
+
+def test_native_backend_unavailable_paths(monkeypatch):
+    monkeypatch.setattr(native, "_NativeLib", _FakeMissingLib)
+    assert native.native_embedder_available() is False
+    assert native.native_reranker_available() is False
+
     # Lib missing → not enabled.
     monkeypatch.setenv("IDA_MCP_BACKEND", "")
     monkeypatch.setattr(native, "_NativeLib", _FakeMissingLib)

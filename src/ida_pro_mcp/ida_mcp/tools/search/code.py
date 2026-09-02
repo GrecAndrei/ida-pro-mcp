@@ -147,7 +147,7 @@ def search_operand(pattern, case_sensitive, range_start, range_end, include_cont
                 break
             ops = []
             for i in range(8):
-                if idc.get_operand_type(ea, i) == idaapi.o_void:
+                if idc.get_operand_type(ea, i) == getattr(idaapi, "o_void", getattr(idc, "o_void", 0)):
                     break
                 ops.append(idc.print_operand(ea, i) or "")
             op_text = ", ".join(ops)

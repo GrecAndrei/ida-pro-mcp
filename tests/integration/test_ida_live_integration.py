@@ -280,6 +280,20 @@ def _wait_vulnerable_hits(client, timeout: float = 30.0) -> dict | None:
     return last
 
 
+def _get_live_session() -> tuple["MCPIntegrationClient", str | None]:
+    """Start the live client, create the fixture session, and await readiness."""
+    client = MCPIntegrationClient()
+    if not client.start():
+        raise unittest.SkipTest("Failed to start IDA MCP server")
+    try:
+        session_id = _require_session(client, _build_fixture())
+        _wait_session_ready(client, session_id)
+    except BaseException:
+        client.close()
+        raise
+    return client, session_id
+
+
 class MCPIntegrationClient:
     """JSON-RPC client for integration testing against live IDA MCP."""
 

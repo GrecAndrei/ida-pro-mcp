@@ -52,6 +52,23 @@ def _normalise_sha256(value: object) -> str:
     return text if re.fullmatch(r"[0-9a-f]{64}", text) else ""
 
 
+def _read_response_limited(response, *, max_bytes: int, label: str) -> bytes:
+    """Read a response while refusing to cross the caller's byte budget."""
+    if max_bytes < 0:
+        raise ValueError("max_bytes must be non-negative")
+    chunks: list[bytes] = []
+    total = 0
+    while total <= max_bytes:
+        chunk = response.read(min(_DOWNLOAD_CHUNK_BYTES, max_bytes + 1 - total))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > max_bytes:
+            raise RuntimeError(f"{label} exceeds the {max_bytes} byte safety limit")
+    return b"".join(chunks)
+
+
 def _download_to_file(
     request: urllib.request.Request,
     destination: Path,
@@ -177,6 +194,8 @@ def _copy_file_atomically(
     """
     reject_symlink_path(destination, "file copy destination")
     destination.parent.mkdir(parents=True, exist_ok=True)
+    if not overwrite and destination.exists():
+        raise FileExistsError(destination)
     temporary: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(

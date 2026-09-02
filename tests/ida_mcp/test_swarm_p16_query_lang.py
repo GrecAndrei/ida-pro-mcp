@@ -331,3 +331,67 @@ def test_query_lang_resolves_function_op_to_data_tool():
     finally:
         sys.modules.pop("ida_pro_mcp.ida_mcp.tools.data", None)
         ql._TOOL_CACHE.clear()
+
+
+def test_query_lang_executor_composes_compact_and_structured_backend_shapes():
+    ql = load_support_module("query_lang")
+    ql._get_arch = lambda: "x64"
+
+    def fake_call(tool_name, **kwargs):
+        action = kwargs.get("action")
+        if tool_name == "data" and action == "functions":
+            return {"ok": True, "functions": "0x1000 20 xrefs=1 handler", "total": 1, "count": 1}
+        if tool_name == "data" and action == "strings":
+            return {"ok": True, "strings": "0x2000 xrefs=2 cmd.exe", "total": 1, "count": 1}
+        if tool_name == "data" and action == "imports":
+            return {"ok": True, "imports": "0x3000 kernel32 CreateFileA", "total": 1, "count": 1}
+        if tool_name == "search" and action == "insns":
+            return {"ok": True, "results": ["0x4000 [call]"]}
+        if tool_name == "code" and action == "xrefs_to":
+            return {"ok": True, "xrefs": [{"addr": "0x5000", "type": "call"}]}
+        if tool_name == "idb" and action == "segments":
+            return {"ok": True, "segments": [{"name": ".text", "start": "0x1000"}]}
+        if tool_name == "code" and action == "blocks":
+            return {"ok": True, "blocks": "0x6000 succs=[0x6010] preds=[]"}
+        if tool_name == "search" and action == "find":
+            return {"ok": True, "results": [{"addr": "0x7000", "text": "free text"}]}
+        raise AssertionError((tool_name, kwargs))
+
+    ql._call_tool = fake_call
+    executor = ql.QueryExecutor(limit=2)
+    assert executor.execute(_plan("function", "*", [{"key": "name", "op": "contains", "value": "handler"}]))["returned"] == 1
+    assert executor.execute(_plan("string", "*", [{"key": "text", "op": "contains", "value": "cmd.exe"}]))["returned"] == 1
+    assert executor.execute(_plan("import", "*", [{"key": "name", "op": "contains", "value": "Create"}]))["returned"] == 1
+    assert executor.execute(_plan("call", "*"))["returned"] == 1
+    assert executor.execute(_plan("instruction", "call"))["returned"] == 1
+    assert executor.execute(_plan("xref", "0x401000"))["returned"] == 1
+    assert executor.execute(_plan("segment", "*", [{"key": "name", "op": "==", "value": ".text"}]))["returned"] == 1
+    assert executor.execute(_plan("block", "handler", [{"key": "succs", "op": "contains", "value": "0x6010"}]))["returned"] == 1
+    assert executor.execute(_plan("find", "free text"))["results"]
+
+
+def test_query_lang_executor_postprocesses_groups_and_propagates_backend_errors(monkeypatch):
+    ql = load_support_module("query_lang")
+    executor = ql.QueryExecutor()
+    item = {"n": 5, "text": "alpha beta", "tags": ["alpha"]}
+    assert executor._match_conditions(item, [
+        {"key": "n", "op": "==", "value": 5},
+        {"key": "n", "op": "!=", "value": 4},
+        {"key": "n", "op": "<", "value": 6},
+        {"key": "n", "op": ">", "value": 4},
+        {"key": "n", "op": "<=", "value": 5},
+        {"key": "n", "op": ">=", "value": 5},
+        {"key": "text", "op": "contains", "value": "alpha"},
+        {"key": "text", "op": "~", "value": "ALP"},
+    ]) is True
+    assert executor._match_conditions(item, [{"key": "text", "op": "~", "value": "["}]) is False
+    grouped = executor._apply_postprocessing(
+        [{"kind": "b", "score": 2}, {"kind": "a", "score": 1}],
+        {"limit": 10, "sort_key": "score", "sort_order": "DESC", "group_key": "kind"},
+    )
+    assert list(grouped["grouped"]) == ["b", "a"]
+
+    monkeypatch.setattr(ql, "_call_tool", lambda *_args, **_kwargs: {"error": True, "code": "IDA_ERROR"})
+    assert executor._execute_instruction(_plan("instruction", "call"))["error"] is True
+    assert executor._execute_block(_plan("block", "*"))["error"] is True
+    assert executor.execute({"target": "unknown", "conditions": [], "limit": 1})["error"] is True

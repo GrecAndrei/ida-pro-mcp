@@ -267,7 +267,12 @@ def _is_cop_terminator(ea, ml, disasm, arch):
             return op_type in (idc.o_reg, idc.o_mem, idc.o_phrase, idc.o_displ)
         return False
     if _is_arm_family(arch):
-        if ml in ("blx", "blr"):
+        if ml == "blr":
+            # AArch64 BLR is always an indirect call. The mnemonic itself
+            # contains the letters "lr", so a substring return check would
+            # misclassify every BLR gadget.
+            return True
+        if ml == "blx":
             return "lr" not in disasm
         return False
     if is_mips_family(arch):

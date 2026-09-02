@@ -37,6 +37,12 @@ class TestSessionReportSnapshot:
             for _ in range(300):
                 report = d.session_report("s1")
                 assert report["session_id"] == "s1"
+                # The observer thread may not have acquired its first slot
+                # before this snapshot.  The zero-call response is a valid
+                # documented shape; once a call exists, assert the full
+                # concurrent-snapshot invariants below.
+                if report.get("total_calls", 0) == 0:
+                    continue
                 # Snapshot reads are atomic: invariants hold even though the
                 # observer mutates the same state concurrently.
                 assert 0 <= report["error_calls"] <= report["total_calls"]

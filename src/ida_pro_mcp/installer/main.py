@@ -919,6 +919,11 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         help="keep partial client changes when a later install phase fails",
     )
     parser.add_argument(
+        "--with-corpus",
+        action="store_true",
+        help="download/build the optional BRON-style threat corpus during setup",
+    )
+    parser.add_argument(
         "--runtime-source",
         choices=["auto", "local", "snapshot", "pypi"],
         default="auto",
@@ -1077,6 +1082,7 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         only=set(args.only),
         disable_policy=args.disable_policy,
         with_r2=args.with_r2,
+        with_corpus=args.with_corpus,
         sigs_dir=args.sigs,
         ida_runtime=args.ida_runtime or "idat",
         ida_binary_path=args.ida_binary_path,

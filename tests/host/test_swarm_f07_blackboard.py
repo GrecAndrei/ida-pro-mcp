@@ -377,3 +377,124 @@ def test_store_unavailable_surfaces_cause(tmp_path, monkeypatch):
     assert res.get("error") is True
     assert res.get("code") == MCPError.DB_ERROR
     assert "locked" in res.get("message", "")
+
+
+def test_phase_contracts_receipts_loops_and_write_gates_compose(tmp_path):
+    server = _make_server(tmp_path)
+    server.current_session = _make_session(tmp_path, "bin-phase", "SESS-PHASE")
+    store = server._get_blackboard_store()
+    state = server._phase_state()
+
+    state["phase"] = "scout"
+    state["recent_actions"] = ["search"] * 6
+    tick = server._phase_tick(state, store, limit=2)
+    assert tick["loop_detected"] is True
+    assert state["phase"] == "prove"
+    assert "switched to prove" in " ".join(tick["recommendations"])
+    assert server._phase_contracts("unknown")["write_policy"] == "optional"
+    assert server._phase_write_call("funcs", "info") is False
+    assert server._phase_write_call("funcs", "change") is True
+    assert server._phase_write_call("modify", "read") is True
+    assert server._phase_write_call("code", "decompile") is False
+    assert server._evidence_has_tool_citation(["search: exact string", "plain text"]) is True
+    assert server._evidence_has_tool_citation(["nothing useful"]) is False
+
+    blocked = server._phase_contract_check(
+        state,
+        "proposal_create",
+        {"proposal_type": "rename", "spec": {"renames": []}},
+        store,
+    )
+    assert blocked["error"] is True
+    assert blocked["gate"] == "phase"
+
+    store.write(
+        "Evidence card",
+        json.dumps({"evidence_for": ["code: decompile"]}),
+        category="hypothesis",
+        tags=["decision_card"],
+    )
+    store.write(
+        "Completed trace",
+        json.dumps({"status": "done"}),
+        category="trace_task",
+        status="resolved",
+    )
+    assert server._phase_has_prove_receipts(store) is True
+    assert server._phase_contract_check(
+        state,
+        "proposal_create",
+        {"proposal_type": "rename", "spec": {"renames": [{"addr": "0x401000", "name": "handler"}]}},
+        store,
+    ) is None
+
+    state["phase"] = "commit"
+    invalid_commit = server._phase_contract_check(
+        state,
+        "proposal_create",
+        {"proposal_type": "patch", "spec": {"patches": []}},
+        store,
+    )
+    assert invalid_commit["error"] is True
+    assert server._phase_contract_check(
+        state,
+        "proposal_create",
+        {"proposal_type": "patch", "spec": {"patches": [{"addr": "0x401000", "bytes": "90"}]}},
+        store,
+    ) is None
+
+    contradicted = store.write("Contradicted", "old", category="fact", confidence=0.8)
+    store.contradict(contradicted, "new evidence")
+    state["phase"] = "finalize"
+    final_block = server._phase_contract_check(state, "proposal_accept", {}, store)
+    assert final_block["error"] is True
+    assert "contradictions" in final_block["message"]
+
+    gate_root = tmp_path / "gates"
+    gate_root.mkdir()
+    gate_server = _make_server(gate_root)
+    gate_server.current_session = _make_session(gate_root, "gate-bin", "SESS-GATE")
+    gate_server._phase_gates_enabled = True
+    gate_state = gate_server._phase_state()
+    gate_server._blackboard_phase_state = gate_state
+    gate_state["phase"] = "prove"
+    assert gate_server._phase_preflight_for_tool("modify", {"action": "rename"})["error"] is True
+    gate_state["phase"] = "commit"
+    assert gate_server._phase_preflight_for_tool("modify", {"action": "rename"})["error"] is True
+    assert gate_server._phase_preflight_for_tool("modify", {"action": "rename", "_phase_commit_ack": True}) is None
+
+
+def test_phase_followups_and_policy_staleness_are_actionable(tmp_path):
+    server = _make_server(tmp_path)
+    server.current_session = _make_session(tmp_path, "bin-follow", "SESS-FOLLOW")
+    store = server._get_blackboard_store()
+    state = server._phase_state()
+    server._blackboard_phase_state = state
+
+    state["phase"] = "prove"
+    followup = server._phase_followup_for_response("code")
+    assert followup["must_call_before_answer"] is True
+    assert followup["required_followup_call"]["action"] == "decision_card"
+    state["phase"] = "commit"
+    assert server._phase_followup_for_response("code")["required_followup_call"]["action"] == "proposal_create"
+    state["phase"] = "finalize"
+    assert server._phase_followup_for_response("code") is None
+    contradiction = store.write("Conflict", "old", category="fact", confidence=0.8)
+    store.contradict(contradiction, "counterexample")
+    assert server._phase_followup_for_response("code")["required_followup_call"]["action"] == "memory_compile"
+    assert server._phase_followup_for_response("blackboard") is None
+
+    policy = server._bb_policy_state()
+    policy.update({
+        "strict_mode": True,
+        "max_staleness_calls": 2,
+        "last_call_count_at_update": 5,
+        "policy_markers": [],
+    })
+    check = server._bb_policy_check(policy)
+    assert check["ok"] is False
+    assert any("working_set" in reason for reason in check["reasons"])
+    policy["policy_markers"] = ["working_set@5", "write@5"]
+    assert server._bb_policy_check(policy)["ok"] is True
+    assert server._bb_policy_enforced_for_phase(policy, "finalize") is True
+    assert server._bb_policy_enforced_for_phase(policy, "scout") is False

@@ -637,3 +637,63 @@ def test_host_check_accepts_ipv6_loopback():
     h = _make_handler(headers={"Host": "evil.com:8080"})
     assert cls._check_host(h) is False
     assert h.sent["code"] == 403
+
+
+def test_mcp_http_policy_rendering_and_config_get(monkeypatch):
+    mod = _load_mcp_http_methods()
+    cls = mod.IdaMcpHttpRequestHandler
+    h = _make_handler()
+    h.mcp_server.cors_localhost = "LOCAL"
+
+    monkeypatch.setattr(mod, "config_json_get", lambda key, default: "unrestricted" if key == "cors_policy" else default)
+    cls.update_cors_policy(h)
+    assert h.mcp_server.cors_allowed_origins == "*"
+    monkeypatch.setattr(mod, "config_json_get", lambda key, default: "local" if key == "cors_policy" else default)
+    cls.update_cors_policy(h)
+    assert h.mcp_server.cors_allowed_origins == "LOCAL"
+    monkeypatch.setattr(mod, "config_json_get", lambda key, default: "direct" if key == "cors_policy" else default)
+    cls.update_cors_policy(h)
+    assert h.mcp_server.cors_allowed_origins is None
+
+    rendered = []
+    h.send_response = lambda code: rendered.append(("response", code))
+    h.send_header = lambda key, value: rendered.append((key, value))
+    h.end_headers = lambda: rendered.append(("end",))
+    h.wfile = types.SimpleNamespace(write=lambda body: rendered.append(("body", body)))
+    cls._send_html(h, 200, "<h1>config</h1>")
+    assert ("response", 200) in rendered
+    assert any(item[0] == "X-Frame-Options" and item[1] == "DENY" for item in rendered)
+    assert ("body", b"<h1>config</h1>") in rendered
+
+
+def test_mcp_http_get_and_post_dispatch_boundaries(monkeypatch):
+    from tests.ida_mcp.test_swarm_t18_zeromcp import _load_mcp_http, _make_config_handler
+
+    mod, _ = _load_mcp_http()
+    cls = mod.IdaMcpHttpRequestHandler
+    h = _make_config_handler(mod)
+    h._local_endpoints = mod.IdaMcpHttpRequestHandler._local_endpoints.__get__(h)
+    h._check_host = mod.IdaMcpHttpRequestHandler._check_host.__get__(h)
+    h._check_origin = mod.IdaMcpHttpRequestHandler._check_origin.__get__(h)
+    h.path = "/config.html"
+    h.headers["Host"] = "127.0.0.1:13337"
+    h._handle_config_get = lambda: setattr(h, "config_get_called", True)
+    cls.do_GET(h)
+    assert h.config_get_called is True
+
+    bad = _make_config_handler(mod)
+    bad._local_endpoints = mod.IdaMcpHttpRequestHandler._local_endpoints.__get__(bad)
+    bad._check_host = mod.IdaMcpHttpRequestHandler._check_host.__get__(bad)
+    bad.path = "/config.html"
+    bad.headers["Host"] = "evil.example"
+    cls.do_GET(bad)
+    assert any(item[0] == "error" and item[1] == 403 for item in bad.sent)
+
+    post = _make_config_handler(mod, body=b"cors_policy=direct")
+    post._local_endpoints = mod.IdaMcpHttpRequestHandler._local_endpoints.__get__(post)
+    post._check_origin = mod.IdaMcpHttpRequestHandler._check_origin.__get__(post)
+    post.path = "/config"
+    post.headers["Origin"] = "http://127.0.0.1:13337"
+    post._handle_config_post = lambda: setattr(post, "config_post_called", True)
+    cls.do_POST(post)
+    assert post.config_post_called is True
