@@ -4,11 +4,13 @@ import json
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from ida_pro_mcp.installer.discovery import (
+    STATE_FILE,
     IdaInstall,
     _binary_arch,
     _detect_flavor,
@@ -309,3 +311,97 @@ def test_select_ida_install_options(tmp_path: Path) -> None:
 
     # Prompt fn
     assert select_ida_install([inst93, inst92], prompt_fn=lambda xs: xs[1]) == inst92
+
+
+def test_discovery_handles_short_headers_external_versions_and_nested_macos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    short = tmp_path / "short"
+    short.write_bytes(b"x")
+    assert _binary_arch(short) == "unknown"
+
+    macho_x64 = tmp_path / "macho-x64"
+    macho_x64.write_bytes(b"\xcf\xfa\xed\xfe\x07\x00\x00\x01" + b"\0" * 12)
+    assert _binary_arch(macho_x64) == "x64"
+
+    pe_unknown = bytearray(128)
+    pe_unknown[:2] = b"MZ"
+    pe_unknown[0x3C:0x40] = (0x40).to_bytes(4, "little")
+    pe_unknown[0x44:0x46] = (0x1234).to_bytes(2, "little")
+    pe_path = tmp_path / "unknown.exe"
+    pe_path.write_bytes(pe_unknown)
+    assert _binary_arch(pe_path) == "unknown"
+
+    raw = tmp_path / "raw-idat"
+    raw.write_bytes(b"no embedded version")
+    monkeypatch.setattr(
+        "ida_pro_mcp.installer.discovery.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="UNKNOWN: placeholder\nIDA 9.4.260901.aabbccdd\n",
+        ),
+    )
+    assert _detect_version(raw) == ((9, 4), "260901.aabbccdd")
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    nested = tmp_path / "IDA Pro.app" / "Contents" / "MacOS"
+    nested.mkdir(parents=True)
+    nested_idat = nested / "idat64"
+    nested_idat.write_bytes(b"idat")
+    nested_idat.chmod(0o755)
+    assert _find_idat(tmp_path / "IDA Pro.app") == nested_idat
+
+
+def test_discovery_flavors_sources_and_state_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    (home / "idaessential_1.hexlic").write_text("license")
+    install = tmp_path / "ida"
+    install.mkdir()
+    assert _detect_flavor(install) == "essential"
+
+    (home / "idaessential_1.hexlic").unlink()
+    (home / "idafree_1.hexlic").write_text("license")
+    assert _detect_flavor(install) == "free"
+
+    ida_home = home / "ida-pro-9.4"
+    ida_home.mkdir()
+    (ida_home / "idat64").write_bytes(b"idat")
+    (ida_home / "idat64").chmod(0o755)
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    assert ida_home in list(_scan_home())
+
+    monkeypatch.setenv("IDADIR", str(ida_home / "idat64"))
+    assert list(_from_env()) == [ida_home]
+    monkeypatch.setattr(
+        "ida_pro_mcp.installer.discovery.shutil.which",
+        lambda name: str(ida_home / name) if name == "idat64" else None,
+    )
+    assert list(_from_path()) == [ida_home]
+
+    root = tmp_path / "state"
+    root.mkdir()
+    assert read_install_state(root) is None
+    (root / STATE_FILE).write_text(json.dumps({"selected": []}), encoding="utf-8")
+    assert read_install_state(root) is None
+    (root / STATE_FILE).write_text("[]", encoding="utf-8")
+    assert read_install_state(root) is None
+
+
+def test_discovery_platform_scan_and_explicit_selection_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    win_root = tmp_path / "Program Files"
+    win_root.mkdir()
+    ida_dir = win_root / "IDA Pro 9.4"
+    ida_dir.mkdir()
+    binary = ida_dir / "idat64.exe"
+    binary.write_bytes(b"idat")
+    binary.chmod(0o755)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("ProgramFiles", str(win_root))
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    assert ida_dir in list(_scan_system_dirs())
+
+    with pytest.raises(RuntimeError, match="does not contain"):
+        select_ida_install([], explicit_dir=tmp_path / "missing")
+
+    with pytest.raises(RuntimeError, match="no version digits"):
+        select_ida_install([], explicit_version="xyz")

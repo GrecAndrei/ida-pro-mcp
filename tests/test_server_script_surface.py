@@ -476,3 +476,101 @@ def test_run_server_handles_truncated_and_non_serializable_responses(bridge, mon
     monkeypatch.setattr(bridge, "process_single", lambda _request: {"bad": {1}})
     bridge.run_server()
     assert json.loads(serialisation_failure.sent[0][4:])["code"] == "INTERNAL"
+
+
+def test_live_trace_and_heartbeat_failures_are_bounded(bridge, monkeypatch, tmp_path):
+    trace_callbacks = []
+    monkeypatch.setenv("IDA_MCP_LIVE_COVERAGE", "1")
+    monkeypatch.setenv("IDA_MCP_LIVE_TRACE_FILE", str(tmp_path / "live-trace"))
+    monkeypatch.setattr(bridge.sys, "settrace", trace_callbacks.append)
+    monkeypatch.setattr(bridge.threading, "settrace", trace_callbacks.append)
+    trace = bridge._start_live_trace()
+    assert trace is not None
+    assert len(trace_callbacks) == 2
+    callback = trace_callbacks[0]
+    frame = types.SimpleNamespace(
+        f_code=types.SimpleNamespace(co_filename=bridge.__file__), f_lineno=123
+    )
+    assert callback(frame, "line", None) is callback
+    assert str(bridge.__file__) in trace[1]
+    outside = types.SimpleNamespace(
+        f_code=types.SimpleNamespace(co_filename="/tmp/not-project.py"), f_lineno=1
+    )
+    callback(outside, "line", None)
+
+    monkeypatch.setattr(bridge, "_LIVE_TRACE", trace)
+    bridge._save_live_trace()
+    saved = tmp_path / f"live-trace.{__import__('os').getpid()}.json"
+    assert json.loads(saved.read_text(encoding="utf-8"))[str(bridge.__file__)] == [123]
+
+    monkeypatch.setattr(bridge, "ALIVE_FILE", str(tmp_path / "heartbeat"))
+    monkeypatch.setattr(
+        "builtins.open",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("read-only")),
+    )
+    bridge.log_ev("heartbeat remains best effort")
+
+
+def test_bridge_error_fallback_and_shutdown_save_paths(bridge, monkeypatch, tmp_path):
+    monkeypatch.setattr(bridge, "_shared_make_error", None)
+    fallback = bridge._build_error(
+        "tool", "bad", code="INVALID_ARGS", details={"values": list(range(20))}, hint="fix"
+    )
+    assert fallback["details"]["values_more"] == 4
+    assert fallback["hint"] == "fix"
+
+    loader = types.ModuleType("ida_loader")
+    loader.save_database = lambda *_args: True
+    monkeypatch.setitem(sys.modules, "ida_loader", loader)
+    monkeypatch.setattr(bridge, "_STARTUP_DONE", __import__("threading").Event())
+    bridge._STARTUP_DONE.set()
+    monkeypatch.setenv("IDA_MCP_IDB_PATH", str(tmp_path / "session.i64"))
+    bridge._SHUTDOWN_EVENT.clear()
+    saved = bridge._handle_shutdown()
+    assert saved["saved"] is True and saved["analysis_complete"] is True
+
+    loader.save_database = lambda *_args: (_ for _ in ()).throw(OSError("save failed"))
+    bridge._SHUTDOWN_EVENT.clear()
+    failed = bridge._handle_shutdown()
+    assert failed["saved"] is False and failed["shutdown"] is True
+
+
+def test_startup_budget_and_preanalysis_invalid_modes(bridge, monkeypatch):
+    monkeypatch.setenv("IDA_MCP_STARTUP_ANALYSIS_TIMEOUT", "nan")
+    assert bridge._startup_analysis_timeout() == 120.0
+    monkeypatch.setenv("IDA_MCP_STARTUP_ANALYSIS_TIMEOUT", "1")
+    assert bridge._startup_analysis_timeout() == 5.0
+    monkeypatch.setenv("IDA_MCP_STARTUP_ANALYSIS_TIMEOUT", "9999")
+    assert bridge._startup_analysis_timeout() == 600.0
+
+    monkeypatch.setenv("IDA_MCP_PRE_ANALYSIS_OPTS", "not-json")
+    bridge._apply_pre_analysis_options()
+    monkeypatch.setenv(
+        "IDA_MCP_PRE_ANALYSIS_OPTS",
+        '{"endian":"sideways", "processor_options":"x", "bitness":32}',
+    )
+    monkeypatch.setitem(sys.modules, "ida_ida", types.ModuleType("ida_ida"))
+    monkeypatch.setitem(sys.modules, "ida_loader", types.ModuleType("ida_loader"))
+    idaapi = types.ModuleType("idaapi")
+    idaapi.SETPROC_LOADER = 1
+    idaapi.get_inf_structure = lambda: types.SimpleNamespace(procname="same")
+    idaapi.set_processor_type = lambda *_args: True
+    monkeypatch.setitem(sys.modules, "idaapi", idaapi)
+    bridge._apply_pre_analysis_options()
+
+
+def test_bounded_auto_wait_legacy_fallbacks_and_trace_detail_modes(bridge, monkeypatch):
+    auto = types.ModuleType("ida_auto")
+    auto.auto_wait = lambda: setattr(auto, "waited", True)
+    monkeypatch.setitem(sys.modules, "ida_auto", auto)
+    bridge._bounded_auto_wait(0)
+    assert auto.waited is True
+
+    auto.get_auto_state = lambda: (_ for _ in ()).throw(RuntimeError("state unavailable"))
+    bridge._bounded_auto_wait(0)
+    assert auto.waited is True
+
+    monkeypatch.setattr(bridge, "_ERROR_DETAIL_LEVEL", "basic")
+    assert bridge._compact_error_details({"traceback": "hidden", "safe": "value"}) == {"safe": "value"}
+    assert bridge._compact_error_details("not-a-dict") == "not-a-dict"
+    assert bridge._suggest_choice("read", ["write"]) is None

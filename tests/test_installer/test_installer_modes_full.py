@@ -169,3 +169,96 @@ def test_run_install_failure_writes_report_and_rolls_back(tmp_path, monkeypatch)
     assert rolled_back == [True]
     assert (tmp_path / "install" / "install-report.json").is_file()
     assert (tmp_path / "install" / "install-error.log").is_file()
+
+
+def test_installer_path_client_and_symlink_helpers_cover_failure_contracts(tmp_path, monkeypatch):
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"model")
+    assert installer._normalise_runtime_path(str(model), "model") == str(model.resolve())
+    assert installer._normalise_runtime_path(
+        "planned.gguf", "model", allow_missing=True
+    ).endswith("planned.gguf")
+    with pytest.raises(RuntimeError, match="regular file"):
+        installer._normalise_runtime_path(str(tmp_path / "missing"), "model")
+
+    binary = tmp_path / "server"
+    binary.write_bytes(b"server")
+    with pytest.raises(RuntimeError, match="not executable"):
+        installer._normalise_runtime_path(str(binary), "server", executable=True)
+    monkeypatch.setattr(installer.sys, "platform", "win32")
+    with pytest.raises(RuntimeError, match="Windows suffix"):
+        installer._normalise_runtime_path(str(model), "server", executable=True)
+    monkeypatch.setattr(installer.sys, "platform", "linux")
+
+    monkeypatch.setattr(installer, "get_config_paths", lambda _root: ["one", "two"])
+    complete = InstallReport()
+    installer._report_client_configuration(
+        tmp_path, ["one", "two"], complete, installer.UI(), dry_run=True
+    )
+    assert complete.steps[-1]["status"] == "dry-run"
+    partial = InstallReport()
+    installer._report_client_configuration(tmp_path, ["one"], partial, installer.UI())
+    assert partial.warnings
+    failed = InstallReport()
+    failed.metadata["client_update_failures"] = ["one"]
+    with pytest.raises(RuntimeError, match="no supported client"):
+        installer._report_client_configuration(tmp_path, [], failed, installer.UI())
+
+    source = tmp_path / "source.txt"
+    source.write_text("content", encoding="utf-8")
+    destination = tmp_path / "destination" / "source.txt"
+    mode = installer._replace_with_symlink_or_copy(source, destination)
+    assert mode in {"linked", "copied"} and destination.read_text(encoding="utf-8") == "content"
+    destination.unlink()
+    outside = tmp_path / "outside"
+    outside.write_text("outside", encoding="utf-8")
+    destination.symlink_to(outside)
+    with pytest.raises(RuntimeError, match="symlink"):
+        installer._replace_with_symlink_or_copy(source, destination)
+
+
+def test_installer_reranker_and_idalib_resolution_modes(tmp_path, monkeypatch):
+    opts = InstallerOptions(rerank_disabled=True)
+    assert installer._resolve_reranker_for_install(
+        opts, tmp_path, InstallReport(), installer.UI(), semantic_enabled=True
+    ) == ""
+    opts = InstallerOptions()
+    assert installer._resolve_reranker_for_install(
+        opts, tmp_path, InstallReport(), installer.UI(), semantic_enabled=False
+    ) == ""
+
+    rerank = tmp_path / "rerank.gguf"
+    rerank.write_bytes(b"rerank")
+    opts = InstallerOptions(rerank_model_path=str(rerank))
+    report = InstallReport()
+    assert installer._resolve_reranker_for_install(
+        opts, tmp_path, report, installer.UI(), semantic_enabled=True
+    ) == str(rerank)
+    assert report.metadata["rerank_model"] == str(rerank)
+
+    opts = InstallerOptions(
+        dry_run=True,
+        download_rerank_model=True,
+        accept_model_license=True,
+        rerank_profile="qwen3-reranker-0.6b",
+    )
+    # Keep the dry-run branch deterministic even when the developer machine
+    # already has a matching model in a standard download directory.
+    monkeypatch.setattr(installer, "find_rerank_model", lambda *_args: "")
+    report = InstallReport()
+    assert installer._resolve_reranker_for_install(
+        opts, tmp_path, report, installer.UI(), semantic_enabled=True
+    ) == ""
+    assert report.steps[-1]["status"] == "dry-run"
+
+    dry = InstallerOptions(dry_run=True, ida_runtime="idalib")
+    report = InstallReport()
+    installer._activate_idalib_after_install(dry, None, report, installer.UI())
+    assert report.steps[-1]["status"] == "dry-run"
+    real = InstallerOptions(ida_runtime="idalib")
+    with pytest.raises(RuntimeError, match="no idapro package"):
+        installer._activate_idalib_after_install(real, _install(tmp_path / "ida"), InstallReport(), installer.UI())
+    monkeypatch.setattr(installer, "find_idalib_python_dir", lambda _path: "/tmp/idalib")
+    monkeypatch.setattr(installer, "activate_idalib", lambda _path: (False, "failed"))
+    with pytest.raises(RuntimeError, match="activation failed"):
+        installer._activate_idalib_after_install(real, _install(tmp_path / "ida2"), InstallReport(), installer.UI())
