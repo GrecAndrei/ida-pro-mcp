@@ -4,6 +4,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
 
 ## 2026-09-02 — PR-work coverage checkpoint
 
+ - Expanded support-helper coverage for GGUF scalar/array parsing and profile
+   aliases, Sigma rule filtering and archive handling, and audit hashing,
+   redaction, rotation, pruning, and serialization failure paths.
  - Expanded runtime coverage for live-process snapshots, state/RPC gates,
    checkpoint failures, teardown lock handling, IDA argument fallbacks, and
    backup/sidecar cleanup errors.
