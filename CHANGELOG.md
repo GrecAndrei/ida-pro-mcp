@@ -4,6 +4,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
 
 ## 2026-09-02 — PR-work coverage checkpoint
 
+ - Expanded runtime coverage for live-process snapshots, state/RPC gates,
+   checkpoint failures, teardown lock handling, IDA argument fallbacks, and
+   backup/sidecar cleanup errors.
  - Expanded multi-session coverage for malformed persisted groups, cache-write
    failures, export/import aliases, cross-session resolution and decompilation,
    deep xrefs, detailed status, and uninitialized helper state.

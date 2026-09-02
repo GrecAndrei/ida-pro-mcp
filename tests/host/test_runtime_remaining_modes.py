@@ -239,3 +239,134 @@ def test_runtime_checkpoint_and_shutdown_policy_branches(tmp_path, monkeypatch):
     host._run_analysis_checkpoint(sid)
     assert updates and updates[-1]["analysis_progress"] == 4
     host._record_analysis_checkpoint(sid)
+
+
+def test_runtime_observability_and_state_gates_cover_live_and_failed_modes(tmp_path, monkeypatch):
+    host = _Host(tmp_path)
+    sid = "SID12345"
+    stdout = tmp_path / "ida_stdout.log"
+    stderr = tmp_path / "ida_stderr.log"
+    stdout.write_text("live output\n", encoding="utf-8")
+    stderr.write_text("live error\n", encoding="utf-8")
+
+    proc = SimpleNamespace(pid=os.getpid(), poll=lambda: None)
+    snapshot = host._collect_ida_state_snapshot(
+        {
+            "process": proc,
+            "stdout_log": str(stdout),
+            "stderr_log": str(stderr),
+        },
+        current_tool="analysis",
+        current_args={"value": "x" * 300},
+        call_started_at=0,
+        tail_lines=1,
+    )
+    assert snapshot["process_alive"] is True
+    assert snapshot["process_pid"] == os.getpid()
+    assert snapshot["process_state"]
+    assert snapshot["process_threads"] >= 1
+    assert snapshot["ida_stdout_tail"] == "live output"
+    assert snapshot["ida_stderr_tail"] == "live error"
+    assert snapshot["current_args"].endswith("...")
+
+    # These are deliberately separate gates: a missing runtime, a bad port, a
+    # transport failure, and a non-success response all report no state.
+    host._runtime_alive = lambda runtime: isinstance(runtime, dict)
+    assert host._query_ida_state(sid) is None
+    host.session_runtimes[sid] = {"process": proc, "port": 0}
+    assert host._query_ida_state(sid) is None
+    host.session_runtimes[sid]["port"] = 9001
+    host._send_rpc_raw = lambda *_args, **_kwargs: {"ok": False}
+    assert host._query_ida_state(sid) is None
+    host._send_rpc_raw = lambda *_args, **_kwargs: {"ok": True, "analysis": {"is_ok": True}}
+    assert host._query_ida_state(sid)["ok"] is True
+    host._send_rpc_raw = lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("closed"))
+    assert host._query_ida_state(sid) is None
+
+    class BrokenProc:
+        pid = 77
+
+        @staticmethod
+        def poll():
+            raise RuntimeError("gone")
+
+    host.session_runtimes[sid] = {"process": BrokenProc(), "port": 9001}
+    host._analysis_is_complete = lambda _sid: True
+    assert host._run_analysis_checkpoint(sid) is None
+
+    host.session_runtimes[sid] = {"process": proc, "port": 0}
+    assert host._run_analysis_checkpoint(sid) is None
+    host.session_runtimes[sid]["port"] = 9001
+    host._send_rpc_raw = lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("save failed"))
+    assert host._run_analysis_checkpoint(sid) is None
+
+    host._query_ida_state = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("state failed"))
+    updates = []
+    host._update_session_indexing_metadata = lambda _sid, **values: updates.append(values)
+    assert host._record_analysis_checkpoint(sid) is None
+    assert updates and updates[-1]["analysis_progress"] is None
+
+
+def test_runtime_lifecycle_helpers_cover_missing_locks_and_cleanup_edges(tmp_path):
+    bare = ServerRuntimeMixin()
+    bare.session_runtimes = []
+    assert bare._runtime_record("x") is None
+    assert bare._runtime_items_snapshot() == []
+    bare.session_runtimes = {}
+    assert bare._runtime_state_lock() is bare._runtime_lock
+
+    assert bare._session_teardown_active("sid") is False
+    bare._begin_session_teardown("sid")
+    assert bare._session_teardown_active("sid") is True
+    bare._end_session_teardown("sid")
+    assert bare._session_teardown_active("sid") is False
+    try:
+        with bare._teardown_session("sid"):
+            assert bare._session_teardown_active("sid") is True
+            raise RuntimeError("body failed")
+    except RuntimeError:
+        pass
+    assert bare._session_teardown_active("sid") is False
+
+    class BadManager:
+        @property
+        def sessions(self):
+            raise RuntimeError("manager unavailable")
+
+    bare.session_mgr = BadManager()
+    bare.large_idb_shutdown_grace_seconds = "invalid"
+    assert bare._shutdown_grace_seconds("sid", {}) == 2.0
+    assert bare._render_payload_text("scalar") == "scalar"
+
+
+def test_runtime_command_and_recovery_helpers_cover_fallback_paths(tmp_path, monkeypatch):
+    host = _Host(tmp_path)
+    binary = tmp_path / "blob.bin"
+    binary.write_bytes(b"raw")
+    session = SimpleNamespace(
+        binary_path=str(binary),
+        idb_path=str(tmp_path / "out.i64"),
+        analysis_options={"rebase_to": "0x12345"},
+        ida_args=["-A"],
+    )
+    assert "-b0x12345" in host._preload_ida_args(session)
+
+    ida_root = tmp_path / "ida"
+    fallback_python = ida_root / "idalib" / "python"
+    fallback_python.mkdir(parents=True)
+    host.ida_dir = str(ida_root)
+    host.idat_exe = str(ida_root / "idat64")
+    assert host._idalib_python_dir() == str(fallback_python)
+
+    original_replace = runtime_mod.os.replace
+    idb = tmp_path / "bad.i64"
+    idb.write_bytes(b"bad")
+    monkeypatch.setattr(runtime_mod.os, "replace", lambda *_args: (_ for _ in ()).throw(OSError("busy")))
+    assert host._backup_idb(str(idb)) is None
+    monkeypatch.setattr(runtime_mod.os, "replace", original_replace)
+
+    stale = tmp_path / "stale.id0"
+    stale.write_text("stale", encoding="utf-8")
+    monkeypatch.setattr(runtime_mod.os, "remove", lambda path: (_ for _ in ()).throw(OSError("locked")) if path == str(stale) else None)
+    host._cleanup_stale_idb_family(str(tmp_path / "stale.i64"))
+    assert stale.exists()
