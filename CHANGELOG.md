@@ -23,7 +23,8 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    `docs/reference/`, `docs/guide/`) and removed loose root markdown files.
  - Updated the release workflow (`alpha-release.yml`) to automatically resolve
    `docs/releases/${RELEASE_TAG}.md` when publishing, ensured PYTHONPATH includes `src`,
-   and added `attestations: write` permission for build provenance attestation.
+   added `attestations: write` permission, and package `install.sh`, `install.bat`,
+   and standalone Linux installer executables into release assets.
  - Synchronized user guides, client setup, and cross-references to the official external
    GitHub Wiki repository (`https://github.com/GrecAndrei/ida-pro-mcp/wiki`).
 

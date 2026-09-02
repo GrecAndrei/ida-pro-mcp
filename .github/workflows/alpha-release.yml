@@ -52,9 +52,16 @@ jobs:
             exit 1
           }
       - name: Install build tools
-        run: python -m pip install --upgrade pip build
+        run: python -m pip install --upgrade pip build pyinstaller
       - name: Build wheel and source distribution
         run: python -m build --sdist --wheel --outdir dist
+      - name: Build standalone Linux installer executable
+        run: pyinstaller --onefile --name ida-pro-mcp-installer-linux-x86_64 install.py
+      - name: Package auto-installers
+        run: |
+          cp scripts/install.sh dist/install.sh
+          cp scripts/install.bat dist/install.bat
+          chmod +x dist/install.sh
       - name: Create source bundle for users
         env:
           RELEASE_TAG: ${{ inputs.tag }}
