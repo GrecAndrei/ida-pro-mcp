@@ -130,7 +130,8 @@ _SHARED_STUB_MODULES = (
     "ida_ida", "idaapi", "idc", "idautils", "ida_funcs", "ida_bytes",
     "ida_segment", "ida_name", "ida_typeinf", "ida_nalt", "ida_hexrays",
     "ida_frame", "ida_struct", "ida_lines", "ida_ua", "ida_kernwin",
-    "ida_loader", "ida_dbg",
+    "ida_loader", "ida_dbg", "ida_pro_mcp.ida_mcp.compat",
+    "ida_mcp.compat",
 )
 
 

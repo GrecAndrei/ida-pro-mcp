@@ -39,6 +39,8 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    imports cannot affect unrelated tests in the full suite.
  - Restored the shared compatibility module after import-surface fixtures so
    fake segment lookups cannot leak across IDA-side test modes.
+ - Extended the central test isolation boundary to restore compatibility
+   helpers alongside SDK stubs for the complete offline suite.
 
 - Expanded offline and opt-in live coverage across the public and legacy MCP
   surfaces, and stabilized batch-history and client-path tests.
