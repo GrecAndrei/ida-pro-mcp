@@ -6,10 +6,12 @@ never started; the only boundary that is faked is the spawned process and the
 daemon's AF_UNIX socket.
 """
 
+import io
 import json
 import socket
 import sys
 import textwrap
+import types
 
 import pytest
 
@@ -256,3 +258,222 @@ def test_main_reads_payload_from_stdin(fake_server_cmd, capsys, monkeypatch):
     out = json.loads(capsys.readouterr().out)
     assert out["tool"] == "session"
     assert out["arguments"] == {"a": 1}
+
+
+# ---------------------------------------------------------------------------
+# Boundary and daemon-mode coverage
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_tool_result_handles_empty_and_mixed_content():
+    assert cli._normalize_tool_result({"result": {"content": []}}) == {"content": []}
+    response = {
+        "result": {
+            "content": [None, {"type": "text"}, {"type": "text", "text": "plain"}],
+            "isError": True,
+        }
+    }
+    assert cli._normalize_tool_result(response) == {
+        "content": [None, {"type": "text"}, {"text": "plain", "isError": True}],
+        "isError": True,
+    }
+
+
+def test_stdio_client_skips_notifications_invalid_lines_and_other_ids(monkeypatch):
+    class Process:
+        stdin = io.StringIO()
+        stdout = io.StringIO(
+            "not-json\n"
+            '{"jsonrpc":"2.0","method":"notifications/message"}\n'
+            '{"jsonrpc":"2.0","id":99,"result":{"wrong":true}}\n'
+            '{"jsonrpc":"2.0","id":3,"result":{"ok":true}}\n'
+        )
+        stderr = io.StringIO("diagnostic\n")
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            self.killed = True
+
+    monkeypatch.setattr(cli.subprocess, "Popen", lambda *args, **kwargs: Process())
+    client = cli.MCPStdioClient(["fake"])
+    assert client.call("ping", request_id=3) == {"jsonrpc": "2.0", "id": 3, "result": {"ok": True}}
+    client.close()
+
+
+def test_stdio_client_closed_process_reports_stderr(monkeypatch):
+    class Process:
+        stdin = io.StringIO()
+        stdout = io.StringIO()
+        stderr = io.StringIO("server boom\n")
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            self.killed = True
+
+    monkeypatch.setattr(cli.subprocess, "Popen", lambda *args, **kwargs: Process())
+    client = cli.MCPStdioClient(["fake"])
+    with pytest.raises(SystemExit, match="server boom"):
+        client.call("ping")
+
+
+def test_stdio_client_pipe_and_close_failure_paths(monkeypatch):
+    class Process:
+        stdin = None
+        stdout = None
+        stderr = io.StringIO()
+        killed = False
+
+        def wait(self, timeout=None):
+            raise TimeoutError("still running")
+
+        def kill(self):
+            self.killed = True
+
+    process = Process()
+    monkeypatch.setattr(cli.subprocess, "Popen", lambda *args, **kwargs: process)
+    client = cli.MCPStdioClient(["fake"])
+    with pytest.raises(SystemExit, match="pipes are unavailable"):
+        client.send({"id": 1})
+    client.close()
+    assert process.killed
+
+
+def test_stdio_client_explicit_id_advances_auto_counter(fake_server_cmd):
+    client = cli.MCPStdioClient(cli._server_cmd())
+    try:
+        response = client.call("ping", request_id=8)
+        assert response["id"] == 8
+        assert client._next_id() == 9
+    finally:
+        client.close()
+
+
+def test_daemon_socket_owned_rejects_regular_file(monkeypatch, tmp_path):
+    path = tmp_path / "not-a-socket"
+    path.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(cli, "_DAEMON_SOCKET", str(path))
+    assert cli._daemon_socket_owned() is False
+    assert cli._daemon_is_running() is False
+
+
+def test_daemon_call_round_trip_filters_notifications(monkeypatch, tmp_path):
+    path = str(tmp_path / "daemon.sock")
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(path)
+    listener.listen(1)
+
+    def serve_once():
+        conn, _ = listener.accept()
+        try:
+            conn.recv(65536)
+            conn.sendall(
+                b'{"jsonrpc":"2.0","method":"notifications/message"}\n'
+                b'{"jsonrpc":"2.0","id":1,"result":{"initialized":true}}\n'
+                b'{"jsonrpc":"2.0","id":2,"result":{"ok":true}}\n'
+            )
+        finally:
+            conn.close()
+
+    thread = __import__("threading").Thread(target=serve_once)
+    thread.start()
+    monkeypatch.setattr(cli, "_DAEMON_SOCKET", path)
+    try:
+        result = cli._daemon_call("session", {"action": "status"})
+        assert result["id"] == 2 and result["result"]["ok"] is True
+    finally:
+        thread.join(timeout=2)
+        listener.close()
+
+
+def test_daemon_call_reports_missing_owned_socket(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "_DAEMON_SOCKET", str(tmp_path / "missing.sock"))
+    with pytest.raises(SystemExit, match="Refusing to connect"):
+        cli._daemon_call("session", {})
+
+
+def test_start_daemon_launches_and_waits_for_owned_socket(monkeypatch, tmp_path):
+    socket_path = str(tmp_path / "daemon.sock")
+    states = iter([False, True])
+    launched = []
+
+    class Process:
+        pass
+
+    monkeypatch.setattr(cli, "_DAEMON_SOCKET", socket_path)
+    monkeypatch.setattr(cli, "_daemon_is_running", lambda: next(states))
+    monkeypatch.setattr(cli.subprocess, "Popen", lambda *args, **kwargs: launched.append((args, kwargs)) or Process())
+    cli._start_daemon()
+    assert launched and launched[0][0][0][0] == sys.executable
+
+
+def test_start_daemon_refuses_unowned_existing_socket(monkeypatch, tmp_path):
+    path = tmp_path / "daemon.sock"
+    path.write_text("socket placeholder", encoding="utf-8")
+    monkeypatch.setattr(cli, "_DAEMON_SOCKET", str(path))
+    monkeypatch.setattr(cli, "_daemon_socket_owned", lambda: False)
+    with pytest.raises(SystemExit, match="not owned"):
+        cli._start_daemon()
+
+
+def test_background_mode_validates_submit_and_task_payloads(monkeypatch):
+    base = {
+        "name": "submit", "file": None, "stdin_json": False,
+        "payload": None, "session_id": None, "pretty": False,
+    }
+    with pytest.raises(SystemExit, match="requires --file"):
+        cli._handle_background_mode(types.SimpleNamespace(**base))
+
+    for action in ("result", "cancel", "wait"):
+        args = dict(base, name=action, payload="{}")
+        with pytest.raises(SystemExit, match="requires 'task_id'"):
+            cli._handle_background_mode(types.SimpleNamespace(**args))
+
+
+def test_background_mode_submits_file_and_waits_with_timeout(monkeypatch, tmp_path, capsys):
+    script_path = tmp_path / "task.py"
+    script_path.write_text("print('hello')", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(cli, "_daemon_is_running", lambda: True)
+    monkeypatch.setattr(cli, "_daemon_call", lambda *args, **kwargs: calls.append((args, kwargs)) or {"result": {"content": [{"type": "text", "text": json.dumps({"ok": True})}]}})
+    args = types.SimpleNamespace(
+        name="submit", file=str(script_path), stdin_json=False, payload=None,
+        session_id="s1", pretty=False,
+    )
+    assert cli._handle_background_mode(args) == 0
+    assert calls[0][0][1] == {"action": "submit", "script": "print('hello')", "session_id": "s1"}
+    assert json.loads(capsys.readouterr().out) == {"ok": True}
+
+    calls.clear()
+    args = types.SimpleNamespace(
+        name="wait", file=None, stdin_json=False, payload='{"task_id":"t1","timeout":2}',
+        session_id=None, pretty=False,
+    )
+    assert cli._handle_background_mode(args) == 0
+    assert calls[0][1]["timeout"] == 32.0
+
+
+def test_main_intelligence_aliases_and_rejects_unknown(fake_server_cmd, capsys):
+    assert cli.main(["intelligence", "doctor"]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["ok"] is True
+    with pytest.raises(SystemExit, match="unsupported intelligence action"):
+        cli.main(["intelligence", "not-real"])
+
+
+def test_main_raw_requires_object_and_default_ids(fake_server_cmd, capsys):
+    with pytest.raises(SystemExit, match="full JSON-RPC object"):
+        cli.main(["raw", "null"])
+    assert cli.main(["raw", '{"method":"ping"}']) == 0
+    assert json.loads(capsys.readouterr().out)["id"] is not None
+
+
+def test_main_rejects_missing_rpc_name_and_stdin_json_error(fake_server_cmd, monkeypatch):
+    with pytest.raises(SystemExit, match="rpc mode requires"):
+        cli.main(["rpc"])
+    monkeypatch.setattr(sys, "stdin", type("FakeStdin", (), {"read": lambda self: "{bad"})())
+    with pytest.raises(SystemExit, match="invalid JSON from stdin"):
+        cli.main(["tool", "session", "--stdin-json"])

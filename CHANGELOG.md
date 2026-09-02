@@ -43,6 +43,8 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    helpers alongside SDK stubs for the complete offline suite.
  - Made the TIL export error-path fixture remove both supported ordinal-count
    API spellings, keeping it valid with the complete fake-IDB harness.
+ - Added offline CLI boundary coverage for stdio framing, daemon ownership,
+   background jobs, raw JSON-RPC, and actionable process/socket failures.
 
 - Expanded offline and opt-in live coverage across the public and legacy MCP
   surfaces, and stabilized batch-history and client-path tests.
