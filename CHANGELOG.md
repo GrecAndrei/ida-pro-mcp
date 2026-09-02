@@ -51,6 +51,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added reranker lifecycle coverage for state/profile resolution, lease
    identity rejection, malformed responses, cache waiters, deadline handling,
    and subprocess recovery paths.
+ - Added threat-corpus boundary coverage for malformed and normalized CWE,
+   ATT&CK, and YARA inputs, source download/build failures, cache fallbacks,
+   and singleton recheck behavior.
 
 - Expanded offline and opt-in live coverage across the public and legacy MCP
   surfaces, and stabilized batch-history and client-path tests.
