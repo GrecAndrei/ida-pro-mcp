@@ -7,9 +7,9 @@ from tests._isolated_repo_loader import load_tool_submodule
 
 
 def _load_search(monkeypatch):
-    from tests.ida_mcp.test_support_engines_and_integration import _make_fake_ida
+    from tests.ida_mcp.support_fakes import make_fake_ida
 
-    for name, module in _make_fake_ida().items():
+    for name, module in make_fake_ida().items():
         monkeypatch.setitem(sys.modules, name, module)
     return load_tool_submodule("search")
 

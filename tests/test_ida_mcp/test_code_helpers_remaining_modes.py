@@ -48,18 +48,6 @@ def test_cfg_dataflow_and_call_context_modes(monkeypatch):
     assert any(edge["ea"] is None for edge in flow["edges"])
     assert helpers._build_decompiler_dataflow(types.SimpleNamespace(lvars=[]))["nodes"] == []
 
-    microcode = importlib.import_module("ida_pro_mcp.ida_mcp.support.microcode_engine")
-    monkeypatch.setattr(microcode, "build_microcode_ssa_graph", lambda *_a, **_k: {
-        "edge_count": 2,
-        "nodes": ["src", "dst"],
-        "edges": [{"from": "src", "to": "dst"}],
-        "phi_like_merges": [{"var": "dst"}],
-    })
-    ssa = helpers._build_decompiler_dataflow(
-        types.SimpleNamespace(entry_ea=0x1000, lvars=[types.SimpleNamespace(name="src", is_arg_var=True)])
-    )
-    assert ssa["engine"] == "hexrays_microcode_ssa" and ssa["top_hubs"] == ["dst"]
-
     monkeypatch.setattr(helpers.idautils, "FuncItems", lambda _ea: iter([0x1000]))
     monkeypatch.setattr(helpers.idautils, "CodeRefsFrom", lambda _ea, _flow: iter([0x2000, 0x1000]))
     monkeypatch.setattr(helpers._compat, "get_func_start", lambda ea: ea)

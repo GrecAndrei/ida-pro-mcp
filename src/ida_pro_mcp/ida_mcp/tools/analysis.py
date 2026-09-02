@@ -986,7 +986,19 @@ def analysis(
             # idc.op_plain_offset(ea, n, base) for IDA < 7.5 compat; op_offset for newer.
             applied = False
             for fn_name, fn_args in [
-                ("op_offset", (ea, 0, idaapi.REF_OFF32 if ptr_size == 4 else idaapi.REF_OFF64, idaapi.BADADDR, 0, 0)),
+                (
+                    "op_offset",
+                    (
+                        ea,
+                        0,
+                        getattr(idaapi, "REF_OFF32", 0x10)
+                        if ptr_size == 4
+                        else getattr(idaapi, "REF_OFF64", 0x20),
+                        idaapi.BADADDR,
+                        0,
+                        0,
+                    ),
+                ),
                 ("op_plain_offset", (ea, 0, 0)),
             ]:
                 fn = getattr(idc, fn_name, None)

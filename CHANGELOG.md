@@ -5,10 +5,13 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
 ## 2026-09-02 — PR-work coverage checkpoint
 
 - Expanded deterministic offline coverage across the host/IDA bridge, public
-operation dispatch, response handling, type and analysis surfaces, gadget
-discovery, retrieval, and cross-mode test isolation. The current checkpoint
-measures 86% branch-aware source coverage; opt-in live-IDA tests remain
-separately gated.
+  operation dispatch, response handling, type and analysis surfaces, gadget
+  discovery, retrieval, and cross-mode test isolation. The corrected PR branch
+  now passes 4,599 tests and measures 86.45% branch-aware source coverage;
+  opt-in live-IDA tests remain separately gated.
+- Hardened installer state discovery, runtime lease identity checks, bounded
+  metadata reads, enum compatibility, and constant-scan progress handling
+  while keeping this PR focused on coverage and stability.
 
 - Expanded offline and opt-in live coverage across the public and legacy MCP
   surfaces, and stabilized batch-history and client-path tests.

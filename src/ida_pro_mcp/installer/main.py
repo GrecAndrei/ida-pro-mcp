@@ -13,6 +13,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+from . import runtime as _runtime
 from .clients import (
     backup_file,
     configure_clients,
@@ -53,6 +54,8 @@ from .runtime import (
     setup_runtime_environment,
     stage_sigs,
 )
+
+_sha256_file = _runtime._sha256_file
 
 
 class UI:
@@ -917,11 +920,6 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         dest="rollback_on_fail",
         action="store_false",
         help="keep partial client changes when a later install phase fails",
-    )
-    parser.add_argument(
-        "--with-corpus",
-        action="store_true",
-        help="download/build the optional BRON-style threat corpus during setup",
     )
     parser.add_argument(
         "--runtime-source",

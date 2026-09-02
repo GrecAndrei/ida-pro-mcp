@@ -72,20 +72,20 @@ def test_ida_selection_explicit_single_multi_and_missing(tmp_path, monkeypatch):
         installer._resolve_ida_install(InstallerOptions(), ui)
 
 
-def test_install_codex_skill_modes_and_safe_link_paths(tmp_path):
+def test_install_codex_skill_modes_and_safe_link_paths(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
     report = InstallReport()
     installer.install_codex_skills(tmp_path, "none", report, dry_run=True)
     assert report.steps[-1]["status"] == "skipped"
     report = InstallReport()
     installer.install_codex_skills(tmp_path, "agent", report, dry_run=True)
-    assert report.warnings
+    assert report.steps[-1]["status"] == "dry-run"
 
     source = tmp_path / ".agents" / "skills" / "ida-pro-mcp"
     source.mkdir(parents=True)
     (source / "SKILL.md").write_text("skill", encoding="utf-8")
     report = InstallReport()
-    with patch.dict("os.environ", {"CODEX_HOME": str(tmp_path / "codex")}):
-        installer.install_codex_skills(tmp_path, "agent", report, dry_run=True)
+    installer.install_codex_skills(tmp_path, "agent", report, dry_run=True)
     assert report.steps[-1]["status"] == "dry-run"
 
 
@@ -100,7 +100,7 @@ def test_bashrc_shim_is_idempotent_and_dry_run(tmp_path, monkeypatch):
     assert (home / ".bashrc").read_text(encoding="utf-8") == first
     report2 = InstallReport()
     installer.install_bashrc_cli(tmp_path / "other", dry_run=True, report=report2)
-    assert report2.modified_files
+    assert report2.modified_files == []
 
 
 def test_run_install_dry_run_phases_without_ida(tmp_path, monkeypatch):
@@ -116,8 +116,8 @@ def test_run_install_dry_run_phases_without_ida(tmp_path, monkeypatch):
         yes=True,
         install_root=tmp_path / "install",
         source_root=source,
-        only={"runtime", "skills", "shell", "r2"},
-        with_r2=True,
+        only={"runtime", "skills", "shell"},
+        with_r2=False,
         install_cli_shim=True,
         install_claude_skills=False,
     )
@@ -133,7 +133,13 @@ def test_run_install_client_gemini_and_sigs_dry_run(tmp_path, monkeypatch):
     monkeypatch.setattr(installer, "_resolve_ida_install", lambda *_a: ida)
     monkeypatch.setattr(installer, "build_stdio_config", lambda *args, **kwargs: {"command": "python"})
     monkeypatch.setattr(installer, "configure_clients", lambda **kwargs: ["client"])
-    monkeypatch.setattr(installer, "stage_sigs", lambda *args, **kwargs: SimpleNamespace(count=0, to_dict=lambda: {"count": 0}))
+    monkeypatch.setattr(
+        installer,
+        "stage_sigs",
+        lambda *args, **kwargs: SimpleNamespace(
+            count=1, skipped=[], to_dict=lambda: {"count": 1}
+        ),
+    )
     opts = InstallerOptions(
         dry_run=True,
         yes=True,

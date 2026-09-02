@@ -146,7 +146,11 @@ class SessionSkillsMixin(SessionBootstrapMixin):
             normalized[key] = [entry for entry in value if isinstance(entry, dict)] if isinstance(value, list) else []
 
         bootstrap = data.get("bootstrap")
-        if not isinstance(bootstrap, dict):
+        # An empty bootstrap object is the persisted representation produced
+        # when ordinary activity is logged before bootstrap is initialized.
+        # Keep it uninitialized; filling it with defaults here would make the
+        # dashboard report a bootstrap run that never happened.
+        if not isinstance(bootstrap, dict) or not bootstrap:
             normalized["bootstrap"] = {}
         else:
             normalized_bootstrap = dict(bootstrap)

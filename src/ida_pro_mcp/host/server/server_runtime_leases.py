@@ -93,47 +93,6 @@ STALE_CLEANUP_BUDGET_SECONDS = _resolve_stale_cleanup_budget()
 _RUNTIME_LEASE_IO_LOCK = threading.RLock()
 
 
-def _lease_pid(value: object) -> int:
-    """Parse a persisted PID without truncating unsafe numeric values."""
-    if isinstance(value, bool):
-        return 0
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        value = value.strip()
-        if value.isascii() and value.isdigit():
-            with contextlib.suppress(ValueError):
-                return int(value)
-    return 0
-
-
-def _lease_timestamp(value: object) -> float:
-    """Parse a lease timestamp; non-finite values are always stale."""
-    try:
-        timestamp = float(value or 0.0)
-    except (TypeError, ValueError):
-        return 0.0
-    return timestamp if math.isfinite(timestamp) else 0.0
-
-
-def _process_start_token(pid: int) -> str:
-    """Return Linux's PID-reuse-resistant process start token."""
-    if sys.platform != "linux" or pid <= 0:
-        return ""
-    try:
-        with open(f"/proc/{pid}/stat", encoding="utf-8") as proc_stat:
-            data = proc_stat.read()
-    except (OSError, UnicodeError):
-        return ""
-    end = data.rfind(")")
-    if end < 0:
-        return ""
-    fields = data[end + 1 :].split()
-    # The field after the command name is state (3); starttime is field 22,
-    # which is offset 19 in the tail after the final closing parenthesis.
-    return fields[19] if len(fields) > 19 else ""
-
-
 @contextmanager
 def _runtime_lease_io_lock(path: str):
     """Serialize one lease transaction in-process and, on POSIX, across hosts."""

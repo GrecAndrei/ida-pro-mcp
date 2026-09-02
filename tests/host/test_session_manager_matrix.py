@@ -288,7 +288,7 @@ def test_bookmark_manager_persistence_filters_and_errors(tmp_path):
     assert updated["bookmark"]["id"] == 1
     second = bookmarks.add(sid, {"addr": "0x2000", "name": "Callsite", "tags": ["xref"], "priority": 5})
     assert second["bookmark"]["id"] == 2
-    assert bookmarks.list(sid, {"category": "general", "query": "revised"})["count"] == 1
+    assert bookmarks.list(sid, {"category": "code", "query": "revised"})["count"] == 1
     assert bookmarks.list(sid, {"tag": "xref"})["count"] == 1
     assert bookmarks.list(sid, {"priority": "not-int"})["count"] == 2
     assert bookmarks.list(sid, {"query": "revised"})["count"] == 1

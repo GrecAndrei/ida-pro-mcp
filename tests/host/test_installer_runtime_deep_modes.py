@@ -363,50 +363,52 @@ def test_find_embed_model_uses_state_search_paths_hf_cache_and_recursive_fallbac
 
 
 def test_find_embed_model_respects_matching_and_mismatching_state_profiles(tmp_path, monkeypatch):
-    from ida_pro_mcp.host.intelligence import core
-
     manual = tmp_path / "manual.gguf"
     manual.write_bytes(b"manual")
+    install_root = tmp_path / "install"
+    install_root.mkdir()
+    (install_root / "embedder.json").write_text(
+        '{"model_path": "' + str(manual) + '", "profile": "zembed-1"}',
+        encoding="utf-8",
+    )
     monkeypatch.delenv("IDA_MCP_EMBED_MODEL", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     (tmp_path / "cwd").mkdir()
     monkeypatch.chdir(tmp_path / "cwd")
-    monkeypatch.setattr(core, "_read_embedder_state", lambda: {"model_path": str(manual), "profile": "zembed-1"})
-    monkeypatch.setattr(core, "_select_state_path", lambda value: value)
-    assert runtime.find_embed_model(tmp_path / "install", "zembed-1") == str(manual)
+    assert runtime.find_embed_model(install_root, "zembed-1") == str(manual)
 
     fallback = tmp_path / "install" / "models" / "zembed-1-Q4_K_M.gguf"
     fallback.parent.mkdir(parents=True)
     fallback.write_bytes(b"fallback")
-    assert runtime.find_embed_model(tmp_path / "install", "qwen3-embedding-0.6b") == ""
-    assert runtime.find_embed_model(tmp_path / "install", "zembed-1") == str(manual)
+    assert runtime.find_embed_model(install_root, "qwen3-embedding-0.6b") == ""
+    assert runtime.find_embed_model(install_root, "zembed-1") == str(manual)
 
 
 def test_model_and_server_discovery_handles_state_and_managed_profile_errors(tmp_path, monkeypatch):
-    from ida_pro_mcp.host.intelligence import core
-
     server = tmp_path / "state-server"
     server.write_bytes(b"server")
     server.chmod(0o755)
+    install_root = tmp_path / "install"
+    install_root.mkdir()
+    (install_root / "embedder.json").write_text(
+        '{"server_bin": "' + str(server) + '"}', encoding="utf-8"
+    )
     monkeypatch.delenv("IDA_MCP_EMBED_SERVER_BIN", raising=False)
-    monkeypatch.setattr(core, "_read_embedder_state", lambda: {"server_bin": str(server)})
-    monkeypatch.setattr(core, "_select_state_path", lambda value: value)
-    assert runtime.find_llama_server_bin(tmp_path / "install") == str(server)
+    assert runtime.find_llama_server_bin(install_root) == str(server)
 
-    monkeypatch.setattr(core, "_read_embedder_state", lambda: (_ for _ in ()).throw(RuntimeError("bad state")))
+    (install_root / "embedder.json").write_text("not-json", encoding="utf-8")
     monkeypatch.setattr(runtime.shutil, "which", lambda _name: None)
-    assert runtime.find_llama_server_bin(tmp_path / "install") == ""
+    assert runtime.find_llama_server_bin(install_root) == ""
 
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "embedder.json").write_text(
+        '{"rerank": {"model_path": "' + str(server)
+        + '", "profile": "qwen3-reranker-0.6b"}}',
+        encoding="utf-8",
+    )
     monkeypatch.setenv("IDA_MCP_RERANK_MODEL", "")
-    monkeypatch.setattr(
-        "ida_pro_mcp.host.intelligence.rerank._find_rerank_model",
-        lambda: str(server),
-    )
     assert runtime.find_rerank_model(tmp_path) == str(server)
-    monkeypatch.setattr(
-        "ida_pro_mcp.host.intelligence.rerank._find_rerank_model",
-        lambda: (_ for _ in ()).throw(RuntimeError("broken")),
-    )
+    (tmp_path / "embedder.json").write_text("not-json", encoding="utf-8")
     assert runtime.find_rerank_model(tmp_path) == ""
 
 
@@ -485,8 +487,10 @@ def test_extract_archive_rejects_special_members_and_size_limits(tmp_path, monke
     with pytest.raises(RuntimeError, match="over 4 bytes"):
         runtime._extract_archive(oversized, tmp_path / "large-out")
 
+    unknown = tmp_path / "unknown.bin"
+    unknown.write_bytes(b"not an archive")
     with pytest.raises(RuntimeError, match="Unsupported archive"):
-        runtime._extract_archive(tmp_path / "unknown.bin", tmp_path / "unknown-out")
+        runtime._extract_archive(unknown, tmp_path / "unknown-out")
 
 
 def test_venv_probe_and_wipe_cover_launch_failures_and_stale_rename(tmp_path, monkeypatch):
@@ -566,8 +570,10 @@ def test_setup_runtime_environment_recreates_stale_venv_and_retries_probe(tmp_pa
     monkeypatch.setattr(
         runtime,
         "run_checked",
-        lambda command, **_kwargs: calls.append(command) or SimpleNamespace(stdout="ok\n"),
+        lambda command, **_kwargs: calls.append(command)
+        or SimpleNamespace(stdout=f"{venv / 'lib'}\n"),
     )
+    (venv / "lib").mkdir()
     result = runtime.setup_runtime_environment(install, source, "pypi", False, InstallReport())
     assert result == install / ".venv" / "bin" / "python"
     assert calls[0] == ("wipe", venv)

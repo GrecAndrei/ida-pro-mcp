@@ -842,7 +842,7 @@ def _lease_pid(value: object) -> int:
     if isinstance(value, bool):
         return 0
     if isinstance(value, int):
-        return value
+        return value if value > 0 else 0
     if isinstance(value, str):
         value = value.strip()
         if value.isascii() and value.isdigit():

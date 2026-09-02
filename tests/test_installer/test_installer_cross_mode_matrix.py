@@ -124,6 +124,13 @@ def test_run_install_composes_runtime_corpus_r2_sigs_clients_and_skills(tmp_path
     install_root = tmp_path / "install"
     ida = _ida(tmp_path)
     sig_dir = tmp_path / "sig"
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"model")
+    server = tmp_path / "llama-server"
+    server.write_bytes(b"server")
+    server.chmod(0o755)
+    rerank = tmp_path / "rerank.gguf"
+    rerank.write_bytes(b"rerank")
     configured = []
     monkeypatch.setattr(installer, "_resolve_ida_install", lambda *_a: ida)
     monkeypatch.setattr(installer, "_run_interactive_wizard", lambda opts, _ui: opts)
@@ -136,7 +143,9 @@ def test_run_install_composes_runtime_corpus_r2_sigs_clients_and_skills(tmp_path
     monkeypatch.setattr(
         installer,
         "stage_sigs",
-        lambda *_a, **_k: SimpleNamespace(count=1, to_dict=lambda: {"count": 1}),
+        lambda *_a, **_k: SimpleNamespace(
+            count=1, skipped=[], to_dict=lambda: {"count": 1}
+        ),
     )
     monkeypatch.setattr(installer, "build_stdio_config", lambda *_a, **_k: {"command": "python"})
     monkeypatch.setattr(installer, "configure_clients", lambda **_k: configured.append("client") or configured)
@@ -160,9 +169,9 @@ def test_run_install_composes_runtime_corpus_r2_sigs_clients_and_skills(tmp_path
         with_r2=True,
         with_corpus=True,
         sigs_dir=str(tmp_path / "sig-source"),
-        embed_model_path=str(tmp_path / "model.gguf"),
-        embed_server_bin=str(tmp_path / "llama-server"),
-        rerank_model_path=str(tmp_path / "rerank.gguf"),
+        embed_model_path=str(model),
+        embed_server_bin=str(server),
+        rerank_model_path=str(rerank),
         install_cli_shim=True,
     )
     assert installer.run_install(opts, installer.UI()) == 0

@@ -116,6 +116,7 @@ def test_kill_stale_pid_escalates_and_confirms_exit(monkeypatch):
 
 def test_linux_process_identity_uses_exe_then_cmdline(monkeypatch, tmp_path):
     runtime = _Runtime(tmp_path)
+    runtime.idat_exe = ""
     monkeypatch.setattr(leases_mod.sys, "platform", "linux")
     monkeypatch.setattr(leases_mod.os.path, "realpath", lambda path: "/opt/ida/idat64" if str(path).endswith("/exe") else str(path))
     assert runtime._is_expected_ida_process(9, {"idat_exe": ""}) is True

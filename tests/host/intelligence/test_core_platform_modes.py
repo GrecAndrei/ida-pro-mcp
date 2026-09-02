@@ -145,6 +145,11 @@ def test_embedder_status_leases_and_idle_modes(monkeypatch, tmp_path):
     assert obj._lease_matches(lease) is True
     lease["recycle_requested"] = True
     assert obj._lease_matches(lease) is False
+    monkeypatch.setattr(
+        core,
+        "_process_command",
+        lambda _pid: f"{obj._server_bin} --embedding --model {obj._model_path}",
+    )
     assert obj._pid_is_expected_server(7, {"schema": 2}) is True
     assert obj._server_has_active_slots() is False
     obj._port = None

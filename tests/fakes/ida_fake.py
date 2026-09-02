@@ -838,6 +838,15 @@ class FakeTinfo:
     def is_array(self) -> bool:
         return self.kind == BT_ARRAY
 
+    def create_array(self, element_type: "FakeTinfo", count: int) -> bool:
+        """Create a sized array type, matching the IDA ``tinfo_t`` API."""
+        if count <= 0 or not hasattr(element_type, "get_size"):
+            return False
+        self.kind = BT_ARRAY
+        self._target_tinfo = element_type
+        self._size = element_type.get_size() * int(count)
+        return self._size > 0
+
     def is_func(self) -> bool:
         return self.kind == BT_FUNC
 

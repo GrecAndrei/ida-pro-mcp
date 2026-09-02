@@ -184,6 +184,11 @@ def test_start_lock_and_stop_paths_are_fail_closed(monkeypatch, tmp_path):
         if signal == 0:
             raise OSError("gone")
 
+    monkeypatch.setattr(
+        core,
+        "_process_command",
+        lambda _pid: f"{obj._server_bin} --embedding --model {obj._model_path}",
+    )
     monkeypatch.setattr(core.os, "kill", fake_kill)
     obj.stop()
     assert (321, 15) in kills

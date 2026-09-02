@@ -1743,11 +1743,13 @@ def _scan_constant_load_strings(func_start_ea: int, result_limit: int = 10) -> l
                     # last operand and may be a string/table address.
                     rd = (idc.print_operand(ea, 0) or "").lower()
                     imm = int(idc.get_operand_value(ea, 1) or 0)
-                    if imm in (0, idaapi.BADADDR):
-                        continue
-                    imm &= 0xFFFFFFFFFFFFFFFF
-                    regs[rd] = imm
-                    candidates.append((ea, imm, "const_mov"))
+                    # Keep advancing even when the operand is not a useful
+                    # address. A continue here skips the next_head update and
+                    # can spin forever on a zero-immediate move.
+                    if imm not in (0, idaapi.BADADDR):
+                        imm &= 0xFFFFFFFFFFFFFFFF
+                        regs[rd] = imm
+                        candidates.append((ea, imm, "const_mov"))
             except Exception:
                 pass
             ea = idc.next_head(ea, func.end_ea)

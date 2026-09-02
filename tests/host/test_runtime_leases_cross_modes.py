@@ -100,13 +100,31 @@ def test_process_identity_and_group_scans_cover_linux_fallbacks(tmp_path, monkey
     runtime = _Runtime(tmp_path)
     monkeypatch.setattr(leases.sys, "platform", "linux")
 
+    class _File:
+        def __init__(self, value):
+            self.value = value
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return self.value
+
     def fake_realpath(path):
         return "/opt/ida/idat64" if str(path).endswith("/exe") else str(path)
 
     monkeypatch.setattr(leases.os.path, "realpath", fake_realpath)
-    monkeypatch.setattr("builtins.open", lambda path, *args, **kwargs: types.SimpleNamespace(
-        read=lambda: b"/opt/ida/idat64\x00--ida-arg\x00" if str(path).endswith("cmdline") else ""
-    ))
+    monkeypatch.setattr(
+        "builtins.open",
+        lambda path, *args, **kwargs: _File(
+            b"/opt/ida/idat64\x00--ida-arg\x00"
+            if str(path).endswith("cmdline")
+            else ""
+        ),
+    )
     assert runtime._proc_is_ida_named(4242) is True
     assert runtime._is_expected_ida_process(4242, {}) is True
 
@@ -119,16 +137,6 @@ def test_process_identity_and_group_scans_cover_linux_fallbacks(tmp_path, monkey
 
     proc_stat = "12 (ida worker) S 1 77 77 0"
     monkeypatch.setattr(leases.os, "listdir", lambda _path: ["12", "bad", "13"])
-    # Use a real context-manager wrapper because the production scanner uses ``with open``.
-    class _File:
-        def __init__(self, value):
-            self.value = value
-        def __enter__(self):
-            return self
-        def __exit__(self, *_args):
-            return False
-        def read(self):
-            return self.value
     monkeypatch.setattr("builtins.open", lambda path, *args, **kwargs: _File(proc_stat.encode()) if str(path).endswith("/12/stat") else (_ for _ in ()).throw(OSError("gone")))
     runtime._proc_is_ida_named = lambda pid: pid == 12
     assert runtime._proc_group_has_ida_member(77) is True

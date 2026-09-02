@@ -149,22 +149,6 @@ def _download_to_file(
         raise
 
 
-def _read_response_limited(response, *, max_bytes: int, label: str) -> bytes:
-    """Read a bounded metadata response without trusting Content-Length."""
-    payload = bytearray()
-    while True:
-        remaining = max_bytes - len(payload)
-        chunk = response.read(min(_DOWNLOAD_CHUNK_BYTES, remaining + 1))
-        if not chunk:
-            break
-        payload.extend(chunk)
-        if len(payload) > max_bytes:
-            raise RuntimeError(
-                f"{label} exceeds the {max_bytes} byte safety limit"
-            )
-    return bytes(payload)
-
-
 def _profile_download_url(profile: object) -> str:
     url = str(getattr(profile, "download_url", "") or "")
     revision = str(getattr(profile, "download_revision", "") or "").strip()

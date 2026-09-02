@@ -40,11 +40,6 @@ def test_expr_and_dataflow_fallback_survives_sdk_failures(monkeypatch):
     )
     assert rows == [(BADADDR, ""), (0x1000, "dst = src")]
 
-    monkeypatch.setattr(
-        importlib.import_module("ida_pro_mcp.ida_mcp.support.microcode_engine"),
-        "build_microcode_ssa_graph",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("no microcode")),
-    )
     cfunc = types.SimpleNamespace(
         entry_ea=0x1000,
         lvars=[

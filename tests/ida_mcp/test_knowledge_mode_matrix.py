@@ -26,9 +26,9 @@ class _SymbolStore:
 
 
 def _load_knowledge(monkeypatch):
-    from tests.ida_mcp.test_support_engines_and_integration import _make_fake_ida
+    from tests.ida_mcp.support_fakes import make_fake_ida
 
-    for name, module in _make_fake_ida().items():
+    for name, module in make_fake_ida().items():
         monkeypatch.setitem(sys.modules, name, module)
     mod = load_tool_module("knowledge")
     monkeypatch.setattr(mod, "SymbolDB", _SymbolStore)
