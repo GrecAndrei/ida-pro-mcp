@@ -881,7 +881,17 @@ class ServerDispatchMixin(ServerClientStateMixin):
                     "memory tool: no allowed root configured (set IDA_MCP_MEMORY_ROOT or open a session).",
                 )
             try:
-                canonical = _os.path.realpath(_os.path.join(allowed_root, path))
+                # Check the unresolved path before canonicalizing it. Resolving
+                # first erases symlink components, which would let a path such
+                # as ``link/secret.txt`` bypass the component policy while
+                # still landing inside the allowed root.
+                candidate = _os.path.abspath(_os.path.join(allowed_root, path))
+                if self._memory_path_has_symlink(candidate, allowed_root):
+                    return make_error(
+                        MCPError.INVALID_ARGS,
+                        "memory tool: symbolic links are not allowed in path",
+                    )
+                canonical = _os.path.realpath(candidate)
             except Exception:
                 return make_error(MCPError.INVALID_ARGS, "memory tool: invalid path")
             common = _os.path.commonpath([allowed_root, canonical])

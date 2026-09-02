@@ -581,6 +581,141 @@ class TestEmulateHost(unittest.TestCase):
         self.assertEqual(self.gov._calls, [])
         self.assertGreater(self._called("start_process"), 0)
 
+    # -- remaining helper and failure modes --------------------------------
+    def test_register_and_ip_helpers_cover_architecture_fallbacks(self):
+        self.dbg.get_reg_vals = None
+        def get_reg_val(name):
+            return {"eip": 0x10, "pc": 0x20}.get(name)
+
+        self.dbg.get_reg_val = get_reg_val
+        with mock.patch.object(self.mod, "get_arch", return_value="x86"), mock.patch.object(
+            self.mod, "_inf_bitness", return_value=32, create=True
+        ):
+            self.assertEqual(self.mod._ip_reg_name(), "eip")
+            self.assertIn("eip", self.mod._common_register_names())
+            regs, available = self.mod._read_all_registers()
+            self.assertTrue(available)
+            self.assertEqual(regs["eip"], "0x10")
+
+        with mock.patch.object(self.mod, "get_arch", return_value="arm64"), mock.patch.object(
+            self.mod, "_inf_bitness", return_value=64, create=True
+        ):
+            self.assertEqual(self.mod._ip_reg_name(), "pc")
+            self.assertIn("x30", self.mod._common_register_names())
+        with mock.patch.object(self.mod, "get_arch", return_value="mips"), mock.patch.object(
+            self.mod, "_inf_bitness", return_value=32, create=True
+        ):
+            self.assertIn("ra", self.mod._common_register_names())
+
+        self.dbg.get_ip_val = None
+        self.assertIsNone(self.mod._current_ip())
+        self.dbg.get_ip_val = lambda: "not-an-integer"
+        self.assertEqual(self.mod._current_ip(), "not-an-integer")
+        self.mod._set_ip(0x1234)
+        self.assertEqual(self.dbg._regs["rip"], 0x1234)
+
+    def test_event_pump_and_suspend_helpers_cover_absent_error_and_timeout(self):
+        self.dbg.WFNE_SUSP = 1
+        self.dbg.wait_for_next_event = lambda *_args: 0
+        self.assertFalse(self.mod._pump_suspended(10))
+        self.dbg.wait_for_next_event = lambda *_args: 1
+        self.assertTrue(self.mod._pump_suspended(10))
+        self.dbg.wait_for_next_event = lambda *_args: (_ for _ in ()).throw(RuntimeError("event loop"))
+        self.assertTrue(self.mod._pump_suspended(10))
+        self.dbg.wait_for_next_event = None
+        self.assertTrue(self.mod._pump_suspended(10))
+
+        self.dbg._state = self.dbg.DSTATE_SUSP
+        self.assertTrue(self.mod._suspend_if_needed(timeout_sec=0))
+        self.dbg._state = self.dbg.DSTATE_RUN
+        self.dbg.suspend_process = None
+        self.assertFalse(self.mod._suspend_if_needed(timeout_sec=0))
+
+        def suspend_then_pause():
+            self.dbg._state = self.dbg.DSTATE_SUSP
+
+        self.dbg.suspend_process = suspend_then_pause
+        self.dbg._state = self.dbg.DSTATE_RUN
+        self.assertTrue(self.mod._suspend_if_needed(timeout_sec=0.01))
+
+    def test_backend_and_start_failure_modes_are_explicit(self):
+        del self.dbg.load_debugger
+        self.mod._BACKEND = None
+        self.assertIsNone(self.mod._select_backend(force=True))
+        self.assertIn("no backend loadable", self.mod._BACKEND_REASON)
+        self.assertTrue(self.mod._no_backend_error()["error"])
+
+        self._prime_backend()
+        del self.dbg.start_process
+        result = self.mod._action_start(False, None, None, None, None)
+        self.assertEqual(result["code"], "EMULATION_ERROR")
+
+        self.dbg.start_process = lambda *_args: -1
+        result = self.mod._action_start(False, None, None, None, None)
+        self.assertEqual(result["code"], "EMULATION_ERROR")
+        self.dbg.start_process = lambda *_args: (_ for _ in ()).throw(RuntimeError("spawn"))
+        result = self.mod._action_start(False, None, None, None, None)
+        self.assertEqual(result["code"], "IDA_ERROR")
+
+    def test_step_run_to_and_register_failures_keep_stable_errors(self):
+        self._prime_process()
+        self.assertEqual(self.mod._action_step(False, "bad", 1, 1)["code"], "INVALID_ARGS")
+        self.assertEqual(self.mod._action_step(False, "into", "bad", 1)["code"], "INVALID_ARGS")
+        self.assertEqual(self.mod._action_step(False, "into", -1, 1)["code"], "INVALID_ARGS")
+        self.dbg.step_into = None
+        self.assertEqual(self.mod._action_step(False, "into", 1, 1)["code"], "EMULATION_ERROR")
+        self.dbg.step_into = lambda: False
+        self.assertEqual(self.mod._action_step(False, "into", 1, 1)["steps_done"], 0)
+
+        self.assertEqual(self.mod._action_run_to(False, None, 1)["code"], "INVALID_ARGS")
+        with mock.patch.object(self.mod, "validate_addr", return_value=(None, {"code": "ADDRESS_INVALID"})):
+            self.assertEqual(self.mod._action_run_to(False, "bad", 1)["code"], "ADDRESS_INVALID")
+        self.dbg.run_to = None
+        self.assertEqual(self.mod._action_run_to(False, "0x401000", 1)["code"], "EMULATION_ERROR")
+        self.dbg.run_to = lambda _ea: False
+        self.assertFalse(self.mod._action_run_to(False, "0x401000", 1)["reached"])
+
+        self.assertEqual(self.mod._action_get_reg(False, None, None)["code"], "INVALID_ARGS")
+        self.dbg.get_reg_val = lambda name: None if name == "missing" else (_ for _ in ()).throw(RuntimeError("context"))
+        result = self.mod._action_get_reg(False, None, ["missing", "broken"])
+        self.assertEqual(result["unavailable"], ["missing", "broken"])
+        self.dbg.get_reg_val = None
+        self.assertEqual(self.mod._action_get_reg(False, "rax", None)["code"], "EMULATION_ERROR")
+
+    def test_memory_fallbacks_and_write_errors_are_safe(self):
+        self._prime_process()
+        self.dbg.read_dbg_memory = lambda *_args: (_ for _ in ()).throw(RuntimeError("buffer shape"))
+        self.dbg.get_dbg_byte = lambda ea: [0x41, 0x00, -1][ea - 0x401000]
+        self.assertEqual(self.mod._read_dbg_memory(0x401000, 4), b"A\x00")
+        self.dbg.get_dbg_byte = lambda _ea: (_ for _ in ()).throw(RuntimeError("no bytes"))
+        self.assertIsNone(self.mod._read_dbg_memory(0x401000, 4))
+
+        self.assertEqual(self.mod._action_read_mem(False, None, 4)["code"], "INVALID_ARGS")
+        self.dbg.read_dbg_memory = None
+        self.dbg.get_dbg_byte = None
+        self.assertEqual(self.mod._action_read_mem(False, "0x401000", 4)["code"], "EMULATION_ERROR")
+        self.dbg.write_dbg_memory = None
+        self.assertEqual(self.mod._action_set_mem(False, "0x401000", "90")["code"], "EMULATION_ERROR")
+        self.dbg.write_dbg_memory = lambda *_args: (_ for _ in ()).throw(RuntimeError("write denied"))
+        self.assertEqual(self.mod._action_set_mem(False, "0x401000", "90")["code"], "IDA_ERROR")
+
+    def test_stop_suspend_continue_and_public_dispatch_missing_methods(self):
+        self._prime_process()
+        self.dbg.exit_process = None
+        self.dbg.stop_process = None
+        self.assertEqual(self.mod._action_stop(False, False)["code"], "EMULATION_ERROR")
+        self.dbg.suspend_process = None
+        self.assertEqual(self.mod._action_suspend(False)["code"], "EMULATION_ERROR")
+        self.dbg.continue_process = None
+        self.assertEqual(self.mod._action_continue(False)["code"], "EMULATION_ERROR")
+        self.assertEqual(self.mod._action_set_reg(False, None, 1)["code"], "INVALID_ARGS")
+        self.assertEqual(self.mod._action_set_reg(False, "rax", None)["code"], "INVALID_ARGS")
+        self.assertEqual(self.mod._action_set_reg(False, "rax", "bad")["code"], "INVALID_ARGS")
+
+        self.assertEqual(self.mod.emulate(action="run_to")["code"], "INVALID_ARGS")
+        self.assertEqual(self.mod.emulate(action="step", mode="unknown")["code"], "INVALID_ARGS")
+        self.assertEqual(self.mod.emulate(action="nope")["code"], "ACTION_NOT_FOUND")
+
 
 if __name__ == "__main__":
     unittest.main()

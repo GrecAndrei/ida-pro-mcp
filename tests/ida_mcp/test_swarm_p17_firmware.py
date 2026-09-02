@@ -325,3 +325,109 @@ def test_detection_without_mapped_bounds_errors():
     resp = mod.firmware(action="detect_vector_table", word="u32", endian="le")
     assert resp["ok"] is False and resp["code"] == "IDA_ERROR", resp
     assert "bounds" in resp["message"]
+
+
+def test_firmware_range_and_public_alias_validation_modes(monkeypatch):
+    blob, mod = _load_fixture()
+    assert mod._fw_parse_range(None, "0x10")[2]["error"] is True
+    assert mod._fw_parse_range("bad", "0x10")[2]["error"] is True
+    assert mod._fw_parse_range("0x20", "0x10")[2]["error"] is True
+    bad_addr = mod.firmware(action="detect_mmio", addr="not-an-address")
+    assert bad_addr["error"] is True
+    bad_range = mod.firmware(action="detect_mmio", start="0x20", end="0x10")
+    assert bad_range["error"] is True
+    # The public `address` alias is accepted for the scan window and still
+    # reaches the same MMIO action path.
+    monkeypatch.setattr(mod, "_detect_mmio", lambda *args: {"ok": True, "args": args})
+    aliased = mod.firmware(
+        action="detect_mmio", address="0x80000010", end="0x80000020"
+    )
+    assert aliased["ok"] is True
+    assert aliased["args"][0:2] == (0x80000010, 0x80000020)
+
+
+def test_firmware_infrastructure_and_scan_helpers_cover_fallbacks(monkeypatch):
+    blob, mod = _load_fixture()
+    ida_ida = sys.modules["ida_ida"]
+    idaapi = blob.module("idaapi")
+    monkeypatch.setattr(ida_ida, "inf_get_min_ea", None, raising=False)
+    monkeypatch.setattr(ida_ida, "inf_get_max_ea", None, raising=False)
+    monkeypatch.setattr(ida_ida, "inf_is_64bit", lambda: False, raising=False)
+    monkeypatch.setattr(ida_ida, "inf_get_app_bitness", lambda: 32, raising=False)
+    monkeypatch.setattr(ida_ida, "inf_is_be", lambda: True, raising=False)
+    monkeypatch.setattr(idaapi, "inf_get_min_ea", lambda: 0x1000, raising=False)
+    monkeypatch.setattr(idaapi, "inf_get_max_ea", lambda: 0x2000, raising=False)
+    monkeypatch.setattr(idaapi, "inf_is_64bit", lambda: False, raising=False)
+    monkeypatch.setattr(idaapi, "inf_is_be", lambda: True, raising=False)
+    assert mod._fw_min_ea() == 0x1000
+    assert mod._fw_max_ea() == 0x2000
+    assert mod._fw_ptr_size() == 4
+    assert mod._fw_is_be() is True
+    assert mod._fw_image_bounds() == (0x1000, 0x2000)
+    assert mod._fw_seg_span(None) is None
+    assert mod._fw_seg_span("not-an-ea") is None
+    assert mod._fw_iter_aligned(0x1000, 0x1010, 0) is not None
+    assert list(mod._fw_iter_aligned(0x1000, 0x1010, 0)) == []
+    assert mod._read_word_bytes(0x1000, 999999) is None
+    assert mod._read_bytes_range(0x1000, 0x1000) == b""
+
+    # An empty/invalid image falls back to no bounds instead of scanning a
+    # huge inf-min/inf-max hole.
+    monkeypatch.setattr(idaapi, "inf_get_max_ea", lambda: 0x1000, raising=False)
+    assert mod._fw_image_bounds() == (None, None)
+
+
+def test_firmware_load_base_architecture_and_vector_error_modes(monkeypatch):
+    blob, mod = _load_fixture_with_insn_map()
+    assert mod._riscv_jal_target(0x1000, 0) is None
+    assert mod._validate_load_base(0x90000000, "riscv", 4, LOAD_BASE, LOAD_BASE + 0x1000)["confidence"] < 0.5
+    assert mod._validate_load_base(LOAD_BASE, "arm", 4, LOAD_BASE, LOAD_BASE + 0x1000)["confidence"] < 0.7
+    assert mod._validate_load_base(LOAD_BASE, "mips", 4, LOAD_BASE, LOAD_BASE + 0x1000)["confidence"] >= 0.05
+    assert mod._detect_load_base(LOAD_BASE, LOAD_BASE + 0x1000, "bad", 4)["error"] is True
+    monkeypatch.setattr(mod, "get_arch", lambda: "arm")
+    arm = mod.firmware(action="detect_load_base", base_candidates=[hex(LOAD_BASE)])
+    assert arm["ok"] is True and arm["arch"] == "arm"
+    bad_base = mod.firmware(action="detect_vector_table", base="bad", word="u32")
+    assert bad_base["error"] is True
+    bad_width = mod.firmware(action="detect_vector_table", word="u16", endian="le", limit=1)
+    assert bad_width["ok"] is True
+
+
+def test_firmware_mmio_rtos_and_carve_failure_and_export_modes(monkeypatch, tmp_path):
+    blob, mod = _load_fixture()
+    empty = mod.firmware(action="detect_mmio", addr=hex(LOAD_BASE), addr_radius=0)
+    assert empty["ok"] is True and empty["scan_window"] is None
+    monkeypatch.setattr(mod, "_read_word_bytes", lambda *_args: None)
+    no_reads = mod.firmware(action="detect_mmio", start=hex(LOAD_BASE), end=hex(LOAD_BASE + 0x20))
+    assert no_reads["ok"] is True and no_reads["ranges"] == []
+
+    monkeypatch.setattr(mod.idautils, "Names", lambda: (_ for _ in ()).throw(RuntimeError("names")), raising=False)
+    monkeypatch.setattr(mod.idautils, "Strings", lambda: (_ for _ in ()).throw(RuntimeError("strings")), raising=False)
+    monkeypatch.setattr(mod, "_read_bytes_range", lambda *_args: b"HAL_UART FreeRTOS")
+    filtered = mod._rtos_scan(0x1000, 0x2000, "ThreadX", 1)
+    assert filtered["matches"] == []
+    matched = mod._rtos_scan(0x1000, 0x2000, "HAL", 1)
+    assert matched["detected"] == "HAL"
+
+    monkeypatch.setattr(mod._compat, "add_segment", lambda *_args: False)
+    failed = mod.firmware(action="carve", start="0x40000000", end="0x40001000", sclass="BSS")
+    assert failed["error"] is True
+    invalid = mod.firmware(action="carve", start="bad", end="0x40001000")
+    assert invalid["error"] is True
+
+    created = tmp_path / "carved.bin"
+    monkeypatch.setattr(mod._compat, "add_segment", lambda *_args: True)
+    monkeypatch.setattr(mod.ida_bytes, "get_bytes", lambda *_args: b"carved")
+    saved = mod.firmware(
+        action="carve", start="0x40001000", end="0x40001006", sclass="XTRN", file=str(created)
+    )
+    assert saved["ok"] is True and created.read_bytes() == b"carved"
+
+    def _raise_open(*_args, **_kwargs):
+        raise OSError("read-only")
+
+    monkeypatch.setattr("builtins.open", _raise_open)
+    save_error = mod.firmware(
+        action="carve", start="0x40002000", end="0x40002006", path="/tmp/nope.bin"
+    )
+    assert save_error["ok"] is True and "save_error" in save_error

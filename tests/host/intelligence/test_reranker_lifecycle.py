@@ -1039,3 +1039,160 @@ class TestRerankPublic:
             lambda q, part, timeout=None: next(responses),
         )
         assert obj.rerank("q", ["a", "b"]) is None
+
+
+class TestRerankerAdditionalBoundaries:
+    def test_enabled_state_values_and_state_read_failures(self, monkeypatch):
+        monkeypatch.delenv("IDA_MCP_RERANK_DISABLED", raising=False)
+        monkeypatch.delenv("IDA_MCP_RERANK_ENABLED", raising=False)
+        monkeypatch.setattr(rerank_mod, "_read_rerank_state", lambda: {"enabled": True})
+        assert rerank_mod._rerank_enabled() is True
+        monkeypatch.setattr(rerank_mod, "_read_rerank_state", lambda: {"enabled": "off"})
+        assert rerank_mod._rerank_enabled() is False
+        monkeypatch.setattr(
+            rerank_mod,
+            "_read_rerank_state",
+            lambda: (_ for _ in ()).throw(RuntimeError("state unreadable")),
+        )
+        assert rerank_mod._rerank_enabled() is True
+
+    def test_find_model_rejects_mismatched_state_profile_and_falls_back(self, tmp_path, monkeypatch):
+        model = tmp_path / "custom.gguf"
+        model.write_bytes(b"model")
+        monkeypatch.delenv("IDA_MCP_RERANK_MODEL", raising=False)
+        monkeypatch.setenv("IDA_MCP_RERANK_PROFILE", "qwen3-reranker-0.6b")
+        monkeypatch.setattr(
+            rerank_mod,
+            "_read_rerank_state",
+            lambda: {"model_path": str(model), "profile": "bge-reranker-v2-m3"},
+        )
+        monkeypatch.setattr(
+            rerank_mod,
+            "Path",
+            type("_P", (), {"home": classmethod(lambda cls: str(tmp_path / "home"))}),
+        )
+        monkeypatch.setattr(rerank_mod, "_install_root", lambda: str(tmp_path / "install"))
+        assert rerank_mod._find_rerank_model() == ""
+
+        fallback = tmp_path / "install" / "bge-reranker-v2-m3-q8_0.gguf"
+        fallback.parent.mkdir(parents=True)
+        fallback.write_bytes(b"fallback")
+        assert rerank_mod._find_rerank_model() == str(fallback)
+
+    def test_lease_matches_rejects_malformed_values_and_wrong_props(self, monkeypatch):
+        obj = _stub_reranker(port=1234)
+        monkeypatch.setattr(rerank_mod, "_pid_alive", lambda _pid: True)
+        assert obj._lease_matches({"schema": "bad", "pid": 1, "owner_pid": 1, "port": 1}) is False
+        monkeypatch.setattr(rerank_mod, "_process_start_token", lambda _pid: "")
+        monkeypatch.setattr(
+            obj,
+            "_server_json",
+            lambda _port, endpoint: {"status": "ok"}
+            if endpoint == "health"
+            else {"model_path": "/wrong"},
+        )
+        lease = {"schema": 1, "pid": 1, "owner_pid": 1, "port": 1234}
+        lease.update(obj._lease_identity())
+        assert obj._lease_matches(lease) is False
+
+    def test_idle_and_rss_helpers_fail_closed_without_optional_state(self, monkeypatch):
+        obj = _stub_reranker()
+        obj._idle_lock = None
+        obj._cancel_idle_shutdown()
+        obj._schedule_idle_shutdown(1.0)
+        assert obj._idle_timer is None
+        monkeypatch.setattr(rerank_mod, "RERANK_MAX_RSS_MB", 0)
+        monkeypatch.setattr(
+            rerank_mod.os.path,
+            "getsize",
+            lambda _path: (_ for _ in ()).throw(OSError("missing")),
+        )
+        assert obj._rss_limit_bytes() == 5 * 1024**3
+
+    def test_request_parser_filters_bad_items_and_accepts_score_alias(self, tmp_path, monkeypatch):
+        obj = TestRequestRerank()._ready(monkeypatch, str(tmp_path / "lease.json"))
+        payload = {
+            "results": [
+                "not-an-item",
+                {"index": "bad", "score": 0.1},
+                {"index": 0, "relevance_score": "bad"},
+                {"index": 0, "score": 0.8},
+                {"index": 1, "score": 0.2},
+            ]
+        }
+        monkeypatch.setattr(
+            rerank_mod.urllib.request,
+            "urlopen",
+            lambda _request, timeout=2.0: _FakeResp(json.dumps(payload).encode()),
+        )
+        assert obj._request_rerank("q", ["a", "b"], timeout=2.0) == [
+            {"index": 0, "score": 0.8},
+            {"index": 1, "score": 0.2},
+        ]
+
+    def test_cached_request_can_be_disabled_and_waiter_timeout_returns_none(self, monkeypatch):
+        obj = _stub_reranker(ready=True)
+        calls = []
+        monkeypatch.setattr(
+            obj,
+            "_request_rerank",
+            lambda *args, **kwargs: calls.append(1) or [{"index": 0, "score": 1.0}],
+        )
+        monkeypatch.setattr(rerank_mod, "RERANK_CACHE_MAX", 0)
+        assert obj._request_rerank_cached("q", ["d"], timeout=1.0)
+        assert obj._request_rerank_cached("q", ["d"], timeout=1.0)
+        assert len(calls) == 2
+
+        monkeypatch.setattr(rerank_mod, "RERANK_CACHE_MAX", 1)
+        key = rerank_mod._rerank_cache_key("q", ["d"])
+        obj._score_inflight[key] = threading.Event()
+        monkeypatch.setattr(obj._score_inflight[key], "wait", lambda timeout: None)
+        assert obj._request_rerank_cached("q", ["d"], timeout=1.0) is None
+
+    def test_public_deadline_stops_between_chunks_and_recovery_exception_is_safe(self, monkeypatch):
+        obj = _stub_reranker(ready=True, use_llama=True)
+        monkeypatch.setattr(rerank_mod, "RERANK_CHUNK_SIZE", 1)
+        monkeypatch.setattr(
+            obj,
+            "_request_rerank_cached",
+            lambda *args, **kwargs: [{"index": 0, "score": 1.0}],
+        )
+        clock = iter([0.0, 2.0])
+        monkeypatch.setattr(rerank_mod.time, "monotonic", lambda: next(clock))
+        assert obj.rerank("q", ["a", "b"], deadline=1.0) is None
+
+        obj._ready = False
+        monkeypatch.setattr(
+            obj,
+            "ensure_ready",
+            lambda: (_ for _ in ()).throw(RuntimeError("start failed")),
+        )
+        assert obj.rerank("q", ["a"]) is None
+
+    def test_start_server_popen_failure_and_abandon_kill_fallback(self, tmp_path, monkeypatch):
+        model = tmp_path / "qwen3-reranker-0.6b-q8_0.gguf"
+        model.write_bytes(b"model")
+        obj = _stub_reranker(server_bin="/bin/echo", model_path=str(model), use_llama=True)
+        monkeypatch.setattr(obj, "_read_lease", dict)
+        monkeypatch.setattr(obj, "_pick_port", lambda: 7777)
+        monkeypatch.setattr(
+            rerank_mod.subprocess,
+            "Popen",
+            lambda *args, **kwargs: (_ for _ in ()).throw(OSError("spawn")),
+        )
+        assert obj._start_server_locked() is False
+
+        class _HungProc(_FakeProc):
+            def wait(self, timeout=None):
+                self.waited.append(timeout)
+                if len(self.waited) == 1:
+                    raise TimeoutError("still running")
+                return 0
+
+        proc = _HungProc(pid=99)
+        obj._proc = proc
+        obj._owns_proc = True
+        obj._abandon_owned_server("health timeout")
+        assert proc.terminated is True
+        assert proc.killed is True
+        assert obj._proc is None

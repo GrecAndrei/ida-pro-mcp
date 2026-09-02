@@ -77,10 +77,12 @@ def _is_probable_mmio(value: int) -> bool:
 
 
 def _mmio_label(addr: int) -> str:
+    # Check narrower/highest bases first; otherwise every 0x500... address
+    # would be incorrectly labelled as an offset from 0x40000000.
     bases = (
-        (0x40000000, "PERIPH"),
-        (0x50000000, "PERIPH_HI"),
         (0xE0000000, "SYSCTRL"),
+        (0x50000000, "PERIPH_HI"),
+        (0x40000000, "PERIPH"),
     )
     for base, name in bases:
         if addr >= base:
@@ -1194,7 +1196,11 @@ def _annotation_comment_mgr_action(action, addr, text, items, path, fmt,
                 else:
                     errors.append({"addr": item_addr, "error": "IDA rejected comment write"})
             except Exception as e:
-                errors.append({"addr": item.get("addr"), "error": str(e)})
+                # Keep one malformed batch entry from aborting the whole
+                # request.  JSON callers can supply null or another scalar;
+                # those values do not have an ``.get`` method themselves.
+                item_addr = item.get("addr") if isinstance(item, dict) else None
+                errors.append({"addr": item_addr, "error": str(e)})
 
         return {
             "ok": True,

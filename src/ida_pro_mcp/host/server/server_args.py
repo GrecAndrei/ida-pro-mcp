@@ -150,6 +150,11 @@ class ServerArgsMixin:
             text = text.strip(ACTION_STRIP_CHARS)
         text = ACTION_PREFIX_RE.sub("", text)
         text = text.strip().strip(",")
+        # Preserve a complete JSON object for the caller below.  The generic
+        # balanced-wrapper cleanup would otherwise remove the outer braces,
+        # making the explicit JSON-action parser unreachable.
+        if text.startswith("{") and text.endswith("}"):
+            return text
         # Keep multi-token action strings intact here so key=value tails survive tokenization;
         # individual tokens are cleaned in _parse_action_tail_tokens().
         if re.search(r"\s", text):

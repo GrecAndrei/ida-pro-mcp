@@ -13,7 +13,7 @@ from pathlib import Path
 
 try:
     import tiktoken
-except ImportError:  # not declared in pyproject.toml
+except ImportError:  # optional for runtime installs; included in the dev group
     raise SystemExit("tiktoken is required for this report; install it with: pip install tiktoken") from None
 
 ROOT = Path(__file__).resolve().parents[1]

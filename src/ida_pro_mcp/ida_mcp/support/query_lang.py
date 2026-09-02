@@ -180,7 +180,7 @@ _WHERE_MARKER_RE = re.compile(r"^(?:where|with|such that|that|having|whose)\b\s*
 _CONTAINS_WORDS = ("contains", "containing", "like", "includes", "has")
 _REGEX_WORDS = ("matches", "match", "regex")
 _COMPARISON_RE = re.compile(
-    r"(\w+)\s*(==|!=|<=|>=|<|>|=|eq|equals|ne|neq|lt|le|gt|ge)\s*(.+)",
+    r"(\w+)\s*(==|!=|<=|>=|<|>|=|equals|eq|neq|ne|lt|le|gt|ge)(?=\s|$)\s*(.+)",
     re.IGNORECASE,
 )
 

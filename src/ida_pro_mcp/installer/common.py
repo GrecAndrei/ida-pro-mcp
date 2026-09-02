@@ -145,7 +145,6 @@ def reject_symlink_path(path: Path, description: str) -> None:
             return
         current = current.parent
 
-
 @dataclass
 class InstallerOptions:
     dry_run: bool = False
@@ -199,6 +198,7 @@ class InstallerOptions:
     # config; it does NOT download a pinned release (documented follow-up,
     # mirroring the llama.cpp pin discipline).
     with_r2: bool = False  # --with-r2: resolve + record rz/r2 into the client config
+    with_corpus: bool = False  # --with-corpus: download/build the optional threat corpus
     # Signature-pack staging (paper §10.2 item 5e) — copies *.sig / *.sig.gz
     # from a source dir into <IDADIR>/sig, closing "nothing installs a RISC-V
     # .sig pack".

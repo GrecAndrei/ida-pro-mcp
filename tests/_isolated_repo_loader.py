@@ -260,7 +260,15 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
         "ida_struct", "ida_lines", "ida_ua", "ida_kernwin", "ida_loader",
         "ida_dbg", "ida_fixup", "ida_ida", "ida_entry", "ida_auto",
     ):
-        mod = sys.modules.setdefault(name, types.ModuleType(name))
+        mod = sys.modules.get(name)
+        if mod is None:
+            mod = types.ModuleType(name)
+            # Tests may replace an SDK module with a deliberately shaped
+            # module before loading a tool.  Mark only modules created here
+            # so version-specific cleanup below cannot erase those injected
+            # APIs (for example ida_ida.inf_get_cc_id).
+            mod.__ida_mcp_base_stub__ = True
+            sys.modules[name] = mod
         setattr(common, name, mod)
     _base_hexrays = sys.modules["ida_hexrays"]
     if not hasattr(_base_hexrays, "user_lvar_modifier_t"):
@@ -284,6 +292,32 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
     # carry it from the start or tests fail under pytest's per-test
     # sys.modules isolation (unittest leaked it from earlier test classes).
     _base_idaapi.BADADDR = -1
+    # Reusing SDK module objects is intentional because already-loaded tool
+    # modules keep direct references to them. Reset version-specific discovery
+    # state at the common-stub boundary, though, so a 9.4-style test cannot
+    # inherit a legacy IDA info object from an earlier test (and vice versa).
+    if not overrides or "idaapi" not in overrides:
+        for _name in (
+            "get_inf_structure", "inf_get_min_ea", "inf_get_max_ea",
+            "inf_get_procname", "inf_get_filetype", "inf_get_app_bitness",
+        ):
+            _base_idaapi.__dict__.pop(_name, None)
+    _base_ida_ida = sys.modules["ida_ida"]
+    if (
+        getattr(_base_ida_ida, "__ida_mcp_base_stub__", False)
+        and (not overrides or "ida_ida" not in overrides)
+    ):
+        for _name in tuple(_base_ida_ida.__dict__):
+            if _name.startswith("inf_"):
+                _base_ida_ida.__dict__.pop(_name, None)
+    if not overrides or "ida_gdl" not in overrides:
+        _base_gdl = sys.modules.get("ida_gdl")
+        if _base_gdl is not None:
+            _base_gdl.__dict__.pop("FlowChart", None)
+    if not overrides or "ida_frame" not in overrides:
+        _base_frame = sys.modules.get("ida_frame")
+        if _base_frame is not None:
+            _base_frame.__dict__.pop("get_frame", None)
     # Ensure base idc mock has commonly-used SDK functions so that
     # tools work regardless of test ordering (test_packer_detector replaces
     # idautils with a blank module; _isolate_sys_modules restores the
@@ -367,20 +401,44 @@ def _ensure_nested_namespace(base_name: str, base_path: Path, module_relpath: st
 
 
 def load_tool_module(module_basename: str, *, common_overrides: dict | None = None):
+    previous_package_common = sys.modules.get("ida_pro_mcp.ida_mcp.tools._common")
+    previous_flat_common = sys.modules.get("_common")
     install_common_stub(common_overrides)
-    fullname = f"ida_pro_mcp.ida_mcp.tools.{module_basename}"
-    path = TOOLS_ROOT / f"{module_basename}.py"
-    return _bind_ida_sdk_names(_load_module(fullname, path))
+    try:
+        fullname = f"ida_pro_mcp.ida_mcp.tools.{module_basename}"
+        path = TOOLS_ROOT / f"{module_basename}.py"
+        return _bind_ida_sdk_names(_load_module(fullname, path))
+    finally:
+        if previous_package_common is None:
+            sys.modules.pop("ida_pro_mcp.ida_mcp.tools._common", None)
+        else:
+            sys.modules["ida_pro_mcp.ida_mcp.tools._common"] = previous_package_common
+        if previous_flat_common is None:
+            sys.modules.pop("_common", None)
+        else:
+            sys.modules["_common"] = previous_flat_common
 
 
 def load_tool_submodule(module_relpath: str, *, common_overrides: dict | None = None):
+    previous_package_common = sys.modules.get("ida_pro_mcp.ida_mcp.tools._common")
+    previous_flat_common = sys.modules.get("_common")
     install_common_stub(common_overrides)
-    _ensure_nested_namespace("ida_pro_mcp.ida_mcp.tools", TOOLS_ROOT, module_relpath)
-    rel = module_relpath.replace(".", "/")
-    path = TOOLS_ROOT / rel
-    path = path / "__init__.py" if path.is_dir() else path.with_suffix(".py")
-    fullname = f"ida_pro_mcp.ida_mcp.tools.{module_relpath}"
-    return _bind_ida_sdk_names(_load_module(fullname, path))
+    try:
+        _ensure_nested_namespace("ida_pro_mcp.ida_mcp.tools", TOOLS_ROOT, module_relpath)
+        rel = module_relpath.replace(".", "/")
+        path = TOOLS_ROOT / rel
+        path = path / "__init__.py" if path.is_dir() else path.with_suffix(".py")
+        fullname = f"ida_pro_mcp.ida_mcp.tools.{module_relpath}"
+        return _bind_ida_sdk_names(_load_module(fullname, path))
+    finally:
+        if previous_package_common is None:
+            sys.modules.pop("ida_pro_mcp.ida_mcp.tools._common", None)
+        else:
+            sys.modules["ida_pro_mcp.ida_mcp.tools._common"] = previous_package_common
+        if previous_flat_common is None:
+            sys.modules.pop("_common", None)
+        else:
+            sys.modules["_common"] = previous_flat_common
 
 
 def load_package_module(module_relpath: str):

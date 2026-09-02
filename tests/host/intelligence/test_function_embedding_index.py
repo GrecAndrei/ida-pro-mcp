@@ -452,6 +452,90 @@ def test_reader_auto_refreshes_after_rebuild_replaces_rows(tmp_path):
         conn.commit()
     rebuilder = FunctionEmbeddingIndex(db_path, _KeywordEmbedder())
     assert rebuilder.index("0x401000", "gamma_fn", "gamma body") is True
-
     hits = reader.similar_vec([1.0, 0.0], top_k=1, threshold=0.0)
     assert hits == [], "stale pre-rebuild vectors leaked into the ranking"
+
+
+def test_structured_search_composes_every_metadata_constraint_and_api_filter(tmp_path):
+    index = FunctionEmbeddingIndex(str(tmp_path / "sample.embeddings.db"), _BatchEmbedder())
+    assert index.index_many([
+        (
+            "0x401000",
+            "packet_parser",
+            "int packet_parser(int x) { recvfrom(sock, dst, 128, 0, addr, len); return x; }",
+            {
+                "func_size": 220,
+                "bb_count": 6,
+                "has_loops": 1,
+                "api_count": 3,
+                "string_count": 2,
+                "segment": ".text",
+                "is_thunk": 0,
+                "cyclomatic": 7,
+            },
+        ),
+        (
+            "0x402000",
+            "tiny_thunk",
+            "int tiny_thunk(void) { return 0; }",
+            {
+                "func_size": 32,
+                "bb_count": 1,
+                "has_loops": 0,
+                "api_count": 0,
+                "string_count": 0,
+                "segment": ".plt",
+                "is_thunk": 1,
+                "cyclomatic": 1,
+            },
+        ),
+    ]) == {"indexed": 2, "failed": 0}
+
+    rows = index.search_structured(
+        {
+            "min_size": 200,
+            "max_size": 240,
+            "min_bb": 5,
+            "max_bb": 7,
+            "has_loops": True,
+            "min_api": 2,
+            "max_api": 4,
+            "min_strings": 1,
+            "max_strings": 3,
+            "segment": ".text",
+            "is_thunk": False,
+            "min_cyclomatic": 6,
+            "max_cyclomatic": 8,
+            "apis": ["recvfrom"],
+        },
+        query="packet",
+        top_k=10,
+    )
+    assert len(rows) == 1
+    assert rows[0]["ea"] == "0x401000"
+    assert rows[0]["has_loops"] is True
+    assert rows[0]["is_thunk"] is False
+    assert rows[0]["score"] > 0
+    assert index.search_structured({"apis": [""]}) == []
+
+
+def test_embedding_state_metadata_and_cache_views_are_consistent(tmp_path):
+    db_path = str(tmp_path / "sample.embeddings.db")
+    index = FunctionEmbeddingIndex(db_path, _KeywordEmbedder())
+    assert index.index("0x401000", "alpha_fn", "alpha behavior") is True
+
+    metadata = index.metadata()
+    assert metadata["embedding_backend"] == "test"
+    assert metadata["embedding_dim"] == 2
+    assert index.recent_functions(limit=1)[0]["ea"] == "0x401000"
+    assert index.quality_counts() == {"unknown": 1}
+    state = index.build_embedding_state_payload()
+    assert state["backend"] == "test"
+    assert state["embedding_dim"] == 2
+    assert state["index_metadata"]["function_count"] == 1
+    assert state["last_indexed_functions"][0]["name"] == "alpha_fn"
+    assert index.db_changed_since_load() is False
+    assert index.cache_keys() == {"0x401000"}
+    assert index.cache_snapshot()[0][0] == "0x401000"
+    index.cache_store("0x402000", [0.0, 1.0])
+    assert index.size == 2

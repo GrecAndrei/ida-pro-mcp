@@ -96,6 +96,31 @@ def _restore_sys_path(snapshot: list[str]) -> None:
     sys.path.extend(snapshot)
 
 
+def _snapshot_package_child_attrs(snapshot: dict[str, object]) -> list[tuple[object, str, object]]:
+    """Capture package attributes that mirror entries in ``sys.modules``.
+
+    A few IDA-side tests replace a child module directly in ``sys.modules``.
+    Import machinery also updates the parent package's attribute in that case,
+    but restoring only the module table leaves a stale object reachable via
+    ``from package import child``.  Keep the package namespace isolated along
+    with the module table.
+    """
+    attrs: list[tuple[object, str, object]] = []
+    for name in snapshot:
+        parent_name, _, child_name = name.rpartition(".")
+        if not parent_name:
+            continue
+        parent = snapshot.get(parent_name)
+        if parent is not None and hasattr(parent, child_name):
+            attrs.append((parent, child_name, getattr(parent, child_name)))
+    return attrs
+
+
+def _restore_package_child_attrs(attrs: list[tuple[object, str, object]]) -> None:
+    for parent, child_name, value in attrs:
+        setattr(parent, child_name, value)
+
+
 # Shared IDA SDK stub module objects that tests mutate IN PLACE (e.g.
 # ``ida_funcs.get_func_name = ...``, ``idaapi.get_inf_structure = ...``,
 # ``ida_ida.inf_get_max_ea = ...``). Restoring sys.modules *identity* between
@@ -105,7 +130,8 @@ _SHARED_STUB_MODULES = (
     "ida_ida", "idaapi", "idc", "idautils", "ida_funcs", "ida_bytes",
     "ida_segment", "ida_name", "ida_typeinf", "ida_nalt", "ida_hexrays",
     "ida_frame", "ida_struct", "ida_lines", "ida_ua", "ida_kernwin",
-    "ida_loader", "ida_dbg",
+    "ida_loader", "ida_dbg", "ida_pro_mcp.ida_mcp.compat",
+    "ida_mcp.compat",
 )
 
 
@@ -163,6 +189,25 @@ def _restore_shared_stub_attrs(
 def _reset_tool_state() -> None:
     """Reset mutable module-level state that leaks between tests."""
     global _ORIGINAL_TOOL_ACTIONS
+    # IDA-side read decorators share an LRU cache across dynamically loaded
+    # tool modules.  Keep cache behavior testable within one test, but never
+    # let a result from a prior fake IDB answer a later test's query.
+    for _module_name in (
+        "ida_pro_mcp.ida_mcp.cache",
+        "ida_mcp.ida_mcp.cache",
+        "cache",
+    ):
+        _cache_module = sys.modules.get(_module_name)
+        _cache = getattr(_cache_module, "TOOL_CACHE", None)
+        if _cache is not None and hasattr(_cache, "clear"):
+            with contextlib.suppress(Exception):
+                _cache.clear()
+    with contextlib.suppress(Exception):
+        from ida_pro_mcp.ida_mcp.sync import _tool_cache
+
+        _shared_cache = _tool_cache()
+        if _shared_cache is not None:
+            _shared_cache.clear()
     # Reset tool_registry._TOOL_ACTIONS to original values
     try:
         from ida_pro_mcp.host.server import tool_registry
@@ -224,6 +269,15 @@ def _isolate_sys_modules(monkeypatch: pytest.MonkeyPatch):
     if _PRESERVED_SYS_PATH is None:
         _PRESERVED_SYS_PATH = list(sys.path)
     _reinstall_clean_common()
+    # Clear any cache entry created during collection before taking the
+    # per-test snapshot.  The cleanup routine runs after the previous test,
+    # but collection itself can import and exercise decorated tools.
+    with contextlib.suppress(Exception):
+        from ida_pro_mcp.ida_mcp.sync import _tool_cache
+
+        _shared_cache = _tool_cache()
+        if _shared_cache is not None:
+            _shared_cache.clear()
     # Snapshot the shared IDA stub modules BEFORE the test body runs. For
     # unittest classes setUpClass is class-scoped and set up before this
     # function-scoped fixture, so the snapshot already carries class-level
@@ -231,11 +285,13 @@ def _isolate_sys_modules(monkeypatch: pytest.MonkeyPatch):
     # it preserves that state across the class's tests.
     stub_attrs = _snapshot_shared_stub_attrs()
     snapshot = _freeze_sys_modules()
+    package_attrs = _snapshot_package_child_attrs(snapshot)
     path_snapshot = list(sys.path)
     try:
         yield
     finally:
         _restore_sys_modules(snapshot)
+        _restore_package_child_attrs(package_attrs)
         # Restore stub-attr mutations, but leave every attribute the
         # monkeypatch fixture will undo in its own teardown (which runs after
         # ours) in place — clearing them here would break monkeypatch's

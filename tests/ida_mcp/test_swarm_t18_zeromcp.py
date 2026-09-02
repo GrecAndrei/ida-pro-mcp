@@ -358,3 +358,75 @@ def test_sse_subscription_rejects_cross_origin_before_opening_stream():
 
     assert any(item[0] == "error" and item[1] == 403 for item in h.sent)
     assert not getattr(h, "parent_get_called", False)
+
+
+def test_mcp_http_config_helpers_cover_invalid_json_cache_and_stale_tools():
+    mod, blobs = _load_mcp_http()
+    blobs["$ ida_mcp.bad"] = b"not-json"
+    assert mod.config_json_get("bad", {"fallback": True}) == {"fallback": True}
+    mod.config_json_set("good", {"value": 1})
+    assert mod.config_json_get("good", {}) == {"value": 1}
+
+    registry = mod.MCP_SERVER.tools
+    registry.methods = {"keep": _tool()}
+    mod.config_json_set("enabled_tools", {"keep": True, "stale": False})
+    mod.handle_enabled_tools(registry, "enabled_tools")
+    assert set(registry.methods) == {"keep"}
+    # The second call uses the enabled-tools cache rather than rereading the
+    # netnode, while preserving the same filtered registry.
+    mod.handle_enabled_tools(registry, "enabled_tools")
+    assert set(registry.methods) == {"keep"}
+
+
+def test_mcp_http_config_post_rejects_bad_headers_and_get_sse_accepts_local(monkeypatch):
+    mod, _ = _load_mcp_http()
+    for content_type, length in (("application/json", "1"), ("application/x-www-form-urlencoded", "bad")):
+        handler = _make_config_handler(mod, body=b"x", content_type=content_type, content_length=length)
+        mod.IdaMcpHttpRequestHandler._handle_config_post(handler)
+        assert any(item[0] == "error" and item[1] == 400 for item in handler.sent)
+
+    negative = _make_config_handler(mod, body=b"x", content_length=-1)
+    mod.IdaMcpHttpRequestHandler._handle_config_post(negative)
+    assert any(item[0] == "error" and item[1] == 400 for item in negative.sent)
+
+    handler = object.__new__(mod.IdaMcpHttpRequestHandler)
+    handler.mcp_server = mod.MCP_SERVER
+    handler._local_endpoints = lambda: ("127.0.0.1:13337", "localhost:13337", "[::1]:13337")
+    handler.path = "/sse"
+    handler.headers = {"Origin": "http://localhost:13337"}
+    handler.parent_get_called = False
+    mod.IdaMcpHttpRequestHandler.do_GET(handler)
+    assert handler.parent_get_called is True
+
+
+def test_mcp_http_dispatch_and_config_page_cover_unknown_policy_and_known_tools(monkeypatch):
+    mod, _ = _load_mcp_http()
+    mod.MCP_SERVER.tools.methods = {"safe": _tool()}
+    mod._KNOWN_TOOLS["safe"] = mod.MCP_SERVER.tools.methods["safe"]
+    handler = _make_config_handler(mod)
+    handler.mcp_server.cors_allowed_origins = "before"
+    monkeypatch.setattr(mod, "config_json_get", lambda _key, default: "unknown" if _key == "cors_policy" else default)
+    mod.IdaMcpHttpRequestHandler.update_cors_policy(handler)
+    assert handler.mcp_server.cors_allowed_origins == "before"
+
+    rendered = []
+    def record_response(code):
+        rendered.append(code)
+
+    def write_body(body):
+        rendered.append(body)
+
+    handler.send_response = record_response
+    handler.send_header = lambda *_args: None
+    handler.end_headers = lambda: None
+    handler.wfile = types.SimpleNamespace(write=write_body)
+    handler._send_html = mod.IdaMcpHttpRequestHandler._send_html.__get__(handler)
+    mod.IdaMcpHttpRequestHandler._handle_config_get(handler)
+    assert 200 in rendered and any(b"safe" in item for item in rendered if isinstance(item, bytes))
+
+    post = _make_config_handler(mod, body=b"cors_policy=direct")
+    post.path = "/other"
+    post.headers["Origin"] = "http://evil.example"
+    post._local_endpoints = lambda: ("127.0.0.1:13337", "localhost:13337", "[::1]:13337")
+    mod.IdaMcpHttpRequestHandler.do_POST(post)
+    assert any(item[0] == "error" and item[1] == 403 for item in post.sent)

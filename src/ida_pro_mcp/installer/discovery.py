@@ -27,6 +27,11 @@ _BUILD_VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d{6})\.([0-9a-f]{6,8})")
 _VERSION_DIGITS_RE = re.compile(r"\d+")
 
 
+def _expand_configured_path(value: str | os.PathLike[str]) -> Path:
+    """Expand environment variables and ``~`` in an installer path value."""
+    return Path(os.path.expanduser(os.path.expandvars(os.fspath(value))))
+
+
 def parse_version(s: str) -> tuple[int, ...]:
     """Extract every run of digits in `s` as an int tuple.
 

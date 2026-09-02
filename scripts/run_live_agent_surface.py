@@ -53,6 +53,8 @@ def main() -> int:
             sys.executable,
             "-m",
             "pytest",
+            "-m",
+            "live_ida",
             "-q",
             f"--timeout={max(60, args.pytest_timeout)}",
             "tests/integration",

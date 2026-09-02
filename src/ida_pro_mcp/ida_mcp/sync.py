@@ -262,14 +262,25 @@ def _signature_defaults(f) -> dict:
     return defaults
 
 
-def _cache_key_kwargs(f, kwargs: dict) -> dict:
-    """Canonicalize *kwargs* for cache-key purposes (not the real call).
+def _cache_key_kwargs(f, kwargs: dict, args: tuple = ()) -> dict:
+    """Canonicalize call arguments for cache-key purposes (not the real call).
 
     Numeric strings become ints and args equal to the tool's default are
     dropped, so an LLM rephrasing an address as "0x401000" / 4198400 or an
     explicit default hits the same LRU entry. The function is still called
     with the caller's original kwargs.
     """
+    values = dict(kwargs)
+    if args:
+        try:
+            bound = inspect.signature(f).bind_partial(*args, **kwargs)
+            values = dict(bound.arguments)
+        except (TypeError, ValueError):
+            # Some wrapped/C-extension callables do not expose a signature.
+            # Preserve the old keyword-only fallback and include positional
+            # values under stable synthetic names so distinct calls cannot
+            # collide in the shared read cache.
+            values.update({f"_arg_{i}": value for i, value in enumerate(args)})
     try:
         from ida_mcp.ida_mcp.cache import canonicalize_kwargs
     except ImportError:
@@ -277,7 +288,7 @@ def _cache_key_kwargs(f, kwargs: dict) -> dict:
             from cache import canonicalize_kwargs
         except ImportError:
             from ida_pro_mcp.ida_mcp.cache import canonicalize_kwargs
-    return canonicalize_kwargs(kwargs, defaults=_signature_defaults(f))
+    return canonicalize_kwargs(values, defaults=_signature_defaults(f))
 
 
 def idawrite(f):
@@ -331,7 +342,7 @@ def idaread(f):
         cache = _tool_cache()
 
         if cache is not None:
-            cache_kwargs = _cache_key_kwargs(f, kwargs)
+            cache_kwargs = _cache_key_kwargs(f, kwargs, args)
             cached, age = cache.get(f.__name__, cache_kwargs, with_age=True)
             if cached is not None:
                 if isinstance(cached, dict):
@@ -351,7 +362,7 @@ def idaread(f):
         # so the caller's object and the cached object never alias: mutation
         # of the returned dict downstream must not poison later cache hits.
         if cache is not None and isinstance(result, dict) and not result.get("error"):
-            cache.put(f.__name__, _cache_key_kwargs(f, kwargs), copy.deepcopy(result))
+            cache.put(f.__name__, _cache_key_kwargs(f, kwargs, args), copy.deepcopy(result))
 
         return result
 

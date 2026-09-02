@@ -330,3 +330,211 @@ def test_www_reports_store_through_non_fp_base():
     ]).install(with_heads=True)
     res = g._find_write_what_where(None, 50, 5, None)
     assert any("sw a0, 0(t0)" in t for t in _gadget_texts(res)), res
+
+
+def test_gadget_arch_terminators_cover_all_supported_families(monkeypatch):
+    g = _load_gadgets()
+    g.idaapi.SEGPERM_EXEC = 4
+    g.idaapi.SEG_CODE = 2
+    g.idc.o_reg = 1
+    g.idc.o_mem = 2
+    g.idc.o_phrase = 3
+    g.idc.o_displ = 4
+    monkeypatch.setattr(g.idc, "get_operand_type", lambda *_args: g.idc.o_reg, raising=False)
+    monkeypatch.setattr(g.idc, "get_operand_value", lambda *_args: 0x80, raising=False)
+    monkeypatch.setattr(g, "_is_x86_family", lambda arch: arch in {"x86", "x64"})
+    monkeypatch.setattr(g, "_is_arm_family", lambda arch: arch in {"arm", "arm64"})
+    monkeypatch.setattr(g, "is_mips_family", lambda arch: arch in {"mips", "mips64"})
+    monkeypatch.setattr(g, "is_ppc_family", lambda arch: arch in {"ppc", "ppc64"})
+    monkeypatch.setattr(g, "is_riscv_family", lambda arch: arch in {"riscv", "riscv64"})
+    monkeypatch.setattr(g, "is_sparc_family", lambda arch: arch in {"sparc"})
+
+    assert g._is_jop_terminator(0, "jmp", "jmp rax", "x64") is True
+    monkeypatch.setattr(g.idc, "get_operand_type", lambda *_args: 0)
+    assert g._is_jop_terminator(0, "jmp", "jmp", "x64") is False
+    monkeypatch.setattr(g.idc, "get_operand_type", lambda *_args: g.idc.o_reg)
+    assert g._is_cop_terminator(0, "call", "call rax", "x64") is True
+    monkeypatch.setattr(g.idc, "get_operand_type", lambda *_args: 0)
+    assert g._is_cop_terminator(0, "call", "call", "x64") is False
+    monkeypatch.setattr(g.idc, "get_operand_type", lambda *_args: g.idc.o_reg)
+    assert g._is_jop_terminator(0, "bx", "bx r0", "arm") is True
+    assert g._is_cop_terminator(0, "blr", "blr x0", "arm64") is True
+    assert g._is_cop_terminator(0, "blx", "blx r0", "arm") is True
+    assert g._is_jop_terminator(0, "jr", "jr $4", "mips") is True
+    assert g._is_jop_terminator(0, "jr", "jr ra", "mips") is False
+    assert g._is_cop_terminator(0, "jalr", "jalr $4", "mips") is True
+    assert g._is_jop_terminator(0, "bctr", "bctr", "ppc") is True
+    assert g._is_cop_terminator(0, "bctrl", "bctrl", "ppc") is True
+    assert g._is_jop_terminator(0, "jalr", "jalr t0", "riscv64") is True
+    assert g._is_cop_terminator(0, "c.jalr", "c.jalr t0", "riscv64") is True
+    assert g._is_syscall_terminator(0, "int", "int 80h", "x86") is True
+    monkeypatch.setattr(g.idc, "get_operand_value", lambda *_args: 3)
+    assert g._is_syscall_terminator(0, "int", "int 3", "x86") is False
+    monkeypatch.setattr(g.idc, "get_operand_value", lambda *_args: 0x80)
+    assert g._is_syscall_terminator(0, "svc", "svc 0", "arm64") is True
+    assert g._is_syscall_terminator(0, "syscall", "syscall", "mips") is True
+    assert g._is_syscall_terminator(0, "sc", "sc", "ppc") is True
+    assert g._is_syscall_terminator(0, "ta", "ta 0", "sparc") is True
+    assert g._is_syscall_terminator(0, "ecall", "ecall", "riscv64") is True
+    assert g._is_syscall_terminator(0, "trap", "trap", "unknown") is False
+
+
+def test_gadget_helper_scan_paths_and_query_cache(monkeypatch):
+    g = _load_gadgets()
+    g.idaapi.SEGPERM_EXEC = 4
+    g.idaapi.SEG_CODE = 2
+    seg = _Seg(0x1000, 0x1010, 4, 2)
+    monkeypatch.setattr(g, "_compat", types.SimpleNamespace(
+        get_segment=lambda _ea: seg,
+        get_segment_perm=lambda _ea: 4,
+        get_segment_type=lambda _ea: 2,
+    ))
+    g.idautils.Segments = lambda: iter([0x1000, 0x2000])
+    assert list(g._get_exec_segments(None)) == [(0x1000, 0x1010), (0x1000, 0x1010)]
+    monkeypatch.setattr(g, "validate_addr", lambda _addr: (0x1004, None))
+    assert list(g._get_exec_segments("0x1004")) == [(0x1000, 0x1010)]
+
+    g._QUERY_MATCHER_CACHE.clear()
+    insns = [(0x1000, "mov", "mov rax, rbx")]
+    assert g._matches_query(insns, None) is True
+    assert g._matches_query(insns, "rax") is True
+    assert g._matches_query(insns, "not-present") is False
+    assert g._matches_query(insns, "rax") is True
+
+    monkeypatch.setattr(g, "_is_x86_family", lambda arch: arch == "x64")
+    g.idc.get_item_size = lambda _ea: 1
+    g.idc.print_insn_mnem = lambda ea: {0x1000: "mov", 0x1001: "ret"}.get(ea, "")
+    g.idc.prev_head = lambda ea: 0x1000 if ea == 0x1001 else g.idaapi.BADADDR
+    g.idc.generate_disasm_line = lambda ea, _flags: {0x1000: "mov rax, rbx", 0x1001: "ret"}.get(ea, "")
+    g.ida_lines.tag_remove = lambda text: text
+    assert g._decode_backward(0x1001, 3)[-1][1] == "ret"
+    assert g._format_gadget(g._decode_backward(0x1001, 3))["insns"] == 2
+
+
+def test_gadget_region_preparation_and_decode_failures(monkeypatch):
+    g = _load_gadgets()
+    auto = types.ModuleType("ida_auto")
+    monkeypatch.setitem(sys.modules, "ida_auto", auto)
+    assert g._prepare_exec_region(1, 2) is False
+    auto.auto_mark_range = lambda *_args: True
+    auto.AU_FINAL = 9
+    assert g._prepare_exec_region(1, 2) is True
+    delattr(auto, "auto_mark_range")
+    auto.auto_make_code = lambda *_args: True
+    assert g._prepare_exec_region(1, 2) is True
+    auto.auto_make_code = lambda *_args: (_ for _ in ()).throw(RuntimeError("auto"))
+    assert g._prepare_exec_region(1, 2) is False
+
+    g.idc.next_head = lambda *_args: (_ for _ in ()).throw(RuntimeError("heads"))
+    assert g._region_has_heads(1, 2) is False
+    monkeypatch.setattr(g, "_get_exec_segments", lambda _addr: [(1, 2)])
+    assert g._exec_region_has_heads(None) is False
+    ua = types.ModuleType("ida_ua")
+    monkeypatch.setitem(sys.modules, "ida_ua", ua)
+    assert g._raw_decode_insn(1) is None
+    ua.insn_t = lambda: types.SimpleNamespace(size=0, get_canon_mnem=lambda: "")
+    ua.decode_insn = lambda *_args: 0
+    assert g._raw_decode_insn(1) is None
+
+
+def test_gadget_shellcode_mitigations_and_seh_modes(monkeypatch):
+    g = _load_gadgets()
+    g.idaapi.f_PE = 10
+    g.idaapi.f_ELF = 11
+    g.idaapi.f_MACHO = 12
+    segments = {
+        1: _Seg(0x1000, 0x1100, 6, 2),
+        2: _Seg(0x2000, 0x2100, 4, 2),
+        3: None,
+    }
+    monkeypatch.setattr(g, "_compat", types.SimpleNamespace(
+        get_segment=segments.get,
+        get_segment_perm=lambda ea: {1: 6, 2: 4, 3: 0}.get(ea, 0),
+        get_segment_type=lambda ea: 2 if ea == 1 else 0,
+        get_segment_name=lambda ea: {1: ".text", 2: ".data"}.get(ea, ""),
+        get_func_start=lambda ea: ea,
+    ))
+    g.idautils.Segments = lambda: iter([1, 2, 3])
+    g.idaapi.SEGPERM_WRITE = 2
+    g.idaapi.SEGPERM_EXEC = 4
+    g.idaapi.SEGPERM_READ = 1
+    g.idaapi.SEG_CODE = 2
+    assert len(g._find_shellcode_space(None, 10, 5, None)) == 1
+    monkeypatch.setattr(g, "validate_addr", lambda _addr: (0x3000, None))
+    assert g._find_shellcode_space("0x3000", 10, 5, None) == []
+    monkeypatch.setattr(g, "_inf_filetype_id", lambda: 999)
+    assert g._detect_mitigations(None, 1, 1, None)["format"] == "unknown"
+
+    monkeypatch.setattr(g, "_inf_filetype_id", lambda: g.idaapi.f_PE)
+    g.idaapi.get_imagebase = lambda: 0x400000
+    g.ida_bytes.get_dword = lambda _ea: 0x40
+    g.ida_bytes.get_word = lambda _ea: 0x20B
+    g.idc.get_name_ea_simple = lambda name: 0x5000 if name == "__security_cookie" else g.idaapi.BADADDR
+    pe = g._detect_mitigations(None, 1, 1, None)
+    assert pe["format"] == "PE" and pe["stack_cookies"] is True
+    g.ida_bytes.get_word = lambda _ea: (_ for _ in ()).throw(RuntimeError("header"))
+    assert g._detect_mitigations(None, 1, 1, None)["pe_parse_error"] is True
+
+    monkeypatch.setattr(g, "_inf_filetype_id", lambda: g.idaapi.f_ELF)
+    monkeypatch.setattr(g, "_compat", types.SimpleNamespace(
+        get_segment=lambda ea: _Seg(0, 1, 0, 0),
+        get_segment_name=lambda ea: ".got.plt" if ea == 1 else ".text",
+        get_segment_perm=lambda ea: 2 if ea == 1 else 4,
+    ))
+    g.idautils.Segments = lambda: iter([1, 2])
+    g.idc.get_name_ea_simple = lambda _name: g.idaapi.BADADDR
+    g.idaapi.get_imagebase = lambda: 0
+    g.idautils.Names = lambda: iter([(0x1, "__memcpy_chk")])
+    elf = g._detect_mitigations(None, 1, 1, None)
+    assert elf["format"] == "ELF" and elf["RELRO"] == "partial" and elf["FORTIFY_SOURCE"] is True
+
+    monkeypatch.setattr(g, "_inf_filetype_id", lambda: g.idaapi.f_MACHO)
+    g.idautils.Names = lambda: iter([])
+    macho = g._detect_mitigations(None, 1, 1, None)
+    assert macho["format"] == "Mach-O" and macho["stack_cookies"] is False
+
+    monkeypatch.setattr(g, "_get_arch", lambda: "x86")
+    seh_seg = _Seg(0x1000, 0x1010, 4, 2)
+    monkeypatch.setattr(g, "_compat", types.SimpleNamespace(
+        get_segment=lambda _ea: seh_seg,
+        get_segment_perm=lambda _ea: 4,
+        get_segment_type=lambda _ea: 2,
+        get_func_start=lambda ea: ea,
+    ))
+    g.idautils.Segments = lambda: iter([0x1000])
+    g.idc.print_insn_mnem = lambda _ea: "push"
+    g.idc.generate_disasm_line = lambda ea, _flags: "push handler" if ea == 0x1000 else "push dword ptr fs:[0]"
+    g.ida_lines.tag_remove = lambda text: text
+    g.idc.next_head = lambda ea: 0x1004 if ea == 0x1000 else g.idaapi.BADADDR
+    g.idc.prev_head = lambda _ea: 0x1000
+    g.idc.get_operand_value = lambda _ea, _op: 0x7000
+    g.ida_funcs.get_func_name = lambda _ea: "handler_fn"
+    assert g._find_seh_handlers(None, 10, 5, None)
+    monkeypatch.setattr(g, "_get_arch", lambda: "arm64")
+    assert g._find_seh_handlers(None, 10, 5, None) == []
+
+
+def test_gadget_pivot_dispatch_and_chain_assessment(monkeypatch):
+    g = _load_gadgets()
+    monkeypatch.setattr(g, "_get_exec_segments", lambda _addr: [])
+    for arch in ("x64", "arm64", "mips", "ppc", "riscv64", "unknown"):
+        monkeypatch.setattr(g, "_get_arch", lambda arch=arch: arch)
+        assert isinstance(g._suggest_pivot_chains(None, 50, 5, None), dict)
+
+    monkeypatch.setattr(g, "_get_arch", lambda: "x64")
+    monkeypatch.setattr(g, "_exec_region_has_heads", lambda _addr: True)
+    monkeypatch.setattr(g, "_score_gadgets_behavior", lambda *_args: None)
+    monkeypatch.setitem(g._ACTIONS, "rop", lambda *args, **kwargs: [{"gadget": "pop rdi ; ret"}])
+    assert g.gadgets("rop", limit=1)["count"] == 1
+    g._find_shellcode_space = lambda *_args: ["region"]
+    assert g.gadgets("shellcode_space")["regions"] == "region"
+    g._detect_mitigations = lambda *_args: {"ASLR": False}
+    assert g.gadgets("mitigations")["mitigations"]["ASLR"] is False
+    g._find_seh_handlers = lambda *_args: ["handler"]
+    assert g.gadgets("seh_handlers")["count"] == 1
+    g._suggest_pivot_chains = lambda *_args: {"pop": {"count": 2}}
+    assert g.gadgets("pivot_chains")["total_gadgets"] == 2
+    g._classify_gadget_chain = lambda *_args: {"ok": True, "assessment": "LOW"}
+    assert g.gadgets("classify_chain")["assessment"] == "LOW"
+    assert g.gadgets("semantic_find")["code"] == "INVALID_ARGS"
+    assert g.gadgets("not-real")["code"] == "INVALID_ARGS"

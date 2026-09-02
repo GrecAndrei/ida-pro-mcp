@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -38,7 +39,6 @@ from _isolated_repo_loader import install_common_stub, load_tool_module  # noqa:
 
 import ida_pro_mcp.services  # noqa: E402
 
-install_common_stub()
 # Collection-time load pulls numpy in once; each test re-imports the module
 # fresh (the conftest purges ida_mcp.tools.* submodules between tests).
 load_tool_module("blackboard")
@@ -291,6 +291,54 @@ def test_crawler_probe_swallows_rpc_failures(bb):
     assert probe.xrefs_to("0x401000") == []
     assert probe.symbols("main") == []
     assert probe.function_probe("0x401000")["callees"] == []
+
+
+def test_crawler_probe_parsers_and_direct_ida_mode(monkeypatch, bb):
+    assert bb._probe_addr(0) == "0x0"
+    assert bb._probe_addr(" 0x0000ABCD ") == "0xabcd"
+    assert bb._probe_addr("symbol") == "symbol"
+    assert bb._probe_addr("   ") == ""
+    assert bb.CrawlerProbe._parse_xref_lines("\n0x10 code fn\n0x20 data other", 1) == [
+        {"addr": "0x10", "kind": "code", "name": "fn"}
+    ]
+    assert bb.CrawlerProbe._parse_xref_lines(None, 4) == []
+    assert bb.CrawlerProbe._parse_function_items(
+        {"items": [{"addr": "0x20", "name": "fn"}, None, {"ea": 0x30}]}, 2
+    ) == [
+        {"addr": "0x20", "name": "fn"},
+        {"addr": "0x30", "name": "0x30"},
+    ]
+
+    ida_mcp = types.ModuleType("ida_mcp")
+    ida_mcp.__path__ = []
+    compat = types.ModuleType("ida_mcp.compat")
+
+    def get_func_start(ea):
+        return {0x1000: 0x1000, 0x1010: 0x1000, 0x2020: 0x2000, 0x3030: 0x3000}.get(ea)
+
+    compat.get_func_start = get_func_start
+    ida_mcp.compat = compat
+    monkeypatch.setitem(sys.modules, "ida_mcp", ida_mcp)
+    monkeypatch.setitem(sys.modules, "ida_mcp.compat", compat)
+    monkeypatch.setattr(sys.modules["ida_funcs"], "get_func_name", lambda ea: {0x1000: "main", 0x2000: "callee"}.get(ea, ""), raising=False)
+    monkeypatch.setattr(
+        sys.modules["idautils"],
+        "XrefsTo",
+        lambda _ea, _flow: [types.SimpleNamespace(frm=0x1010, iscode=True), types.SimpleNamespace(frm=0x2020, iscode=False)],
+        raising=False,
+    )
+    monkeypatch.setattr(sys.modules["idautils"], "Functions", lambda: [0x1000, 0x2000], raising=False)
+    monkeypatch.setattr(sys.modules["idautils"], "FuncItems", lambda _ea: [0x1000], raising=False)
+    monkeypatch.setattr(
+        sys.modules["idautils"],
+        "XrefsFrom",
+        lambda _ea, _flow: [types.SimpleNamespace(to=0x2020, iscode=True), types.SimpleNamespace(to=0x3030, iscode=False)],
+        raising=False,
+    )
+    probe = bb.CrawlerProbe()
+    assert probe.xrefs_to("0x1000", limit=2)[0]["name"] == "main"
+    assert probe.symbols("main") == [{"addr": "0x1000", "name": "main"}]
+    assert probe.function_probe("0x1000")["callees"] == [{"addr": "0x2000", "name": "callee"}]
 
 
 # ---------------------------------------------------------------------------

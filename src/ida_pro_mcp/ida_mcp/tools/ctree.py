@@ -374,7 +374,7 @@ def _ctree_build_logic_graph(cfunc, max_nodes=1200):
 def ctree(
     action: Annotated[Literal["get", "traverse", "find_calls", "find_vars", "find_strings", "find_conditions", "get_logic_flow", "dominance_map", "var_dependency_graph"],
                       "Action: get|traverse|find_calls|find_vars|find_strings|find_conditions|get_logic_flow|dominance_map|var_dependency_graph"],
-    addr: Annotated[str, "Address of function to analyze"],
+    addr: Annotated[Optional[str], "Address of function to analyze"] = None,
     query: Annotated[Optional[str], "Filter pattern (regex/glob/substring/semantic auto-detected; for find_* actions)"] = None,
     depth: Annotated[int, "Max traversal depth"] = 10,
     **kwargs,

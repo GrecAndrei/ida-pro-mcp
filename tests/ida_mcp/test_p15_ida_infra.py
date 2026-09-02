@@ -45,6 +45,24 @@ def _load_standalone(relpath: str, name: str):
     return mod
 
 
+def _run_worker(fn):
+    result = {}
+
+    def run():
+        try:
+            result["value"] = fn()
+        except BaseException as exc:  # surfaced in the calling thread
+            result["error"] = exc
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    thread.join(timeout=10)
+    assert not thread.is_alive(), "worker did not terminate"
+    if "error" in result:
+        raise result["error"]
+    return result.get("value")
+
+
 def _register_ida_mcp_pkg():
     """Register ``ida_pro_mcp.ida_mcp`` as a stub package pointing at the real
     source dir so standalone loads can resolve ``ida_pro_mcp.ida_mcp.*``
@@ -420,6 +438,104 @@ def test_sync_timeout_env_knob(monkeypatch):
     assert sync._sync_timeout() == 30.0
 
 
+def test_sync_kernel_version_and_batch_fallback_edges():
+    sync, _ = _load_sync_with_cache()
+    sync.idaapi.get_kernel_version = lambda: "9"
+    assert sync._parse_kernel_version() == (9, 0)
+    assert sync.IDAError("message").message == "message"
+
+    del sync.idaapi.is_batch
+    sync.ida_kernwin.cvar = None
+    assert sync._is_batch() is False
+
+
+def test_sync_wrapper_handles_bypass_batch_invalid_mode_and_sdk_exception():
+    sync, _ = _load_sync_with_cache()
+    sync.idaapi.is_batch = lambda: False
+    sync.ida_kernwin.execute_sync = lambda fn, flags=0: fn()
+    assert sync._sync_wrapper(lambda: {"main": True}, sync.IDASafety.SAFE_READ) == {"main": True}
+
+    sync.idaapi.is_batch = lambda: True
+    result = _run_worker(lambda: sync._sync_wrapper(lambda: {"batch": True}, sync.IDASafety.SAFE_READ))
+    assert result == {"batch": True}
+
+    sync.idaapi.is_batch = lambda: False
+
+    def invalid():
+        return sync._sync_wrapper(lambda: None, sync.IDASafety.SAFE_NONE)
+
+    with pytest.raises(sync.IDASyncError, match="Invalid safety mode"):
+        _run_worker(invalid)
+
+    def raises():
+        raise ValueError("from IDA callback")
+
+    with pytest.raises(ValueError, match="from IDA callback"):
+        _run_worker(lambda: sync._sync_wrapper(raises, sync.IDASafety.SAFE_READ))
+
+
+def test_sync_wrapper_timeout_does_not_wait_forever(monkeypatch):
+    sync, _ = _load_sync_with_cache()
+    sync.idaapi.is_batch = lambda: False
+    sync.ida_kernwin.execute_sync = lambda _fn, _flags=0: None
+    monkeypatch.setattr(sync, "_sync_timeout", lambda: 0.001)
+
+    with pytest.raises(sync.IDASyncError, match="timed out"):
+        _run_worker(lambda: sync._sync_wrapper(lambda: None, sync.IDASafety.SAFE_READ))
+
+
+def test_sync_cache_hit_non_dict_and_legacy_write_invalidation(monkeypatch):
+    sync, cache = _load_sync_with_cache()
+    cache.TOOL_CACHE.clear()
+
+    @sync.idaread
+    def read(addr, count=10):
+        return {"ok": True, "addr": addr, "count": count}
+
+    first = read("0x401000", count=10)
+    second = read(0x401000)
+    assert "_cache_hit" not in first
+    assert second["_cache_hit"] is True
+    assert second["addr"] == "0x401000"
+
+    @sync.idaread
+    def scalar(value):
+        return value
+
+    scalar("value")
+    assert scalar("value") == "value"
+
+    class LegacyCache:
+        def __init__(self):
+            self.invalidated = False
+
+        def invalidate_all(self):
+            self.invalidated = True
+
+    legacy = LegacyCache()
+    monkeypatch.setattr(sync, "_tool_cache", lambda: legacy)
+
+    @sync.idawrite
+    def write(value):
+        return {"ok": True, "value": value}
+
+    assert write("x")["ok"] is True
+    assert legacy.invalidated is True
+
+
+def test_sync_cache_key_signature_fallbacks(monkeypatch):
+    sync, _ = _load_sync_with_cache()
+
+    def tool(addr, count=10):
+        return addr, count
+
+    assert sync._signature_defaults(tool) == {"count": 10}
+    monkeypatch.setattr(sync.inspect, "signature", lambda _fn: (_ for _ in ()).throw(TypeError("opaque")))
+    assert sync._signature_defaults(object()) == {}
+    key = sync._cache_key_kwargs(object(), {"x": "1"}, ("positional",))
+    assert key["_arg_0"] == "positional"
+
+
 # ---------------------------------------------------------------------------
 # taint_registry: clean command_injection bucket + no dual-classified sinks
 # ---------------------------------------------------------------------------
@@ -637,3 +753,63 @@ def test_host_check_accepts_ipv6_loopback():
     h = _make_handler(headers={"Host": "evil.com:8080"})
     assert cls._check_host(h) is False
     assert h.sent["code"] == 403
+
+
+def test_mcp_http_policy_rendering_and_config_get(monkeypatch):
+    mod = _load_mcp_http_methods()
+    cls = mod.IdaMcpHttpRequestHandler
+    h = _make_handler()
+    h.mcp_server.cors_localhost = "LOCAL"
+
+    monkeypatch.setattr(mod, "config_json_get", lambda key, default: "unrestricted" if key == "cors_policy" else default)
+    cls.update_cors_policy(h)
+    assert h.mcp_server.cors_allowed_origins == "*"
+    monkeypatch.setattr(mod, "config_json_get", lambda key, default: "local" if key == "cors_policy" else default)
+    cls.update_cors_policy(h)
+    assert h.mcp_server.cors_allowed_origins == "LOCAL"
+    monkeypatch.setattr(mod, "config_json_get", lambda key, default: "direct" if key == "cors_policy" else default)
+    cls.update_cors_policy(h)
+    assert h.mcp_server.cors_allowed_origins is None
+
+    rendered = []
+    h.send_response = lambda code: rendered.append(("response", code))
+    h.send_header = lambda key, value: rendered.append((key, value))
+    h.end_headers = lambda: rendered.append(("end",))
+    h.wfile = types.SimpleNamespace(write=lambda body: rendered.append(("body", body)))
+    cls._send_html(h, 200, "<h1>config</h1>")
+    assert ("response", 200) in rendered
+    assert any(item[0] == "X-Frame-Options" and item[1] == "DENY" for item in rendered)
+    assert ("body", b"<h1>config</h1>") in rendered
+
+
+def test_mcp_http_get_and_post_dispatch_boundaries(monkeypatch):
+    from tests.ida_mcp.test_swarm_t18_zeromcp import _load_mcp_http, _make_config_handler
+
+    mod, _ = _load_mcp_http()
+    cls = mod.IdaMcpHttpRequestHandler
+    h = _make_config_handler(mod)
+    h._local_endpoints = mod.IdaMcpHttpRequestHandler._local_endpoints.__get__(h)
+    h._check_host = mod.IdaMcpHttpRequestHandler._check_host.__get__(h)
+    h._check_origin = mod.IdaMcpHttpRequestHandler._check_origin.__get__(h)
+    h.path = "/config.html"
+    h.headers["Host"] = "127.0.0.1:13337"
+    h._handle_config_get = lambda: setattr(h, "config_get_called", True)
+    cls.do_GET(h)
+    assert h.config_get_called is True
+
+    bad = _make_config_handler(mod)
+    bad._local_endpoints = mod.IdaMcpHttpRequestHandler._local_endpoints.__get__(bad)
+    bad._check_host = mod.IdaMcpHttpRequestHandler._check_host.__get__(bad)
+    bad.path = "/config.html"
+    bad.headers["Host"] = "evil.example"
+    cls.do_GET(bad)
+    assert any(item[0] == "error" and item[1] == 403 for item in bad.sent)
+
+    post = _make_config_handler(mod, body=b"cors_policy=direct")
+    post._local_endpoints = mod.IdaMcpHttpRequestHandler._local_endpoints.__get__(post)
+    post._check_origin = mod.IdaMcpHttpRequestHandler._check_origin.__get__(post)
+    post.path = "/config"
+    post.headers["Origin"] = "http://127.0.0.1:13337"
+    post._handle_config_post = lambda: setattr(post, "config_post_called", True)
+    cls.do_POST(post)
+    assert post.config_post_called is True

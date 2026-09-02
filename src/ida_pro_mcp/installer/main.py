@@ -13,6 +13,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+from . import runtime as _runtime
 from .clients import (
     backup_file,
     configure_clients,
@@ -53,6 +54,8 @@ from .runtime import (
     setup_runtime_environment,
     stage_sigs,
 )
+
+_sha256_file = _runtime._sha256_file
 
 
 class UI:
@@ -1100,6 +1103,7 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         only=set(args.only),
         disable_policy=args.disable_policy,
         with_r2=args.with_r2,
+        with_corpus=args.with_corpus,
         sigs_dir=args.sigs,
         ida_runtime=args.ida_runtime or "idat",
         ida_binary_path=args.ida_binary_path,

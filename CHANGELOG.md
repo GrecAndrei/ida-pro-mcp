@@ -2,10 +2,182 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
-## 2026-09-01 — verified existing skill links
+## 2026-09-02 — PR-work coverage checkpoint
 
-- Reuse an existing Codex skill link when its generated contents are current,
-  including installs running from a snapshot or packaged source.
+ - Declared the development tokenizer dependency required by the occupancy
+   report tests and standalone CI collection.
+ - Made the embedding timeout recycling test deterministic on freshly booted
+   CI runners by explicitly placing it outside activation grace.
+ - Fixed PR CI lint failures in the session-gate and IDA-side RPC surface
+   tests.
+ - Expanded cross-mode offline coverage for dispatch continuations,
+   annotation/comment management, code-helper scanners, and architecture
+   inference.
+ - Added remaining cross-mode boundary coverage for session actions and search
+   combinators.
+ - Expanded installer runtime and CLI coverage across process failures,
+   archive safety, signature staging, venv source modes, wizard choices,
+   embedder doctor outcomes, and packaged client configuration.
+ - Expanded runtime lifecycle, ownership, diagnostics, macro, archive, and
+   checkpoint boundary coverage.
+ - Added search-combinator parser, cache, index, and degradation-mode tests.
+ - Added blackboard governance, filesystem, evidence, memory, and proposal
+   lifecycle boundary tests.
+ - Added type-library member-editing and compatibility failure-mode tests.
+ - Expanded code-helper coverage for sparse disassembly windows, conservative
+   API prefilters, detector safety limits, and SDK failure fallbacks.
+ - Expanded server-script coverage for startup budgets, authenticated loading,
+   and degraded pre-analysis behavior.
+ - Expanded session-host coverage for state caching, runtime observability,
+   cleanup, and declarative action fallbacks.
+ - Added session analysis-gate coverage for watcher confirmation, teardown
+   races, background spawn errors, architecture inference, and switch paths.
+ - Added dispatch coverage for RPC timeout/connection failures, wall-clock
+   termination, policy/guardrail faults, post-processing failures, and path
+   safety boundaries.
+ - Expanded client-state coverage for runtime-table failures, connection
+   teardown and adoption, stale leases, and SSO scope/lifecycle rejection.
+ - Expanded runtime-lease coverage for signal races, process-tree identity
+   failures, heartbeat transitions, shutdown faults, and registration errors.
+ - Added response-pipeline coverage for bounded address collection, malformed
+   output filters, session-scoped blackboard lookup, and enrichment fallbacks.
+ - Added server-state coverage for request properties, scoped insight-cache
+   eviction, persistence failures, and uninitialized gate registries.
+ - Expanded compact-response coverage for semantic flags, table conversion,
+   dropped values, and opaque batch entries.
+ - Expanded bootstrap lifecycle coverage for mitigation, autopilot,
+   calibration, disputes, reweighting, and persisted outcome paths.
+ - Expanded code-helper coverage for dataflow, firmware signals, decompiler
+   diagnostics, structured disassembly, argument tracing, and detector scans.
+ - Added deeper code-helper coverage for indirect ctree calls, computed sizes,
+   constant-load string fallbacks, and disassembly recovery paths.
+ - Added code-helper boundary coverage for nested ctree safety checks,
+   pcrel string materialization, and tight-window recovery.
+ - Expanded session administration coverage for narrative limits, validation,
+   bulk tagging/deletion cleanup, snapshots, merges, macro registry behavior,
+   conditional workflow branches, and recent-workset options.
+ - Expanded session-state coverage for open-argument conflicts and aliases,
+   analysis polling, enriched open results, discovery/get/note visibility, and
+   legacy coverage-cache parsing and eviction.
+ - Expanded support-helper coverage for GGUF scalar/array parsing and profile
+   aliases, Sigma rule filtering and archive handling, and audit hashing,
+   redaction, rotation, pruning, and serialization failure paths.
+ - Expanded runtime coverage for live-process snapshots, state/RPC gates,
+   checkpoint failures, teardown lock handling, IDA argument fallbacks, and
+   backup/sidecar cleanup errors.
+ - Expanded multi-session coverage for malformed persisted groups, cache-write
+   failures, export/import aliases, cross-session resolution and decompilation,
+   deep xrefs, detailed status, and uninitialized helper state.
+ - Expanded session coverage for fresh/reused opens, inferred architecture
+   recommendations, runtime failure envelopes, skill and triage actions,
+   analogy application, activity and hypothesis tracking, macro execution,
+   workflow validation, and recent-workset boundaries.
+ - Expanded fake-ctree vulnerability coverage for allocator and format
+   argument conventions, prototype mismatches, UAF/NULL handling, call
+   injection patterns, CFG reachability, stack-frame findings, writable
+   globals, suspicious shared strings, shellcode markers, and processor modes.
+ - Expanded gadget coverage across architecture-specific pivot catalogs,
+   RISC-V parser and decoder fallbacks, public dispatch modes, raw/head scans,
+   mitigation persistence, classifier failures, and exploit-chain blackboard
+   safeguards.
+ - Added offline architecture coverage for RISC-V GP reference repair,
+   stale/unmapped target handling, processor-option fallback, reanalysis
+   scheduling, and signed immediate detection.
+ - Added offline type-action coverage for public aliases, parser and apply
+   failures, struct/enum validation, inference/read/vtable guards, and TIL
+   lifecycle errors.
+ - Added offline search-combinator coverage for boolean composition, call-graph
+   path and reachability, direct outlier fallbacks, semantic and vulnerability
+   guards, and detector primitive limits.
+ - Added offline emulation coverage for backend absence and fallback
+   selection, debugger event pumping, architecture register helpers,
+   rejected lifecycle operations, memory byte fallback, and teardown errors.
+ - Added offline coverage for code-helper decompiler diagnostics, firmware
+   constant/string fallbacks, annotation comment recovery, and detector
+   metadata failure and limit paths.
+ - Expanded deterministic offline coverage across the host/IDA bridge, public
+   operation dispatch, response handling, type and analysis surfaces, gadget
+   discovery, retrieval, and cross-mode test isolation. The corrected PR branch
+  current branch-aware source coverage snapshot measures 87.25%;
+  installer discovery, installer mode contracts, and bridge startup/runtime
+  failure paths received another focused test pass. Opt-in live-IDA tests
+   remain separately gated.
+ - Added cross-mode tests for context indexing, persistence, telemetry,
+   housekeeping, enrichment failure handling, compaction, and singleton
+   lifecycle behavior.
+ - Added analysis-helper coverage for raw-binary detection, mapped-range
+   fallbacks, executable-segment scoring, auto-analysis scheduling, and entry
+   point bootstrapping.
+ - Added session-action coverage for bulk lifecycle operations, skills,
+   analogies, hypotheses, activity, recent worksets, macros, and conditional
+   workflow steps.
+ - Hardened installer state discovery, runtime lease identity checks, bounded
+   metadata reads, enum compatibility, and constant-scan progress handling
+   while keeping this PR focused on coverage and stability.
+ - Added focused offline matrices for debug symbols, deep imports, query
+   parsing/execution, semantic matching, synchronization/cache behavior,
+   batch macros, bootstrap-session validation, and gadget architecture,
+   mitigation, and dispatch modes, plus function-management, decompiler
+   helper, and compositional-search paths. Also fixed comparison aliases such
+   as `neq` being parsed as the shorter `ne` operator.
+ - Added offline coverage for the public type operation's inspection,
+   declaration, local/global/function application, inference, structured reads,
+   propagation, dependency graphs, vtables, member editing, enum editing, and
+   TIL carry paths, including IDA 9 fallback behavior and explicit failures.
+ - Added offline coverage for analysis option rebasing, processor and endian
+   selection, loader-option persistence, code/data conversion, analysis flags,
+   offset creation, bounded reanalysis, raw mapped-range discovery, executable
+   segment scoring, and scoped auto-analysis waits.
+ - Added host-runtime coverage for framed localhost RPC, auth-token injection,
+   fragmented responses, queue contention, bounded retries, payload limits,
+   process termination, library-init diagnosis, IDA discovery, backend command
+   construction, safe rendering, and IDB backup paths.
+ - Hardened the memory filesystem boundary by rejecting symlink components before
+   path canonicalization, and added dispatch coverage for filesystem,
+   bookmark, truncation, plugin, policy, and strict-gate modes.
+ - Isolated the expanded fake-IDB coverage modules so their temporary SDK
+   imports cannot affect unrelated tests in the full suite.
+ - Restored the shared compatibility module after import-surface fixtures so
+   fake segment lookups cannot leak across IDA-side test modes.
+ - Extended the central test isolation boundary to restore compatibility
+   helpers alongside SDK stubs for the complete offline suite.
+ - Made the TIL export error-path fixture remove both supported ordinal-count
+   API spellings, keeping it valid with the complete fake-IDB harness.
+ - Added offline CLI boundary coverage for stdio framing, daemon ownership,
+   background jobs, raw JSON-RPC, and actionable process/socket failures.
+ - Added native-backend coverage for ctypes loading, availability selection,
+   cache generations, and failure recovery, plus r2 coverage for parser,
+   environment, subprocess, disassembly, bininfo, and pointer-scan boundaries.
+ - Added reranker lifecycle coverage for state/profile resolution, lease
+   identity rejection, malformed responses, cache waiters, deadline handling,
+   and subprocess recovery paths.
+ - Added threat-corpus boundary coverage for malformed and normalized CWE,
+   ATT&CK, and YARA inputs, source download/build failures, cache fallbacks,
+   and singleton recheck behavior.
+ - Added cross-platform runtime coverage for process-tree failure handling,
+   psutil filtering, Windows WMIC fallback, Linux `/proc` discovery, and
+   live-runtime protection.
+ - Added intelligence-core coverage for GPU and model discovery fallbacks,
+   shared embedder lease probing, idle shutdown state, and classifier cache
+   generation edges.
+ - Added gadget-discovery boundary coverage for cross-architecture terminators,
+   raw/head scan selection, write-where and stack-pivot shapes, pivot-chain
+   fallbacks, and exploit-assessment modes.
+ - Added intelligence-core coverage for model/state discovery fallbacks,
+   conservative lease validation and retirement, Windows lock handling, GPU
+   startup selection, embedding-cache waiters, and classifier cache/report
+   behavior.
+ - Added embedding-index coverage for document/token boundary handling,
+   corrupt-row reloads, fail-soft metadata access, vector/search edge cases,
+   structured API filtering, and lexical-only hybrid results.
+
+- Expanded offline and opt-in live coverage across the public and legacy MCP
+  surfaces, and stabilized batch-history and client-path tests.
+
+## 2026-09-01 — checkout-backed skill installation
+
+- Reuse the Codex skill symlink when it points to the active checkout, while
+  continuing to reject unrelated symlink redirects.
 
 ## 2026-08-27 — 1.0.0a1 repository cleanup and retrieval foundations
 
