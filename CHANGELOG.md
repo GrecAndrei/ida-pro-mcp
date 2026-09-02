@@ -10,6 +10,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added cross-mode coverage for IDA analysis controls, raw entry seeding,
    bounded auto-analysis, snapshot/undo fallbacks, search compatibility, type
    helpers, and host runtime protocol boundaries.
+ - Added debugger/emulation fallback matrices and IDA bridge startup,
+   authentication, protocol, and main-thread dispatch coverage, including
+   order-independent fake-IDB setup for the cross-mode round-trip tests.
 
 ## 2026-09-02 — Multi-agent configuration and skill system redesign
 
