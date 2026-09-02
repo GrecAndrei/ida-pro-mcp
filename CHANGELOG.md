@@ -7,6 +7,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added offline boundary coverage for host response helpers, policy and audit
    paths, blackboard trace handling, installer runtime modes, download guards,
    platform process selection, venv recovery, and bundled-runtime setup.
+ - Added cross-mode coverage for IDA analysis controls, raw entry seeding,
+   bounded auto-analysis, snapshot/undo fallbacks, search compatibility, type
+   helpers, and host runtime protocol boundaries.
 
 ## 2026-09-02 — Multi-agent configuration and skill system redesign
 
