@@ -152,7 +152,7 @@ def install_skills(
 
 
 def default_skill_dirs() -> list[Path]:
-    """Standard skill directories for Claude Code and OpenCode."""
+    """Standard skill directories across universal agent standards, Claude Code, OpenCode, OpenClaw, Codex, and Pi."""
     import os
 
     home = Path.home()
@@ -163,7 +163,18 @@ def default_skill_dirs() -> list[Path]:
             )
         )
     )
-    return [
+    targets = [
+        home / ".agents" / "skills",
         home / ".claude" / "skills",
         xdg / "opencode" / "skills",
     ]
+    candidates = [
+        (home / ".codex", home / ".codex" / "skills"),
+        (home / ".openclaw", home / ".openclaw" / "workspace" / "skills"),
+        (home / ".pi", home / ".pi" / "agent" / "skills"),
+    ]
+    for parent, skill_dir in candidates:
+        if parent.exists():
+            targets.append(skill_dir)
+
+    return targets

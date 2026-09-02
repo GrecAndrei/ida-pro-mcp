@@ -2,6 +2,25 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-09-02 — Multi-agent configuration, skill redesign & self-extracting bundles
+
+ - Expanded client configuration support for 8 additional AI coding agent environments:
+   OpenClaw (JSON5 nested `mcp.servers`), Pi Coding Agent (`mcpServers`), Hermes
+   Agent (YAML `mcp_servers`), Prime Agent (`mcpServers`), modern Cursor paths,
+   ZCode (`mcpServers`), Kimi Code (`mcpServers`), and MiniMax Code (`mcpServers`).
+ - Added YAML configuration parser/updater (`update_yaml_config`) and nested key
+   support to `src/ida_pro_mcp/installer/clients.py`, along with client removal logic.
+ - Redesigned skill distribution in `installer/skills/__init__.py` to follow the open
+   Agent Skills specification, automatically populating universal discovery targets
+   (`~/.agents/skills/`, `~/.claude/skills/`, `~/.codex/skills/`, `~/.openclaw/`, and `~/.pi/`).
+ - Added bundled runtime detection and executable launcher shims (`bin/ida-pro-mcp`)
+   to `installer/runtime.py`.
+ - Added `--auto` non-interactive installation and clean `--uninstall` support in
+   `installer/main.py`.
+ - Added `scripts/package_bundle.py` for building standalone self-extracting installers
+   across Linux (`.sh`), macOS (`.command`), and Windows (`.bat`).
+ - Integrated self-extracting bundle generation into `.github/workflows/alpha-release.yml`.
+
 ## 2026-09-02 — PR-work coverage checkpoint
 
  - Declared the development tokenizer dependency required by the occupancy

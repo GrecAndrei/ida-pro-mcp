@@ -21,6 +21,7 @@ from ida_pro_mcp.installer.clients import (
     update_json_config,
     update_opencode_config,
     update_toml_config,
+    update_yaml_config,
 )
 from ida_pro_mcp.installer.common import InstallReport
 
@@ -175,3 +176,38 @@ def test_backup_and_rollback(tmp_path: Path) -> None:
     rollback_from_backups(report)
     assert json.loads(target.read_text(encoding="utf-8")) == {"original": True}
     assert not created.exists()
+
+
+def test_update_yaml_config(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.yaml"
+    report = InstallReport()
+    server_cfg = {"command": "python", "args": ["-m", "ida_pro_mcp"]}
+
+    ok = update_yaml_config(config_file, "ida-pro-mcp", server_cfg, report, dry_run=False, top_level_key="mcp_servers")
+    assert ok is True
+    assert config_file.is_file()
+    content = config_file.read_text(encoding="utf-8")
+    assert "mcp_servers" in content
+    assert "ida-pro-mcp" in content
+
+
+def test_update_json_nested_key_openclaw(tmp_path: Path) -> None:
+    config_file = tmp_path / "openclaw.json"
+    report = InstallReport()
+    server_cfg = {"command": "python", "args": ["-m", "ida_pro_mcp"]}
+
+    ok = update_json_config(
+        config_file,
+        "ida-pro-mcp",
+        server_cfg,
+        report,
+        dry_run=False,
+        nested_key="mcp.servers",
+    )
+    assert ok is True
+    assert config_file.is_file()
+    data = json.loads(config_file.read_text(encoding="utf-8"))
+    assert "mcp" in data
+    assert "servers" in data["mcp"]
+    assert "ida-pro-mcp" in data["mcp"]["servers"]
+    assert data["mcp"]["servers"]["ida-pro-mcp"]["command"] == "python"

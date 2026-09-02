@@ -74,6 +74,41 @@
         "unix": "{xdg_config}/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json"
       },
       "pick_existing": false
+    },
+    "OpenClaw": {
+      "paths": ["{home}/.openclaw/openclaw.json"],
+      "pick_existing": false,
+      "json": {"nested_key": "mcp.servers"}
+    },
+    "Pi Coding Agent": {
+      "paths": ["{home}/.pi/agent/mcp.json"],
+      "pick_existing": false,
+      "json": {"top_level_key": "mcpServers"}
+    },
+    "Hermes Agent": {
+      "paths": ["{home}/.hermes/config.yaml"],
+      "pick_existing": false,
+      "yaml": {"top_level_key": "mcp_servers"}
+    },
+    "Prime Agent": {
+      "paths": ["{home}/.prime/agent/settings.json"],
+      "pick_existing": false,
+      "json": {"top_level_key": "mcpServers"}
+    },
+    "ZCode": {
+      "paths": ["{home}/.zcode/cli/config.json"],
+      "pick_existing": false,
+      "json": {"top_level_key": "mcpServers"}
+    },
+    "Kimi Code": {
+      "paths": ["{home}/.kimi-code/mcp.json"],
+      "pick_existing": false,
+      "json": {"top_level_key": "mcpServers"}
+    },
+    "MiniMax Code": {
+      "paths": ["{home}/.minimax/mcp.json"],
+      "pick_existing": false,
+      "json": {"top_level_key": "mcpServers"}
     }
   }
 }

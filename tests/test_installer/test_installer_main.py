@@ -111,3 +111,28 @@ def test_main_bron_corpus(tmp_path: Path) -> None:
     with patch("ida_pro_mcp.installer.bron_corpus.download_bron_corpus", return_value={"built": True}):
         rc = main(["--with-corpus", "--dry-run"])
         assert rc == 0
+
+
+def test_parse_args_auto_and_uninstall() -> None:
+    opts_auto = parse_args(["--auto"])
+    assert opts_auto.yes is True
+    assert opts_auto.uninstall is False
+
+    opts_un = parse_args(["--uninstall"])
+    assert opts_un.uninstall is True
+
+
+def test_main_uninstall(tmp_path: Path) -> None:
+    install_root = tmp_path / "install"
+    bin_dir = install_root / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "ida-pro-mcp").write_text("shim")
+
+    with (
+        patch("ida_pro_mcp.installer.clients.remove_server_entry_from_clients", return_value=["Cursor"]),
+        patch("ida_pro_mcp.installer.discovery.detect_ida_installs", return_value=[]),
+        patch("ida_pro_mcp.installer.skills.default_skill_dirs", return_value=[tmp_path / "skills"]),
+    ):
+        rc = main(["--uninstall", "--install-root", str(install_root)])
+        assert rc == 0
+        assert not (bin_dir / "ida-pro-mcp").exists()

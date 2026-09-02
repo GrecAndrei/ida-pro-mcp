@@ -207,6 +207,7 @@ class InstallerOptions:
     allow_unverified_downloads: bool = False  # explicit supply-chain escape hatch
     with_bron_corpus: bool = False  # opt-in download of the optional threat corpus
     verify_bron_corpus: bool = False  # require per-source BRON SHA-256 env vars
+    uninstall: bool = False  # clean removal of plugins, client configs, and shims
 
 
 @dataclass

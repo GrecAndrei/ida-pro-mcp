@@ -1603,6 +1603,44 @@ def _remove_dev_pth(venv_dir: Path, report: InstallReport) -> None:
         report.add_step("dev_pth", "removed", f"removed live source pointer {pth_path}")
 
 
+def find_bundled_runtime(source_root: Path) -> Path | None:
+    """Return path to bundled python executable if running inside a self-contained bundle."""
+    candidates = [
+        source_root / "runtime",
+        source_root.parent / "runtime",
+        source_root.parent.parent / "runtime",
+    ]
+    for c in candidates:
+        if c.is_dir():
+            py_candidates = [
+                c / "bin" / "python3",
+                c / "bin" / "python",
+                c / "python.exe",
+                c / "Scripts" / "python.exe",
+            ]
+            for py in py_candidates:
+                if py.is_file() and (os.access(py, os.X_OK) or os.name == "nt"):
+                    return py
+    return None
+
+
+def create_launcher_shims(install_root: Path, python_exe: Path) -> Path:
+    """Create executable launcher shim in install_root / 'bin'."""
+    bin_dir = install_root / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        shim = bin_dir / "ida-pro-mcp.cmd"
+        content = f'@echo off\r\n"{python_exe}" -m ida_pro_mcp.host.server %*\r\n'
+        atomic_write_text(shim, content)
+        return shim
+    else:
+        shim = bin_dir / "ida-pro-mcp"
+        content = f'#!/bin/sh\nexec "{python_exe}" -m ida_pro_mcp.host.server "$@"\n'
+        atomic_write_text(shim, content)
+        shim.chmod(0o755)
+        return shim
+
+
 def setup_runtime_environment(
     install_root: Path,
     source_root: Path,
@@ -1610,14 +1648,22 @@ def setup_runtime_environment(
     dry_run: bool,
     report: InstallReport,
 ) -> Path:
+    install_root.mkdir(parents=True, exist_ok=True)
+    bundled_py = find_bundled_runtime(source_root)
+    if bundled_py is not None:
+        report.add_step("runtime", "bundled", str(bundled_py))
+        report.metadata["runtime_source"] = "bundled"
+        report.metadata["venv_python"] = str(bundled_py)
+        if not dry_run:
+            create_launcher_shims(install_root, bundled_py)
+        return bundled_py
+
     venv_dir = install_root / ".venv"
     reject_symlink_path(venv_dir, "runtime environment path")
     python_exe = _venv_python_exe(venv_dir)
     if dry_run:
         report.metadata["venv_python"] = str(python_exe)
         return python_exe
-
-    install_root.mkdir(parents=True, exist_ok=True)
 
     # If a previous venv exists and is healthy, reuse it.  This avoids the
     # Windows race where a long-lived venv's .exe handles keep `python -m venv`
@@ -1667,6 +1713,8 @@ def setup_runtime_environment(
             "import ida_pro_mcp.host.server, ida_pro_mcp.cli, requests, numpy, tomli_w; print('ok')",
         ]
     )
+    if not dry_run:
+        create_launcher_shims(install_root, python_exe)
     report.metadata["venv_python"] = str(python_exe)
     return python_exe
 def find_idalib_python_dir(ida_dir: str) -> str:

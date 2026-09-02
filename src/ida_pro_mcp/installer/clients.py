@@ -329,6 +329,7 @@ def update_json_config(
     dry_run: bool,
     *,
     top_level_key: str = "mcpServers",
+    nested_key: str = "",
     server_type: str = "",
 ) -> bool:
     _validate_config_path(path)
@@ -337,21 +338,35 @@ def update_json_config(
     except ConfigParseError as exc:
         report.add_error(str(exc))
         return False
-    # Some Copilot-family clients (VS Code Copilot Chat, Copilot CLI) use a
-    # "servers" top-level key instead of the classic "mcpServers", and expect
-    # local servers to declare "type": "stdio".  Writing under the wrong key
-    # makes the server silently invisible to the client.
-    if top_level_key in config and not isinstance(config[top_level_key], dict):
-        report.add_error(
-            f"Could not update {path}: top-level {top_level_key!r} must be an object. "
-            "Fix the syntax or remove the key before retrying."
-        )
-        return False
-    config.setdefault(top_level_key, {})
+
+    if nested_key:
+        keys = nested_key.split(".")
+        target_container = config
+        for k in keys:
+            if k in target_container and not isinstance(target_container[k], dict):
+                report.add_error(
+                    f"Could not update {path}: intermediate key {k!r} in {nested_key!r} must be an object. "
+                    "Fix the syntax or remove the key before retrying."
+                )
+                return False
+            target_container = target_container.setdefault(k, {})
+    else:
+        # Some Copilot-family clients (VS Code Copilot Chat, Copilot CLI) use a
+        # "servers" top-level key instead of the classic "mcpServers", and expect
+        # local servers to declare "type": "stdio".  Writing under the wrong key
+        # makes the server silently invisible to the client.
+        if top_level_key in config and not isinstance(config[top_level_key], dict):
+            report.add_error(
+                f"Could not update {path}: top-level {top_level_key!r} must be an object. "
+                "Fix the syntax or remove the key before retrying."
+            )
+            return False
+        target_container = config.setdefault(top_level_key, {})
+
     entry = dict(server_cfg)
     if server_type:
         entry["type"] = server_type
-    _upsert_server_entry(config[top_level_key], server_name, entry)
+    _upsert_server_entry(target_container, server_name, entry)
     _prepare_config_path(path, report, dry_run)
     if not dry_run:
         _atomic_write_text(path, json.dumps(config, indent=2))
@@ -431,6 +446,63 @@ def update_toml_config(path: Path, server_name: str, server_cfg: dict, report: I
     return True
 
 
+def update_yaml_config(
+    path: Path,
+    server_name: str,
+    server_cfg: dict,
+    report: InstallReport,
+    dry_run: bool,
+    *,
+    top_level_key: str = "mcp_servers",
+) -> bool:
+    try:
+        import yaml
+    except ImportError:
+        yaml = None
+
+    _validate_config_path(path)
+    config: dict = {}
+    if path.exists():
+        content = path.read_text(encoding="utf-8")
+        if content.strip():
+            if yaml is not None:
+                try:
+                    loaded = yaml.safe_load(content)
+                    if loaded is not None:
+                        if not isinstance(loaded, dict):
+                            report.add_error(f"Could not parse {path} as YAML: top-level must be a mapping.")
+                            return False
+                        config = loaded
+                except Exception as exc:
+                    report.add_error(f"Could not parse {path} as YAML: {exc}")
+                    return False
+            else:
+                try:
+                    config = json.loads(_strip_jsonc_comments(content))
+                except Exception as exc:
+                    report.add_error(f"Could not parse {path} (PyYAML not installed and not valid JSON): {exc}")
+                    return False
+
+    if top_level_key in config and not isinstance(config[top_level_key], dict):
+        report.add_error(
+            f"Could not update {path}: top-level {top_level_key!r} must be a mapping. "
+            "Fix the syntax or remove the key before retrying."
+        )
+        return False
+
+    config.setdefault(top_level_key, {})
+    _upsert_server_entry(config[top_level_key], server_name, server_cfg)
+    _prepare_config_path(path, report, dry_run)
+    if not dry_run:
+        if yaml is not None:
+            text = yaml.safe_dump(config, sort_keys=False)
+        else:
+            text = json.dumps(config, indent=2)
+        _atomic_write_text(path, text)
+        report.add_modified(path)
+    return True
+
+
 def _client_meta(source_root: Path) -> dict[str, dict]:
     """Return per-client metadata from client_configs.json keyed by client name."""
     return {name: (meta or {}) for name, meta in load_client_map(source_root).items()}
@@ -448,12 +520,17 @@ def configure_clients(
     meta_by_client = _client_meta(source_root)
     for client, path in get_config_paths(source_root).items():
         try:
+            client_dict = meta_by_client.get(client, {}) or {}
+            yaml_meta = client_dict.get("yaml")
+            json_meta = client_dict.get("json") or {}
             if client == "OpenCode":
                 ok = update_opencode_config(path, server_name, server_cfg, report, dry_run)
             elif path.suffix == ".toml":
                 ok = update_toml_config(path, server_name, server_cfg, report, dry_run)
+            elif path.suffix in (".yaml", ".yml") or yaml_meta is not None:
+                top_key = (yaml_meta or {}).get("top_level_key", "mcp_servers")
+                ok = update_yaml_config(path, server_name, server_cfg, report, dry_run, top_level_key=top_key)
             else:
-                json_meta = (meta_by_client.get(client, {}) or {}).get("json") or {}
                 ok = update_json_config(
                     path,
                     server_name,
@@ -461,6 +538,7 @@ def configure_clients(
                     report,
                     dry_run,
                     top_level_key=str(json_meta.get("top_level_key") or "mcpServers"),
+                    nested_key=str(json_meta.get("nested_key") or ""),
                     server_type=str(json_meta.get("type") or ""),
                 )
             if ok:
@@ -493,3 +571,91 @@ def rollback_from_backups(report: InstallReport) -> None:
         target = Path(value)
         if target.is_file() or target.is_symlink():
             target.unlink()
+
+
+def remove_server_entry_from_clients(
+    source_root: Path,
+    report: InstallReport,
+    dry_run: bool,
+    server_name: str = "ida-pro-mcp",
+) -> list[str]:
+    """Remove server_name from all client configurations."""
+    cleaned: list[str] = []
+    meta_by_client = _client_meta(source_root)
+    for client, path in get_config_paths(source_root).items():
+        if not path.exists():
+            continue
+        try:
+            if client == "OpenCode":
+                config = _load_json_config(path, allow_comments=True)
+                if "mcp" in config and isinstance(config["mcp"], dict) and server_name in config["mcp"]:
+                    del config["mcp"][server_name]
+                    _prepare_config_path(path, report, dry_run)
+                    if not dry_run:
+                        _atomic_write_text(path, json.dumps(config, indent=2))
+                        report.add_modified(path)
+                    cleaned.append(client)
+            elif path.suffix == ".toml":
+                try:
+                    import tomllib
+                except ImportError:
+                    import tomli as tomllib  # type: ignore
+                config = tomllib.loads(path.read_text(encoding="utf-8"))
+                if "mcp_servers" in config and isinstance(config["mcp_servers"], dict) and server_name in config["mcp_servers"]:
+                    del config["mcp_servers"][server_name]
+                    _prepare_config_path(path, report, dry_run)
+                    if not dry_run:
+                        try:
+                            import io
+
+                            import tomli_w
+                            buf = io.BytesIO()
+                            tomli_w.dump(config, buf)
+                            _atomic_write_bytes(path, buf.getvalue())
+                        except ImportError:
+                            _atomic_write_text(path, _toml_dump_simple(config))
+                        report.add_modified(path)
+                    cleaned.append(client)
+            elif path.suffix in (".yaml", ".yml") or (meta_by_client.get(client, {}) or {}).get("yaml") is not None:
+                try:
+                    import yaml
+                    content = path.read_text(encoding="utf-8")
+                    config = yaml.safe_load(content) or {}
+                    top_key = (meta_by_client.get(client, {}).get("yaml") or {}).get("top_level_key", "mcp_servers")
+                    if top_key in config and isinstance(config[top_key], dict) and server_name in config[top_key]:
+                        del config[top_key][server_name]
+                        _prepare_config_path(path, report, dry_run)
+                        if not dry_run:
+                            _atomic_write_text(path, yaml.safe_dump(config, sort_keys=False))
+                            report.add_modified(path)
+                        cleaned.append(client)
+                except Exception:
+                    pass
+            else:
+                config = _load_json_config(path, allow_comments=True)
+                json_meta = (meta_by_client.get(client, {}) or {}).get("json") or {}
+                nested_key = json_meta.get("nested_key")
+                top_key = json_meta.get("top_level_key", "mcpServers")
+                target = config
+                if nested_key:
+                    for k in nested_key.split("."):
+                        if isinstance(target, dict) and k in target:
+                            target = target[k]
+                        else:
+                            target = None
+                            break
+                elif top_key in config:
+                    target = config[top_key]
+                else:
+                    target = None
+
+                if isinstance(target, dict) and server_name in target:
+                    del target[server_name]
+                    _prepare_config_path(path, report, dry_run)
+                    if not dry_run:
+                        _atomic_write_text(path, json.dumps(config, indent=2))
+                        report.add_modified(path)
+                    cleaned.append(client)
+        except Exception as exc:
+            report.add_warning(f"Failed to remove {server_name} from {client}: {exc}")
+    return cleaned

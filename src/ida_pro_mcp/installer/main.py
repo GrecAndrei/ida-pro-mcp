@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import getpass
 import json
 import os
@@ -919,9 +920,10 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
         help="print planned actions without changing managed files (writes an install report)",
     )
     mode_group = parser.add_mutually_exclusive_group()
-    mode_group.add_argument("--yes", action="store_true", help="non-interactive mode")
+    mode_group.add_argument("--yes", "--auto", dest="yes", action="store_true", help="non-interactive mode (auto install)")
     mode_group.add_argument("--interactive", action="store_true", help="force interactive wizard mode")
     mode_group.add_argument("--no-interactive", action="store_true", help="disable interactive wizard mode")
+    parser.add_argument("--uninstall", action="store_true", help="uninstall IDA Pro MCP plugins, client configurations, and shims")
     parser.add_argument("--kill-ida", action="store_true", help="terminate running ida/idat processes before install")
     parser.add_argument(
         "--ida-binary-path",
@@ -1072,6 +1074,7 @@ def parse_args(argv: list[str] | None = None) -> InstallerOptions:
     opts = InstallerOptions(
         dry_run=args.dry_run,
         yes=args.yes,
+        uninstall=args.uninstall,
         kill_ida=args.kill_ida,
         install_cli_shim=args.install_cli_shim,
         rollback_on_fail=args.rollback_on_fail,
@@ -1329,6 +1332,59 @@ def run_install(opts: InstallerOptions, ui: UI) -> int:
         return 1
 
 
+def _run_uninstall(opts: InstallerOptions, ui: UI, report: InstallReport) -> int:
+    source_root = opts.source_root or Path.cwd()
+    install_root = opts.install_root or get_install_root()
+    ui.info(f"Uninstalling IDA Pro MCP from {install_root}...")
+
+    # 1. Prune from coding agent client configs
+    from .clients import remove_server_entry_from_clients
+    removed_clients = remove_server_entry_from_clients(source_root, report, opts.dry_run)
+    if removed_clients:
+        ui.ok(f"Removed server configuration from: {', '.join(removed_clients)}")
+        report.add_step("clients", "uninstalled", f"removed from {len(removed_clients)} clients")
+
+    # 2. Remove skills
+    from .skills import SKILL_NAME, default_skill_dirs
+    for sdir in default_skill_dirs():
+        target_skill = sdir / SKILL_NAME
+        if target_skill.exists():
+            if not opts.dry_run:
+                shutil.rmtree(target_skill, ignore_errors=True)
+                report.add_modified(target_skill)
+            ui.ok(f"Removed skill directory: {target_skill}")
+
+    # 3. Remove IDA plugin if IDA installs found
+    from .discovery import detect_ida_installs
+    try:
+        installs = detect_ida_installs()
+        for inst in installs:
+            plugin_dir = Path(inst.ida_dir) / "plugins"
+            for plugin_file in [plugin_dir / "server_script.py", plugin_dir / "ida_pro_mcp_plugin.py"]:
+                if plugin_file.is_file():
+                    if not opts.dry_run:
+                        plugin_file.unlink(missing_ok=True)
+                        report.add_modified(plugin_file)
+                    ui.ok(f"Removed IDA plugin: {plugin_file}")
+    except Exception:
+        pass
+
+    # 4. Remove launcher shims
+    bin_dir = install_root / "bin"
+    if bin_dir.exists():
+        if not opts.dry_run:
+            shutil.rmtree(bin_dir, ignore_errors=True)
+        ui.ok(f"Removed launcher shims in {bin_dir}")
+
+    report.finalize(success=True)
+    report_file = install_root / "uninstall-report.json"
+    if not opts.dry_run:
+        with contextlib.suppress(Exception):
+            report.write(report_file)
+    ui.ok("IDA Pro MCP successfully uninstalled.")
+    return 0
+
+
 def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
     report = InstallReport()
     install_root = _absolute_path(opts.install_root or get_install_root())
@@ -1336,6 +1392,9 @@ def _run_install_unlocked(opts: InstallerOptions, ui: UI) -> int:
     opts.install_root = install_root
     opts.source_root = source_root
     report.metadata.update({"install_root": str(install_root), "source_root": str(source_root)})
+
+    if opts.uninstall:
+        return _run_uninstall(opts, ui, report)
 
     try:
         reject_symlink_path(install_root, "installer root")

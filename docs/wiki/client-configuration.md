@@ -57,10 +57,39 @@ another machine.
 }
 ```
 
-The top-level key is client-specific: many JSON clients use `mcpServers`,
-while some use `servers`, OpenCode uses `mcp`, and Codex uses TOML
-`mcp_servers`. Let the installer generate the client-specific shape when it
-supports that client.
+The top-level key is client-specific:
+- Standard JSON `mcpServers`: Claude Desktop, Cursor, Windsurf, Cline, Roo Code, Gemini CLI, Antigravity, Pi Coding Agent, Prime Agent, ZCode, Kimi Code, MiniMax Code.
+- JSON with `servers`: Copilot CLI, VS Code.
+- JSON with `mcp`: OpenCode (`opencode.json`).
+- JSON5 with nested `mcp.servers`: OpenClaw (`openclaw.json`).
+- TOML with `mcp_servers`: Codex (`config.toml`).
+- YAML with `mcp_servers`: Hermes Agent (`config.yaml`).
+
+Let the installer generate the client-specific shape automatically.
+
+### Automated and Uninstallation Options
+
+For non-interactive unattended installation:
+
+```bash
+python install.py --auto
+```
+
+To cleanly uninstall the MCP server entries, skills, launcher shims, and IDA plugins:
+
+```bash
+python install.py --uninstall
+```
+
+### Self-Extracting Single-File Packages
+
+Pre-built self-extracting bundles are published on the release page:
+- **Linux (`.sh`)**: `ida-pro-mcp-v1.0.0a1-linux-x86_64.sh`
+- **macOS (`.command`)**: `ida-pro-mcp-v1.0.0a1-macos-arm64.command`
+- **Windows (`.bat`)**: `ida-pro-mcp-v1.0.0a1-windows-x64.bat`
+
+Running the self-extracting bundle unpacks to the user environment, auto-configures installed coding agents, and places launcher shims in `<install-root>/bin`.
+
 
 ## Verify the connection
 
