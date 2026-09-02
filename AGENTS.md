@@ -17,12 +17,19 @@ analysis path.
   handling, intelligence, and durable stores.
 - `src/ida_pro_mcp/ida_mcp/`: bridge-side tools and compatibility dispatcher.
 - `src/ida_pro_mcp/server_script.py`: IDA plugin/runtime loader.
-- `src/ida_pro_mcp/installer/`: IDA discovery, runtime/client configuration,
-  and skill installation.
+- `src/ida_pro_mcp/installer/`: IDA discovery, runtime/client configuration
+  (22+ AI agent environments across JSON, JSON5, TOML, YAML), launcher shims,
+  and `agentskills.io` skill distribution.
 - `src/ida_pro_mcp/native/`: optional in-process llama.cpp driver.
-- `tests/`: host/contract tests, fake-IDA tests, and opt-in live tests.
-- `docs/guide/`: maintained guidance; `docs/wiki/`: hand-authored pages
-  loaded by the wiki tool; `docs/research/`: historical context.
+- `scripts/`: release packaging, verification tools, schema integrity, and
+  auto-installers (`install.sh`, `install.bat`).
+- `tests/`: host/contract tests, fake-IDA tests, installer tests, and opt-in live tests.
+- `docs/guide/`: maintained architectural and safety guides;
+  `docs/releases/`: release notes by version (`docs/releases/TEMPLATE.md`);
+  `docs/operations/`: live testing, Rizin, and OpenCode workflows;
+  `docs/reference/`: technical and policy specifications;
+  `docs/wiki/`: offline mirror for the in-tool wiki (public wiki at
+  `https://github.com/GrecAndrei/ida-pro-mcp/wiki`); `docs/research/`: historical context.
 - `benchmarks/run.py`: canonical benchmark entry point.
 
 ## Source of truth and safe edits
@@ -127,6 +134,13 @@ update installer discovery/validation and generated client configuration,
 document defaults and explicit paths, add missing-dependency behavior and
 tests, and preserve atomic writes, backups, symlink/path checks, and rollback.
 
+The installer supports 22+ coding environments across JSON (`mcpServers`, `servers`,
+`mcp`), JSON5 with nested keys (`mcp.servers`), TOML (`mcp_servers`), and YAML
+(`mcp_servers`). It provides `--auto` for non-interactive unattended runs, `--uninstall`
+for clean removal of plugins/skills/client configs/shims, and generates portable launcher
+shims (`bin/ida-pro-mcp` and `bin/ida-pro-mcp.cmd`). Self-contained auto-installers live
+at `scripts/install.sh` (Linux/macOS) and `scripts/install.bat` (Windows).
+
 Native builds require a caller-supplied `LLAMA_CPP_SRC` for
 `scripts/build_native_llama.sh` or `LLAMA_CPP_BUILD` for the CMake project.
 The llama.cpp revision is pinned in the build script/workflow. Do not vendor a
@@ -143,7 +157,9 @@ python -m pip install -e . --group dev
 ruff check .
 python scripts/check_schema_integrity.py
 python scripts/generate_tool_skills.py
+python scripts/check_workflow_pins.py
 python -m pytest -q --ignore=tests/integration --basetemp=.pytest_tmp
+git diff --check
 ```
 
 Run focused tests first, then the full non-live suite for host/runtime,
@@ -239,13 +255,16 @@ agent must not publish or retag a release as part of an ordinary change.
 Before merge or release, `[major]` work must have:
 
 - a linked issue and a PR description naming impact, owners, and acceptance;
-- version/changelog/release notes updated as applicable; release artifacts
-  (wheel/sdist/native or other published outputs) built, inspected, and
-  traceable to the reviewed commit before publishing;
-- maintained guides and relevant hand-authored wiki pages updated, plus
-  generated docs/skills regenerated when the public surface changes;
-- CodeQL results reviewed for Python and GitHub Actions; workflow permissions,
-  action pin integrity, and untrusted-input handling explicitly checked;
+- version/changelog/release notes updated as applicable; release notes authored
+  under `docs/releases/<tag>.md` strictly following `docs/releases/TEMPLATE.md`;
+- release artifacts (wheel/sdist/installers/native or other published outputs)
+  built, inspected, and traceable to the reviewed commit before publishing;
+- maintained guides, `docs/releases/TEMPLATE.md`, and relevant hand-authored
+  wiki pages updated, plus generated docs/skills regenerated when the public
+  surface changes;
+- CodeQL results reviewed for Python and GitHub Actions; workflow permissions
+  (including `attestations: write`), action pin integrity, and untrusted-input
+  handling explicitly checked;
 - dependency and vulnerability scans reviewed, including Dependabot's pip and
   GitHub Actions updates, with tool/date/findings/disposition recorded;
 - migration and rollback notes, compatibility tests, and backup/restore or
@@ -280,6 +299,7 @@ Before merge or release, `[major]` work must have:
    ruff check .
    python scripts/check_schema_integrity.py
    python scripts/generate_tool_skills.py
+   python scripts/check_workflow_pins.py
    python -m pytest -q --ignore=tests/integration --basetemp=.pytest_tmp
    git diff --check
    ```

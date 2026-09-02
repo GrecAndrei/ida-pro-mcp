@@ -29,6 +29,8 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    GitHub Wiki repository (`https://github.com/GrecAndrei/ida-pro-mcp/wiki`).
  - Added mandatory release description template (`docs/releases/TEMPLATE.md`) and
    updated release checklist in `docs/guide/versioning.md`.
+ - Updated `AGENTS.md` instructions with current codebase layout, 22+ agent client
+   formats, auto-installers, routine checks, and release template safeguards.
 
 ## 2026-09-02 — PR-work coverage checkpoint
 
