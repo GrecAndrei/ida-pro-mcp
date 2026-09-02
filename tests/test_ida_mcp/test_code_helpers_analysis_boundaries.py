@@ -6,13 +6,20 @@ import importlib
 import sys
 import types
 
+import ida_hexrays
+
 from tests.fakes.ida_fake import (
     BADADDR,
     FakeTinfo,
+    cexpr_t,
     cfunc_t,
+    cot_call,
+    cot_obj,
     lvar_t,
+    var_ref_t,
 )
 from tests.test_ida_mcp.test_code_helpers_ctree_modes import (
+    _Args,
     _body,
     _call,
     _install_ctree_surface,
@@ -327,3 +334,109 @@ def test_custom_detector_catalog_and_positive_scans_cover_limits(monkeypatch, fr
     assert len(helpers._detect_callers_of("target", max_items=1)) == 1
     monkeypatch.setattr(helpers.idautils, "CodeRefsTo", lambda *_a: iter([4, 5]))
     assert len(helpers._detect_callees_of("target", max_items=1)) == 1
+
+
+def test_ctree_nested_helpers_cover_indirect_calls_strings_sizes_and_failures(monkeypatch, fresh_fake_idb):
+    helpers = _helpers()
+    _install_ctree_surface(monkeypatch)
+    monkeypatch.setattr(ida_hexrays, "cot_ref", 90, raising=False)
+    monkeypatch.setattr(ida_hexrays, "cot_ptr", 91, raising=False)
+    monkeypatch.setattr(ida_hexrays, "cot_sizeof", 92, raising=False)
+    db = fresh_fake_idb
+
+    ref = cexpr_t(op=90, x=cexpr_t(op=cot_obj, obj_ea=0x7000), ea=0x1020)
+    ref.x.print1 = lambda _tag=None: "fmt_ref"
+    sizeof = cexpr_t(op=92, ea=0x1021)
+    sizeof.print1 = lambda _tag=None: "sizeof(buf)"
+    pointer = cexpr_t(op=91, x=_var(1), ea=0x1022)
+    pointer.print1 = lambda _tag=None: "*input_data"
+    computed = cexpr_t(op=999, ea=0x1023)
+    computed.print1 = lambda _tag=None: "n * m"
+    broken_callee = cexpr_t(op=999, ea=0x1024)
+
+    def broken_print(_tag=None):
+        raise RuntimeError("callee text unavailable")
+
+    broken_callee.print1 = broken_print
+    bad_arg = cexpr_t(op=999, ea=0x1025)
+    bad_arg.print1 = broken_print
+    var_callee = cexpr_t(op=ida_hexrays.cot_var, v=var_ref_t(99), ea=0x1026)
+
+    expressions = [
+        _call(db, "strcpy", [_var(0), _num(7)], 0x1010, 0x2001),
+        _call(db, "printf", [ref], 0x1011, 0x2002),
+        _call(db, "memcpy", [_var(0), _var(1), sizeof], 0x1012, 0x2003),
+        _call(db, "memcpy", [_var(0), _var(1), pointer], 0x1013, 0x2004),
+        _call(db, "malloc", [computed], 0x1014, 0x2005),
+        _call(db, "free", [bad_arg], 0x1015, 0x2006),
+        cexpr_t(op=cot_call, x=var_callee, a=_Args([]), ea=0x1016),
+        cexpr_t(op=cot_call, x=broken_callee, a=_Args([]), ea=0x1017),
+    ]
+    cfunc = cfunc_t(
+        entry_ea=0x1000,
+        body=_body(expressions),
+        lvars=[
+            lvar_t("dst", FakeTinfo()),
+            lvar_t("input_data", FakeTinfo(), is_arg_var=True),
+            lvar_t("n", FakeTinfo()),
+        ],
+    )
+    monkeypatch.setattr(helpers.idc, "get_str_type", lambda _ea: 1, raising=False)
+    monkeypatch.setattr(helpers.idc, "get_strlit_contents", lambda *_a: b"%s %n", raising=False)
+    findings = helpers._scan_ctree_vulns(cfunc)
+    patterns = {item["pattern"] for item in findings}
+    assert {
+        "strcpy_unbounded",
+        "format_arg_mismatch",
+        "format_string_write",
+        "integer_overflow_alloc",
+    } <= patterns
+
+
+def test_constant_and_string_entry_fallbacks_cover_pcrel_limits_and_errors(monkeypatch):
+    helpers = _helpers()
+    real_reader = helpers._read_candidate_string
+    func = types.SimpleNamespace(start_ea=1, end_ea=3)
+    monkeypatch.setattr(helpers._compat, "get_func_info", lambda _ea: func)
+    mnem = {1: "auipc", 2: "lw"}
+    monkeypatch.setattr(helpers.idc, "print_insn_mnem", lambda ea: mnem.get(ea, ""))
+    monkeypatch.setattr(helpers.idc, "next_head", lambda ea, _end: ea + 1)
+    monkeypatch.setattr(helpers.idc, "print_operand", lambda _ea, index: "r0" if index in (0, 1) else "")
+    monkeypatch.setattr(helpers.idc, "get_operand_value", lambda _ea, index: 1 if index == 1 else 4)
+    monkeypatch.setattr(helpers, "_read_candidate_string", lambda _target: "resolved")
+    assert helpers._scan_constant_load_strings(1) == [{"addr": 0x1005, "value": "resolved"}]
+
+    monkeypatch.setattr(helpers._compat, "get_func_info", lambda _ea: (_ for _ in ()).throw(RuntimeError("func info failed")))
+    assert helpers._scan_constant_load_strings(1) == []
+    monkeypatch.setattr(helpers, "_read_candidate_string", real_reader)
+    monkeypatch.setattr(helpers.ida_bytes, "is_loaded", lambda _ea: True)
+    monkeypatch.setattr(helpers.ida_bytes, "get_bytes", lambda _ea, _size: "text")
+    assert helpers._read_candidate_string(0x1000) == "text"
+    monkeypatch.setattr(helpers.ida_bytes, "get_bytes", lambda *_a: (_ for _ in ()).throw(RuntimeError("read failed")))
+    assert helpers._read_candidate_string(0x1000) is None
+
+    monkeypatch.setattr(helpers.idautils, "FuncItems", lambda _ea: iter([1, 2, 3]))
+    monkeypatch.setattr(helpers.idautils, "XrefsFrom", lambda ea, _flags: [types.SimpleNamespace(iscode=True, to=ea), types.SimpleNamespace(iscode=False, to=0x4000 + ea)])
+    monkeypatch.setattr(helpers.idc, "get_strlit_contents", lambda _ea: b"value")
+    assert len(helpers._collect_function_string_entries(1, result_limit=1)) == 1
+    monkeypatch.setattr(helpers.idautils, "FuncItems", lambda _ea: (_ for _ in ()).throw(RuntimeError("items failed")))
+    assert helpers._collect_function_string_entries(1) == []
+
+
+def test_disasm_window_exercises_forward_fallback_and_tight_slice(monkeypatch):
+    helpers = _helpers()
+    monkeypatch.setattr(helpers, "_format_disasm_line", lambda ea, **_kwargs: f"line-{ea:x}")
+    monkeypatch.setattr(helpers.idc, "prev_head", lambda ea, _minimum: ea - 1 if ea > 0x1000 else BADADDR)
+    calls = []
+
+    def next_head(ea, _maximum):
+        if ea == 0x1001:
+            calls.append(ea)
+            return ea if len(calls) == 1 else ea + 1
+        return BADADDR
+
+    monkeypatch.setattr(helpers.idc, "next_head", next_head)
+    monkeypatch.setattr(helpers.idc, "get_item_size", lambda _ea: 1)
+    assert helpers._disasm_window(0x1001, radius=3, max_items=3, style="classic", include_bytes=False) == [
+        "line-1000", "line-1001", "line-1002"
+    ]
