@@ -10,7 +10,10 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
   current branch-aware source coverage snapshot measures 87.25%;
   installer discovery, installer mode contracts, and bridge startup/runtime
   failure paths received another focused test pass. Opt-in live-IDA tests
-  remain separately gated.
+   remain separately gated.
+ - Added cross-mode tests for context indexing, persistence, telemetry,
+   housekeeping, enrichment failure handling, compaction, and singleton
+   lifecycle behavior.
  - Hardened installer state discovery, runtime lease identity checks, bounded
    metadata reads, enum compatibility, and constant-scan progress handling
    while keeping this PR focused on coverage and stability.
