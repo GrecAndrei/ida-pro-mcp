@@ -24,6 +24,10 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    declaration, local/global/function application, inference, structured reads,
    propagation, dependency graphs, vtables, member editing, enum editing, and
    TIL carry paths, including IDA 9 fallback behavior and explicit failures.
+ - Added offline coverage for analysis option rebasing, processor and endian
+   selection, loader-option persistence, code/data conversion, analysis flags,
+   offset creation, bounded reanalysis, raw mapped-range discovery, executable
+   segment scoring, and scoped auto-analysis waits.
 
 - Expanded offline and opt-in live coverage across the public and legacy MCP
   surfaces, and stabilized batch-history and client-path tests.
