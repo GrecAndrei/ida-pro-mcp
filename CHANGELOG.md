@@ -29,6 +29,10 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added dispatch coverage for RPC timeout/connection failures, wall-clock
    termination, policy/guardrail faults, post-processing failures, and path
    safety boundaries.
+ - Expanded client-state coverage for runtime-table failures, connection
+   teardown and adoption, stale leases, and SSO scope/lifecycle rejection.
+ - Expanded runtime-lease coverage for signal races, process-tree identity
+   failures, heartbeat transitions, shutdown faults, and registration errors.
  - Expanded bootstrap lifecycle coverage for mitigation, autopilot,
    calibration, disputes, reweighting, and persisted outcome paths.
  - Expanded code-helper coverage for dataflow, firmware signals, decompiler
