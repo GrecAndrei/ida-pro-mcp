@@ -13,6 +13,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added debugger/emulation fallback matrices and IDA bridge startup,
    authentication, protocol, and main-thread dispatch coverage, including
    order-independent fake-IDB setup for the cross-mode round-trip tests.
+ - Added IDB metadata/state/register compatibility matrices and firmware
+   shaping boundary coverage for raw ranges, load-base hypotheses, MMIO/RTOS
+   scans, segment carving, audit tails, and degraded SDK modes.
 
 ## 2026-09-02 — Multi-agent configuration and skill system redesign
 
