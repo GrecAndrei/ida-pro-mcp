@@ -76,6 +76,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    conservative lease validation and retirement, Windows lock handling, GPU
    startup selection, embedding-cache waiters, and classifier cache/report
    behavior.
+ - Added embedding-index coverage for document/token boundary handling,
+   corrupt-row reloads, fail-soft metadata access, vector/search edge cases,
+   structured API filtering, and lexical-only hybrid results.
 
 - Expanded offline and opt-in live coverage across the public and legacy MCP
   surfaces, and stabilized batch-history and client-path tests.
