@@ -220,6 +220,9 @@ def test_request_embeddings_validation_and_failure_modes(monkeypatch, tmp_path, 
 
 def test_request_embeddings_timeout_active_slot_and_batch_recycling(monkeypatch, tmp_path):
     obj = _embedder(tmp_path, ready=True, use_llama=True)
+    # This case asserts post-grace timeout recycling; avoid making the result
+    # depend on how long the CI runner has been up.
+    obj._server_started_at = -core.EMBED_ACTIVATION_GRACE_TIMEOUT - 1.0
     obj._server_has_active_slots = lambda: False
     obj._cancel_idle_shutdown = lambda: None
     obj._schedule_idle_shutdown = lambda *_args, **_kwargs: None

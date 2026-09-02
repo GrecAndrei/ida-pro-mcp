@@ -6,6 +6,8 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
 
  - Declared the development tokenizer dependency required by the occupancy
    report tests and standalone CI collection.
+ - Made the embedding timeout recycling test deterministic on freshly booted
+   CI runners by explicitly placing it outside activation grace.
  - Fixed PR CI lint failures in the session-gate and IDA-side RPC surface
    tests.
  - Expanded cross-mode offline coverage for dispatch continuations,
