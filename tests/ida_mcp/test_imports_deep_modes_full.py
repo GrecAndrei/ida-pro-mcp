@@ -15,6 +15,17 @@ if str(TESTS) not in sys.path:
 from _isolated_repo_loader import load_tool_module  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _restore_compat_module():
+    """Prevent fake segment lookups from leaking through shared compat."""
+    compat = sys.modules.get("ida_pro_mcp.ida_mcp.compat")
+    before = dict(compat.__dict__) if compat is not None else None
+    yield
+    if compat is not None and before is not None:
+        compat.__dict__.clear()
+        compat.__dict__.update(before)
+
+
 def _module():
     mod = load_tool_module("imports_deep")
     mod.idaapi.BADADDR = -1

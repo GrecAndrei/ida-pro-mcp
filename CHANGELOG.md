@@ -37,6 +37,8 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    bookmark, truncation, plugin, policy, and strict-gate modes.
  - Isolated the expanded fake-IDB coverage modules so their temporary SDK
    imports cannot affect unrelated tests in the full suite.
+ - Restored the shared compatibility module after import-surface fixtures so
+   fake segment lookups cannot leak across IDA-side test modes.
 
 - Expanded offline and opt-in live coverage across the public and legacy MCP
   surfaces, and stabilized batch-history and client-path tests.
