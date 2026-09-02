@@ -64,13 +64,6 @@ jobs:
           git archive --format=tar.gz --prefix="ida-pro-mcp-$version/" HEAD > "dist/ida-pro-mcp-$version-bundle.tar.gz"
           git archive --format=zip --prefix="ida-pro-mcp-$version/" HEAD > "dist/ida-pro-mcp-$version-bundle.zip"
           python -m zipfile -t "dist/ida-pro-mcp-$version-bundle.zip"
-      - name: Build self-extracting release bundles
-        env:
-          RELEASE_TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          version="${RELEASE_TAG#v}"
-          python scripts/package_bundle.py --outdir dist --version "$version"
       - name: Write manifest and checksums
         env:
           RELEASE_TAG: ${{ inputs.tag }}

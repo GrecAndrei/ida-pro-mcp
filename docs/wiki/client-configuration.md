@@ -81,16 +81,6 @@ To cleanly uninstall the MCP server entries, skills, launcher shims, and IDA plu
 python install.py --uninstall
 ```
 
-### Self-Extracting Single-File Packages
-
-Pre-built self-extracting bundles are published on the release page:
-- **Linux (`.sh`)**: `ida-pro-mcp-v1.0.0a1-linux-x86_64.sh`
-- **macOS (`.command`)**: `ida-pro-mcp-v1.0.0a1-macos-arm64.command`
-- **Windows (`.bat`)**: `ida-pro-mcp-v1.0.0a1-windows-x64.bat`
-
-Running the self-extracting bundle unpacks to the user environment, auto-configures installed coding agents, and places launcher shims in `<install-root>/bin`.
-
-
 ## Verify the connection
 
 After configuration, ask the client to discover or call:

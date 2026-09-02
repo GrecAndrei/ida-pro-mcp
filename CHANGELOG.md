@@ -2,7 +2,7 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
-## 2026-09-02 — Multi-agent configuration, skill redesign & self-extracting bundles
+## 2026-09-02 — Multi-agent configuration and skill system redesign
 
  - Expanded client configuration support for 8 additional AI coding agent environments:
    OpenClaw (JSON5 nested `mcp.servers`), Pi Coding Agent (`mcpServers`), Hermes
@@ -17,9 +17,6 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    to `installer/runtime.py`.
  - Added `--auto` non-interactive installation and clean `--uninstall` support in
    `installer/main.py`.
- - Added `scripts/package_bundle.py` for building standalone self-extracting installers
-   across Linux (`.sh`), macOS (`.command`), and Windows (`.bat`).
- - Integrated self-extracting bundle generation into `.github/workflows/alpha-release.yml`.
 
 ## 2026-09-02 — PR-work coverage checkpoint
 
