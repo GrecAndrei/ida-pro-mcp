@@ -20,9 +20,11 @@ versioning, and releases.
 
 ## Reference
 
+- [Release Notes (v1.0.0a1)](RELEASE_NOTES_v1.0.0a1.md) — Genesis alpha release overview and capabilities
+- [Official Project Wiki](https://github.com/GrecAndrei/ida-pro-mcp/wiki) — complete user guides, client setup, and RE workflows
 - [Tool reference](TOOLS_REFERENCE.md) — generated tool/action/argument reference from
   `host.agent_operations.AGENT_OPERATIONS`
-- [Wiki](wiki/) — in-tool documentation consumed by the `wiki` MCP tool
+- [Wiki mirror](wiki/) — in-tool documentation consumed by the `wiki` MCP tool
   - `wiki/QuickStart.md` — concise operational quickstart
   - `wiki/INDEX.md` — index of available wiki topics (hand-authored)
   - `wiki/tools/*.md` — per-tool manuals (hand-authored)

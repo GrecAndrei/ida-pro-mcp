@@ -133,7 +133,14 @@ jobs:
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" \
-              --title "ida-pro-mcp $RELEASE_TAG" --prerelease \
-              --generate-notes
+            notes_file="docs/RELEASE_NOTES_${RELEASE_TAG}.md"
+            if [ -f "$notes_file" ]; then
+              gh release create "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" \
+                --title "ida-pro-mcp $RELEASE_TAG" --prerelease \
+                --notes-file "$notes_file"
+            else
+              gh release create "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" \
+                --title "ida-pro-mcp $RELEASE_TAG" --prerelease \
+                --generate-notes
+            fi
           fi

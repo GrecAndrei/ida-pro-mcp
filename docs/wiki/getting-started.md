@@ -25,6 +25,18 @@ From the repository root:
 python install.py
 ```
 
+For unattended or non-interactive automation:
+
+```bash
+python install.py --auto
+```
+
+To cleanly uninstall plugins, skills, and client entries:
+
+```bash
+python install.py --uninstall
+```
+
 The installer prepares the runtime, locates IDA, configures supported MCP
 clients, and installs the portable skill for supported clients.
 

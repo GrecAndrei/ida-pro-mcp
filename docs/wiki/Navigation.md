@@ -5,7 +5,8 @@ Choose the page that matches the job.
 | Task | Page |
 | --- | --- |
 | Install the runtime and open a binary | [Install and run your first session](getting-started) |
-| Add the server to an MCP client | [Configure an MCP client](client-configuration) |
+| Add the server to an MCP client (22+ clients) | [Configure an MCP client](client-configuration) |
+| Explore what's new in the Genesis release | [v1.0.0a1 Release Notes](v1.0.0a1-Release-Notes) |
 | Move from discovery to a defensible conclusion | [A practical reverse-engineering workflow](reverse-engineering-workflow) |
 | Preserve evidence, uncertainty, and disagreement | [Findings, evidence, and conflicts](findings-and-evidence) |
 | Rename, annotate, patch, or reshape an IDB | [Safe IDB edits and rollback](safe-idb-edits) |

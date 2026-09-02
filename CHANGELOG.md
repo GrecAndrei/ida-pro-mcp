@@ -17,6 +17,12 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    to `installer/runtime.py`.
  - Added `--auto` non-interactive installation and clean `--uninstall` support in
    `installer/main.py`.
+ - Added `docs/RELEASE_NOTES_v1.0.0a1.md` detailing the genesis alpha release across
+   all 107 operations, dual-engine runtime, and multi-agent integrations.
+ - Updated the release workflow (`alpha-release.yml`) to automatically use dedicated
+   release notes when publishing.
+ - Synchronized user guides, client setup, and release notes to the official external
+   GitHub Wiki repository (`https://github.com/GrecAndrei/ida-pro-mcp/wiki`).
 
 ## 2026-09-02 — PR-work coverage checkpoint
 
