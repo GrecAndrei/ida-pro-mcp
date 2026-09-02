@@ -209,6 +209,134 @@ def test_group_link_keeps_error_rows_out_of_links(tmp_path):
     assert linked["import_errors"] == [{"session_id": "AAAA0001", "error": "imports unavailable"}]
 
 
+def test_session_group_from_dict_and_disk_loading_fail_closed(tmp_path, monkeypatch):
+    assert SessionGroup.from_dict(None).group_id == ""
+    assert SessionGroup.from_dict({"group_id": "g", "session_ids": "bad", "links": []}).session_ids == []
+
+    (tmp_path / "groups.json").write_text("{not json", encoding="utf-8")
+    server = _Server(tmp_path)
+    assert server._handle_multi_session("group_list", {}) == {
+        "ok": True,
+        "groups": [],
+        "count": 0,
+    }
+
+    server._session_groups["g1"] = SessionGroup("g1")
+    monkeypatch.setattr(
+        "ida_pro_mcp.host.server.server_multi_session.json.dump",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("read-only cache")),
+    )
+    server._persist_groups()
+    assert not list(tmp_path.glob("groups.json.*.tmp"))
+
+
+def test_multi_session_group_link_accepts_catalog_aliases_and_skips_bad_rows(tmp_path):
+    responses = {
+        ("symbols", "AAAA0001"): {
+            "entries": [
+                {"name": " puts ", "address": "0x4010"},
+                "not-a-row",
+                {"name": "", "ea": "0x4020"},
+            ]
+        },
+        ("symbols", "BBBB0002"): {
+            "symbols": [{"name": "read", "addr": "0x5010"}]
+        },
+        ("imports_deep", "AAAA0001"): {
+            "entries": [{"name": "read"}, "bad", {"name": ""}, {"name": "puts"}]
+        },
+        ("imports_deep", "BBBB0002"): {
+            "symbols": [{"name": " puts "}, {"name": "missing"}]
+        },
+    }
+    server = _Server(tmp_path, responses)
+    _create(server)
+
+    result = server._ms_group_link({"group_id": "g1"})
+    assert result["ok"] is True
+    assert result["links_built"] == 2
+    assert server._session_groups["g1"].links == {
+        "read": {"provider_sid": "BBBB0002", "export_ea": "0x5010", "importer_sids": ["AAAA0001"]},
+        "puts": {"provider_sid": "AAAA0001", "export_ea": "0x4010", "importer_sids": ["BBBB0002"]},
+    }
+
+
+def test_multi_session_cross_resolution_decompile_xrefs_and_detail_status(tmp_path):
+    server = _Server(tmp_path)
+    _create(server)
+    group = server._session_groups["g1"]
+    group.links = {
+        "puts": {
+            "provider_sid": "AAAA0001",
+            "export_ea": "0x4010",
+            "importer_sids": ["BBBB0002"],
+        }
+    }
+
+    missing = server._ms_cross_resolve({"group_id": "g1"})
+    assert missing["error"] is True
+    resolved = server._ms_cross_resolve({"group_id": "g1", "symbol": " PUTS "})
+    assert resolved["ok"] is True and resolved["symbol"] == "puts"
+    resolved = server._ms_cross_resolve({"group_id": "g1", "symbol": "PUTS"})
+    assert resolved["ok"] is True and resolved["symbol"] == "puts"
+    assert server._ms_cross_resolve({"group_id": "g1", "symbol": "nope"})["error"] is True
+
+    direct = server._ms_cross_decompile({"session_id": "BBBB0002", "address": "0x99"})
+    assert direct["_cross_session"] == {
+        "source_session_id": "BBBB0002",
+        "resolved_from_symbol": None,
+        "addr": "0x99",
+    }
+    by_symbol = server._ms_cross_decompile({"symbol": "PUTS"})
+    assert by_symbol["_cross_session"]["source_session_id"] == "AAAA0001"
+    assert by_symbol["_cross_session"]["addr"] == "0x4010"
+    assert server._ms_cross_decompile({})["error"] is True
+    assert server._ms_cross_decompile({"session_id": "AAAA0001"})["error"] is True
+    assert server._ms_cross_decompile({"symbol": "unknown"})["error"] is True
+
+    server._responses[("search", "BBBB0002")] = {
+        "matches": [
+            {"addr": "0x10", "name": "call_puts"},
+            {"ea": "0x20", "text": "puts"},
+            "bad-row",
+        ]
+    }
+    shallow = server._ms_cross_xrefs({"group_id": "g1", "symbol": "puts"})
+    assert shallow["ok"] is True and shallow["xrefs"] is None
+    deep = server._ms_cross_xrefs({"group_id": "g1", "symbol": "PUTS", "deep": True})
+    assert deep["ok"] is True
+    assert deep["xrefs"] == [
+        {"session_id": "BBBB0002", "addr": "0x10", "context": "call_puts"},
+        {"session_id": "BBBB0002", "addr": "0x20", "context": "puts"},
+    ]
+    assert server._ms_cross_xrefs({"group_id": "g1"})["error"] is True
+    assert server._ms_cross_xrefs({"group_id": "g1", "symbol": "none"})["error"] is True
+
+    detail = server._ms_status({"group_id": "g1"})
+    assert detail["ok"] is True
+    assert detail["providers"] == {"AAAA0001": 1}
+    assert detail["importers"] == {"BBBB0002": 1}
+    assert detail["sample_links"][0]["symbol"] == "puts"
+    assert server._ms_status({"group_id": "missing"})["error"] is True
+
+
+def test_multi_session_group_helpers_tolerate_uninitialized_state(tmp_path):
+    bare = ServerMultiSessionMixin()
+    bare.cache_dir = ""
+    bare._persist_groups()
+    bare._drop_sid_from_groups("AAAA0001")
+    assert bare._groups_path() is None
+
+    server = _Server(tmp_path)
+    group, error = server._require_group({})
+    assert group is None and error["error"] is True
+    assert server._ms_group_remove({})["error"] is True
+    assert server._ms_group_remove({"group_id": "missing"})["error"] is True
+    _create(server)
+    removed = server._ms_group_remove({"group_id": "g1"})
+    assert removed["ok"] is True and removed["removed"]["group_id"] == "g1"
+
+
 def test_cross_resolve_is_case_insensitive_and_reports_missing_group_or_symbol(tmp_path):
     server = _Server(tmp_path)
     _create(server)

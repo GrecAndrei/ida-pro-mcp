@@ -4,6 +4,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
 
 ## 2026-09-02 — PR-work coverage checkpoint
 
+ - Expanded multi-session coverage for malformed persisted groups, cache-write
+   failures, export/import aliases, cross-session resolution and decompilation,
+   deep xrefs, detailed status, and uninitialized helper state.
  - Expanded session coverage for fresh/reused opens, inferred architecture
    recommendations, runtime failure envelopes, skill and triage actions,
    analogy application, activity and hypothesis tracking, macro execution,
