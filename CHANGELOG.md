@@ -27,6 +27,8 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    and standalone Linux installer executables into release assets.
  - Synchronized user guides, client setup, and cross-references to the official external
    GitHub Wiki repository (`https://github.com/GrecAndrei/ida-pro-mcp/wiki`).
+ - Added mandatory release description template (`docs/releases/TEMPLATE.md`) and
+   updated release checklist in `docs/guide/versioning.md`.
 
 ## 2026-09-02 — PR-work coverage checkpoint
 

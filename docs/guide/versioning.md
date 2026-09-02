@@ -25,6 +25,22 @@ surface and workspace format may still change before `1.0.0`.
 4. Regenerate `docs/TOOLS_REFERENCE.md` and the portable agent skill.
 5. Build and inspect the wheel/sdist, then tag the exact commit with the same
    version, such as `v1.0.0a1`.
+6. Author the release artifact description under `docs/releases/<tag>.md` adhering
+   strictly to the mandatory release template (`docs/releases/TEMPLATE.md`).
+
+## Mandatory release description template
+
+Every GitHub release must use the standardized format defined in
+[`docs/releases/TEMPLATE.md`](../releases/TEMPLATE.md). Loose or unformatted
+release descriptions are prohibited. The template requires:
+- **Title & Overview**: Version header and one-sentence core value proposition.
+- **Highlights**: 3 to 6 high-impact capability summaries with bold headings.
+- **🚀 Instant Auto-Installation**: Direct, copy-pasteable platform instructions
+  (`curl ... | bash` for Linux/macOS, double-clickable `install.bat` for Windows,
+  and native standalone binaries).
+- **Manual / Offline Setup**: Extraction instructions for air-gapped environments.
+- **Integrity & Provenance**: `sha256sum` and `gh attestation verify` commands.
+- **Canonical Links**: Direct references to the Wiki, Tools Reference, and Safety model.
 
 ## GitHub alpha artifacts
 
@@ -33,11 +49,13 @@ alpha tag whose name matches `_version.py`. Run it once with `publish=false`
 to build the wheel, source distribution, source bundle, manifest, and
 checksums. Inspect the uploaded artifact, then rerun the workflow with
 `publish=true`; the protected `release` environment is the approval boundary.
+The workflow automatically reads `docs/releases/${RELEASE_TAG}.md` to populate
+the release notes.
 
-The published bundle is the simplest user installation path: download it from
-the GitHub prerelease, verify `SHA256SUMS`, extract it, and run `python
-install.py`. The workflow never creates a tag from the default branch and does
-not include IDA, proprietary files, native model weights, or credentials.
+The published auto-installers (`install.sh`, `install.bat`, and standalone binary)
+provide zero-friction automated installation across all supported AI coding agents.
+The workflow never creates a tag from the default branch and does not include IDA,
+proprietary files, native model weights, or credentials.
 
 Benchmark output records the package version, commit, runtime, and inputs at
 run time; benchmark results do not carry hand-maintained version numbers.
