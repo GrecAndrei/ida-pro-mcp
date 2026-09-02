@@ -7,7 +7,7 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Expanded deterministic offline coverage across the host/IDA bridge, public
    operation dispatch, response handling, type and analysis surfaces, gadget
    discovery, retrieval, and cross-mode test isolation. The corrected PR branch
-  current branch-aware source coverage snapshot measures 87.23%;
+  current branch-aware source coverage snapshot measures 87.25%;
   installer discovery, installer mode contracts, and bridge startup/runtime
   failure paths received another focused test pass. Opt-in live-IDA tests
   remain separately gated.
@@ -17,9 +17,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added focused offline matrices for debug symbols, deep imports, query
    parsing/execution, semantic matching, synchronization/cache behavior,
    batch macros, bootstrap-session validation, and gadget architecture,
-   mitigation, and dispatch modes, plus function-management and decompiler
-   helper paths. Also fixed comparison aliases such as `neq` being parsed as
-   the shorter `ne` operator.
+   mitigation, and dispatch modes, plus function-management, decompiler
+   helper, and compositional-search paths. Also fixed comparison aliases such
+   as `neq` being parsed as the shorter `ne` operator.
 
 - Expanded offline and opt-in live coverage across the public and legacy MCP
   surfaces, and stabilized batch-history and client-path tests.
