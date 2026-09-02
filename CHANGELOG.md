@@ -4,6 +4,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
 
 ## 2026-09-02 — PR-work coverage checkpoint
 
+ - Added offline emulation coverage for backend absence and fallback
+   selection, debugger event pumping, architecture register helpers,
+   rejected lifecycle operations, memory byte fallback, and teardown errors.
  - Added offline coverage for code-helper decompiler diagnostics, firmware
    constant/string fallbacks, annotation comment recovery, and detector
    metadata failure and limit paths.
