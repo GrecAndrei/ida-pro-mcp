@@ -25,6 +25,9 @@ from ida_pro_mcp.host.intelligence.native import (
     prefer_native_rerank,
 )
 
+_REAL_NATIVE_LIB = native._NativeLib
+_REAL_FIND_NATIVE_LIB = native._find_native_lib
+
 
 class _FakeMissingLib:
     """Fake loader for the "library absent" path."""
@@ -536,3 +539,142 @@ def test_native_backend_unavailable_paths(monkeypatch):
     )
     report = native.bootstrap_native_backend()
     assert report["enabled"] is False
+
+
+def test_native_loader_missing_and_load_error(monkeypatch):
+    """The ctypes loader must fail closed for absent or unloadable libraries."""
+    _REAL_NATIVE_LIB._instance = None
+    monkeypatch.setattr(native, "_find_native_lib", lambda: "")
+    missing = _REAL_NATIVE_LIB()
+    assert missing.lib is None
+    assert "not found" in missing.error
+
+    _REAL_NATIVE_LIB._instance = None
+    monkeypatch.setattr(native, "_find_native_lib", lambda: "/tmp/libmcp_llama.so")
+
+    def fail_load(_path):
+        raise OSError("wrong ELF class")
+
+    monkeypatch.setattr(native.ctypes, "CDLL", fail_load)
+    failed = _REAL_NATIVE_LIB()
+    assert failed.lib is None
+    assert "wrong ELF class" in failed.error
+    _REAL_NATIVE_LIB._instance = None
+
+
+def test_native_library_search_uses_install_and_system_fallbacks(tmp_path, monkeypatch):
+    install_root = tmp_path / "install"
+    library = install_root / "bin" / "libmcp_llama.so"
+    library.parent.mkdir(parents=True)
+    library.write_bytes(b"fake")
+    monkeypatch.delenv("IDA_MCP_NATIVE_LIB", raising=False)
+    monkeypatch.setattr(native, "_install_root", lambda: str(install_root))
+    assert _REAL_FIND_NATIVE_LIB() == str(library)
+
+    library.unlink()
+    monkeypatch.setattr(
+        native, "__file__", str(tmp_path / "pkg" / "host" / "intelligence" / "native.py")
+    )
+    monkeypatch.setattr(
+        native.ctypes.util, "find_library", lambda _name: "libmcp_llama.so"
+    )
+    assert _REAL_FIND_NATIVE_LIB() == "libmcp_llama.so"
+
+
+def test_native_preference_auto_and_explicit_alias_matrix(monkeypatch):
+    monkeypatch.setenv("IDA_MCP_BACKEND", "auto")
+    monkeypatch.setenv("IDA_MCP_NATIVE", "1")
+    monkeypatch.delenv("IDA_MCP_EMBED_DISABLED", raising=False)
+    assert prefer_native_embed() is True
+    assert prefer_native_rerank() is True
+
+    monkeypatch.setenv("IDA_MCP_EMBED_DISABLED", "yes")
+    assert prefer_native_embed() is False
+    monkeypatch.delenv("IDA_MCP_EMBED_DISABLED")
+
+    monkeypatch.setattr(
+        "ida_pro_mcp.host.intelligence.core._resolve_backend", lambda: "gemini"
+    )
+    assert prefer_native_embed() is False
+
+    monkeypatch.setenv("IDA_MCP_BACKEND", "cpp")
+    assert prefer_native_embed() is True
+    monkeypatch.setenv("IDA_MCP_BACKEND", "llama")
+    assert prefer_native_embed() is False
+
+
+def test_native_open_rejects_zero_handles_then_recovers(monkeypatch):
+    original_embed_new = _FakeLib.mcp_embed_new
+    monkeypatch.setattr(_FakeLib, "mcp_embed_new", lambda *_args: 0)
+    NativeEmbedder._instance = None
+    embedder = NativeEmbedder()
+    assert embedder.backend == "unavailable"
+    assert embedder.ensure_ready() is False
+
+    monkeypatch.setattr(_FakeLib, "mcp_embed_new", original_embed_new)
+    assert embedder.ensure_ready() is True
+
+    original_rerank_new = _FakeLib.mcp_rerank_new
+    monkeypatch.setattr(_FakeLib, "mcp_rerank_new", lambda *_args: 0)
+    NativeReranker._instance = None
+    reranker = NativeReranker()
+    assert reranker.backend == "unavailable"
+    assert reranker.ensure_ready() is False
+    monkeypatch.setattr(_FakeLib, "mcp_rerank_new", original_rerank_new)
+    assert reranker.ensure_ready() is True
+
+
+def test_native_stop_suppresses_free_errors_and_clears_state(monkeypatch):
+    embedder = NativeEmbedder()
+    assert embedder.embed_vector("cached") is not None
+    monkeypatch.setattr(
+        _FakeLib, "mcp_embed_free", lambda *_args: (_ for _ in ()).throw(RuntimeError("free"))
+    )
+    embedder.stop()
+    assert embedder.backend == "unavailable"
+    assert embedder._vec_cache == {}
+
+    reranker = NativeReranker()
+    assert reranker.rerank("q", ["doc"])
+    monkeypatch.setattr(
+        _FakeLib, "mcp_rerank_free", lambda *_args: (_ for _ in ()).throw(RuntimeError("free"))
+    )
+    reranker.stop()
+    assert reranker.backend == "unavailable"
+    assert reranker._score_cache == {}
+
+
+def test_native_score_handles_missing_library_and_disabled_cache(monkeypatch):
+    reranker = NativeReranker()
+    reranker._native_lib = _FakeMissingLib()
+    assert reranker._score("missing", ["library"]) is None
+
+    reranker._native_lib = _FakeLib()
+    calls = 0
+    original_score = _FakeLib.mcp_rerank_score
+
+    def counted_score(lib, *args):
+        nonlocal calls
+        calls += 1
+        return original_score(lib, *args)
+
+    monkeypatch.setattr(native, "NATIVE_RERANK_CACHE_MAX", 0)
+    monkeypatch.setattr(_FakeLib, "mcp_rerank_score", counted_score)
+    assert reranker.rerank("uncached", ["one"])
+    assert reranker.rerank("uncached", ["one"])
+    assert calls == 2
+
+
+def test_native_score_does_not_cache_old_generation(monkeypatch):
+    reranker = NativeReranker()
+
+    def score_and_advance_generation(_lib, _handle, _query, _docs, n, out):
+        for i in range(n):
+            out[i] = float(i + 1)
+        reranker._generation += 1
+        return 0
+
+    monkeypatch.setattr(_FakeLib, "mcp_rerank_score", score_and_advance_generation)
+    result = reranker._score("generation", ["changed"])
+    assert result == [1.0]
+    assert reranker._score_cache == {}

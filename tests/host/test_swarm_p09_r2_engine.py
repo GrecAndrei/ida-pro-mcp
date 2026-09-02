@@ -27,12 +27,14 @@ from __future__ import annotations
 import os
 import shutil
 import stat
+import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
 from ida_pro_mcp.host import r2_engine as r2_engine_mod
-from ida_pro_mcp.host.errors import MCPError, is_error_result
+from ida_pro_mcp.host.errors import MCPError, is_error_result, make_error
 from ida_pro_mcp.host.r2_engine import R2Engine
 from ida_pro_mcp.host.server.server import IDAMCPServer
 
@@ -721,3 +723,202 @@ def test_contract_load_hints_real(real_engine, tmp_path):
     assert is_error_result(res) is False
     assert res.get("ok") is True
     assert "load_hints" in res
+
+
+# ---------------------------------------------------------------------------
+# Boundary and parser tests that do not require a real r2 installation.
+# ---------------------------------------------------------------------------
+def test_r2_helper_parsers_cover_malformed_output_and_disagreements():
+    assert r2_engine_mod._extract_json_object('notice\n{"ok": true}') == {"ok": True}
+    assert r2_engine_mod._extract_json_object("no object") is None
+    assert r2_engine_mod._extract_json_object("{not-json}") is None
+    assert r2_engine_mod._extract_json_object("[1, 2]") is None
+
+    assert r2_engine_mod._decode_stdout({"stdout": b"bytes"}) == "bytes"
+    assert r2_engine_mod._decode_stdout({"stdout": "text"}) == "text"
+    assert r2_engine_mod._decode_stdout({}) == ""
+    assert r2_engine_mod._decode_stderr({"stderr": b"warning"}) == "warning"
+    assert r2_engine_mod._decode_stderr({"stderr": "text"}) == "text"
+
+    assert r2_engine_mod._scan_words(b"abcd", 1, 3, "little") == []
+    assert r2_engine_mod._scan_words(b"\x01\x00\x00\x00", 2**32, 4, "little") == []
+    results = r2_engine_mod._compute_disagreements(
+        [
+            {"error": "failed", "instructions": [{"offset": 0, "text": "bad"}]},
+            {
+                "arch": "a",
+                "bits": 32,
+                "instructions": [{"offset": 0, "size": 2, "bytes": "aa", "text": "mov r0"}],
+            },
+            {
+                "arch": "b",
+                "bits": 64,
+                "instructions": [{"offset": 0, "size": 4, "bytes": "aabb", "text": "add r0"}],
+            },
+        ]
+    )
+    assert results[0]["offset"] == 0
+    assert len(results[0]["interpretations"]) == 2
+
+
+def test_r2_env_and_restricted_cwd_are_minimal(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", "/custom/bin")
+    monkeypatch.setenv("HOME", "/custom/home")
+    monkeypatch.setenv("IDA_MCP_SESSION_TOKEN", "secret")
+    env = r2_engine_mod._r2_env()
+    assert env == {
+        "PATH": "/custom/bin",
+        "HOME": "/custom/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "R2_NOPLUGINS": "1",
+    }
+    assert "IDA_MCP_SESSION_TOKEN" not in env
+
+    target = tmp_path / "raw.bin"
+    target.write_bytes(b"x")
+    assert R2Engine._restricted_cwd(str(target)) == str(tmp_path)
+    assert R2Engine._restricted_cwd(str(tmp_path / "missing" / "file")) == r2_engine_mod.tempfile.gettempdir()
+
+
+def test_one_shot_start_and_exit_boundaries(monkeypatch):
+    engine = R2Engine(bin_path="fake", timeout=0.1)
+
+    monkeypatch.setattr(
+        r2_engine_mod.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("denied")),
+    )
+    denied = engine._one_shot(["fake"])
+    assert denied["code"] == MCPError.R2_ENGINE_START_FAILED
+    assert "denied" in denied["message"]
+
+    monkeypatch.setattr(
+        r2_engine_mod.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=7, stdout=b"", stderr=b"bad command"
+        ),
+    )
+    exited = engine._one_shot(["fake"])
+    assert exited["code"] == MCPError.R2_ENGINE_START_FAILED
+    assert exited["details"]["returncode"] == 7
+    assert exited["details"]["stderr"] == "bad command"
+
+    monkeypatch.setattr(
+        r2_engine_mod.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=7, stdout=b"usable output", stderr=b"warning"
+        ),
+    )
+    usable = engine._one_shot(["fake"])
+    assert usable["ok"] is True
+    assert usable["returncode"] == 7
+
+
+def test_status_and_bininfo_handle_nonstandard_engine_output(tmp_path, monkeypatch):
+    engine = R2Engine()
+    monkeypatch.setattr(
+        engine,
+        "_one_shot",
+        lambda _argv: {"ok": True, "stdout": b"Rizin nightly build", "stderr": b""},
+    )
+    status = engine.status()
+    assert status["variant"] == "rizin"
+    assert status["version"] is None
+
+    binary = _write_raw_bin(tmp_path)
+    calls = []
+
+    def fake_bininfo(flags, path):
+        calls.append((flags, path))
+        if flags == ["-Ij"]:
+            return {"info": {"class": "raw", "type": "blob"}}
+        return {"entries": [{"vaddr": 1}, "ignore-me"]}
+
+    monkeypatch.setattr(engine, "_run_bininfo_json", fake_bininfo)
+    info = engine.bininfo(binary)
+    assert info["filetype"] == "raw"
+    assert info["entries"] == [{"vaddr": 1}]
+    assert len(calls) == 2
+
+
+def test_load_hints_keeps_context_when_advisory_sources_fail(tmp_path, monkeypatch):
+    engine = R2Engine()
+    binary = _write_raw_bin(tmp_path)
+    monkeypatch.setattr(
+        engine,
+        "bininfo",
+        lambda _path: make_error(MCPError.R2_ENGINE_START_FAILED, "bininfo unavailable"),
+    )
+
+    def fail_inference(_path):
+        raise RuntimeError("heuristic failure")
+
+    monkeypatch.setattr(
+        "ida_pro_mcp.host.analysis.arch_profile.infer_binary_arch_profile",
+        fail_inference,
+    )
+    hints = engine.load_hints(
+        binary,
+        {"processor": "metapc", "bitness": 64, "endian": "little", "baseaddr": 0},
+    )
+    assert hints["ok"] is True
+    assert hints["processor"] == "metapc"
+    assert hints["bitness"] == 64
+    assert hints["arch_context_applied"] is True
+    assert "heuristic failure" in hints["reason"]
+    assert hints["bininfo"] is None
+
+
+def test_decode_window_filters_invalid_lines_and_negative_offsets(tmp_path, monkeypatch):
+    engine = R2Engine()
+    binary = _write_raw_bin(tmp_path)
+    monkeypatch.setattr(
+        engine,
+        "_one_shot",
+        lambda _argv: {
+            "ok": True,
+            "stdout": (
+                "\x1b[31m0x00000010 13 00 mov r0\x1b[0m\n"
+                "0x0000000f 13 00 before-base\n"
+                "0x00000010 13 00 invalid instruction\n"
+                "not an instruction\n"
+            ),
+            "stderr": b"",
+        },
+    )
+    result = engine._decode_window(binary, 0, 8, 0x10, "thumb", {"bits": 16})
+    assert result["decode_error"] is None
+    assert result["instructions"] == [
+        {"offset": 0, "size": 2, "bytes": "1300", "text": "mov r0"}
+    ]
+
+
+def test_disassemble_and_vxrefs_io_boundaries(tmp_path, monkeypatch):
+    engine = R2Engine()
+    binary = _write_raw_bin(tmp_path)
+    monkeypatch.setattr(
+        r2_engine_mod.os.path,
+        "getsize",
+        lambda _path: (_ for _ in ()).throw(OSError("stat failed")),
+    )
+    stat_result = engine.disassemble_hypothesis(binary)
+    assert stat_result["code"] == MCPError.IO_ERROR
+
+    monkeypatch.undo()
+    monkeypatch.setattr(
+        "builtins.open",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("read failed")),
+    )
+    read_result = engine.vxrefs(binary, target=1)
+    assert read_result["code"] == MCPError.IO_ERROR
+
+    blob = bytearray(b"\x00" * 16)
+    blob[4:8] = (1).to_bytes(4, "little")
+    target = _write_raw_bin(tmp_path, name="pointers.bin", data=bytes(blob))
+    monkeypatch.undo()
+    result = engine.vxrefs(target, target=1, pointer_width=3, endian="middle", limit=-1)
+    assert result["ok"] is True
+    assert result["count"] == 0
