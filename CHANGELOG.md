@@ -4,6 +4,10 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
 
 ## 2026-09-02 — PR-work coverage checkpoint
 
+ - Expanded fake-ctree vulnerability coverage for allocator and format
+   argument conventions, prototype mismatches, UAF/NULL handling, call
+   injection patterns, CFG reachability, stack-frame findings, writable
+   globals, suspicious shared strings, shellcode markers, and processor modes.
  - Expanded gadget coverage across architecture-specific pivot catalogs,
    RISC-V parser and decoder fallbacks, public dispatch modes, raw/head scans,
    mitigation persistence, classifier failures, and exploit-chain blackboard
