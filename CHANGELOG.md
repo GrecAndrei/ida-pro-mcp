@@ -4,10 +4,10 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
 
 ## 2026-09-02 — PR-work coverage checkpoint
 
-  - Expanded deterministic offline coverage across the host/IDA bridge, public
-    operation dispatch, response handling, type and analysis surfaces, gadget
-    discovery, retrieval, and cross-mode test isolation. The corrected PR branch
-  now passes 4,599 tests and measures 86.61% branch-aware source coverage;
+ - Expanded deterministic offline coverage across the host/IDA bridge, public
+   operation dispatch, response handling, type and analysis surfaces, gadget
+   discovery, retrieval, and cross-mode test isolation. The corrected PR branch
+   now passes 4,599 tests and measures 87.15% branch-aware source coverage;
   installer discovery, installer mode contracts, and bridge startup/runtime
   failure paths received another focused test pass. Opt-in live-IDA tests
   remain separately gated.
@@ -16,8 +16,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    while keeping this PR focused on coverage and stability.
  - Added focused offline matrices for debug symbols, deep imports, query
    parsing/execution, semantic matching, synchronization/cache behavior,
-   batch macros, and bootstrap-session validation. Also fixed comparison
-   aliases such as `neq` being parsed as the shorter `ne` operator.
+   batch macros, bootstrap-session validation, and gadget architecture,
+   mitigation, and dispatch modes. Also fixed comparison aliases such as
+   `neq` being parsed as the shorter `ne` operator.
 
 - Expanded offline and opt-in live coverage across the public and legacy MCP
   surfaces, and stabilized batch-history and client-path tests.
