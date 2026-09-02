@@ -4,6 +4,8 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
 
 ## 2026-09-02 — PR-work coverage checkpoint
 
+ - Declared the development tokenizer dependency required by the occupancy
+   report tests and standalone CI collection.
  - Fixed PR CI lint failures in the session-gate and IDA-side RPC surface
    tests.
  - Expanded cross-mode offline coverage for dispatch continuations,
