@@ -54,6 +54,12 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added threat-corpus boundary coverage for malformed and normalized CWE,
    ATT&CK, and YARA inputs, source download/build failures, cache fallbacks,
    and singleton recheck behavior.
+ - Added cross-platform runtime coverage for process-tree failure handling,
+   psutil filtering, Windows WMIC fallback, Linux `/proc` discovery, and
+   live-runtime protection.
+ - Added intelligence-core coverage for GPU and model discovery fallbacks,
+   shared embedder lease probing, idle shutdown state, and classifier cache
+   generation edges.
 
 - Expanded offline and opt-in live coverage across the public and legacy MCP
   surfaces, and stabilized batch-history and client-path tests.

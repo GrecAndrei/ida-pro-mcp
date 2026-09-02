@@ -6,6 +6,7 @@ import json
 import os
 import socket
 import subprocess
+import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -251,3 +252,123 @@ def test_json_rendering_and_backup_paths_cover_non_json_values(tmp_path):
     assert backup and Path(backup).exists() and not source.exists()
     host._cleanup_stale_idb_family(backup)
     assert host._backup_idb(str(tmp_path / "missing.i64")) is None
+
+
+def test_terminate_ida_processes_covers_psutil_and_live_pid_filtering(monkeypatch, tmp_path):
+    host = _Host(tmp_path)
+    target = tmp_path / "sample.i64"
+    target.write_bytes(b"idb")
+
+    class Process:
+        def __init__(self, info):
+            self.info = info
+
+    live = _Proc()
+    live.pid = 111
+    host.session_runtimes["LIVE1234"] = {"process": live}
+    candidates = [
+        Process({"pid": 111, "name": "idat64", "cmdline": ["idat64", str(target)]}),
+        Process({"pid": 222, "name": "idat64", "cmdline": ["idat64", str(target)]}),
+        Process({"pid": 333, "name": "unrelated", "cmdline": ["unrelated", str(target)]}),
+        Process({"pid": "bad", "name": "ida64", "cmdline": ["ida64", str(target)]}),
+    ]
+    psutil = SimpleNamespace(process_iter=lambda _attrs: candidates)
+    monkeypatch.setitem(sys.modules, "psutil", psutil)
+    grouped = []
+    killed = []
+    monkeypatch.setattr(runtime_mod.os, "getpgid", lambda pid: pid if pid == 222 else 1)
+    monkeypatch.setattr(runtime_mod.os, "killpg", lambda pid, sig: grouped.append((pid, sig)))
+    monkeypatch.setattr(runtime_mod.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+
+    assert host._terminate_ida_processes_for_path(str(target)) == [222]
+    assert grouped == [(222, runtime_mod.signal.SIGTERM)]
+    assert killed == []
+
+    class BrokenProcess:
+        @property
+        def info(self):
+            raise RuntimeError("process disappeared")
+
+    monkeypatch.setitem(sys.modules, "psutil", SimpleNamespace(process_iter=lambda _attrs: [BrokenProcess()]))
+    assert host._terminate_ida_processes_for_path(str(target)) == []
+
+
+def test_terminate_ida_processes_uses_windows_wmic_fallback(monkeypatch, tmp_path):
+    host = _Host(tmp_path)
+    target = tmp_path / "sample.i64"
+    target.write_bytes(b"idb")
+    commands = []
+
+    def run(command, **_kwargs):
+        commands.append(command)
+        if command[0] == "wmic":
+            return SimpleNamespace(
+                stdout=(
+                    "ProcessId: 321\n"
+                    f"CommandLine: idat64.exe -o{target}\n"
+                    "ProcessId: not-a-pid\n"
+                    f"CommandLine: idat64.exe {target}\n"
+                )
+            )
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setitem(sys.modules, "psutil", None)
+    monkeypatch.setattr(runtime_mod.sys, "platform", "win32")
+    monkeypatch.setattr(runtime_mod.subprocess, "run", run)
+    assert host._terminate_ida_processes_for_path(str(target)) == [321]
+    assert commands[0][0] == "wmic"
+    assert commands[1][:4] == ["taskkill", "/T", "/F", "/PID"]
+
+
+def test_terminate_ida_processes_uses_proc_fallback_and_skips_bad_entries(monkeypatch, tmp_path):
+    host = _Host(tmp_path)
+    target = tmp_path / "sample.i64"
+    target.write_bytes(b"idb")
+    real_open = open
+    real_realpath = runtime_mod.os.path.realpath
+
+    monkeypatch.setitem(sys.modules, "psutil", None)
+    monkeypatch.setattr(runtime_mod.sys, "platform", "linux")
+    monkeypatch.setattr(runtime_mod.os, "listdir", lambda path: ["not-a-pid", "444"])
+
+    def proc_open(path, *args, **kwargs):
+        if path == "/proc/444/cmdline":
+            return __import__("io").BytesIO(f"idat64\x00{target}\x00".encode())
+        return real_open(path, *args, **kwargs)
+
+    def realpath(path):
+        if path == "/proc/444/exe":
+            return "/opt/ida/idat64"
+        return real_realpath(path)
+
+    monkeypatch.setattr("builtins.open", proc_open)
+    monkeypatch.setattr(runtime_mod.os.path, "realpath", realpath)
+    sent = []
+    monkeypatch.setattr(runtime_mod.os, "kill", lambda pid, sig: sent.append((pid, sig)))
+    assert host._terminate_ida_processes_for_path(str(target)) == [444]
+    assert sent == [(444, runtime_mod.signal.SIGTERM)]
+
+
+def test_process_tree_failure_paths_are_best_effort(monkeypatch):
+    class Proc:
+        pid = 777
+
+        def wait(self, **_kwargs):
+            return None
+
+    calls = []
+
+    def killpg(pid, sig):
+        calls.append((pid, sig))
+        if sig == runtime_mod.signal.SIGTERM:
+            raise RuntimeError("permission denied")
+        if sig == runtime_mod.signal.SIGKILL:
+            raise ProcessLookupError
+
+    clock = iter((100.0, 100.01, 100.06))
+    monkeypatch.setattr(runtime_mod.sys, "platform", "linux")
+    monkeypatch.setattr(runtime_mod.os, "killpg", killpg)
+    monkeypatch.setattr(runtime_mod.time, "time", lambda: next(clock))
+    monkeypatch.setattr(runtime_mod.time, "sleep", lambda _seconds: None)
+    runtime_mod._kill_process_tree(Proc(), grace_seconds=0.05)
+    assert calls == [(777, runtime_mod.signal.SIGTERM), (777, 0), (777, runtime_mod.signal.SIGKILL)]
