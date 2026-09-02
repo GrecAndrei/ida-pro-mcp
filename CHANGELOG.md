@@ -30,6 +30,8 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    diagnostics, structured disassembly, argument tracing, and detector scans.
  - Added deeper code-helper coverage for indirect ctree calls, computed sizes,
    constant-load string fallbacks, and disassembly recovery paths.
+ - Added code-helper boundary coverage for nested ctree safety checks,
+   pcrel string materialization, and tight-window recovery.
  - Expanded session administration coverage for narrative limits, validation,
    bulk tagging/deletion cleanup, snapshots, merges, macro registry behavior,
    conditional workflow branches, and recent-workset options.
