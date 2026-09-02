@@ -152,7 +152,6 @@ def test_background_create_and_switch_select_paths(tmp_path, monkeypatch):
     session.analysis_options = {"processor": "arm"}
     session.binary_path = str(tmp_path / "sample.bin")
     (tmp_path / "sample.bin").write_bytes(b"payload")
-    sid = session.session_id
 
     monkeypatch.setattr(session_mod, "background_open_enabled", lambda: True)
     host._prepare_open_args = lambda _args: (session.binary_path, {"processor": "arm"}, {}, False, ["-A"], make_error(MCPError.INVALID_ARGS, "bad"))

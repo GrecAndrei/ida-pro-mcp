@@ -4,6 +4,8 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
 
 ## 2026-09-02 — PR-work coverage checkpoint
 
+ - Fixed PR CI lint failures in the session-gate and IDA-side RPC surface
+   tests.
  - Expanded cross-mode offline coverage for dispatch continuations,
    annotation/comment management, code-helper scanners, and architecture
    inference.

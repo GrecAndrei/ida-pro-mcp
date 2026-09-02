@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 
+
 def test_rpc_decorators_delegate_and_record_metadata(monkeypatch):
     # Resolve the canonical module from ``sys.modules``.  Some IDA-side tests
     # load compatibility modules through a standalone loader; importing
