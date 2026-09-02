@@ -24,6 +24,8 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    and degraded pre-analysis behavior.
  - Expanded session-host coverage for state caching, runtime observability,
    cleanup, and declarative action fallbacks.
+ - Expanded bootstrap lifecycle coverage for mitigation, autopilot,
+   calibration, disputes, reweighting, and persisted outcome paths.
  - Expanded session administration coverage for narrative limits, validation,
    bulk tagging/deletion cleanup, snapshots, merges, macro registry behavior,
    conditional workflow branches, and recent-workset options.
