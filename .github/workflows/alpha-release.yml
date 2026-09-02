@@ -46,7 +46,7 @@ jobs:
             exit 1
           }
           git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"
-          version="$(python -c 'from ida_pro_mcp._version import __version__; print(__version__)')"
+          version="$(PYTHONPATH=src python -c 'from ida_pro_mcp._version import __version__; print(__version__)')"
           test "v$version" = "$RELEASE_TAG" || {
             echo "tag $RELEASE_TAG does not match package version $version" >&2
             exit 1

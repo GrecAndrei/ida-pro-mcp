@@ -22,7 +22,7 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Reorganized documentation into structured subfolders (`docs/releases/`, `docs/operations/`,
    `docs/reference/`, `docs/guide/`) and removed loose root markdown files.
  - Updated the release workflow (`alpha-release.yml`) to automatically resolve
-   `docs/releases/${RELEASE_TAG}.md` when publishing.
+   `docs/releases/${RELEASE_TAG}.md` when publishing, and ensured PYTHONPATH includes `src`.
  - Synchronized user guides, client setup, and cross-references to the official external
    GitHub Wiki repository (`https://github.com/GrecAndrei/ida-pro-mcp/wiki`).
 
