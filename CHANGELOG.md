@@ -4,6 +4,10 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
 
 ## 2026-09-02 — PR-work coverage checkpoint
 
+ - Expanded gadget coverage across architecture-specific pivot catalogs,
+   RISC-V parser and decoder fallbacks, public dispatch modes, raw/head scans,
+   mitigation persistence, classifier failures, and exploit-chain blackboard
+   safeguards.
  - Added offline architecture coverage for RISC-V GP reference repair,
    stale/unmapped target handling, processor-option fallback, reanalysis
    scheduling, and signed immediate detection.
