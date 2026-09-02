@@ -25,6 +25,7 @@ no live IDA session is required.
 import sys
 import types
 import unittest
+from unittest import mock
 
 from tests._isolated_repo_loader import load_tool_module
 
@@ -674,6 +675,407 @@ class TestPureHelpers(unittest.TestCase):
         patterns = _patterns(findings)
         self.assertIn("strcpy_unbounded", patterns)
         self.assertIn("command_injection", patterns)
+
+
+class _TextCfunc(_Cfunc):
+    def __init__(self, text, lvars=None, entry_ea=0):
+        super().__init__(lvars=lvars, entry_ea=entry_ea)
+        self._text = text
+
+    def __str__(self):
+        return self._text
+
+
+class TestCodeHelpersCoverageMore(unittest.TestCase):
+    """Exercise cross-mode helper paths that the regression cases do not hit."""
+
+    def setUp(self):
+        self.mod = load_tool_module("code_helpers")
+        sys.modules["idaapi"].BADADDR = BADADDR
+        sys.modules["idaapi"].FUNC_LIB = 1
+        sys.modules["ida_lines"].tag_remove = lambda value: str(value or "")
+
+    def test_cfg_summary_and_dataflow_edges(self):
+        self.mod._compat.get_flow_chart = lambda _ea: None
+        self.assertEqual(self.mod._compute_cfg_semantics(_Func(1))["nodes"], 0)
+
+        first = _BB(0x1000, 0x1010)
+        second = _BB(0x1010, 0x1020)
+        first._succs = [second]
+        second._succs = [first]
+        self.mod._compat.get_flow_chart = lambda _ea: [first, second]
+        cfg = self.mod._compute_cfg_semantics(_Func(0x1000))
+        self.assertEqual(cfg["nodes"], 2)
+        self.assertEqual(cfg["edges"], 2)
+        self.assertEqual(cfg["back_edges"], 1)
+        self.assertEqual(cfg["entry_blocks"], 0)
+        self.assertEqual(cfg["cyclomatic_complexity"], 2)
+
+        cfunc = _Cfunc([_LVar("dst", 0), _LVar("src", 1, is_arg_var=True)])
+        self.mod._collect_expr_rows_from_cfunc = lambda *_args, **_kwargs: [
+            (0x1000, "dst = src"),
+            (0x1004, "send(src)"),
+            (0x1008, "dst = dst"),
+        ]
+        flow = self.mod._build_decompiler_dataflow(cfunc)
+        self.assertEqual(flow["argument_variables"], ["src"])
+        self.assertEqual(flow["assignment_edges"], 1)
+        self.assertEqual(flow["call_edges"], 1)
+        self.assertIn({"from": "src", "to": "dst", "kind": "assign", "ea": "0x1000"}, flow["edges"])
+        self.assertEqual(flow["top_hubs"][0]["node"], "src")
+
+    def test_structure_summary_call_targets_and_control_points(self):
+        self.mod._compat.get_flow_chart = lambda _ea: []
+        self.mod._compat.get_func_start = lambda ea: ea
+        sys.modules["idautils"].FuncItems = lambda _ea: iter([0x1000, 0x1004])
+        sys.modules["idautils"].CodeRefsFrom = lambda ea, _flow: iter([0x2000, 0x1000] if ea == 0x1000 else [0x2000])
+        sys.modules["ida_funcs"].get_func_name = lambda ea: "" if ea == 0x2000 else "self"
+        func = _Func(0x1000, 0x1010)
+        summary = self.mod._build_function_structure_summary(func)
+        self.assertEqual(summary["call_targets"], ["0x2000"])
+        self.assertIn("calls: 0x2000", summary["evidence"])
+
+        hexrays = sys.modules["ida_hexrays"]
+        hexrays.CV_FAST = 0
+        hexrays.cit_if, hexrays.cit_while = 1, 2
+        hexrays.cit_for, hexrays.cit_switch = 3, 4
+
+        class Visitor:
+            def __init__(self, _flags):
+                pass
+
+            def apply_to(self, body, _item=None):
+                if hasattr(self, "visit_insn"):
+                    for insn in body.insns:
+                        self.visit_insn(insn)
+                return 0
+
+        hexrays.ctree_visitor_t = Visitor
+
+        class Expr:
+            def print1(self, _tag=None):
+                return "x > 0"
+
+        def control(op, container, field, ea):
+            return types.SimpleNamespace(
+                op=op,
+                ea=ea,
+                **{container: types.SimpleNamespace(**{field: Expr()})},
+            )
+
+        body = types.SimpleNamespace(insns=[
+            control(1, "cif", "expr", 0x1001),
+            control(2, "cwhile", "expr", BADADDR),
+            types.SimpleNamespace(op=99, ea=0x1003),
+        ])
+        cfunc = _Cfunc([_LVar("arg", 0, is_arg_var=True)])
+        cfunc.body = body
+        self.mod._build_decompiler_dataflow = lambda *_args, **_kwargs: {
+            "argument_variables": ["arg"], "top_hubs": [{"node": "arg", "degree": 1}],
+            "assignment_edges": 2, "call_edges": 3,
+        }
+        detailed = self.mod._build_function_structure_summary(func, cfunc, details=True)
+        self.assertEqual([p["kind"] for p in detailed["control_points"]], ["if", "while"])
+        self.assertEqual(detailed["dataflow"]["call_edges"], 3)
+        self.assertIn("control: if(x > 0); while(x > 0)", detailed["evidence"])
+
+    def test_variable_rename_hints_type_usage_and_argument_heuristics(self):
+        typed = _TextCfunc("int f(a1) { return a1; }", [_LVar("a1", 0, "wifi_frame_t *")])
+        hints = self.mod._extract_var_rename_hints(typed)
+        self.assertEqual(hints[0]["suggested"], "frame")
+        self.assertIn("type=wifi_frame_t", hints[0]["reason"])
+
+        usage = _TextCfunc(
+            "v1 = recv(fd, v1, n); v2 = send(fd, v2, n); "
+            "v3 = malloc(v3); v4 = AES_encrypt(v4);",
+            [_LVar("v1", 0), _LVar("v2", 1), _LVar("v3", 2), _LVar("v4", 3)],
+        )
+        usage_hints = self.mod._extract_var_rename_hints(usage)
+        self.assertEqual([h["suggested"] for h in usage_hints], ["recv_buf", "send_buf", "heap_buf", "key_buf"])
+
+        arg = _TextCfunc("int handle(a1, a2)", [_LVar("a1", 0), _LVar("a2", 1)])
+        arg.type = "int handle(int fd, int size)"
+        arg_hints = self.mod._extract_var_rename_hints(arg)
+        self.assertEqual([h["suggested"] for h in arg_hints], ["fd", "size"])
+
+    def test_firmware_signal_and_memory_target_modes(self):
+        mod = self.mod
+        insn = types.SimpleNamespace(ops=[types.SimpleNamespace(type=4)])
+        mod.ida_ua = types.SimpleNamespace(
+            insn_t=lambda: insn,
+            decode_insn=lambda _insn, _ea: 1,
+            get_operand_value=lambda _insn, _idx: 0x40001234,
+            o_displ=4,
+            o_mem=2,
+        )
+        self.assertEqual(mod._store_memory_target(0x1000), 0x40001234)
+        mod.ida_ua.decode_insn = lambda _insn, _ea: 0
+        self.assertIsNone(mod._store_memory_target(0x1000))
+
+        mod.ida_ua.decode_insn = lambda _insn, _ea: 1
+        mod._compat.get_func_info = lambda _ea: _Func(0x1000, 0x100C)
+        mod.is_riscv_family = lambda: True
+        mod.is_syscall_mnemonic = lambda mnem: mnem == "ecall"
+        mnems = {0x1000: "ecall", 0x1004: "csrrw", 0x1008: "sw"}
+        mod.idc.print_insn_mnem = lambda ea: mnems.get(ea, "")
+        mod.idc.next_head = lambda ea, _end: {0x1000: 0x1004, 0x1004: 0x1008, 0x1008: BADADDR}.get(ea, BADADDR)
+        mod._store_memory_target = lambda ea: 0x40001234 if ea == 0x1008 else None
+        signals = mod._detect_firmware_signals(0x1000)
+        self.assertEqual(signals, ["syscall:ecall", "csr_access:csrrw", "mmio_store:0x40001234"])
+
+        mod.is_syscall_mnemonic = lambda _mnem: False
+        mod.is_riscv_family = lambda: False
+        mod.idc.print_insn_mnem = lambda _ea: ""
+        self.assertEqual(mod._detect_firmware_signals(0x1000, "0x40001234"), ["constant_ref:0x40001234"])
+
+    def test_candidate_strings_and_constant_load_pairs(self):
+        mod = self.mod
+        mod.ida_bytes.is_loaded = lambda ea: ea == 0x40001234
+        mod.ida_bytes.get_bytes = lambda _ea, _n: b"firmware\x00ignored"
+        self.assertEqual(mod._read_candidate_string(0x40001234), "firmware")
+        mod.ida_bytes.get_bytes = lambda _ea, _n: b"\x01\x02\x00"
+        self.assertIsNone(mod._read_candidate_string(0x40001234))
+        mod.ida_bytes.get_bytes = lambda _ea, _n: "abc\x00"
+        self.assertEqual(mod._read_candidate_string(0x40001234), "abc")
+
+        mod._compat.get_func_info = lambda _ea: _Func(0x1000, 0x100C)
+        mnem = {0x1000: "lui", 0x1004: "addi", 0x1008: "mov"}
+        operands = {
+            (0x1000, 0): "a0", (0x1000, 1): "0x40001",
+            (0x1004, 0): "a0", (0x1004, 1): "a0", (0x1004, 2): "0x234",
+            (0x1008, 0): "a1", (0x1008, 1): "0x40001234",
+        }
+        values = {(0x1000, 1): 0x40001, (0x1004, 2): 0x234, (0x1008, 1): 0x40001234}
+        mod.idc.print_insn_mnem = lambda ea: mnem.get(ea, "")
+        mod.idc.print_operand = lambda ea, idx: operands.get((ea, idx), "")
+        mod.idc.get_operand_value = lambda ea, idx: values.get((ea, idx), 0)
+        mod.idc.next_head = lambda ea, _end: {0x1000: 0x1004, 0x1004: 0x1008, 0x1008: BADADDR}.get(ea, BADADDR)
+        mod.ida_bytes.is_loaded = lambda _ea: True
+        mod.ida_bytes.get_bytes = lambda _ea, _n: b"boot\x00"
+        hits = mod._scan_constant_load_strings(0x1000)
+        self.assertEqual(hits, [{"addr": 0x40001234, "value": "boot"}])
+
+    def test_function_string_entries_primary_and_fallback(self):
+        mod = self.mod
+        ref = types.SimpleNamespace(iscode=False, to=0x3000)
+        mod.idautils.FuncItems = lambda _ea: iter([0x1000])
+        mod.idautils.XrefsFrom = lambda _ea, _flow: iter([ref])
+        mod.idc.get_strlit_contents = lambda _ea, *_args: b"hello"
+        entries = mod._collect_function_string_entries(0x1000)
+        self.assertEqual(entries, [{"addr": "0x3000", "value": "hello"}])
+        self.assertEqual(mod._collect_function_strings(0x1000), ["hello"])
+
+        mod.idautils.XrefsFrom = lambda _ea, _flow: iter([])
+        mod._scan_constant_load_strings = lambda _ea, _limit: [{"addr": 0x4000, "value": "fallback"}]
+        self.assertEqual(mod._collect_function_strings(0x1000), ["fallback"])
+
+    def test_dangerous_text_modes_and_diagnostics(self):
+        mod = self.mod
+        pseudo = (
+            'recv(sock, input, n); memcpy(dst, src, input); '
+            'sprintf(buf, fmt); system(cmd); malloc(a*b); '
+            'access(path, 0); fopen(path, "r"); password = "secret"; '
+            'VirtualAlloc(x, n, 0, 0); WriteProcessMemory(p, q, r, n, z); '
+            'CreateRemoteThread(p, 0, 0, f, 0, 0, 0);'
+        )
+        findings = mod._detect_dangerous_patterns(
+            ["recv", "memcpy", "sprintf", "system", "malloc", "VirtualAlloc",
+             "WriteProcessMemory", "CreateRemoteThread", "access", "fopen"],
+            pseudo, detailed=True,
+        )
+        patterns = _patterns(findings)
+        self.assertIn("source_to_sink_flow", patterns)
+        self.assertIn("command_injection", patterns)
+        self.assertIn("hardcoded_secret", patterns)
+        self.assertIn("process_injection", patterns)
+        self.assertIn("remote_thread_injection", patterns)
+        self.assertIn("toctou_race", patterns)
+        self.assertTrue(mod._detect_dangerous_patterns([], "gets(buf);", detailed=False))
+
+        mod.ida_hexrays.init_hexrays_plugin = lambda: False
+        _, error = mod._decompile_with_diagnostics(0x1000)
+        self.assertEqual(error["code"], "DECOMPILER_UNAVAILABLE")
+        mod.ida_hexrays.init_hexrays_plugin = lambda: (_ for _ in ()).throw(RuntimeError("init"))
+        _, error = mod._decompile_with_diagnostics(0x1000)
+        self.assertEqual(error["code"], "DECOMPILER_UNAVAILABLE")
+
+        mod.ida_hexrays.init_hexrays_plugin = lambda: True
+        mod._compat.HAS_DECOMPILER = False
+        mod.ida_hexrays.decompile = lambda _ea: None
+        _, error = mod._decompile_with_diagnostics(0x1000)
+        self.assertEqual(error["code"], "DECOMPILER_FAILED")
+
+    def test_annotation_and_disassembly_rendering_modes(self):
+        mod = self.mod
+        mod.idaapi.BADADDR = BADADDR
+        mod.idc.generate_disasm_line = lambda _ea, _flags: "<color>mov rax, rbx"
+        mod.ida_lines.tag_remove = lambda value: value.replace("<color>", "")
+        mod.idc.get_cmt = lambda ea, repeat: "comment" if ea == 0x1000 and repeat == 0 else ""
+        mod.idc.get_item_size = lambda _ea: 3
+        mod.ida_bytes.get_byte = lambda ea: {0x1000: 0x48, 0x1001: 0x89, 0x1002: 0xD8}.get(ea, 0)
+        mod._annotate_branch_target = lambda _ea, _text: "target (0x2000)"
+        line = mod._format_disasm_line(
+            0x1000, style="classic", include_bytes=True,
+            include_comments=True, annotate_branches=True,
+        )
+        self.assertIn("0x1000  mov rax, rbx", line)
+        self.assertIn("-> target (0x2000)", line)
+        self.assertIn("bytes=48 89 d8", line)
+        self.assertIn("// comment", line)
+        self.assertTrue(mod._format_disasm_line(0x1000, style="annotated", mark_all=False).startswith("0x1000:"))
+        mod.idc.generate_disasm_line = lambda _ea, _flags: ""
+        self.assertIn("<data>", mod._format_disasm_line(0x1000))
+
+        mod._is_flow_control_mnemonic = lambda mnem, arch=None: mnem.lower() == "beq"
+        mod._flow_target_ea = lambda _ea: 0x2000
+        mod.idc.generate_disasm_line = lambda _ea, _flags: "beq a0, a1, loc_2000"
+        mod.idc.print_insn_mnem = lambda _ea: "beq"
+        mod.idc.print_operand = lambda _ea, idx: {0: "a0", 1: "a1", 2: "loc_2000"}.get(idx, "")
+        mod.idc.get_cmt = lambda _ea, repeat: "repeatable" if repeat == 1 else ""
+        mod.idc.get_item_size = lambda _ea: 2
+        mod.ida_bytes.get_byte = lambda _ea: 0x13
+        mod.idaapi.get_dref_cnt = lambda _ea: 2
+        mod.idaapi.get_dref = lambda _ea, idx: [0x3000, BADADDR][idx]
+        mod.idc.get_name = lambda ea: "global_value" if ea == 0x3000 else ""
+        structured = mod._format_disasm_structured(0x1000)
+        self.assertEqual(structured["operands"], ["a0", "a1", "loc_2000"])
+        self.assertEqual(structured["branch_target"], "0x2000")
+        self.assertEqual(structured["comment"], "repeatable")
+        self.assertEqual(structured["data_refs"], [{"addr": "0x3000", "name": "global_value"}])
+
+        mod.idc.next_head = lambda ea, _end: {0x1000: 0x1002, 0x1002: BADADDR}.get(ea, BADADDR)
+        self.assertEqual(len(mod._disasm_range(0x1000, 0x1004, max_items=4, style="csmini", include_bytes=False)), 2)
+        mod.idc.next_head = lambda _ea, _end: BADADDR
+        mod.idc.get_item_size = lambda _ea: 2
+        self.assertEqual(len(mod._disasm_range_structured(0x1000, 0x1004, 3)), 2)
+
+        mod.idc.prev_head = lambda ea, _end: {0x1002: 0x1000, 0x1000: BADADDR}.get(ea, BADADDR)
+        mod.idc.next_head = lambda ea, _end: {0x1000: 0x1002, 0x1002: 0x1004, 0x1004: BADADDR}.get(ea, BADADDR)
+        window = mod._disasm_window(0x1002, radius=4, max_items=3, style="csmini", include_bytes=False)
+        self.assertEqual(len(window), 3)
+        self.assertIn("0x1002", window[1])
+
+    def test_flow_target_and_decompiler_retry_modes(self):
+        mod = self.mod
+        mod.idaapi.BADADDR = BADADDR
+        mod.ida_ua = types.SimpleNamespace(o_near=7, o_far=6)
+        mod._is_flow_control_mnemonic = lambda _mnem, arch=None: True
+        mod.idc.print_insn_mnem = lambda _ea: "beq"
+        mod.idc.get_operand_type = lambda _ea, idx: 7 if idx == 2 else 0
+        mod.idc.get_operand_value = lambda _ea, _idx: 0x2400
+        self.assertEqual(mod._flow_target_ea(0x1000), 0x2400)
+        mod._is_flow_control_mnemonic = lambda *_args, **_kwargs: False
+        self.assertIsNone(mod._flow_target_ea(0x1000))
+        mod._is_flow_control_mnemonic = lambda *_args, **_kwargs: True
+        mod.idc.get_operand_type = lambda *_args: (_ for _ in ()).throw(RuntimeError("operand"))
+        self.assertIsNone(mod._flow_target_ea(0x1000))
+
+        mod.ida_hexrays.init_hexrays_plugin = lambda: True
+        mod.ida_hexrays.hexrays_failure_t = lambda: types.SimpleNamespace(
+            code=7, errea=0x1004, str="bad cfg"
+        )
+        mod._compat.HAS_DECOMPILER = True
+        mod._compat.get_func_info = lambda _ea: _Func(0x1000, 0x1020)
+        retry_calls = []
+
+        def decompile_with_retry(*_args):
+            retry_calls.append(True)
+            return types.SimpleNamespace(name="cfunc") if len(retry_calls) == 2 else None
+
+        mod._compat.decompile_function = decompile_with_retry
+        mod.time.sleep = lambda _seconds: None
+        sys.modules["ida_auto"].plan_range = lambda *_args: None
+        result, error = mod._decompile_with_diagnostics(0x1000)
+        self.assertEqual(result.name, "cfunc")
+        self.assertIsNone(error)
+        self.assertEqual(len(retry_calls), 2)
+
+        mod._compat.decompile_function = lambda *_args: (_ for _ in ()).throw(RuntimeError("decompile"))
+        result, error = mod._decompile_with_diagnostics(0x1000)
+        self.assertIsNone(result)
+        self.assertEqual(error["code"], "DECOMPILER_FAILED")
+        mod._compat.HAS_DECOMPILER = False
+        mod.ida_hexrays.decompile = lambda _ea: types.SimpleNamespace(name="fallback")
+        result, error = mod._decompile_with_diagnostics(0x1000)
+        self.assertEqual(result.name, "fallback")
+        self.assertIsNone(error)
+
+    def test_context_and_custom_detector_dispatch(self):
+        mod = self.mod
+        mod._CUSTOM_DETECTORS.clear()
+        rule = {"type": "xor_threshold", "threshold": 3}
+        self.assertTrue(mod.register_detector("Crypto", rule)["ok"])
+        self.assertEqual(mod.list_detectors()[0]["name"], "crypto")
+        self.assertTrue(mod.delete_detector("CRYPTO"))
+        self.assertFalse(mod.delete_detector("missing"))
+
+        self.assertEqual(mod._run_custom_detector({"register": True, "rule": "bad"}, 5)["code"], "INVALID_ARGS")
+        self.assertTrue(mod._run_custom_detector({"list_detectors": True}, 5)["ok"])
+        self.assertEqual(mod._run_custom_detector({"delete_detector": True}, 5)["code"], "INVALID_ARGS")
+        self.assertEqual(mod._run_custom_detector({}, 5)["code"], "INVALID_ARGS")
+        mod._detect_api_chains = lambda *args, **kwargs: [{"name": "chain"}]
+        mod._detect_string_refs = lambda *args, **kwargs: [{"name": "string"}]
+        mod._detect_type_matches = lambda *args, **kwargs: [{"name": "type"}]
+        mod._detect_xor_heavy = lambda *args, **kwargs: [{"name": "xor"}]
+        mod._detect_callers_of = lambda *args, **kwargs: [{"name": "caller"}]
+        mod._detect_callees_of = lambda *args, **kwargs: [{"name": "callee"}]
+        self.assertEqual(mod._run_custom_detector({"rule_type": "api_chain", "apis": "recv, memcpy"}, 5)["count"], 1)
+        self.assertEqual(mod._run_custom_detector({"rule_type": "string_ref", "pattern": "secret"}, 5)["count"], 1)
+        self.assertEqual(mod._run_custom_detector({"rule_type": "type_match", "type": "char"}, 5)["count"], 1)
+        self.assertEqual(mod._run_custom_detector({"rule_type": "xor_threshold", "threshold": 2}, 5)["count"], 1)
+        self.assertEqual(mod._run_custom_detector({"rule_type": "caller_of", "target": "f"}, 5)["count"], 1)
+        self.assertEqual(mod._run_custom_detector({"rule_type": "callee_of", "function": "f"}, 5)["count"], 1)
+        self.assertEqual(mod._run_custom_detector({"rule_type": "unknown"}, 5)["code"], "INVALID_ARGS")
+        self.assertEqual(mod._run_custom_detector({"rule_type": "api_chain"}, 5)["code"], "INVALID_ARGS")
+        self.assertEqual(mod._run_custom_detector({"rule_type": "string_ref"}, 5)["code"], "INVALID_ARGS")
+        self.assertEqual(mod._run_custom_detector({"rule_type": "type_match"}, 5)["code"], "INVALID_ARGS")
+        self.assertEqual(mod._run_custom_detector({"rule_type": "caller_of"}, 5)["code"], "INVALID_ARGS")
+
+    def test_reference_and_detector_scan_helpers(self):
+        mod = self.mod
+        mod.idaapi.BADADDR = BADADDR
+        mod._iter_all_functions = lambda: iter([0x1000, 0x2000])
+        mod._compat.get_func_start = lambda ea: ea
+        mod.idc.get_func_name = lambda ea: {0x1000: "first", 0x2000: "second"}.get(ea, "")
+        mod.ida_funcs.get_func_name = mod.idc.get_func_name
+        mod.idautils.FuncItems = lambda ea: iter([ea])
+        mod.idautils.CodeRefsFrom = lambda ea, _flow: iter([0x3000]) if ea == 0x1000 else iter([])
+        mod.idc.get_name_ea_simple = lambda name: 0x3000 if name == "api" else BADADDR
+        mod.idc.get_name = lambda ea: "api" if ea == 0x3000 else ""
+        mod._is_flow_control_mnemonic = lambda *_args, **_kwargs: True
+        mod._flow_target_ea = lambda _ea: 0x3000
+        self.assertTrue(mod._function_may_reference_apis(0x1000, {"api"}, {0x3000}))
+        self.assertTrue(mod._function_may_reference_apis(0x2000, {"api"}, set()))
+
+        class StringObj:
+            ea = 0x4000
+
+            def __str__(self):
+                return "password token"
+
+        mod.idautils.Strings = lambda: iter([StringObj()])
+        mod.idautils.XrefsTo = lambda _ea: iter([types.SimpleNamespace(frm=0x1000)])
+        self.assertEqual(mod._detect_string_refs("password", max_items=2)[0]["name"], "first")
+
+        class Tinfo:
+            def get_func_details(self, data):
+                data._items = [types.SimpleNamespace(name="buf", type="char *")]
+                return True
+
+        mod.ida_typeinf.tinfo_t = Tinfo
+        mod.ida_typeinf.func_type_data_t = lambda: _FuncData([])
+        mod.ida_nalt.get_tinfo = lambda _tinfo, ea: ea == 0x1000
+        self.assertEqual(mod._detect_type_matches("char ")[0]["name"], "first")
+
+        mod.idc.print_insn_mnem = lambda ea: "XOR" if ea == 0x1000 else "mov"
+        self.assertEqual(mod._detect_xor_heavy(threshold=1)[0]["xor_count"], 1)
+
+        mod.idc.get_name_ea_simple = lambda name: 0x5000 if name == "_target" else BADADDR
+        mod._compat.get_func_start = lambda ea: ea
+        mod.idautils.CodeRefsFrom = lambda _ea, _flow: iter([0x2000])
+        self.assertEqual(mod._detect_callers_of("target")[0]["name"], "second")
+        mod.idautils.CodeRefsTo = lambda _ea, _flow: iter([0x2000])
+        self.assertEqual(mod._detect_callees_of("target")[0]["name"], "second")
 
 
 if __name__ == "__main__":
