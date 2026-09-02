@@ -9,6 +9,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    inference.
  - Added remaining cross-mode boundary coverage for session actions and search
    combinators.
+ - Expanded installer runtime and CLI coverage across process failures,
+   archive safety, signature staging, venv source modes, wizard choices,
+   embedder doctor outcomes, and packaged client configuration.
  - Expanded session administration coverage for narrative limits, validation,
    bulk tagging/deletion cleanup, snapshots, merges, macro registry behavior,
    conditional workflow branches, and recent-workset options.
