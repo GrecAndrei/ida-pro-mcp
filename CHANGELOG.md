@@ -7,6 +7,8 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Expanded cross-mode offline coverage for dispatch continuations,
    annotation/comment management, code-helper scanners, and architecture
    inference.
+ - Added remaining cross-mode boundary coverage for session actions and search
+   combinators.
  - Expanded session administration coverage for narrative limits, validation,
    bulk tagging/deletion cleanup, snapshots, merges, macro registry behavior,
    conditional workflow branches, and recent-workset options.
