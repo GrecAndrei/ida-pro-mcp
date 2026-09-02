@@ -673,6 +673,8 @@ def test_til_delete_export_and_import_cover_filters_and_error_modes(tmp_path):
     assert "struct Root" in exported_path.read_text(encoding="utf-8")
     assert mod.types(action="til_export")["code"] == "INVALID_ARGS"
     del mod.ida_typeinf.get_ordinal_qty
+    if hasattr(mod.ida_typeinf, "get_ordinal_count"):
+        del mod.ida_typeinf.get_ordinal_count
     assert mod.types(action="til_export", path=str(tmp_path / "none.h"))["code"] == "IDA_ERROR"
     mod.ida_typeinf.get_ordinal_qty = lambda _til: 6
 

@@ -41,6 +41,8 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    fake segment lookups cannot leak across IDA-side test modes.
  - Extended the central test isolation boundary to restore compatibility
    helpers alongside SDK stubs for the complete offline suite.
+ - Made the TIL export error-path fixture remove both supported ordinal-count
+   API spellings, keeping it valid with the complete fake-IDB harness.
 
 - Expanded offline and opt-in live coverage across the public and legacy MCP
   surfaces, and stabilized batch-history and client-path tests.
