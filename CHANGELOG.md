@@ -36,6 +36,9 @@
  - Added modify-surface coverage for compatibility aliases, governance
    redaction propagation, raw NOP sizing, local-variable failures, string/data
    authoring errors, persistence limits, and undo API fallbacks.
+ - Added a diff-scoped changed-line coverage gate: Python source additions
+   require added tests and at least 95% executable-line coverage, including
+   strict handling for unmeasured changed files.
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 

@@ -47,6 +47,22 @@ def test_standalone_ci_never_runs_live_ida_suite():
     )
 
 
+def test_standalone_ci_enforces_changed_line_coverage():
+    wf = _load_workflow("standalone-tests.yml")
+    test_job = wf["jobs"]["test"]
+    checkouts = [
+        step
+        for step in test_job["steps"]
+        if step.get("uses", "").startswith("actions/checkout@")
+    ]
+    assert checkouts and checkouts[0]["with"]["fetch-depth"] == 0
+
+    commands = [step.get("run", "") for step in test_job["steps"]]
+    coverage_commands = [command for command in commands if "coverage run" in command]
+    assert coverage_commands and "pytest" in coverage_commands[0]
+    assert "check_changed_line_coverage.py" in coverage_commands[0]
+
+
 def test_llama_cpp_pin_matches_build_script():
     """CI's llama.cpp pin must equal the build script's canonical default.
 
