@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-03 — Expand persistent-store edge coverage
+
+ - Added offline checks for knowledge-graph rollback and adaptive matching,
+   duplicate peripheral/gap updates, insight-index recovery, and symbol upsert
+   race merging.
+
 ## 2026-09-03 — Expand schema edge coverage
 
  - Added deterministic checks for alias normalization, compact schema modes,
