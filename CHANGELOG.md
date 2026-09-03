@@ -69,6 +69,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added shared error-layer coverage for timeout classification, IDA 9.4
    address/image fallbacks, mapped/code/function validation, debugger states,
    path safety, action suggestions, and missing-SDK behavior.
+ - Added offline search-code coverage for instruction sequence, text, operand,
+   and comment scans across relaxed ranges, context/offset handling, limits,
+   timeout exits, malformed ranges, and IDA iteration sentinels.
  - Isolated the non-interactive reranker installer test from real client
    configuration writers by stubbing both path discovery and client updates.
 
