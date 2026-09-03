@@ -1,7 +1,9 @@
 """Route-level coverage for the public search surface and its mode aliases."""
 
+import builtins
 import json
 import sys
+import types
 
 from tests._isolated_repo_loader import load_tool_submodule
 
@@ -172,3 +174,98 @@ def test_search_router_handles_handler_failure_and_data_value_aliases(monkeypatc
     monkeypatch.setattr(search, "looks_like_address", lambda _value: True)
     assert search.search(action="pointer", pattern="0x401000", endian="little")["ok"] is True
     assert calls[-1][1]["endian"] == "le"
+
+
+def test_insight_helpers_cover_direct_malformed_payloads_and_fallback_import(monkeypatch):
+    search = _load_search(monkeypatch)
+
+    monkeypatch.setattr(search, "_load_insight_index", list)
+    assert search._query_insight_by_tags(["crypto"]) == []
+    monkeypatch.setattr(search, "_load_insight_index", lambda: {"tag_map": [], "func_map": {}})
+    assert search._query_insight_by_tags(["crypto"]) == []
+    monkeypatch.setattr(search, "_load_insight_index", lambda: {"tag_map": {}, "func_map": []})
+    assert search._query_insight_by_tags(["crypto"]) == []
+    monkeypatch.setattr(search, "_load_insight_index", lambda: {"tag_map": {}, "func_map": {}})
+    assert search._query_insight_by_tags(["  ", 1]) == []
+
+    monkeypatch.setattr(
+        search,
+        "_load_insight_index",
+        lambda: {"tag_map": {"crypto": ["0x1"], "empty": []}, "func_map": {"0x1": {}}},
+    )
+    assert search._query_insight_by_tags(["crypto", "empty"]) == []
+    assert search._query_insight_by_tags(["crypto", "broken"], mode="or") == ["0x1"]
+
+    fallback = types.ModuleType("host.intelligence.insight_paths")
+    fallback.resolve_insight_index_path = lambda: "/tmp/fallback-insight.json"
+    monkeypatch.setitem(sys.modules, "host", types.ModuleType("host"))
+    monkeypatch.setitem(sys.modules, "host.intelligence", types.ModuleType("host.intelligence"))
+    monkeypatch.setitem(sys.modules, "host.intelligence.insight_paths", fallback)
+    real_import = builtins.__import__
+
+    def import_without_package(name, *args, **kwargs):
+        if name == "ida_pro_mcp.host.intelligence.insight_paths":
+            raise ImportError("package layout unavailable")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_package)
+    assert search._insight_index_path() == "/tmp/fallback-insight.json"
+
+
+def test_search_router_covers_numeric_data_value_and_blackboard_context(monkeypatch):
+    search = _load_search(monkeypatch)
+    monkeypatch.setattr(search, "normalize_search_result", lambda result, **_kwargs: result)
+    captured = {}
+
+    def data_value(*args, **kwargs):
+        captured["data"] = (args, kwargs)
+        return {"ok": True, "items": [], "results": "", "count": 0}
+
+    monkeypatch.setattr(search, "search_data_value", data_value)
+    assert search.search(action="data_value", pattern=42, endian="big", word_size="u32")["ok"] is True
+    assert captured["data"][0][0] == 42
+    assert captured["data"][1]["endian"] == "be"
+    assert captured["data"][1]["word_size"] == "u32"
+
+    class Store:
+        def list(self, **kwargs):
+            assert kwargs["addr"] == "0x1000"
+            return [{"title": "note", "category": "finding", "confidence": 0.8}]
+
+    blackboard = types.ModuleType("ida_pro_mcp.ida_mcp.tools.blackboard")
+    blackboard.BlackboardStore = Store
+    monkeypatch.setitem(sys.modules, "ida_pro_mcp.ida_mcp.tools.blackboard", blackboard)
+    monkeypatch.setattr(
+        search,
+        "search_find",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "items": [{"addr": "0x1000", "name": "f"}, {"name": "no-address"}],
+            "results": "0x1000  f",
+            "count": 2,
+        },
+    )
+    enriched = search.search(action="find", pattern="f")
+    assert enriched["blackboard_context"] == {
+        "0x1000": [{"title": "note", "category": "finding", "confidence": 0.8}]
+    }
+
+
+def test_search_router_covers_validation_defaults_and_path_error(monkeypatch):
+    search = _load_search(monkeypatch)
+    monkeypatch.setattr(search, "normalize_search_result", lambda result, **_kwargs: result)
+    monkeypatch.setattr(search, "search_name", lambda *_args: {"ok": True, "items": []})
+
+    result = search.search(action="name", pattern="x", limit="bad", offset="bad", semantic_min_score="bad")
+    assert result["ok"] is True
+    assert search.search(action="export")["code"] == "INVALID_ARGS"
+    assert search.search(action="structured")["code"] == "INVALID_ARGS"
+    assert search.search(action="path", pattern="src")["code"] == "INVALID_ARGS"
+
+    monkeypatch.setattr(search, "search_structured", lambda *_args, **_kwargs: {"ok": True, "items": []})
+    structured = search.search(
+        action="structured",
+        constraints={"behavior_tags": "crypto"},
+        query="q",
+    )
+    assert structured["ok"] is True

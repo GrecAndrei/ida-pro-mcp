@@ -39,6 +39,9 @@
  - Added a diff-scoped changed-line coverage gate: Python source additions
    require added tests and at least 95% executable-line coverage, including
    strict handling for unmeasured changed files.
+ - Added search-router coverage for malformed insight indexes, fallback module
+   imports, numeric data-value routing, blackboard enrichment, aliases, and
+   structured/path validation boundaries.
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
