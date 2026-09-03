@@ -48,6 +48,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added graph coverage for real-function cycles, function-less targets, raw
    code scans, CFG call/branch classification, empty dominator charts, xref
    directions, traversal limits, validation errors, and formatter edge cases.
+ - Added workflow-batch coverage for fast-path eligibility, policy/session and
+   rate-limit fallbacks, malformed RPC responses, truncation/post-processing,
+   chaining references, payload limits, and wrapped versus unwrapped failures.
  - Isolated the non-interactive reranker installer test from real client
    configuration writers by stubbing both path discovery and client updates.
 
