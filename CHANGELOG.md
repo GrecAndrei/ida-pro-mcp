@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-03 — Expand combinator fallback coverage
+
+ - Added offline behavior checks for search graph fallbacks, index metadata
+   and similarity paths, neighborhood notes, outlier metrics, vulnerability
+   candidates, and semantic result shaping.
+
 ## 2026-09-03 — Isolate live IDB control coverage
 
  - Restore the live fixture snapshot after analysis-control tests and keep
