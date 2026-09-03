@@ -63,6 +63,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added complete offline coverage for the IDA-side blackboard bridge,
    including RPC and direct-IDA crawler probes, optional embedder fallbacks,
    parser limits, and standalone import error paths.
+ - Added offline governance coverage for every rule family, ontology threshold
+   and inference boundary, custom-rule failures, statistics, singleton helpers,
+   and standalone MCP fallback actions.
  - Isolated the non-interactive reranker installer test from real client
    configuration writers by stubbing both path discovery and client updates.
 
