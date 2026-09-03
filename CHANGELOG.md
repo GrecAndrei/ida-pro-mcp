@@ -26,6 +26,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    and optional insight indexes degrade to recall/classifier results instead
    of aborting the request; added coverage for backend, expansion, rerank,
    timeout, and classifier edge modes.
+ - Added memory boundary coverage for scalar/string and endian failures,
+   wildcard-search engine fallbacks, integer-width limits, compare algorithms,
+   cyclic struct walks, region caps, and governed-write error envelopes.
 
 ## 2026-09-02 — Multi-agent configuration and skill system redesign
 
