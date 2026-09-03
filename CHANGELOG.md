@@ -54,6 +54,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added offline BRON corpus coverage for download-size and checksum guards,
    manifest drift, archive member safety, materialization failures, strict
    verification, partial sources, and empty corpus outcomes.
+ - Added batch-manager coverage for executor rejection/recovery, cooperative
+   cancellation, shutdown races, result/error states, history trimming,
+   persistence debounce and truncation, corrupt reloads, and disk failures.
  - Isolated the non-interactive reranker installer test from real client
    configuration writers by stubbing both path discovery and client updates.
 
