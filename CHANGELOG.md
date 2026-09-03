@@ -23,6 +23,9 @@
  - Added workflow-coordinator coverage for recursive plan/compose/audit/
    execute paths, priority and estimate modes, capability pruning, catalog
    fallback, malformed stats, and non-dict/error result envelopes.
+ - Added wiki coverage for temporary-tree indexing, cache races and eviction,
+   generated-doc fallback, semantic/lexical ranking, topic normalization,
+   section/range reads, filtering, and unavailable-backend behavior.
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
