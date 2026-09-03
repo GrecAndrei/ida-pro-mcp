@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-03 — Offline listing-cache isolation
+
+ - Cleared canonical and eagerly held data-tool walk caches at test
+   boundaries so fresh fake IDBs cannot inherit a prior listing page when
+   tests run in a different order.
+
 ## 2026-09-03 — Code-dispatch boundary coverage
 
  - Added offline coverage for paginated decompile modes, raw/listing

@@ -264,6 +264,38 @@ def _reset_tool_state() -> None:
         if _cache is not None and hasattr(_cache, "clear"):
             with contextlib.suppress(Exception):
                 _cache.clear()
+    # The data listing actions keep their own bounded walk cache. Its IDB
+    # fingerprint intentionally stays small for production, so a fresh fake
+    # database can share the same filename/function-count pair with a prior
+    # test. Clear it at the test boundary while preserving cache-hit behavior
+    # inside each individual test.
+    _data_modules = []
+    for _module_name in (
+        "ida_pro_mcp.ida_mcp.tools.data",
+        "ida_mcp.tools.data",
+        "ida_mcp.ida_mcp.tools.data",
+    ):
+        _data_module = sys.modules.get(_module_name)
+        if _data_module is not None:
+            _data_modules.append(_data_module)
+    # Eagerly imported test modules can retain a reference after the isolated
+    # loader removes the canonical name from sys.modules. Include those
+    # references too, or an old fake-IDB walk can survive into the next test.
+    for _holder in list(sys.modules.values()):
+        try:
+            for _value in vars(_holder).values():
+                if getattr(_value, "__name__", "").endswith(".tools.data"):
+                    _data_modules.append(_value)
+        except Exception:
+            pass
+    for _data_module in set(map(id, _data_modules)):
+        # Resolve the object again without depending on a module name; the
+        # identity set above only deduplicates repeated eager references.
+        _module = next((m for m in _data_modules if id(m) == _data_module), None)
+        _walk_cache = getattr(_module, "_WALK_CACHE", None)
+        if _walk_cache is not None and hasattr(_walk_cache, "clear"):
+            with contextlib.suppress(Exception):
+                _walk_cache.clear()
     with contextlib.suppress(Exception):
         from ida_pro_mcp.ida_mcp.sync import _tool_cache
 
