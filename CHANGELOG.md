@@ -22,6 +22,10 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added IDA 9.3/9.4 compatibility coverage for segment/function mutation,
    flow-chart constructor fallbacks, stack-frame resolution, and degraded
    prototype/type surfaces.
+ - Hardened semantic and behavior search so unavailable persisted documents
+   and optional insight indexes degrade to recall/classifier results instead
+   of aborting the request; added coverage for backend, expansion, rerank,
+   timeout, and classifier edge modes.
 
 ## 2026-09-02 — Multi-agent configuration and skill system redesign
 
