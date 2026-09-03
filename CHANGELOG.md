@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-03 — Expand segment boundary coverage
+
+ - Added offline checks for segment lookup and mutation parse failures,
+   stale iterator entries, missing function records, and segment-register
+   processor/API failure modes.
+
 ## 2026-09-03 — Expand search metadata and reference coverage
 
  - Added offline checks for type-library and explicit-type searches, export

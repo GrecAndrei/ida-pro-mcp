@@ -208,3 +208,87 @@ def test_segment_action_failure_and_register_unavailable_modes(monkeypatch, fres
     assert segments_mod.segments(action="sreg_get", start="0x140001000", reg="GP")["error"] is True
     assert segments_mod.segments(action="sreg_set", start="0x140001000", reg="GP", value=1)["error"] is True
     assert segments_mod.segments(action="sreg_list", start="0x140001000")["error"] is True
+
+
+def test_segment_actions_cover_parse_lookup_and_register_failure_boundaries(monkeypatch, fresh_fake_idb):
+    """Exercise the compatibility errors callers see when IDA rejects inputs."""
+    parse_error = {"error": True, "message": "bad address"}
+    monkeypatch.setattr(segments_mod, "parse_address_safe", lambda *_args: (None, parse_error))
+    assert segments_mod.segments(action="add", start="0x1500", end="0x1600") is parse_error
+    assert segments_mod.segments(action="delete", start="0x1500") is parse_error
+    assert segments_mod.segments(action="move", start="0x140001000", end="0x1600") is parse_error
+
+    assert segments_mod.segments(action="set_attr", start="0x1500", attr="name", value="x")["error"] is True
+    assert segments_mod.segments(action="set_perms", start="0x1500", value="rwx")["error"] is True
+    assert segments_mod.segments(action="find_code", name="missing")["error"] is True
+    assert segments_mod.segments(action="find_data", name="missing")["error"] is True
+    assert segments_mod.segments(action="analyze", name="missing")["error"] is True
+    assert segments_mod.segments(action="compare", name=".text", name2="missing")["error"] is True
+
+    # A stale segment iterator entry is ignored by list/analyze, while a
+    # function record that disappeared during enumeration is skipped.
+    monkeypatch.setattr(segments_mod.idautils, "Segments", lambda: iter([0x140001000, 0xDEAD]))
+    monkeypatch.setattr(segments_mod._compat, "get_segment", lambda ea: None if ea == 0xDEAD else fresh_fake_idb.segments[0])
+    listed = _ok(segments_mod.segments(action="list"))
+    assert listed["total"] == 1
+    monkeypatch.setattr(segments_mod.idautils, "Functions", lambda *_args: iter([0x140001000, 0x140001050]))
+    monkeypatch.setattr(
+        segments_mod._compat,
+        "get_func_info",
+        lambda ea: None if ea == 0x140001050 else types.SimpleNamespace(start_ea=ea, end_ea=ea + 8),
+    )
+    assert _ok(segments_mod.segments(action="find_code", start="0x140001000"))["count"] == 1
+
+    segregs = fresh_fake_idb.segregs
+    monkeypatch.setattr(segments_mod, "ida_segregs", segregs)
+    monkeypatch.setattr(segregs, "get_sreg_range", lambda *_args: (_ for _ in ()).throw(RuntimeError("range")))
+    no_range = _ok(segments_mod.segments(action="sreg_get", start="0x140001000", reg="GP"))
+    assert "range" not in no_range
+    monkeypatch.setattr(segregs, "split_sreg_range", lambda *_args: False)
+    assert segments_mod.segments(action="sreg_set", start="0x140001000", reg="GP", value=1)["error"] is True
+    monkeypatch.setattr(segregs, "split_sreg_range", lambda *_args: (_ for _ in ()).throw(RuntimeError("split")))
+    assert segments_mod.segments(action="sreg_set", start="0x140001000", reg="GP", value=1)["error"] is True
+
+
+def test_segment_register_helpers_cover_degraded_processor_tables(monkeypatch):
+    class BrokenProcessor:
+        ph = type("Processor", (), {"reg_names": None, "reg_first_sreg": "bad", "reg_last_sreg": 1})()
+
+        @staticmethod
+        def str2reg(_value):
+            raise ValueError("unsupported")
+
+    monkeypatch.setattr(segments_mod, "ida_idp", BrokenProcessor)
+    assert segments_mod._resolve_sreg("0x10") == 16
+    assert segments_mod._resolve_sreg("GP") is None
+    assert segments_mod._sreg_name(2) == "2"
+    assert segments_mod._sreg_reg_indices() is None
+
+    class BrokenRanges:
+        @staticmethod
+        def get_sreg_ranges_qty(_sr):
+            raise RuntimeError("qty")
+
+    monkeypatch.setattr(segments_mod, "ida_segregs", BrokenRanges)
+    assert segments_mod._sreg_ranges_for_register(0, 10, 1) == []
+
+    class SparseRanges:
+        class sreg_range_t:
+            pass
+
+        @staticmethod
+        def get_sreg_ranges_qty(_sr):
+            return 3
+
+        @staticmethod
+        def getn_sreg_range(out, _sr, index):
+            if index == 0:
+                return False
+            if index == 1:
+                raise RuntimeError("entry")
+            out.start_ea, out.end_ea = 20, 30
+            return True
+
+    monkeypatch.setattr(segments_mod, "ida_segregs", SparseRanges)
+    assert segments_mod._sreg_ranges_for_register(0, 10, 1) == []
+    assert segments_mod._sreg_ranges_for_register(20, 40, 1)
