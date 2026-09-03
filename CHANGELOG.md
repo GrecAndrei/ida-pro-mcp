@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-03 — Type-system boundary coverage
+
+ - Added offline coverage for type import, declaration/application failures,
+   infer/read fail-closed behavior, enum and dependency-graph comparisons,
+   and classic-versus-IDA-9 member-editing fallbacks.
+
 ## 2026-09-03 — Offline support and code-helper boundary coverage
 
  - Added offline checks for cache canonicalization, TTL and stale-generation
