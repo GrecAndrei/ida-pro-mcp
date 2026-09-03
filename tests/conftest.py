@@ -1,14 +1,307 @@
 # tests/conftest.py
 from __future__ import annotations
 
+import atexit
+import builtins
 import contextlib
+import io
 import os
+import shutil
+import sqlite3
 import sys
 import tempfile
 import threading
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 import pytest
+
+# ---------------------------------------------------------------------------
+# Collection-time filesystem sandbox
+# ---------------------------------------------------------------------------
+# Application modules are imported by test modules during collection, before
+# function-scoped fixtures run.  The host configuration creates its runtime
+# directory at import time, so a per-test fixture is too late to protect a
+# developer's real home directory.  Give the entire offline pytest process a
+# temporary HOME and reject every test write outside temporary/test metadata
+# roots.  This is deliberately installed before any application import below.
+_TEST_SANDBOX_ROOT = Path(tempfile.mkdtemp(prefix="ida-pro-mcp-pytest-"))
+_TEST_SANDBOX_ROOT = _TEST_SANDBOX_ROOT.resolve()
+_REAL_OS_PATH = os.path
+_REAL_OS_SEP = os.sep
+_TEST_TEMP_ROOT = Path(_REAL_OS_PATH.realpath(tempfile.gettempdir()))
+_TEST_REPO_ROOT = Path(_REAL_OS_PATH.realpath(os.fspath(Path(__file__).parent.parent)))
+_TEST_ALLOWED_WRITE_ROOTS = (
+    _REAL_OS_PATH.realpath(os.fspath(_TEST_TEMP_ROOT)),
+    _REAL_OS_PATH.realpath(os.fspath(_TEST_SANDBOX_ROOT)),
+    _REAL_OS_PATH.realpath(os.fspath(_TEST_REPO_ROOT / ".pytest_cache")),
+    _REAL_OS_PATH.realpath(os.fspath(_TEST_REPO_ROOT / ".pytest_tmp")),
+    _REAL_OS_PATH.realpath("/dev"),
+)
+
+
+def _path_is_under(path: str, root: str) -> bool:
+    return path == root or path.startswith(root + _REAL_OS_SEP)
+
+
+def _resolved_write_path(value) -> str | None:
+    if isinstance(value, int):
+        return None
+    try:
+        raw = os.fsdecode(os.fspath(value))
+        return _REAL_OS_PATH.realpath(
+            raw if _REAL_OS_PATH.isabs(raw) else _REAL_OS_PATH.join(os.getcwd(), raw)
+        )
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def _assert_test_path_safe(value) -> None:
+    path = _resolved_write_path(value)
+    if path is None:
+        return
+    if any(_path_is_under(path, root) for root in _TEST_ALLOWED_WRITE_ROOTS):
+        return
+    # Python bytecode and pytest's coverage database are test machinery. They
+    # may be created in the checkout, but source/config/test data must not be.
+    if _path_is_under(path, _REAL_OS_PATH.realpath(os.fspath(_TEST_REPO_ROOT))):
+        if "__pycache__" in path.split(_REAL_OS_SEP):
+            return
+        if _REAL_OS_PATH.basename(path).startswith(".coverage"):
+            return
+    raise RuntimeError(
+        "offline pytest filesystem guard blocked a write outside temporary "
+        f"roots: {path}"
+    )
+
+
+def _assert_test_path_safe_from_dir_fd(value, dir_fd) -> None:
+    """Check a relative filesystem operation against its directory fd."""
+    if dir_fd is None or _REAL_OS_PATH.isabs(os.fspath(value)):
+        _assert_test_path_safe(value)
+        return
+    try:
+        base = os.readlink(f"/proc/self/fd/{dir_fd}")
+    except (OSError, TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "offline pytest filesystem guard cannot resolve a relative "
+            f"write through directory fd {dir_fd}"
+        ) from exc
+    _assert_test_path_safe(_REAL_OS_PATH.join(base, os.fsdecode(os.fspath(value))))
+
+
+_REAL_OPEN = builtins.open
+_REAL_IO_OPEN = io.open
+_REAL_OS_OPEN = os.open
+_REAL_OS_CHDIR = os.chdir
+_REAL_OS_MKDIR = os.mkdir
+_REAL_OS_MAKEDIRS = os.makedirs
+_REAL_OS_UNLINK = os.unlink
+_REAL_OS_REMOVE = os.remove
+_REAL_OS_RMDIR = os.rmdir
+_REAL_OS_RENAME = os.rename
+_REAL_OS_REPLACE = os.replace
+_REAL_OS_CHMOD = os.chmod
+_REAL_OS_UTIME = os.utime
+_REAL_OS_TRUNCATE = os.truncate
+_REAL_OS_SYMLINK = os.symlink
+_REAL_SHUTIL_RMTREE = shutil.rmtree
+_REAL_SHUTIL_MOVE = shutil.move
+_REAL_SHUTIL_COPY = shutil.copy
+_REAL_SHUTIL_COPY2 = shutil.copy2
+_REAL_SHUTIL_COPYTREE = shutil.copytree
+_REAL_SQLITE_CONNECT = sqlite3.connect
+
+
+def _mode_writes(mode) -> bool:
+    return any(flag in str(mode) for flag in ("w", "a", "x", "+"))
+
+
+def _guarded_open(file, mode="r", *args, **kwargs):
+    if _mode_writes(mode):
+        _assert_test_path_safe(file)
+    return _REAL_OPEN(file, mode, *args, **kwargs)
+
+
+def _guarded_io_open(file, mode="r", *args, **kwargs):
+    if _mode_writes(mode):
+        _assert_test_path_safe(file)
+    return _REAL_IO_OPEN(file, mode, *args, **kwargs)
+
+
+def _guarded_os_open(file, flags, *args, **kwargs):
+    write_flags = (
+        os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
+    )
+    if flags & write_flags:
+        _assert_test_path_safe_from_dir_fd(file, kwargs.get("dir_fd"))
+    return _REAL_OS_OPEN(file, flags, *args, **kwargs)
+
+
+def _guarded_mkdir(path, *args, **kwargs):
+    _assert_test_path_safe_from_dir_fd(path, kwargs.get("dir_fd"))
+    return _REAL_OS_MKDIR(path, *args, **kwargs)
+
+
+def _guarded_makedirs(name, *args, **kwargs):
+    _assert_test_path_safe(name)
+    return _REAL_OS_MAKEDIRS(name, *args, **kwargs)
+
+
+def _guarded_unlink(path, *args, **kwargs):
+    _assert_test_path_safe_from_dir_fd(path, kwargs.get("dir_fd"))
+    return _REAL_OS_UNLINK(path, *args, **kwargs)
+
+
+def _guarded_remove(path, *args, **kwargs):
+    _assert_test_path_safe_from_dir_fd(path, kwargs.get("dir_fd"))
+    return _REAL_OS_REMOVE(path, *args, **kwargs)
+
+
+def _guarded_rmdir(path, *args, **kwargs):
+    _assert_test_path_safe_from_dir_fd(path, kwargs.get("dir_fd"))
+    return _REAL_OS_RMDIR(path, *args, **kwargs)
+
+
+def _guarded_rename(src, dst, *args, **kwargs):
+    _assert_test_path_safe_from_dir_fd(src, kwargs.get("src_dir_fd"))
+    _assert_test_path_safe_from_dir_fd(dst, kwargs.get("dst_dir_fd"))
+    return _REAL_OS_RENAME(src, dst, *args, **kwargs)
+
+
+def _guarded_replace(src, dst, *args, **kwargs):
+    _assert_test_path_safe_from_dir_fd(src, kwargs.get("src_dir_fd"))
+    _assert_test_path_safe_from_dir_fd(dst, kwargs.get("dst_dir_fd"))
+    return _REAL_OS_REPLACE(src, dst, *args, **kwargs)
+
+
+def _guarded_chmod(path, *args, **kwargs):
+    _assert_test_path_safe(path)
+    return _REAL_OS_CHMOD(path, *args, **kwargs)
+
+
+def _guarded_utime(path, *args, **kwargs):
+    _assert_test_path_safe(path)
+    return _REAL_OS_UTIME(path, *args, **kwargs)
+
+
+def _guarded_truncate(path, *args, **kwargs):
+    _assert_test_path_safe(path)
+    return _REAL_OS_TRUNCATE(path, *args, **kwargs)
+
+
+def _guarded_symlink(src, dst, *args, **kwargs):
+    _assert_test_path_safe(dst)
+    return _REAL_OS_SYMLINK(src, dst, *args, **kwargs)
+
+
+def _guarded_rmtree(path, *args, **kwargs):
+    _assert_test_path_safe(path)
+    return _REAL_SHUTIL_RMTREE(path, *args, **kwargs)
+
+
+def _guarded_move(src, dst, *args, **kwargs):
+    _assert_test_path_safe(src)
+    _assert_test_path_safe(dst)
+    return _REAL_SHUTIL_MOVE(src, dst, *args, **kwargs)
+
+
+def _guarded_copy(src, dst, *args, **kwargs):
+    _assert_test_path_safe(dst)
+    return _REAL_SHUTIL_COPY(src, dst, *args, **kwargs)
+
+
+def _guarded_copy2(src, dst, *args, **kwargs):
+    _assert_test_path_safe(dst)
+    return _REAL_SHUTIL_COPY2(src, dst, *args, **kwargs)
+
+
+def _guarded_copytree(src, dst, *args, **kwargs):
+    _assert_test_path_safe(dst)
+    return _REAL_SHUTIL_COPYTREE(src, dst, *args, **kwargs)
+
+
+def _guarded_sqlite_connect(database, *args, **kwargs):
+    raw = os.fsdecode(os.fspath(database)) if not isinstance(database, str) else database
+    if raw not in {":memory:", ""}:
+        if raw.startswith("file:"):
+            parsed = urlsplit(raw)
+            raw = unquote(parsed.path)
+            if raw in {"", ":memory:"}:
+                return _REAL_SQLITE_CONNECT(database, *args, **kwargs)
+        _assert_test_path_safe(raw)
+    return _REAL_SQLITE_CONNECT(database, *args, **kwargs)
+
+
+def _install_offline_filesystem_guard() -> None:
+    if os.environ.get("IDA_MCP_LIVE_TEST") == "1":
+        return
+    builtins.open = _guarded_open
+    io.open = _guarded_io_open
+    os.open = _guarded_os_open
+    os.mkdir = _guarded_mkdir
+    os.makedirs = _guarded_makedirs
+    os.unlink = _guarded_unlink
+    os.remove = _guarded_remove
+    os.rmdir = _guarded_rmdir
+    os.rename = _guarded_rename
+    os.replace = _guarded_replace
+    os.chmod = _guarded_chmod
+    os.utime = _guarded_utime
+    os.truncate = _guarded_truncate
+    os.symlink = _guarded_symlink
+    shutil.rmtree = _guarded_rmtree
+    shutil.move = _guarded_move
+    shutil.copy = _guarded_copy
+    shutil.copy2 = _guarded_copy2
+    shutil.copytree = _guarded_copytree
+    sqlite3.connect = _guarded_sqlite_connect
+
+
+def _configure_offline_environment() -> None:
+    if os.environ.get("IDA_MCP_LIVE_TEST") == "1":
+        return
+    safe = _TEST_SANDBOX_ROOT
+    path_env = {
+        "USERPROFILE": safe / "userprofile",
+        "LOCALAPPDATA": safe / "localappdata",
+        "APPDATA": safe / "appdata",
+        "XDG_CONFIG_HOME": safe / "xdg-config",
+        "XDG_DATA_HOME": safe / "xdg-data",
+        "XDG_STATE_HOME": safe / "xdg-state",
+        "XDG_CACHE_HOME": safe / "xdg-cache",
+        "UV_CACHE_DIR": safe / "uv-cache",
+        "IDA_PRO_MCP_HOME": safe / "ida-pro-mcp",
+        "IDA_MCP_CACHE_DIR": safe / "runtime",
+        "IDA_MCP_DATA_DIR": safe / "runtime",
+        "IDA_MCP_BATCH_STATE_DIR": safe / "batch",
+        "IDA_MCP_SESSION_LOG_DIR": safe / "session-logs",
+        "IDA_MCP_PORT_FILE": safe / "port-file",
+        "CODEX_HOME": safe / "codex",
+        "CODEX_SKILL_ROOT": safe / "codex-skills",
+    }
+    for name, value in path_env.items():
+        os.environ[name] = str(value)
+    # Offline tests must not discover or start a developer's licensed IDA or
+    # reuse a developer-selected IDB/model/native library.
+    for name in (
+        "IDA_ROOT",
+        "IDA_PYTHON_PATH",
+        "IDA_MCP_IDAT",
+        "IDA_MCP_IDB_PATH",
+        "IDA_MCP_NATIVE_LIB",
+        "IDA_MCP_EMBED_MODEL",
+        "IDA_MCP_EMBED_SERVER_BIN",
+        "IDA_MCP_RERANK_MODEL",
+        "IDA_MCP_R2_BIN",
+        "IDA_MCP_R2_BININFO_BIN",
+    ):
+        os.environ.pop(name, None)
+
+
+_configure_offline_environment()
+_install_offline_filesystem_guard()
+atexit.register(_REAL_SHUTIL_RMTREE, str(_TEST_SANDBOX_ROOT), True)
 
 
 # ---------------------------------------------------------------------------
@@ -415,6 +708,22 @@ def _restore_test_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Restore the developer's original env values around each test."""
     monkeypatch.setenv("IDA_MCP_DISABLE_STUCK_DETECTION", _ORIG_STUCK or "1")
     monkeypatch.setenv("IDA_MCP_DISABLE_RATE_LIMIT", _ORIG_RATE or "1")
+
+
+@pytest.fixture(autouse=True)
+def _restore_process_environment_and_cwd() -> None:
+    """Undo direct process mutations made by legacy tests.
+
+    ``monkeypatch`` cannot restore a test that assigns ``os.environ`` or calls
+    ``os.chdir`` directly.  Snapshot both at the test boundary so one test
+    cannot redirect the next test's default paths or working directory.
+    """
+    original_env = dict(os.environ)
+    original_cwd = os.getcwd()
+    yield
+    _REAL_OS_CHDIR(original_cwd)
+    os.environ.clear()
+    os.environ.update(original_env)
 
 
 @pytest.fixture(autouse=True)

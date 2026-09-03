@@ -173,9 +173,10 @@ def test_policy_config_cached_by_mtime_size(tmp_path, monkeypatch):
     monkeypatch.delenv("IDA_MCP_POLICY_MODE", raising=False)
 
     server_dispatch._POLICY_CONFIG_CACHE.clear()
-    policy = tmp_path / "policy.json"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    policy = tmp_path / ".config" / "ida-pro-mcp" / "policy.json"
+    policy.parent.mkdir(parents=True)
     policy.write_text('{"mode": "enforce"}')
-    monkeypatch.setattr(os.path, "expanduser", lambda _p: str(policy))
 
     real_open = builtins.open
     opens = {"n": 0}

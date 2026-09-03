@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-03 — Offline test filesystem isolation
+
+ - Sandboxed offline test defaults before application collection imports so
+   import-time runtime and batch stores cannot resolve into a developer's
+   home directory.
+ - Added a filesystem write guard for non-temporary test paths and restore
+   direct environment and working-directory mutations at each test boundary.
+
 ## 2026-09-03 — Offline listing-cache isolation
 
  - Cleared canonical and eagerly held data-tool walk caches at test
