@@ -42,6 +42,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added IDA-side boundary coverage for plugin restart/platform/port handling,
    ctree action and visitor modes, and shared utility fallbacks for address,
    type, prototype, decompiler, and stack-frame helpers.
+ - Added semantic-index coverage for current-session resolution, embedding-first
+   cache warmup, malformed persisted vectors, per-row embedding failures,
+   lexical fallback, empty indexes, and unusable source payloads.
 
 ## 2026-09-02 — Multi-agent configuration and skill system redesign
 
