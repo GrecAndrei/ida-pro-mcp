@@ -743,6 +743,11 @@ def test_noninteractive_rerank_download_is_honored_without_local_embedding(
     monkeypatch.setattr(main_mod, "detect_ida_installs", list)
     monkeypatch.setattr(main_mod, "find_rerank_model", lambda *a, **k: "")
     downloaded: dict[str, str] = {}
+    # This test exercises only installer state/config construction. Keep the
+    # client target set explicitly empty and stub the writer so it can never
+    # write a real user's MCP configuration files.
+    monkeypatch.setattr(main_mod, "get_config_paths", lambda _root: {})
+    monkeypatch.setattr(main_mod, "configure_clients", lambda **_kwargs: [])
 
     def _download(root, profile):
         downloaded["root"] = str(root)

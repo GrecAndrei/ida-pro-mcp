@@ -48,6 +48,8 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added graph coverage for real-function cycles, function-less targets, raw
    code scans, CFG call/branch classification, empty dominator charts, xref
    directions, traversal limits, validation errors, and formatter edge cases.
+ - Isolated the non-interactive reranker installer test from real client
+   configuration writers by stubbing both path discovery and client updates.
 
 ## 2026-09-02 — Multi-agent configuration and skill system redesign
 
