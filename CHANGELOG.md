@@ -8,6 +8,9 @@
  - Added offline YARA scanner coverage for optional-backend absence, rule
    discovery and namespace collisions, malformed metadata, compile/load/save
    failures, scan limits, address-range holes, and wrapper delegation.
+ - Added installer-common coverage for relative paths, atomic-write modes,
+   lock acquisition and cleanup, symlink/open failures, unexpected OS lock
+   errors, and POSIX/Windows lock contention behavior using temporary roots.
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
