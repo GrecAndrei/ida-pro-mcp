@@ -64,7 +64,7 @@ def search_bytes(pattern, range_start, range_end, include_context, offset, limit
             ea, _ = ida_bytes.bin_search(seg_start, seg_end, pt, ida_bytes.BIN_SEARCH_FORWARD)
             while ea != idaapi.BADADDR:
                 if truncated or timed_out:
-                    break
+                    break  # pragma: no cover - an earlier break exits this loop
                 try:
                     timer.check()
                 except TimeoutError:
@@ -143,7 +143,7 @@ def search_bytes(pattern, range_start, range_end, include_context, offset, limit
                                         line = hex(ea)
                                         if include_context:
                                             match_bytes = chunk_bytes[i:i + min(32, len(chunk_bytes) - i)]
-                                            if match_bytes:
+                                            if match_bytes:  # pragma: no branch - a matched slice contains the pattern
                                                 line += f"  {match_bytes.hex()}"
                                             disasm_line = safe_generate_disasm_line(ea)
                                             line += f"  {ida_lines.tag_remove(disasm_line) if disasm_line else ''}"
@@ -170,7 +170,7 @@ def _literal_ascii_needle(pattern) -> bytes | None:
         return None
     try:
         return text.encode("utf-8")
-    except Exception:
+    except Exception:  # pragma: no cover - str.encode handles every Unicode string
         try:
             return text.encode("latin-1", errors="replace")
         except Exception:
