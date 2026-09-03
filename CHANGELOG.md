@@ -78,6 +78,8 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added deep offline coverage for shared search-core caches, segment and code
    iteration, target resolution ranking/fallbacks, and IDA API compatibility
    shims.
+ - Added deterministic host rate-limit coverage for partial refills, refunds,
+   global denials, and reservation rollback.
  - Added deep offline coverage for advanced search candidate planning, bounded
    intelligence expansion, constant scans, decompiled search modes, and
    structured-index result shaping.
