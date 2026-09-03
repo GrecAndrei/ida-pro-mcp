@@ -33,6 +33,9 @@
    parser and added complete offline coverage for function creation, mutation,
    prototype, metrics, similarity, embedding, persistence, and compatibility
    failure paths.
+ - Added modify-surface coverage for compatibility aliases, governance
+   redaction propagation, raw NOP sizing, local-variable failures, string/data
+   authoring errors, persistence limits, and undo API fallbacks.
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
