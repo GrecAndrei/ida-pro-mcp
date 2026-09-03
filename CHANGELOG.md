@@ -26,6 +26,9 @@
  - Added wiki coverage for temporary-tree indexing, cache races and eviction,
    generated-doc fallback, semantic/lexical ranking, topic normalization,
    section/range reads, filtering, and unavailable-backend behavior.
+ - Added native retrieval backend coverage for ctypes loader/reset failures,
+   backend selection, model-state degradation, generation-safe embedding and
+   rerank caches, waiter cleanup, and fake-ABI recovery paths.
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
