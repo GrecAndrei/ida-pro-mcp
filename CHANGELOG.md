@@ -29,6 +29,10 @@
  - Added native retrieval backend coverage for ctypes loader/reset failures,
    backend selection, model-state degradation, generation-safe embedding and
    rerank caches, waiter cleanup, and fake-ABI recovery paths.
+ - Fixed the function-management raw-runtime fallback to import its address
+   parser and added complete offline coverage for function creation, mutation,
+   prototype, metrics, similarity, embedding, persistence, and compatibility
+   failure paths.
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
