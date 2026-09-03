@@ -33,6 +33,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    classification/decompilation guards, fast/full/range indexing filters,
    retry cursors, semantic/blackboard/family actions, document shaping, and
    unavailable optional-service modes.
+ - Added legacy blackboard boundary coverage for damaged and partial SQLite
+   files, migration/raw-copy fallbacks, candidate discovery, machinery/link
+   routing, and path-confinement failures.
 
 ## 2026-09-02 — Multi-agent configuration and skill system redesign
 
