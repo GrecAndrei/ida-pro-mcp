@@ -21,6 +21,7 @@ deferred.  This file pins the five rebuilt actions on the shared raw-blob fake
 
 import os
 import sys
+from types import SimpleNamespace
 
 from tests._isolated_repo_loader import load_tool_module
 from tests.ida_mcp.raw_blob_fake import (
@@ -431,3 +432,60 @@ def test_firmware_mmio_rtos_and_carve_failure_and_export_modes(monkeypatch, tmp_
         action="carve", start="0x40002000", end="0x40002006", path="/tmp/nope.bin"
     )
     assert save_error["ok"] is True and "save_error" in save_error
+
+
+def test_firmware_low_level_windows_and_decoder_failures(monkeypatch):
+    blob, mod = _load_fixture()
+    original_parse = mod.parse_address_safe
+    parse_error = {"error": True, "message": "end is invalid"}
+    monkeypatch.setattr(
+        mod,
+        "parse_address_safe",
+        lambda value: (None, parse_error) if value == "bad-end" else original_parse(value),
+    )
+    assert mod._fw_parse_range("0x1000", "bad-end")[2] is parse_error
+
+    assert mod._fw_seg_span(SimpleNamespace(start_ea="bad", end_ea="bad")) is None
+    monkeypatch.setattr(blob.module("idaapi"), "getseg", lambda _ea: None)
+    monkeypatch.setattr(mod.idc, "get_segm_end", lambda ea: ea + 0x20, raising=False)
+    assert mod._fw_seg_span(0x1000) == (0x1000, 0x1020)
+    monkeypatch.setattr(
+        mod.idc,
+        "get_segm_end",
+        lambda _ea: (_ for _ in ()).throw(RuntimeError("end")),
+        raising=False,
+    )
+    assert mod._fw_seg_span(0x1000) is None
+
+    monkeypatch.setattr(mod.idautils, "Segments", lambda: (_ for _ in ()).throw(RuntimeError("segments")))
+    assert mod._fw_mapped_windows(0x1000, 0x1010) == [(0x1000, 0x1010)]
+    monkeypatch.setattr(mod, "_fw_mapped_windows", lambda *_args: [(0x1000, 0x1010)])
+    assert list(mod._fw_iter_aligned(0x1000, 0x1010, 4, max_bytes=4)) == [0x1000]
+    monkeypatch.setattr(mod.ida_bytes, "get_bytes", lambda *_args: (_ for _ in ()).throw(RuntimeError("read")))
+    assert mod._read_word_bytes(0x1000, 4) is None
+    assert mod._read_bytes_range(0x1000, 0x1010) == b""
+
+    monkeypatch.setattr(mod, "_fw_ptr_size", lambda: 3)
+    fallback_width = mod._detect_vector_table(0x1000, 0x1010, None, "auto", "le", 2)
+    assert fallback_width["ok"] is True
+    assert mod._detect_load_base(0x1000, 0x1010, "not-a-list", 2)["error"] is True
+    assert mod._default_load_base_candidates(0x1000, 0x1000, 4) == [0x1000]
+
+
+def test_firmware_scan_filter_and_carve_defaults(monkeypatch):
+    blob, mod = _load_fixture()
+
+    class BadString:
+        def __str__(self):
+            raise RuntimeError("bad string")
+
+    monkeypatch.setattr(mod.idautils, "Names", lambda: iter([(0x1000, None)]), raising=False)
+    monkeypatch.setattr(mod.idautils, "Strings", lambda: iter([BadString(), "HAL_GPIO"]), raising=False)
+    monkeypatch.setattr(mod, "_read_bytes_range", lambda *_args: b"")
+    result = mod._rtos_scan(0x1000, 0x1010, "HAL", 1)
+    assert result["detected"] == "HAL"
+
+    monkeypatch.setattr(mod._compat, "add_segment", lambda *_args: True)
+    created = mod._carve(0x40000000, 0x40000010, None, "BSS", 1, {"segment_name": ".bss"})
+    assert created["ok"] is True and created["name"] == ".bss" and created["perms"] == "rw"
+    assert mod._carve("0x40000000", "bad-end", None, "DATA", 1, {})["error"] is True

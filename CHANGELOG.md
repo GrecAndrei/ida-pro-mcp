@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-03 — Expand firmware boundary coverage
+
+ - Added offline checks for mapped-window and decoder failures, fallback
+   architecture widths, RTOS signature filtering, and default carve behavior.
+
 ## 2026-09-03 — Expand segment boundary coverage
 
  - Added offline checks for segment lookup and mutation parse failures,
