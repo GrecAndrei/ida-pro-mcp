@@ -57,6 +57,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added batch-manager coverage for executor rejection/recovery, cooperative
    cancellation, shutdown races, result/error states, history trimming,
    persistence debounce and truncation, corrupt reloads, and disk failures.
+ - Added server-argument coverage for scope isolation, malformed action
+   payloads, noisy scalar/list wrappers, positional aliases, and continuation
+   token boundary handling.
  - Isolated the non-interactive reranker installer test from real client
    configuration writers by stubbing both path discovery and client updates.
 
