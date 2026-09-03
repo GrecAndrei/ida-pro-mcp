@@ -5,6 +5,9 @@
  - Added deep offline coverage for background semantic-index submission,
    cancellation, binary-index reuse, lazy initialization, client ownership,
    policy admission, and task lifecycle failure paths.
+ - Added offline YARA scanner coverage for optional-backend absence, rule
+   discovery and namespace collisions, malformed metadata, compile/load/save
+   failures, scan limits, address-range holes, and wrapper delegation.
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
