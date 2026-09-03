@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-03 — Expand search metadata and reference coverage
+
+ - Added offline checks for type-library and explicit-type searches, export
+   pagination and failures, category summary counting, reference context,
+   regex timeout/guard behavior, and function-signature filters.
+
 ## 2026-09-03 — Expand combinator fallback coverage
 
  - Added offline behavior checks for search graph fallbacks, index metadata
