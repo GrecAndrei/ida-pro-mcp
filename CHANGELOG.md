@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-03 — Expand protocol boundary coverage
+
+ - Added offline coverage for flat-plugin imports, JSON-RPC notification and
+   typed-union validation, HTTP origin/timeout handling, and IDA sync fallbacks.
+
 ## 2026-09-03 — Expand host edge coverage
 
  - Added behavior coverage for runtime/config fallback paths, legacy symbol DB
