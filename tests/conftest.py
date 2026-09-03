@@ -71,17 +71,79 @@ _ORIG_RATE = os.environ.get("IDA_MCP_DISABLE_RATE_LIMIT")
 _PRESERVED_SYS_MODULES: dict[str, object] | None = None
 _ORIGINAL_TOOL_ACTIONS: dict[str, list[str]] | None = None
 _PRESERVED_SYS_PATH: list[str] | None = None
+_PRESERVE_FAKE_IDB_RUNTIME = False
+_FAKE_IDB_MODULES = {
+    "idaapi", "idc", "idautils", "ida_funcs", "ida_bytes", "ida_segment",
+    "ida_name", "ida_typeinf", "ida_nalt", "ida_hexrays", "ida_frame",
+    "ida_struct", "ida_lines", "ida_ua", "ida_kernwin", "ida_loader",
+    "ida_dbg", "ida_fixup", "ida_ida", "ida_entry", "ida_auto", "ida_gdl",
+    "_ida_gdl", "ida_idp", "ida_segregs", "ida_netnode",
+}
+_ORIGINAL_TIME_FUNCS = {
+    name: getattr(__import__("time"), name)
+    for name in ("time", "monotonic", "sleep")
+}
+# Native extension modules cannot always be unloaded and imported again in
+# one interpreter. NumPy raises "cannot load module more than once" when its
+# extension graph is removed from sys.modules between two tests. Keep that
+# third-party graph resident while still restoring application and fake-IDA
+# modules normally.
+_PRESERVE_EXTENSION_MODULE_PREFIXES = ("numpy",)
+
+
+def _is_preserved_extension_module(name: str) -> bool:
+    return any(
+        name == prefix or name.startswith(f"{prefix}.")
+        for prefix in _PRESERVE_EXTENSION_MODULE_PREFIXES
+    )
 
 
 def _freeze_sys_modules() -> dict[str, object]:
     return dict(sys.modules)
 
 
+def _ensure_canonical_services_module() -> None:
+    """Keep collection-time isolated service stubs out of the baseline.
+
+    A unittest ``setUpClass`` can install a fake ``ida_pro_mcp.services``
+    before the first function-scoped fixture snapshots sys.modules. If that
+    fake becomes the baseline, later host tests import the wrong MCPError
+    class and lose host-only codes such as IDA_BUSY.
+    """
+    service = sys.modules.get("ida_pro_mcp.services")
+    if service is not None:
+        try:
+            if service.MCPError.IDA_BUSY == "IDA_BUSY":
+                return
+        except Exception:
+            pass
+    sys.modules.pop("ida_pro_mcp.services", None)
+    package = sys.modules.get("ida_pro_mcp")
+    if package is not None:
+        with contextlib.suppress(AttributeError):
+            delattr(package, "services")
+    with contextlib.suppress(Exception):
+        import importlib
+
+        importlib.import_module("ida_pro_mcp.services")
+
+
 def _restore_sys_modules(snapshot: dict[str, object]) -> None:
     for name in list(sys.modules.keys()):
-        if name not in snapshot:
+        if name not in snapshot and not (
+            _is_preserved_extension_module(name)
+            or _PRESERVE_FAKE_IDB_RUNTIME and name in _FAKE_IDB_MODULES
+        ):
             del sys.modules[name]
     for name, mod in snapshot.items():
+        if (
+            (
+                _is_preserved_extension_module(name)
+                or _PRESERVE_FAKE_IDB_RUNTIME and name in _FAKE_IDB_MODULES
+            )
+            and name in sys.modules
+        ):
+            continue
         if sys.modules.get(name) is not mod:
             sys.modules[name] = mod
 
@@ -130,7 +192,7 @@ _SHARED_STUB_MODULES = (
     "ida_ida", "idaapi", "idc", "idautils", "ida_funcs", "ida_bytes",
     "ida_segment", "ida_name", "ida_typeinf", "ida_nalt", "ida_hexrays",
     "ida_frame", "ida_struct", "ida_lines", "ida_ua", "ida_kernwin",
-    "ida_loader", "ida_dbg", "ida_pro_mcp.ida_mcp.compat",
+    "ida_loader", "ida_dbg", "ida_gdl", "ida_idp", "ida_pro_mcp.ida_mcp.compat",
     "ida_mcp.compat",
 )
 
@@ -234,10 +296,11 @@ def _reset_tool_state() -> None:
     # Purge cached ida_mcp.tools.* submodules so they reimport with
     # fresh references. Only purge leaf modules, not _common itself
     # (we just patched it above) and not ida_mcp.rpc/sync/etc.
-    _prefix = "ida_pro_mcp.ida_mcp.tools."
-    for name in list(sys.modules.keys()):
-        if name.startswith(_prefix) and name != _common_name and name in sys.modules:
-            del sys.modules[name]
+    if not _PRESERVE_FAKE_IDB_RUNTIME:
+        _prefix = "ida_pro_mcp.ida_mcp.tools."
+        for name in list(sys.modules.keys()):
+            if name.startswith(_prefix) and name != _common_name and name in sys.modules:
+                del sys.modules[name]
 
 
 def _reinstall_clean_common() -> None:
@@ -265,9 +328,17 @@ def _reinstall_clean_common() -> None:
 def _isolate_sys_modules(monkeypatch: pytest.MonkeyPatch):
     global _PRESERVED_SYS_MODULES, _PRESERVED_SYS_PATH
     if _PRESERVED_SYS_MODULES is None:
+        _ensure_canonical_services_module()
         _PRESERVED_SYS_MODULES = _freeze_sys_modules()
     if _PRESERVED_SYS_PATH is None:
         _PRESERVED_SYS_PATH = list(sys.path)
+    # A few legacy tests patch the process-wide time module directly instead
+    # of using pytest's monkeypatch fixture. Restore the real clock before
+    # each body so a prior fake clock cannot turn a 50 ms assertion into a
+    # multi-hour wait.
+    _time_module = __import__("time")
+    for _name, _value in _ORIGINAL_TIME_FUNCS.items():
+        setattr(_time_module, _name, _value)
     _reinstall_clean_common()
     # Clear any cache entry created during collection before taking the
     # per-test snapshot.  The cleanup routine runs after the previous test,

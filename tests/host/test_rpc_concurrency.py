@@ -258,9 +258,10 @@ def test_call_tool_maps_queue_timeout_to_ida_busy():
     """A lane that stays busy past the queue bound must report IDA_BUSY —
     not IDA_TIMEOUT (which means the socket recv deadline passed) and not
     IDA_CRASHED (the process is alive)."""
+    from ida_pro_mcp.host.errors import MCPError
     from ida_pro_mcp.host.server.server_dispatch import ServerDispatchMixin
     from ida_pro_mcp.host.server.server_runtime import RpcQueueTimeout
-    from ida_pro_mcp.services import MCPError, Session
+    from ida_pro_mcp.services import Session
 
     class _BusyDispatch(ServerDispatchMixin):
         def __init__(self):

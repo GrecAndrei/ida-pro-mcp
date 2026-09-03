@@ -33,6 +33,12 @@ def _assert_ok(result):
     return result
 
 
+def _types_globals():
+    """Return implementation globals regardless of decorator availability."""
+    implementation = getattr(types, "__wrapped__", types)
+    return implementation.__globals__
+
+
 def test_import_header_and_parse_error_are_structured(monkeypatch):
     import idc
 
@@ -93,8 +99,8 @@ def test_apply_function_global_local_and_invalid_kind(monkeypatch):
     monkeypatch.setattr(ida_hexrays, "modify_user_lvars", lambda *_args: True, raising=False)
     # ``types`` is wrapped by @idawrite; patch the implementation globals so
     # the local-variable path does not require a real Hex-Rays warning flag.
-    monkeypatch.setitem(types.__wrapped__.__globals__, "my_modifier_t", lambda *_args: object())
-    monkeypatch.setitem(types.__wrapped__.__globals__, "refresh_decompiler_ctext", lambda *_args: None)
+    monkeypatch.setitem(_types_globals(), "my_modifier_t", lambda *_args: object())
+    monkeypatch.setitem(_types_globals(), "refresh_decompiler_ctext", lambda *_args: None)
     local = _assert_ok(
         types(action="apply", addr="0x140001000", decl="int", kind="local", name="local_value")
     )
@@ -252,7 +258,7 @@ def test_type_vtable_empty_and_classic_struct_error_modes(monkeypatch, fresh_fak
         set_member_tinfo=lambda *_args: -4,
     )
     monkeypatch.setattr(module, "ida_struct", classic)
-    monkeypatch.setitem(types.__wrapped__.__globals__, "ida_struct", classic)
+    monkeypatch.setitem(_types_globals(), "ida_struct", classic)
     add_result = types(
         action="struct_member_add", struct_name="target_struct", member_name="new", type_str="int", offset=0
     )

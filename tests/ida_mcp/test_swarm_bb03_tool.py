@@ -269,9 +269,11 @@ def test_crawler_probe_rpc_mode_parses_ida_probe_shapes(bb):
     assert isinstance(bb.crawler_probe, bb.CrawlerProbe)
 
 
-def test_crawler_probe_degrades_gracefully_without_ida(bb):
+def test_crawler_probe_degrades_gracefully_without_ida(bb, monkeypatch):
     # No rpc_fn and no IDA SDK: every probe returns an empty result set and
     # never raises, so the host crawler can treat a probe as "nothing found".
+    for name in ("ida_funcs", "idautils", "ida_mcp", "ida_mcp.compat"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
     probe = bb.CrawlerProbe()
     assert probe.xrefs_to("0x401000") == []
     assert probe.symbols("main") == []

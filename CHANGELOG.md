@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-09-03 — Order-independent offline tests
+
+ - Stabilized the isolated fake-IDA SDK baseline and removed implicit import
+   dependencies from daemon, graph, and type-management tests so they pass
+   consistently in isolation and in the full suite.
+ - Reset process-wide test clocks, fixup module discovery, and eagerly imported
+   tool globals at suite boundaries so offline tests are order-independent.
+ - Completed the isolated IDA module baseline for processor and prompt seams,
+   including stable rpc aliases and IDP imports across mixed test families.
+ - Anchored the gadget classifier test patches to the module under test so
+   operand classification does not depend on an imported SDK alias's identity.
+ - Refreshed private classifier aliases alongside public helpers when the
+   fake-IDB suite rebinds eagerly imported tools.
+ - Preserved intentional isolated-loader overrides while refreshing fake-IDA
+   globals, and kept NumPy's native extension graph resident between tests.
+ - Isolated the environment-sensitive reranker singleton so disabled-mode
+   assertions do not depend on which retrieval test ran first.
+ - Made firmware and blackboard tests clean up direct module seams and made
+   the RPC timeout assertion import the host error contract directly.
+ - Replaced the safe-mode interruption test's scheduler-dependent wait with an
+   explicit watcher/runtime rendezvous.
+ - Kept the touched test surface clean under the repository-wide Ruff check.
+
 ## 2026-09-03 — PR-work coverage continuation
 
  - Added deep offline coverage for background semantic-index submission,

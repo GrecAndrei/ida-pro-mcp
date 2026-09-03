@@ -258,7 +258,8 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
         "idaapi", "idc", "idautils", "ida_funcs", "ida_bytes", "ida_segment",
         "ida_name", "ida_typeinf", "ida_nalt", "ida_hexrays", "ida_frame",
         "ida_struct", "ida_lines", "ida_ua", "ida_kernwin", "ida_loader",
-        "ida_dbg", "ida_fixup", "ida_ida", "ida_entry", "ida_auto",
+        "ida_dbg", "ida_fixup", "ida_ida", "ida_entry", "ida_auto", "ida_gdl",
+        "ida_idp",
     ):
         mod = sys.modules.get(name)
         if mod is None:
@@ -273,6 +274,14 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
     _base_hexrays = sys.modules["ida_hexrays"]
     if not hasattr(_base_hexrays, "user_lvar_modifier_t"):
         _base_hexrays.user_lvar_modifier_t = type("user_lvar_modifier_t", (), {})
+    # Keep the type-parser flags available in every isolated load.  Individual
+    # tests may replace the SDK module, but a module loaded in a fresh process
+    # must not depend on an earlier test having populated these constants.
+    _base_typeinf = sys.modules["ida_typeinf"]
+    _base_typeinf.PT_SIL = 0x0001
+    _base_typeinf.PT_TYP = 0x0002
+    _base_typeinf.TINFO_DEFINITE = 0x0001
+    _base_typeinf.NTF_TYPE = 0x0001
     # ida_mcp.sync builds its IDASafety enum from these at import time, so any
     # module that imports a tool transitively needs them present.
     _base_kernwin = sys.modules["ida_kernwin"]
@@ -372,7 +381,8 @@ _IDA_SDK_NAMES = (
     "idaapi", "idc", "idautils", "ida_funcs", "ida_bytes", "ida_segment",
     "ida_name", "ida_typeinf", "ida_nalt", "ida_hexrays", "ida_frame",
     "ida_struct", "ida_lines", "ida_ua", "ida_kernwin", "ida_loader",
-    "ida_dbg", "ida_fixup", "ida_ida", "ida_entry", "ida_auto",
+    "ida_dbg", "ida_fixup", "ida_ida", "ida_entry", "ida_auto", "ida_gdl",
+    "ida_idp",
 )
 
 
@@ -407,7 +417,13 @@ def load_tool_module(module_basename: str, *, common_overrides: dict | None = No
     try:
         fullname = f"ida_pro_mcp.ida_mcp.tools.{module_basename}"
         path = TOOLS_ROOT / f"{module_basename}.py"
-        return _bind_ida_sdk_names(_load_module(fullname, path))
+        module = _bind_ida_sdk_names(_load_module(fullname, path))
+        # Preserve deliberate per-test seams when the fake-IDB fixture
+        # refreshes eagerly imported tool globals later in the process.
+        module.__isolated_common_overrides__ = frozenset(
+            (common_overrides or {}).keys()
+        )
+        return module
     finally:
         if previous_package_common is None:
             sys.modules.pop("ida_pro_mcp.ida_mcp.tools._common", None)
@@ -429,7 +445,11 @@ def load_tool_submodule(module_relpath: str, *, common_overrides: dict | None = 
         path = TOOLS_ROOT / rel
         path = path / "__init__.py" if path.is_dir() else path.with_suffix(".py")
         fullname = f"ida_pro_mcp.ida_mcp.tools.{module_relpath}"
-        return _bind_ida_sdk_names(_load_module(fullname, path))
+        module = _bind_ida_sdk_names(_load_module(fullname, path))
+        module.__isolated_common_overrides__ = frozenset(
+            (common_overrides or {}).keys()
+        )
+        return module
     finally:
         if previous_package_common is None:
             sys.modules.pop("ida_pro_mcp.ida_mcp.tools._common", None)

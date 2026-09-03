@@ -50,10 +50,14 @@ def _load_memory(bitness=64, ida_bytes=None, idc=None, ida_segment=None):
         idc = types.ModuleType("idc")
     if ida_segment is None:
         ida_segment = types.ModuleType("ida_segment")
+    # ``setdefault`` is intentional for most legacy SDK seams, but fixup
+    # constants are discovered by name and must start from a fresh module or
+    # a prior fake can win the reverse-map collision.
+    sys.modules["ida_fixup"] = types.ModuleType("ida_fixup")
     _blank_modules(["idaapi", "idautils", "ida_funcs", "ida_name", "ida_typeinf",
                     "ida_nalt", "ida_hexrays", "ida_frame", "ida_struct",
                     "ida_lines", "ida_ua", "ida_kernwin", "ida_loader",
-                    "ida_dbg", "ida_fixup"])
+                    "ida_dbg"])
     sys.modules["ida_bytes"] = ida_bytes
     sys.modules["idc"] = idc
     sys.modules["ida_segment"] = ida_segment

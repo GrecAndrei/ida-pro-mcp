@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from ida_pro_mcp.host.intelligence.families import _UnionFind, _ea_sort_key, compute_function_families
+from ida_pro_mcp.host.intelligence.families import (
+    _ea_sort_key,
+    _UnionFind,
+    compute_function_families,
+)
 
 
 class _FakeIndex:

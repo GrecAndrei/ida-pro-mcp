@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,18 @@ from ida_pro_mcp.host.intelligence.rerank import (
     _find_rerank_model,
     _read_rerank_state,
 )
+
+
+@pytest.fixture(autouse=True)
+def _fresh_reranker_singleton():
+    """Keep this module's environment-sensitive singleton per-test."""
+    Reranker._instance = None
+    yield
+    instance = Reranker._instance
+    if instance is not None:
+        with contextlib.suppress(Exception):
+            instance.stop()
+    Reranker._instance = None
 
 
 def test_rerank_state_read_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

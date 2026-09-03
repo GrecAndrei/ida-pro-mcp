@@ -206,7 +206,9 @@ def test_parser_helpers_cover_limits_invalid_items_and_empty_fields():
     ) == [{"addr": "0x10", "name": "0x10"}]
 
 
-def test_direct_ida_helpers_are_safe_when_sdk_is_unavailable():
+def test_direct_ida_helpers_are_safe_when_sdk_is_unavailable(monkeypatch):
+    for name in ("ida_funcs", "idautils", "ida_mcp", "ida_mcp.compat"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
     probe = blackboard_module.CrawlerProbe()
     assert probe.xrefs_to("0x10") == []
     assert probe.symbols("main") == []

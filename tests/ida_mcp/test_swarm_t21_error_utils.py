@@ -75,7 +75,11 @@ class TestPromptsNoDeadToolCalls(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         install_common_stub()
-        sys.modules.setdefault("ida_pro_mcp.ida_mcp.rpc", _FakeRpc())
+        # Replace all aliases explicitly: a prior isolated test may have left
+        # a real or differently shaped rpc module at the canonical name.
+        fake_rpc = _FakeRpc()
+        for name in ("ida_pro_mcp.ida_mcp.rpc", "ida_mcp.rpc", "rpc"):
+            sys.modules[name] = fake_rpc
         cls.mod = load_ida_module("prompts")
 
     def test_quickref_uses_batch_template_not_dead_agent_tool(self):
