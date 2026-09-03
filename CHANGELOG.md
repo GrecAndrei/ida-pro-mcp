@@ -42,6 +42,8 @@
  - Added search-router coverage for malformed insight indexes, fallback module
    imports, numeric data-value routing, blackboard enrichment, aliases, and
    structured/path validation boundaries.
+ - Added function-family edge coverage for empty/malformed vectors, name
+   filters, row caps, empty addresses, and redundant union operations.
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 

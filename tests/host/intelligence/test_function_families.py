@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ida_pro_mcp.host.intelligence.families import compute_function_families
+from ida_pro_mcp.host.intelligence.families import _UnionFind, _ea_sort_key, compute_function_families
 
 
 class _FakeIndex:
@@ -112,3 +112,35 @@ def test_delta_reports_shared_and_missing_tokens():
     assert isinstance(sub_delta, list)
     # Every delta is a +/- token list, never empty for a real variant.
     assert all(d["ea"] != family["representative"]["ea"] for d in family["deltas"])
+
+
+def test_family_builder_rejects_empty_rows_and_honors_filters_and_caps():
+    empty = _FakeIndex({}, {})
+    assert compute_function_families(empty)["families"] == []
+
+    idx = _FakeIndex(
+        {
+            "0x1000": None,
+            "0x2000": [],
+            "0x3000": ["not-a-number"],
+            "0x4000": [1.0, 0.0],
+            "0x5000": [0.99, 0.01],
+        },
+        {
+            "0x4000": {"name": "keep"},
+            "0x5000": {"name": "keep-two"},
+        },
+    )
+    filtered = compute_function_families(idx, name_filter="missing")
+    assert filtered["families"] == [] and filtered["clustered"] == 0
+
+    capped = compute_function_families(idx, max_functions=1, min_size=1)
+    assert capped["clustered"] == 1
+    assert capped["families"] == []
+
+
+def test_family_helpers_cover_empty_eas_and_redundant_union():
+    assert _ea_sort_key("   ") == 0
+    union_find = _UnionFind(2)
+    union_find.union(0, 0)
+    assert union_find.find(0) == 0
