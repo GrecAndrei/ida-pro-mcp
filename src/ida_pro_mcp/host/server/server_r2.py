@@ -211,6 +211,6 @@ class ServerR2Mixin:
                 limit=limit,
             )
 
-        return make_error(
+        return make_error(  # pragma: no cover - action membership makes this defensive tail unreachable
             MCPError.ACTION_NOT_FOUND, f"Unsupported r2 action: '{action}'"
         )

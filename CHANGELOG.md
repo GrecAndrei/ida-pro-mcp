@@ -81,6 +81,8 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added deep offline coverage for advanced search candidate planning, bounded
    intelligence expansion, constant scans, decompiled search modes, and
    structured-index result shaping.
+ - Added offline r2 host coverage for memory-root failures, active-session
+   fallback, default disassembly windows, and malformed hypothesis inputs.
  - Isolated the non-interactive reranker installer test from real client
    configuration writers by stubbing both path discovery and client updates.
 
