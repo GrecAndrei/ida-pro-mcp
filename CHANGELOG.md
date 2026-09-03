@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-03 — Stabilize live annotation address coverage
+
+ - Resolve the annotation context fixture address through the live search
+   contract so the test does not depend on an IDA-specific address format.
+
 ## 2026-09-03 — Expand persistent-store edge coverage
 
  - Added offline checks for knowledge-graph rollback and adaptive matching,

@@ -863,6 +863,24 @@ def test_legacy_annotation_write_and_cleanup_lifecycle_is_live(
     legacy_ctx: LegacyContext, tmp_path: Path
 ):
     """Verify a real user can write, inspect, export, import, and clean notes."""
+    # Annotation context resolves an address strictly, while the write and
+    # cleanup actions intentionally accept IDA names. Resolve the fixture name
+    # through the same public search route a user would use instead of relying
+    # on a layout-specific hard-coded address.
+    resolved = legacy_ctx.coded_or_ok(
+        "search", action="find", query="rich_tiny", kind="names",
+        include_items=True, limit=10,
+    )
+    tiny_item = next(
+        (
+            item for item in (resolved.get("items") or [])
+            if isinstance(item, dict) and item.get("name") == "rich_tiny"
+        ),
+        None,
+    )
+    assert tiny_item and tiny_item.get("addr"), resolved
+    tiny_addr = str(tiny_item["addr"])
+
     legacy_ctx.coded_or_ok(
         "annotation", action="set_structured", addr="rich_tiny",
         text="temporary structured review", fmt="structured", _risk_ack=True,
@@ -877,7 +895,7 @@ def test_legacy_annotation_write_and_cleanup_lifecycle_is_live(
         _risk_ack=True,
     )
     context = legacy_ctx.coded_or_ok(
-        "annotation", action="get_context", addr="rich_tiny", _risk_ack=True
+        "annotation", action="get_context", addr=tiny_addr, _risk_ack=True
     )
     assert context.get("addr")
     legacy_ctx.coded_or_ok(
