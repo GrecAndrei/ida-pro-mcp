@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-03 — Data-surface boundary coverage
+
+ - Added offline coverage for bounded byte/string walks, legacy string-list
+   fallback, literal scans, import/export/lookup fallback behavior,
+   bulk/capability/read-byte errors, and string-xref deduplication.
+
 ## 2026-09-03 — Type-system boundary coverage
 
  - Added offline coverage for type import, declaration/application failures,
