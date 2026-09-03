@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-03 — Expand host edge coverage
+
+ - Added behavior coverage for runtime/config fallback paths, legacy symbol DB
+   repair, enrichment metadata, semantic matching, and context compaction.
+
 ## 2026-09-03 — Offline test filesystem isolation
 
  - Sandboxed offline test defaults before application collection imports so
