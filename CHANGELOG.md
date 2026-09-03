@@ -17,6 +17,9 @@
  - Added public agent-operation contract coverage for nested schema types,
    strict validation and acknowledgements, backend/risk translation, recovery
    rewriting, error adaptation, and public batch argument admission.
+ - Added truncation coverage for nested token resolution, scope isolation,
+   continuation cursors, regex safety, search and summary modes, recursive
+   depth/size limits, and non-mutating response pruning.
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
