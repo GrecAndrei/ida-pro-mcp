@@ -20,6 +20,9 @@
  - Added truncation coverage for nested token resolution, scope isolation,
    continuation cursors, regex safety, search and summary modes, recursive
    depth/size limits, and non-mutating response pruning.
+ - Added workflow-coordinator coverage for recursive plan/compose/audit/
+   execute paths, priority and estimate modes, capability pruning, catalog
+   fallback, malformed stats, and non-dict/error result envelopes.
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
