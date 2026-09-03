@@ -36,6 +36,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added legacy blackboard boundary coverage for damaged and partial SQLite
    files, migration/raw-copy fallbacks, candidate discovery, machinery/link
    routing, and path-confinement failures.
+ - Added orchestration boundary coverage for durable machinery/task failures,
+   malformed payloads, queue shutdown and deadline behavior, crawler lifecycle
+   fallbacks, frontier RPC selection, and trace claim/error paths.
 
 ## 2026-09-02 — Multi-agent configuration and skill system redesign
 
