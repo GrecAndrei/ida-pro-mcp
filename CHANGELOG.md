@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-03 — Offline support and code-helper boundary coverage
+
+ - Added offline checks for cache canonicalization, TTL and stale-generation
+   handling, narrow write invalidation, optional embedding failures, and
+   event/SSE fallback behavior without an IDA SDK.
+ - Added cross-mode boundary coverage for architecture detection, RISC-V GP
+   fallback paths, decompiler dataflow, firmware constant recovery, security
+   detector fallbacks, string/type searches, xref limits, and diagnostics.
+
 ## 2026-09-03 — Order-independent offline tests
 
  - Stabilized the isolated fake-IDA SDK baseline and removed implicit import
