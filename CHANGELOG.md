@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-03 — Expand schema edge coverage
+
+ - Added deterministic checks for alias normalization, compact schema modes,
+   description truncation, category classification, and Vertex sanitization.
+
 ## 2026-09-03 — Expand protocol boundary coverage
 
  - Added offline coverage for flat-plugin imports, JSON-RPC notification and
