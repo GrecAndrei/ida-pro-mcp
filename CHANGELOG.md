@@ -83,6 +83,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added offline host-server coverage for environment normalization, stdio and
    daemon lifecycle/error paths, PID cleanup, native bootstrap handling, and
    legacy batch dispatch.
+ - Added integrated session-skills coverage for malformed persistence,
+   bootstrap dependency failures, readiness trends, embedding/global
+   suggestions, dead-end detection, and triage limits.
  - Added deep offline coverage for advanced search candidate planning, bounded
    intelligence expansion, constant scans, decompiled search modes, and
    structured-index result shaping.
