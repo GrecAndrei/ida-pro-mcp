@@ -39,6 +39,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added orchestration boundary coverage for durable machinery/task failures,
    malformed payloads, queue shutdown and deadline behavior, crawler lifecycle
    fallbacks, frontier RPC selection, and trace claim/error paths.
+ - Added IDA-side boundary coverage for plugin restart/platform/port handling,
+   ctree action and visitor modes, and shared utility fallbacks for address,
+   type, prototype, decompiler, and stack-frame helpers.
 
 ## 2026-09-02 — Multi-agent configuration and skill system redesign
 
