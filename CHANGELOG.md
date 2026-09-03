@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-03 — PR-work coverage continuation
+
+ - Added deep offline coverage for background semantic-index submission,
+   cancellation, binary-index reuse, lazy initialization, client ownership,
+   policy admission, and task lifecycle failure paths.
+
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
 ## 2026-09-02 — PR-work coverage continuation
