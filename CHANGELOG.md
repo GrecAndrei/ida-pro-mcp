@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-03 — Isolate live IDB control coverage
+
+ - Restore the live fixture snapshot after analysis-control tests and keep
+   layout probes outside named functions so destructive IDB actions cannot
+   affect later tests in the shared session.
+ - Bound live semantic gadget indexing to one small source action in the
+   compatibility smoke path.
+
 ## 2026-09-03 — Stabilize live annotation address coverage
 
  - Resolve the annotation context fixture address through the live search
