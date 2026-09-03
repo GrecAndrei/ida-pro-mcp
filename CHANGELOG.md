@@ -29,6 +29,10 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
  - Added memory boundary coverage for scalar/string and endian failures,
    wildcard-search engine fallbacks, integer-width limits, compare algorithms,
    cyclic struct walks, region caps, and governed-write error envelopes.
+ - Added intelligence lifecycle coverage for status and anchor actions,
+   classification/decompilation guards, fast/full/range indexing filters,
+   retry cursors, semantic/blackboard/family actions, document shaping, and
+   unavailable optional-service modes.
 
 ## 2026-09-02 — Multi-agent configuration and skill system redesign
 
