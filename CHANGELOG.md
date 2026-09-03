@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-03 — Code-dispatch boundary coverage
+
+ - Added offline coverage for paginated decompile modes, raw/listing
+   disassembly, missing-function suggestions, bounded graph and xref scans,
+   decoder-absent field matching, cache invalidation, and error envelopes.
+
 ## 2026-09-03 — Data-surface boundary coverage
 
  - Added offline coverage for bounded byte/string walks, legacy string-list
