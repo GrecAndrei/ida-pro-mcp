@@ -80,6 +80,9 @@ All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-
    shims.
  - Added deterministic host rate-limit coverage for partial refills, refunds,
    global denials, and reservation rollback.
+ - Added offline host-server coverage for environment normalization, stdio and
+   daemon lifecycle/error paths, PID cleanup, native bootstrap handling, and
+   legacy batch dispatch.
  - Added deep offline coverage for advanced search candidate planning, bounded
    intelligence expansion, constant scans, decompiled search modes, and
    structured-index result shaping.
