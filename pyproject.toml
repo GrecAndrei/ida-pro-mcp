@@ -36,7 +36,7 @@ dev = [
     "pytest-timeout>=2.4.0",
     "ruff>=0.15.0",
     "tiktoken>=0.8.0",
-    "pyyaml>=6.0",  # tests/test_ci_workflows.py guards parse .github/workflows YAML
+    "pyyaml>=6.0.3",  # tests/test_ci_workflows.py guards parse .github/workflows YAML
 ]
 
 [project.urls]
