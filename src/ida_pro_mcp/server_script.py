@@ -109,6 +109,13 @@ _tools_root = os.path.join(_mcp_root, "tools")
 for p in [_src_root, _pkg_root, _mcp_root, _tools_root]:
     if p not in sys.path: sys.path.insert(0, p)
 
+try:
+    from ida_pro_mcp.ida_mcp import compat as _compat
+    _compat.shim_ida_segment_helpers()
+    _compat.shim_ida_funcs_helpers()
+except Exception:
+    pass
+
 # IDA_MCP_BYPASS_SYNC is set by the host runtime (server_runtime.py) when
 # launching IDA. Do not force it here at module import: the env var
 # disables the @idaread/@idawrite safety wrapper globally, so it should

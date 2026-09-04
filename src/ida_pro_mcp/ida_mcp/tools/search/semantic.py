@@ -417,7 +417,16 @@ def search_nl(
                     pool = raw_results[: min(RERANK_MAX_CANDIDATES, candidate_limit)]
                     eas = [str(r.get("ea") or "") for r in pool]
                     docs: list[str] = []
-                    stored = idx._row_docs_for_eas(eas) if hasattr(idx, "_row_docs_for_eas") else {}
+                    try:
+                        stored = (
+                            idx._row_docs_for_eas(eas)
+                            if hasattr(idx, "_row_docs_for_eas") else {}
+                        )
+                    except Exception:
+                        # Persisted document text is an optimization.  A
+                        # damaged or unavailable side table must not turn a
+                        # useful recall result into a failed search.
+                        stored = {}
                     for ea, r in zip(eas, pool, strict=True):
                         doc = stored.get(ea) or r.get("signature") or ""
                         if not doc and ea:
@@ -563,9 +572,14 @@ def search_behavior(
     rows: list[dict] = []
 
     # Stage 1: L1 insight index
-    from . import _query_insight_by_tags
+    try:
+        from . import _query_insight_by_tags
 
-    l1_addrs = _query_insight_by_tags([normalized_tag], mode="or")
+        l1_addrs = _query_insight_by_tags([normalized_tag], mode="or")
+    except Exception:
+        # The optional L1 index is an accelerator, not a prerequisite for the
+        # classifier path below.
+        l1_addrs = []
     if l1_addrs:
         for addr_str in l1_addrs[:limit]:
             try:

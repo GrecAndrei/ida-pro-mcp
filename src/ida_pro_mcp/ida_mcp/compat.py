@@ -274,6 +274,86 @@ def add_segment(start_ea, end_ea, name, sclass, perm):
     return bool(idaapi.add_segm_ex(seg, name or "", sclass, 0))
 
 
+def shim_ida_segment_helpers(mod=None):
+    """Add defensive helpers to ida_segment to support common aliases.
+
+    Many callers and agent scripts intuitively expect ``ida_segment.get_start(seg)``
+    and ``ida_segment.get_end(seg)`` (mirroring ``ida_funcs.get_func_start``), or
+    passing an address ``ea``. Shimming these prevents unexpected runtime errors.
+    """
+    if mod is None:
+        mod = _ida_segment()
+    if mod is None:
+        return
+
+    def _get_start(seg_or_ea):
+        if hasattr(seg_or_ea, "start_ea"):
+            return seg_or_ea.start_ea
+        if isinstance(seg_or_ea, int):
+            s = getattr(mod, "getseg", lambda _: None)(seg_or_ea)
+            if s and hasattr(s, "start_ea"):
+                return s.start_ea
+            return seg_or_ea
+        return getattr(seg_or_ea, "start_ea", seg_or_ea)
+
+    def _get_end(seg_or_ea):
+        if hasattr(seg_or_ea, "end_ea"):
+            return seg_or_ea.end_ea
+        if isinstance(seg_or_ea, int):
+            s = getattr(mod, "getseg", lambda _: None)(seg_or_ea)
+            if s and hasattr(s, "end_ea"):
+                return s.end_ea
+            return seg_or_ea
+        return getattr(seg_or_ea, "end_ea", seg_or_ea)
+
+    for attr in ("get_start", "get_segm_start"):
+        if not hasattr(mod, attr):
+            try:
+                setattr(mod, attr, _get_start)
+            except Exception:
+                pass
+
+    for attr in ("get_end", "get_segm_end"):
+        if not hasattr(mod, attr):
+            try:
+                setattr(mod, attr, _get_end)
+            except Exception:
+                pass
+
+
+def shim_ida_funcs_helpers(mod=None):
+    """Add defensive helpers to ida_funcs to support common aliases."""
+    if mod is None:
+        mod = _ida_funcs()
+    if mod is None:
+        return
+
+    def _get_func_end(pfn_or_ea):
+        if hasattr(pfn_or_ea, "end_ea"):
+            return pfn_or_ea.end_ea
+        if isinstance(pfn_or_ea, int):
+            pfn = getattr(mod, "get_func", lambda _: None)(pfn_or_ea)
+            if pfn and hasattr(pfn, "end_ea"):
+                return pfn.end_ea
+            return pfn_or_ea
+        return getattr(pfn_or_ea, "end_ea", pfn_or_ea)
+
+    for attr in ("get_func_end", "get_end"):
+        if not hasattr(mod, attr):
+            try:
+                setattr(mod, attr, _get_func_end)
+            except Exception:
+                pass
+
+
+# Apply shims to imported modules if already in sys.modules
+try:
+    shim_ida_segment_helpers()
+    shim_ida_funcs_helpers()
+except Exception:
+    pass
+
+
 # --- functions ---------------------------------------------------------------
 
 def _ida_funcs():

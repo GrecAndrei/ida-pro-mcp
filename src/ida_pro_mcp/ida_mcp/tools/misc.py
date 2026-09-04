@@ -18,6 +18,18 @@ from ._common import (
     tool,
     validate_path_safe
 )
+import traceback
+
+try:
+    from .. import compat as _compat
+except (ImportError, ValueError):
+    try:
+        from ida_mcp import compat as _compat
+    except (ImportError, ValueError):
+        try:
+            import compat as _compat
+        except (ImportError, ValueError):
+            _compat = None
 
 _SIG_PATH_CACHE = None
 
@@ -493,6 +505,13 @@ def _python_exec_namespace():
             ns[name] = __import__(name)
         except ImportError:
             continue
+    if _compat is not None:
+        segmod = ns.get("ida_segment") or sys.modules.get("ida_segment")
+        if segmod is not None:
+            _compat.shim_ida_segment_helpers(segmod)
+        funcsmod = ns.get("ida_funcs") or sys.modules.get("ida_funcs")
+        if funcsmod is not None:
+            _compat.shim_ida_funcs_helpers(funcsmod)
     return ns
 
 
@@ -539,7 +558,13 @@ def execute_python(script: str):
             hint="Use action=python with 'code' for multi-line scripts.",
         )
     except Exception as e:
-        return handle_error(e, context="execute_python")
+        trace = traceback.format_exc()
+        return make_error(
+            MCPError.SCRIPT_ERROR,
+            f"[execute_python] {e}",
+            details={"traceback": trace, "kind": type(e).__name__},
+            hint="Check Python script syntax and IDAPython API usage.",
+        )
     finally:
         sys.stdout = old_stdout
         sys.stderr = old_stderr

@@ -343,3 +343,52 @@ def test_misc_reload_all_and_python_exec_fallback(monkeypatch):
     assert expression == {"output": "42\n", "result": 42}
     statement = misc_mod.execute_python("answer = 42")
     assert statement == {"output": "", "result": None}
+
+
+def test_execute_python_ida_segment_get_start_end_shims():
+    script = (
+        "import types\n"
+        "seg = types.SimpleNamespace(start_ea=0x1000, end_ea=0x2000)\n"
+        "s = ida_segment.get_start(seg)\n"
+        "e = ida_segment.get_end(seg)\n"
+        "print(f'{s:#x}-{e:#x}')\n"
+    )
+    res = misc_mod.execute_python(script)
+    assert res.get("error") is not True
+    assert "0x1000-0x2000" in res["output"]
+
+
+def test_execute_python_runtime_error_uses_script_error_envelope():
+    res = misc_mod.execute_python("raise AttributeError('some_missing_attr')")
+    assert res["error"] is True
+    assert res["code"] == misc_mod.MCPError.SCRIPT_ERROR
+    assert "[execute_python]" in res["message"]
+    assert "some_missing_attr" in res["message"]
+    assert "details" in res and "traceback" in res["details"]
+
+
+def test_compat_segment_and_funcs_shims():
+    import types
+
+    from ida_pro_mcp.ida_mcp import compat as _compat
+
+    fake_seg = types.SimpleNamespace(start_ea=0x4000, end_ea=0x5000)
+    fake_mod = types.ModuleType("fake_segment")
+    fake_mod.getseg = lambda ea: fake_seg if ea == 0x4050 else None
+
+    _compat.shim_ida_segment_helpers(fake_mod)
+    assert fake_mod.get_start(fake_seg) == 0x4000
+    assert fake_mod.get_end(fake_seg) == 0x5000
+    assert fake_mod.get_segm_start(fake_seg) == 0x4000
+    assert fake_mod.get_segm_end(fake_seg) == 0x5000
+    assert fake_mod.get_start(0x4050) == 0x4000
+    assert fake_mod.get_end(0x4050) == 0x5000
+
+    fake_func = types.SimpleNamespace(start_ea=0x6000, end_ea=0x6050)
+    fake_funcs_mod = types.ModuleType("fake_funcs")
+    fake_funcs_mod.get_func = lambda ea: fake_func if ea == 0x6010 else None
+
+    _compat.shim_ida_funcs_helpers(fake_funcs_mod)
+    assert fake_funcs_mod.get_func_end(fake_func) == 0x6050
+    assert fake_funcs_mod.get_end(fake_func) == 0x6050
+    assert fake_funcs_mod.get_func_end(0x6010) == 0x6050

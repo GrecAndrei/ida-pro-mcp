@@ -2,6 +2,12 @@
 
 All notable changes to `ida-pro-mcp`. Dates in YYYY-MM-DD. Versions are not tag-stamped yet — each release maps roughly to a wave of improvements announced here.
 
+## 2026-09-04 — Python execution resilience, IDA segment/func shims, and search fallbacks
+
+ - Added defensive shims `get_start`, `get_end`, `get_segm_start`, and `get_segm_end` to `ida_segment`, and `get_func_end` to `ida_funcs` to support common alias patterns across IDAPython surfaces.
+ - Enhanced `execute_python` exception handling to return structured `SCRIPT_ERROR` envelopes with tracebacks, preventing user script `AttributeError`s from being misattributed to IDA SDK version divergence.
+ - Added defensive fallbacks in `search_nl` and `search_behavior` to gracefully handle damaged or missing insight/side tables without crashing recall.
+
 ## 2026-09-02 — Multi-agent configuration and skill system redesign
 
  - Expanded client configuration support for 8 additional AI coding agent environments:
