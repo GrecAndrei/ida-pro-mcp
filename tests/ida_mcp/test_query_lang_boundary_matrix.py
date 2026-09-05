@@ -217,3 +217,107 @@ def test_executor_propagates_backend_errors_and_query_entrypoint(monkeypatch):
     plan = {"target": "instruction", "identifier": "mov", "conditions": [], "limit": 10}
     assert ql.QueryExecutor().execute(plan)["code"] == "BACKEND"
     assert ql.run_query_lang("MATCH instruction mov", limit="bad")["code"] == "BACKEND"
+
+
+def test_tool_loader_and_caller_fallbacks(monkeypatch):
+    ql = _module()
+    # Nonexistent tool resolution and error handling
+    assert ql._get_tool("nonexistent_unknown_tool_xyz") is None
+    res = ql._call_tool("nonexistent_unknown_tool_xyz")
+    assert res.get("error") is True
+    assert "not available" in res["message"]
+
+    # Tool that raises exception
+    monkeypatch.setitem(ql._TOOL_CACHE, "exploding_tool", lambda **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+    err = ql._call_tool("exploding_tool")
+    assert err.get("error") is True
+    assert "boom" in err["message"]
+
+
+def test_parser_empty_and_extraction_edges():
+    ql = _module()
+    parser = ql.QueryParser()
+    assert parser._parse_head_and_conditions("") is None
+    assert parser._extract_target("") == (None, "")
+    assert parser._extract_identifier_and_conditions("") == ("*", [])
+
+
+def test_condition_evaluator_all_comparison_operators():
+    ql = _module()
+    executor = ql.QueryExecutor()
+
+    # != operator returning False
+    assert executor._match_conditions({"name": "main"}, [{"key": "name", "op": "!=", "value": "main"}]) is False
+    assert executor._match_conditions({"name": "other"}, [{"key": "name", "op": "!=", "value": "main"}]) is True
+
+    # < operator returning False
+    assert executor._match_conditions({"size": 20}, [{"key": "size", "op": "<", "value": 10}]) is False
+    assert executor._match_conditions({"size": 5}, [{"key": "size", "op": "<", "value": 10}]) is True
+
+    # > operator returning False
+    assert executor._match_conditions({"size": 5}, [{"key": "size", "op": ">", "value": 10}]) is False
+    assert executor._match_conditions({"size": 20}, [{"key": "size", "op": ">", "value": 10}]) is True
+
+    # <= operator returning False
+    assert executor._match_conditions({"size": 15}, [{"key": "size", "op": "<=", "value": 10}]) is False
+    assert executor._match_conditions({"size": 10}, [{"key": "size", "op": "<=", "value": 10}]) is True
+
+    # >= operator returning False
+    assert executor._match_conditions({"size": 5}, [{"key": "size", "op": ">=", "value": 10}]) is False
+    assert executor._match_conditions({"size": 10}, [{"key": "size", "op": ">=", "value": 10}]) is True
+
+    # ~ regex operator returning False
+    assert executor._match_conditions({"name": "sub_1000"}, [{"key": "name", "op": "~", "value": "^crypto_"}]) is False
+    assert executor._match_conditions({"name": "crypto_aes"}, [{"key": "name", "op": "~", "value": "^crypto_"}]) is True
+
+
+def test_executor_handles_non_dict_and_capped_backends(monkeypatch):
+    ql = _module()
+    executor = ql.QueryExecutor()
+    base = {"identifier": "test", "conditions": [], "limit": 10}
+
+    # All executors returning non-dict
+    monkeypatch.setattr(ql, "_call_tool", lambda *_args, **_kwargs: None)
+    assert executor._execute_function(base)["error"] is True
+    assert executor._execute_call(base)["error"] is True
+    assert executor._execute_string(base)["error"] is True
+    assert executor._execute_import(base)["error"] is True
+    assert executor._execute_instruction(base)["error"] is True
+    assert executor._execute_xref(base)["error"] is True
+    assert executor._execute_segment(base)["error"] is True
+    assert executor._execute_find(base)["error"] is True
+    assert executor._execute_find({**base, "limit": "bad"})["error"] is True
+    assert executor._execute_block({**base, "identifier": "main"})["error"] is True
+
+    # _execute_block with blocks not a string and not a list
+    monkeypatch.setattr(ql, "_call_tool", lambda *_args, **_kwargs: {"blocks": 12345})
+    res_block = executor._execute_block({**base, "identifier": "main"})
+    assert res_block["ok"] is True
+    assert res_block["returned"] == 0
+
+    # _execute_call hitting the 200 call cap across patterns
+    fake_calls = [{"addr": hex(0x401000 + i * 4), "text": f"call sub_{i}"} for i in range(210)]
+    monkeypatch.setattr(ql, "_call_tool", lambda *_args, **_kwargs: {"ok": True, "results": fake_calls})
+    call_res = executor._execute_call(base)
+    assert call_res["ok"] is True
+    assert call_res.get("truncated") is True
+
+
+def test_run_query_lang_uninterpretable_query(monkeypatch):
+    ql = _module()
+    monkeypatch.setattr(ql.QueryParser, "parse", lambda self, q: None)
+    res = ql.run_query_lang("some uninterpretable string")
+    assert res.get("error") is True
+    assert "query could not be interpreted" in res["message"]
+
+
+def test_fallback_globals_stubs():
+    ql = _module()
+    # Exercise fallback stubs if defined
+    tool_fn = ql.tool(lambda: 42)
+    assert tool_fn() == 42
+    idaread_fn = ql.idaread(lambda: 43)
+    assert idaread_fn() == 43
+    err = ql.make_error("TEST_CODE", "test message")
+    assert err["code"] == "TEST_CODE"
+    assert ql.MCPError.INVALID_ARGS == "INVALID_ARGS"

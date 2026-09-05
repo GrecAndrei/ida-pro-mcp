@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-05 — Expand unified search and query language boundary coverage
+
+ - Cover unified search symbol inspector error paths, prototype exception handling, xref limits, non-code data/code descriptors, and address validation fallbacks.
+ - Cover unified search find heap replacement, duplicate address filtering, comment limits, and instruction scanning timeouts across segments.
+ - Cover query language condition operators, tool loader and caller failure branches, executor non-dict responses, and uninterpretable query plans.
+ - Update isolated test harness common stubs for error hint parameters and invalid address decoding.
+
 ## 2026-09-05 — Expand blackboard shapes and IDB round-trip synchronization coverage
 
  - Cover snapshot_to_markdown formatting edge cases including stale items, conflicting findings, evidence locations, custom kinds, and unlisted statuses.

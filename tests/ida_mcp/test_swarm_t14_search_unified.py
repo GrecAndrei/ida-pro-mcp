@@ -432,3 +432,259 @@ def test_router_data_value_ascii_uses_string_scan():
     assert r["ok"] is True
     assert captured.get("string") == "AGENT_SURFACE_STRING_001"
     assert "pointer" not in captured
+
+
+def test_search_unified_edge_cases_and_symbol_info():
+    uni = _module("search.unified")
+    idc = sys.modules["idc"]
+    idaapi = sys.modules["idaapi"]
+    idautils = sys.modules["idautils"]
+    compat = uni._compat
+
+    # 1. search_xrefs_to_string empty pattern
+    res = uni.search_xrefs_to_string("")
+    assert res.get("error") is True or res.get("isError") is True
+    assert "pattern required" in res["message"]
+
+    # 2. search_symbol empty pattern
+    res = uni.search_symbol("")
+    assert res.get("error") is True or res.get("isError") is True
+    assert "pattern required" in res["message"]
+
+    # 3. _alternatives_for_name limit break
+    saved_names = idautils.Names
+    try:
+        idautils.Names = lambda: [
+            (0x401000, "my_func_1"),
+            (0x401010, "my_func_2"),
+            (0x401020, "my_func_3"),
+        ]
+        compat.get_func_start = lambda ea: ea
+        alts = uni._alternatives_for_name("my_func", limit=2)
+        assert len(alts) == 2
+    finally:
+        idautils.Names = saved_names
+
+    # 4. search_symbol fallback score (matcher matches, but not simple substring of lower)
+    orig_compile = uni.compile_smart_pattern
+    saved_xrefs_to = getattr(idautils, "XrefsTo", None)
+    try:
+        idautils.Names = lambda: [(0x401000, "HELLO_WORLD")]
+        idautils.XrefsTo = lambda ea, flags: []
+        compat.get_func_start = lambda ea: ea
+        idc.get_name = lambda ea: "HELLO_WORLD"
+        idc.get_name_ea_simple = lambda name: idaapi.BADADDR
+        uni.compile_smart_pattern = lambda pat, **k: lambda text: True
+        res = uni.search_symbol("fuzzy_query", include_alternatives=False)
+        assert res["ok"] is True
+        assert res["total_candidates"] == 1
+    finally:
+        uni.compile_smart_pattern = orig_compile
+        idautils.Names = saved_names
+        if saved_xrefs_to:
+            idautils.XrefsTo = saved_xrefs_to
+
+    # 5. search_callees and search_callers non-function errors
+    orig_resolve = uni.resolve_target
+    orig_get_func = compat.get_func_start
+    try:
+        # resolve returns error
+        uni.resolve_target = lambda *a, **k: (idaapi.BADADDR, "not found target", None)
+        err_res = uni.search_callees("missing_sym", False, 0, 10, 0.5, False, False)
+        assert err_res.get("error") is True
+        assert "not found target" in err_res["message"]
+
+        # resolve succeeds but get_func_start is None
+        uni.resolve_target = lambda *a, **k: (0x401000, None, None)
+        compat.get_func_start = lambda ea: None
+        err_func = uni.search_callees("data_sym", False, 0, 10, 0.5, False, False)
+        assert err_func.get("error") is True
+        assert "No function at" in err_func["message"]
+
+        err_caller = uni.search_callers("data_sym", False, 0, 10, 0.5, False, False)
+        assert err_caller.get("error") is True
+        assert "No function at" in err_caller["message"]
+    finally:
+        uni.resolve_target = orig_resolve
+        compat.get_func_start = orig_get_func
+
+    # 6. search_symbol_info with BadAddr, prototype, is_code, xrefs_to, and _count_xrefs_from_limited
+    idc.get_name_ea_simple = lambda n: idaapi.BADADDR
+    idc.get_name = lambda ea: ""
+    # bad address literal
+    res_bad = uni.search_symbol_info(hex(idaapi.BADADDR))
+    assert res_bad.get("error") is True
+    # unparseable literal
+    res_unparsed = uni.search_symbol_info("not_a_valid_symbol_name_or_addr!!!")
+    assert res_unparsed.get("error") is True
+
+    # Function with prototype and xrefs_to
+    class _FakeFunc:
+        start_ea = 0x401000
+        end_ea = 0x401050
+
+    idc.INF_SHORT_DN = getattr(idc, "INF_SHORT_DN", 0)
+    idc.get_inf_attr = getattr(idc, "get_inf_attr", lambda a: 0)
+    idc.demangle_name = getattr(idc, "demangle_name", lambda n, inf: "")
+    compat.get_func_info = lambda ea: _FakeFunc() if ea == 0x401000 else None
+    compat.get_segment = lambda ea: object()
+    compat.get_segment_name = lambda ea: ".text"
+    compat.get_segment_perm = lambda ea: 5  # R-X
+    idc.get_type = lambda ea: "int __cdecl(int, char**)"
+    saved_xrefs_to = idautils.XrefsTo
+    saved_xrefs_from = idautils.XrefsFrom
+    try:
+        class _FakeXref:
+            frm = 0x402000
+            iscode = True
+
+        idautils.XrefsTo = lambda ea, flags: [_FakeXref()]
+        idc.get_full_flags = lambda ea: 0x600  # code
+        idc.is_code = lambda flags: True
+        idc.is_data = lambda flags: False
+        idc.find_func_end = lambda ea: 0x401050
+        idc.next_head = lambda cur, end: 0x401050
+        idautils.XrefsFrom = lambda cur, flags: [_FakeXref()]
+
+        info = uni.search_symbol_info("0x401000", include_xrefs=True)
+        assert info["ok"] is True
+        assert info["function"]["prototype"] == "int __cdecl(int, char**)"
+        assert len(info["xrefs_to_samples"]) == 1
+        assert info["xrefs_to_samples"][0]["from"] == "0x402000"
+
+        # Prototype exception
+        idc.get_type = lambda ea: (_ for _ in ()).throw(RuntimeError("typeinfo failed"))
+        info_exc = uni.search_symbol_info("0x401000", include_xrefs=False)
+        assert info_exc["ok"] is True
+        assert "prototype" not in info_exc["function"]
+
+        # 64+ xrefs
+        idautils.XrefsTo = lambda ea, flags: [_FakeXref() for _ in range(70)]
+        info_many_xrefs = uni.search_symbol_info("0x401000", include_xrefs=True)
+        assert len(info_many_xrefs["xrefs_to_samples"]) == 64
+
+        # _count_xrefs_from_limited code flags hitting find_func_end == BADADDR, count >= max_count, and BADADDR break
+        idc.is_code = lambda flags: True
+        idc.find_func_end = lambda ea: idaapi.BADADDR
+        next_calls = [0x401010, idaapi.BADADDR]
+        idc.next_head = lambda cur, end: next_calls.pop(0) if next_calls else idaapi.BADADDR
+        idautils.XrefsFrom = lambda cur, flags: [_FakeXref()]
+        code_count = uni._count_xrefs_from_limited(0x401000, 50)
+        assert code_count == 1
+        # Code flags hitting max_count early
+        idc.find_func_end = lambda ea: 0x401020
+        idautils.XrefsFrom = lambda cur, flags: [_FakeXref(), _FakeXref()]
+        code_count_max = uni._count_xrefs_from_limited(0x401000, 1)
+        assert code_count_max == 1
+
+        # Non-function code item
+        compat.get_func_info = lambda ea: None
+        idc.is_code = lambda flags: True
+        idc.is_data = lambda flags: False
+        idc.get_item_size = lambda ea: 4
+        code_info = uni.search_symbol_info("0x401000", include_xrefs=False)
+        assert code_info["ok"] is True
+        assert "code" in code_info
+        assert code_info["code"]["size"] == 4
+
+        # Non-code _count_xrefs_from_limited hitting max_count (line 898)
+        idc.is_code = lambda flags: False
+        idautils.XrefsFrom = lambda cur, flags: [_FakeXref(), _FakeXref()]
+        count = uni._count_xrefs_from_limited(0x401000, 1)
+        assert count == 1
+    finally:
+        idautils.XrefsTo = saved_xrefs_to
+        idautils.XrefsFrom = saved_xrefs_from
+
+    # Exact name score in search_symbol hitting empty name (715) and exact score (722)
+    try:
+        idautils.Names = lambda: [(0x401000, ""), (0x401004, "MY_EXACT_NAME")]
+        idautils.XrefsTo = lambda ea, flags: []
+        compat.get_func_start = lambda ea: ea
+        idc.get_name = lambda ea: "MY_EXACT_NAME"
+        idc.get_name_ea_simple = lambda name: idaapi.BADADDR
+        exact_res = uni.search_symbol("my_exact_name", include_alternatives=False)
+        assert exact_res["ok"] is True
+    finally:
+        idautils.Names = saved_names
+
+
+def test_search_find_heap_and_scan_edges():
+    uni = _module("search.unified")
+    idc = sys.modules["idc"]
+    idautils = sys.modules["idautils"]
+    compat = uni._compat
+
+    saved_names = idautils.Names
+    saved_cached_strings = uni.get_cached_strings
+    saved_cached_imports = uni.get_cached_imports
+    saved_segments = idautils.Segments
+    orig_cap = uni._FIND_INSTRUCTION_CAP
+    orig_mult = uni._FIND_INSTRUCTION_LIMIT_MULTIPLIER
+    try:
+        uni._FIND_INSTRUCTION_CAP = 5
+        uni._FIND_INSTRUCTION_LIMIT_MULTIPLIER = 1
+
+        # Names with duplicate EA and empty name (hitting line 153), plus > 5 items (hitting heapreplace lines 126-127)
+        names_list = [(0x401000, "_Z4testv"), (0x401000, "_Z4testv"), (0x401008, "")]
+        for i in range(10):
+            names_list.append((0x401100 + i * 4, f"test_func_{i:03d}"))
+        idautils.Names = lambda: names_list
+        idc.demangle_name = lambda name, inf: "test()" if name == "_Z4testv" else ""
+        compat.get_func_start = lambda ea: ea
+
+        # Strings with duplicate EA
+        uni.get_cached_strings = lambda: [
+            {"ea": 0x401000, "string": "test string 1"},  # already in seen_eas!
+            {"ea": 0x403000, "string": "test string 2"},
+        ]
+        # Imports with duplicate EA
+        uni.get_cached_imports = lambda: [
+            {"ea": 0x403000, "name": "test_imp", "module": "libtest"},  # already in seen_eas!
+            {"ea": 0x404000, "name": "test_imp2", "module": "libtest"},
+        ]
+        # Comments exceeding comment_cap across segments
+        idautils.Segments = lambda: [0x401000, 0x402000]
+        idc.get_segm_end = lambda s: s + 0x100
+        idautils.Heads = lambda s, e: [s + i * 4 for i in range(250)]
+        idc.get_cmt = lambda ea, rep: "test comment" if rep == 0 else ""
+
+        res = uni.search_find("test", False, None, None, False, True, False, 0, 10)
+        assert res["ok"] is True
+        assert res["count"] >= 10
+
+        # Pattern starting with 0x but invalid hex
+        res_bad_addr = uni.search_find("0xGHIJK", False, None, None, False, True, False, 0, 10)
+        assert res_bad_addr["ok"] is True
+
+        # Timeout in comments check
+        class _FailingTimer:
+            def check(self):
+                raise TimeoutError("search timeout")
+
+        orig_timeout = uni.SearchTimeout
+        uni.SearchTimeout = lambda ms: _FailingTimer()
+        res_timeout = uni.search_find("test", False, None, None, False, True, False, 0, 5, kind="comments")
+        assert res_timeout["ok"] is True
+
+        # Instruction scan hitting cap (line 247) and timeout across multiple segments (line 244)
+        uni.SearchTimeout = orig_timeout
+        uni._FIND_INSTRUCTION_CAP = 1
+        uni.resolve_scan_segments = lambda start, end, require_exec: ([(0x401000, 0x402000), (0x403000, 0x404000)], "", "")
+        uni.iter_code = lambda s, e, force: [s, s + 4]
+        idc.print_insn_mnem = lambda ea: "mov"
+        idc.print_operand = lambda ea, op: "eax" if op == 0 else "ebx"
+        res_insn_cap = uni.search_find("mov", False, None, None, False, True, False, 0, 5, kind="instructions")
+        assert res_insn_cap["ok"] is True
+
+        uni.SearchTimeout = lambda ms: _FailingTimer()
+        res_insn_timeout = uni.search_find("mov", False, None, None, False, True, False, 0, 5, kind="instructions")
+        assert res_insn_timeout["ok"] is True
+        uni.SearchTimeout = orig_timeout
+    finally:
+        uni._FIND_INSTRUCTION_CAP = orig_cap
+        uni._FIND_INSTRUCTION_LIMIT_MULTIPLIER = orig_mult
+        idautils.Names = saved_names
+        uni.get_cached_strings = saved_cached_strings
+        uni.get_cached_imports = saved_cached_imports
+        idautils.Segments = saved_segments

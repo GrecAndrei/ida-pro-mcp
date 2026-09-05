@@ -108,11 +108,14 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
     common.require_arg = lambda *a, **kw: None
     common.require_one_of = lambda *a, **kw: None
     common.validate_action = lambda *a, **kw: None
-    common.validate_count = lambda val, *a, **kw: int(val)
-    common.validate_addr = lambda addr, *a, **kw: (
-        int(str(addr), 0) if addr is not None else 0,
-        None,
-    )
+    def _validate_addr_stub(addr, *a, **kw):
+        if addr is None:
+            return 0, None
+        try:
+            return int(str(addr), 0), None
+        except Exception as exc:
+            return None, {"error": True, "message": str(exc)}
+    common.validate_addr = _validate_addr_stub
     def _default_parse_address_canonical(addr_str):
         # Matches the real parser's simplest behavior for isolated tests: hex
         # strings and non-negative ints resolve, everything else is ADDRESS_INVALID.
@@ -147,7 +150,7 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
             return {"ok": False, "error": True, "code": "ACTION_NOT_FOUND", "message": f"Unknown action '{action}'"}
         return fn()
     common.run_action = _run_action
-    def _make_error(code, message, **kw):
+    def _make_error(code, message, hint=None, **kw):
         out = {
             "error": True,
             "ok": False,
@@ -156,6 +159,8 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
             "category": kw.pop("category", "runtime"),
             "recoverable": bool(kw.pop("recoverable", False)),
         }
+        if hint is not None:
+            out["hint"] = hint
         out.update(kw)
         return out
     common.make_error = _make_error
