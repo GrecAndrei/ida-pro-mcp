@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-05 — Expand calculation tool expression, dereference, and conversion coverage
+
+ - Cover calc action evaluation with custom expression symbols, invalid operators, forbidden calls, and natural-language intent fallbacks.
+ - Cover memory dereferencing edge cases including signed 64-bit integer decoding, long string truncation, unmapped byte reads, and non-pointer dereference chain termination.
+ - Cover scalar conversion formatting error fallbacks, non-primitive argument rejection, alignment value resolution errors, and blackboard persistence import failure handling.
+
 ## 2026-09-05 — Expand unified search and query language boundary coverage
 
  - Cover unified search symbol inspector error paths, prototype exception handling, xref limits, non-code data/code descriptors, and address validation fallbacks.

@@ -218,3 +218,213 @@ def test_calc_persist_capture_noop_dedup_and_write_failure_modes(monkeypatch):
 
     monkeypatch.setattr(board_mod, "BlackboardStore", BrokenStore)
     calc_mod._calc_persist_capture({"expr": "2 + 2"}, {"value": 4}, "eval")
+
+
+def test_calc_action_normalization_aliases_and_semantic():
+    # Alias mapping
+    assert calc_mod._normalize_calc_action("alignment") == "align"
+    assert calc_mod._normalize_calc_action("pointer") == "deref"
+    # Semantic fuzzy match (hits lines 105-109)
+    assert calc_mod._normalize_calc_action("evaluation") == "eval"
+    assert calc_mod._normalize_calc_action("xyzzy_nonexistent", fallback="default_act") == "default_act"
+
+
+def test_calc_resolve_ea_and_numeric_edge_cases(fresh_fake_idb, monkeypatch):
+    idc = importlib.import_module("idc")
+
+    # Empty string to resolve_ea / _semantic_symbol_match
+    assert calc_mod.calc(action="deref", addr="   ")["error"] is True
+
+    # Expression too long
+    assert calc_mod.calc(action="eval", expr="1 + " * 300)["error"] is True
+
+    # Unknown names and unsupported nodes
+    assert calc_mod.calc(action="eval", expr="unknown_sym_123 + 1")["error"] is True
+
+    # Error handling when idc.get_name_ea_simple throws
+    monkeypatch.setattr(idc, "get_name_ea_simple", lambda n: (_ for _ in ()).throw(RuntimeError("ida broken")))
+    assert calc_mod.calc(action="eval", expr="main + 1")["error"] is True
+    assert calc_mod.calc(action="convert", value="not_a_num")["error"] is True
+
+    # Suffix numbers in resolve_ea (+/-)
+    assert calc_mod.calc(action="convert", value="+invalid")["error"] is True
+    assert calc_mod.calc(action="convert", value="")["error"] is True
+    assert calc_mod.calc(action="convert")["error"] is True
+
+
+def test_calc_actions_parameter_validation_and_errors(fresh_fake_idb, monkeypatch):
+    # offset missing args
+    assert calc_mod.calc(action="offset")["error"] is True
+    assert calc_mod.calc(action="offset", addr="invalid", target="0x140001000")["error"] is True
+
+    # deref errors
+    assert calc_mod.calc(action="deref")["error"] is True
+    assert calc_mod.calc(action="deref", addr="invalid", type="u8")["error"] is True
+    # deref via intent
+    fresh_fake_idb.patch_bytes(0x140003000, b"\x42\x00\x00\x00")
+    res_nl = calc_mod.calc(action="deref", intent="0x140003000", type="u8")
+    assert res_nl["ok"] is True and res_nl["value"] == 0x42
+
+    # deref depth loop and non-pointer-value termination
+    fresh_fake_idb.patch_bytes(0x140003050, b"not_a_pointer_value_string\x00")
+    res_deref = calc_mod.calc(action="deref", addr="0x140003050", type="string", deref_depth=2)
+    assert res_deref["ok"] is True
+
+    # chain missing args
+    assert calc_mod.calc(action="chain")["error"] is True
+    assert calc_mod.calc(action="chain", addr="invalid", offsets=[0])["error"] is True
+    # chain offsets via intent
+    res_chain_nl = calc_mod.calc(action="chain", addr="0x140003000", intent="offsets 0x10, 0x20")
+    assert res_chain_nl.get("ok") is True or res_chain_nl.get("error") is True
+
+    # align errors
+    assert calc_mod.calc(action="align", addr="invalid", size=4)["error"] is True
+
+    # resolve errors and headerless raw blob
+    assert calc_mod.calc(action="resolve", addr="invalid")["error"] is True
+    idaapi = importlib.import_module("idaapi")
+    monkeypatch.setattr(idaapi, "get_fileregion_offset", lambda ea: idaapi.BADADDR)
+    res_noblob = calc_mod.calc(action="resolve", addr="0x140001000")
+    assert res_noblob["error"] is True
+    assert "No file offset for VA" in res_noblob["message"]
+
+
+def test_calc_persist_capture_chain_and_import_error(monkeypatch):
+    board_mod = importlib.import_module("ida_pro_mcp.ida_mcp.tools.blackboard")
+
+    class RecordingStore:
+        def __init__(self):
+            self.writes = []
+
+        def exists_similar(self, *_args):
+            return False
+
+        def write(self, **kwargs):
+            self.writes.append(kwargs)
+
+    rec_store = RecordingStore()
+    monkeypatch.setattr(board_mod, "BlackboardStore", lambda: rec_store)
+
+    # chain with string offset
+    calc_mod._calc_persist_capture(
+        {"addr": "0x140001000", "offsets": "0x10"},
+        {"steps": [{"ptr": "0x140001000", "offset": 16}], "final": "0x140001010"},
+        "chain",
+    )
+    assert len(rec_store.writes) == 1
+    assert "0x10" in rec_store.writes[0]["title"]
+
+
+def test_calc_remaining_uncovered_paths(monkeypatch, fresh_fake_idb):
+    import builtins
+    import struct
+
+    import idaapi
+    import idc
+
+    # 1. Line 212: _semantic_symbol_match with whitespace-only addr
+    with monkeypatch.context() as m:
+        m.setitem(calc_mod.calc.__globals__, "parse_address_canonical", lambda s: (None, {"message": "err"}))
+        res = calc_mod.calc(action="deref", addr="   ")
+        assert res["error"] is True
+
+    # 2. Line 281: resolve_ea(None) via align without value/addr/expr
+    res = calc_mod.calc(action="align", size=4)
+    assert res["error"] is True and "value required" in res["message"]
+
+    # 3. Lines 315-317: idc.get_name_ea_simple returns valid EA or raises
+    with monkeypatch.context() as m:
+        m.setattr(idc, "get_name_ea_simple", lambda name: 0x140001000 if name == "valid_sym" else (_ for _ in ()).throw(RuntimeError("boom")))
+        m.setattr(calc_mod, "parse_address_canonical", lambda s: (0x140001000, None))
+        assert calc_mod.calc(action="deref", addr="valid_sym", type="u8")["ok"] is True
+        assert calc_mod.calc(action="deref", addr="exploding_sym", type="u8")["ok"] is True
+
+    # 4. Lines 335-336: parse_address_canonical returning err=None, and non-str/non-int addr
+    with monkeypatch.context() as m:
+        m.setattr(idc, "get_name_ea_simple", lambda name: idaapi.BADADDR)
+        m.setattr(calc_mod, "parse_address_canonical", lambda s: (None, None))
+        assert calc_mod.calc(action="deref", addr="failed_parse", type="u8")["error"] is True
+    assert calc_mod.calc(action="align", value=[1, 2], size=4)["error"] is True
+
+    # 5. Line 377: resolve_numeric_value with non-str/non-int value
+    assert calc_mod.calc(action="convert", value=[1, 2])["error"] is True
+
+    # 6. Line 423: read_typed bytes read failure
+    with monkeypatch.context() as m:
+        m.setattr(calc_mod.ida_bytes, "get_bytes", lambda *_a: None)
+        assert calc_mod.calc(action="deref", addr="0x140003000", type="bytes", size=4)["error"] is True
+
+    # 7. Line 440: read_typed s64
+    fresh_fake_idb.patch_bytes(0x140003000, (-42).to_bytes(8, "little", signed=True))
+    assert calc_mod.calc(action="deref", addr="0x140003000", type="s64")["value"] == -42
+
+    # 8. Lines 468-470: string > 65536 bytes
+    with monkeypatch.context() as m:
+        m.setattr(idc, "get_strlit_contents", lambda *_args: b"A" * 70000)
+        res_str = calc_mod.calc(action="deref", addr="0x140003000", type="string")
+        assert res_str["ok"] is True and len(res_str["value"]) == 65536
+
+    # 9. Lines 506, 523: function name in eval expr
+    with monkeypatch.context() as m:
+        m.setattr(idc, "get_name_ea_simple", lambda name: 0x140001000 if name == "my_sym" else idaapi.BADADDR)
+        res_eval = calc_mod.calc(action="eval", expr="my_sym + 0x10")
+        assert res_eval["ok"] is True and res_eval["value"] == 0x140001010
+
+    # 10. Line 545: Unary operator not allowed (e.g. not)
+    assert calc_mod.calc(action="eval", expr="not 1")["error"] is True
+
+    # 11. Line 560: Comparison operator not allowed (e.g. in)
+    assert calc_mod.calc(action="eval", expr="1 in (1, 2)")["error"] is True
+
+    # 12. Line 576: Non-direct function calls
+    assert calc_mod.calc(action="eval", expr="foo.bar()")["error"] is True
+
+    # 13. Line 583: Non-numeric/bool arguments in call
+    assert calc_mod.calc(action="eval", expr="abs(hex)")["error"] is True
+
+    # 14. Line 591: Eval with intent fallback
+    res_intent = calc_mod.calc(action="eval", expr="", intent="1 + 5")
+    assert res_intent["ok"] is True and res_intent["value"] == 6
+
+    # 15. Lines 648-649: struct.pack exception in convert ascii formatting
+    orig_pack = struct.pack
+    pack_calls = 0
+
+    def faulty_pack(fmt, val):
+        nonlocal pack_calls
+        pack_calls += 1
+        if pack_calls == 1:
+            raise struct.error("pack error")
+        return orig_pack(fmt, val)
+
+    with monkeypatch.context() as m:
+        m.setattr(struct, "pack", faulty_pack)
+        res_conv = calc_mod.calc(action="convert", value=42)
+        assert res_conv["ok"] is True and res_conv["ascii"] == "n/a"
+
+    # 16. Lines 775-776: deref depth terminates on non_pointer_value
+    def mock_unpack(fmt, data):
+        return ("not_an_int",)
+
+    with monkeypatch.context() as m:
+        m.setattr(struct, "unpack", mock_unpack)
+        res_deref_nonptr = calc_mod.calc(action="deref", addr="0x140003000", type="ptr", deref_depth=2)
+        assert res_deref_nonptr["error"] is True
+
+    # 17. Lines 955-956: top-level unexpected exception caught by handle_error
+    with monkeypatch.context() as m:
+        m.setattr(calc_mod, "_inf_bitness", lambda: (_ for _ in ()).throw(RuntimeError("fatal calc error")))
+        res_exc = calc_mod.calc(action="deref", addr="0x140003000")
+        assert res_exc["error"] is True
+
+    # 18. Lines 976-980: ImportError in _calc_persist_capture
+    orig_import = builtins.__import__
+
+    def faulty_import(name, *args, **kwargs):
+        if "blackboard" in name:
+            raise ImportError("no blackboard")
+        return orig_import(name, *args, **kwargs)
+
+    with monkeypatch.context() as m:
+        m.setattr(builtins, "__import__", faulty_import)
+        calc_mod._calc_persist_capture({"expr": "1"}, {"value": 1}, "eval")
