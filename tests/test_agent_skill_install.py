@@ -247,3 +247,97 @@ def test_multi_target_skill_install_rolls_back_when_later_target_fails(tmp_path,
     assert (first_skill / "SKILL.md").read_text(encoding="utf-8") == "first old"
     assert not (second_root / skills.SKILL_NAME).exists()
     assert not list(first_root.glob(".*transaction-backup-*"))
+
+
+def test_publish_skill_rejects_non_directory(tmp_path):
+    from ida_pro_mcp.installer import skills
+    target = tmp_path / "skills"
+    target.mkdir()
+    non_dir = target / skills.SKILL_NAME
+    non_dir.write_text("not a directory")
+    with pytest.raises(RuntimeError, match="Skill installation path is not a directory"):
+        skills._publish_skill(non_dir, "skill", "ref")
+
+
+def test_publish_skill_unlinks_staged_symlinks(tmp_path):
+    from ida_pro_mcp.installer import skills
+    target = tmp_path / "skills"
+    target.mkdir()
+    skill_dir = target / skills.SKILL_NAME
+    skill_dir.mkdir()
+    outside_skill = tmp_path / "outside.md"
+    outside_skill.write_text("outside")
+    # Symlink at SKILL.md
+    (skill_dir / "SKILL.md").symlink_to(outside_skill)
+    # Perform publish
+    skills._publish_skill(skill_dir, "new skill", "new ref")
+    assert not (skill_dir / "SKILL.md").is_symlink()
+    assert (skill_dir / "SKILL.md").read_text() == "new skill"
+
+
+
+def test_default_skill_dirs_with_candidates(monkeypatch, tmp_path):
+    from ida_pro_mcp.installer.skills import default_skill_dirs
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".codex").mkdir()
+    (home / ".openclaw").mkdir()
+    (home / ".pi").mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    dirs = default_skill_dirs()
+    dir_strs = [str(d) for d in dirs]
+    assert str(home / ".codex" / "skills") in dir_strs
+    assert str(home / ".openclaw" / "workspace" / "skills") in dir_strs
+    assert str(home / ".pi" / "agent" / "skills") in dir_strs
+
+
+def test_install_skills_rollback_failure_raises_runtime_error(tmp_path, monkeypatch):
+    from ida_pro_mcp.installer import skills
+    first_root = tmp_path / "first"
+    first_skill = first_root / skills.SKILL_NAME
+    first_skill.mkdir(parents=True)
+    (first_skill / "SKILL.md").write_text("old", encoding="utf-8")
+    second_root = tmp_path / "second"
+
+    real_publish = skills.install_skills.__globals__["_publish_skill"]
+
+    def fail_second(skill_dir, skill_text, reference_text):
+        if Path(skill_dir) == second_root / skills.SKILL_NAME:
+            raise OSError("second failed")
+        return real_publish(skill_dir, skill_text, reference_text)
+
+    monkeypatch.setitem(skills.install_skills.__globals__, "_publish_skill", fail_second)
+
+    # Make rollback fail by breaking os.replace during rollback
+    real_replace = os.replace
+    def broken_replace(src, dst):
+        if "backup" in str(src):
+            raise RuntimeError("rollback disk failure")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr("os.replace", broken_replace)
+    with pytest.raises(RuntimeError, match="skill installation failed and rollback was incomplete"):
+        skills.install_skills([first_root, second_root])
+
+
+def test_install_skills_rollback_file_target(tmp_path, monkeypatch):
+    import shutil
+
+    from ida_pro_mcp.installer import skills
+    root = tmp_path / "root"
+    skill_dir = root / skills.SKILL_NAME
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("old")
+    second = tmp_path / "second"
+
+    real_publish = skills.install_skills.__globals__["_publish_skill"]
+    def fail_second(sdir, stext, rtext):
+        if Path(sdir) == second / skills.SKILL_NAME:
+            shutil.rmtree(skill_dir)
+            skill_dir.write_text("now a file")
+            raise OSError("fail second")
+        return real_publish(sdir, stext, rtext)
+
+    monkeypatch.setitem(skills.install_skills.__globals__, "_publish_skill", fail_second)
+    with pytest.raises(OSError, match="fail second"):
+        skills.install_skills([root, second])

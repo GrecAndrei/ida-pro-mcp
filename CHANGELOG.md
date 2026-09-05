@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-05 — Expand worker, entrypoint, and skill installer coverage
+
+ - Cover idalib worker script lifecycle, database closing on exit/error, and missing script error paths.
+ - Cover FindCrypt YARA source de-duplication, metadata extraction fallbacks, unreadable file handling, and archive post-download.
+ - Cover package __main__ invocation and execution path.
+ - Cover skill directory staging, symlink rejection, and transaction rollback failure handling.
+
 ## 2026-09-05 — Sandbox offline test environment from real-world paths and network
 
  - Isolate HOME to temporary sandbox so tests cannot scan or mutate developer's

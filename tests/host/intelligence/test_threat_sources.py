@@ -295,6 +295,55 @@ class TestFindCryptSource:
 
         assert FindCryptSource().parse(str(rules_dir)) == []
 
+    def test_parses_edge_cases_and_post_download(self, tmp_path, monkeypatch):
+        # 1. Duplicate strings, duplicate rule name, and meta without description
+        rules = (
+            "rule edge_rule {\n"
+            "  meta:\n"
+            "    author = \"alice\"\n"
+            "  strings:\n"
+            "    $a = \"dup_str\"\n"
+            "    $b = \"dup_str\"\n"
+            "  condition:\n"
+            "    $a\n"
+            "}\n"
+            "rule edge_rule {\n"
+            "  condition: true\n"
+            "}\n"
+        )
+        _write(tmp_path, "rules/edge.rules", rules)
+        # Non-matching extension
+        _write(tmp_path, "rules/notes.txt", "just notes")
+        # Unreadable file triggering OSError
+        _write(tmp_path, "rules/unreadable.yar", "rule bad { condition: true }")
+
+        real_open = open
+
+        def guarded_open(path, *args, **kwargs):
+            if "unreadable.yar" in str(path):
+                raise OSError("simulated unreadable file")
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.open", guarded_open)
+        entries = FindCryptSource().parse(str(tmp_path))
+        edge_entry = next((e for e in entries if e["name"] == "edge_rule"), None)
+        assert edge_entry is not None
+        assert edge_entry["display_name"] == "edge_rule"  # Fallback to rule_name
+        assert edge_entry["strings"] == ["dup_str"]  # De-duplicated
+
+        # 2. _post_download coverage
+        extracted = []
+        monkeypatch.setattr(
+            "ida_pro_mcp.host.intelligence.sources.findcrypt_source.extract_findcrypt_rules",
+            lambda z, d: extracted.append((z, d)),
+        )
+        src = FindCryptSource()
+        src._post_download("rules.zip", "/dest")
+        assert extracted == [("rules.zip", "/dest")]
+        src._post_download("rules.tar", "/dest")
+        assert len(extracted) == 1
+
+
 
 class TestYaraSources:
     def test_yara_source_finds_signature_base_subdir(self, tmp_path):
