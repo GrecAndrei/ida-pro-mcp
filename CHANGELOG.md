@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-05 — Expand blackboard shapes and IDB round-trip synchronization coverage
+
+ - Cover snapshot_to_markdown formatting edge cases including stale items, conflicting findings, evidence locations, custom kinds, and unlisted statuses.
+ - Cover blackboard IDB symbol batch error fallbacks, rename planning exceptions, and annotation import failure paths.
+ - Allow test repository root directory in conftest filesystem guard for pytest coverage database creation.
+
 ## 2026-09-05 — Expand worker, entrypoint, and skill installer coverage
 
  - Cover idalib worker script lifecycle, database closing on exit/error, and missing script error paths.

@@ -66,7 +66,10 @@ def _assert_test_path_safe(value) -> None:
         return
     # Python bytecode and pytest's coverage database are test machinery. They
     # may be created in the checkout, but source/config/test data must not be.
-    if _path_is_under(path, _REAL_OS_PATH.realpath(os.fspath(_TEST_REPO_ROOT))):
+    repo_root = _REAL_OS_PATH.realpath(os.fspath(_TEST_REPO_ROOT))
+    if path == repo_root:
+        return
+    if _path_is_under(path, repo_root):
         if "__pycache__" in path.split(_REAL_OS_SEP):
             return
         if _REAL_OS_PATH.basename(path).startswith(".coverage"):
