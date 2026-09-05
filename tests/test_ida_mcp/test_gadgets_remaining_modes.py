@@ -486,3 +486,256 @@ def test_gadget_chain_blackboard_and_handler_failure_modes(monkeypatch):
     blackboard.BlackboardStore = ExistingStore
     result = module._classify_gadget_chain(None, 20, 3, None, auto_blackboard=True)
     assert result["ok"] is True
+
+    class ExplodingStore(Store):
+        def list(self, **_kwargs):
+            return []
+
+        def write(self, **kwargs):
+            raise RuntimeError("write failed")
+
+    blackboard.BlackboardStore = ExplodingStore
+    result = module._classify_gadget_chain(None, 20, 3, None, auto_blackboard=True)
+    assert result["ok"] is True
+
+
+def test_gadgets_terminators_remaining_branches():
+    # Line 248: _is_jop_terminator arm non-branch
+    assert _is_jop_terminator(0x1000, "mov", "mov r0, r1", "arm") is False
+    # Line 252: _is_jop_terminator mips non-jr
+    assert _is_jop_terminator(0x1000, "add", "add $t0, $t1, $t2", "mips") is False
+    # Line 277: _is_cop_terminator arm non-call
+    assert _is_cop_terminator(0x1000, "mov", "mov r0, r1", "arm") is False
+    # Line 286: _is_cop_terminator ppc or unknown arch
+    assert _is_cop_terminator(0x1000, "b", "b 0x1000", "ppc") is False
+    assert _is_cop_terminator(0x1000, "call", "call foo", "sparc") is False
+    # Line 293: _is_syscall_terminator x86 syscall / sysenter
+    assert _is_syscall_terminator(0x1000, "syscall", "syscall", "x86") is True
+    assert _is_syscall_terminator(0x1000, "sysenter", "sysenter", "x86") is True
+
+
+def test_scan_region_terminators_no_mnem_badaddr(monkeypatch):
+    import idc
+
+    monkeypatch.setattr(idc, "print_insn_mnem", lambda _ea: "")
+    monkeypatch.setattr(idc, "next_head", lambda _ea, _end=0xFFFFFFFFFFFFFFFF: module.idaapi.BADADDR)
+    # Line 406: next_head returns BADADDR
+    res = _scan_region_terminators(0x1000, 0x2000, 10, 3, None, "x64", lambda *args: False, set())
+    assert res == []
+
+
+def test_gadget_scanners_multiseg_limit_breaks(monkeypatch):
+    monkeypatch.setattr(module, "_get_exec_segments", lambda _addr: [(0x1000, 0x1010), (0x2000, 0x2010)])
+    monkeypatch.setattr(module, "_get_arch", lambda: "x64")
+    monkeypatch.setattr(module, "_region_results", lambda *args, **kwargs: [{"gadget": "ret", "insns": 1}])
+
+    # Line 487 in _find_rop_gadgets
+    res_rop = module._find_rop_gadgets(None, limit=1, max_insns=3, query=None)
+    assert len(res_rop) == 1
+
+    # Line 512 in _find_jop_gadgets
+    res_jop = module._find_jop_gadgets(None, limit=1, max_insns=3, query=None)
+    assert len(res_jop) == 1
+
+    # Line 537 in _find_cop_gadgets
+    res_cop = module._find_cop_gadgets(None, limit=1, max_insns=3, query=None)
+    assert len(res_cop) == 1
+
+    # Line 556 in _find_syscall_gadgets
+    res_sys = module._find_syscall_gadgets(None, limit=1, max_insns=3, query=None)
+    assert len(res_sys) == 1
+
+
+def test_write_what_where_remaining_branches(monkeypatch):
+    import idc
+
+    # Segment iteration: 2 segments to test line 581 (break on limit)
+    monkeypatch.setattr(module, "_get_exec_segments", lambda _addr: [(0x1000, 0x1020), (0x2000, 0x2020)])
+    monkeypatch.setattr(module, "_get_arch", lambda: "x64")
+    monkeypatch.setattr(module, "get_stack_pointer_names", lambda _arch: ["rsp", "esp"])
+    monkeypatch.setattr(module, "_prepare_exec_region", lambda *_args: None)
+
+    # Line 581: limit break across segments
+    entries_581 = {
+        0x1000: {"mnem": "mov", "disasm": "mov [rax], rbx", "types": {0: idc.o_phrase, 1: idc.o_reg}},
+        0x1004: {"mnem": "ret", "disasm": "ret"},
+        0x2000: {"mnem": "mov", "disasm": "mov [rcx], rdx", "types": {0: idc.o_phrase, 1: idc.o_reg}},
+        0x2004: {"mnem": "ret", "disasm": "ret"},
+    }
+    _install_instruction_map(monkeypatch, entries_581)
+    res_581 = _find_write_what_where(None, limit=1, max_insns=3, query=None)
+    assert len(res_581) == 1
+
+    # Lines 587-590: mnem is empty string:
+    # ea=0x1000 has empty mnem, next_head is 0x1004 (line 590: continue)
+    # ea=0x1004 has empty mnem, next_head is BADADDR (line 589: break)
+    entries_empty = {
+        0x1000: {"mnem": "", "disasm": ""},
+        0x1004: {"mnem": "", "disasm": ""},
+    }
+    monkeypatch.setattr(module, "_get_exec_segments", lambda _addr: [(0x1000, 0x1020)])
+    _install_instruction_map(monkeypatch, entries_empty)
+    monkeypatch.setattr(idc, "next_head", lambda ea, _end=0xFFFFFFFFFFFFFFFF: 0x1004 if ea == 0x1000 else module.idaapi.BADADDR)
+    assert _find_write_what_where(None, limit=10, max_insns=3, query=None) == []
+
+    # Line 625: look_ea == BADADDR during lookahead for ret
+    entries_625 = {
+        0x1000: {"mnem": "mov", "disasm": "mov [rax], rbx", "types": {0: idc.o_phrase, 1: idc.o_reg}},
+    }
+    _install_instruction_map(monkeypatch, entries_625)
+    monkeypatch.setattr(idc, "next_head", lambda _ea, _end=0xFFFFFFFFFFFFFFFF: module.idaapi.BADADDR)
+    assert _find_write_what_where(None, limit=10, max_insns=3, query=None) == []
+
+    # Lines 630-631: lm in CALL_MNEMONICS / UNCONDITIONAL_JUMP_MNEMONICS / SYSCALL_MNEMONICS during lookahead
+    entries_631 = {
+        0x1000: {"mnem": "mov", "disasm": "mov [rax], rbx", "types": {0: idc.o_phrase, 1: idc.o_reg}},
+        0x1004: {"mnem": "call", "disasm": "call 0x1000"},
+        0x1008: {"mnem": "ret", "disasm": "ret"},
+    }
+    _install_instruction_map(monkeypatch, entries_631)
+    assert _find_write_what_where(None, limit=10, max_insns=5, query=None) == []
+
+
+def test_stack_pivot_remaining_branches(monkeypatch):
+    import idc
+
+    # Line 668: limit break across segments
+    monkeypatch.setattr(module, "_get_exec_segments", lambda _addr: [(0x1000, 0x1020), (0x2000, 0x2020)])
+    monkeypatch.setattr(module, "_get_arch", lambda: "x64")
+    monkeypatch.setattr(module, "get_stack_pointer_names", lambda _arch: ["rsp", "esp"])
+    monkeypatch.setattr(module, "_prepare_exec_region", lambda *_args: None)
+
+    entries_668 = {
+        0x1000: {"mnem": "leave", "disasm": "leave"},
+        0x1002: {"mnem": "ret", "disasm": "ret"},
+        0x2000: {"mnem": "leave", "disasm": "leave"},
+        0x2002: {"mnem": "ret", "disasm": "ret"},
+    }
+    _install_instruction_map(monkeypatch, entries_668)
+    res_668 = _find_stack_pivot(None, limit=1, max_insns=3, query=None)
+    assert len(res_668) == 1
+
+    # Lines 674-677: empty mnem continue (677) and break (676)
+    monkeypatch.setattr(module, "_get_exec_segments", lambda _addr: [(0x1000, 0x1020)])
+    monkeypatch.setattr(idc, "print_insn_mnem", lambda _ea: "")
+    monkeypatch.setattr(idc, "next_head", lambda ea, _end=0xFFFFFFFFFFFFFFFF: 0x1004 if ea == 0x1000 else module.idaapi.BADADDR)
+    assert _find_stack_pivot(None, limit=10, max_insns=3, query=None) == []
+
+    # Line 710: look_ea == BADADDR during lookahead for ret
+    entries_710 = {
+        0x1000: {"mnem": "leave", "disasm": "leave"},
+    }
+    _install_instruction_map(monkeypatch, entries_710)
+    monkeypatch.setattr(idc, "next_head", lambda _ea, _end=0xFFFFFFFFFFFFFFFF: module.idaapi.BADADDR)
+    assert _find_stack_pivot(None, limit=10, max_insns=3, query=None) == []
+
+
+def test_shellcode_space_limit_and_invalid_addr(monkeypatch):
+    # Line 748: len(regions) >= limit: break
+    monkeypatch.setattr(module.idautils, "Segments", lambda: [0x1000, 0x2000, 0x3000])
+    seg1 = types.SimpleNamespace(start_ea=0x1000, end_ea=0x1100)
+    seg2 = types.SimpleNamespace(start_ea=0x2000, end_ea=0x2100)
+    monkeypatch.setattr(module._compat, "get_segment", lambda ea: seg1 if ea == 0x1000 else seg2)
+    # W+X permissions
+    monkeypatch.setattr(module._compat, "get_segment_perm", lambda _ea: module.idaapi.SEGPERM_WRITE | module.idaapi.SEGPERM_EXEC)
+    monkeypatch.setattr(module._compat, "get_segment_name", lambda ea: f".seg_{ea:x}")
+    monkeypatch.setattr(module, "_get_arch", lambda: "x64")
+    monkeypatch.setattr(module, "validate_addr", lambda _v: (0x1050, None))
+
+    res_lim = module._find_shellcode_space(None, limit=1, _max_insns=3, _query=None)
+    assert len(res_lim) == 1
+
+    # Line 755: addr is not None and validate_addr returns error
+    monkeypatch.setattr(module, "validate_addr", lambda _v: (None, {"error": True}))
+    res_err = module._find_shellcode_space("bad_addr", limit=10, _max_insns=3, _query=None)
+    assert len(res_err) == 0
+
+
+def test_check_mitigations_relro_full_and_names_scan_overflow(monkeypatch):
+    import idc
+
+    monkeypatch.setattr(module, "_inf_filetype_id", lambda: module.idaapi.f_ELF)
+    monkeypatch.setattr(module, "_get_arch", lambda: "x64")
+    monkeypatch.setattr(module.idaapi, "get_imagebase", lambda: 0, raising=False)
+    monkeypatch.setattr(module.idautils, "Segments", lambda: [0x1000, 0x2000])
+    monkeypatch.setattr(idc, "get_name_ea_simple", lambda _name: module.idaapi.BADADDR)
+
+    # Line 850: got_plt has non-writable perm -> RELRO = "full"
+    seg_got_plt = types.SimpleNamespace(start_ea=0x1000, end_ea=0x1050)
+    monkeypatch.setattr(module._compat, "get_segment", lambda ea: seg_got_plt)
+    monkeypatch.setattr(module._compat, "get_segment_name", lambda ea: ".got.plt" if ea == 0x1000 else ".text")
+    monkeypatch.setattr(module._compat, "get_segment_perm", lambda ea: 1)  # not writable (& 2 == 0)
+
+    # Lines 880-882: _names_scanned >= _MAX_NAMES_SCAN (50000)
+    monkeypatch.setattr(module.idautils, "Names", lambda: ((0x1000 + i, f"dummy_sym_{i}") for i in range(50005)))
+
+    res = module._detect_mitigations(None, 10, 3, None)
+    assert res["RELRO"] == "full"
+    assert res["FORTIFY_SOURCE"] is False
+
+
+def test_find_seh_handlers_remaining_branches(monkeypatch):
+    import idc
+
+    monkeypatch.setattr(module, "_get_arch", lambda: "x86")
+    # Line 918: limit break across segments
+    monkeypatch.setattr(module, "_get_exec_segments", lambda _addr: [(0x1000, 0x1020), (0x2000, 0x2020)])
+    entries_918 = {
+        0x1000: {"mnem": "push", "disasm": "push 0x401000", "values": {0: 0x401000}},
+        0x1005: {"mnem": "push", "disasm": "push dword ptr fs:[0]"},
+        0x2000: {"mnem": "push", "disasm": "push 0x402000", "values": {0: 0x402000}},
+        0x2005: {"mnem": "push", "disasm": "push dword ptr fs:[0]"},
+    }
+    _install_instruction_map(monkeypatch, entries_918)
+    monkeypatch.setattr(module._compat, "get_func_start", lambda _ea: 0x401000)
+    monkeypatch.setattr(module.ida_funcs, "get_func_name", lambda _ea: "handler_func")
+
+    res_seh = module._find_seh_handlers(None, limit=1, _max_insns=3, _query=None)
+    assert len(res_seh) == 1
+
+    # Lines 923-926: not mnem with next_head returning valid (926) and BADADDR (925)
+    monkeypatch.setattr(module, "_get_exec_segments", lambda _addr: [(0x1000, 0x1020)])
+    monkeypatch.setattr(idc, "print_insn_mnem", lambda _ea: "")
+    monkeypatch.setattr(idc, "next_head", lambda ea, _end=0xFFFFFFFFFFFFFFFF: 0x1004 if ea == 0x1000 else module.idaapi.BADADDR)
+    assert module._find_seh_handlers(None, limit=10, _max_insns=3, _query=None) == []
+
+
+def test_suggest_pivot_chains_remaining_branches(monkeypatch):
+    import idc
+
+    monkeypatch.setattr(module, "_get_arch", lambda: "x64")
+
+    # Line 1024: per_cat_limit break across segments
+    monkeypatch.setattr(module, "_get_exec_segments", lambda _addr: [(0x1000, 0x1020), (0x2000, 0x2020)])
+    entries_1024 = {
+        0x1000: {"mnem": "pop", "disasm": "pop rax"},
+        0x1002: {"mnem": "ret", "disasm": "ret"},
+        0x2000: {"mnem": "pop", "disasm": "pop rbx"},
+        0x2002: {"mnem": "ret", "disasm": "ret"},
+    }
+    _install_instruction_map(monkeypatch, entries_1024)
+    res_cand = _suggest_pivot_chains(None, limit=12, max_insns=3, query=None)
+    assert len(res_cand) >= 1
+
+    # Lines 1029-1032: not mnem continue (1032) and break (1031)
+    monkeypatch.setattr(module, "_get_exec_segments", lambda _addr: [(0x1000, 0x1020)])
+    monkeypatch.setattr(idc, "print_insn_mnem", lambda _ea: "")
+    monkeypatch.setattr(idc, "next_head", lambda ea, _end=0xFFFFFFFFFFFFFFFF: 0x1004 if ea == 0x1000 else module.idaapi.BADADDR)
+    assert _suggest_pivot_chains(None, limit=10, max_insns=3, query=None) == {}
+
+    # Line 1041: look_ea == BADADDR during candidate lookahead
+    entries_1041 = {
+        0x1000: {"mnem": "pop", "disasm": "pop rax"},
+    }
+    _install_instruction_map(monkeypatch, entries_1041)
+    monkeypatch.setattr(idc, "next_head", lambda _ea, _end=0xFFFFFFFFFFFFFFFF: module.idaapi.BADADDR)
+    assert _suggest_pivot_chains(None, limit=10, max_insns=3, query=None) == {}
+
+    # Lines 1046-1047: call/jmp break during candidate lookahead
+    entries_1047 = {
+        0x1000: {"mnem": "pop", "disasm": "pop rax"},
+        0x1002: {"mnem": "jmp", "disasm": "jmp 0x1000"},
+        0x1004: {"mnem": "ret", "disasm": "ret"},
+    }
+    _install_instruction_map(monkeypatch, entries_1047)
+    assert _suggest_pivot_chains(None, limit=10, max_insns=5, query=None) == {}

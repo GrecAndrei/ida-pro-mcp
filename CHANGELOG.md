@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-09-05 — Expand exploit gadget scanner, terminator, mitigation, and chain coverage
+
+- Cover ARM and MIPS JOP/COP non-branch mnemonic branches, PPC and unknown architecture terminator fallbacks, and x86 syscall/sysenter detection.
+- Cover head-based scan termination on missing mnemonics with bad destination addresses.
+- Cover multi-segment limit breaks across ROP, JOP, COP, syscall, write-what-where, stack pivot, SEH handler, and pivot chain candidate searches.
+- Cover write-what-where lookahead instruction boundaries across dead addresses and control flow interrupts.
+- Cover stack pivot lookahead terminator failures and shellcode search address validation errors.
+- Cover ELF RELRO full mitigation classification on non-writable GOT PLT segments and symbol scan loop bounds.
+- Cover blackboard store write exception envelopes during gadget exploit classification.
+
+
+
 ## 2026-09-05 — Expand segment attribute, permission, sreg range, and data scan coverage
 
 - Cover segment lookup errors for mapped addresses without segment descriptors.
