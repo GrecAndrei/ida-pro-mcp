@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-05 — Expand CTree AST analysis, dominance hierarchy, and logic flow coverage
+
+ - Cover CTree expression collection formatting error fallbacks, variable dependency self-assignment skips, and edge limit breaking.
+ - Cover dominance map condition expression stringification exceptions and edge count display bounding.
+ - Cover simplified logic flow node and edge truncation, call expression parsing, and control stack scoping.
+ - Cover variable inspect bound method type resolution errors, out-of-bounds local variable indexes, and decompiler plugin initialization exceptions.
+
 ## 2026-09-05 — Expand intelligence tool indexing, document builders, and fallback coverage
 
  - Cover fast signature generation and full decompilation index document construction including API limit truncation, string decoding errors, opcode histograms, CFG loop detection, and suffix budgets.
