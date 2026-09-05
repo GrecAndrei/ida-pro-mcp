@@ -256,3 +256,269 @@ def test_register_classes_cover_native_ranges_synthesis_and_filters(monkeypatch)
     monkeypatch.setattr(idb_mod, "ida_idp", None)
     _clear_read_cache()
     assert idb_mod.idb_registers()["code"] == "IDA_ERROR"
+
+
+def test_idb_dispatcher_actions_and_overview_edges(monkeypatch):
+    _clear_read_cache()
+
+    # 1. Test idb(action="meta") and idb(action="summary")
+    monkeypatch.setattr(idb_mod, "idb_meta", lambda: {"binary_path": "test.bin"})
+    monkeypatch.setattr(idb_mod, "idb_summary", lambda **_k: {"comments": 1, "approximate": False})
+    assert idb_mod.idb(action="meta")["binary_path"] == "test.bin"
+    assert idb_mod.idb(action="summary")["comments"] == 1
+
+    # 2. Test idb(action="overview") with candidates filter branches (148-152) and firmware detection (173-174)
+    fake_arch_profile_fw = {
+        "raw_binary_mode": True,
+        "inferred_from_binary": {
+            "candidates": [
+                None,  # not dict -> line 149
+                {"bitness": 32},  # missing processor -> line 151
+                {
+                    "processor": "arm",
+                    "bitness": 32,
+                    "endian": "little",
+                    "confidence": 0.85,
+                    "reason": "vector table",
+                },
+            ]
+        },
+    }
+    monkeypatch.setattr(idb_mod, "idb_architecture_profile", lambda **_k: fake_arch_profile_fw)
+    ov_fw = idb_mod.idb(action="overview")
+    assert ov_fw["ok"] is True
+    assert ov_fw["firmware_detected"] is True
+    assert len(ov_fw["architecture_recommendations"]) == 1
+    assert ov_fw["architecture_recommendations"][0]["processor"] == "arm"
+    assert "ida_analysis_brief(limit=10)" in ov_fw["next_actions"]
+
+    # 3. Test idb(action="overview") non-firmware branch (line 180-184)
+    fake_arch_profile_pe = {
+        "raw_binary_mode": False,
+        "inferred_from_binary": {},
+    }
+    monkeypatch.setattr(idb_mod, "idb_architecture_profile", lambda **_k: fake_arch_profile_pe)
+    _clear_read_cache()
+    ov_pe = idb_mod.idb(action="overview")
+    assert ov_pe["ok"] is True
+    assert "firmware_detected" not in ov_pe
+    assert "ida_find(query='main')" in ov_pe["next_actions"]
+
+    # Test other actions dispatched through idb()
+    monkeypatch.setattr(idb_mod, "idb_segments_detailed", lambda **_k: [{"name": ".text"}, {"name": ".data"}, {"name": ".bss"}])
+    seg_page = idb_mod.idb(action="segments", offset=1, count=1)
+    assert seg_page["ok"] is True and seg_page["count"] == 1 and seg_page["segments"][0]["name"] == ".data"
+
+    seg_all = idb_mod.idb(action="segments", offset=1, count=0)
+    assert seg_all["ok"] is True and seg_all["count"] == 2
+
+    monkeypatch.setattr(idb_mod, "idb_entrypoints_detailed", lambda: {"entrypoints": [{"name": "start"}]})
+    assert idb_mod.idb(action="entrypoints")["entrypoints"][0]["name"] == "start"
+
+    monkeypatch.setattr(idb_mod, "idb_bookmarks", lambda: {"bookmarks": [], "count": 0})
+    assert idb_mod.idb(action="bookmarks")["count"] == 0
+
+    assert idb_mod.idb(action="architecture_profile")["raw_binary_mode"] is False
+
+    monkeypatch.setattr(idb_mod, "idb_state", lambda audit_tail=5: {"ok": True, "tail": audit_tail})
+    assert idb_mod.idb(action="state", audit_tail=7)["tail"] == 7
+
+    monkeypatch.setattr(idb_mod, "idb_events", lambda limit=50: {"ok": True, "limit": limit})
+    assert idb_mod.idb(action="events", limit=25)["limit"] == 25
+
+    monkeypatch.setattr(idb_mod, "idb_registers", lambda reg_class=None: {"ok": True, "reg_class": reg_class})
+    assert idb_mod.idb(action="registers", reg_class="gpr")["reg_class"] == "gpr"
+
+    unknown = idb_mod.idb(action="non_existent")
+    assert unknown.get("error") is True or unknown.get("code") == "INVALID_ARGS"
+
+    # Test line 205-206: exception handling in idb()
+    monkeypatch.setattr(idb_mod, "idb_meta", lambda: (_ for _ in ()).throw(RuntimeError("overview crash")))
+    _clear_read_cache()
+    err = idb_mod.idb(action="overview")
+    assert err.get("error") is True
+
+
+def test_idb_summary_missing_segment_and_head_boundaries(monkeypatch):
+    _clear_read_cache()
+    # Segments iterator returns an address whose get_segment returns None -> line 444
+    # Also test line 320 in idb_segments_detailed where next_head returns BADADDR
+    seg = types.SimpleNamespace(start_ea=0x1000, end_ea=0x1010)
+    monkeypatch.setattr(idb_mod.idautils, "Segments", lambda: iter([0x1000, 0x9999]))
+    monkeypatch.setattr(idb_mod._compat, "get_segment", lambda ea: seg if ea == 0x1000 else None)
+    monkeypatch.setattr(idb_mod._compat, "get_segment_perm", lambda _ea: 0)
+    monkeypatch.setattr(idb_mod._compat, "get_segment_bitness", lambda _ea: 1)
+    monkeypatch.setattr(idb_mod._compat, "get_segment_type", lambda _ea: 0)
+    monkeypatch.setattr(idb_mod._compat, "get_segment_align", lambda _ea: 0)
+    monkeypatch.setattr(idb_mod.idc, "get_cmt", lambda _ea, _rpt: None)
+    monkeypatch.setattr(idb_mod.idc, "next_head", lambda _ea, _end: idb_mod.idaapi.BADADDR)
+    monkeypatch.setattr(idb_mod.idautils, "Functions", lambda: iter([]))
+    monkeypatch.setattr(idb_mod.idaapi, "get_strlist_qty", lambda: 0)
+    monkeypatch.setattr(idb_mod.ida_nalt, "get_import_module_qty", lambda: 0)
+    monkeypatch.setattr(idb_mod.ida_entry, "get_entry_qty", lambda: 0)
+    monkeypatch.setattr(idb_mod.idaapi, "auto_is_ok", lambda: True)
+
+    detailed_segs = idb_mod.idb_segments_detailed()
+    assert len(detailed_segs) == 1
+
+    summary = idb_mod.idb_summary(fast=False)
+    assert summary["comments"] == 0
+
+
+def test_idb_architecture_profile_exception_and_default_branches(monkeypatch):
+    _clear_read_cache()
+    # Lines 494 and 496: meta and summary are None by default
+    monkeypatch.setattr(idb_mod, "idb_meta", lambda: {"binary_path": "", "processor": "x86", "bitness": 64})
+    monkeypatch.setattr(idb_mod, "idb_summary", lambda: {"imports": 10})
+    def_prof = idb_mod.idb_architecture_profile()
+    assert def_prof["current"]["processor"] == "x86"
+
+    # Line 510-511: infer_binary_arch_profile throws
+    monkeypatch.setattr(idb_mod, "infer_binary_arch_profile", lambda _path: (_ for _ in ()).throw(RuntimeError("infer crash")))
+    monkeypatch.setattr(idb_mod.os.path, "exists", lambda _p: True)
+    # Line 555-556: detect_riscv_gp throws
+    monkeypatch.setattr(idb_mod, "detect_riscv_gp", lambda: (_ for _ in ()).throw(RuntimeError("gp crash")))
+
+    meta = {
+        "binary_path": "/path/to/target.bin",
+        "processor": "riscv32",
+        "bitness": 32,
+        "is_be": False,
+        "file_type_info": {"effective": "raw"},
+    }
+    _clear_read_cache()
+    prof = idb_mod.idb_architecture_profile(meta=meta, summary={"imports": 0})
+    assert prof["inferred_from_binary"] == {}
+    assert "riscv_gp" not in prof or prof.get("riscv_gp") is None
+
+
+def test_idb_audit_tail_and_safe_dir_boundaries(tmp_path, monkeypatch):
+    # Line 608: base = os.path.join(os.path.expanduser("~"), ".ida-pro-mcp")
+    monkeypatch.delenv("IDA_MCP_CACHE_DIR", raising=False)
+    monkeypatch.delenv("IDA_MCP_DATA_DIR", raising=False)
+    fake_home = tmp_path / "fake_home"
+    fake_audit = fake_home / ".ida-pro-mcp" / "audit"
+    fake_audit.mkdir(parents=True)
+    monkeypatch.setattr(idb_mod.os.path, "expanduser", lambda p: str(fake_home) if p == "~" else p)
+    assert idb_mod._safe_audit_dir() == str(fake_audit)
+
+    # Line 628: month_dirs is empty
+    empty_audit = tmp_path / "empty_audit"
+    empty_audit.mkdir()
+    assert idb_mod._read_audit_tail(str(empty_audit), 5) == []
+
+    # Line 632: day_files is empty inside month_dir
+    month_dir = empty_audit / "2026-09"
+    month_dir.mkdir()
+    assert idb_mod._read_audit_tail(str(empty_audit), 5) == []
+
+    # Line 644 and 648: file larger than window (256KB), containing empty lines
+    day_file = month_dir / "audit_2026-09-05.jsonl"
+    large_pad = (" " * 300) + "\n"
+    # Write > 256KB to trigger window < size
+    content = (large_pad * 1000) + "\n\n" + json.dumps({"tool": "test", "ok": True}) + "\n\n"
+    day_file.write_text(content, encoding="utf-8")
+    records = idb_mod._read_audit_tail(str(empty_audit), 10)
+    assert len(records) >= 1
+    assert records[-1]["tool"] == "test"
+
+
+def test_idb_state_isolated_exception_branches(tmp_path, monkeypatch):
+    _clear_read_cache()
+    # Mock files that exist
+    idb_file = tmp_path / "test.i64"
+    input_file = tmp_path / "test.bin"
+    idb_file.write_bytes(b"idb data")
+    input_file.write_bytes(b"MZ\x00\x00input data")
+
+    # Line 691-692: auto_is_ok raises
+    monkeypatch.setattr(idb_mod.idaapi, "auto_is_ok", lambda: (_ for _ in ()).throw(RuntimeError("auto error")), raising=False)
+    # Line 711-712: getmtime raises OSError
+    orig_getmtime = idb_mod.os.path.getmtime
+    monkeypatch.setattr(idb_mod.os.path, "getmtime", lambda p: (_ for _ in ()).throw(OSError("mtime err")) if "test.i64" in str(p) else orig_getmtime(p))
+    # Line 716-717: getsize raises OSError
+    orig_getsize = idb_mod.os.path.getsize
+    monkeypatch.setattr(idb_mod.os.path, "getsize", lambda p: (_ for _ in ()).throw(OSError("size err")) if "test.bin" in str(p) else orig_getsize(p))
+    # Line 732-733: get_func_qty raises
+    monkeypatch.setattr(idb_mod.idaapi, "get_func_qty", lambda: (_ for _ in ()).throw(RuntimeError("func_qty error")), raising=False)
+    # Line 737-738: get_strlist_qty raises
+    monkeypatch.setattr(idb_mod.idaapi, "get_strlist_qty", lambda: (_ for _ in ()).throw(RuntimeError("strlist_qty error")), raising=False)
+    # Line 770-771: get_cursor_ea raises
+    monkeypatch.setattr(idb_mod.ida_kernwin, "get_cursor_ea", lambda: (_ for _ in ()).throw(RuntimeError("cursor error")), raising=False)
+    # Line 787-788: is_debugger_on raises
+    monkeypatch.setattr(idb_mod.idaapi, "is_debugger_on", lambda: (_ for _ in ()).throw(RuntimeError("dbg error")), raising=False)
+
+    monkeypatch.setattr(idb_mod.idaapi, "get_idb_path", lambda: str(idb_file), raising=False)
+    monkeypatch.setattr(idb_mod.idaapi, "get_input_file_path", lambda: str(input_file), raising=False)
+
+    res1 = idb_mod.idb_state()
+    assert res1["ok"] is True
+    assert res1["database"]["idb_age_seconds"] == -1.0
+    assert res1["database"]["input_size"] == -1
+
+    # Lines 702-703 and 706-707: get_idb_path and get_input_file_path raise
+    _clear_read_cache()
+    monkeypatch.setattr(idb_mod.idaapi, "get_idb_path", lambda: (_ for _ in ()).throw(RuntimeError("idb path error")), raising=False)
+    monkeypatch.setattr(idb_mod.idaapi, "get_input_file_path", lambda: (_ for _ in ()).throw(RuntimeError("input path error")), raising=False)
+    res2 = idb_mod.idb_state()
+    assert res2["ok"] is True
+    assert res2["database"]["idb_path"] == ""
+
+    # Line 759-760: open(input_path) raises OSError in magic check
+    _clear_read_cache()
+    monkeypatch.setattr(idb_mod.idaapi, "get_input_file_path", lambda: str(input_file), raising=False)
+    orig_open = idb_mod.open if hasattr(idb_mod, "open") else open
+    import builtins
+    def guarded_open(file, *args, **kwargs):
+        if "test.bin" in str(file):
+            raise OSError("permission denied")
+        return orig_open(file, *args, **kwargs)
+    monkeypatch.setattr(builtins, "open", guarded_open)
+    res3 = idb_mod.idb_state()
+    assert res3["indicators"]["raw_blob"] is False
+
+
+def test_idb_events_limit_type_error():
+    _clear_read_cache()
+    # Line 875-876: limit cannot be parsed as int
+    res = idb_mod.idb_events(limit="not_a_valid_number")
+    assert res["ok"] is True
+    assert res["limit"] == 50
+
+
+def test_idb_register_classes_bounds():
+    _clear_read_cache()
+    # Line 1003: _range returns None when last is out of bounds
+    ida_idp = idb_mod.ida_idp
+    if ida_idp is not None:
+        ida_idp.ph = types.SimpleNamespace(reg_names=["r0", "r1"], reg_first_sreg=5, reg_last_sreg=2)
+        classes = idb_mod._register_classes("arm")
+        assert isinstance(classes, list)
+
+
+def test_idb_top_level_import_fallbacks(monkeypatch):
+    import builtins
+    import sys
+    orig_imp = builtins.__import__
+
+    def fail_imp(name, globals=None, locals=None, fromlist=(), level=0):
+        if name in ("ida_idp", "ida_pro_mcp.services"):
+            raise ImportError(f"no {name}")
+        if "events" in name or "arch_utils" in name:
+            raise ImportError(f"no {name}")
+        if fromlist and any(x in ("EVENT_RING_MAX", "read_events", "detect_riscv_gp", "infer_binary_arch_profile") for x in fromlist):
+            raise ImportError("no symbol")
+        return orig_imp(name, globals, locals, fromlist, level)
+
+    sys.modules["ida_pro_mcp.ida_mcp.tools.idb"] = idb_mod
+    monkeypatch.setattr(builtins, "__import__", fail_imp)
+    try:
+        importlib.reload(idb_mod)
+        assert idb_mod.ida_idp is None
+        assert idb_mod.infer_binary_arch_profile is None
+        assert idb_mod.EVENT_RING_MAX == 0
+        assert idb_mod.read_events() == []
+        assert idb_mod.detect_riscv_gp is None
+    finally:
+        monkeypatch.undo()
+        importlib.reload(idb_mod)

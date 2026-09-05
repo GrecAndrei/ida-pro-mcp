@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-05 — Expand IDB inspection, overview, state telemetry, and register class coverage
+
+- Cover overview action firmware detection hints, next-action synthesis, and recommendation candidate filtering.
+- Cover IDB metadata, summary, segments paging, bookmarks, and entry points dispatch edge branches.
+- Cover IDB state auto-analysis exceptions, database file modification stat errors, and debugger state mapping.
+- Cover audit tail parsing with oversized windows, malformed JSON lines, and missing month/day directories.
+- Cover processor register class boundary bounds and top-level import fallbacks across IDA IDP, services, events, and arch utils.
+
 ## 2026-09-05 — Expand data listing, string discovery, and capability matrix boundary coverage
 
 - Cover byte hit scanning and bounded segment traversal failure modes and size truncation.
