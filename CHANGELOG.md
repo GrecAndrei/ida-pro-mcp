@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-05 — Expand intelligence tool indexing, document builders, and fallback coverage
+
+ - Cover fast signature generation and full decompilation index document construction including API limit truncation, string decoding errors, opcode histograms, CFG loop detection, and suffix budgets.
+ - Cover function indexing and batch indexing edge branches including min/max size filters, candidate naming exceptions, decompile fallbacks, and index commit batch environment parsing.
+ - Cover semantic search and similar functions error paths on empty indexes, unresolvable addresses, and decompile failures.
+ - Cover function families radius scoping, range validation exceptions, and bulk examination persistence via BlackboardStore fallbacks.
+
 ## 2026-09-05 — Expand architecture utilities and RISC-V GP repair coverage
 
  - Cover architecture processor name and bitness detection fallbacks when IDA structures raise exceptions.
