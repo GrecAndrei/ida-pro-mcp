@@ -7,6 +7,7 @@ import contextlib
 import io
 import os
 import shutil
+import signal
 import socket
 import sqlite3
 import sys
@@ -331,9 +332,31 @@ def _configure_offline_environment() -> None:
         os.environ.pop(name, None)
 
 
+def _cleanup_sandbox() -> None:
+    if _TEST_SANDBOX_ROOT.exists():
+        _REAL_SHUTIL_RMTREE(str(_TEST_SANDBOX_ROOT), True)
+
+
+def _clean_stale_sandboxes() -> None:
+    temp_dir = Path(tempfile.gettempdir())
+    for item in temp_dir.glob("ida-pro-mcp-pytest-*"):
+        if item.resolve() != _TEST_SANDBOX_ROOT:
+            with contextlib.suppress(Exception):
+                _REAL_SHUTIL_RMTREE(str(item), True)
+
+
+def _signal_handler(signum, frame):
+    _cleanup_sandbox()
+    sys.exit(128 + signum)
+
+
 _configure_offline_environment()
 _install_offline_filesystem_guard()
-atexit.register(_REAL_SHUTIL_RMTREE, str(_TEST_SANDBOX_ROOT), True)
+_clean_stale_sandboxes()
+atexit.register(_cleanup_sandbox)
+with contextlib.suppress(Exception):
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,8 @@
  - Explicitly include repository src on PYTHONPATH during subprocess invocations
    to prevent tests from importing packages from real user-site locations.
  - Gate real-system IDA detection tests behind IDA_MCP_LIVE_TEST and live_ida mark.
+ - Add signal handlers (SIGTERM, SIGINT), atexit hooks, and stale sandbox sweeps
+   to guarantee test sandboxes in temp are purged even if tests are interrupted.
 
 ## 2026-09-03 — Expand firmware boundary coverage
 
