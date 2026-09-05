@@ -276,7 +276,11 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
             mod.__ida_mcp_base_stub__ = True
             sys.modules[name] = mod
         setattr(common, name, mod)
+    _base_funcs = sys.modules["ida_funcs"]
+    if not hasattr(_base_funcs, "get_func_name"):
+        _base_funcs.get_func_name = lambda ea: f"sub_{ea:x}" if ea is not None else ""
     _base_hexrays = sys.modules["ida_hexrays"]
+
     if not hasattr(_base_hexrays, "user_lvar_modifier_t"):
         _base_hexrays.user_lvar_modifier_t = type("user_lvar_modifier_t", (), {})
     # Keep the type-parser flags available in every isolated load.  Individual

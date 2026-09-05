@@ -149,7 +149,10 @@ def get_first_segment_ea():
     if HAS_EA_SEGMENT:
         ea = seg.get_first_segment_ea()
         return None if ea == seg.ida_idaapi.BADADDR else ea
-    s = seg.get_first_seg()
+    fn = getattr(seg, "get_first_seg", None)
+    if not fn:
+        return None
+    s = fn()
     return s.start_ea if s else None
 
 
@@ -162,8 +165,12 @@ def get_next_segment_ea(ea):
     if HAS_EA_SEGMENT:
         nxt = seg.get_next_segment_ea(ea)
         return None if nxt == seg.ida_idaapi.BADADDR else nxt
-    s = seg.get_next_seg(ea)
+    fn = getattr(seg, "get_next_seg", None)
+    if not fn:
+        return None
+    s = fn(ea)
     return s.start_ea if s else None
+
 
 
 def _segment_attr(ea, ea_getter, legacy_attr):
@@ -322,8 +329,11 @@ def get_func_flags(ea):
         if funcs.get_func_start(ea) == funcs.ida_idaapi.BADADDR:
             return None
         return funcs.get_func_flags(ea)
-    pfn = funcs.get_func(ea)
-    return pfn.flags if pfn else None
+    get_fn = getattr(funcs, "get_func", None)
+    if not get_fn:
+        return None
+    pfn = get_fn(ea)
+    return getattr(pfn, "flags", None) if pfn else None
 
 
 def set_func_flags(ea, flags):

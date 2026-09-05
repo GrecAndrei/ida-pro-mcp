@@ -904,11 +904,11 @@ def _perm_str(ea):
     if perm is None:
         return ""
     perms = []
-    if perm & idaapi.SEGPERM_READ:
+    if perm & getattr(idaapi, "SEGPERM_READ", 4):
         perms.append("R")
-    if perm & idaapi.SEGPERM_WRITE:
+    if perm & getattr(idaapi, "SEGPERM_WRITE", 2):
         perms.append("W")
-    if perm & idaapi.SEGPERM_EXEC:
+    if perm & getattr(idaapi, "SEGPERM_EXEC", 1):
         perms.append("X")
     return "".join(perms)
 
@@ -917,18 +917,19 @@ def _func_flags(func_flags):
     out = []
     if not func_flags:
         return out
-    if func_flags & idaapi.FUNC_NORET:
+    if func_flags & getattr(idaapi, "FUNC_NORET", 1):
         out.append("noreturn")
-    if func_flags & idaapi.FUNC_LIB:
+    if func_flags & getattr(idaapi, "FUNC_LIB", 4):
         out.append("library")
-    if func_flags & idaapi.FUNC_THUNK:
+    if func_flags & getattr(idaapi, "FUNC_THUNK", 0x80):
         out.append("thunk")
     _static_flag = getattr(idaapi, "FUNC_STATIC", getattr(idaapi, "FUNC_STATICDEF", 0))
     if _static_flag and (func_flags & _static_flag):
         out.append("static")
-    if func_flags & idaapi.FUNC_FRAME:
+    if func_flags & getattr(idaapi, "FUNC_FRAME", 0x400):
         out.append("frame")
     return out
+
 
 
 def _data_flags(flags, ea=None):

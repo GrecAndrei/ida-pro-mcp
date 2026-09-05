@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-05 — Harden search unified rescoring, segment enumeration, and cross-reference fallbacks
+
+- Cover search unified semantic rescoring for long and phrase-like query budgets.
+- Safeguard SDK segment enumeration, function flags, and cross-reference counts against missing module attributes.
+- Cover gadget mitigation blackboard persistence write failure recovery.
+- Stabilize isolated repo loader with default function name stubs.
+
+
+
 ## 2026-09-05 — Expand exploit gadget scanner, terminator, mitigation, and chain coverage
 
 - Cover ARM and MIPS JOP/COP non-branch mnemonic branches, PPC and unknown architecture terminator fallbacks, and x86 syscall/sysenter detection.

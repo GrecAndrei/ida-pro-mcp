@@ -28,9 +28,10 @@ from tests._isolated_repo_loader import load_tool_submodule
 
 
 class _Func:
-    def __init__(self, start, end):
+    def __init__(self, start, end, flags=0):
         self.start_ea = start
         self.end_ea = end
+        self.flags = flags
 
 
 class _Cfunc:
@@ -452,7 +453,7 @@ def test_search_unified_edge_cases_and_symbol_info():
     assert "pattern required" in res["message"]
 
     # 3. _alternatives_for_name limit break
-    saved_names = idautils.Names
+    saved_names = getattr(idautils, "Names", None)
     try:
         idautils.Names = lambda: [
             (0x401000, "my_func_1"),
@@ -463,7 +464,10 @@ def test_search_unified_edge_cases_and_symbol_info():
         alts = uni._alternatives_for_name("my_func", limit=2)
         assert len(alts) == 2
     finally:
-        idautils.Names = saved_names
+        if saved_names is not None:
+            idautils.Names = saved_names
+        elif hasattr(idautils, "Names"):
+            delattr(idautils, "Names")
 
     # 4. search_symbol fallback score (matcher matches, but not simple substring of lower)
     orig_compile = uni.compile_smart_pattern
@@ -522,6 +526,7 @@ def test_search_unified_edge_cases_and_symbol_info():
     class _FakeFunc:
         start_ea = 0x401000
         end_ea = 0x401050
+        flags = 0
 
     idc.INF_SHORT_DN = getattr(idc, "INF_SHORT_DN", 0)
     idc.get_inf_attr = getattr(idc, "get_inf_attr", lambda a: 0)
@@ -531,8 +536,8 @@ def test_search_unified_edge_cases_and_symbol_info():
     compat.get_segment_name = lambda ea: ".text"
     compat.get_segment_perm = lambda ea: 5  # R-X
     idc.get_type = lambda ea: "int __cdecl(int, char**)"
-    saved_xrefs_to = idautils.XrefsTo
-    saved_xrefs_from = idautils.XrefsFrom
+    saved_xrefs_to = getattr(idautils, "XrefsTo", None)
+    saved_xrefs_from = getattr(idautils, "XrefsFrom", None)
     try:
         class _FakeXref:
             frm = 0x402000
@@ -593,8 +598,14 @@ def test_search_unified_edge_cases_and_symbol_info():
         count = uni._count_xrefs_from_limited(0x401000, 1)
         assert count == 1
     finally:
-        idautils.XrefsTo = saved_xrefs_to
-        idautils.XrefsFrom = saved_xrefs_from
+        if saved_xrefs_to is not None:
+            idautils.XrefsTo = saved_xrefs_to
+        elif hasattr(idautils, "XrefsTo"):
+            delattr(idautils, "XrefsTo")
+        if saved_xrefs_from is not None:
+            idautils.XrefsFrom = saved_xrefs_from
+        elif hasattr(idautils, "XrefsFrom"):
+            delattr(idautils, "XrefsFrom")
 
     # Exact name score in search_symbol hitting empty name (715) and exact score (722)
     try:
@@ -606,7 +617,11 @@ def test_search_unified_edge_cases_and_symbol_info():
         exact_res = uni.search_symbol("my_exact_name", include_alternatives=False)
         assert exact_res["ok"] is True
     finally:
-        idautils.Names = saved_names
+        if saved_names is not None:
+            idautils.Names = saved_names
+        elif hasattr(idautils, "Names"):
+            delattr(idautils, "Names")
+
 
 
 def test_search_find_heap_and_scan_edges():
@@ -615,10 +630,10 @@ def test_search_find_heap_and_scan_edges():
     idautils = sys.modules["idautils"]
     compat = uni._compat
 
-    saved_names = idautils.Names
+    saved_names = getattr(idautils, "Names", None)
     saved_cached_strings = uni.get_cached_strings
     saved_cached_imports = uni.get_cached_imports
-    saved_segments = idautils.Segments
+    saved_segments = getattr(idautils, "Segments", None)
     orig_cap = uni._FIND_INSTRUCTION_CAP
     orig_mult = uni._FIND_INSTRUCTION_LIMIT_MULTIPLIER
     try:
@@ -684,7 +699,10 @@ def test_search_find_heap_and_scan_edges():
     finally:
         uni._FIND_INSTRUCTION_CAP = orig_cap
         uni._FIND_INSTRUCTION_LIMIT_MULTIPLIER = orig_mult
-        idautils.Names = saved_names
+        if saved_names is not None:
+            idautils.Names = saved_names
+        elif hasattr(idautils, "Names"):
+            delattr(idautils, "Names")
         uni.get_cached_strings = saved_cached_strings
         uni.get_cached_imports = saved_cached_imports
         idautils.Segments = saved_segments

@@ -498,6 +498,12 @@ def test_gadget_chain_blackboard_and_handler_failure_modes(monkeypatch):
     result = module._classify_gadget_chain(None, 20, 3, None, auto_blackboard=True)
     assert result["ok"] is True
 
+    # Lines 1177-1178: action="mitigations", auto_blackboard store write exception
+    monkeypatch.setattr(module, "_detect_mitigations", lambda *a, **k: {"NX": False, "format": "ELF"})
+    res_mit = gadget_tool(action="mitigations", auto_blackboard=True)
+    assert res_mit["ok"] is True
+
+
 
 def test_gadgets_terminators_remaining_branches():
     # Line 248: _is_jop_terminator arm non-branch
