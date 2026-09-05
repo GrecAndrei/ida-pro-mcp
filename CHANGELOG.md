@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-05 — Expand debugger emulation lifecycle, register, and governance coverage
+
+ - Cover debugger instruction pointer extraction fallbacks, arch discovery exceptions, and synthetic register name fallbacks across ARM, MIPS, and x86.
+ - Cover process suspension polling loops, timeout expiration, event pumping with non-integer suspension flags, and backend wait failure recovery.
+ - Cover register reading per-register error handling, register write exception envelopes, and memory read/write validation boundaries.
+ - Cover governance blocking across step, run_to, set_mem, stop, suspend, and continue actions.
+ - Cover action dispatch boundaries for throwing action strings, negative timeouts, missing backend loads, and unknown action fallbacks.
+
 ## 2026-09-05 — Expand annotation and comment management boundary coverage
 
  - Cover MMIO label address base formatting below peripheral range.
