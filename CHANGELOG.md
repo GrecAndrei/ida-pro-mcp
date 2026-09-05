@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-05 — Expand context assembly, housekeeping, and retrieval telemetry coverage
+
+ - Cover ContextAssembler background embedding persistence worker exceptions, fallback handling, and telemetry locks.
+ - Cover finding merging priority ordering, negative confidence score filtering, and multi-session retrieval metric updates.
+ - Cover session housekeeping edge cases, graph degree pruning limits, and idle session cleanup TOCTOU revival guards.
+ - Cover adaptive semantic budget tuning with quality/performance profile metrics and retrieval failure handling.
+ - Cover cross-address callgraph-linked findings retrieval exceptions and stuck detection pivots on diverse tool activities.
+ - Cover search/xref structural enrichment cache integration, candidate target suggestions, and singleton shutdown handlers.
+
 ## 2026-09-05 — Expand CTree AST analysis, dominance hierarchy, and logic flow coverage
 
  - Cover CTree expression collection formatting error fallbacks, variable dependency self-assignment skips, and edge limit breaking.

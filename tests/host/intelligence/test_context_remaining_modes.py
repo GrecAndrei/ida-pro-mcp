@@ -227,3 +227,215 @@ def test_assembler_singleton_and_state_boundaries(monkeypatch):
         assert context_mod._shutdown_intelligence_singleton() is None
     finally:
         context_mod._assembler = old
+
+
+def test_context_assembler_real_init_and_status(monkeypatch):
+    monkeypatch.setattr(context_mod, "BgeCodeEmbedder", _FakeEmbedder)
+    monkeypatch.setattr(context_mod.BehaviorClassifier, "instance", lambda _emb: None)
+    asm = ContextAssembler()
+    assert asm._embedder is not None
+    assert asm._max_indexes == 4
+    assert asm.status["backend"] == "fake"
+    assert asm.ensure_embedding_server() is True
+    asm.stop()
+
+
+def test_context_assembler_housekeeping_and_merging_edges(tmp_path, monkeypatch):
+    import time
+    import types
+
+    obj = _make_assembler(embedder=_FakeEmbedder())
+
+    # 1. line 202-205: _schedule_embedding_persist worker exception
+    idx = obj._get_index(str(tmp_path / "persist_fail.idb"))
+    monkeypatch.setattr(context_mod.threading, "Thread", _InlineThread)
+    monkeypatch.setattr(idx, "_conn", lambda: (_ for _ in ()).throw(RuntimeError("conn fail")))
+    assert obj._schedule_embedding_persist(idx, "0x1000", "func", [1.0], "p", "s", "sh", "doc") is True
+
+    # 2. lines 263, 289-290, 319-320 in _merge_related_findings
+    pack = {}
+    obj._merge_related_findings(pack, [], "address_linked")
+    assert pack == {}
+
+    # line 263: negative confidence causes filtered_entries to be empty
+    obj._merge_related_findings(pack, [{"id": "neg", "confidence": -1.0}], "address_linked")
+    assert pack == {}
+
+    pack = {"related_findings": [{"id": "f1", "confidence": 0.5, "retrieval_source": "address_linked"}]}
+    obj._merge_related_findings(pack, [{"id": "f1", "confidence": 0.9}], "address_linked")
+    assert pack["related_findings"][0]["confidence"] == 0.9
+
+    monkeypatch.setattr(obj, "_retrieval_metrics_lock", types.SimpleNamespace(
+        __enter__=lambda: (_ for _ in ()).throw(RuntimeError("lock fail")),
+        __exit__=lambda *a: None,
+    ))
+    obj._merge_related_findings(pack, [{"id": "f2", "confidence": 0.5}], "address_linked", session_id="s1")
+
+    # 3. lines 375-376: _session_retrieval_stats exception
+    assert obj._get_semantic_threshold("") == 0.5
+    obj._retrieval_metrics["s1"] = {"address_linked.total": 1}
+    monkeypatch.setattr(obj, "_get_semantic_threshold", lambda _s: (_ for _ in ()).throw(RuntimeError("stats fail")))
+    assert obj._session_retrieval_stats("s1") == {}
+
+    # 4. lines 399, 419, 422-423, 435 in housekeeping and _drop_session_state
+    obj._drop_session_state("")
+    obj._related_graph_max_edges = 2
+    obj._related_addr_graph["s1"]["0x1000"] = {"0x1004", "0x1008", "0x100c"}
+    obj._related_addr_graph["s1"]["0x2000"] = {"0x2004"}
+    obj._related_addr_graph["s1"]["0x3000"] = {"0x3004"}
+    obj._related_addr_graph["s1"]["0x4000"] = {"0x4004"}
+    obj._session_last_seen.clear()
+    obj._session_last_seen["s_stale"] = 10.0
+    obj._session_last_seen["s_revived"] = 10.0
+    obj._last_housekeeping_ts = 0.0
+
+    # Revive s_revived when dropping stale sessions (triggers line 419)
+    real_drop = obj._drop_session_state
+    revived_hit = []
+
+    def drop_and_revive(sid):
+        revived_hit.append(sid)
+        if sid == "s_stale":
+            obj._session_last_seen["s_revived"] = time.time() + 1000.0
+        real_drop(sid)
+
+    obj._drop_session_state = drop_and_revive
+    obj._run_housekeeping("s1")
+    assert revived_hit == ["s_stale"]
+
+    # Housekeeping exception handler (lines 422-423)
+    obj._last_housekeeping_ts = 0.0
+    obj._drop_session_state = lambda sid: (_ for _ in ()).throw(RuntimeError("drop fail"))
+    obj._session_last_seen["s_fail"] = 10.0
+    obj._run_housekeeping("s1")
+
+    # 5. lines 561-562, 573, 587-588, 592, 601, 630-631, 645-646
+    obj._update_semantic_circuit_breaker("")
+    obj._tune_semantic_threshold("")
+    monkeypatch.setattr(obj, "_session_retrieval_stats", lambda _s: (_ for _ in ()).throw(RuntimeError("tune fail")))
+    obj._tune_semantic_threshold("s1")
+    obj._adaptive_semantic_budget("s1")
+    obj._update_semantic_circuit_breaker("s1")
+    real_addr_lock = obj._related_addr_lock
+    obj._related_addr_lock = types.SimpleNamespace(
+        __enter__=lambda: (_ for _ in ()).throw(RuntimeError("addr lock fail")),
+        __exit__=lambda *a: None,
+    )
+    obj._record_related_addresses("s1", "0x1000", ["0x2000"])
+    obj._related_addr_lock = real_addr_lock
+
+    # 6. lines 672, 677 in _get_bb_by_related_addresses
+    class MockBB:
+        def list(self, addr, limit=3):
+            return [{"id": "dup_id", "addr": addr}, {"id": "dup_id", "addr": addr}, {"id": f"unique_{addr}"}]
+
+    obj._related_addr_graph["s_rel"]["0x1000"] = {"0x1004", "0x1008"}
+    found_bb = obj._get_bb_by_related_addresses("s_rel", "0x1000", MockBB(), top_k=2)
+    assert len(found_bb) == 2
+
+    # 7. line 687 in record_call and line 753 in check_stuck
+    obj.record_call("", "tool", "action", "0x1000")
+    obj.record_call("   ", "tool", "action", "0x1000")
+    for i in range(6):
+        obj.record_call("s_not_stuck", f"tool_{i}", f"action_{i}", f"0x{i+1}000")
+    assert obj.check_stuck("s_not_stuck", "0x9999", "tool_x", "action_x") is None
+
+
+def test_context_assembler_search_and_decompile_branches(tmp_path, monkeypatch):
+    import types
+
+    obj = _make_assembler(embedder=_FakeEmbedder())
+    idb = str(tmp_path / "search.idb")
+    idx = obj._get_index(idb)
+
+    # 1. lines 832-837: dict items in search payload (ea, addr, address, from, to)
+    search_payload = {
+        "results": [
+            {"ea": "0x1000"},
+            {"addr": "0x2000"},
+            {"address": "0x3000"},
+            {"from": "0x4000"},
+            {"to": "0x5000"},
+        ]
+    }
+    with idx._conn() as conn:
+        for ea in ("0x1000", "0x2000", "0x3000", "0x4000", "0x5000"):
+            conn.execute(
+                "INSERT OR REPLACE INTO func_embeddings(ea, name, vec_blob, func_size, bb_count, has_loops, api_count, string_count, segment, cyclomatic) VALUES (?, ?, ?, 100, 5, 1, 3, 2, '.text', 4)",
+                (ea, f"sub_{ea}", b"\x00" * 8),
+            )
+        conn.commit()
+    idx._load_cache()
+
+    pack_search = obj.assemble("search", "find", search_payload, "0x1000", "s1", idb)
+    assert "hit_details" in pack_search
+
+    # Search enrichment exception (lines 844-845)
+    real_enrich = obj._enrich_address_list
+    obj._enrich_address_list = lambda *a: (_ for _ in ()).throw(RuntimeError("search enrich fail"))
+    assert obj.assemble("search", "find", search_payload, "0x1000", "s1", idb) == {}
+    obj._enrich_address_list = real_enrich
+
+    # Next target suggestion exception (lines 863-864)
+    real_suggest = obj.suggest_next_targets
+    obj.suggest_next_targets = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("target fail"))
+    obj._activity["s1"] = [{"_n": 4}]
+    obj.assemble("code", "disasm", {}, "0x1000", "s1", idb)
+    obj.suggest_next_targets = real_suggest
+
+    # 2. Decompile enrichment:
+    # line 936 (query_vec is None), lines 964-965 (similarity exception),
+    # lines 972-974 (relation linked findings), lines 995-996 (semantic bb search exception)
+    class NoneEmbedder(_FakeEmbedder):
+        def embed_vector(self, text):
+            return None
+
+    obj_no_vec = _make_assembler(embedder=NoneEmbedder())
+    p_none = {}
+    obj_no_vec._enrich_decompile(p_none, {}, "int test() { return 1; } " * 10, "0x1000", idb, None, "s1")
+
+    # Similarity search exception (lines 964-965)
+    monkeypatch.setattr(idx, "similar_vec", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("similar fail")))
+    p_sim_err = {}
+    obj._enrich_decompile(p_sim_err, {}, "int test() { return 1; } " * 10, "0x1000", idb, None, "s1")
+
+    # Relation linked findings (lines 972-974) and semantic search exception (lines 995-996)
+    class RelationBB:
+        def list(self, addr, limit=3):
+            return [{"id": "f_rel", "addr": addr, "confidence": 0.8}]
+
+        def semantic_search(self, *a, **k):
+            raise RuntimeError("semantic fail")
+
+    obj._related_addr_graph["s1"]["0x1000"] = {"0x2000"}
+    p_rel = {}
+    obj._enrich_decompile(p_rel, {}, "int test() { return 1; } " * 10, "0x1000", idb, RelationBB(), "s1")
+    assert any(f.get("id") == "f_rel" for f in p_rel.get("related_findings", []))
+
+    # Relation linked exception handler (lines 973-974)
+    real_rel = obj._get_bb_by_related_addresses
+    obj._get_bb_by_related_addresses = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("rel fail"))
+    obj._enrich_decompile({}, {}, "int test() { return 1; } " * 10, "0x1000", idb, RelationBB(), "s1")
+    obj._get_bb_by_related_addresses = real_rel
+
+    # 3. _enrich_address_list exception (lines 1056-1057)
+    monkeypatch.setattr(idx, "_conn", lambda: (_ for _ in ()).throw(RuntimeError("conn fail")))
+    assert obj._enrich_address_list(["0x1000"], idb) == []
+
+    # 4. suggest_next_targets: ea in analyzed / seen (line 1087) and exception (lines 1099-1100)
+    monkeypatch.setattr(idx, "cache_keys", lambda: {"0x1000"})
+    monkeypatch.setattr(idx, "search_structured", lambda *a, **k: [
+        {"ea": "0x1000", "name": "sub_1000", "func_size": 100, "bb_count": 5, "api_count": 3, "has_loops": 1},
+        {"ea": "0x2000", "name": "sub_2000", "func_size": 100, "bb_count": 5, "api_count": 3, "has_loops": 1},
+        {"ea": "0x2000", "name": "sub_2000_dup", "func_size": 100, "bb_count": 5, "api_count": 3, "has_loops": 1},
+    ])
+    sugg = obj.suggest_next_targets(idb)
+    assert len(sugg) == 1
+    assert sugg[0]["ea"] == "0x2000"
+
+    monkeypatch.setattr(idx, "search_structured", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("search fail")))
+    assert obj.suggest_next_targets(idb) == []
+
+    # 5. _shutdown_intelligence_singleton with active assembler (lines 1144-1146)
+    context_mod._assembler = types.SimpleNamespace(stop=lambda: (_ for _ in ()).throw(RuntimeError("stop fail")))
+    context_mod._shutdown_intelligence_singleton()
