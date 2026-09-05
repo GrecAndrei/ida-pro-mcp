@@ -66,9 +66,10 @@ def test_search_router_validates_ranges_exports_structured_and_radius(monkeypatc
     assert search.search(action="export")["code"] == "INVALID_ARGS"
     assert search.search(action="structured")["code"] == "INVALID_ARGS"
 
-    search.validate_addr = lambda value, require_func=False: (int(value, 0), None)
+    search.validate_addr = lambda value, require_func=False: (None, {"code": "INVALID_ADDR"}) if value == "bad" else (int(value, 0), None)
     search._search_nl_impl = _stub
     assert search.search(action="nl", pattern="x", radius=2)["code"] == "INVALID_ARGS"
+    assert search.search(action="nl", pattern="x", address="bad")["code"] == "INVALID_ADDR"
     result = search.search(action="nl", pattern="x", addr="0x1000", radius=2, mode="quick")
     assert result["ok"] is True
 
@@ -80,8 +81,8 @@ def test_search_router_composes_l1_tag_filter_and_data_value_modes(monkeypatch):
     search.search_structured = lambda constraints, *_args: {
         "ok": True,
         "results": "0x1000  keep\n0x3000  remove",
-        "items": [{"addr": "0x1000", "name": "keep"}, {"addr": "0x3000", "name": "remove"}],
-        "count": 2,
+        "items": ["not-a-dict", {"addr": "0x1000", "name": "keep"}, {"addr": "0x3000", "name": "remove"}],
+        "count": 3,
     }
     filtered = search.search(
         action="structured",
@@ -90,6 +91,13 @@ def test_search_router_composes_l1_tag_filter_and_data_value_modes(monkeypatch):
     assert filtered["count"] == 1
     assert filtered["items"] == [{"addr": "0x1000", "name": "keep"}]
     assert filtered["results"] == "0x1000  keep"
+
+    class _ExplodingAddr:
+        def __str__(self):
+            raise RuntimeError("explode")
+
+    search._query_insight_by_tags = lambda tags, mode="and": [_ExplodingAddr()]
+    assert search.search(action="structured", constraints={"behavior_tags": ["crypto"]})["ok"] is True
 
     calls = []
 
@@ -117,7 +125,7 @@ def test_insight_index_helpers_cover_missing_corrupt_and_tag_modes(monkeypatch, 
     path.write_text("not-json", encoding="utf-8")
     assert search._load_insight_index(str(path)) == {}
     path.write_text(json.dumps({
-        "tag_map": {"crypto": ["0x1000", "0x2000"], "network": ["0x2000", "0x3000"]},
+        "tag_map": {"crypto": [None, "0x1000", "0x2000"], "network": ["0x2000", "0x3000"], "bad": "not-list"},
         "func_map": {"0x1000": {}, "0x2000": {}},
     }), encoding="utf-8")
     assert search._load_insight_index(str(path))["func_map"]
@@ -126,6 +134,8 @@ def test_insight_index_helpers_cover_missing_corrupt_and_tag_modes(monkeypatch, 
     assert search._query_insight_by_tags(["crypto", "network"], mode="and") == ["0x2000"]
     assert set(search._query_insight_by_tags(["crypto", "network"], mode="or")) == {"0x1000", "0x2000"}
     assert search._query_insight_by_tags(["missing"], mode="or") == []
+    assert search._query_insight_by_tags(["bad"], mode="and") == []
+    assert search._query_insight_by_tags(["bad"], mode="or") == []
     assert set(search._extract_tags_from_pattern("crypto and NETWORK and unknown")) == {"crypto", "network"}
     assert search._extract_tags_from_pattern("") == []
 
@@ -250,6 +260,14 @@ def test_search_router_covers_numeric_data_value_and_blackboard_context(monkeypa
         "0x1000": [{"title": "note", "category": "finding", "confidence": 0.8}]
     }
 
+    class FailingStore:
+        def list(self, **kwargs):
+            raise RuntimeError("store lookup failed")
+
+    blackboard.BlackboardStore = FailingStore
+    failing_bb = search.search(action="find", pattern="f")
+    assert "blackboard_context" not in failing_bb
+
 
 def test_search_router_covers_validation_defaults_and_path_error(monkeypatch):
     search = _load_search(monkeypatch)
@@ -258,6 +276,7 @@ def test_search_router_covers_validation_defaults_and_path_error(monkeypatch):
 
     result = search.search(action="name", pattern="x", limit="bad", offset="bad", semantic_min_score="bad")
     assert result["ok"] is True
+    assert search.search(action="find")["code"] == "INVALID_ARGS"
     assert search.search(action="export")["code"] == "INVALID_ARGS"
     assert search.search(action="structured")["code"] == "INVALID_ARGS"
     assert search.search(action="path", pattern="src")["code"] == "INVALID_ARGS"

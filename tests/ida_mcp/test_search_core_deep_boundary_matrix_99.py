@@ -442,3 +442,9 @@ def test_resolve_target_requires_nonempty_target(raw):
     core.idaapi.BADADDR = -1
     ea, err, info = core.resolve_target(raw)
     assert ea == -1 and err == "target is required" and info == {}
+
+
+def test_xref_count_limited_when_xrefs_to_missing(monkeypatch):
+    core = _core()
+    monkeypatch.delattr(core.idautils, "XrefsTo", raising=False)
+    assert core.xref_count_limited(0x1000) == 0

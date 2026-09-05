@@ -236,6 +236,7 @@ def install_common_stub(overrides: dict | None = None) -> types.ModuleType:
         setattr(common, _mnem, frozenset())
 
     class _MCPError:
+        UNKNOWN = "UNKNOWN_ERROR"
         INVALID_ARGS = "INVALID_ARGS"
         INVALID_ARG_VALUE = "INVALID_ARG_VALUE"
         INVALID_ARG_COMBINATION = "INVALID_ARG_COMBINATION"

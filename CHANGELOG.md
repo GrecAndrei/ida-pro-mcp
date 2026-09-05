@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-05 — Expand search router, semantic, and combinators boundary coverage
+
+- Reorder export action pattern validation in search router to present actionable error hints.
+- Cover search core reference counts when XrefsTo module attributes are absent.
+- Cover semantic search fallback imports, cross-encoder rerank errors, and behavior classifier limit bounds.
+- Cover combinator primitives, call-graph diamond traversals, and SQLite embedding index fallbacks.
+
+
+
 ## 2026-09-05 — Expand basic, code, meta, and refs search boundary and segment loop coverage
 
 - Outdent segment-level truncation checks across instruction and operand searches to avoid redundant segment scanning.
