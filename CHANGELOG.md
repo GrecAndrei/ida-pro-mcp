@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-09-05 — Expand annotation and comment management boundary coverage
+
+ - Cover MMIO label address base formatting below peripheral range.
+ - Cover BehaviorClassifier crypto detection branch within inline auto-commenting and classifier failure fallbacks.
+ - Cover auto_comment_function write failure accumulation and error handling.
+ - Cover label_loops and label_branches iteration limits, empty successor edge cases, and comment write failures.
+ - Cover mark_dangerous and tag_functions unbounded function iteration limits and warning cap limits.
+ - Cover mark_error_paths non-matching API filtering, invalid target heads, multi-head instruction step scans, and comment write failure recording.
+ - Cover propagate_names default sub_ prefix rejection, suggestion iteration limits, and function comment write failures.
+ - Cover cleanup function limit breaks, missing function info skipping, inline prefix deletion, dry-run modes, and comment write failures.
+ - Cover comment manager get_context and set_structured address validation errors, anterior/posterior line extraction, export_md function scan bounds, import_md parsing exceptions, summary scan bounds, and unknown action dispatch.
+
 ## 2026-09-05 — Expand code dispatcher decompilation, xrefs-to-field, and disasm boundary coverage
 
  - Cover decompile action nearest function search fallbacks, thunk real implementation resolution with demangling error fallbacks, and decompiler diagnostic exceptions.
