@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-06 — Expand analysis tool snapshot, auto-wait, entry points, and options coverage
+
+- Cover undefine, make_code, and force_offset address validation error branches.
+- Cover analysis flag raw accessors, get_af2 import fallbacks, and set_af failure modes.
+- Cover raw entry point bootstrap AUIPC/JALR instruction decoding and vector table parsing.
+- Cover snapshot creation/restore failures, undo breaks, and auto_wait step timeouts.
+
+
 ## 2026-09-06 — Expand code helpers ctree vulnerability, disassembly window, and constant scan coverage
 
 - Cover ctree vulnerability sink visitor call exceptions, empty prototype parameters, and string argument decodes.
