@@ -378,8 +378,8 @@ def search_immediate(pattern, range_start, range_end, include_context, offset, l
                 curr = idc.next_head(curr, seg_end)
                 if curr == idaapi.BADADDR:
                     break
-            if truncated:
-                break
+        if truncated:
+            break
 
     result = build_response(results, offset, limit, matches_seen, truncated, value=hex(value), **semantic_meta)
     if seg_note:
@@ -398,8 +398,6 @@ def search_name(pattern, case_sensitive, offset, limit):
     matches_seen = 0
 
     for ea, name in idautils.Names():
-        if truncated:
-            break
         if matcher(name):
             matches_seen += 1
             if matches_seen > offset:

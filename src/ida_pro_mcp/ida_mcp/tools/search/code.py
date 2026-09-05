@@ -112,8 +112,8 @@ def search_text(pattern, case_sensitive, range_start, range_end, include_context
                         if len(results) >= limit:
                             truncated = True
                             break
-            if truncated:
-                break
+        if truncated:
+            break
 
     result = build_response(results, offset, limit, matches_seen, truncated, pattern=pattern)
     if seg_note:
@@ -162,8 +162,8 @@ def search_operand(pattern, case_sensitive, range_start, range_end, include_cont
                     if len(results) >= limit:
                         truncated = True
                         break
-            if truncated:
-                break
+        if truncated:
+            break
 
     result = build_response(results, offset, limit, matches_seen, truncated, pattern=pattern)
     if seg_note:

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-05 — Expand basic, code, meta, and refs search boundary and segment loop coverage
+
+- Outdent segment-level truncation checks across instruction and operand searches to avoid redundant segment scanning.
+- Eliminate unreachable loop break checks in symbol name, type, export, data reference, and code reference scans.
+- Align function signature search timeout and limit break handling.
+
+
+
 ## 2026-09-05 — Harden search unified rescoring, segment enumeration, and cross-reference fallbacks
 
 - Cover search unified semantic rescoring for long and phrase-like query budgets.
