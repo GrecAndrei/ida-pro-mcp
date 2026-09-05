@@ -292,3 +292,217 @@ def test_segment_register_helpers_cover_degraded_processor_tables(monkeypatch):
     monkeypatch.setattr(segments_mod, "ida_segregs", SparseRanges)
     assert segments_mod._sreg_ranges_for_register(0, 10, 1) == []
     assert segments_mod._sreg_ranges_for_register(20, 40, 1)
+
+
+def test_segment_find_and_sreg_helper_boundaries(monkeypatch, fresh_fake_idb):
+    # Line 76: _find_segment where address is valid but segment does not exist
+    monkeypatch.setattr(segments_mod._compat, "get_segment", lambda _ea: None)
+    seg, err = segments_mod._find_segment(start="0x140001000")
+    assert seg is None and err["error"] is True and "No segment at address" in err["message"]
+    monkeypatch.undo()
+
+    # Lines 260-261: _sreg_name with non-int sr when ph has reg_names
+    class FakePh:
+        reg_names = ["r0", "r1"]
+
+    monkeypatch.setattr(segments_mod.ida_idp, "ph", FakePh, raising=False)
+    assert segments_mod._sreg_name("not_an_int") == "not_an_int"
+
+    # Line 271: _sreg_reg_indices where ph is None
+    monkeypatch.setattr(segments_mod.ida_idp, "ph", None, raising=False)
+    assert segments_mod._sreg_reg_indices() is None
+
+    # Line 278: _sreg_reg_indices where last < first
+    class PhInverted:
+        reg_first_sreg = 5
+        reg_last_sreg = 2
+
+    monkeypatch.setattr(segments_mod.ida_idp, "ph", PhInverted, raising=False)
+    assert segments_mod._sreg_reg_indices() is None
+
+    # Line 285 & 296: ida_segregs is None
+    monkeypatch.setattr(segments_mod, "ida_segregs", None)
+    assert segments_mod._sreg_tag_name(0) == "signed"
+    assert segments_mod._sreg_tag_for_type("default") == 0
+
+    # Line 290 & 298: sreg tags with ida_segregs present
+    class FakeSegRegs:
+        SR_inherit = 10
+        SR_user = 20
+        SR_auto = 30
+
+    monkeypatch.setattr(segments_mod, "ida_segregs", FakeSegRegs)
+    assert segments_mod._sreg_tag_name(20) == "signed"
+    assert segments_mod._sreg_tag_for_type("default") == 10
+
+    # Line 322: _sreg_ranges_for_register with range where start_ea or end_ea is None
+    class PartialRange:
+        start_ea = None
+        end_ea = 100
+
+    class FakeSRegRanges:
+        sreg_range_t = PartialRange
+
+        @staticmethod
+        def get_sreg_ranges_qty(_sr):
+            return 1
+
+        @staticmethod
+        def getn_sreg_range(_out, _sr, _n):
+            return True
+
+    monkeypatch.setattr(segments_mod, "ida_segregs", FakeSRegRanges)
+    assert segments_mod._sreg_ranges_for_register(0, 200, 0) == []
+
+
+def test_segment_mutation_and_move_error_branches(monkeypatch, fresh_fake_idb):
+    # Line 540: action == "add", invalid end
+    err_add = segments_mod.segments(action="add", start="0x1000", end="invalid_end_ea")
+    assert err_add["error"] is True
+
+    # Line 615: action == "set_attr", segment not found
+    with monkeypatch.context() as m:
+        m.setattr(segments_mod._compat, "get_segment", lambda _ea: None)
+        err_attr = segments_mod.segments(action="set_attr", start="0x140001000", attr="name", value="test")
+        assert err_attr["error"] is True and "No segment at address" in err_attr["message"]
+
+    # Line 641: action == "set_attr", attr="perm", set_segment_attr returns False
+    with monkeypatch.context() as m:
+        m.setattr(segments_mod._compat, "set_segment_attr", lambda *_args: False)
+        err_perm = segments_mod.segments(action="set_attr", start="0x140001000", attr="perm", value="r")
+        assert err_perm["error"] is True and "Failed to set segment attribute 'perm'" in err_perm["message"]
+
+    # Line 655: action == "set_attr", set_segment_attr returns None
+    with monkeypatch.context() as m:
+        m.setattr(segments_mod._compat, "set_segment_attr", lambda *_args: None)
+        err_no_attr = segments_mod.segments(action="set_attr", start="0x140001000", attr="align", value=4)
+        assert err_no_attr["error"] is True and "Segment object has no attribute 'align'" in err_no_attr["message"]
+
+    # Line 677 & 686: action == "set_perms", segment not found and "w" in perms
+    with monkeypatch.context() as m:
+        m.setattr(segments_mod._compat, "get_segment", lambda _ea: None)
+        err_no_seg_perm = segments_mod.segments(action="set_perms", start="0x140001000", value="rw")
+        assert err_no_seg_perm["error"] is True
+    ok_perm_w = segments_mod.segments(action="set_perms", start="0x140001000", value="rw")
+    assert ok_perm_w["ok"] is True and "w" in ok_perm_w["perms"]
+
+    # Line 725 & 732-742: action == "move", segment not found and move_errors dict mapping
+    with monkeypatch.context() as m:
+        m.setattr(segments_mod._compat, "get_segment", lambda _ea: None)
+        err_no_seg_move = segments_mod.segments(action="move", start="0x140001000", end="0x150000000")
+        assert err_no_seg_move["error"] is True
+    for name, val in [
+        ("MOVE_SEGM_OK", 0),
+        ("MOVE_SEGM_PARAM", -1),
+        ("MOVE_SEGM_ROOM", -2),
+        ("MOVE_SEGM_IDP", -3),
+        ("MOVE_SEGM_CHUNK", -4),
+        ("MOVE_SEGM_LOADER", -5),
+        ("MOVE_SEGM_ODD", -6),
+        ("MOVE_SEGM_ORPHAN", -7),
+    ]:
+        monkeypatch.setattr(segments_mod.idaapi, name, val, raising=False)
+    monkeypatch.setattr(segments_mod._compat, "move_segment", lambda *_args: -2)
+    err_room = segments_mod.segments(action="move", start="0x140001000", end="0x150000000")
+    assert err_room["error"] is True and "Not enough room at destination" in err_room["message"]
+
+
+def test_segment_sreg_actions_full_validation_matrix(monkeypatch, fresh_fake_idb):
+    segregs = fresh_fake_idb.segregs
+    monkeypatch.setattr(segments_mod, "ida_segregs", segregs)
+
+    # sreg_get: 750 (missing start), 753 (missing reg), 760 (bad start), 767 (no seg)
+    assert segments_mod.segments(action="sreg_get", start=None, reg="GP")["error"] is True
+    assert segments_mod.segments(action="sreg_get", start="0x140001000", reg=None)["error"] is True
+    assert segments_mod.segments(action="sreg_get", start="0x140001000", reg="")["error"] is True
+    assert segments_mod.segments(action="sreg_get", start="not_an_ea", reg="GP")["error"] is True
+    with monkeypatch.context() as m:
+        m.setattr(segments_mod._compat, "get_segment", lambda _ea: None)
+        assert segments_mod.segments(action="sreg_get", start="0x140001000", reg="GP")["error"] is True
+
+    # sreg_set: 796 (missing start), 799 (missing reg), 802 (missing value), 812 (bad start), 815 (unknown reg), 819 (no seg)
+    assert segments_mod.segments(action="sreg_set", start=None, reg="GP", value=1)["error"] is True
+    assert segments_mod.segments(action="sreg_set", start="0x140001000", reg="", value=1)["error"] is True
+    assert segments_mod.segments(action="sreg_set", start="0x140001000", reg="GP", value=None)["error"] is True
+    assert segments_mod.segments(action="sreg_set", start="not_an_ea", reg="GP", value=1)["error"] is True
+    assert segments_mod.segments(action="sreg_set", start="0x140001000", reg="TOTALLY_UNKNOWN_REG", value=1)["error"] is True
+    with monkeypatch.context() as m:
+        m.setattr(segments_mod._compat, "get_segment", lambda _ea: None)
+        assert segments_mod.segments(action="sreg_set", start="0x140001000", reg="GP", value=1)["error"] is True
+
+    # sreg_list: 847 (missing start), 854 (bad start), 857 (no seg), 861 (unknown reg)
+    assert segments_mod.segments(action="sreg_list", start=None)["error"] is True
+    assert segments_mod.segments(action="sreg_list", start="not_an_ea")["error"] is True
+    with monkeypatch.context() as m:
+        m.setattr(segments_mod._compat, "get_segment", lambda _ea: None)
+        assert segments_mod.segments(action="sreg_list", start="0x140001000")["error"] is True
+    assert segments_mod.segments(action="sreg_list", start="0x140001000", reg="TOTALLY_UNKNOWN_REG")["error"] is True
+
+
+def test_segment_read_data_iterations_limit_and_compare_lookup_err(monkeypatch, fresh_fake_idb):
+    # Line 972: find_data iterations >= 500000 break
+    seg = fresh_fake_idb.segments[0]
+    call_c = [0]
+
+    def fast_next_head(head, _end):
+        call_c[0] += 1
+        if call_c[0] >= 500005:
+            return segments_mod.idaapi.BADADDR
+        return head
+
+    monkeypatch.setattr(segments_mod.ida_bytes, "is_strlit", lambda _f: False)
+    monkeypatch.setattr(segments_mod.ida_bytes, "is_data", lambda _f: False)
+    monkeypatch.setattr(segments_mod.idc, "next_head", fast_next_head)
+    res_iter = segments_mod.segments(action="find_data", start=hex(seg.start_ea))
+    assert res_iter["ok"] is True
+
+    # Line 997: action == "compare", seg_a lookup err
+    with monkeypatch.context() as m:
+        m.setattr(segments_mod._compat, "get_segment", lambda _ea: None)
+        err_comp = segments_mod.segments(action="compare", start="0x140001000", end=hex(seg.start_ea))
+        assert err_comp["error"] is True and "No segment at address" in err_comp["message"]
+
+
+def test_segments_top_level_import_fallbacks(monkeypatch):
+    import builtins
+    orig_imp = builtins.__import__
+
+    # Provide error_handling module in sys.modules so line 46 succeeds
+    fake_eh = types.SimpleNamespace(parse_address_safe=lambda x: (int(str(x), 0), None))
+    monkeypatch.setitem(sys.modules, "error_handling", fake_eh)
+
+    def fail_imp(name, globals=None, locals=None, fromlist=(), level=0):
+        if name in ("ida_idp", "ida_segregs"):
+            raise ImportError(f"no {name}")
+        if name in ("ida_mcp.error_handling", "ida_pro_mcp.ida_mcp.error_handling"):
+            raise ImportError(f"no {name}")
+        return orig_imp(name, globals, locals, fromlist, level)
+
+    sys.modules["ida_pro_mcp.ida_mcp.tools.segments"] = segments_mod
+    monkeypatch.setattr(builtins, "__import__", fail_imp)
+    try:
+        importlib.reload(segments_mod)
+        assert segments_mod.ida_idp is None
+        assert segments_mod.ida_segregs is None
+    finally:
+        monkeypatch.undo()
+        importlib.reload(segments_mod)
+
+
+def test_segment_last_four_edge_branches(monkeypatch, fresh_fake_idb):
+    # Line 236: _resolve_sreg with int
+    assert segments_mod._resolve_sreg(1) == 1
+
+    # Line 561: action="add" with sclass="BSS"
+    monkeypatch.setattr(segments_mod._compat, "add_segment", lambda *_args: True)
+    res_bss = segments_mod.segments(action="add", start="0x140008000", end="0x140008100", name=".bss_extra", sclass="BSS")
+    assert res_bss["ok"] is True
+
+    # Line 571: action="add" without sclass (explicit sclass="")
+    res_noclass = segments_mod.segments(action="add", start="0x140009000", end="0x140009100", name=".noclass", sclass="")
+    assert res_noclass["ok"] is True and "note" in res_noclass
+
+    # Line 638: action="set_attr", attr="perm", value="rx" (covers "x" in v)
+    monkeypatch.setattr(segments_mod._compat, "set_segment_attr", lambda *_args: True)
+    res_x = segments_mod.segments(action="set_attr", start="0x140001000", attr="perm", value="rx")
+    assert res_x["ok"] is True

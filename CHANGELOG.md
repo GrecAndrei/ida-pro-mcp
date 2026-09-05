@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-05 — Expand segment attribute, permission, sreg range, and data scan coverage
+
+- Cover segment lookup errors for mapped addresses without segment descriptors.
+- Cover segment attribute and permission updates with string permission bitmaps and invalid attribute types.
+- Cover segment register (sreg) name resolution, tag mapping, index bounds, and range retrieval fallbacks.
+- Cover segment move error code reporting across room, parameter, and loader constraints.
+- Cover find_data iteration limits, comparison lookup errors, and top-level import fallbacks.
+
+
 ## 2026-09-05 — Expand IDB inspection, overview, state telemetry, and register class coverage
 
 - Cover overview action firmware detection hints, next-action synthesis, and recommendation candidate filtering.
