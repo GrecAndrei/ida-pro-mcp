@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-09-05 — Expand code dispatcher decompilation, xrefs-to-field, and disasm boundary coverage
+
+ - Cover decompile action nearest function search fallbacks, thunk real implementation resolution with demangling error fallbacks, and decompiler diagnostic exceptions.
+ - Cover decompile_chain caller function deduplication and pseudocode context extraction.
+ - Cover disasm action address parameter aliases, max_items string parsing, raw disassembly warnings when not inside a function, and caller context enrichment error handling.
+ - Cover xrefs_to_field ordinal type scanning without struct names, instruction decode exception branches, instruction scan limits, and truncated scan metadata.
+ - Cover find_paths target validation and recursion depth limits.
+ - Cover strings_in_func RISC-V GP detection branches and read cache invalidation.
+ - Cover smart_decompile and explain suggested next actions and firmware signal synthesis.
+
 ## 2026-09-05 — Expand context assembly, housekeeping, and retrieval telemetry coverage
 
  - Cover ContextAssembler background embedding persistence worker exceptions, fallback handling, and telemetry locks.
