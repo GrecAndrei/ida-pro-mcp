@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-06 — Expand code helpers ctree vulnerability, disassembly window, and constant scan coverage
+
+- Cover ctree vulnerability sink visitor call exceptions, empty prototype parameters, and string argument decodes.
+- Cover use-after-free and unchecked allocation visitor exception blocks and segment permission errors.
+- Cover shellcode prologue detection in non-code segments and string cross-reference iteration limits.
+- Cover forward disassembly window fallback boundaries and candidate string constant scanning loops.
+
+
 ## 2026-09-05 — Expand types tool boundary, vtable, and struct member shift coverage
 
 - Cover typedef unwrap exception chains, ordinal allocation failures, and struct name matching.
