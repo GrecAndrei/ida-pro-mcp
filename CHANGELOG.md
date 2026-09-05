@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-05 — Expand data listing, string discovery, and capability matrix boundary coverage
+
+- Cover byte hit scanning and bounded segment traversal failure modes and size truncation.
+- Cover literal query preprocessing, encoding error fallbacks, and walk fingerprint caching.
+- Cover string discovery with legacy string lists, literal scans, and printable ratio percentile gating.
+- Cover import module enumeration, ordinal extraction fallbacks, and export symbol resolution.
+- Cover capability matrix calculation, dangerous API detection, and binary type heuristic fallbacks.
+- Cover string cross-reference scoring, module key parsing, and unreferenced string collection.
+
 ## 2026-09-05 — Expand debugger emulation lifecycle, register, and governance coverage
 
  - Cover debugger instruction pointer extraction fallbacks, arch discovery exceptions, and synthetic register name fallbacks across ARM, MIPS, and x86.
