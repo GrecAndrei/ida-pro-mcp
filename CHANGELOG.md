@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-05 — Expand architecture utilities and RISC-V GP repair coverage
+
+ - Cover architecture processor name and bitness detection fallbacks when IDA structures raise exceptions.
+ - Cover prologue and epilogue pattern matching across multiple instruction sets and operand formats.
+ - Cover RISC-V GP register detection and xref repair edge branches including decode failures, stale xref deletions, and segment boundaries.
+ - Cover directive failure clearing and stack register resolution fallbacks.
+
 ## 2026-09-05 — Expand calculation tool expression, dereference, and conversion coverage
 
  - Cover calc action evaluation with custom expression symbols, invalid operators, forbidden calls, and natural-language intent fallbacks.
