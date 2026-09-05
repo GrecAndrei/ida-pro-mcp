@@ -7,6 +7,7 @@ import contextlib
 import io
 import os
 import shutil
+import socket
 import sqlite3
 import sys
 import tempfile
@@ -233,9 +234,32 @@ def _guarded_sqlite_connect(database, *args, **kwargs):
     return _REAL_SQLITE_CONNECT(database, *args, **kwargs)
 
 
+_REAL_SOCKET_CONNECT = socket.socket.connect
+
+
+def _is_loopback_address(host: str) -> bool:
+    return host in ("localhost", "127.0.0.1", "::1", "0.0.0.0", "::") or host.startswith("127.")
+
+
+def _guarded_socket_connect(self, address, *args, **kwargs):
+    family = getattr(self, "family", None)
+    if family in (socket.AF_INET, socket.AF_INET6):
+        host = ""
+        if isinstance(address, tuple) and len(address) > 0:
+            host = str(address[0])
+        elif isinstance(address, str):
+            host = address
+        if not _is_loopback_address(host):
+            raise RuntimeError(
+                f"offline pytest network guard blocked outbound connection to {host!r}"
+            )
+    return _REAL_SOCKET_CONNECT(self, address, *args, **kwargs)
+
+
 def _install_offline_filesystem_guard() -> None:
     if os.environ.get("IDA_MCP_LIVE_TEST") == "1":
         return
+    socket.socket.connect = _guarded_socket_connect
     builtins.open = _guarded_open
     io.open = _guarded_io_open
     os.open = _guarded_os_open
@@ -262,7 +286,10 @@ def _configure_offline_environment() -> None:
     if os.environ.get("IDA_MCP_LIVE_TEST") == "1":
         return
     safe = _TEST_SANDBOX_ROOT
+    safe_home = safe / "home"
+    safe_home.mkdir(parents=True, exist_ok=True)
     path_env = {
+        "HOME": safe_home,
         "USERPROFILE": safe / "userprofile",
         "LOCALAPPDATA": safe / "localappdata",
         "APPDATA": safe / "appdata",
@@ -281,7 +308,12 @@ def _configure_offline_environment() -> None:
         "CODEX_SKILL_ROOT": safe / "codex-skills",
     }
     for name, value in path_env.items():
+        if isinstance(value, Path) and not name.endswith("_FILE"):
+            value.mkdir(parents=True, exist_ok=True)
         os.environ[name] = str(value)
+    src_dir = str(_TEST_REPO_ROOT / "src")
+    cur_pythonpath = os.environ.get("PYTHONPATH", "")
+    os.environ["PYTHONPATH"] = f"{src_dir}{os.pathsep}{cur_pythonpath}" if cur_pythonpath else src_dir
     # Offline tests must not discover or start a developer's licensed IDA or
     # reuse a developer-selected IDB/model/native library.
     for name in (

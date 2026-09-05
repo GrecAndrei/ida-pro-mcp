@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-09-05 — Sandbox offline test environment from real-world paths and network
+
+ - Isolate HOME to temporary sandbox so tests cannot scan or mutate developer's
+   home directory, real IDA Pro installations, or client configurations.
+ - Install outbound socket network guard in offline pytest configuration to block
+   unmocked external internet connections.
+ - Explicitly include repository src on PYTHONPATH during subprocess invocations
+   to prevent tests from importing packages from real user-site locations.
+ - Gate real-system IDA detection tests behind IDA_MCP_LIVE_TEST and live_ida mark.
+
 ## 2026-09-03 — Expand firmware boundary coverage
 
  - Added offline checks for mapped-window and decoder failures, fallback

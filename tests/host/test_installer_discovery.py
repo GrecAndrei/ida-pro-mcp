@@ -9,6 +9,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
@@ -263,12 +265,15 @@ class StateFileTests(_DiscoveryFixture):
         self.assertIsNone(read_install_state(self.tmp))
 
 
+@pytest.mark.live_ida
 class DetectOnRealSystemTests(unittest.TestCase):
-    """When run on the user's actual machine, we should find 9.2 and 9.3."""
+    """When run on the user's actual machine with live testing enabled, we should find 9.2 and 9.3."""
 
     @unittest.skipUnless(
-        (Path.home() / "ida-pro-9.3").is_dir() and (Path.home() / "ida-pro-9.2").is_dir(),
-        "requires ~/ida-pro-9.2 and ~/ida-pro-9.3 to exist",
+        os.environ.get("IDA_MCP_LIVE_TEST") == "1"
+        and (Path.home() / "ida-pro-9.3").is_dir()
+        and (Path.home() / "ida-pro-9.2").is_dir(),
+        "requires IDA_MCP_LIVE_TEST=1 and ~/ida-pro-9.2 and ~/ida-pro-9.3 to exist",
     )
     def test_finds_both_9_2_and_9_3(self) -> None:
         installs = detect_ida_installs()
