@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-05 — Expand types tool boundary, vtable, and struct member shift coverage
+
+- Cover typedef unwrap exception chains, ordinal allocation failures, and struct name matching.
+- Cover raw memory dumping for non-printable buffers and empty byte sequences.
+- Cover struct member retyping size shift loops, member deletion errors, and enum revalue additions.
+
+
 ## 2026-09-05 — Expand search router, semantic, and combinators boundary coverage
 
 - Reorder export action pattern validation in search router to present actionable error hints.
