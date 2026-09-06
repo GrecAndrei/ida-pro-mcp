@@ -167,9 +167,17 @@ class MCPClient:
         fd = self.proc.stdout.fileno()
 
         while time.time() - start < timeout:
-            # Use select to check if data is available
-            ready, _, _ = select.select([fd], [], [], 0.1)
-            if ready:
+            # Use select (with poll fallback for high file descriptors)
+            is_ready = False
+            try:
+                ready, _, _ = select.select([fd], [], [], 0.1)
+                is_ready = bool(ready)
+            except (ValueError, OSError):
+                if hasattr(select, "poll"):
+                    p = select.poll()
+                    p.register(fd, select.POLLIN)
+                    is_ready = bool(p.poll(100))
+            if is_ready:
                 try:
                     chunk = os.read(fd, 4096)
                     if chunk:

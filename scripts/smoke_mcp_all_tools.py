@@ -176,11 +176,18 @@ class MCPClient:
             remaining = deadline - time.time()
             if remaining <= 0:
                 return None
+            is_ready = False
             try:
                 r, _, _ = select.select([fd], [], [], remaining)
+                is_ready = bool(r)
             except (OSError, ValueError):
-                return None
-            if not r:
+                if hasattr(select, "poll"):
+                    p = select.poll()
+                    p.register(fd, select.POLLIN)
+                    is_ready = bool(p.poll(int(max(0, remaining * 1000))))
+                else:
+                    return None
+            if not is_ready:
                 return None  # timeout
             chunk = self.proc.stdout.readline()
             if not chunk:

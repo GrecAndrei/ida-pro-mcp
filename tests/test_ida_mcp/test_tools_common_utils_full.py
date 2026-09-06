@@ -637,11 +637,11 @@ def test_tools_pkg_getattr_dir_and_common_bitness_edges(monkeypatch):
     assert "wiki" in d and "governance" in d
 
     # __getattr__ with standard tool
-    wiki_tool = tools_pkg.wiki
+    wiki_tool = tools_pkg.__getattr__("wiki")
     assert callable(wiki_tool)
 
     # __getattr__ with mapped tool
-    fw_tool = tools_pkg.firmware
+    fw_tool = tools_pkg.__getattr__("firmware")
     assert callable(fw_tool)
 
     # __getattr__ with unknown attribute

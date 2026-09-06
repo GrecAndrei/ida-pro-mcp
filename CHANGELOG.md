@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-06 — Add poll fallbacks for test client high file descriptors and fix tools getattr test isolation
+
+- Add poll fallback for high file descriptor counts (FD >= 1024) in test mcp_client and smoke test client to avoid select range errors during long test runs.
+- Fix tools package __getattr__ test isolation when tool modules were previously imported during preceding test suites.
+
+
+
 ## 2026-09-06 — Expand server dispatch error paths, policy gates, and watchdog coverage to 100%
 
 - Cover server dispatch liveness checks, unreadable policy config fallbacks, and safe mode tool/action gates.
