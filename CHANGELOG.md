@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-06 — Expand stack analysis frame, canary limit, and uninitialized store coverage
+
+- Cover empty frame short-circuit pathways across buffers, alignment, spills, and variables.
+- Cover canary symbol reference iteration caps and summary action xref thresholds.
+- Cover dynamic allocation scan loops and stack pointer delta iteration bounds.
+- Cover uninitialized variable store instruction operand indexing and stack variable exceptions.
+
+
 ## 2026-09-06 — Expand batch macro DSL, dependency cycles, and condition coverage
 
 - Cover macro path empty segment skips, non-list pipe operator handling, and string literal unwrapping.

@@ -316,3 +316,89 @@ def test_search_refs_regex_and_signature_filters(monkeypatch):
     monkeypatch.setattr(refs_mod.ida_funcs, "get_func_name", lambda _ea: "leaf_func", raising=False)
     sig = refs_mod.search_func_by_sig("leaf", 0, 10)
     assert sig["ok"] is True
+
+
+def test_stack_deep_boundary_matrix_99(monkeypatch):
+    _stack_fixture(monkeypatch)
+    import sys
+    for mod_name in ("ida_mcp.sync", "ida_pro_mcp.ida_mcp.sync"):
+        if mod_name in sys.modules:
+            monkeypatch.setattr(sys.modules[mod_name], "_tool_cache", lambda: None)
+
+    # 1. Lines 272, 334, 378, 459, 512, 568: No frame error path on each action
+    monkeypatch.setattr(stack_mod._compat, "frame_members", lambda _ea: [])
+    monkeypatch.setattr(stack_mod._compat, "frame_size", lambda _ea: 0)
+    for act in ("buffers", "alignment", "spills", "variables", "arrays", "uninitialized"):
+        res_no_frame = stack_mod.stack_analysis(action=act, addr="0x140001000")
+        assert res_no_frame["ok"] is True
+        assert "No stack frame" in res_no_frame["note"]
+
+    # Restore frame members
+    _stack_fixture(monkeypatch)
+
+    # 2. Limit breaks: lines 285 (buffers), 362 (alignment), 396 (spills), 498 (variables), 555 (arrays), 634 (uninitialized)
+    res_buf_lim = stack_mod.stack_analysis(action="buffers", addr="0x140001000", limit=1)
+    assert res_buf_lim["count"] <= 1
+    res_align_lim = stack_mod.stack_analysis(action="alignment", addr="0x140001000", limit=1)
+    assert len(res_align_lim["members"].splitlines()) <= 1
+    res_spills_lim = stack_mod.stack_analysis(action="spills", addr="0x140001000", limit=1)
+    assert res_spills_lim["count"] <= 1
+    res_vars_lim = stack_mod.stack_analysis(action="variables", addr="0x140001000", limit=1)
+    assert res_vars_lim["count"] <= 1
+    res_arr_lim = stack_mod.stack_analysis(action="arrays", addr="0x140001000", limit=1)
+    assert res_arr_lim["count"] <= 1
+    res_uninit_lim = stack_mod.stack_analysis(action="uninitialized", addr="0x140001000", limit=1)
+    assert res_uninit_lim["count"] <= 1
+
+    # 3. Line 338: frame_size == 0 in alignment action
+    monkeypatch.setattr(stack_mod._compat, "frame_size", lambda _ea: 0)
+    res_align_zero = stack_mod.stack_analysis(action="alignment", addr="0x140001000")
+    assert res_align_zero["frame_alignment"] == 8
+
+    # 4. Canary xref loop limit (line 319) and summary canary xref limit (lines 677-679)
+    dummy_xrefs = [SimpleNamespace(frm=0x1000, iscode=True)] * 5005
+    monkeypatch.setattr(stack_mod.idc, "get_name_ea_simple", lambda _name: 0x2000, raising=False)
+    monkeypatch.setattr(stack_mod.idautils, "XrefsTo", lambda _ea, *_args: iter(dummy_xrefs), raising=False)
+    monkeypatch.setattr(stack_mod._compat, "get_func_start", lambda _ea: 0x99999)
+    res_canary_lim = stack_mod.stack_analysis(action="canary", addr="0x140001000")
+    assert res_canary_lim["has_canary"] is False
+
+    res_summary_lim = stack_mod.stack_analysis(action="summary", addr="0x140001000")
+    assert res_summary_lim["has_canary"] is False
+
+    # 5. Usage iteration limit (line 423) and dynamic alloc xref limit (line 442)
+    monkeypatch.setattr(stack_mod._compat, "get_func_info", lambda _ea: SimpleNamespace(start_ea=0x1000, end_ea=0x1000 + 100005))
+    monkeypatch.setattr(stack_mod.idc, "next_head", lambda ea, *_args: ea + 1, raising=False)
+    res_usage_lim = stack_mod.stack_analysis(action="usage", addr="0x140001000")
+    assert res_usage_lim["ok"] is True
+
+    # 6. Uninitialized stores branches: lines 604, 607, 610-611, 615-616, 620
+    _stack_fixture(monkeypatch)
+    ida_ua = stack_mod.ida_ua
+    ida_frame = stack_mod.ida_frame
+    op_bad_type = SimpleNamespace(type=getattr(ida_ua, "o_reg", 1))
+    op_displ = SimpleNamespace(type=getattr(ida_ua, "o_displ", 2))
+    insn1 = SimpleNamespace(ops=[op_bad_type])
+    insn2 = SimpleNamespace(ops=[op_displ])
+
+    monkeypatch.setattr(stack_mod.idc, "print_insn_mnem", lambda _ea: "mov", raising=False)
+    monkeypatch.setattr(stack_mod, "_store_dest_operand_indices", lambda _insn, _arch: [0, 5])
+    monkeypatch.setattr(ida_ua, "insn_t", lambda: insn1, raising=False)
+    monkeypatch.setattr(ida_ua, "decode_insn", lambda _out, _ea: 1, raising=False)
+    res_uninit_ops = stack_mod.stack_analysis(action="uninitialized", addr="0x140001000")
+    assert res_uninit_ops["ok"] is True
+
+    monkeypatch.setattr(ida_ua, "insn_t", lambda: insn2, raising=False)
+    monkeypatch.setattr(stack_mod, "_store_dest_operand_indices", lambda _insn, _arch: [0])
+    monkeypatch.setattr(ida_frame, "get_stkvar", lambda _insn, _op: (_ for _ in ()).throw(RuntimeError("stkvar boom")), raising=False)
+    res_uninit_stkvar = stack_mod.stack_analysis(action="uninitialized", addr="0x140001000")
+    assert res_uninit_stkvar["ok"] is True
+
+    monkeypatch.setattr(ida_ua, "decode_insn", lambda _out, _ea: (_ for _ in ()).throw(RuntimeError("decode boom")), raising=False)
+    res_uninit_dec_err = stack_mod.stack_analysis(action="uninitialized", addr="0x140001000")
+    assert res_uninit_dec_err["ok"] is True
+
+    monkeypatch.setattr(stack_mod._compat, "get_func_info", lambda _ea: SimpleNamespace(start_ea=0x1000, end_ea=0x1000 + 100005))
+    monkeypatch.setattr(stack_mod.idc, "next_head", lambda ea, *_args: ea + 1, raising=False)
+    res_uninit_iter = stack_mod.stack_analysis(action="uninitialized", addr="0x140001000")
+    assert res_uninit_iter["ok"] is True
