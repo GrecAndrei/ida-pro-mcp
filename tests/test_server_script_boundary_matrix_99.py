@@ -407,6 +407,7 @@ def test_run_server_loop_socket_errors_and_batch(tmp_path, monkeypatch):
 
     select_returns = [
         ([], [], []),
+        ValueError("filedescriptor out of range in select()"),
         ([server_sock], [], []),
         ([server_sock], [], []),
         ([server_sock], [], []),
@@ -414,24 +415,36 @@ def test_run_server_loop_socket_errors_and_batch(tmp_path, monkeypatch):
         ([server_sock], [], []),
     ]
     recv_side_effects = [
-        # Iteration 2: raw_len is empty (line 726)
+        # Iteration 2: poll fallback accepts conn, raw_len is empty (line 726)
         b"",
-        # Iteration 3: batch request (line 764)
+        # Iteration 3: raw_len is empty
+        b"",
+        # Iteration 4: batch request (line 764)
         len(batch_bytes).to_bytes(4, "big"),
         batch_bytes,
-        # Iteration 4: TimeoutError (line 796)
+        # Iteration 5: TimeoutError (line 796)
         TimeoutError("timed out"),
-        # Iteration 5: generic Exception (line 798)
+        # Iteration 6: generic Exception (line 798)
         ValueError("arbitrary error"),
-        # Iteration 6: KeyboardInterrupt (line 797)
+        # Iteration 7: KeyboardInterrupt (line 797)
         KeyboardInterrupt(),
     ]
     conn.recv.side_effect = recv_side_effects
     conn.close.side_effect = RuntimeError("close err")  # lines 803-804
     server_sock.accept.return_value = (conn, ("127.0.0.1", 12345))
 
+    mock_poll = MagicMock()
+    mock_poll.poll.return_value = [(server_sock, 1)]
     with patch("socket.socket", return_value=server_sock), \
-         patch("select.select", side_effect=select_returns):
+         patch("select.select", side_effect=select_returns), \
+         patch("select.poll", return_value=mock_poll):
+        bridge._SHUTDOWN_EVENT.clear()
+        bridge.run_server()
+
+    # Also test ValueError when select has no poll
+    with patch("socket.socket", return_value=server_sock), \
+         patch("select.select", side_effect=[ValueError("range error"), KeyboardInterrupt()]):
+        monkeypatch.delattr("select.poll", raising=False)
         bridge._SHUTDOWN_EVENT.clear()
         bridge.run_server()
 

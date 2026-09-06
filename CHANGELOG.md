@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-06 — Expand server dispatch error paths, policy gates, and watchdog coverage to 100%
+
+- Cover server dispatch liveness checks, unreadable policy config fallbacks, and safe mode tool/action gates.
+- Cover tool call wallclock watchdog timeout escalation, force-kill signal propagation, RPC queue timeouts, and socket error details.
+- Cover session health discovery errors, memory filesystem byte caps and path validation, and analysis plugin execution edge branches.
+- Cover continuation token recovery error envelopes, parameter coercion edge cases, and post-processing error resilience.
+- Add poll fallback for high file descriptor counts (FD >= 1024) in server script accept loop to avoid select range errors.
+
+
 ## 2026-09-06 — Expand server_script IDA bridge lifecycle, socket framing, and analysis options coverage to 100%
 
 - Align server script test module import names with package namespace to enable accurate line coverage tracing.

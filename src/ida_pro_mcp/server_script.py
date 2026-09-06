@@ -712,7 +712,15 @@ def run_server():
         conn = None
         try:
             # Poll for new connection
-            readable, _, _ = select.select([server_sock], [], [], 0.05)
+            try:
+                readable, _, _ = select.select([server_sock], [], [], 0.05)
+            except ValueError:
+                if hasattr(select, "poll"):
+                    p = select.poll()
+                    p.register(server_sock, select.POLLIN)
+                    readable = bool(p.poll(50))
+                else:
+                    raise
             if not readable:
                 time.sleep(0.01)
                 continue
@@ -795,7 +803,9 @@ def run_server():
             log_ev("Request finished")
         except TimeoutError: log_ev("Socket timeout")
         except KeyboardInterrupt: break
-        except Exception as e: log_ev(f"Loop error: {e}")
+        except Exception as e:
+            log_ev(f"Loop error: {e}")
+            time.sleep(0.01)
         finally:
             if conn is not None:
                 try:
