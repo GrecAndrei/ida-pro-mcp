@@ -1,8 +1,17 @@
 # Changelog
 
-## 2026-09-06 — Expand server runtime leases process lifecycle, signals, and cleanup coverage to 100%
+## 2026-09-06 — Expand session manager metadata, pruning, and bookmark error coverage to 100%
 
-- Cover lease PID digit overflow boundaries and process group discovery edge cases.
+- Cover Session model dictionary validation, basename handling, and tag sanitization cap boundaries.
+- Cover unique session ID retry exhaustion, global skills database query errors, and metadata ENOSPC disk-full logging.
+- Cover legacy file migration, delete error escalation across logs, caches, and runtime leases, and validation error issues.
+- Cover snapshot cap pruning and restoration error recovery, notebook read/write failures, and bookmark error propagation.
+- Cover session metadata update no-op checks, .i64 extension stripping across creation, duplication, and import.
+- Cover 2-pass auto-pruning budget break conditions, bookmark tag coercion fallbacks, and priority formatting resilience.
+
+
+
+## 2026-09-06 — Expand server runtime leases process lifecycle, signals, and cleanup coverage to 100%
 - Cover SIGKILL escalation fallback paths on process lookup error and generic kill exceptions.
 - Cover process tree termination, win32 descendant alive checks, and procfs stat read failures.
 - Cover stale lease filename regex uppercase matching, foreign owner inspection errors, and heartbeat shutdown desync branches.
