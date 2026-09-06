@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-06 — Expand emulate, symbols, imports deep, and common tools package coverage
+
+- Cover tools package lazy `__getattr__` and `__dir__` dispatch and unknown attribute error branches.
+- Cover `_common._inf_bitness` 16-bit and 32-bit exception handling and IDB bitness fallbacks.
+- Cover debug symbol status function enumeration cap, PDB path traversal guards, and export iteration limits.
+- Cover deep imports cache eviction limits, thunk query matcher filters, delay break limits, and ordinal caps.
+- Cover debugger backend reselection, suspend state verification, step and run-to timeouts, and memory byte reader exceptions.
+
+
 ## 2026-09-06 — Expand wiki and misc tool edge cases and boundary coverage
 
 - Cover wiki topic path normalization, leading slashes, .md suffixes, absolute traversal, and commonpath errors.

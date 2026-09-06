@@ -50,6 +50,12 @@ from tests.fakes.ida_fake import (
 # Initialize global fake SDK so imports succeed
 create_fake_idb()
 
+
+@pytest.fixture(autouse=True, scope="module")
+def _cleanup_fake_idb():
+    yield
+    install_fake_idb(FakeDatabase())
+
 from ida_pro_mcp.ida_mcp.error_handling import (
     ERROR_HINTS,
     MCPError,
@@ -620,3 +626,43 @@ def test_utils_normalization_and_stack_frame_modes(monkeypatch, init_sample_idb)
     monkeypatch.setattr(utils_module._compat, "get_frame_id", lambda _ea: 77)
     frame = get_stack_frame_variables_internal(0x140001000, True)
     assert frame == [{"name": "saved", "offset": "0x0", "size": "0x4", "type": "int"}]
+
+
+def test_tools_pkg_getattr_dir_and_common_bitness_edges(monkeypatch):
+    import ida_pro_mcp.ida_mcp.tools as tools_pkg
+    import ida_pro_mcp.ida_mcp.tools._common as tools_common
+
+    # __dir__
+    d = dir(tools_pkg)
+    assert "wiki" in d and "governance" in d
+
+    # __getattr__ with standard tool
+    wiki_tool = tools_pkg.wiki
+    assert callable(wiki_tool)
+
+    # __getattr__ with mapped tool
+    fw_tool = tools_pkg.firmware
+    assert callable(fw_tool)
+
+    # __getattr__ with unknown attribute
+    with pytest.raises(AttributeError, match="has no attribute"):
+        _ = tools_pkg.unknown_tool_xyz
+
+    # _common._inf_bitness 16-bit
+    import ida_ida
+    monkeypatch.setattr(ida_ida, "inf_is_16bit", lambda: True, raising=False)
+    assert tools_common._inf_bitness() == 16
+
+    # _common._inf_bitness 16-bit exception
+    monkeypatch.setattr(ida_ida, "inf_is_16bit", lambda: (_ for _ in ()).throw(RuntimeError("16bit err")), raising=False)
+    monkeypatch.setattr(tools_common, "_inf_is_64bit", lambda: True)
+    assert tools_common._inf_bitness() == 64
+
+    # _common._inf_bitness 32-bit exception
+    orig_is_64 = tools_common._inf_bitness.__globals__["_inf_is_64bit"]
+    try:
+        tools_common._inf_bitness.__globals__["_inf_is_64bit"] = lambda: False
+        monkeypatch.setattr(ida_ida, "inf_is_32bit_exactly", lambda: (_ for _ in ()).throw(RuntimeError("32bit err")), raising=False)
+        assert tools_common._inf_bitness() == 32
+    finally:
+        tools_common._inf_bitness.__globals__["_inf_is_64bit"] = orig_is_64

@@ -428,3 +428,98 @@ def test_public_emulate_exceptional_action_and_dispatch_boundaries(monkeypatch):
     res3 = emulate_mod.emulate(action="synthetic_action")
     assert res3["code"] == "ACTION_NOT_FOUND"
     assert "synthetic_action" in res3["message"]
+
+
+def test_emulate_remaining_edges_and_fallbacks(monkeypatch):
+    # line 309: _common_register_names 32-bit x86
+    monkeypatch.setattr(emulate_mod, "get_arch", lambda: "x86")
+    monkeypatch.setattr(emulate_mod, "_inf_bitness_or_64", lambda: 32)
+    assert "eax" in emulate_mod._common_register_names()
+
+    # line 378: _governance_check approved
+    monkeypatch.setattr(emulate_mod, "evaluate_operation", lambda *_a, **_kw: {"approved": True})
+    assert emulate_mod._governance_check("step", governed=True) is None
+
+    # line 439: _select_backend returns name directly when load succeeds
+    monkeypatch.setattr(emulate_mod, "_try_load", lambda name: True)
+    assert emulate_mod._select_backend(name="win32") == "win32"
+
+    # line 442: cand == name in candidate loop
+    monkeypatch.setattr(emulate_mod, "_try_load", lambda name: False)
+    assert emulate_mod._select_backend(name=emulate_mod._BACKEND_CANDIDATES[0], force=True) is None
+
+    # line 1007: _action_stop with missing backend error
+    monkeypatch.setattr(emulate_mod, "_BACKEND", None)
+    monkeypatch.setattr(emulate_mod, "_select_backend", lambda **kw: None)
+    res_stop_err = emulate_mod._action_stop(governed=False, unload=False)
+    assert res_stop_err["error"] is True and "backend" in res_stop_err["message"].lower()
+
+    # line 512: _suspend_if_needed already not running
+    dbg = _debugger(get_process_state=lambda: 2)
+    monkeypatch.setattr(emulate_mod, "ida_dbg", dbg)
+    assert emulate_mod._suspend_if_needed() is True
+
+    # line 515: _suspend_if_needed running but suspend_process not callable
+    dbg2 = _debugger(get_process_state=lambda: 1, suspend_process=None)
+    monkeypatch.setattr(emulate_mod, "ida_dbg", dbg2)
+    assert emulate_mod._suspend_if_needed() is False
+
+    # line 589: emulate action backend with force and process running
+    stopped = []
+    monkeypatch.setattr(emulate_mod, "_PROCESS_STARTED", True)
+    monkeypatch.setattr(emulate_mod, "_best_effort_stop", lambda: stopped.append(True))
+    monkeypatch.setattr(emulate_mod, "_select_backend", lambda **kw: "win32")
+    res_b = emulate_mod.emulate(action="backend", name="win32", force=True)
+    assert res_b["ok"] is True
+    assert stopped == [True]
+
+    # line 732: emulate step timeout
+    dbg3 = _debugger()
+    monkeypatch.setattr(emulate_mod, "ida_dbg", dbg3)
+    monkeypatch.setattr(emulate_mod, "_BACKEND", "win32")
+    monkeypatch.setattr(emulate_mod, "_wait_not_running", lambda deadline: False)
+    step_err = emulate_mod.emulate(action="step", count=1)
+    assert step_err["code"] == "EMULATION_TIMEOUT"
+
+    # line 786: emulate run_to timeout
+    run_err = emulate_mod.emulate(action="run_to", address="0x401000")
+    assert run_err["code"] == "EMULATION_TIMEOUT"
+
+    # lines 913-914: _read_dbg_mem get_byte exception fallback
+    call_cnt = [0]
+
+    def faulty_gb(ea):
+        call_cnt[0] += 1
+        if call_cnt[0] == 1:
+            return 0x90
+        raise RuntimeError("gb error")
+
+    dbg4 = _debugger(read_dbg_memory=None, get_dbg_byte=faulty_gb)
+    monkeypatch.setattr(emulate_mod, "ida_dbg", dbg4)
+    read_bytes = emulate_mod._read_dbg_memory(0x1000, 4)
+    assert read_bytes == b"\x90"
+
+    # lines 67-68, 72-73: flat import fallbacks
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "ida_pro_mcp.ida_mcp.tools.emulate_flat_test", Path(emulate_mod.__file__)
+    )
+    new_mod = importlib.util.module_from_spec(spec)
+    new_mod.__package__ = "ida_pro_mcp.ida_mcp.tools"
+    gov_dummy = types.SimpleNamespace(evaluate_operation=lambda *_a, **_kw: None)
+    monkeypatch.setitem(sys.modules, "governance_engine", gov_dummy)
+    orig_dbg = sys.modules.get("ida_dbg")
+    orig_gov = sys.modules.get("ida_pro_mcp.ida_mcp.tools.governance_engine")
+    try:
+        sys.modules["ida_dbg"] = None
+        sys.modules["ida_pro_mcp.ida_mcp.tools.governance_engine"] = None
+        spec.loader.exec_module(new_mod)
+        assert new_mod.ida_dbg is None
+    finally:
+        if orig_dbg is not None:
+            sys.modules["ida_dbg"] = orig_dbg
+        if orig_gov is not None:
+            sys.modules["ida_pro_mcp.ida_mcp.tools.governance_engine"] = orig_gov
