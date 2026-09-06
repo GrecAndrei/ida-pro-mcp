@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-06 — Expand wiki and misc tool edge cases and boundary coverage
+
+- Cover wiki topic path normalization, leading slashes, .md suffixes, absolute traversal, and commonpath errors.
+- Cover wiki categories, topic listing, index summary page counts, and section fuzzy suggestion branches.
+- Cover filesystem read and write path traversal guards, script error envelopes, and active cache stat reports.
+- Cover signature application API fallbacks, duplicate plugin symlink filtering, and server TOOLS registry dynamic reloads.
+
+
 ## 2026-09-06 — Expand stack analysis frame, canary limit, and uninitialized store coverage
 
 - Cover empty frame short-circuit pathways across buffers, alignment, spills, and variables.

@@ -343,3 +343,201 @@ def test_misc_reload_all_and_python_exec_fallback(monkeypatch):
     assert expression == {"output": "42\n", "result": 42}
     statement = misc_mod.execute_python("answer = 42")
     assert statement == {"output": "", "result": None}
+
+
+def test_wiki_deep_boundary_matrix_99(monkeypatch):
+    # list_topics (line 163)
+    list_res = wiki_mod.wiki(action="list_topics")
+    assert list_res["ok"] is True
+    assert "categories" in list_res
+
+    # index (lines 358-360)
+    idx_res = wiki_mod.wiki(action="index")
+    assert idx_res["ok"] is True
+    assert "categories" in idx_res
+    assert idx_res["total_pages"] >= 0
+
+    # sections with missing topic (line 334)
+    sec_missing = wiki_mod.wiki(action="sections")
+    assert sec_missing["error"] is True
+    assert sec_missing["code"] == wiki_mod.MCPError.INVALID_ARGS
+
+    # sections with unknown topic triggering fuzzy suggestion (lines 337-342)
+    sec_fuzzy = wiki_mod.wiki(action="sections", topic="QuickStrat")
+    assert sec_fuzzy["error"] is True
+    assert "quickstart" in str(sec_fuzzy.get("suggestion", "")).lower()
+    assert "fuzzy_score" in sec_fuzzy
+
+    # sections with unknown topic that has no fuzzy match
+    sec_no_fuzzy = wiki_mod.wiki(action="sections", topic="zzzz_not_a_topic_123")
+    assert sec_no_fuzzy["error"] is True
+    assert "suggestion" not in sec_no_fuzzy
+
+    # FlipBool to trigger line 130 (if not topic_name in resolve_topic_path)
+    class FlipBool(str):
+        def __init__(self, val="QuickStart"):
+            super().__init__()
+            self.calls = 0
+
+        def __bool__(self):
+            self.calls += 1
+            return self.calls == 1
+
+    flip_res = wiki_mod.wiki(action="read", topic=FlipBool())
+    assert flip_res["error"] is True
+    assert flip_res["code"] == wiki_mod.MCPError.INVALID_ARGS
+
+    # whitespace topic to trigger line 134 (if not normalized in resolve_topic_path)
+    ws_res = wiki_mod.wiki(action="read", topic="   ")
+    assert ws_res["error"] is True
+    assert ws_res["code"] == wiki_mod.MCPError.INVALID_ARGS
+
+    # absolute path to trigger line 136
+    abs_res = wiki_mod.wiki(action="read", topic="/etc/passwd")
+    assert abs_res["error"] is True
+    assert abs_res["code"] == wiki_mod.MCPError.PATH_TRAVERSAL
+
+    # leading slash with isabs mocked to False to trigger line 138
+    monkeypatch.setattr(wiki_mod.os.path, "isabs", lambda p: False)
+    slash_res = wiki_mod.wiki(action="read", topic="/QuickStart")
+    assert slash_res["ok"] is True
+
+    # topic ending with .md to trigger line 140
+    md_res = wiki_mod.wiki(action="read", topic="QuickStart.md")
+    assert md_res["ok"] is True
+
+    # os.path.commonpath ValueError (lines 125-126) and not _is_inside_wiki (line 156)
+    def fail_commonpath(*args, **kwargs):
+        raise ValueError("simulated commonpath ValueError")
+
+    monkeypatch.setattr(wiki_mod.os.path, "commonpath", fail_commonpath)
+    traversal_res = wiki_mod.wiki(action="read", topic="QuickStart")
+    assert traversal_res["error"] is True
+    assert traversal_res["code"] == wiki_mod.MCPError.PATH_TRAVERSAL
+    assert "escapes wiki root" in traversal_res["message"]
+
+    # Top-level exception handling in wiki() (lines 365-366)
+    monkeypatch.setattr(
+        wiki_mod.os, "walk", lambda root: (_ for _ in ()).throw(RuntimeError("wiki boom"))
+    )
+    err_res = wiki_mod.wiki(action="list_topics")
+    assert err_res["error"] is True
+
+
+def test_misc_deep_boundary_matrix_99(monkeypatch, tmp_path: Path):
+    # read_file_impl and write_file_impl path_err (lines 51, 88)
+    assert misc_mod.read_file_impl("../escaped.txt")["code"] == misc_mod.MCPError.PATH_TRAVERSAL
+    assert misc_mod.write_file_impl("../escaped.txt", "abc")["code"] == misc_mod.MCPError.PATH_TRAVERSAL
+
+    # misc(action="python") with execution error (line 162)
+    py_err = misc_mod.misc(action="python", code="1 / 0")
+    assert py_err["error"] is True
+    assert py_err["code"] in (misc_mod.MCPError.SCRIPT_ERROR, misc_mod.MCPError.UNKNOWN)
+
+    # load_sig with apply_idasgn fallback (lines 233-234)
+    applied_idasgn_calls = []
+    fake_libfuncs = SimpleNamespace(
+        plan_to_apply_ldes=lambda name: None,
+        apply_idasgn=applied_idasgn_calls.append,
+    )
+    monkeypatch.setitem(sys.modules, "ida_libfuncs", fake_libfuncs)
+    monkeypatch.setattr(misc_mod, "_sig_paths", lambda: ("/tmp/custom.sig",))
+    load_res = misc_mod.misc(action="load_sig", name="custom")
+    assert load_res["ok"] is True
+    assert load_res["applied"] is True
+    assert applied_idasgn_calls == ["custom"]
+
+    # cache_stats with active cache (line 265)
+    cache_obj = SimpleNamespace(stats=lambda: {"hits": 42, "misses": 7})
+    for sync_name in ("ida_mcp.sync", "ida_pro_mcp.ida_mcp.sync"):
+        if sync_name in sys.modules:
+            monkeypatch.setattr(sys.modules[sync_name], "_tool_cache", lambda: cache_obj)
+    cache_res = misc_mod.misc(action="cache_stats")
+    assert cache_res["ok"] is True
+    assert cache_res["hits"] == 42
+    assert cache_res["misses"] == 7
+
+    # misc read_file action argument check and success (lines 268-271)
+    assert misc_mod.misc(action="read_file")["code"] == misc_mod.MCPError.MISSING_REQUIRED_ARG
+    test_f = tmp_path / "hello.txt"
+    test_f.write_text("world", encoding="utf-8")
+    rf_res = misc_mod.misc(action="read_file", path=str(test_f))
+    assert rf_res["ok"] is True
+    assert rf_res["content"] == "world"
+
+    # misc write_file action argument check and success (lines 273-284)
+    assert misc_mod.misc(action="write_file")["code"] == misc_mod.MCPError.MISSING_REQUIRED_ARG
+    dest_f = tmp_path / "out.txt"
+    assert misc_mod.misc(action="write_file", path=str(dest_f))["code"] == misc_mod.MCPError.MISSING_REQUIRED_ARG
+    wf_res = misc_mod.misc(action="write_file", path=str(dest_f), content="data")
+    assert wf_res["ok"] is True
+    assert dest_f.read_text(encoding="utf-8") == "data"
+
+    # plugin_list duplicate seen plugin (line 315)
+    pdir1 = tmp_path / "p1_base" / "plugins"
+    pdir2 = tmp_path / "p2_base" / "plugins"
+    pdir1.mkdir(parents=True)
+    pdir2.mkdir(parents=True)
+    f1 = pdir1 / "common.py"
+    f1.write_text("# plug", encoding="utf-8")
+    os.symlink(str(f1), str(pdir2 / "common.py"))
+    monkeypatch.setenv("IDADIR", str(tmp_path / "p1_base"))
+    monkeypatch.setenv("IDAUSR", str(tmp_path / "p2_base"))
+    dup_listed = misc_mod.misc(action="plugin_list")
+    assert dup_listed["ok"] is True
+    assert dup_listed["count"] == 1
+
+    # plugin_list environ exceptions (lines 295-296, 300-301)
+    orig_join = misc_mod.os.path.join
+
+    def failing_join(*args):
+        if len(args) >= 2 and args[1] == "plugins":
+            raise RuntimeError("plugins join error")
+        return orig_join(*args)
+
+    monkeypatch.setattr(misc_mod.os.path, "join", failing_join)
+    assert misc_mod.misc(action="plugin_list")["ok"] is True
+    monkeypatch.setattr(misc_mod.os.path, "join", orig_join)
+
+    # plugin_list exception handling (lines 326-327)
+    monkeypatch.setattr(
+        misc_mod.os.path, "isdir", lambda p: (_ for _ in ()).throw(RuntimeError("isdir boom"))
+    )
+    pl_err = misc_mod.misc(action="plugin_list")
+    assert pl_err["error"] is True
+
+    # _server_tools_registries edge cases (lines 400, 403-404, 406)
+    # line 400: sys.modules contains None
+    monkeypatch.setitem(sys.modules, "_none_module_sentinel", None)
+
+    # lines 403-404: module getattr raises Exception
+    class FaultyModule:
+        @property
+        def TOOLS(self):
+            raise RuntimeError("attribute access boom")
+
+    monkeypatch.setitem(sys.modules, "_faulty_module_sentinel", FaultyModule())
+
+    # line 406: module has TOOLS dict containing target mod_name
+    fake_registry = {"custom_tool": lambda: "old"}
+    fake_server_mod = SimpleNamespace(TOOLS=fake_registry)
+    monkeypatch.setitem(sys.modules, "_fake_server_registry_mod", fake_server_mod)
+    registries = misc_mod._server_tools_registries("custom_tool")
+    assert fake_registry in registries
+
+    # _reload_tool_module error path when mod is None (line 435)
+    monkeypatch.setattr(importlib, "import_module", lambda name: None)
+    err_reload = misc_mod._reload_tool_module("nonexistent_mod_xyz")
+    assert err_reload["status"] == "error"
+    assert "not importable" in err_reload["error"]
+
+    # _reload_tool_module with server TOOLS registry updated (lines 455, 457)
+    tool_file = tmp_path / "fake_tool.py"
+    tool_file.write_text("def custom_tool():\n    return 'new'\n", encoding="utf-8")
+    fake_mod_obj = SimpleNamespace(__file__=str(tool_file), custom_tool=lambda: "new")
+    monkeypatch.setitem(sys.modules, "custom_tool", fake_mod_obj)
+    monkeypatch.setattr(importlib, "reload", lambda m: m)
+    reloaded = misc_mod._reload_tool_module("custom_tool")
+    assert reloaded["status"] == "reloaded"
+    assert callable(fake_registry["custom_tool"])
+    assert "server TOOLS registry updated" in reloaded.get("note", "")

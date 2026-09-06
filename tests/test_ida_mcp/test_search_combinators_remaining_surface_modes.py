@@ -337,6 +337,9 @@ def test_search_analyze_auto_scope_matrix(monkeypatch):
     comb, _names, _edges = _function_surface(monkeypatch)
     monkeypatch.setattr(comb, "resolve_target", lambda target: (0x1000, None, {}))
     monkeypatch.setattr(comb._compat, "get_func_info", lambda _ea: SimpleNamespace(start_ea=0x1000, end_ea=0x1020))
+    services = types.ModuleType("ida_pro_mcp.services")
+    services.get_assembler = lambda: SimpleNamespace(_get_index=lambda _path: None)
+    monkeypatch.setitem(sys.modules, "ida_pro_mcp.services", services)
 
     r1 = comb.search_analyze(addr="0x1000", metric="bb_count")
     assert r1.get("scope") == "outlier"
