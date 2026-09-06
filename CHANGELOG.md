@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-09-06 — Expand server runtime leases process lifecycle, signals, and cleanup coverage to 100%
+
+- Cover lease PID digit overflow boundaries and process group discovery edge cases.
+- Cover SIGKILL escalation fallback paths on process lookup error and generic kill exceptions.
+- Cover process tree termination, win32 descendant alive checks, and procfs stat read failures.
+- Cover stale lease filename regex uppercase matching, foreign owner inspection errors, and heartbeat shutdown desync branches.
+- Cover termination signal handler propagation and shutdown trigger.
+
+
+
 ## 2026-09-06 — Add poll fallbacks for test client high file descriptors and fix tools getattr test isolation
 
 - Add poll fallback for high file descriptor counts (FD >= 1024) in test mcp_client and smoke test client to avoid select range errors during long test runs.
