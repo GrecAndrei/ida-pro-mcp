@@ -11,6 +11,7 @@ import threading
 import types
 from pathlib import Path
 from typing import Annotated, Literal
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -27,7 +28,7 @@ def _load_bridge(tmp_path, monkeypatch, **env):
             monkeypatch.setenv(key, str(value))
     for name in ("ida_segment", "idautils", "idc"):
         monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
-    name = f"ida_pro_mcp_server_boundary_{id(tmp_path)}"
+    name = "ida_pro_mcp.server_script"
     spec = importlib.util.spec_from_file_location(name, _SERVER_SCRIPT)
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, name, module)
@@ -189,39 +190,302 @@ def test_protocol_helpers_and_inline_dispatch_fallbacks(tmp_path, monkeypatch):
     bridge._drain_tool_queue()
 
 
-def test_run_main_flow_is_exercised_without_an_ida_runtime(tmp_path, monkeypatch):
-    """Exercise the real ``__main__`` orchestration with inert thread/IDA fakes."""
-    monkeypatch.setenv("IDA_MCP_SESSION_LOG_DIR", str(tmp_path))
-    monkeypatch.setenv("IDA_MCP_USE_EXISTING_IDB", "1")
-    monkeypatch.delenv("IDA_MCP_SESSION_TOKEN", raising=False)
-    for name in ("ida_segment", "idautils", "idc"):
+def test_tool_loading_and_introspection_edges(tmp_path, monkeypatch):
+    bridge = _load_bridge(tmp_path, monkeypatch)
+
+    # Line 267-269: module has canonical tool callable
+    mod = types.ModuleType("ida_mcp.tools.fake_tool")
+    mod.fake_tool = lambda: {"ok": True}
+    monkeypatch.setitem(sys.modules, "ida_mcp.tools.fake_tool", mod)
+    tool_func, name, err = bridge._try_load_single_tool("fake_tool")
+    assert tool_func() == {"ok": True} and name == "fake_tool" and err is None
+
+    # Line 283, 289-290, 293, 295-296: load_tools edge cases
+    fake_tools_dir = tmp_path / "tools"
+    fake_tools_dir.mkdir(parents=True, exist_ok=True)
+    (fake_tools_dir / "not_py.txt").write_text("ignored")
+    (fake_tools_dir / "__init__.py").write_text("")
+    (fake_tools_dir / "broken.py").write_text("syntax error !!!")
+    monkeypatch.setattr(bridge, "_tools_root", str(fake_tools_dir))
+    bridge.load_tools()
+
+    with patch("os.listdir", side_effect=RuntimeError("listdir fail")):
+        bridge.load_tools()
+
+    # Line 325-326: _tool_signature_info exception on annotations
+    def valid_func(x: int = 1):
+        return x
+
+    class BadDict(dict):
+        def __contains__(self, key):
+            raise RuntimeError("contains err")
+
+    valid_func.__annotations__ = BadDict()
+    assert bridge._tool_signature_info(valid_func)["actions"] == []
+
+
+def test_process_single_dynamic_loading_and_empty_details(tmp_path, monkeypatch):
+    bridge = _load_bridge(tmp_path, monkeypatch)
+    monkeypatch.setattr(bridge, "_SESSION_TOKEN", "secret")
+    bridge._STARTUP_DONE.set()
+
+    # Line 480-482: dynamically load tool inside process_single
+    bridge.TOOLS.clear()
+    mod = types.ModuleType("ida_mcp.tools.on_demand")
+    mod.on_demand = lambda: {"ok": True, "loaded": True}
+    monkeypatch.setitem(sys.modules, "ida_mcp.tools.on_demand", mod)
+    res = bridge.process_single({"tool": "on_demand", "session_token": "secret", "args": {}})
+    assert res.get("loaded") is True
+
+    # Line 553: empty details dictionary popped
+    bridge.TOOLS["empty_details"] = lambda: {"error": True, "code": "INVALID_ARGS", "details": {}}
+    res_err = bridge.process_single({"tool": "empty_details", "session_token": "secret", "args": {}})
+    assert "details" not in res_err
+
+
+def test_drain_tool_queue_exception_propagation(tmp_path, monkeypatch):
+    bridge = _load_bridge(tmp_path, monkeypatch)
+    import queue
+    q = queue.Queue(maxsize=1)
+    bridge._TOOL_QUEUE.put(({"tool": "crasher"}, q))
+    monkeypatch.setattr(bridge, "process_single", lambda _req: (_ for _ in ()).throw(RuntimeError("drain crash")))
+    bridge._drain_tool_queue()
+    err_res = q.get_nowait()
+    assert err_res["code"] == "INTERNAL"
+
+
+def test_apply_pre_analysis_options_exhaustive_edges(tmp_path, monkeypatch):
+    bridge = _load_bridge(tmp_path, monkeypatch)
+    ida_ida = types.ModuleType("ida_ida")
+    ida_loader = types.ModuleType("ida_loader")
+    ida_idp = types.ModuleType("ida_idp")
+    idaapi = types.ModuleType("idaapi")
+    monkeypatch.setitem(sys.modules, "ida_ida", ida_ida)
+    monkeypatch.setitem(sys.modules, "ida_loader", ida_loader)
+    monkeypatch.setitem(sys.modules, "ida_idp", ida_idp)
+    monkeypatch.setitem(sys.modules, "idaapi", idaapi)
+
+    # Line 887-888: bitness exception
+    ida_ida.inf_set_app_bitness = lambda _b: (_ for _ in ()).throw(RuntimeError("bitness err"))
+    # Line 904: invalid endian
+    # Line 907-908: endian exception
+    # Line 919-920: stack_size exception
+    ida_ida.inf_set_be = lambda _b: (_ for _ in ()).throw(RuntimeError("be err"))
+    ida_ida.inf_set_ssize = lambda _s: (_ for _ in ()).throw(RuntimeError("ssize err"))
+    # Line 936-937: ida_idp.process_config_directive
+    ida_idp.process_config_directive = lambda _opt: True
+    # Line 962-965, 971-972: inf_set_mtype
+    ida_ida.inf_set_mtype = lambda _m: False
+
+    opts = {
+        "bitness": 32,
+        "endian": "invalid_val",
+        "stack_size": 4096,
+        "processor_options": "armv8",
+        "memory_model": 1,
+        "loader_options": {"opt": 1},
+        "loader": "bin",
+        "processor": "arm",
+    }
+    monkeypatch.setenv("IDA_MCP_PRE_ANALYSIS_OPTS", json.dumps(opts))
+    bridge._apply_pre_analysis_options()
+
+    # Line 963: inf_set_mtype returns True
+    opts_mtype = {"memory_model": 1}
+    ida_ida.inf_set_mtype = lambda _m: True
+    monkeypatch.setenv("IDA_MCP_PRE_ANALYSIS_OPTS", json.dumps(opts_mtype))
+    bridge._apply_pre_analysis_options()
+
+    # Test endian exception and mtype exception
+    opts2 = {"endian": "be", "memory_model": 2}
+    ida_ida.inf_set_mtype = lambda _m: (_ for _ in ()).throw(RuntimeError("mtype err"))
+    monkeypatch.setenv("IDA_MCP_PRE_ANALYSIS_OPTS", json.dumps(opts2))
+    bridge._apply_pre_analysis_options()
+
+    # Raw load segment and thumb fixes: lines 1004, 1010-1011, 1017-1018, 1024-1025, 1032-1037, 1047-1050
+    idaapi.get_inf_structure = lambda: types.SimpleNamespace(filetype=0)
+    idaapi.f_BIN = 0
+    idaapi.SEG_CODE = 1
+    idaapi.SEGPERM_EXEC = 4
+
+    seg_obj = types.SimpleNamespace(start_ea=0x1000, type=0, perm=0, bitness=2)
+    idaapi.getseg = lambda ea: seg_obj if ea == 0x1000 else None
+    idautils = sys.modules["idautils"]
+    idautils.Segments = lambda: [0x1000, 0x2000]
+
+    ida_segment = sys.modules["ida_segment"]
+    ida_segment.get_segm_class = lambda _s: "DATA"
+    ida_segment.set_segm_class = lambda _s, _c: (_ for _ in ()).throw(RuntimeError("class err"))
+    ida_segment.update_segm = lambda _s: (_ for _ in ()).throw(RuntimeError("update err"))
+    # Line 1035: set_segm_addressing succeeds
+    ida_segment.set_segm_addressing = lambda _s, _b: True
+
+    idc = sys.modules["idc"]
+    idc.split_sreg_range = lambda *_a: (_ for _ in ()).throw(RuntimeError("sreg err"))
+
+    opts_raw = {"loader": "bin", "processor": "arm", "bitness": 32}
+    monkeypatch.setenv("IDA_MCP_PRE_ANALYSIS_OPTS", json.dumps(opts_raw))
+    bridge._apply_pre_analysis_options()
+
+
+def test_bounded_auto_wait_and_startup_analysis_edges(tmp_path, monkeypatch):
+    bridge = _load_bridge(tmp_path, monkeypatch)
+    ida_auto = types.ModuleType("ida_auto")
+    monkeypatch.setitem(sys.modules, "ida_auto", ida_auto)
+
+    # Line 1094-1095: auto_wait raises in no-get_auto_state
+    ida_auto.auto_wait = lambda: (_ for _ in ()).throw(RuntimeError("wait err"))
+    bridge._bounded_auto_wait()
+
+    # Lines 1107-1108: get_auto_state raises and fallback auto_wait raises
+    ida_auto.get_auto_state = lambda: (_ for _ in ()).throw(RuntimeError("state err"))
+    bridge._bounded_auto_wait()
+
+    # Lines 1112-1118: loop timeout
+    ida_auto.AU_NONE = 0
+    ida_auto.get_auto_state = lambda: 1
+    bridge._bounded_auto_wait(timeout=0.01)
+
+    # Startup analysis: Line 1143 (no auto_wait attribute)
+    del ida_auto.auto_wait
+    del ida_auto.get_auto_state
+    bridge._run_startup_analysis()
+
+    # Line 1155: shutdown requested during startup
+    ida_auto.auto_wait = lambda: None
+    bridge._SHUTDOWN_EVENT.set()
+    bridge._run_startup_analysis()
+    bridge._SHUTDOWN_EVENT.clear()
+
+    # Lines 1173-1174, 1189-1194: reanalysis error and save_database
+    ida_loader = types.ModuleType("ida_loader")
+    ida_loader.save_database = lambda *_a: (_ for _ in ()).throw(RuntimeError("save err"))
+    monkeypatch.setitem(sys.modules, "ida_loader", ida_loader)
+    monkeypatch.setenv("IDA_MCP_USE_EXISTING_IDB", "0")
+    monkeypatch.delenv("IDA_MCP_IDB_PATH", raising=False)
+    bridge._run_startup_analysis()
+
+    # Line 1190: save_database succeeds at empty path
+    ida_loader.save_database = lambda *_a: True
+    bridge._run_startup_analysis()
+
+    # Line 1194: shutdown arrived during reanalysis
+    analysis_mod = types.ModuleType("ida_pro_mcp.ida_mcp.tools.analysis")
+    def _shutdown_during_reanalysis(*_args, **_kwargs):
+        bridge._SHUTDOWN_EVENT.set()
+        return {"scheduled": 1}
+
+    analysis_mod._auto_reanalyze_text_segments = _shutdown_during_reanalysis
+    analysis_mod._ensure_entry_point_functions = lambda: None
+    monkeypatch.setitem(sys.modules, "ida_pro_mcp.ida_mcp.tools.analysis", analysis_mod)
+    bridge._run_startup_analysis()
+    bridge._SHUTDOWN_EVENT.clear()
+
+    # Lines 1197-1199: outer exception in _run_startup_analysis
+    monkeypatch.setattr(bridge, "_bounded_auto_wait", lambda: (_ for _ in ()).throw(RuntimeError("reanalysis crash")))
+    bridge._run_startup_analysis()
+
+
+def test_run_server_loop_socket_errors_and_batch(tmp_path, monkeypatch):
+    bridge = _load_bridge(tmp_path, monkeypatch)
+
+    # Line 690: server_sock.bind raises on port 0
+    with patch("socket.socket") as mock_sock:
+        mock_instance = MagicMock()
+        mock_instance.bind.side_effect = OSError("port in use")
+        mock_sock.return_value = mock_instance
+        with pytest.raises(OSError):
+            bridge.run_server()
+
+    # Line 706-707: port file write error
+    monkeypatch.setenv("IDA_MCP_PORT_FILE", str(tmp_path / "nonexistent_dir" / "port.txt"))
+
+    # Line 717-718, 726, 764, 796-798, 803-804 in run_server:
+    server_sock = MagicMock()
+    conn = MagicMock()
+    batch_bytes = json.dumps([{"type": "ping"}]).encode("utf-8")
+
+    select_returns = [
+        ([], [], []),
+        ([server_sock], [], []),
+        ([server_sock], [], []),
+        ([server_sock], [], []),
+        ([server_sock], [], []),
+        ([server_sock], [], []),
+    ]
+    recv_side_effects = [
+        # Iteration 2: raw_len is empty (line 726)
+        b"",
+        # Iteration 3: batch request (line 764)
+        len(batch_bytes).to_bytes(4, "big"),
+        batch_bytes,
+        # Iteration 4: TimeoutError (line 796)
+        TimeoutError("timed out"),
+        # Iteration 5: generic Exception (line 798)
+        ValueError("arbitrary error"),
+        # Iteration 6: KeyboardInterrupt (line 797)
+        KeyboardInterrupt(),
+    ]
+    conn.recv.side_effect = recv_side_effects
+    conn.close.side_effect = RuntimeError("close err")  # lines 803-804
+    server_sock.accept.return_value = (conn, ("127.0.0.1", 12345))
+
+    with patch("socket.socket", return_value=server_sock), \
+         patch("select.select", side_effect=select_returns):
+        bridge._SHUTDOWN_EVENT.clear()
+        bridge.run_server()
+
+
+def test_main_execution_and_critical_module_error(tmp_path, monkeypatch):
+    # Lines 99-101: Critical error importing IDA modules
+    p = _SERVER_SCRIPT.resolve()
+    lines = p.read_text("utf-8").splitlines()
+    early_lines = "\n".join(lines[:102])
+    early_code = compile(early_lines, str(p), "exec")
+
+    class FailImport:
+        def find_spec(self, name, *args):
+            if name in ("ida_segment", "idautils", "idc"):
+                raise ImportError("no ida")
+
+    monkeypatch.setattr(sys, "meta_path", [FailImport()] + list(sys.meta_path))
+    monkeypatch.delitem(sys.modules, "ida_segment", raising=False)
+    monkeypatch.delitem(sys.modules, "idautils", raising=False)
+    monkeypatch.delitem(sys.modules, "idc", raising=False)
+    monkeypatch.setattr(sys, "exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+
+    with pytest.raises(SystemExit):
+        exec(early_code, {"__file__": str(p), "sys": sys, "os": __import__("os"), "time": __import__("time"), "log_ev": lambda _m: None})
+
+    # Lines 1206-1250: main block execution
+    for name in ("ida_segment", "idautils", "idc", "idaapi", "ida_name", "ida_auto", "ida_loader"):
         monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
-    auto = types.ModuleType("ida_auto")
-    auto.auto_wait = lambda: None
-    monkeypatch.setitem(sys.modules, "ida_auto", auto)
-    loader = types.ModuleType("ida_loader")
-    loader.save_database = lambda *_args: True
-    monkeypatch.setitem(sys.modules, "ida_loader", loader)
+
+    code = compile(p.read_text("utf-8"), str(p), "exec")
+    mod = types.ModuleType("ida_pro_mcp.server_script")
+    mod.__file__ = str(p)
+    mod.__name__ = "__main__"
+    monkeypatch.setitem(sys.modules, "ida_pro_mcp.server_script", mod)
 
     class InertThread:
         def __init__(self, *args, **kwargs):
-            del args, kwargs
+            self._count = 1
 
         def start(self):
-            return None
+            pass
 
         def is_alive(self):
+            if self._count > 0:
+                self._count -= 1
+                return True
             return False
 
         def join(self, **_kwargs):
-            return None
+            pass
 
     monkeypatch.setattr(threading, "Thread", InertThread)
-    original_listdir = __import__("os").listdir
-    monkeypatch.setattr(
-        __import__("os"),
-        "listdir",
-        lambda path: [] if str(path).endswith("/tools") else original_listdir(path),
-    )
-    namespace = runpy.run_path(str(_SERVER_SCRIPT), run_name="__main__")
-    assert namespace["_STARTUP_DONE"].is_set()
+    monkeypatch.setenv("IDA_MCP_USE_EXISTING_IDB", "1")
+    monkeypatch.setenv("IDA_MCP_SESSION_LOG_DIR", str(tmp_path))
+
+    exec(code, mod.__dict__)
+    assert mod._STARTUP_DONE.is_set()

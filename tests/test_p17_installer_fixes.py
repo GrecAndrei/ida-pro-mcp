@@ -1347,7 +1347,7 @@ def server_script_module(tmp_path, monkeypatch):
     for name in ("ida_segment", "idautils", "idc"):
         monkeypatch.setitem(sys.modules, name, _stdlib_types.ModuleType(name))
     spec = importlib.util.spec_from_file_location(
-        "ida_pro_mcp_server_script_under_test", str(SRC_SERVER_SCRIPT)
+        "ida_pro_mcp.server_script", str(SRC_SERVER_SCRIPT)
     )
     mod = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, mod)

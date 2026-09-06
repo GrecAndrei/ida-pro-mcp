@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-06 — Expand server_script IDA bridge lifecycle, socket framing, and analysis options coverage to 100%
+
+- Align server script test module import names with package namespace to enable accurate line coverage tracing.
+- Cover pre-analysis option applications: app bitness exception handling, endianness coercion, and memory model directives.
+- Cover raw binary segment and thumb mode fixes: segment class setting, SEG_CODE type, and sreg range splitting exceptions.
+- Cover bounded auto-wait progress polling, timeout fallbacks, reanalysis exception handling, and canonical IDB saving.
+- Cover socket accept loops: select polling, invalid request framing, batch requests, socket error escalations, and main thread tool queue dispatching.
+
+
 ## 2026-09-06 — Expand server blackboard governance, workspace seeding, and proposal execution coverage
 
 - Cover server blackboard dispatch errors, missing store handling, and gated phase checks.
