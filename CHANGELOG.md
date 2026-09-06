@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-06 — Expand batch macro DSL, dependency cycles, and condition coverage
+
+- Cover macro path empty segment skips, non-list pipe operator handling, and string literal unwrapping.
+- Cover dependency validation error envelopes, cycle detection DFS paths, and empty calls lists.
+- Cover conditional operator fallback evaluation, comparison exceptions, and stop_on_error breaks.
+- Cover tool name normalization prefixes and package namespaces across batch executions.
+
+
 ## 2026-09-06 — Expand firmware vector table, load base, and RTOS scan coverage
 
 - Cover pointer size and endianness fallback exception branches across SDK modules.
