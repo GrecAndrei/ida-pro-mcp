@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-06 — Expand reranker lifecycle, process management, cache eviction, and model discovery coverage
+
+- Cover cross-encoder reranker enabled flag string representations and state file parsing.
+- Cover model discovery path splitting whitespace parsing, expansion errors, and HuggingFace cache fallback scans across profiles.
+- Cover model directory candidate quant rank sort exceptions, abspath resolution errors, and duplicate candidate path filtering.
+- Cover native reranker routing and exception fallbacks across instantiation and reset.
+- Cover subprocess launch GPU flags, lease token mismatches, process kill timeout handling, signal escalation, and score cache eviction.
+
+
 ## 2026-09-06 — Expand emulate, symbols, imports deep, and common tools package coverage
 
 - Cover tools package lazy `__getattr__` and `__dir__` dispatch and unknown attribute error branches.
