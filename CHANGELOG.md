@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-06 — Expand firmware vector table, load base, and RTOS scan coverage
+
+- Cover pointer size and endianness fallback exception branches across SDK modules.
+- Cover segment span and mapped window retrieval error handling and segment end queries.
+- Cover RISC-V JAL negative displacement decoding and GP initialization prologue discovery.
+- Cover load-base hypothesis validation evidence pathways and vector table scan limits.
+
+
 ## 2026-09-06 — Expand analysis tool snapshot, auto-wait, entry points, and options coverage
 
 - Cover undefine, make_code, and force_offset address validation error branches.
