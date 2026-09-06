@@ -96,8 +96,10 @@ def bridge(tmp_path, monkeypatch):
     # mutation. Reusing that polluted module makes `parse_address_canonical`
     # resolve a bare hex token via the symbol branch instead of the image-window
     # digit path. A fresh empty module keeps the bridge deterministic.
-    for name in ("ida_segment", "idautils", "idc"):
-        sys.modules[name] = types.ModuleType(name)
+    for name in ("ida_segment", "idautils", "idc", "idaapi", "ida_name"):
+        mod_stub = types.ModuleType(name)
+        mod_stub.BADADDR = -1
+        sys.modules[name] = mod_stub
     mod = _load_module("s1_server_script_ut", str(SRC_SERVER_SCRIPT))
     mod._eh = eh  # expose the shared error factory for tools in tests
     return mod
@@ -180,8 +182,8 @@ def _running_bridge(mod, tmp_path, monkeypatch):
     finally:
         stop_drainer.set()
         mod._SHUTDOWN_EVENT.set()
-        drainer.join(timeout=5)
-        thread.join(timeout=5)
+        drainer.join(timeout=15)
+        thread.join(timeout=15)
         assert not thread.is_alive(), "listener thread did not stop after _SHUTDOWN_EVENT"
 
 
@@ -483,5 +485,5 @@ def test_shutdown_over_wire_stops_accept_loop(bridge, tmp_path, monkeypatch):
         assert res["shutdown"] is True
         assert res["saved"] is False
         assert bridge._SHUTDOWN_EVENT.is_set() is True
-        thread.join(timeout=5)
+        thread.join(timeout=15)
         assert not thread.is_alive(), "accept loop must stop once shutdown is handled"

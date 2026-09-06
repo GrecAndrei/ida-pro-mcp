@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-06 — Expand server blackboard governance, workspace seeding, and proposal execution coverage
+
+- Cover server blackboard dispatch errors, missing store handling, and gated phase checks.
+- Cover workspace seeding with legacy candidate discovery, merge row pragmas, and sqlite connection errors.
+- Cover cross-session hypotheses export and import fallback paths, malformed base addresses, and duplicate skips.
+- Cover proposal acceptance and rejection with non-list tags, malformed JSON payloads, and verification error handling.
+- Harden bridge tests against thread join timeouts and stub missing SDK modules under heavy concurrency.
+
+
 ## 2026-09-06 — Expand reranker lifecycle, process management, cache eviction, and model discovery coverage
 
 - Cover cross-encoder reranker enabled flag string representations and state file parsing.
