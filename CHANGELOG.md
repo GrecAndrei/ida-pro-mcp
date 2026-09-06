@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-06 — Expand blackboard store CRUD, migrations, lifecycle, and search coverage to 100%
+
+- Cover database path resolution error handling, embedder resolution fallbacks, and compatibility view creation.
+- Cover database initialization failure fallbacks, embed text None handling, and empty row hydration.
+- Cover write and upsert validation guards, integrity error retry recursion, and examination address validation.
+- Cover link conflict validation, semantic search status filtering, corrupted embedding blobs, and conflict mapping.
+- Cover update lifecycle transitions, rollback on nonexistent entries, and confidence calibration with empty evidence.
+- Cover query filtering edge cases, function inventory RPC errors and string parsing, and auto-merge duplicate suppression.
+
+
+
 ## 2026-09-06 — Expand session manager metadata, pruning, and bookmark error coverage to 100%
 
 - Cover Session model dictionary validation, basename handling, and tag sanitization cap boundaries.
