@@ -208,3 +208,49 @@ def test_main_cli_dispatch(monkeypatch, tmp_path):
     # Test missing binary error in CLI main flow
     monkeypatch.setattr(sys, "argv", ["mcp_client.py", "--test", "session", "--binary", "/non/existent/path"])
     # Run the main block logic safely
+
+
+def test_read_response_poll_fallback(monkeypatch):
+    import select
+
+    client = mcp_client.MCPClient()
+    mock_proc = mock.MagicMock()
+    mock_proc.stdout.fileno.return_value = 100
+    client.proc = mock_proc
+
+    def fake_select(*args, **kwargs):
+        raise OSError("bad fd")
+
+    monkeypatch.setattr(select, "select", fake_select)
+    monkeypatch.delattr(select, "poll", raising=False)
+    assert client._send_recv({"jsonrpc": "2.0", "id": 1, "method": "test"}, timeout=0.1) is None
+
+
+def test_read_response_poll_success(monkeypatch):
+    import select
+
+    client = mcp_client.MCPClient()
+    mock_proc = mock.MagicMock()
+    fd = 101
+    mock_proc.stdout.fileno.return_value = fd
+    mock_proc.poll.return_value = None
+    # Provide a valid JSON response for the read path
+    resp = {"jsonrpc": "2.0", "id": 1, "result": {"ok": True}}
+    payload = json.dumps(resp).encode() + b"\n"
+    mock_proc.stdin = mock.MagicMock()
+    mock_proc.stdin.write = mock.MagicMock()
+    mock_proc.stdin.flush = mock.MagicMock()
+    client.proc = mock_proc
+
+    def fake_select(*_a, **_k):
+        raise ValueError("bad fd")
+
+    mock_poll = mock.MagicMock()
+    mock_poll.poll.return_value = 1
+    monkeypatch.setattr(select, "select", fake_select)
+    monkeypatch.setattr(select, "poll", lambda: mock_poll)
+    monkeypatch.setattr(os, "read", lambda _fd, _n: payload)
+    result = client._send_recv({"jsonrpc": "2.0", "id": 1, "method": "test"}, timeout=0.5)
+    assert result == resp
+    mock_poll.poll.assert_called_once()
+    mock_poll.register.assert_called_once_with(fd, select.POLLIN)

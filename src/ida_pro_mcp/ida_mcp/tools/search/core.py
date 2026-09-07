@@ -338,11 +338,15 @@ def _match_size_rule(size: int, op: str, val1: int, val2) -> bool:
 
 def xref_count_limited(ea: int, max_count: int = 256) -> int:
     count = 0
-    for _ in idautils.XrefsTo(ea, 0):
+    xrefs_to = getattr(idautils, "XrefsTo", None)
+    if not xrefs_to:
+        return 0
+    for _ in xrefs_to(ea, 0):
         count += 1
         if count >= max_count:
             break
     return count
+
 
 
 def iter_segments(range_start=None, range_end=None, require_exec: bool = True):

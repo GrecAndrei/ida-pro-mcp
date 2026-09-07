@@ -137,3 +137,101 @@ def test_bootstrap_mitigation_policy_and_autopilot_controls(tmp_path):
     autopilot = manager.bootstrap_autopilot(sid, window=2, dry_run=True)
     assert autopilot["ok"] is True and autopilot["dry_run"] is True
     assert manager.bootstrap_prune_data(sid, max_outcomes=1, max_disputes=1, max_snapshots=2)["ok"] is True
+
+
+def test_bootstrap_monitoring_not_found_and_boundary_paths(tmp_path, monkeypatch):
+    manager, sid = _manager(tmp_path)
+
+    # 1. Missing session errors
+    for fn in (
+        manager.bootstrap_snapshot,
+        manager.bootstrap_list_snapshots,
+        manager.bootstrap_drift_report,
+        manager.bootstrap_update_baseline,
+        manager.bootstrap_evaluate_alerts,
+        manager.bootstrap_summary_detailed,
+    ):
+        assert fn("missing")["code"] == MCPError.SESSION_NOT_FOUND
+
+    # 2. Detailed summary on uninitialized session
+    assert manager.bootstrap_summary_detailed(sid)["initialized"] is False
+
+    # 3. Evaluate alerts on uninitialized session without baseline (< 5 snapshots)
+    alerts_no_data = manager.bootstrap_evaluate_alerts(sid)
+    assert alerts_no_data["enough_data"] is False
+    assert "Need at least 5 snapshots" in alerts_no_data["message"]
+
+    # 4. Initialize and create snapshots to test drift report improving risk & None keys
+    manager.bootstrap_init(sid)
+    data = manager._load_skills(sid)
+    data["bootstrap"]["metric_snapshots"] = [
+        {"snapshot_id": "s1", "ece": 0.20, "prior_confidence": 0.80, "outcomes": 10},
+        {"snapshot_id": "s2", "ece": 0.05, "prior_confidence": 0.82, "outcomes": 12},
+    ]
+    manager._save_skills(sid, data)
+    improving_drift = manager.bootstrap_drift_report(sid)
+    assert improving_drift["risk"] == "improving"
+
+    # Delta with None keys
+    data["bootstrap"]["metric_snapshots"] = [
+        {"snapshot_id": "s1", "ece": None, "prior_confidence": None, "outcomes": None},
+        {"snapshot_id": "s2", "ece": 0.05, "prior_confidence": 0.82, "outcomes": 12},
+    ]
+    manager._save_skills(sid, data)
+    none_drift = manager.bootstrap_drift_report(sid)
+    assert none_drift["drift"]["ece_delta"] is None
+
+    # Update baseline with all None values -> hits empty vals fallback
+    data["bootstrap"]["metric_snapshots"] = [
+        {"snapshot_id": f"s{i}", "ece": None, "prior_confidence": None}
+        for i in range(5)
+    ]
+    manager._save_skills(sid, data)
+    empty_baseline = manager.bootstrap_update_baseline(sid)
+    assert empty_baseline["enough_data"] is True
+    assert empty_baseline["baseline"]["ece_p95"] == 0.0
+
+    # Evaluate alerts without baseline and with >= 5 snapshots
+    data["bootstrap"]["baseline"] = {}
+    data["bootstrap"]["metric_snapshots"] = [
+        {"snapshot_id": f"s{i}", "ece": 0.05, "prior_confidence": 0.80, "timestamp": "2026-01-01"}
+        for i in range(5)
+    ]
+    manager._save_skills(sid, data)
+    eval_alerts = manager.bootstrap_evaluate_alerts(sid)
+    assert eval_alerts["ok"] is True
+    assert eval_alerts["severity"] == "none"
+
+    # Evaluate alerts severity "low" and "medium"
+    # baseline ece_p95 = 0.05. If latest ece = 0.07, excess is 0.02 (<= 0.03 -> low)
+    data["bootstrap"]["baseline"] = {"ece_p95": 0.05, "prior_p05": 0.90}
+    data["bootstrap"]["metric_snapshots"] = [
+        {"snapshot_id": "s1", "ece": 0.05, "prior_confidence": 0.90, "timestamp": "2026-01-01"},
+        {"snapshot_id": "s2", "ece": 0.07, "prior_confidence": 0.90, "timestamp": "2026-01-02"},
+    ]
+    manager._save_skills(sid, data)
+    alerts_low = manager.bootstrap_evaluate_alerts(sid)
+    assert alerts_low["severity"] == "low"
+
+    # If latest ece = 0.10, excess is 0.05 (0.03 < excess <= 0.08 -> medium)
+    data["bootstrap"]["metric_snapshots"][-1]["ece"] = 0.10
+    manager._save_skills(sid, data)
+    alerts_med = manager.bootstrap_evaluate_alerts(sid)
+    assert alerts_med["severity"] == "medium"
+
+    # If snaps < 2
+    data["bootstrap"]["metric_snapshots"] = [
+        {"snapshot_id": "s1", "ece": 0.05, "prior_confidence": 0.90, "timestamp": "2026-01-01"}
+    ]
+    manager._save_skills(sid, data)
+    alerts_fewer = manager.bootstrap_evaluate_alerts(sid)
+    assert alerts_fewer["enough_data"] is False
+
+    # Error results from subcalls
+    monkeypatch.setattr(manager, "bootstrap_summary", lambda _sid: {"error": True, "code": -1, "message": "mock err"})
+    assert manager.bootstrap_snapshot(sid)["error"] is True
+
+    data["bootstrap"]["baseline"] = {}
+    manager._save_skills(sid, data)
+    monkeypatch.setattr(manager, "bootstrap_update_baseline", lambda _sid, **_kw: {"error": True, "code": -1, "message": "mock err"})
+    assert manager.bootstrap_evaluate_alerts(sid)["error"] is True

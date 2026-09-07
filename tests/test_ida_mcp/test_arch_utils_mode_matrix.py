@@ -347,3 +347,341 @@ def test_riscv_gp_apply_directive_queues_reanalysis_and_detects_signed_lui(monke
     monkeypatch.setattr(idc, "next_head", lambda ea, _end: ea + 4 if ea == 0x1000 else idc.BADADDR, raising=False)
     result = arch.detect_riscv_gp()
     assert result["found"] is True and result["gp"] == 0xFFFFFFFF7FFFFFFF
+
+
+def test_arch_utils_edge_branches(monkeypatch, arch):
+    import builtins
+    import sys
+
+    import ida_auto
+    import ida_ida
+    import ida_idp
+    import ida_segment
+    import ida_ua
+    import idc
+
+    ida_xref = types.ModuleType("ida_xref")
+    ida_xref.dr_W = 7
+    ida_xref.dr_R = 8
+    monkeypatch.setitem(sys.modules, "ida_xref", ida_xref)
+
+    # 1. Lines 64-65, 74-75: _proc_name_and_bitness exception fallbacks
+    class FakeInfo:
+        procname = "metapc"
+
+        def is_64bit(self):
+            raise RuntimeError("bitness failure")
+
+    fake_api = types.SimpleNamespace(get_inf_structure=FakeInfo)
+    with monkeypatch.context() as m:
+        m.setattr(arch, "idaapi", fake_api)
+        m.setattr(ida_ida, "inf_get_procname", lambda: None, raising=False)
+        proc, bitness = arch._proc_name_and_bitness()
+        assert proc == "metapc" and bitness is None
+
+    with monkeypatch.context() as m:
+        m.setattr(arch, "idaapi", types.SimpleNamespace(get_inf_structure=lambda: None))
+        m.setattr(ida_ida, "inf_get_procname", lambda: None, raising=False)
+        m.setattr(idc, "get_inf_attr", lambda _attr: (_ for _ in ()).throw(RuntimeError("idc fail")), raising=False)
+        proc, bitness = arch._proc_name_and_bitness()
+        assert proc == "" and bitness is None
+
+    # 2. Lines 201, 208, 222: Family checks with arch=None
+    with monkeypatch.context() as m:
+        m.setattr(arch, "get_arch", lambda: "mips")
+        assert arch.is_mips_family() is True
+        m.setattr(arch, "get_arch", lambda: "ppc")
+        assert arch.is_ppc_family() is True
+        m.setattr(arch, "get_arch", lambda: "sparc")
+        assert arch.is_sparc_family() is True
+
+    # 3. Line 575: Callee-saved registers with arch=None
+    with monkeypatch.context() as m:
+        m.setattr(arch, "get_arch", lambda: "x86")
+        assert "ebp" in arch.get_callee_saved_registers()
+
+    # 4. Lines 663, 675: _classify_riscv_ret edge cases
+    assert arch._classify_riscv_ret("jalr", "jalr ra") is False
+    assert arch._classify_riscv_ret("c.jr", "c.jr") is False
+
+    # 5. Lines 688, 694, 702, 718, 722: is_return_mnemonic branches
+    with monkeypatch.context() as m:
+        m.setattr(arch, "get_arch", lambda: "x64")
+        assert arch.is_return_mnemonic("ret") is True
+    assert arch.is_return_mnemonic("nop", arch="x86") is False
+    assert arch.is_return_mnemonic("ldp", disasm_lower="ldp x29, pc, [sp]", arch="arm") is True
+    assert arch.is_return_mnemonic("mret", arch="riscv") is True
+    assert arch.is_return_mnemonic("sret", arch="riscv") is True
+    assert arch.is_return_mnemonic("nop", arch="sparc") is False
+
+    # 6. Lines 731, 738, 748, 802: is_call/syscall/prologue/epilogue with arch=None
+    with monkeypatch.context() as m:
+        m.setattr(arch, "get_arch", lambda: "x64")
+        assert arch.is_call_mnemonic("call") is True
+        assert arch.is_syscall_mnemonic("syscall") is True
+        assert arch.get_prologue_pattern(["push", "mov"]) == "standard_frame_setup"
+        assert arch.get_epilogue_pattern(["pop", "ret"]) == "standard_frame_teardown"
+
+    # 7. Lines 926-927, 929, 933-934, 948-949, 954-955, 957, 975, 979, 994-995, 1001-1002, 1007-1008, 1012-1013: _riscv_gp_fix_refs branches
+    with monkeypatch.context() as m:
+        m.setattr(arch, "is_riscv_family", lambda: True)
+        m.setattr(ida_idp, "str2reg", lambda _name: (_ for _ in ()).throw(RuntimeError("no reg")), raising=False)
+        m.setattr(ida_ida, "inf_get_app_bitness", lambda: (_ for _ in ()).throw(RuntimeError("no bitness")), raising=False)
+        m.delattr(ida_segment, "get_first_segment_ea", raising=False)
+        m.setattr(idc, "get_first_seg", lambda: 0x1000, raising=False)
+
+        class BrokenSeg:
+            start_ea = 0x1000
+            end_ea = 0x1010
+
+        # test getseg returning None to break
+        m.setattr(ida_segment, "getseg", lambda ea: None if ea == 0x1000 else BrokenSeg(), raising=False)
+        res_none = arch._riscv_gp_fix_refs(0x1000)
+        assert res_none == {"fixed": 0, "skipped": 0}
+
+    # test seen_targets, disp 0, and exception in decode
+    with monkeypatch.context() as m:
+        m.setattr(arch, "is_riscv_family", lambda: True)
+        seg = types.SimpleNamespace(start_ea=0x1000, end_ea=0x1008)
+        m.setattr(ida_segment, "get_first_segment_ea", lambda: 0x1000, raising=False)
+        m.setattr(ida_segment, "getseg", lambda ea: seg if ea == 0x1000 else None, raising=False)
+        m.delattr(ida_segment, "get_next_segment_ea", raising=False)
+
+        # instruction with two ops targeting the same address, then disp 0 with GP 0
+        op1 = types.SimpleNamespace(type=2, reg=3, addr=0x20)
+        op2 = types.SimpleNamespace(type=2, reg=3, addr=0x20)
+        op3 = types.SimpleNamespace(type=2, reg=3, addr=0)
+        dummy_ops = [op1, op2, op3, types.SimpleNamespace(type=0, reg=0, addr=0), types.SimpleNamespace(type=0, reg=0, addr=0), types.SimpleNamespace(type=0, reg=0, addr=0)]
+
+        class TestInsn:
+            ops = dummy_ops
+            def get_canon_mnem(self):
+                return "lw"
+
+        m.setattr(ida_ua, "insn_t", TestInsn, raising=False)
+        m.setattr(ida_ua, "decode_insn", lambda insn, ea: True, raising=False)
+        m.setattr(ida_xref, "get_first_dref_from", lambda ea: 0x20, raising=False)
+        m.setattr(ida_xref, "get_next_dref_from", lambda ea, r: idc.BADADDR, raising=False)
+        m.setattr(ida_xref, "del_dref", lambda ea, target: (_ for _ in ()).throw(RuntimeError("del fail")), raising=False)
+        m.setattr(ida_xref, "add_dref", lambda ea, target, dtp: None, raising=False)
+        m.setattr(idc, "next_head", lambda ea: 0x1008, raising=False)
+
+        res_fixed = arch._riscv_gp_fix_refs(0, old_gp=0x1000)
+        assert res_fixed["fixed"] == 0
+
+    # 8. Lines 1046-1047, 1061-1062, 1071-1072, 1083-1084, 1091-1092, 1109-1110, 1112-1113: _apply_riscv_gp branches
+    with monkeypatch.context() as m:
+        orig_imp = builtins.__import__
+        def fail_imp(name, *args, **kwargs):
+            if name == "idaapi":
+                raise ImportError("no idaapi")
+            return orig_imp(name, *args, **kwargs)
+        m.setattr(builtins, "__import__", fail_imp)
+        m.setattr(arch, "_APPLIED_RISCV_GP", None)
+        applied, err, rean, refs = arch._apply_riscv_gp(0x5555)
+        assert applied is False and "IDA not available" in err
+
+    with monkeypatch.context() as m:
+        m.setattr(arch, "_APPLIED_RISCV_GP", None)
+        m.setattr(idc, "set_processor_options", lambda _val: (_ for _ in ()).throw(RuntimeError("proc option error")), raising=False)
+        m.setattr(arch, "_riscv_gp_fix_refs", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("fix ref error")))
+        m.setattr(arch.idaapi, "netnode", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("netnode error")))
+        applied, err, rean, refs = arch._apply_riscv_gp(0x6666)
+        assert applied is False and "fix ref error" in err
+
+    with monkeypatch.context() as m:
+        m.setattr(arch, "_APPLIED_RISCV_GP", None)
+        m.setattr(idc, "set_processor_options", lambda _val: None, raising=False)
+        m.setattr(arch, "_riscv_gp_fix_refs", lambda *_a, **_k: {"fixed": 0})
+        m.delattr(ida_auto, "plan_range", raising=False)
+        marked = []
+        m.setattr(ida_auto, "auto_mark_range", lambda s, e, mnem: marked.append((s, e)), raising=False)
+        m.setattr(ida_auto, "AU_FINAL", 0, raising=False)
+        applied, err, rean, refs = arch._apply_riscv_gp(0x7777)
+        assert applied is True and rean is True and len(marked) == 1
+
+    # 9. Lines 1129, 1157-1158: _riscv_gp_note and set_riscv_gp
+    note = arch._riscv_gp_note(0x1000, 0x200, True, None, False, {"fixed": 2, "skipped": 3})
+    assert "3 unmapped targets skipped" in note
+    set_res = arch.set_riscv_gp(0x8888)
+    assert set_res["ok"] is True and set_res["gp"] == 0x8888
+
+    # 10. Lines 1190-1191, 1200-1201, 1205, 1214, 1225-1226, 1249, 1285-1287, 1296-1297: detect_riscv_gp branches
+    with monkeypatch.context() as m:
+        orig_imp = builtins.__import__
+        def no_idautils(name, *args, **kwargs):
+            if name == "idautils":
+                raise ImportError("no idautils")
+            return orig_imp(name, *args, **kwargs)
+        m.setattr(builtins, "__import__", no_idautils)
+        assert arch.detect_riscv_gp()["found"] is False
+
+    with monkeypatch.context() as m:
+        m.setattr(idautils, "Entries", lambda: (_ for _ in ()).throw(RuntimeError("no entries")), raising=False)
+        m.setattr(idc, "get_name_ea_simple", lambda sym: 0x1000 if sym in ("_start", "reset_handler") else idc.BADADDR, raising=False)
+        m.setattr(idc, "get_inf_attr", lambda _attr: (_ for _ in ()).throw(RuntimeError("inf fail")), raising=False)
+        m.setattr(idc, "print_insn_mnem", lambda ea: "auipc" if ea == 0x1000 else ("addi" if ea == 0x1004 else "nop"), raising=False)
+        m.setattr(idc, "print_operand", lambda ea, idx: "gp" if idx == 0 else "", raising=False)
+        # negative auipc immediate (bit 19 set: 0x80000)
+        m.setattr(idc, "get_operand_value", lambda ea, idx: 0x80000 if ea == 0x1000 else 0x10, raising=False)
+        m.setattr(idc, "next_head", lambda ea, _b: ea + 4 if ea == 0x1000 else idc.BADADDR, raising=False)
+        res_auipc = arch.detect_riscv_gp()
+        assert res_auipc["found"] is True
+
+    # 11. Lines 760, 769, 776, 783, 791: Prologue pattern 'unknown' for all archs
+    for fam in ("x86", "arm", "mips", "ppc", "riscv"):
+        assert arch.get_prologue_pattern(["nop"], arch=fam) == "unknown"
+
+    # 12. Lines 804, 816, 829, 838, 847, 859: Epilogue pattern 'unknown' for all archs
+    assert arch.get_epilogue_pattern([], arch="x86") == "unknown"
+    for fam in ("x86", "arm", "mips", "ppc", "riscv"):
+        assert arch.get_epilogue_pattern(["nop"], arch=fam) == "unknown"
+
+    # 13. Lines 920-921: _riscv_gp_fix_refs import failure
+    with monkeypatch.context() as m:
+        m.setattr(arch, "is_riscv_family", lambda: True)
+        orig_imp = builtins.__import__
+        def fail_xref(name, *args, **kwargs):
+            if name == "ida_xref":
+                raise ImportError("no ida_xref")
+            return orig_imp(name, *args, **kwargs)
+        m.setattr(builtins, "__import__", fail_xref)
+        assert arch._riscv_gp_fix_refs(0x1000) == {"fixed": 0, "skipped": 0}
+
+    # 14a. Lines 954-955: getseg raises AttributeError
+    with monkeypatch.context() as m:
+        m.setattr(arch, "is_riscv_family", lambda: True)
+        m.setattr(ida_segment, "get_first_segment_ea", lambda: 0x1000, raising=False)
+        m.setattr(ida_segment, "getseg", lambda ea: (_ for _ in ()).throw(AttributeError("no seg")), raising=False)
+        assert arch._riscv_gp_fix_refs(0x1000) == {"fixed": 0, "skipped": 0}
+
+    # 14b. Lines 929, 965-966, 975, 979, 986, 994-995: _riscv_gp_fix_refs detail paths
+    with monkeypatch.context() as m:
+        m.setattr(arch, "is_riscv_family", lambda: True)
+        m.setattr(ida_idp, "str2reg", lambda _name: 0, raising=False)  # triggers gp_reg = 3 fallback (line 929)
+        seg = types.SimpleNamespace(start_ea=0x1000, end_ea=0x1010)
+        m.setattr(ida_segment, "get_first_segment_ea", lambda: 0x1000, raising=False)
+        m.setattr(ida_segment, "getseg", lambda ea: seg, raising=False)
+        m.delattr(ida_segment, "get_next_segment_ea", raising=False)
+
+        decode_calls = 0
+        def mock_decode(insn, ea):
+            nonlocal decode_calls
+            decode_calls += 1
+            return decode_calls > 1
+
+        op_zero = types.SimpleNamespace(type=2, reg=3, addr=0)
+        insn_zero = types.SimpleNamespace(ops=[op_zero] + [types.SimpleNamespace(type=0, reg=0, addr=0)] * 5, get_canon_mnem=lambda: "lw")
+        m.setattr(ida_ua, "insn_t", lambda: insn_zero, raising=False)
+        m.setattr(ida_ua, "decode_insn", mock_decode, raising=False)
+        m.setattr(ida_xref, "get_first_dref_from", lambda ea: idc.BADADDR, raising=False)
+        m.setattr(idc, "next_head", lambda ea: 0x1004 if ea == 0x1000 else 0x1010, raising=False)
+
+        # gp=0, addr=0 triggers line 979 (target == raw and not raw)
+        res_zero = arch._riscv_gp_fix_refs(0)
+        assert res_zero["fixed"] == 0
+
+    with monkeypatch.context() as m:
+        m.setattr(arch, "is_riscv_family", lambda: True)
+        m.setattr(ida_idp, "str2reg", lambda _name: 3, raising=False)
+        seg = types.SimpleNamespace(start_ea=0x1000, end_ea=0x1008)
+        m.setattr(ida_segment, "get_first_segment_ea", lambda: 0x1000, raising=False)
+        m.setattr(ida_segment, "getseg", lambda ea: seg, raising=False)
+        m.delattr(ida_segment, "get_next_segment_ea", raising=False)
+
+        op1 = types.SimpleNamespace(type=2, reg=3, addr=0x20)
+        op2 = types.SimpleNamespace(type=2, reg=3, addr=0x20)
+        op3 = types.SimpleNamespace(type=2, reg=3, addr=0x40)
+        dummy_ops = [op1, op2, op3, types.SimpleNamespace(type=0, reg=0, addr=0), types.SimpleNamespace(type=0, reg=0, addr=0), types.SimpleNamespace(type=0, reg=0, addr=0)]
+
+        dummy_insn = types.SimpleNamespace(ops=dummy_ops, get_canon_mnem=lambda: "lw")
+        m.setattr(ida_ua, "insn_t", lambda: dummy_insn, raising=False)
+        m.setattr(ida_ua, "decode_insn", lambda insn, ea: True, raising=False)
+
+        # target 0x1020 is in existing (line 986)
+        # raw 0x40 is in existing and != target (line 994-995)
+        m.setattr(ida_xref, "get_first_dref_from", lambda ea: 0x1020, raising=False)
+        m.setattr(ida_xref, "get_next_dref_from", lambda ea, r: 0x40 if r == 0x1020 else idc.BADADDR, raising=False)
+        m.setattr(ida_xref, "del_dref", lambda ea, target: (_ for _ in ()).throw(RuntimeError("del fail")), raising=False)
+        m.setattr(ida_xref, "add_dref", lambda ea, target, dtp: None, raising=False)
+        m.setattr(idc, "next_head", lambda ea: 0x1008, raising=False)
+
+        res_detail = arch._riscv_gp_fix_refs(0x1000)
+        assert res_detail["fixed"] == 1
+
+    # 14c. Lines 1007-1008: decode loop exception
+    with monkeypatch.context() as m:
+        m.setattr(arch, "is_riscv_family", lambda: True)
+        seg = types.SimpleNamespace(start_ea=0x1000, end_ea=0x1004)
+        m.setattr(ida_segment, "get_first_segment_ea", lambda: 0x1000, raising=False)
+        m.setattr(ida_segment, "getseg", lambda ea: seg, raising=False)
+        m.delattr(ida_segment, "get_next_segment_ea", raising=False)
+        m.setattr(ida_ua, "insn_t", types.SimpleNamespace, raising=False)
+        m.setattr(ida_ua, "decode_insn", lambda _i, _ea: (_ for _ in ()).throw(RuntimeError("decode fail")), raising=False)
+        m.setattr(idc, "next_head", lambda ea: 0x1004, raising=False)
+        assert arch._riscv_gp_fix_refs(0x1000) == {"fixed": 0, "skipped": 0}
+
+    # 15. Lines 999-1002: old_gp stale deletion in _riscv_gp_fix_refs with exception
+    with monkeypatch.context() as m:
+        m.setattr(arch, "is_riscv_family", lambda: True)
+        m.setattr(ida_idp, "str2reg", lambda _name: 3, raising=False)
+        seg = types.SimpleNamespace(start_ea=0x1000, end_ea=0x1004)
+        m.setattr(ida_segment, "get_first_segment_ea", lambda: 0x1000, raising=False)
+        m.setattr(ida_segment, "getseg", lambda ea: seg, raising=False)
+        m.delattr(ida_segment, "get_next_segment_ea", raising=False)
+        op = types.SimpleNamespace(type=2, reg=3, addr=0x20)
+        dummy_insn = types.SimpleNamespace(ops=[op] + [types.SimpleNamespace(type=0, reg=0, addr=0)] * 5, get_canon_mnem=lambda: "lw")
+        m.setattr(ida_ua, "insn_t", lambda: dummy_insn, raising=False)
+        m.setattr(ida_ua, "decode_insn", lambda insn, ea: True, raising=False)
+
+        # existing refs include the stale old_gp target (0x2000 + 0x20 = 0x2020)
+        m.setattr(ida_xref, "get_first_dref_from", lambda ea: 0x2020, raising=False)
+        m.setattr(ida_xref, "get_next_dref_from", lambda ea, r: idc.BADADDR, raising=False)
+        # del_dref raises to hit lines 1001-1002
+        m.setattr(ida_xref, "del_dref", lambda ea, target: (_ for _ in ()).throw(RuntimeError("del stale fail")), raising=False)
+        m.setattr(ida_xref, "add_dref", lambda ea, target, dtp: None, raising=False)
+        m.setattr(idc, "next_head", lambda ea: 0x1004, raising=False)
+
+        res_stale = arch._riscv_gp_fix_refs(0x1000, old_gp=0x2000)
+        assert res_stale["fixed"] == 1
+
+    # 16. Lines 1061-1062, 1081, 1091-1092: _apply_riscv_gp import, clear error, and netnode failure
+    with monkeypatch.context() as m:
+        orig_imp = builtins.__import__
+        def fail_idp(name, *args, **kwargs):
+            if name == "ida_idp":
+                raise ImportError("no ida_idp")
+            return orig_imp(name, *args, **kwargs)
+        m.setattr(builtins, "__import__", fail_idp)
+        m.setattr(arch, "_APPLIED_RISCV_GP", None)
+        # set_processor_options raises so apply_error is set, then cleared at line 1081
+        m.setattr(idc, "set_processor_options", lambda _val: (_ for _ in ()).throw(RuntimeError("directive fail")), raising=False)
+        m.setattr(arch, "_riscv_gp_fix_refs", lambda *_a, **_k: {"fixed": 0})
+        applied, err, rean, refs = arch._apply_riscv_gp(0x9999)
+        assert applied is True and err is None
+
+    with monkeypatch.context() as m:
+        import idaapi as _idaapi
+        m.setattr(arch, "_APPLIED_RISCV_GP", None)
+        m.setattr(arch, "_riscv_gp_fix_refs", lambda *_a, **_k: {"fixed": 1})
+        m.setattr(_idaapi, "netnode", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("netnode boom")))
+        applied, err, rean, refs = arch._apply_riscv_gp(0xAAAA)
+        assert applied is True
+
+    # 17. Lines 1206-1207, 1215-1216, 1285-1287, 1295-1297: detect_riscv_gp symbol & loop error paths
+    with monkeypatch.context() as m:
+        m.setattr(idautils, "Entries", lambda: iter([(1, 0x1000)]), raising=False)
+        m.setattr(idc, "get_name_ea_simple", lambda sym: (_ for _ in ()).throw(RuntimeError("sym fail")), raising=False)
+        m.setattr(idc, "get_inf_attr", lambda _attr: None, raising=False)
+        m.setattr(idc, "print_insn_mnem", lambda ea: (_ for _ in ()).throw(RuntimeError("insn fail")), raising=False)
+        res_fail = arch.detect_riscv_gp()
+        assert res_fail["found"] is False
+
+    with monkeypatch.context() as m:
+        m.setattr(idautils, "Entries", lambda: iter([(1, 0x1000)]), raising=False)
+        m.setattr(idc, "get_name_ea_simple", lambda sym: idc.BADADDR, raising=False)
+        m.setattr(idc, "get_inf_attr", lambda _attr: (_ for _ in ()).throw(RuntimeError("inf fail")), raising=False)
+        m.setattr(idc, "print_insn_mnem", lambda ea: "nop", raising=False)
+        m.setattr(idc, "next_head", lambda ea, _b: idc.BADADDR, raising=False)
+        res_badaddr = arch.detect_riscv_gp()
+        assert res_badaddr["found"] is False

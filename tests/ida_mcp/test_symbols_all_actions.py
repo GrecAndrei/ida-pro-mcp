@@ -131,3 +131,29 @@ def test_export_unknown_action_and_error_handler(tmp_path, monkeypatch):
     mod.ida_nalt.get_tinfo = lambda *_args: (_ for _ in ()).throw(RuntimeError("SDK"))
     failed = mod.symbols("export", path=str(tmp_path / "failed.json"))
     assert failed["ok"] is False and "SDK" in failed["error"]
+
+
+def test_symbols_boundary_and_limit_edges(tmp_path):
+    mod = load_tool_module("symbols")
+    # line 53: path validation error in load_pdb
+    mod.validate_path_safe = lambda p: (None, {"error": True, "code": "PATH_TRAVERSAL"})
+    assert mod.symbols("load_pdb", path="../escaped.pdb")["code"] == "PATH_TRAVERSAL"
+
+    # line 77: named_funcs >= _STATUS_FUNC_LIMIT (100000)
+    mod.idautils.Functions = lambda: range(100005)
+    mod.idc.get_func_name = lambda ea: "named_func"
+    mod.ida_typeinf.get_idati = lambda: None
+    res = mod.symbols("status")
+    assert res["ok"] is True
+    assert res["named_functions"] == 100000
+
+    # line 139: export func limit (50000)
+    mod.validate_path_safe = lambda value: (str(value), None)
+    mod.idautils.Functions = lambda: range(50005)
+    mod.idc.get_func_name = lambda ea: "named_func"
+    mod.ida_typeinf.tinfo_t = lambda: None
+    mod.ida_nalt.get_tinfo = lambda _tif, ea: False
+    out_file = tmp_path / "limit.json"
+    res_exp = mod.symbols("export", path=str(out_file))
+    assert res_exp["ok"] is True
+    assert res_exp["count"] == 50000

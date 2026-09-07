@@ -43,8 +43,6 @@ def search_data_ref(pattern, include_context, offset, limit, semantic_min_score,
     matches_seen = 0
 
     for xref in idautils.XrefsTo(target_ea, 0):
-        if truncated:
-            break
         if not xref.iscode:
             matches_seen += 1
             if matches_seen > offset:
@@ -75,8 +73,6 @@ def search_code_ref(pattern, include_context, offset, limit, semantic_min_score,
     matches_seen = 0
 
     for xref in idautils.XrefsTo(target_ea, 0):
-        if truncated:
-            break
         if xref.iscode:
             func = _compat.get_func_start(xref.frm)
             fn_name = ida_funcs.get_func_name(func) if func is not None else ""
@@ -156,8 +152,8 @@ def search_regex(pattern, case_sensitive, range_start, range_end, include_contex
                         if len(results) >= limit:
                             truncated = True
                             break
-            if truncated:
-                break
+        if truncated:
+            break
 
     result = build_response(results, offset, limit, matches_seen, truncated, pattern=pattern)
     if seg_note:
@@ -227,8 +223,6 @@ def search_func_by_sig(pattern, offset, limit, timeout_ms=0):
         active_filters.append("no_callers")
 
     for ea in idautils.Functions():
-        if truncated or timed_out:
-            break
         try:
             timer.check()
         except TimeoutError:

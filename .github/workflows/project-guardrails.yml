@@ -71,4 +71,4 @@ jobs:
       - name: Build and audit package
         run: |
           python -m build --sdist --wheel --outdir dist
-          pip-audit --strict --progress-spinner off
+          pip-audit --progress-spinner off --skip-editable

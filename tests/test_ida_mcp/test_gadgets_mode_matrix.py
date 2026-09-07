@@ -65,13 +65,17 @@ def test_terminator_classifiers_cover_x86_arm_mips_ppc_riscv_and_sparc():
 
     monkeypatch = pytest.MonkeyPatch()
     try:
+        # The imported classifier can outlive a canonical module reload made
+        # by another test family.  Bind its globals explicitly so the patch
+        # reaches the object the function actually executes against.
+        monkeypatch.setitem(_is_jop_terminator.__globals__, "idc", gadgets_module.idc)
         monkeypatch.setattr(
-            idc,
+            gadgets_module.idc,
             "get_operand_type",
-            lambda ea, _index: idc.o_near if ea == 2 else idc.o_reg,
+            lambda ea, _index: gadgets_module.idc.o_near if ea == 2 else gadgets_module.idc.o_reg,
             raising=False,
         )
-        monkeypatch.setattr(idc, "get_operand_value", lambda *_args: 0x80, raising=False)
+        monkeypatch.setattr(gadgets_module.idc, "get_operand_value", lambda *_args: 0x80, raising=False)
         assert _is_jop_terminator(1, "jmp", "jmp rax", "x64")
         assert not _is_jop_terminator(2, "jmp", "jmp 0x1000", "x64")
         assert _is_cop_terminator(1, "call", "call rax", "x64")

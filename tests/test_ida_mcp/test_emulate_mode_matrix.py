@@ -14,6 +14,7 @@ import ctypes
 import pytest
 
 from ida_pro_mcp.ida_mcp.tools.emulate import emulate
+from tests.fakes.ida_fake import create_sample_c_binary_idb, install_fake_idb
 
 emulate_module = __import__(
     "ida_pro_mcp.ida_mcp.tools.emulate", fromlist=["emulate"]
@@ -114,6 +115,12 @@ def fake_debugger(monkeypatch):
     monkeypatch.setattr(emulate_module, "get_arch", lambda: "metapc")
     monkeypatch.setattr(emulate_module, "_inf_bitness_or_64", lambda: 64)
     return dbg
+
+
+@pytest.fixture(autouse=True)
+def sample_fake_idb():
+    """Keep this cross-mode round-trip independent of bridge test ordering."""
+    install_fake_idb(create_sample_c_binary_idb())
 
 
 def _ok(result):

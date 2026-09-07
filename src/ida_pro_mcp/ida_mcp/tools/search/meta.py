@@ -41,8 +41,6 @@ def search_type(pattern, case_sensitive, offset, limit, include_items):
         til = ida_typeinf.get_idati()
         if til:
             for idx in range(ida_typeinf.get_ordinal_qty(til)):
-                if truncated:
-                    break
                 tif = ida_typeinf.tinfo_t()
                 if tif.get_type_by_ordinal(til, idx):
                     name = tif.get_type_name()
@@ -110,8 +108,6 @@ def search_export(pattern, case_sensitive, offset, limit, include_items):
         entry_count = 0
 
     for idx in range(entry_count):
-        if truncated:
-            break
         try:
             ordinal = ida_nalt.get_entry_ordinal(idx)
             ea = ida_nalt.get_entry(ordinal)

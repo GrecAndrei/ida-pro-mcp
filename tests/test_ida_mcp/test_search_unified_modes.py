@@ -153,3 +153,11 @@ def test_graph_helpers_and_low_level_flag_modes(monkeypatch):
     uni.idc.is_align = lambda _flags: False
     uni.ida_bytes.has_cmt = lambda _ea, _rep: True
     assert uni._data_flags(0, ea=0x10) == ["has_comment"]
+
+
+def test_rescore_with_embeddings_phrase_like():
+    uni = _module()
+    ranked = [{"_sem": "foo bar baz", "score": 1.0, "_bonus": 0.0}]
+    uni.semantic_scores = lambda pat, pool, **kwargs: [2.0]
+    uni._rescore_find_ranked(ranked, "phrase with space and long")
+    assert ranked[0]["score"] == 2.0

@@ -18,7 +18,7 @@ def bridge(tmp_path, monkeypatch):
     monkeypatch.delenv("IDA_MCP_SESSION_TOKEN", raising=False)
     for name in ("ida_segment", "idautils", "idc"):
         monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
-    name = f"ida_pro_mcp_server_remaining_{id(tmp_path)}"
+    name = "ida_pro_mcp.server_script"
     spec = importlib.util.spec_from_file_location(name, _SERVER_SCRIPT)
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, name, module)

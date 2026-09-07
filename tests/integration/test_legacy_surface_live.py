@@ -605,43 +605,47 @@ def test_legacy_analysis_and_database_controls_are_live(
     legacy_ctx: LegacyContext, tmp_path: Path
 ):
     """Cover non-destructive analysis controls and reversible IDB plumbing."""
-    for action, extra in (
-        ("get_options", {}),
-        ("state", {}),
-        ("get_af", {}),
-        ("get_af", {"af_flag": "AF_MARKCODE"}),
-        ("auto_wait", {"timeout_ms": 0}),
-        ("set_processor", {"processor": "metapc"}),
-        ("set_architecture", {"bitness": 64, "endian": "le"}),
-        ("set_loader_options", {"loader": "elf", "value": ""}),
-        ("set_options", {"options": {"unknown_option": 1}}),
-        ("set_af", {"af_flag": "AF_MARKCODE", "af_value": True}),
-        ("set_gp", {}),
-        ("reanalyze", {"start": "rich_tiny", "end": "rich_tiny", "blocking": False}),
-        ("run", {"start": "rich_tiny", "end": "rich_tiny", "blocking": False}),
-        ("analyze", {"start": "rich_tiny", "end": "rich_tiny", "blocking": False}),
-        ("make_code", {"addr": "rich_tiny", "size": 1}),
-        ("undefine", {"addr": "rich_tiny", "size": 1}),
-        ("force_offset", {"addr": "rich_tiny", "size": 8}),
-        ("add_entry", {"addr": "rich_tiny", "ordinal": 29991, "name": "expanded_entry"}),
-        ("save_idb", {"path": str(tmp_path / "expanded-copy.i64")}),
-    ):
-        if action in {
-            "set_processor", "set_architecture", "set_loader_options", "set_options",
-            "set_af", "set_gp", "reanalyze", "run", "analyze", "make_code",
-            "undefine", "force_offset", "add_entry", "save_idb",
-        }:
-            extra = {**extra, "_risk_ack": True}
-        legacy_ctx.coded_or_ok("analysis", action=action, **extra)
-
-    snapshot = legacy_ctx.coded_or_ok(
-        "analysis", action="snapshot", snapshot_name="expanded-live-snapshot"
+    baseline = legacy_ctx.coded_or_ok(
+        "analysis", action="snapshot", snapshot_name="expanded-live-baseline"
     )
-    if snapshot.get("error") is not True:
-        legacy_ctx.coded_or_ok(
-            "analysis", action="restore_snapshot", snapshot_name="expanded-live-snapshot",
-            _risk_ack=True,
-        )
+    try:
+        for action, extra in (
+            ("get_options", {}),
+            ("state", {}),
+            ("get_af", {}),
+            ("get_af", {"af_flag": "AF_MARKCODE"}),
+            ("auto_wait", {"timeout_ms": 0}),
+            ("set_processor", {"processor": "metapc"}),
+            ("set_architecture", {"bitness": 64, "endian": "le"}),
+            ("set_loader_options", {"loader": "elf", "value": ""}),
+            ("set_options", {"options": {"unknown_option": 1}}),
+            ("set_af", {"af_flag": "AF_MARKCODE", "af_value": True}),
+            ("set_gp", {}),
+            ("reanalyze", {"start": "rich_tiny", "end": "rich_tiny", "blocking": False}),
+            ("run", {"start": "rich_tiny", "end": "rich_tiny", "blocking": False}),
+            ("analyze", {"start": "rich_tiny", "end": "rich_tiny", "blocking": False}),
+            # Exercise IDB layout controls at the fixture's image header. It
+            # is intentionally outside every named function, so these probes
+            # cannot remove a function needed by later tests.
+            ("make_code", {"addr": "0x400000", "size": 1}),
+            ("undefine", {"addr": "0x400000", "size": 1}),
+            ("force_offset", {"addr": "0x400000", "size": 8}),
+            ("add_entry", {"addr": "0x400000", "ordinal": 29991, "name": "expanded_entry"}),
+            ("save_idb", {"path": str(tmp_path / "expanded-copy.i64")}),
+        ):
+            if action in {
+                "set_processor", "set_architecture", "set_loader_options", "set_options",
+                "set_af", "set_gp", "reanalyze", "run", "analyze", "make_code",
+                "undefine", "force_offset", "add_entry", "save_idb",
+            }:
+                extra = {**extra, "_risk_ack": True}
+            legacy_ctx.coded_or_ok("analysis", action=action, **extra)
+    finally:
+        if baseline.get("error") is not True:
+            legacy_ctx.coded_or_ok(
+                "analysis", action="restore_snapshot", snapshot_name="expanded-live-baseline",
+                _risk_ack=True,
+            )
 
 
 def test_legacy_intelligence_and_symbol_surfaces_are_live(legacy_ctx: LegacyContext):
@@ -693,7 +697,10 @@ def test_legacy_exploit_and_emulation_surfaces_are_live(legacy_ctx: LegacyContex
         ("seh_handlers", {"addr": "rich_entry", "limit": 5}),
         ("pivot_chains", {"addr": "rich_entry", "limit": 5, "max_insns": 4}),
         ("classify_chain", {"query": "pop rdi; ret"}),
-        ("semantic_find", {"query": "stack pivot", "limit": 5}),
+        ("semantic_find", {
+            "query": "stack pivot", "limit": 5, "source_actions": ["rop"],
+            "source_limit": 50, "max_insns": 2,
+        }),
     ):
         legacy_ctx.coded_or_ok("gadgets", action=action, **extra)
 
@@ -863,6 +870,24 @@ def test_legacy_annotation_write_and_cleanup_lifecycle_is_live(
     legacy_ctx: LegacyContext, tmp_path: Path
 ):
     """Verify a real user can write, inspect, export, import, and clean notes."""
+    # Annotation context resolves an address strictly, while the write and
+    # cleanup actions intentionally accept IDA names. Resolve the fixture name
+    # through the same public search route a user would use instead of relying
+    # on a layout-specific hard-coded address.
+    resolved = legacy_ctx.coded_or_ok(
+        "search", action="find", query="rich_tiny", kind="names",
+        include_items=True, limit=10,
+    )
+    tiny_item = next(
+        (
+            item for item in (resolved.get("items") or [])
+            if isinstance(item, dict) and item.get("name") == "rich_tiny"
+        ),
+        None,
+    )
+    assert tiny_item and tiny_item.get("addr"), resolved
+    tiny_addr = str(tiny_item["addr"])
+
     legacy_ctx.coded_or_ok(
         "annotation", action="set_structured", addr="rich_tiny",
         text="temporary structured review", fmt="structured", _risk_ack=True,
@@ -877,7 +902,7 @@ def test_legacy_annotation_write_and_cleanup_lifecycle_is_live(
         _risk_ack=True,
     )
     context = legacy_ctx.coded_or_ok(
-        "annotation", action="get_context", addr="rich_tiny", _risk_ack=True
+        "annotation", action="get_context", addr=tiny_addr, _risk_ack=True
     )
     assert context.get("addr")
     legacy_ctx.coded_or_ok(

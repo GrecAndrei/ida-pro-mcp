@@ -339,18 +339,24 @@ class TestFirmwareSignals(unittest.TestCase):
         # block must still run. _detect_firmware_signals is unit-tested above;
         # here pin the wiring into _scan_ctree_vulns.
         EXPR_STREAM[:] = []
-        self.mod._detect_firmware_signals = lambda ea, pseudo="": ["mmio_store:0x40001000"]
+        original_detector = self.mod._detect_firmware_signals
+        self.mod._detect_firmware_signals = (
+            lambda ea, pseudo="": ["mmio_store:0x40001000"]
+        )
 
-        class _Cfunc:
-            entry_ea = 0xA000
-            type = None
-            lvars = []
-            body = types.SimpleNamespace()
+        try:
+            class _Cfunc:
+                entry_ea = 0xA000
+                type = None
+                lvars = []
+                body = types.SimpleNamespace()
 
-        findings = self.mod._scan_ctree_vulns(_Cfunc())
-        fw = [f for f in findings if f.get("pattern") == "firmware_signal"]
-        self.assertTrue(fw, findings)
-        self.assertIn("mmio_store:0x40001000", fw[0]["evidence"])
+            findings = self.mod._scan_ctree_vulns(_Cfunc())
+            fw = [f for f in findings if f.get("pattern") == "firmware_signal"]
+            self.assertTrue(fw, findings)
+            self.assertIn("mmio_store:0x40001000", fw[0]["evidence"])
+        finally:
+            self.mod._detect_firmware_signals = original_detector
 
 
 # ---------------------------------------------------------------------------

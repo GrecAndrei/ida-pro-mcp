@@ -348,7 +348,7 @@ class CrawlerProbe:
                 entry["kind"] = parts[1]
             if len(parts) >= 3:
                 entry["name"] = " ".join(parts[2:])
-            if entry["addr"]:
+            if entry["addr"]:  # pragma: no branch - non-empty split token
                 out.append(entry)
         return out
 

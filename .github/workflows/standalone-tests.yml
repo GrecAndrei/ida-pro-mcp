@@ -25,6 +25,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
@@ -49,14 +51,20 @@ jobs:
           python scripts/generate_tool_skills.py
           git diff --exit-code -- .agents/skills docs/TOOLS_REFERENCE.md
 
-      - name: Run standalone test suite
+      - name: Run standalone test suite with changed-line coverage
         env:
           IDA_MCP_DISABLE_RATE_LIMIT: "1"
           IDA_MCP_POLICY_MODE: "permissive"
         # tests/integration requires a licensed IDA installation and is
         # exercised locally against live sessions; CI must not attempt to
         # spawn idat (each class would wait out its startup timeout).
-        run: python -m pytest -q --ignore=tests/integration
+        run: |
+          python -m coverage run --branch -m pytest -q --ignore=tests/integration
+          base="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ -z "$base" ] || [[ "$base" =~ ^0+$ ]]; then
+            base="$(git rev-parse HEAD^)"
+          fi
+          python scripts/check_changed_line_coverage.py --base "$base"
 
   # Optional: Architecture A Phase 1 — exercise the host-side r2 engine
   # against a real Rizin install. Hermetic tests in the base matrix already

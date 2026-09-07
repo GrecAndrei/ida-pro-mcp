@@ -21,7 +21,9 @@ All tests run standalone with _FakeIda-style fakes — no live IDA, no MCP serve
 import os
 import struct
 import sys
+import types
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
@@ -396,3 +398,191 @@ class TestRiscVRawBlob(unittest.TestCase):
         self.assertIs(r["ok"], True)
         self.assertEqual(idb.strlits[blob_end]["strtype"], 0)
         self.assertEqual(idb.read(blob_end, 14), b"reset_handler\0")
+
+
+class TestModifyCompatibilityBoundaries(unittest.TestCase):
+    def test_metadata_persistence_aliases_and_governance_redaction(self):
+        mod, idb = _load_modify()
+        self.assertEqual(mod._gather_governance_metadata("rename", 0x1000, "x"), {})
+        self.assertEqual(mod._gather_governance_metadata("set_type", 0x1000, "int"), {})
+
+        fn = types.SimpleNamespace(start_ea=0x1000, end_ea=0x1010)
+        mod._compat.get_func_info = lambda _ea: fn
+        mod._compat.get_func_flags = lambda _ea: 0
+        mod._compat.get_func_start = lambda _ea: 0x1000
+        mod.idautils.Heads = lambda *_args: iter([0x1000])
+        mod.idautils.CodeRefsFrom = lambda *_args: iter([0x2000])
+        mod.idc.get_func_name = lambda _ea: ""
+        mod.ida_nalt.get_tinfo = lambda *_args: True
+
+        class Tinfo:
+            def get_func_details(self, _out):
+                return False
+
+        mod.ida_typeinf.tinfo_t = Tinfo
+        mod.idaapi.func_type_data_t = object
+        metadata = mod._gather_governance_metadata("rename", 0x1000, "x")
+        self.assertEqual(metadata["api_calls"], "")
+        self.assertEqual(mod._gather_governance_metadata("set_type", 0x1000, "int __sp"), {
+            "targets_stack": True,
+            "changes_frame_size": True,
+        })
+
+        # The public compatibility aliases are resolved before the action
+        # branches, including the generic `type` and `comment` spellings.
+        idb.create_data = lambda *_args: 1
+        self.assertTrue(mod.modify(action="create_data", address="0x1000", type="dword", governed=False)["ok"])
+        mod.idc.set_cmt = lambda *_args: True
+        self.assertTrue(mod.modify(action="comment", address="0x1000", comment="via kw", governed=False)["ok"])
+
+        warnings = ["review this edit"]
+
+        def approved(**_kwargs):
+            return {
+                "approved": True,
+                "verdict": "warned",
+                "violations": [],
+                "warnings": warnings,
+                "redacted_content": "safe",
+            }
+
+        mod.evaluate_operation = approved
+        mod.idc.set_name = lambda *_args: True
+        mod._persist_symbol_knowledge = lambda *_args: None
+        self.assertEqual(mod.modify(action="rename", address="0x1000", value="unsafe")["name"], "safe")
+        self.assertEqual(mod.modify(action="comment", address="0x1000", value="unsafe")["governance_warnings"], warnings)
+
+        mod.ida_typeinf.parse_decl = lambda *_args: True
+        mod.ida_typeinf.apply_tinfo = lambda *_args: True
+        self.assertEqual(mod.modify(action="set_type", address="0x1000", value="unsafe")["governance_warnings"], warnings)
+        import ida_idp
+        mod.ida_bytes.patch_bytes = lambda *_args: None
+        ida_idp.assemble = lambda *_args: (True, b"\x90")
+        self.assertEqual(mod.modify(action="patch_asm", address="0x1000", value="unsafe")["governance_warnings"], warnings)
+        mod.evaluate_operation = lambda **_kwargs: {
+            "approved": True,
+            "verdict": "warned",
+            "violations": [],
+            "warnings": warnings,
+            "redacted_content": "90",
+        }
+        self.assertTrue(mod.modify(action="patch_bytes", address="0x1000", value="9090")["ok"])
+
+        mod.evaluate_operation = lambda **_kwargs: {
+            "approved": True,
+            "verdict": "warned",
+            "violations": [],
+            "warnings": warnings,
+            "redacted_content": "",
+        }
+        self.assertEqual(mod.modify(action="create_data", address="0x1000", count=1)["governance_warnings"], warnings)
+        self.assertEqual(mod.modify(action="create_strlit", address="0x1100", size=2)["governance_warnings"], warnings)
+
+    def test_persistence_fallback_loop_limits_and_validation_errors(self):
+        mod, _idb = _load_modify()
+        real_import = __import__("builtins").__import__
+        service = types.ModuleType("ida_pro_mcp.services")
+        records = []
+
+        class SymbolDB:
+            def upsert_symbol(self, row):
+                records.append(row)
+
+        service.SymbolDB = SymbolDB
+
+        def import_service(name, *args, **kwargs):
+            if name == "ida_pro_mcp.services":
+                return service
+            return real_import(name, *args, **kwargs)
+
+        mod._compat.get_func_start = lambda ea: ea
+        mod.idc.get_idb_path = lambda: "/tmp/test.i64"
+        mod.idautils.CodeRefsTo = lambda *_args: iter(())
+        mod.idautils.FuncItems = lambda _ea: iter([0x1000])
+        refs = iter([0x4000, 0x4004, 0x4008])
+        mod.idautils.DataRefsFrom = lambda _ea: refs
+        strings = {0x4000: None, 0x4004: b"same", 0x4008: b"same"}
+        mod.idc.get_strlit_contents = lambda ea, *_args: strings[ea]
+        with patch.object(__import__("builtins"), "__import__", import_service):
+            mod._persist_symbol_knowledge(0x1000, "known")
+        self.assertEqual(records[-1]["strings"], ["same"])
+
+        refs = iter(range(24))
+        mod.idautils.DataRefsFrom = lambda _ea: refs
+        mod.idc.get_strlit_contents = lambda ea, *_args: f"s{ea}".encode()
+        with patch.object(__import__("builtins"), "__import__", import_service):
+            mod._persist_symbol_knowledge(0x1000, "many")
+        self.assertEqual(len(records[-1]["strings"]), 24)
+
+        class BrokenDB:
+            def upsert_symbol(self, _row):
+                raise RuntimeError("database unavailable")
+
+        service.SymbolDB = BrokenDB
+        with patch.object(__import__("builtins"), "__import__", import_service):
+            mod._persist_symbol_knowledge(0x1000, "broken")
+
+        def import_missing(name, *args, **kwargs):
+            if name in {"ida_pro_mcp.services", "host.stores.symbol_db"}:
+                raise ImportError("store unavailable")
+            return real_import(name, *args, **kwargs)
+
+        with patch.object(__import__("builtins"), "__import__", import_missing):
+            mod._persist_symbol_knowledge(0x1000, "no_store")
+
+        error = {"error": True, "code": "ADDRESS_INVALID"}
+        mod.validate_addr = lambda *_args, **_kwargs: (None, error)
+        self.assertIs(mod.modify(action="rename", addr="bad", value="x", governed=False), error)
+
+    def test_patch_nop_local_variable_and_strlit_failure_edges(self):
+        mod, idb = _load_modify()
+        mod._compat.get_func_start = lambda _ea: 0x1000
+        patches = []
+        mod.ida_bytes.patch_bytes = lambda ea, raw: patches.append((ea, bytes(raw)))
+        mod.idaapi.insn_t = object
+        mod.idaapi.decode_insn = lambda *_args: 0
+        mod._inf_procname = lambda: "riscv"
+        decoded_default = mod.modify(action="patch_bytes", addr="0x1000", nop=True, governed=False)
+        self.assertEqual(decoded_default["size"], 1)
+        riscv = mod.modify(action="patch_bytes", addr="0x1000", nop=True, count=5, governed=False)
+        self.assertEqual(riscv["size"], 5)
+        self.assertEqual(patches[-1][1], b"\x13\x00\x00\x00\x00")
+        mod._inf_procname = lambda: "arm"
+        arm = mod.modify(action="patch_bytes", addr="0x1000", nop=True, count=5, governed=False)
+        self.assertEqual(arm["size"], 5)
+        self.assertEqual(patches[-1][1], b"\x00\xf0\x20\xe3\x00")
+        self.assertEqual(mod.modify(action="patch_bytes", addr="0x1000", value=0, governed=False)["code"], "INVALID_ARGS")
+
+        mod.ida_hexrays.decompile = lambda _ea: types.SimpleNamespace(
+            lvars=[types.SimpleNamespace(name="existing")]
+        )
+        missing = mod.modify(action="rename_local", addr="0x1000", var_name="missing", new_name="x", governed=False)
+        self.assertIn("Available: existing", missing["message"])
+        mod.ida_hexrays.user_lvar_modifier_t = type("Base", (), {})
+        mod.ida_hexrays.modify_user_lvars = lambda _ea, modifier: modifier.modify_lvars(
+            types.SimpleNamespace(lvvec=[types.SimpleNamespace(name="other")])
+        )
+        failed = mod.modify(action="rename_local", addr="0x1000", var_name="existing", new_name="x", governed=False)
+        self.assertEqual(failed["code"], "IDA_ERROR")
+        mod.ida_hexrays.decompile = lambda _ea: (_ for _ in ()).throw(RuntimeError("decompile crash"))
+        self.assertFalse(mod.modify(action="rename_local", addr="0x1000", var_name="x", new_name="y", governed=False)["ok"])
+
+        idb.create_strlit = lambda *_args: (_ for _ in ()).throw(RuntimeError("strlit failure"))
+        self.assertFalse(mod.modify(action="create_strlit", addr="0x1000", size=2, governed=False)["ok"])
+
+    def test_undo_fallback_and_exception_modes(self):
+        mod, _idb = _load_modify()
+        undo = types.ModuleType("ida_undo")
+        with patch.dict(sys.modules, {"ida_undo": undo}):
+            mod.ida_bytes = types.ModuleType("ida_bytes")
+            self.assertTrue(mod.modify(action="undo_end")["ok"])
+            mod.ida_bytes.undo_end = lambda: (_ for _ in ()).throw(RuntimeError("undo failure"))
+            self.assertFalse(mod.modify(action="undo_end")["ok"])
+            undo.create_undo_point = lambda *_args: (_ for _ in ()).throw(RuntimeError("begin failure"))
+            self.assertFalse(mod.modify(action="undo_begin")["ok"])
+            undo.create_undo_point = lambda *_args: True
+            self.assertTrue(mod.modify(action="undo_begin")["ok"])
+
+        mod.validate_addr = lambda value, **_kwargs: (int(str(value), 0), None)
+        mod.idc.set_name = lambda *_args: (_ for _ in ()).throw(RuntimeError("rename crash"))
+        self.assertFalse(mod.modify(action="rename", addr="0x1000", value="x", governed=False)["ok"])

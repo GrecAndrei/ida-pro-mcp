@@ -182,3 +182,57 @@ def test_imports_deep_handles_sdk_failures_with_error_envelope(monkeypatch):
     monkeypatch.setattr(mod.ida_nalt, "get_import_module_qty", lambda: (_ for _ in ()).throw(RuntimeError("imports unavailable")))
     result = mod.imports_deep("resolve")
     assert result["ok"] is False and "imports unavailable" in result["error"]
+
+
+def test_imports_deep_cache_limits_and_thunk_query_edges():
+    mod = _module()
+
+    # line 67: _IMPORT_MAP_CACHE pop when reaching max
+    mod._IMPORT_MAP_CACHE_MAX = 1
+    _imports(mod, [("kernel32.dll", [(0x1000, "CreateFileA", 0)])])
+    mod._import_ea_map()
+    mod.ida_nalt.get_root_filename = lambda: "second"
+    mod._import_ea_map()
+
+    # line 205: seg is None in thunks idata segment scan
+    mod.idautils.Segments = lambda: [0x2000]
+    mod.idc.get_segm_name = lambda _ea: ".idata"
+    mod._compat.get_segment = lambda _ea: None
+    res = mod.imports_deep("thunks")
+    assert res["ok"] is True
+
+    # lines 214-215: query_matcher filters out thunk name and advances stride
+    seg = types.SimpleNamespace(start_ea=0x2000, end_ea=0x2010)
+    mod.idautils.Segments = lambda: [0x2000]
+    mod._compat.get_segment = lambda _ea: seg
+    mod.idc.get_segm_name = lambda _ea: ".idata"
+    mod.idc.get_qword = lambda _ea: 0x5000
+    mod.idc.get_name = lambda ea: "SkipMe" if ea == 0x2000 else "KeepMe"
+    mod._inf_bitness = lambda: 64
+    res_query = mod.imports_deep("thunks", query="Keep")
+    assert res_query["count"] == 1
+
+    # line 257: delay item limit reached
+    seg_del = types.SimpleNamespace(start_ea=0x4000, end_ea=0x4020)
+    mod.idautils.Segments = lambda: [0x4000]
+    mod._compat.get_segment = lambda _ea: seg_del
+    mod.idc.get_segm_name = lambda _ea: ".didat"
+    mod.idc.get_name = lambda ea: f"dll_{ea:x}"
+    mod.idc.next_head = lambda ea, _end: ea + 4 if ea < 0x4010 else -1
+    res_del = mod.imports_deep("delay", count=1)
+    assert res_del["count"] == 1
+
+    # line 279 & 284: forwarded limit reached early stop and query mismatch filter
+    _imports(
+        mod,
+        [("kernel32", [(0x1000, "NTDLL.Skip", 0), (0x1004, "NTDLL.Rtl1", 0), (0x1008, "NTDLL.Rtl2", 0)])],
+    )
+    res_fwd_filter = mod.imports_deep("forwarded", query="Rtl")
+    assert "NTDLL.Rtl1" in res_fwd_filter["forwarded"]
+    res_fwd = mod.imports_deep("forwarded", count=1)
+    assert res_fwd["count"] == 1
+
+    # line 307: ordinal limit reached early callback stop
+    _imports(mod, [("kernel32", [(0x1000, None, 1), (0x1004, None, 2)])])
+    res_ord = mod.imports_deep("ordinal", count=1)
+    assert res_ord["count"] == 1

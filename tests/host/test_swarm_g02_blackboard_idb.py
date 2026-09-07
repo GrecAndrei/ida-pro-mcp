@@ -356,3 +356,115 @@ def test_auto_named_rows_without_comment_are_not_counted_as_own_annotations(stor
     assert result["imported"][0]["address"] == "0x402000"
     assert result["skipped_no_content"] == 1
     assert "skipped_own_annotations" not in result
+
+
+def test_current_symbols_batch_empty_and_error_fallbacks():
+    ida = _FakeIda()
+    host = _Host(ida)
+    # Empty addrs -> returns {}
+    assert host._current_symbols_batch(ida, []) == {}
+
+    # Batch where sub_res is missing "name"
+    class _MissingNameBatch(_FakeIda):
+        def __call__(self, tool, payload):
+            if tool == "batch":
+                return {"ok": True, "results": [{"result": {"foo": "bar"}}, {"result": {"foo": "baz"}}]}
+            return super().__call__(tool, payload)
+
+    b_host = _Host(_MissingNameBatch())
+    res = b_host._current_symbols_batch(_MissingNameBatch(), ["0x401000", "0x402000"])
+    from ida_pro_mcp.host.server.server_blackboard_idb import _UNREADABLE
+    assert res["0x401000"] is _UNREADABLE
+
+    # Batch where rpc("batch") raises Exception -> falls back to sequential lookup
+    class _FailingBatch(_FakeIda):
+        def __call__(self, tool, payload):
+            if tool == "batch":
+                raise RuntimeError("batch broken")
+            return super().__call__(tool, payload)
+
+    f_ida = _FailingBatch(names={"0x401000": "func_a", "0x402000": "func_b"})
+    f_host = _Host(f_ida)
+    res = f_host._current_symbols_batch(f_ida, ["0x401000", "0x402000"])
+    assert res["0x401000"] == "func_a"
+    assert res["0x402000"] == "func_b"
+
+
+def test_plan_rename_and_apply_exceptions():
+    ida = _FakeIda(names={"0x401000": "sub_401000"})
+    host = _Host(ida)
+    # Title with no usable identifier
+    sym, reason = host._plan_rename(ida, {"title": "??? !!!"}, "0x401000")
+    assert sym == ""
+    assert "title yields no usable identifier" in reason
+
+    # current_symbol is None -> looks up symbol
+    sym, reason = host._plan_rename(ida, {"title": "My Func"}, "0x401000", current_symbol=None)
+    assert sym == "my_func"
+    assert reason == ""
+
+    # _apply raises Exception
+    class _RaisingModify(_FakeIda):
+        def __call__(self, tool, payload):
+            if tool == "modify":
+                raise RuntimeError("disk read only")
+            return super().__call__(tool, payload)
+
+    m_host = _Host(_RaisingModify())
+    err = m_host._apply(_RaisingModify(), "rename", "0x401000", "new_name")
+    assert "disk read only" in err
+
+
+def test_import_annotations_errors_and_edge_rows(store):
+    # 1. rpc is None -> SESSION_NOT_FOUND
+    class _NoRpcHost(_Host):
+        def _idb_rpc(self):
+            return None
+
+    no_rpc = _NoRpcHost(None)
+    res = no_rpc._import_annotations(store, {})
+    assert res.get("error") is True
+    assert "Reading IDB annotations needs an open session" in res["message"]
+
+    # 2. rpc raises exception on "data" -> IDA_ERROR
+    class _RaisingData(_FakeIda):
+        def __call__(self, tool, payload):
+            if tool == "data":
+                raise RuntimeError("data plugin crashed")
+            return super().__call__(tool, payload)
+
+    r_host = _Host(_RaisingData())
+    res = r_host._import_annotations(store, {})
+    assert res.get("error") is True
+    assert "Could not read annotations: data plugin crashed" in res["message"]
+
+    # 3. Non-list annotations and non-dict row
+    class _MalformedAnnotations(_FakeIda):
+        def __call__(self, tool, payload):
+            if tool == "data":
+                return {"ok": True, "annotations": "not-a-list"}
+            return super().__call__(tool, payload)
+
+    m_host = _Host(_MalformedAnnotations())
+    res = m_host._import_annotations(store, {})
+    assert res["count"] == 0
+
+    class _NonDictRows(_FakeIda):
+        def __call__(self, tool, payload):
+            if tool == "data":
+                return {"ok": True, "annotations": [123, {"addr": "0x401000", "comment": "valid"}]}
+            return super().__call__(tool, payload)
+
+    nd_host = _Host(_NonDictRows())
+    res = nd_host._import_annotations(store, {})
+    assert res["count"] >= 1
+
+    # 4. adopt_annotation returns None
+    class _RefusedRowHost(_Host):
+        pass
+
+    import_host = _RefusedRowHost(_AnnotationsRows([{"addr": "0x500000", "name": "foo", "comment": "bar"}]))
+    import unittest.mock as mock
+    with mock.patch.object(store, "adopt_annotation", return_value=None):
+        res = import_host._import_annotations(store, {})
+        assert res["skipped_no_content"] == 1

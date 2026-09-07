@@ -221,9 +221,17 @@ def test_kill_mid_build_keeps_safe_mode_and_surfaces_error(tmp_path, server):
     # "registered-then-dead" runtime once it has OBSERVED the runtime alive, so
     # hold the fake runtime registered long enough for one poll to land.
     runtime_seen = threading.Event()
+    runtime_lookup_reached = threading.Event()
+    release_runtime_lookup = threading.Event()
     real_runtime_record = server._runtime_record
 
     def _runtime_record(session_id):
+        if session_id == sid:
+            # Hold the watcher at the lookup boundary.  This makes the test
+            # deterministic even when the background thread is scheduled
+            # between the open response and the fake runtime registration.
+            runtime_lookup_reached.set()
+            release_runtime_lookup.wait(timeout=5)
         record = real_runtime_record(session_id)
         if session_id == sid and record:
             runtime_seen.set()
@@ -240,8 +248,10 @@ def test_kill_mid_build_keeps_safe_mode_and_surfaces_error(tmp_path, server):
         return result
 
     server._record_background_error = _record_background_error
+    assert runtime_lookup_reached.wait(timeout=5)
     server.session_runtimes[sid] = {"process": _FakeIdaProcess()}
-    assert runtime_seen.wait(timeout=2)
+    release_runtime_lookup.set()
+    assert runtime_seen.wait(timeout=5)
     # session/kill is now classified DESTRUCTIVE (it tears down the runtime),
     # so it requires explicit ack even in the test's policy mode.
     killed = _open(

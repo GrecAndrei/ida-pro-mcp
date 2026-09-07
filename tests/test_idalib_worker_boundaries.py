@@ -60,9 +60,10 @@ def test_invalid_open_spec_is_rejected(monkeypatch):
     assert "invalid IDA_MCP_IDALIB_OPEN" in calls[0][1]
 
 
-def test_missing_database_is_rejected(monkeypatch):
+def test_missing_database_is_rejected(monkeypatch, tmp_path):
     mod = _worker()
     monkeypatch.setitem(sys.modules, "idapro", types.ModuleType("idapro"))
+    monkeypatch.setenv("IDA_MCP_IDALIB_PYTHON_DIR", str(tmp_path / "idalib_python"))
     monkeypatch.setenv("IDA_MCP_IDALIB_OPEN", "{}")
     monkeypatch.delenv("IDA_MCP_IDB_PATH", raising=False)
     calls = _exit_capture(monkeypatch, mod)
@@ -132,3 +133,43 @@ def test_script_lifecycle_closes_database_even_on_script_failure(monkeypatch, tm
     assert calls[0][1][1] is False
     assert calls[-1] == ("close", {"save": True})
     assert "script exited with error" in capsys.readouterr().err
+
+
+def test_server_script_not_a_file(monkeypatch, tmp_path):
+    mod = _worker()
+    ida = types.ModuleType("idapro")
+    ida.open_database = lambda *args, **kwargs: 0
+    monkeypatch.setitem(sys.modules, "idapro", ida)
+    monkeypatch.setenv("IDA_MCP_IDALIB_OPEN", '{"file": "sample.bin"}')
+    missing_script = tmp_path / "does_not_exist.py"
+    monkeypatch.setenv("IDA_MCP_SERVER_SCRIPT", str(missing_script))
+    calls = _exit_capture(monkeypatch, mod)
+    with pytest.raises(SystemExit):
+        mod.main()
+    assert "server_script not found" in calls[0][1]
+
+
+def test_script_lifecycle_handles_system_exit_and_close_database_failure(monkeypatch, tmp_path, capsys):
+    mod = _worker()
+    script = tmp_path / "exit_script.py"
+    script.write_text("import sys; sys.exit(0)\n", encoding="utf-8")
+    ida = types.ModuleType("idapro")
+    ida.open_database = lambda *args, **kwargs: 0
+    ida.close_database = lambda **kwargs: (_ for _ in ()).throw(RuntimeError("close fail"))
+    monkeypatch.setitem(sys.modules, "idapro", ida)
+    monkeypatch.setenv("IDA_MCP_IDALIB_OPEN", '{"file": "sample.bin"}')
+    monkeypatch.setenv("IDA_MCP_SERVER_SCRIPT", str(script))
+    with pytest.raises(SystemExit) as exc:
+        mod.main()
+    assert exc.value.code == 0
+    assert "close_database failed: close fail" in capsys.readouterr().err
+
+
+def test_idalib_worker_invoked_as_main(monkeypatch):
+    import runpy
+    monkeypatch.setitem(sys.modules, "idapro", types.ModuleType("idapro"))
+    monkeypatch.setenv("IDA_MCP_IDALIB_OPEN", "{}")
+    monkeypatch.delenv("IDA_MCP_IDB_PATH", raising=False)
+    with pytest.raises(SystemExit) as exc:
+        runpy.run_module("ida_pro_mcp.idalib_worker", run_name="__main__")
+    assert exc.value.code == 3

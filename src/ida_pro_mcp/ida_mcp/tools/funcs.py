@@ -32,6 +32,7 @@ from ..sync import _tool_cache, sync_wrapper
 
 # IDA 9.4 EA-based API shims (see ida_mcp/compat.py).
 from .. import compat as _compat
+from ..error_handling import parse_address_safe
 
 # Arch-aware classification for metrics and create-failure hints.  Re-imported
 # directly (not via _common) so the isolated unit-test harness exercises the

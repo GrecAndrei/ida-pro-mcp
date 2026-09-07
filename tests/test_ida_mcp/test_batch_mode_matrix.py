@@ -117,3 +117,114 @@ def test_batch_stop_on_error_and_malformed_calls_are_reported(batch_mod):
     malformed = batch_mod.batch(calls=[None])
     assert malformed["ok"] is False
     assert malformed["results"][0].get("error") is True
+
+
+def test_batch_deep_boundary_matrix_99(monkeypatch, batch_mod):
+    # 1. Line 34: _macro_get_path with empty part between dots
+    assert batch_mod._macro_get_path({"a": {"b": 10}}, "a..b") == 10
+
+    # 2. Line 96 & 107: pipe ops with non-list data
+    assert batch_mod._macro_apply_pipe_op("scalar", "first(2)") == "scalar"
+    assert batch_mod._macro_apply_pipe_op(123, "sort(field)") == 123
+
+    # 3. Line 159: MacroDSLInterpreter loading existing tool
+    interpreter = batch_mod.MacroDSLInterpreter()
+    tool_fn = interpreter._get_tool("calc")
+    assert callable(tool_fn)
+
+    # 4. Line 248: single-quoted string in _eval_expr
+    assert interpreter._eval_expr("'single_quoted'") == "single_quoted"
+
+    # 5. Line 254: _parse_args with empty string
+    assert interpreter._parse_args("   ") == {}
+
+    # 6. Lines 295, 308, 310, 313-316, 319: _eval_cond branches
+    interpreter.vars["n"] = 5
+    assert not interpreter._eval_cond("missing_var == 1")
+    assert interpreter._eval_cond("n != 4")
+    assert interpreter._eval_cond("n > 4")
+    interpreter.vars["n"] = 2
+    assert interpreter._eval_cond("n < 4")
+    interpreter.vars["n"] = 4
+    assert interpreter._eval_cond("n <= 4")
+    assert interpreter._eval_cond("n >= 4")
+    interpreter.vars["n"] = "not_a_num"
+    assert not interpreter._eval_cond("n < 4")
+
+    # 7. Line 602 & 399, 401, 407: Dependency error and circular dependency detection
+    inv_calls = [
+        {"tool": "calc", "depends_on": 1},
+        {"tool": "calc", "action": "eval", "expr": "1+1"},
+    ]
+    res_inv = batch_mod.batch(calls=inv_calls)
+    assert res_inv.get("error") is True
+    assert "must refer to an earlier call" in res_inv["message"]
+
+    class FakeDep(int):
+        def __ge__(self, other):
+            return False
+
+    circ_calls = [
+        {"tool": "calc", "depends_on": FakeDep(1)},
+        {"tool": "calc", "depends_on": FakeDep(0)},
+    ]
+    order, err = batch_mod._resolve_dependencies(circ_calls)
+    assert order is None
+    assert "Circular dependency" in err
+
+    # Lines 80 & 319: Unmatched operator in eval_cond via regex match override
+    class FakeMatch:
+        def group(self, n):
+            return {1: "a", 2: "~=", 3: "1"}[n]
+
+    real_match = batch_mod.re.match
+    monkeypatch.setattr(batch_mod.re, "match", lambda pat, s: FakeMatch() if "~=" in s else real_match(pat, s))
+    assert not batch_mod._macro_eval_cond({"a": 1}, "a ~= 1")
+    interpreter.vars["a"] = 1
+    assert not interpreter._eval_cond("a ~= 1")
+
+    # 8. Lines 471 & 484-485: _check_condition exists op and lt exception
+    assert batch_mod._check_condition({"if_result": {"index": 0, "field": "val", "op": "exists"}}, [{"val": 1}])[0]
+    assert not batch_mod._check_condition({"if_result": {"index": 0, "field": "val", "op": "lt", "value": 10}}, [{"val": "str"}])[0]
+
+    # 9. Lines 580-581: Non-dry-run script execution
+    res_script = batch_mod.batch(script="set x = 42\nreturn x")
+    assert res_script["ok"] is True
+    assert res_script["final"] == 42
+
+    # 10. Line 593: Empty calls list after template resolution
+    monkeypatch.setattr(batch_mod, "_resolve_template", lambda _tmpl, _vars: [])
+    res_empty = batch_mod.batch(template="analyze_function")
+    assert res_empty.get("error") is True
+    assert "calls list is required and cannot be empty" in res_empty["message"]
+
+    # 11. Lines 608-621 & 626: Tool name normalization and validation
+    calls_norm = [
+        {"tool": 123},
+        {"tool": "   "},
+        {"tool": "pkg.calc", "action": "eval", "expr": "1+1"},
+        {"tool": "mcp:calc", "action": "eval", "expr": "2+2"},
+        {"tool": "path/calc", "action": "eval", "expr": "3+3"},
+        {"tool": "ida-pro-mcp_calc", "action": "eval", "expr": "4+4"},
+        {"tool": "bad tool!"},
+    ]
+    res_norm = batch_mod.batch(calls=calls_norm, stop_on_error=False)
+    assert res_norm["total"] == 7
+
+    # 12. Line 668: stop_on_error with non-dict call
+    res_stop_nondict = batch_mod.batch(calls=[None, {"tool": "calc"}], stop_on_error=True)
+    assert res_stop_nondict["executed"] == 0
+
+    # 13. Line 685: stop_on_error with missing tool key
+    res_stop_notool = batch_mod.batch(calls=[{"action": "eval"}, {"tool": "calc"}], stop_on_error=True)
+    assert res_stop_notool["executed"] == 0
+
+    # 14. Line 708: stop_on_error when tool raises exception
+    def boom_calc(**_kwargs):
+        raise RuntimeError("calc boom")
+
+    import ida_pro_mcp.ida_mcp.tools.calc as calc_mod
+    monkeypatch.setattr(calc_mod, "calc", boom_calc)
+    res_stop_boom = batch_mod.batch(calls=[{"tool": "calc", "action": "eval"}, {"tool": "calc", "action": "eval"}], stop_on_error=True)
+    assert res_stop_boom["executed"] == 0
+    assert res_stop_boom["failed"] == 1

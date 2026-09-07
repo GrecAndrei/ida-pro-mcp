@@ -587,3 +587,86 @@ def test_target_collection_summary_prefers_priority_score_then_priority():
 
 def test_frontier_collection_summary_empty_shape():
     assert frontier_collection_summary([]) == {"count": 0, "briefs": []}
+
+
+def test_shapes_edge_cases_and_rendering():
+    # 1. target_collection_summary with semantic_similarity, xref_count, entropy
+    targets = [
+        {
+            "addr": "0x401000",
+            "title": "full_target",
+            "semantic_similarity": 0.85,
+            "xref_count": 5,
+            "entropy": 6.2,
+        }
+    ]
+    summary = target_collection_summary(targets)
+    assert "semantic=0.850" in summary["briefs"][0]["summary"]
+    assert "xrefs=5" in summary["briefs"][0]["summary"]
+    assert "entropy=6.20" in summary["briefs"][0]["summary"]
+
+    # 2. frontier_collection_summary with proximity, nearest_label_title
+    frontier_results = [
+        {
+            "addr": "0x401000",
+            "name": "func_a",
+            "proximity": 0.75,
+            "nearest_label_title": "near_target",
+        }
+    ]
+    f_summary = frontier_collection_summary(frontier_results)
+    assert "prox=0.750" in f_summary["briefs"][0]["summary"]
+    assert "near=near_target" in f_summary["briefs"][0]["summary"]
+
+    # 3. proposal_collection_summary with empty proposals
+    assert proposal_collection_summary([]) == {"count": 0, "briefs": []}
+
+    # 4. snapshot_to_markdown with stale, conflicts, evidence, custom status, and custom kind
+    snapshot = {
+        "exported_at": "2026-09-05T00:00:00Z",
+        "format": "ida-findings-v1",
+        "stats": {"total_entries": 3, "resolved": 1, "contradicted": 1, "stale": 1},
+        "entries": [
+            {
+                "addr": "0x401000",
+                "title": "stale_conflict_item",
+                "kind": "finding",
+                "status": "confirmed",
+                "confidence": 0.9,
+                "priority": 0.8,
+                "tags": ["crypto", "aes"],
+                "source_type": "plugin",
+                "stale": True,
+                "stale_reason": "modified IDB",
+                "conflicts_with": ["other_finding_id"],
+                "content": "A detailed explanation of findings.",
+                "evidence": [
+                    {"type": "string", "value": "AES_KEY", "address": "0x403000"},
+                    {"type": "api", "value": "CryptEncrypt"},
+                ],
+            },
+            {
+                "addr": "0x402000",
+                "title": "custom_status_item",
+                "kind": "finding",
+                "status": "in_review",
+            },
+            {
+                "addr": "0x403000",
+                "title": "custom_kind_item",
+                "kind": "custom_kind",
+                "status": "open",
+            },
+        ],
+    }
+    md = snapshot_to_markdown(snapshot)
+    assert "# IDA Findings Export" in md
+    assert "## finding" in md
+    assert "### confirmed" in md
+    assert "STALE: modified IDB" in md
+    assert "contradicts=other_finding_id" in md
+    assert "tags=crypto, aes" in md
+    assert "evidence: [string] AES_KEY @ 0x403000" in md
+    assert "evidence: [api] CryptEncrypt" in md
+    assert "### in_review" in md
+    assert "## custom_kind" in md

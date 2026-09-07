@@ -94,7 +94,7 @@ def _load_server_script():
     for name in ("ida_segment", "idautils", "idc"):
         sys.modules.setdefault(name, types.ModuleType(name))
     mod = _load_module(
-        "q07_server_script_ut", str(REPO / "src" / "ida_pro_mcp" / "server_script.py")
+        "ida_pro_mcp.server_script", str(REPO / "src" / "ida_pro_mcp" / "server_script.py")
     )
     mod._eh = eh  # expose for tests
     return mod

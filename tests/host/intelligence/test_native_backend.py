@@ -678,3 +678,248 @@ def test_native_score_does_not_cache_old_generation(monkeypatch):
     result = reranker._score("generation", ["changed"])
     assert result == [1.0]
     assert reranker._score_cache == {}
+
+
+def test_native_preference_and_loader_fallback_boundaries(monkeypatch, tmp_path):
+    monkeypatch.delenv("IDA_MCP_BACKEND", raising=False)
+    monkeypatch.delenv("IDA_MCP_NATIVE", raising=False)
+    assert native._backend_requests_native() is False
+
+    monkeypatch.setenv("IDA_MCP_NATIVE", "1")
+    core = __import__("ida_pro_mcp.host.intelligence.core", fromlist=["core"])
+    monkeypatch.setattr(core, "_resolve_backend", lambda: (_ for _ in ()).throw(RuntimeError("config")))
+    assert prefer_native_embed() is True
+    rerank_module = __import__("ida_pro_mcp.host.intelligence.rerank", fromlist=["rerank"])
+    monkeypatch.setattr(rerank_module, "_rerank_enabled", lambda: (_ for _ in ()).throw(RuntimeError("config")))
+    assert prefer_native_rerank() is True
+
+    # A second bootstrap with the flag already set exercises the idempotent
+    # branch that does not rewrite the process environment.
+    report = native.bootstrap_native_backend()
+    assert report["enabled"] is True
+
+    monkeypatch.setenv("IDA_MCP_NATIVE_LIB", str(tmp_path / "missing.so"))
+    monkeypatch.setattr(native, "_install_root", lambda: str(tmp_path / "install"))
+    monkeypatch.setattr(native.ctypes.util, "find_library", lambda _name: None)
+    assert _REAL_FIND_NATIVE_LIB() == ""
+
+    _REAL_NATIVE_LIB._instance = None
+
+
+def test_native_loader_reset_and_embedder_state_failure(monkeypatch):
+    _REAL_NATIVE_LIB._instance = None
+    first = _REAL_NATIVE_LIB()
+    second = _REAL_NATIVE_LIB.reset()
+    assert second is not first
+
+    core = __import__("ida_pro_mcp.host.intelligence.core", fromlist=["core"])
+    monkeypatch.setattr(native, "_find_llama_server", lambda: "")
+    monkeypatch.setattr(
+        core,
+        "_read_embedder_state",
+        lambda: (_ for _ in ()).throw(RuntimeError("state")),
+    )
+    NativeEmbedder._instance = None
+    assert NativeEmbedder().backend == "native-llama"
+
+    rerank_module = __import__("ida_pro_mcp.host.intelligence.rerank", fromlist=["rerank"])
+    monkeypatch.setattr(
+        rerank_module,
+        "_read_rerank_state",
+        lambda: (_ for _ in ()).throw(RuntimeError("state")),
+    )
+    NativeReranker._instance = None
+    assert NativeReranker().backend == "native-llama"
+    monkeypatch.setattr(native, "_find_native_lib", lambda: "")
+    missing = _REAL_NATIVE_LIB()
+    with pytest.raises(AttributeError):
+        missing.__getattr__("missing_symbol")
+    _REAL_NATIVE_LIB._instance = None
+
+
+def test_native_embedder_singleton_status_and_cache_failure_boundaries(monkeypatch):
+    embedder = NativeEmbedder()
+    assert NativeEmbedder() is embedder
+    embedder._open()
+    embedder._native_lib = None
+    assert embedder.status()["native_lib_exists"] is True
+
+    # A native handle can disappear between the initial snapshot and cache
+    # lookup; cached vectors must not be returned for that stale handle.
+    formatted = embedder._format("cached", "document")
+    key = (embedder._generation, "document", formatted)
+
+    class _SwapOnGet(dict):
+        def get(self, lookup, default=None):
+            embedder._handle = 999
+            return super().get(lookup, default)
+
+    embedder._native_lib = _FakeLib()
+    embedder._vec_cache = _SwapOnGet({key: [1.0]})
+    assert embedder._encode(["cached"]) is None
+
+    embedder._vec_cache = {}
+    embedder._native_lib = _FakeMissingLib()
+    assert embedder._encode(["missing library"]) is None
+
+    embedder.stop()
+    assert embedder.embed_batch(["unavailable"])[0].ok is False
+    assert embedder.stop() is None
+    NativeEmbedder.reset()
+
+
+def test_native_embedder_waiter_eviction_and_generation_races(monkeypatch):
+    embedder = NativeEmbedder()
+    formatted = embedder._format("waiting", "document")
+    key = (embedder._generation, "document", formatted)
+    event = threading.Event()
+    event.set()
+    embedder._vec_inflight = {key: event}
+    assert embedder._encode(["waiting"]) is None
+    embedder._vec_inflight = {}
+
+    class _WaiterCache(dict):
+        def __init__(self, lookup, value):
+            super().__init__()
+            self.lookup = lookup
+            self.value = value
+            self.calls = 0
+
+        def get(self, lookup, default=None):
+            self.calls += 1
+            if lookup == self.lookup and self.calls == 1:
+                return None
+            return self.value if lookup == self.lookup else super().get(lookup, default)
+
+    embedder._vec_cache = _WaiterCache(key, [2.0])
+    embedder._vec_inflight = {key: event}
+    assert embedder._encode(["waiting"]) == [[2.0]]
+    embedder._vec_inflight = {}
+
+    class _NoneOnPop(dict):
+        def pop(self, *_args, **_kwargs):
+            self.clear()
+
+    embedder._vec_cache = {}
+    embedder._vec_inflight = _NoneOnPop()
+    assert embedder._encode(["cleanup event"]) is not None
+
+    class _BadPop(dict):
+        def pop(self, *_args, **_kwargs):
+            raise RuntimeError("cache race")
+
+    embedder._vec_cache = _BadPop({"old": [0.0]})
+    embedder._vec_cache_max = 1
+    assert embedder.embed_vector("eviction") is not None
+
+    original_encode = _FakeLib.mcp_embed_encode
+
+    def advance_generation(lib, *args):
+        result = original_encode(lib, *args)
+        embedder._generation += 1
+        return result
+
+    monkeypatch.setattr(_FakeLib, "mcp_embed_encode", advance_generation)
+    embedder._vec_cache = {}
+    assert embedder._encode(["generation race"]) is None
+
+    class _NoStore(dict):
+        def __setitem__(self, _key, _value):
+            return None
+
+    monkeypatch.setattr(_FakeLib, "mcp_embed_encode", original_encode)
+    embedder._generation += 1
+    embedder._vec_cache = _NoStore()
+    assert embedder._encode(["not stored"]) is None
+
+    embedder._vec_cache = {}
+    cached_text = embedder._format("cached row", "document")
+    cached_key = (embedder._generation, "document", cached_text)
+    embedder._vec_cache[cached_key] = [1.0]
+    assert embedder._encode(["cached row", "new row"])
+
+
+def test_native_embedder_reset_suppresses_previous_stop_and_reranker_edges(monkeypatch):
+    class _BadPrevious:
+        def stop(self):
+            raise RuntimeError("already stopped")
+
+    NativeEmbedder._instance = _BadPrevious()
+    replacement = NativeEmbedder.reset()
+    assert replacement.backend == "native-llama"
+
+    reranker = NativeReranker()
+    assert NativeReranker() is reranker
+    reranker._open()
+    reranker._native_lib = None
+    assert reranker.status()["native_lib_exists"] is True
+    reranker._native_lib = _FakeLib()
+
+    key = native._rerank_cache_key("wait", ["doc"])
+    event = threading.Event()
+    event.set()
+    reranker._score_inflight = {key: event}
+    assert reranker._score("wait", ["doc"]) is None
+    reranker._score_inflight = {}
+
+    class _BadPop(dict):
+        def pop(self, *_args, **_kwargs):
+            raise RuntimeError("cache race")
+
+    reranker._score_cache = _BadPop({"old": [0.0]})
+    monkeypatch.setattr(native, "NATIVE_RERANK_CACHE_MAX", 1)
+    assert reranker._score("eviction", ["doc"]) is not None
+
+    reranker.stop()
+    assert reranker.stop() is None
+
+    reranker._native_lib = _FakeMissingLib()
+    reranker._handle = 2
+    reranker._use_native = True
+    reranker._ready = True
+    reranker.stop()
+
+    NativeReranker._instance = _BadPrevious()
+    replacement = NativeReranker.reset()
+    assert replacement.backend == "native-llama"
+
+
+def test_native_reranker_owner_cleanup_and_revalidation(monkeypatch):
+    reranker = NativeReranker()
+    assert reranker._score("empty", []) is None
+    assert reranker._use_llama is True
+
+    class _NoPop(dict):
+        def pop(self, *_args, **_kwargs):
+            self.clear()
+
+    reranker._score_inflight = _NoPop()
+    monkeypatch.setattr(native, "NATIVE_RERANK_CACHE_MAX", 1)
+    assert reranker._score("cleanup", ["doc"]) is not None
+    assert reranker._score_inflight == {}
+
+    reranker._ready = False
+    reranker._handle = None
+    assert reranker.rerank("reopen", ["doc"])
+    reranker._ready = False
+    reranker._handle = None
+    reranker._model_path = ""
+    assert reranker.rerank("cannot reopen", ["doc"]) is None
+
+    # _score takes the recovery path when readiness is lost before it enters
+    # the ABI call; rerank then reports the unavailable backend cleanly.
+    reranker.stop()
+    assert reranker.rerank("q", ["doc"]) is None
+
+    reranker = NativeReranker.reset()
+
+    class _SwapHandle(str):
+        calls = 0
+
+        def encode(self, *args, **kwargs):
+            self.calls += 1
+            if self.calls >= 2:
+                reranker._handle = 999
+            return super().encode(*args, **kwargs)
+
+    assert reranker._score("revalidate", [_SwapHandle("doc")]) is None
