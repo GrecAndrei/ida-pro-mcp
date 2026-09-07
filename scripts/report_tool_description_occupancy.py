@@ -32,9 +32,23 @@ def load_tool_descriptions() -> dict[str, str]:
     raise RuntimeError("TOOL_DESCRIPTIONS not found in schemas_data.py")
 
 
+def _get_encoding():
+    try:
+        return tiktoken.get_encoding("cl100k_base")
+    except Exception:
+        # Offline fallback: see report_tools_list_occupancy.py
+        class _Fallback:  # pragma: no cover - offline/no cache
+            def encode(self, text: str):
+                if not text:
+                    return []
+                return [0] * max(1, (len(text) + 3) // 4)
+
+        return _Fallback()
+
+
 def main() -> int:
     descriptions = load_tool_descriptions()
-    encoding = tiktoken.get_encoding("cl100k_base")
+    encoding = _get_encoding()
 
     rows = []
     total_chars = 0

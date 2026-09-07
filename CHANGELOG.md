@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-07 — Harden tiktoken occupancy reports for offline CI
+
+- Defer `tiktoken.get_encoding("cl100k_base")` to first use in `scripts/report_tools_list_occupancy.py` and add offline fallback (~4 chars/token) to prevent collection-time network fetch under the offline pytest guard.
+- Add offline fallback to `scripts/report_tool_description_occupancy.py` so both occupancy reports run without outbound network and keep `tests/test_scripts/test_report_*` green in CI.
+
 ## 2026-09-07 — Permit pytest cache machinery in filesystem guard and harden client poll fallback
 
 - Permit atomic pytest cache temporary directories (pytest-cache-files-*) and .pytest_cache directories under the repository root in the offline test filesystem guard.
