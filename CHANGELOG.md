@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-09-07 — Expand server runtime lifecycle, watchdog, and error handling coverage to 100%
+
+- Cover runtime lease claim FileNotFoundError recovery, unreadable and malformed lease handling, and Windows executable file checks.
+- Cover IDA directory candidate discovery, environment fallbacks, which resolution, and idat executable detection.
+- Cover process resource usage exception handling, raw RPC EOFError detection, and library init failure diagnostics parsing.
+- Cover tool call activity logging, auto-nudge fallback recording, recent workset break thresholds, and fallback targets.
+- Cover analysis watchdog worker loop exits upon dead runtime, and teardown lock-free begin/active/end flag lifecycle.
+- Cover analysis checkpoint timer lazy initialization and join timeouts, and analysis options native magic detection and entry point flags.
+- Cover idalib Python directory candidate detection, stale IDB family empty path guards, and process termination across psutil, win32, and procfs.
+- Cover nuclear reset corrupted IDB size check failures, start server mutexes, ownership claim failures, and pre-launch process cleanup logging.
+- Cover apply session options failure cleanup, crash recovery via library init error-2 and orphan locked database detection, and crash details.
+- Cover idalib runtime missing package errors, port handoff timeout and teardown aborts, and session recovery orphan sidecar cleanup.
+- Cover architecture verification mismatches and exceptions, background service thread initialization and index reuse, and IDB reference ambiguity resolution.
+
+
+
 ## 2026-09-07 — Expand server session validation, error handling, and background task coverage to 100%
 
 - Cover coercion guards (_sess_coerce_untag, empty strips, note/query/rename) and _substitute_params primitive fallbacks.
