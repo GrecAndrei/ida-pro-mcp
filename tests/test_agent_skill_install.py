@@ -341,3 +341,26 @@ def test_install_skills_rollback_file_target(tmp_path, monkeypatch):
     monkeypatch.setitem(skills.install_skills.__globals__, "_publish_skill", fail_second)
     with pytest.raises(OSError, match="fail second"):
         skills.install_skills([root, second])
+
+
+def test_install_skills_cleanup_non_dir_backup(tmp_path, monkeypatch):
+    import shutil
+
+    from ida_pro_mcp.installer import skills
+
+    root = tmp_path / "root"
+    skill_dir = root / skills.SKILL_NAME
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("old")
+
+    real_publish = skills.install_skills.__globals__["_publish_skill"]
+
+    def replace_backup_with_file(sdir, stext, rtext):
+        for b in root.glob(".*transaction-backup-*"):
+            shutil.rmtree(b)
+            b.write_text("not a directory")
+        return real_publish(sdir, stext, rtext)
+
+    monkeypatch.setitem(skills.install_skills.__globals__, "_publish_skill", replace_backup_with_file)
+    skills.install_skills([root])
+    assert not list(root.glob(".*transaction-backup-*"))

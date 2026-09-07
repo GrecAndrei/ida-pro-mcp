@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-07 — Expand installer clients, discovery, skills, plugin loader, and bridge script coverage to 100%
+
+- Eliminate module shadow in swarm tests so server_script.py achieves 100% offline coverage across all 751 statements.
+- Cover installer clients across Codex, Claude, Cursor, OpenCode, Hermes, and 18+ agent environments, including backup cleanup, JSON/JSON5 formatting, and Windows launcher shims.
+- Cover installer discovery edge cases, safe root traversal rejection, malformed install layouts, macOS bundle probes, and unified path expansion.
+- Cover installer skills backup pruning, broken symlink rejection, and atomic install workflows.
+- Cover ida_mcp.py plugin entrypoint loading, module unload isolation, and lifecycle initialization.
+- Cover installer main and runtime interactive wizard options, Gemini/Vertex access validation, reranker profiles, and native engine detection.
+
+
+
 ## 2026-09-07 — Expand server runtime lifecycle, watchdog, and error handling coverage to 100%
 
 - Cover runtime lease claim FileNotFoundError recovery, unreadable and malformed lease handling, and Windows executable file checks.

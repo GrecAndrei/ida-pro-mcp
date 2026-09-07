@@ -28,8 +28,8 @@ _VERSION_DIGITS_RE = re.compile(r"\d+")
 
 
 def _expand_configured_path(value: str | os.PathLike[str]) -> Path:
-    """Expand environment variables and ``~`` in an installer path value."""
-    return Path(os.path.expanduser(os.path.expandvars(os.fspath(value))))
+    """Expand user/environment references from installer path settings."""
+    return Path(os.path.expandvars(os.path.expanduser(os.fspath(value).strip())))
 
 
 def parse_version(s: str) -> tuple[int, ...]:
@@ -48,11 +48,6 @@ def parse_version(s: str) -> tuple[int, ...]:
 # any process that needs to know which IDA is wired) can find the choice
 # without re-prompting.
 STATE_FILE = "ida-install.json"
-
-
-def _expand_configured_path(value: str) -> Path:
-    """Expand user/environment references from installer path settings."""
-    return Path(os.path.expandvars(os.path.expanduser(str(value).strip())))
 
 
 def _safe_roots() -> list[Path]:
@@ -588,17 +583,13 @@ def select_ida_install(
             matches = [i for i in installs if i.version[0] == want[0]]
         elif len(want) == 2:
             matches = [i for i in installs if i.version == want]
-        elif len(want) >= 3:
+        else:
             # Third component matches the start of the build date (e.g. "9.3.260421")
             target_build_prefix = str(want[2])
             matches = [
                 i for i in installs
                 if i.version == want[:2] and i.build.startswith(target_build_prefix)
             ]
-        else:
-            raise RuntimeError(
-                f"Invalid --ida-version {explicit_version!r}: expected MAJOR[.MINOR[.BUILD]]"
-            )
         if not matches:
             raise RuntimeError(
                 f"No installed IDA matches version {explicit_version}; found: "

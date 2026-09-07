@@ -288,12 +288,12 @@ def _load_server_script_ut():
     for name in ("ida_segment", "idautils", "idc"):
         sys.modules.setdefault(name, types.ModuleType(name))
     spec = importlib.util.spec_from_file_location(
-        "s4_server_script_ut",
+        "ida_pro_mcp.server_script",
         str(REPO / "src" / "ida_pro_mcp" / "server_script.py"),
     )
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["s4_server_script_ut"] = mod
+    sys.modules["ida_pro_mcp.server_script"] = mod
     spec.loader.exec_module(mod)
     return mod
 

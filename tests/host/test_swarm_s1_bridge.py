@@ -100,7 +100,7 @@ def bridge(tmp_path, monkeypatch):
         mod_stub = types.ModuleType(name)
         mod_stub.BADADDR = -1
         sys.modules[name] = mod_stub
-    mod = _load_module("s1_server_script_ut", str(SRC_SERVER_SCRIPT))
+    mod = _load_module("ida_pro_mcp.server_script", str(SRC_SERVER_SCRIPT))
     mod._eh = eh  # expose the shared error factory for tools in tests
     return mod
 
