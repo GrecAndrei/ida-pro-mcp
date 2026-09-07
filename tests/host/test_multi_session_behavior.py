@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
+from ida_pro_mcp.host.errors import MCPError
 from ida_pro_mcp.host.server.server_multi_session import (
     ServerMultiSessionMixin,
     SessionGroup,
@@ -429,3 +431,104 @@ def test_group_remove_persists_removal_and_requires_existing_group(tmp_path):
     assert json.loads((tmp_path / "groups.json").read_text()) == []
     assert server._ms_group_remove({"group_id": "g1"})["error"] is True
     assert server._ms_group_remove({})["error"] is True
+
+
+def test_multi_session_deep_edges_99(tmp_path, monkeypatch):
+    # 80: SessionGroup.from_dict with invalid export_ea
+    bad_links = {
+        "group_id": "g_bad",
+        "name": "bad",
+        "session_ids": ["AAAA0001"],
+        "links": {
+            "sym1": {"provider_sid": "AAAA0001", "export_ea": "", "importer_sids": ["BBBB0002"]},
+            "sym2": {"provider_sid": "AAAA0001", "export_ea": "0x1000", "importer_sids": [123, "BBBB0002"]},
+        },
+    }
+    sg = SessionGroup.from_dict(bad_links)
+    assert "sym1" not in sg.links
+    assert "sym2" in sg.links
+    assert sg.links["sym2"]["importer_sids"] == ["BBBB0002"]
+
+    server = _Server(tmp_path)
+
+    # 158, 163: dict with groups list and non-list
+    groups_file = tmp_path / "groups.json"
+    groups_file.write_text(json.dumps({"groups": "not_a_list"}))
+    server._load_groups_from_disk()
+
+    # 168, 171-172, 174: rehydrate with non-dict, exception, empty group_id
+    orig_from_dict = SessionGroup.from_dict
+
+    def _corrupt_from_dict(entry):
+        if entry.get("group_id") == "corrupt":
+            raise ValueError("simulated corrupt entry")
+        return orig_from_dict(entry)
+
+    monkeypatch.setattr(SessionGroup, "from_dict", _corrupt_from_dict)
+    groups_file.write_text(
+        json.dumps({
+            "groups": [
+                "not_a_dict",
+                {"group_id": "corrupt"},
+                {"group_id": ""},
+                {"group_id": "valid_g", "name": "val", "session_ids": []},
+            ]
+        })
+    )
+    server._load_groups_from_disk()
+    monkeypatch.setattr(SessionGroup, "from_dict", orig_from_dict)
+    assert "valid_g" in server._session_groups
+
+    # 248: _drop_sid_from_groups when lock is None
+    server._session_groups_lock = None
+    server._drop_sid_from_groups("AAAA0001")
+    server._session_groups_lock = threading.Lock()
+
+    # 378: _ms_group_link with missing group
+    err = server._ms_group_link({"group_id": "nonexistent"})
+    assert err["error"] is True
+
+    # 459: group removed while linking
+    _create(server, group_id="g_race")
+    orig_call_tool = server.call_tool
+
+    def remove_during_calls(*a, **kw):
+        with server._session_groups_lock:
+            server._session_groups.pop("g_race", None)
+        return {"exports": [], "imports": []}
+
+    monkeypatch.setattr(server, "call_tool", remove_during_calls)
+    res_gone = server._ms_group_link({"group_id": "g_race"})
+    assert res_gone["code"] == MCPError.NOT_FOUND
+
+    # 465: membership changed while linking
+    _create(server, group_id="g_race2")
+
+    def mutate_during_calls(*a, **kw):
+        with server._session_groups_lock:
+            server._session_groups["g_race2"].session_ids = ["AAAA0001"]
+        return {"exports": [], "imports": []}
+
+    monkeypatch.setattr(server, "call_tool", mutate_during_calls)
+    res_mut = server._ms_group_link({"group_id": "g_race2"})
+    assert res_mut["code"] == MCPError.CONFLICT
+    monkeypatch.setattr(server, "call_tool", orig_call_tool)
+
+    # 564, 575: _ms_cross_decompile group not found & symbol not found
+    d1 = server._ms_cross_decompile({"group_id": "nonexistent", "symbol": "sym"})
+    assert d1["error"] is True
+    _create(server, group_id="g_decompile")
+    d2 = server._ms_cross_decompile({"group_id": "g_decompile", "symbol": "unlinked_sym"})
+    assert d2["error"] is True
+
+    # 611: _ms_cross_xrefs group missing
+    x1 = server._ms_cross_xrefs({"group_id": "nonexistent", "symbol": "sym"})
+    assert x1["error"] is True
+
+    # 675-677: _ms_status without group_id but with links
+    server._session_groups["g_decompile"].links = {
+        "puts": {"provider_sid": "AAAA0001", "importer_sids": ["BBBB0002"]},
+    }
+    g_res = server._ms_status({})
+    assert g_res["ok"] is True
+    assert any(g["provider_count"] >= 1 for g in g_res["groups"])

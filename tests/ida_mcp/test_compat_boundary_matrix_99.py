@@ -285,3 +285,130 @@ def test_prototype_fallbacks_cover_missing_and_broken_legacy_methods(monkeypatch
     sys.modules.pop("ida_typeinf", None)
     compat = _load_compat()
     assert compat.get_prototype_string(0x401500) is None
+
+
+def test_segment_first_and_next_missing_functions(monkeypatch):
+    _install_ida_stubs(ea_api=False)
+    segment = sys.modules["ida_segment"]
+    segment.get_first_seg = None
+    segment.get_next_seg = None
+    compat = _load_compat()
+    assert compat.get_first_segment_ea() is None
+    assert compat.get_next_segment_ea(0x401000) is None
+
+
+def test_func_flags_missing_get_func(monkeypatch):
+    _install_ida_stubs(ea_api=False)
+    funcs = sys.modules["ida_funcs"]
+    funcs.get_func = None
+    compat = _load_compat()
+    assert compat.get_func_flags(0x401000) is None
+
+
+def test_qflow_chart_legacy_constructor_exception(monkeypatch):
+    _install_ida_stubs(ea_api=True)
+    funcs = sys.modules["ida_funcs"]
+    funcs.get_func = lambda _ea: types.SimpleNamespace(start_ea=0x401000)
+    funcs.get_func_entry_info = lambda out, _ea: (
+        setattr(out, "start_ea", 0x401000) or setattr(out, "end_ea", 0x402000) or True
+    )
+    monkeypatch.delitem(sys.modules, "idaapi", raising=False)
+    gdl = types.ModuleType("ida_gdl")
+
+    class FailingFlow:
+        def __init__(self, *args):
+            if len(args) == 5:
+                raise TypeError("legacy failure")
+            raise TypeError("range failure")
+
+    gdl.FlowChart = FailingFlow
+    sys.modules["ida_gdl"] = gdl
+    compat = _load_compat()
+    assert compat.get_flow_chart(0x401500) is None
+
+
+def test_get_spd_missing_ida_frame(monkeypatch):
+    _install_ida_stubs(ea_api=True)
+    sys.modules.pop("ida_frame", None)
+    compat = _load_compat()
+    assert compat.get_spd(0x401000, 0x401004) == 0
+
+
+def test_legacy_frame_struc_exceptions(monkeypatch):
+    _install_ida_stubs(ea_api=False)
+    frame = types.ModuleType("ida_frame")
+    frame.get_frame = None
+    sys.modules["ida_frame"] = frame
+
+    funcs = sys.modules["ida_funcs"]
+    funcs.get_frame = lambda _func: (_ for _ in ()).throw(RuntimeError("funcs frame error"))
+    compat = _load_compat()
+    assert compat._legacy_frame_struc(0x401500) is None
+
+    # Test idc without get_frame_id
+    funcs.get_frame = None
+    struct = types.ModuleType("ida_struct")
+    struct.get_struc = lambda _sid: (_ for _ in ()).throw(RuntimeError("struc error"))
+    sys.modules["ida_struct"] = struct
+    idc = types.ModuleType("idc")
+    idc.get_frame_id = None
+    sys.modules["idc"] = idc
+    assert compat._legacy_frame_struc(0x401500) is None
+
+    # Test ida_struct.get_struc raising exception
+    idc.get_frame_id = lambda _ea: 0x123
+    assert compat._legacy_frame_struc(0x401500) is None
+
+
+def test_legacy_frame_members_uncallable_get_member(monkeypatch):
+    _install_ida_stubs(ea_api=False)
+    frame_mod = types.ModuleType("ida_frame")
+    struct_mod = types.ModuleType("ida_struct")
+
+    class Frame:
+        id = 0x100
+        memqty = 2
+        members = []
+        get_member = None
+
+    frame = Frame()
+    frame_mod.get_frame = lambda _func: frame
+    sys.modules["ida_frame"] = frame_mod
+    sys.modules["ida_struct"] = struct_mod
+    compat = _load_compat()
+    assert compat.frame_members(0x401500) == []
+
+
+def test_frame_members_and_size_ea_exceptions(monkeypatch):
+    _install_ida_stubs(ea_api=True)
+    _install_frame_stubs(ea_api=True)
+    frame = sys.modules["ida_frame"]
+    frame.get_func_frame_ea = lambda _tif, _ea: (_ for _ in ()).throw(RuntimeError("frame ea error"))
+    frame.get_frame_size_ea = lambda _ea: (_ for _ in ()).throw(RuntimeError("size ea error"))
+    compat = _load_compat()
+    assert compat.frame_members(0x401500) == []
+    assert compat.frame_size(0x401500) == 0
+
+
+def test_get_prototype_string_legacy_none_and_nalt_exception(monkeypatch):
+    _install_ida_stubs(ea_api=False)
+    funcs = sys.modules["ida_funcs"]
+    pfn = types.SimpleNamespace(start_ea=0x401000, end_ea=0x402000)
+    pfn.get_prototype = lambda: None
+    funcs.get_func = lambda _ea: pfn
+    idc = types.ModuleType("idc")
+    idc.get_type = lambda _ea: None
+    sys.modules["idc"] = idc
+    compat = _load_compat()
+    assert compat.get_prototype_string(0x401500) is None
+
+    # Test ida_nalt.get_tinfo raising exception when idc raises
+    _install_ida_stubs(ea_api=True)
+    idc.get_type = lambda _ea: (_ for _ in ()).throw(RuntimeError("idc error"))
+    sys.modules["idc"] = idc
+    nalt = types.ModuleType("ida_nalt")
+    nalt.get_tinfo = lambda _tif, _ea: (_ for _ in ()).throw(RuntimeError("nalt error"))
+    sys.modules["ida_nalt"] = nalt
+    sys.modules["ida_typeinf"] = types.SimpleNamespace(tinfo_t=type("Tinfo", (), {}))
+    compat = _load_compat()
+    assert compat.get_prototype_string(0x401500) is None

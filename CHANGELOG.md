@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-07 — Expand offline coverage for CLI, server client state, multi-session, R2 engine, compat, bootstrap monitoring, plugin loader, and installer edges
+
+- Eliminate module shadow and custom run_name in plugin loader tests so ida_mcp.py achieves 100% offline coverage.
+- Cover CLI subcommands across server, installer, and intelligence interfaces, including batch runs, error handlers, and help dispatch.
+- Cover server client state registration, connection tracking, capability negotiation, and lease expiration edge cases.
+- Cover multi-session lifecycle, concurrent access, active session switching, and session boundary isolation.
+- Cover Rizin/r2 engine binary detection, command execution, analysis fallbacks, and error recovery.
+- Cover IDA 9.4 EA compatibility shims across segments, functions, stack frames, member walks, and prototype resolution.
+- Cover session skills bootstrap monitoring snapshots, baseline drift alerts, metric calculations, and missing session guards.
+- Cover installer checkout skill link verification, embedder doctor Gemini/Vertex modes, and interactive wizard options.
+
 ## 2026-09-07 — Expand installer clients, discovery, skills, plugin loader, and bridge script coverage to 100%
 
 - Eliminate module shadow in swarm tests so server_script.py achieves 100% offline coverage across all 751 statements.

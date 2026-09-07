@@ -450,10 +450,14 @@ def test_ida_plugin_entrypoint_lifecycle_and_port_failover(monkeypatch, tmp_path
     fake_flat_ida_mcp.IdaMcpHttpRequestHandler = object
     monkeypatch.setitem(__import__("sys").modules, "idaapi", fake_idaapi)
     monkeypatch.setitem(__import__("sys").modules, "ida_mcp", fake_flat_ida_mcp)
-    plugin_ns = runpy.run_path(
-        str(Path(__file__).parents[1] / "src" / "ida_pro_mcp" / "ida_mcp.py"),
-        run_name="ida_plugin_coverage",
-    )
+    import importlib.util
+
+    plugin_path = Path(__file__).parents[1] / "src" / "ida_pro_mcp" / "ida_mcp.py"
+    spec = importlib.util.spec_from_file_location("ida_pro_mcp.ida_mcp", str(plugin_path))
+    loader = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(__import__("sys").modules, "ida_pro_mcp.ida_mcp", loader)
+    spec.loader.exec_module(loader)
+    plugin_ns = vars(loader)
     # Keep this lifecycle test independent of the package-unload side effect;
     # the unload helper itself is checked separately below.
     plugin_ns["MCP"].run.__globals__["unload_package"] = lambda _name: None
@@ -478,6 +482,7 @@ def test_ida_plugin_entrypoint_lifecycle_and_port_failover(monkeypatch, tmp_path
 
 
 def test_ida_plugin_unload_package_removes_only_matching_modules(monkeypatch):
+    import importlib.util
     import sys
 
     fake_idaapi = types.ModuleType("idaapi")
@@ -486,10 +491,12 @@ def test_ida_plugin_unload_package_removes_only_matching_modules(monkeypatch):
     fake_idaapi.PLUGIN_FIX = 2
     fake_idaapi.plugin_t = type("plugin_t", (), {})
     monkeypatch.setitem(sys.modules, "idaapi", fake_idaapi)
-    plugin_ns = runpy.run_path(
-        str(Path(__file__).parents[1] / "src" / "ida_pro_mcp" / "ida_mcp.py"),
-        run_name="ida_plugin_unload_coverage",
-    )
+    plugin_path = Path(__file__).parents[1] / "src" / "ida_pro_mcp" / "ida_mcp.py"
+    spec = importlib.util.spec_from_file_location("ida_pro_mcp.ida_mcp", str(plugin_path))
+    loader = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, "ida_pro_mcp.ida_mcp", loader)
+    spec.loader.exec_module(loader)
+    plugin_ns = vars(loader)
     monkeypatch.setitem(sys.modules, "ida_mcp", types.ModuleType("ida_mcp"))
     monkeypatch.setitem(sys.modules, "ida_mcp.child", types.ModuleType("ida_mcp.child"))
     monkeypatch.setitem(sys.modules, "ida_mcp_extra", types.ModuleType("ida_mcp_extra"))

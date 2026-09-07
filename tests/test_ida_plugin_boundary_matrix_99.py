@@ -19,12 +19,18 @@ def _load_plugin(monkeypatch, server):
     package.IdaMcpHttpRequestHandler = object
     monkeypatch.setitem(sys.modules, "idaapi", idaapi)
     monkeypatch.setitem(sys.modules, "ida_mcp", package)
-    namespace = runpy.run_path(
-        str(Path(__file__).parents[1] / "src" / "ida_pro_mcp" / "ida_mcp.py"),
-        run_name="ida_plugin_boundary_matrix",
-    )
-    namespace["MCP"].run.__globals__["unload_package"] = lambda _name: None
-    return namespace
+    import importlib.util
+
+    plugin_path = Path(__file__).parents[1] / "src" / "ida_pro_mcp" / "ida_mcp.py"
+    spec = importlib.util.spec_from_file_location("ida_pro_mcp.ida_mcp", str(plugin_path))
+    loader = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, "ida_pro_mcp.ida_mcp", loader)
+    spec.loader.exec_module(loader)
+    real_unload = loader.unload_package
+    loader.unload_package = lambda _name: None
+    ns = vars(loader).copy()
+    ns["_real_unload_package"] = real_unload
+    return ns
 
 
 class _Server:
@@ -79,3 +85,26 @@ def test_plugin_with_no_port_attempts_is_a_noop(monkeypatch):
     plugin.run(0)
     assert server.calls == []
     assert plugin.mcp is None
+
+
+def test_plugin_unload_package(monkeypatch):
+    server = _Server()
+    namespace = _load_plugin(monkeypatch, server)
+    unload_package = namespace["_real_unload_package"]
+    monkeypatch.setitem(sys.modules, "dummy_pkg", types.ModuleType("dummy_pkg"))
+    monkeypatch.setitem(sys.modules, "dummy_pkg.sub", types.ModuleType("dummy_pkg.sub"))
+    monkeypatch.setitem(sys.modules, "other_pkg", types.ModuleType("other_pkg"))
+    unload_package("dummy_pkg")
+    assert "dummy_pkg" not in sys.modules
+    assert "dummy_pkg.sub" not in sys.modules
+    assert "other_pkg" in sys.modules
+
+
+def test_plugin_run_raises_unexpected_oserror(monkeypatch):
+    import pytest
+    server = _Server(error=13)
+    namespace = _load_plugin(monkeypatch, server)
+    plugin = namespace["MCP"]()
+    plugin.init()
+    with pytest.raises(OSError):
+        plugin.run(0)

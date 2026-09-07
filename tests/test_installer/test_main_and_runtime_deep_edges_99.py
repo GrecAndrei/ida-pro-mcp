@@ -338,3 +338,450 @@ def test_runtime_find_rerank_model_huggingface_search(tmp_path, monkeypatch):
 def test_main_doctor_exit_code_via_main(monkeypatch):
     monkeypatch.setattr(installer_main, "run_embedder_doctor", lambda opts, ui: 42)
     assert installer_main.main(["--embedder-doctor"]) == 42
+
+
+def test_replace_with_symlink_or_copy_deep_edges(tmp_path):
+    # 762: nonexistent src
+    with pytest.raises(FileNotFoundError):
+        installer_main._replace_with_symlink_or_copy(tmp_path / "nonexistent", tmp_path / "dst")
+
+    # 794-795: dst exists as directory, replaces and cleans up directory backup
+    src_dir = tmp_path / "src_dir"
+    src_dir.mkdir()
+    (src_dir / "file.txt").write_text("hello")
+    dst_dir = tmp_path / "dst_dir"
+    dst_dir.mkdir()
+    (dst_dir / "old.txt").write_text("old")
+    installer_main._replace_with_symlink_or_copy(src_dir, dst_dir)
+    assert dst_dir.exists()
+
+    # 796: dst exists as file, replaces and unlinks file backup
+    src_file = tmp_path / "src.txt"
+    src_file.write_text("new")
+    dst_file = tmp_path / "dst.txt"
+    dst_file.write_text("old")
+    installer_main._replace_with_symlink_or_copy(src_file, dst_file)
+    assert dst_file.exists()
+
+
+def test_install_skills_existing_directory(tmp_path, monkeypatch):
+    # 898-903: dst is existing dir, refreshes managed files
+    source_root = tmp_path / "source"
+    skill = source_root / ".agents" / "skills" / "ida-pro-mcp"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("skill")
+    codex = tmp_path / "codex"
+    codex_skills = codex / "skills" / "ida-pro-mcp"
+    codex_skills.mkdir(parents=True)
+    (codex_skills / "custom.txt").write_text("custom")
+    monkeypatch.setenv("CODEX_HOME", str(codex))
+    report = InstallReport()
+    installer_main.install_codex_skills(source_root, "agent", report, False)
+    assert (codex_skills / "custom.txt").exists()
+
+
+def test_parse_args_source_root_fallbacks(monkeypatch, tmp_path):
+    # 1129-1132: fallback branches when client_configs.json not in repo root
+    orig_exists = Path.exists
+
+    def mock_exists(self):
+        if self.name == "client_configs.json":
+            return False
+        return orig_exists(self)
+
+    monkeypatch.setattr(Path, "exists", mock_exists)
+    opts = installer_main.parse_args([])
+    assert opts.source_root is not None
+
+
+def test_run_install_rerank_profile_errors(tmp_path):
+    # 1256, 1258
+    ui = installer_main.UI()
+    opts = InstallerOptions(
+        install_root=tmp_path / "root",
+        download_rerank_model=True,
+        rerank_profile="nonexistent_profile_xyz",
+    )
+    with pytest.raises(RuntimeError, match="Unknown rerank profile"):
+        installer_main._resolve_reranker_for_install(opts, tmp_path / "root", InstallReport(), ui, semantic_enabled=True)
+
+    opts2 = InstallerOptions(
+        install_root=tmp_path / "root",
+        download_rerank_model=True,
+        rerank_profile="bge-reranker-v2-m3",
+        accept_model_license=False,
+    )
+    with pytest.raises(RuntimeError, match="accept-model-license"):
+        installer_main._resolve_reranker_for_install(opts2, tmp_path / "root", InstallReport(), ui, semantic_enabled=True)
+
+
+def test_run_install_boundary_guards(tmp_path, monkeypatch):
+    ui = installer_main.UI()
+    monkeypatch.setattr(installer_main, "setup_runtime_environment", lambda *a, **kw: Path(sys.executable))
+    # 1427: _resolve_ida_install raises unexpected error
+    monkeypatch.setattr(installer_main, "_resolve_ida_install", MagicMock(side_effect=RuntimeError("unexpected ida error")))
+    opts = InstallerOptions(install_root=tmp_path / "r1", yes=True)
+    rc = installer_main.run_install(opts, ui)
+    assert rc == 1
+
+    # 1442: with_r2 requires clients phase
+    monkeypatch.setattr(installer_main, "_resolve_ida_install", lambda *a: None)
+    opts_r2 = InstallerOptions(install_root=tmp_path / "r2", yes=True, with_r2=True, only={"plugins"})
+    rc2 = installer_main.run_install(opts_r2, ui)
+    assert rc2 == 1
+
+
+def test_run_install_r2_dry_run_and_sigs_branches(tmp_path, monkeypatch):
+    ui = installer_main.UI()
+    inst = _make_install(tmp_path / "ida")
+    monkeypatch.setattr(installer_main, "setup_runtime_environment", lambda *a, **kw: Path(sys.executable))
+    monkeypatch.setattr(installer_main, "_resolve_ida_install", lambda *a: inst)
+    monkeypatch.setattr(installer_main, "resolve_r2_binary", lambda: ("/bin/rz", "1.0.0"))
+
+    # 1609: with_r2 in dry-run mode
+    opts = InstallerOptions(install_root=tmp_path / "r3", yes=True, with_r2=True, dry_run=True)
+    assert installer_main.run_install(opts, ui) == 0
+
+    # 1653: sigs_dir requires IDA install
+    opts_no_ida = InstallerOptions(install_root=tmp_path / "r4", yes=True, sigs_dir=tmp_path / "sigs")
+    monkeypatch.setattr(installer_main, "_resolve_ida_install", lambda *a: None)
+    assert installer_main.run_install(opts_no_ida, ui) == 1
+
+    # 1661: no sigs found under sigs_dir
+    empty_sigs = tmp_path / "empty_sigs"
+    empty_sigs.mkdir()
+    opts_empty = InstallerOptions(install_root=tmp_path / "r5", yes=True, sigs_dir=empty_sigs)
+    monkeypatch.setattr(installer_main, "_resolve_ida_install", lambda *a: inst)
+    assert installer_main.run_install(opts_empty, ui) == 1
+
+    # 1670: existing sigs preserved (manifest.count == 0, len(skipped) > 0)
+    manifest = SimpleNamespace(count=0, skipped=["dummy.sig"], to_dict=dict)
+    monkeypatch.setattr(installer_main, "stage_sigs", lambda *a, **kw: manifest)
+    opts_preserved = InstallerOptions(install_root=tmp_path / "r6", yes=True, sigs_dir=empty_sigs)
+    assert installer_main.run_install(opts_preserved, ui) == 0
+
+
+def test_run_install_vertex_auth_and_llama_download(tmp_path, monkeypatch):
+    ui = installer_main.UI()
+    inst = _make_install(tmp_path / "ida")
+    monkeypatch.setattr(installer_main, "setup_runtime_environment", lambda *a, **kw: Path(sys.executable))
+    monkeypatch.setattr(installer_main, "_resolve_ida_install", lambda *a: inst)
+
+    # 1724-1725: vertex with gemini_install_auth
+    opts_vertex = InstallerOptions(
+        install_root=tmp_path / "v1",
+        yes=True,
+        embed_backend="gemini",
+        gemini_access="vertex",
+        gemini_install_auth=True,
+        dry_run=False,
+    )
+    monkeypatch.setattr(installer_main, "install_optional_packages", lambda exe, pkgs: True)
+    assert installer_main.run_install(opts_vertex, ui) == 0
+
+    # 1794-1795: install_llama_server with embed_model
+    model_file = tmp_path / "model.gguf"
+    model_file.write_bytes(b"dummy")
+    server_bin_file = tmp_path / "llama-server"
+    server_bin_file.write_bytes(b"")
+    server_bin_file.chmod(0o755)
+    opts_llama = InstallerOptions(
+        install_root=tmp_path / "l1",
+        yes=True,
+        embed_backend="local",
+        embed_auto=True,
+        install_llama_server=True,
+        embed_model_path=str(model_file),
+        dry_run=False,
+    )
+    mock_dl = MagicMock(return_value=str(server_bin_file))
+    monkeypatch.setattr(installer_main, "download_and_install_llama_server", mock_dl)
+    monkeypatch.setattr(installer_main, "find_llama_server_bin", lambda *a: "")
+    assert installer_main.run_install(opts_llama, ui) == 0
+    assert mock_dl.called
+
+
+def test_run_install_embedder_state_warning_and_shell_shim(tmp_path, monkeypatch):
+    ui = installer_main.UI()
+    inst = _make_install(tmp_path / "ida")
+    monkeypatch.setattr(installer_main, "setup_runtime_environment", lambda *a, **kw: Path(sys.executable))
+    monkeypatch.setattr(installer_main, "_resolve_ida_install", lambda *a: inst)
+    model_file = tmp_path / "model.gguf"
+    model_file.write_bytes(b"dummy")
+
+    # 1852-1853: write_embedder_state exception caught
+    from ida_pro_mcp.host.intelligence import core
+    monkeypatch.setattr(core, "write_embedder_state", MagicMock(side_effect=RuntimeError("write state failed")))
+    opts_fail = InstallerOptions(
+        install_root=tmp_path / "s1",
+        yes=True,
+        embed_model_path=str(model_file),
+        dry_run=False,
+    )
+    assert installer_main.run_install(opts_fail, ui) == 0
+
+    # 1899-1905: install_cli_shim dry_run and ok
+    monkeypatch.setattr(installer_main, "install_bashrc_cli", lambda *a: True)
+    opts_shim_dry = InstallerOptions(install_root=tmp_path / "sh1", yes=True, install_cli_shim=True, dry_run=True)
+    assert installer_main.run_install(opts_shim_dry, ui) == 0
+    opts_shim_ok = InstallerOptions(install_root=tmp_path / "sh2", yes=True, install_cli_shim=True, dry_run=False)
+    assert installer_main.run_install(opts_shim_ok, ui) == 0
+
+
+def test_run_install_error_recovery_failures(tmp_path, monkeypatch):
+    ui = installer_main.UI()
+    monkeypatch.setattr(installer_main, "setup_runtime_environment", lambda *a, **kw: Path(sys.executable))
+    # 1935-1936: _write_install_error_log raises OSError
+    monkeypatch.setattr(installer_main, "_resolve_ida_install", MagicMock(side_effect=RuntimeError("fatal")))
+    monkeypatch.setattr(installer_main, "_write_install_error_log", MagicMock(side_effect=OSError("disk full")))
+
+    # 1942-1944: rollback_from_backups raises exception
+    monkeypatch.setattr(installer_main, "rollback_from_backups", MagicMock(side_effect=RuntimeError("rollback failed")))
+
+    # 1951-1952: report.write raises exception
+    monkeypatch.setattr(InstallReport, "write", MagicMock(side_effect=OSError("cannot write report")))
+
+    opts = InstallerOptions(install_root=tmp_path / "err_all", yes=True, rollback_on_fail=True)
+    assert installer_main.run_install(opts, ui) == 1
+
+
+def test_main_dunder_entrypoint(tmp_path, monkeypatch):
+    # 1967: main execution as __main__
+    import runpy
+    monkeypatch.setattr(sys, "argv", [
+        "ida-pro-mcp-installer",
+        "--embedder-doctor",
+        "--no-embed-auto",
+        "--install-root",
+        str(tmp_path),
+    ])
+    with pytest.raises(SystemExit) as exc_info:
+        runpy.run_module("ida_pro_mcp.installer.main", run_name="__main__")
+    assert exc_info.value.code in (0, 1)
+
+
+def test_runtime_deep_edge_cases(tmp_path, monkeypatch):
+    # 158: _profile_download_url without /resolve/main/
+    prof = SimpleNamespace(download_url="https://hf.co/user/repo/blob/master/m.gguf", download_revision="a" * 40)
+    assert installer_runtime._profile_download_url(prof) == ""
+
+    # 339-340, 348-351: kill_ida_processes on win32
+    monkeypatch.setattr(sys, "platform", "win32")
+    target_bin = "/opt/ida/target_ida64"
+    wmic_output = SimpleNamespace(returncode=0, stdout=f"Node,ExecutablePath,ProcessId\nnode1,{target_bin},1234\n")
+
+    def fake_win_run(cmd, *a, **kw):
+        if "wmic" in cmd[0]:
+            return wmic_output
+        if "taskkill" in cmd:
+            return SimpleNamespace(returncode=1)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_win_run)
+    orig_resolve = Path.resolve
+    called_target = False
+
+    def flaky_res(self, *a, **kw):
+        nonlocal called_target
+        if str(self) == target_bin:
+            if not called_target:
+                called_target = True
+                return target_bin
+            raise OSError("cannot resolve")
+        return orig_resolve(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "resolve", flaky_res)
+    assert installer_runtime.kill_ida_processes(target_bin) is False
+
+    # 384, 395-396: kill_ida_processes on linux
+    monkeypatch.setattr(sys, "platform", "linux")
+    mock_pgrep = SimpleNamespace(returncode=0, stdout="1234   \n5678 /opt/ida\n")
+    def fake_linux_run(cmd, *a, **kw):
+        if cmd[0] == "pgrep":
+            return mock_pgrep
+        if cmd[0] == "kill":
+            raise OSError("permission denied")
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(subprocess, "run", fake_linux_run)
+    assert installer_runtime.kill_ida_processes("/opt/ida") is False
+
+    # 494-495, 537: find_embed_model exception in manual read and falsy base
+    from ida_pro_mcp.host.intelligence import core
+    orig_expand = installer_runtime._expand_configured_path
+    monkeypatch.setattr(core, "_select_state_path", MagicMock(side_effect=RuntimeError("boom")))
+    monkeypatch.setattr(installer_runtime, "_read_installer_embedder_state", lambda r: {"model_path": "something"})
+    monkeypatch.setenv("IDA_MCP_EMBED_SEARCH_PATHS", "dummy_entry")
+    monkeypatch.setattr(installer_runtime, "_expand_configured_path", lambda s: None)
+    assert installer_runtime.find_embed_model(tmp_path) == ""
+    monkeypatch.setattr(installer_runtime, "_expand_configured_path", orig_expand)
+
+    # 731, 741: find_llama_server_bin darwin roots and seen duplicate
+    monkeypatch.setattr(sys, "platform", "darwin")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    srv = bin_dir / "llama-server"
+    srv.write_bytes(b"")
+    srv.chmod(0o755)
+    monkeypatch.setattr(os, "environ", {"PATH": f"{bin_dir}:{bin_dir}"})
+    found_bin = installer_runtime.find_llama_server_bin(tmp_path)
+    assert found_bin == str(srv)
+
+    # 808, 810, 829-830, 840-841, 859-860: find_rerank_model branches
+    fake_home = tmp_path / "fake_home"
+    fake_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    # 808: unknown profile fallback
+    assert installer_runtime.find_rerank_model(tmp_path, profile="unknown_xyz") == ""
+
+    # 810: selected is None
+    import ida_pro_mcp.host.intelligence.rerank_profiles as rp_mod
+    monkeypatch.setattr(rp_mod, "get_rerank_model_profile", lambda *a: None)
+    assert installer_runtime.find_rerank_model(tmp_path) == ""
+
+    # 829-830, 840-841, 859-860: extra paths, resolve OSError, rglob match
+    monkeypatch.setattr(rp_mod, "get_rerank_model_profile", lambda *a: rp_mod.QWEN3_RERANKER_0_6B)
+    monkeypatch.setenv("IDA_MCP_RERANK_SEARCH_PATHS", str(tmp_path / "extra1") + ":" + str(tmp_path / "extra2"))
+    (tmp_path / "extra1").mkdir()
+    nested = tmp_path / "deep" / "nested" / "models"
+    nested.mkdir(parents=True)
+    cand_model = nested / rp_mod.QWEN3_RERANKER_0_6B.download_filename
+    cand_model.write_bytes(b"dummy")
+
+    real_res = Path.resolve
+    def flaky_res_rerank(self, *a, **kw):
+        if "extra2" in str(self):
+            raise OSError("cannot resolve")
+        return real_res(self, *a, **kw)
+    monkeypatch.setattr(Path, "resolve", flaky_res_rerank)
+    found_rerank = installer_runtime.find_rerank_model(tmp_path, profile=rp_mod.QWEN3_RERANKER_0_6B.key)
+    assert found_rerank == str(cand_model)
+
+
+def test_is_checkout_skill_link_all_branches(tmp_path):
+    # Nonexistent path -> OSError in resolve(strict=True) -> False
+    assert installer_main._is_checkout_skill_link(tmp_path / "nonexistent") is False
+
+    # Target is not a dir -> False
+    f = tmp_path / "regular_file"
+    f.touch()
+    assert installer_main._is_checkout_skill_link(f) is False
+
+    # Target dir wrong name -> False
+    d = tmp_path / "wrong_name"
+    d.mkdir()
+    assert installer_main._is_checkout_skill_link(d) is False
+
+    # Structure: root / .agents / skills / ida-pro-mcp
+    root = tmp_path / "repo"
+    skill_dir = root / ".agents" / "skills" / "ida-pro-mcp"
+    skill_dir.mkdir(parents=True)
+
+    # Missing SKILL.md -> False
+    assert installer_main._is_checkout_skill_link(skill_dir) is False
+
+    (skill_dir / "SKILL.md").touch()
+    # Missing operations.md -> False
+    assert installer_main._is_checkout_skill_link(skill_dir) is False
+
+    refs = skill_dir / "references"
+    refs.mkdir()
+    (refs / "operations.md").touch()
+
+    # Without .git -> False
+    assert installer_main._is_checkout_skill_link(skill_dir) is False
+
+    # With .git dir -> True
+    (root / ".git").mkdir()
+    assert installer_main._is_checkout_skill_link(skill_dir) is True
+
+
+def test_run_embedder_doctor_symlink_and_gemini_modes(tmp_path, monkeypatch):
+    # Symlinked install root -> returns 1
+    real_root = tmp_path / "real_root"
+    real_root.mkdir()
+    sym_root = tmp_path / "sym_root"
+    sym_root.symlink_to(real_root)
+
+    ui = installer_main.UI()
+    opts = InstallerOptions(install_root=sym_root)
+    assert installer_main.run_embedder_doctor(opts, ui) == 1
+
+    # Gemini mode with vertex options
+    opts2 = InstallerOptions(
+        install_root=real_root,
+        embed_backend="gemini",
+        gemini_model="models/embedding-001",
+        gemini_dim=768,
+        gemini_access="vertex",
+        gemini_api_key="secret-key",
+        gemini_vertex_project="gcp-project",
+        gemini_vertex_location="us-central1",
+    )
+    import ida_pro_mcp.host.intelligence.core as intel_core
+    class MockEmbedder:
+        _instance = None
+        def status(self, probe=True, deep_hash=False):
+            return {"active_backend": "gemini", "ready": True}
+        def embed_vector(self, text):
+            return [0.1] * 768
+        def embed(self, text):
+            return [0.1] * 768
+    monkeypatch.setattr(intel_core, "BgeCodeEmbedder", MockEmbedder)
+    monkeypatch.setattr(intel_core, "model_fingerprint", lambda *a, **kw: "fp_model")
+    monkeypatch.setattr(intel_core, "server_fingerprint", lambda *a, **kw: "fp_server")
+
+    rc = installer_main.run_embedder_doctor(opts2, ui)
+    assert rc == 0
+
+
+def test_interactive_wizard_gemini_prompts(monkeypatch):
+    ui = installer_main.UI()
+
+    # 1. AI Studio with key entered
+    opts1 = InstallerOptions(interactive=True, skills_mode="agent")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    def mock_prompt_choice(prompt, choices, default=None):
+        if "Runtime" in prompt:
+            return "snapshot"
+        if "skills mode" in prompt:
+            return "agent"
+        if "Embedding backend" in prompt:
+            return "gemini-embedding-2 (cloud, requires API key)"
+        if "Gemini access" in prompt:
+            return "Google AI Studio (API key)"
+        return default or choices[0]
+
+    monkeypatch.setattr(installer_main, "_prompt_choice", mock_prompt_choice)
+    monkeypatch.setattr(installer_main, "_prompt_yes_no", lambda *a, **kw: True)
+    monkeypatch.setattr(installer_main, "_prompt_secret", lambda *a, **kw: "test-ai-key")
+
+    res1 = installer_main._run_interactive_wizard(opts1, ui)
+    assert res1.embed_backend == "gemini"
+    assert res1.gemini_access == "aistudio"
+    assert res1.gemini_api_key == "test-ai-key"
+
+    # 2. AI Studio with empty key
+    opts2 = InstallerOptions(interactive=True, skills_mode="agent")
+    monkeypatch.setattr(installer_main, "_prompt_secret", lambda *a, **kw: "")
+    res2 = installer_main._run_interactive_wizard(opts2, ui)
+    assert res2.gemini_api_key == ""
+
+    # 3. Vertex AI
+    opts3 = InstallerOptions(interactive=True, skills_mode="agent")
+    def mock_prompt_choice_vertex(prompt, choices, default=None):
+        if "Embedding backend" in prompt:
+            return "gemini-embedding-2 (cloud, requires API key)"
+        if "Gemini access" in prompt:
+            return "Vertex AI (GCP)"
+        return mock_prompt_choice(prompt, choices, default)
+
+    monkeypatch.setattr(installer_main, "_prompt_choice", mock_prompt_choice_vertex)
+    monkeypatch.setattr(installer_main, "_prompt_text", lambda prompt, default=None: "custom-val")
+    res3 = installer_main._run_interactive_wizard(opts3, ui)
+    assert res3.gemini_access == "vertex"
+    assert res3.gemini_vertex_project == "custom-val"
+    assert res3.gemini_vertex_location == "custom-val"
+    assert res3.gemini_install_auth is True
